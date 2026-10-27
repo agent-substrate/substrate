@@ -126,6 +126,7 @@ func TestExchangeReturnsToken(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
 		body          string
+		wantToken     string // ya29.token unless set
 		wantExpiresIn time.Duration
 	}{{
 		name:          "with expires_in",
@@ -134,6 +135,10 @@ func TestExchangeReturnsToken(t *testing.T) {
 	}, {
 		name: "without expires_in or issued_token_type",
 		body: `{"access_token":"ya29.token","token_type":"Bearer"}`,
+	}, {
+		name:      "with a space in access_token",
+		body:      `{"access_token":"ya29 token"}`,
+		wantToken: "ya29 token",
 	}} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, c := newTestServer(t, respond(http.StatusOK, tt.body))
@@ -143,8 +148,12 @@ func TestExchangeReturnsToken(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Exchange: %v", err)
 			}
-			if tok.AccessToken != "ya29.token" {
-				t.Errorf("AccessToken = %q, want ya29.token", tok.AccessToken)
+			want := tt.wantToken
+			if want == "" {
+				want = "ya29.token"
+			}
+			if tok.AccessToken != want {
+				t.Errorf("AccessToken = %q, want %q", tok.AccessToken, want)
 			}
 			if tt.wantExpiresIn == 0 {
 				if !tok.ExpiresAt.IsZero() {
@@ -187,6 +196,7 @@ func TestExchangeErrors(t *testing.T) {
 		{"200 with another issued_token_type", http.StatusOK, `{"access_token":"at","issued_token_type":"urn:ietf:params:oauth:token-type:jwt"}`, codes.Unavailable},
 		{"200 with a control character in access_token", http.StatusOK, `{"access_token":"at\r\nX-Injected: 1"}`, codes.Unavailable},
 		{"200 with non-ASCII in access_token", http.StatusOK, `{"access_token":"atÿ"}`, codes.Unavailable},
+		{"200 with DEL in access_token", http.StatusOK, `{"access_token":"at\u007f"}`, codes.Unavailable},
 		{"200 over 1 MiB", http.StatusOK, `{"access_token":"at"}` + strings.Repeat(" ", maxResponseBytes), codes.Unavailable},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -233,13 +243,29 @@ func TestExchangeClipsErrorDescription(t *testing.T) {
 	}
 }
 
-func TestExchangeHonorsContextDeadline(t *testing.T) {
-	release := make(chan struct{})
-	defer close(release)
-	srv, c := newTestServer(t, func(http.ResponseWriter, *http.Request) {
-		<-release
+func TestExchangeClipsParseError(t *testing.T) {
+	srv, c := newTestServer(t, respond(http.StatusOK, `{"access_token":"at","expires_in":`+strings.Repeat("9", 4096)+`}`))
+	_, err := c.Exchange(t.Context(), srv.URL+"/token", subjectToken, audience, nil)
+	if status.Code(err) != codes.Unavailable || len(err.Error()) > 2*maxDetailBytes {
+		t.Errorf("Exchange error = %.300s... (%d bytes), want code Unavailable within %d bytes", err, len(err.Error()), 2*maxDetailBytes)
+	}
+}
+
+func TestExchangeTruncatedResponse(t *testing.T) {
+	srv, c := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"access_token"`)
 	})
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	_, err := c.Exchange(t.Context(), srv.URL+"/token", subjectToken, audience, nil)
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Errorf("Exchange error = %v (code %v), want code %v", err, got, codes.Unavailable)
+	}
+}
+
+func TestExchangeHonorsContextDeadline(t *testing.T) {
+	srv, c := newTestServer(t, respond(http.StatusOK, `{"access_token":"at"}`))
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now())
 	defer cancel()
 	_, err := c.Exchange(ctx, srv.URL+"/token", subjectToken, audience, nil)
 	if got := status.Code(err); got != codes.DeadlineExceeded {
