@@ -20,10 +20,7 @@ We expect the application layer creating actors using substrate to be responsibl
 
 ## Security Extensibility
 
-More advanced security can be integrated using the ingress and egress extension points. This is where advanced prompt injection scanning, dynamic LLM-driven authorization decisions, data leak prevention (DLP), or cloud IAM policy enforcement can be added:
-
-- **Egress Extensibility**: The outbound path is a fully pluggable Policy Enforcement Point (PEP). Operators can either extend the existing egress proxy using Envoy's `ext_proc` callout mechanism to invoke external inspection and authorization services, or completely replace the egress gateway (`atenet-egress`) with an external solution.
-- **Ingress Extensibility**: Ingress similarly supports `ext_proc` callouts for external authentication, authorization, and payload inspection. However, unlike egress, the ingress gateway (`atenet-router`) cannot be completely replaced from the outside: Substrate's core orchestration relies on ingress routing hooks to manage actor state, resolve worker assignments, and trigger on-demand cold starts or resume operations from snapshots to wake up agents.
+Substrate provides extension points for operators and vendors to augment or replace the built-in ingress and egress gateways. See [Extending Substrate](extensibility.md).
 
 ## Core Security Principles
 
