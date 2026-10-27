@@ -628,7 +628,7 @@ message EgressPolicy {
   // +k8s:optional
   // +k8s:maxItems=256
   // +k8s:listType=atomic
-  // +k8s:customValidation # no two rules tie on a name and port
+  // +k8s:customValidation # no two rules tie on a name and port, and an https rule allows each token_url
   repeated EgressRule rules = 2;
 }
 
@@ -643,7 +643,7 @@ message EgressPolicyTemplate {
   // +k8s:required
   // +k8s:maxItems=256
   // +k8s:listType=atomic
-  // +k8s:customValidation # no two rules tie on a name and port
+  // +k8s:customValidation # no two rules tie on a name and port, and an https rule allows each token_url
   repeated EgressRule rules = 1;
 }
 
@@ -846,7 +846,7 @@ message CredentialHeader {
   // Source-agnostic reference interpreted by a registered credential provider:
   // ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
   //
-  // Exactly one of credential_uri and actor_jwt must be set.
+  // Exactly one of credential_uri, actor_jwt, and token_exchange must be set.
   //
   // +k8s:optional
   // +k8s:unionMember
@@ -859,6 +859,43 @@ message CredentialHeader {
   // +k8s:optional
   // +k8s:unionMember
   ActorJwtSource actor_jwt = 4;
+
+  // An access token obtained by exchanging an actor JWT at an OAuth 2.0
+  // token exchange endpoint (RFC 8693).
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  TokenExchangeSource token_exchange = 5;
+}
+
+// TokenExchangeSource has the gateway mint a JWT for the Actor that sent the
+// request, bound to audience, and exchange it at token_url (RFC 8693). The
+// returned access token becomes the header value.
+message TokenExchangeSource {
+  // HTTPS URL of the token endpoint, without userinfo, query, or fragment.
+  // An https rule in the same policy must allow its host and port.
+  //
+  // +k8s:required
+  // +k8s:maxLength=2048
+  // +k8s:customValidation # format
+  string token_url = 1;
+
+  // Becomes the actor JWT's only aud and the request's audience parameter.
+  //
+  // +k8s:required
+  // +k8s:minLength=1
+  // +k8s:maxLength=512
+  string audience = 2;
+
+  // The request's scope parameter, space-joined.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=16
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:minLength=1
+  // +k8s:eachVal=+k8s:maxLength=256
+  // +k8s:customValidation # RFC 6749 scope-token characters
+  repeated string scopes = 3;
 }
 
 // ActorJwtSource has the gateway mint a JWT for the Actor that sent the

@@ -2574,7 +2574,7 @@ func Validate_CreateWorkerRequest(
 	return errs
 }
 
-var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_CredentialHeader_ = validate.NewUnionMembership(validate.NewUnionMember("credential_uri"), validate.NewUnionMember("actor_jwt"))
+var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_CredentialHeader_ = validate.NewUnionMembership(validate.NewUnionMember("credential_uri"), validate.NewUnionMember("actor_jwt"), validate.NewUnionMember("token_exchange"))
 
 // Validate_CredentialHeader validates an instance of CredentialHeader according
 // to declarative validation rules in the API schema.
@@ -2595,6 +2595,12 @@ func Validate_CredentialHeader(
 				return false
 			}
 			return obj.ActorJwt != nil
+		},
+		func(obj *v1.CredentialHeader) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.TokenExchange != nil
 		}); len(e) != 0 {
 		errs = append(errs, e...)
 	}
@@ -2724,6 +2730,36 @@ func Validate_CredentialHeader(
 				return oldObj.ActorJwt
 			})
 		errs = append(errs, fn(fldPath.Child("actor_jwt"), obj.ActorJwt, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.CredentialHeader.TokenExchange
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.TokenExchangeSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_TokenExchangeSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CredentialHeader) *v1.TokenExchangeSource {
+				return oldObj.TokenExchange
+			})
+		errs = append(errs, fn(fldPath.Child("token_exchange"), obj.TokenExchange, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -9172,6 +9208,138 @@ func Validate_TlsPassthroughRule(
 				return oldObj.Ports
 			})
 		errs = append(errs, fn(fldPath.Child("ports"), obj.Ports, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_TokenExchangeSource validates an instance of TokenExchangeSource according
+// to declarative validation rules in the API schema.
+func Validate_TokenExchangeSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.TokenExchangeSource) (errs field.ErrorList) {
+
+	{ // field v1.TokenExchangeSource.TokenUrl
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_TokenExchangeSource_TokenUrl(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 2048); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.TokenExchangeSource) *string {
+				return &oldObj.TokenUrl
+			})
+		errs = append(errs, fn(fldPath.Child("token_url"), &obj.TokenUrl, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.TokenExchangeSource.Audience
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 512); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MinLength(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.TokenExchangeSource) *string {
+				return &oldObj.Audience
+			})
+		errs = append(errs, fn(fldPath.Child("audience"), &obj.Audience, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.TokenExchangeSource.Scopes
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_TokenExchangeSource_Scopes(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MinLength(ctx, op, fldPath, obj, oldObj, 1)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.TokenExchangeSource) []string {
+				return oldObj.Scopes
+			})
+		errs = append(errs, fn(fldPath.Child("scopes"), obj.Scopes, oldVal, oldObj != nil)...)
 	}
 
 	return errs
