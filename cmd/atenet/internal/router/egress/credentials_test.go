@@ -17,7 +17,22 @@ package egress
 import (
 	"cmp"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"io"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -31,6 +46,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/credprovider/v1"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/tokenexchange"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 )
 
@@ -57,7 +73,7 @@ func bearerTokenResponse(token string) *credprovider.FetchSecretResponse {
 }
 
 func injectionHandlerFor(policy *ateapi.EgressPolicy, provider credprovider.CredentialProviderClient, providerName string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName, nil)
 }
 
 // withAuthorization adds the placeholder authorization header the sample
@@ -312,7 +328,7 @@ func TestActorJWTInjection(t *testing.T) {
 				actorJWTHeader("authorization"),
 				&ateapi.CredentialHeader{Header: "x-api-key", CredentialUri: "ate-secret://k8s/default/token"},
 			)}
-			h := New(client, nil, 0, nil, "")
+			h := New(client, nil, 0, nil, "", nil)
 
 			res, err := h.HandleRequestHeaders(context.Background(),
 				withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
@@ -347,7 +363,7 @@ func TestActorJWTInjection(t *testing.T) {
 
 func TestActorJWTInjectionSkippedWithoutHeader(t *testing.T) {
 	client := &egressMockClient{actor: runningActor(), policy: replaceHeadersPolicy(extproc.EgressTLSMITMFilterChainName, actorJWTHeader("authorization"))}
-	h := New(client, nil, 0, nil, "")
+	h := New(client, nil, 0, nil, "", nil)
 	res, err := h.HandleRequestHeaders(context.Background(),
 		innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
 	if err != nil {
@@ -385,7 +401,7 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 						policy:  replaceHeadersPolicy(leg, actorJWTHeader(header)),
 						mintErr: tc.mintErr,
 					}
-					h := New(mock, nil, 0, nil, "")
+					h := New(mock, nil, 0, nil, "", nil)
 					md := innerMetadata(leg, "GET", "api.example.com", nil)
 					md.Headers[header] = "placeholder"
 					_, err := h.HandleRequestHeaders(context.Background(), md)
@@ -396,22 +412,170 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 	}
 }
 
-// A token exchange entry denies even with a provider configured, so its empty
-// credential_uri is never fetched.
-func TestTokenExchangeInjectionDenied(t *testing.T) {
+// tokenEndpoint starts a TLS token endpoint at localhost that answers every
+// exchange with status and body. It returns the endpoint's token URL, a client
+// that trusts it, and the number of exchanges it has served.
+func tokenEndpoint(t *testing.T, status int, body string) (string, *tokenexchange.Client, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		DNSNames:              []string{"localhost"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := tokenexchange.New(caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "https://localhost:" + u.Port() + "/token", client, &calls
+}
+
+func tokenExchangeHeader(header, tokenURL string) *ateapi.CredentialHeader {
+	return &ateapi.CredentialHeader{
+		Header:        header,
+		Prefix:        "Bearer ",
+		TokenExchange: &ateapi.TokenExchangeSource{TokenUrl: tokenURL, Audience: "sts.example.com"},
+	}
+}
+
+// tokenExchangePolicy is replaceHeadersPolicy plus an https rule that allows
+// tokenURL's host and port.
+func tokenExchangePolicy(t *testing.T, leg, tokenURL string, entries ...*ateapi.CredentialHeader) *ateapi.EgressPolicy {
+	t.Helper()
+	u, err := url.Parse(tokenURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := replaceHeadersPolicy(leg, entries...)
+	policy.Rules = append(policy.Rules, &ateapi.EgressRule{Https: &ateapi.HttpsRule{
+		Hostnames: []string{u.Hostname()},
+		Ports:     &ateapi.Ports{Numbers: []int32{int32(port)}},
+	}})
+	return policy
+}
+
+func TestTokenExchangeInjection(t *testing.T) {
 	for _, leg := range requestLegs {
 		t.Run(leg, func(t *testing.T) {
-			provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
-			h := injectionHandlerFor(replaceHeadersPolicy(leg, &ateapi.CredentialHeader{
-				Header:        "authorization",
-				Prefix:        "Bearer ",
-				TokenExchange: &ateapi.TokenExchangeSource{TokenUrl: "https://sts.example.com/token", Audience: "https://api.example.com"},
-			}), provider, "")
-			_, err := h.HandleRequestHeaders(context.Background(),
+			tokenURL, tokenClient, _ := tokenEndpoint(t, http.StatusOK, `{"access_token":"exchanged","expires_in":900}`)
+			client := &egressMockClient{actor: runningActor(), policy: tokenExchangePolicy(t, leg, tokenURL, tokenExchangeHeader("authorization", tokenURL))}
+			h := New(client, nil, 0, nil, "", tokenClient)
+
+			res, err := h.HandleRequestHeaders(context.Background(),
 				withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
-			wantStatus(t, err, envoy_type.StatusCode_InternalServerError)
-			if provider.got != nil {
-				t.Errorf("provider was asked for %v, want no fetch", provider.got)
+			if err != nil {
+				t.Fatalf("HandleRequestHeaders: %v", err)
+			}
+			setHeaders := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders()
+			if len(setHeaders) != 1 {
+				t.Fatalf("got %d header mutations, want 1", len(setHeaders))
+			}
+			if got := string(setHeaders[0].GetHeader().GetRawValue()); got != "Bearer exchanged" {
+				t.Errorf("header value = %q, want %q", got, "Bearer exchanged")
+			}
+			if got := setHeaders[0].GetAppendAction(); got != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+				t.Errorf("append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", got)
+			}
+			want := &ateapi.MintActorJwtRequest{
+				Actor:             &ateapi.ObjectRef{Atespace: testEgressAtespace, Name: testEgressActor},
+				Audiences:         []string{"sts.example.com"},
+				ExpirationSeconds: 300,
+			}
+			if got := client.lastMint.Load(); !proto.Equal(got, want) {
+				t.Errorf("MintActorJwt request = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestTokenExchangeSkippedWithoutHeader(t *testing.T) {
+	tokenURL, tokenClient, exchanges := tokenEndpoint(t, http.StatusOK, `{"access_token":"exchanged"}`)
+	client := &egressMockClient{actor: runningActor(), policy: tokenExchangePolicy(t, extproc.EgressTLSMITMFilterChainName, tokenURL, tokenExchangeHeader("authorization", tokenURL))}
+	h := New(client, nil, 0, nil, "", tokenClient)
+	res, err := h.HandleRequestHeaders(context.Background(),
+		innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders: %v", err)
+	}
+	if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
+		t.Errorf("got %d injected headers, want 0", len(got))
+	}
+	if n := exchanges.Load(); n != 0 {
+		t.Errorf("%d exchanges, want 0", n)
+	}
+}
+
+func TestTokenExchangeDenials(t *testing.T) {
+	const issued = `{"access_token":"exchanged"}`
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		mintErr    error
+		notAllowed bool // no rule allows the token URL
+		want       envoy_type.StatusCode
+	}{
+		{name: "token URL no rule allows", status: http.StatusOK, body: issued, notAllowed: true, want: envoy_type.StatusCode_InternalServerError},
+		{name: "endpoint refuses the actor", status: http.StatusBadRequest, body: `{"error":"invalid_grant"}`, want: envoy_type.StatusCode_Forbidden},
+		{name: "endpoint unavailable", status: http.StatusServiceUnavailable, want: envoy_type.StatusCode_ServiceUnavailable},
+		{name: "endpoint rejects the request", status: http.StatusBadRequest, body: `{"error":"invalid_request"}`, want: envoy_type.StatusCode_InternalServerError},
+		{name: "actor deleted", status: http.StatusOK, body: issued, mintErr: status.Error(codes.NotFound, "actor not found"), want: envoy_type.StatusCode_Forbidden},
+		{name: "ateapi unavailable", status: http.StatusOK, body: issued, mintErr: status.Error(codes.Unavailable, "ateapi is down"), want: envoy_type.StatusCode_ServiceUnavailable},
+		{name: "gateway may not mint", status: http.StatusOK, body: issued, mintErr: status.Error(codes.PermissionDenied, "denied"), want: envoy_type.StatusCode_InternalServerError},
+	}
+	for _, leg := range requestLegs {
+		t.Run(leg, func(t *testing.T) {
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					tokenURL, tokenClient, exchanges := tokenEndpoint(t, tc.status, tc.body)
+					entry := tokenExchangeHeader("authorization", tokenURL)
+					policy := tokenExchangePolicy(t, leg, tokenURL, entry)
+					if tc.notAllowed {
+						policy = replaceHeadersPolicy(leg, entry)
+					}
+					h := New(&egressMockClient{actor: runningActor(), policy: policy, mintErr: tc.mintErr}, nil, 0, nil, "", tokenClient)
+					_, err := h.HandleRequestHeaders(context.Background(),
+						withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
+					wantStatus(t, err, tc.want)
+					if tc.notAllowed && exchanges.Load() != 0 {
+						t.Errorf("%d exchanges at a token URL no rule allows, want 0", exchanges.Load())
+					}
+				})
 			}
 		})
 	}

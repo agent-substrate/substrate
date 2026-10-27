@@ -16,6 +16,7 @@ package egress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,6 +29,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/credprovider/v1"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/tokenexchange"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/resources"
@@ -70,6 +72,24 @@ func mapActorJWTError(err error) error {
 	}
 }
 
+// mapTokenExchangeError converts a token exchange failure into a client-facing
+// ext_proc denial. A failed subject JWT mint maps as mapActorJWTError does.
+// Otherwise an endpoint refusing the actor denies as 403, a transient failure
+// as a retryable 503, and anything else as 500.
+func mapTokenExchangeError(err error) error {
+	if errors.Is(err, tokenexchange.ErrMint) {
+		return mapActorJWTError(err)
+	}
+	switch status.Code(err) {
+	case codes.PermissionDenied:
+		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err, deniedBody)
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err, deniedBody)
+	default:
+		return extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
+	}
+}
+
 // applyEffects resolves a matched rule's credential injections and returns the
 // header mutations to add to the request, or an error that denies it. Only a
 // header the request carries is replaced (headers is keyed by lowercased
@@ -77,9 +97,10 @@ func mapActorJWTError(err error) error {
 // fetched.
 //
 // Any failure to produce a credential the request needs denies it, including
-// having no provider configured for a credential_uri entry. Actor JWTs need no
-// provider.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, headers map[string]string, effects *ateapi.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+// having no provider configured for a credential_uri entry. Actor JWTs and
+// token exchanges need no provider; policy is the actor's compiled policy,
+// which must allow each token exchange's endpoint.
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, headers map[string]string, policy *egresspolicy.Policy, effects *ateapi.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
 	var injections []*ateapi.CredentialHeader
 	for _, inj := range effects.GetReplaceHeaders() {
 		if _, ok := headers[strings.ToLower(inj.GetHeader())]; ok {
@@ -109,9 +130,10 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 				return nil, fmt.Errorf("minting an actor JWT for header %s: %w", inj.GetHeader(), err)
 			}
 		case inj.GetTokenExchange() != nil:
-			slog.ErrorContext(ctx, "egress denied: token exchange is not supported by this gateway",
-				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("header", inj.GetHeader()))
-			return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
+			secret, err = h.exchangedToken(ctx, ref, dest, policy, inj.GetTokenExchange())
+			if err != nil {
+				return nil, fmt.Errorf("exchanging a token for header %s: %w", inj.GetHeader(), err)
+			}
 		default:
 			secret, err = h.providerCredential(ctx, ref, dest, inj.GetCredentialUri())
 			if err != nil {
@@ -139,6 +161,25 @@ func (h *Handler) actorJWT(ctx context.Context, ref resources.ActorRef, dest egr
 		return nil, mapActorJWTError(err)
 	}
 	return []byte(jwt), nil
+}
+
+// exchangedToken exchanges an actor JWT for the access token src asks for.
+// Every error it returns is already a client-facing denial.
+func (h *Handler) exchangedToken(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, policy *egresspolicy.Policy, src *ateapi.TokenExchangeSource) ([]byte, error) {
+	endpoint, ok := egresspolicy.TokenURLDestination(src.GetTokenUrl())
+	if !ok || !policy.EvaluateRequest(endpoint, true).Allowed {
+		slog.ErrorContext(ctx, "egress denied: no https rule allows the token exchange endpoint",
+			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("tokenURL", src.GetTokenUrl()))
+		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
+	}
+	token, err := h.tokens.Token(ctx, ref, src)
+	if err != nil {
+		slog.ErrorContext(ctx, "egress denied: token exchange failed",
+			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("tokenURL", src.GetTokenUrl()),
+			slog.String("audience", src.GetAudience()), slog.Any("err", err))
+		return nil, mapTokenExchangeError(err)
+	}
+	return []byte(token), nil
 }
 
 // providerCredential fetches the secret uri names from the credential
