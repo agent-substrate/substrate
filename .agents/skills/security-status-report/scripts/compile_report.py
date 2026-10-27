@@ -60,6 +60,9 @@ def compile_report(threats_json_path, results_dir, output_path):
                             t["strengths"] = str(res["strengths"])
                         if "weaknesses" in res:
                             t["weaknesses"] = str(res["weaknesses"])
+                        for key in ("mitigation_summary", "remaining_gap"):
+                            if key in res:
+                                t[key] = str(res[key])
 
                         # Validate and normalize citations schema
                         if "citations" in res:

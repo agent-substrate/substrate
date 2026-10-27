@@ -24,17 +24,24 @@ except ImportError:
     print("Error: 'matplotlib' is required to render the chart. Please install it using 'pip install matplotlib'.", file=sys.stderr)
     sys.exit(1)
 
+PRIORITY_ORDER = ["Critical", "High", "Medium", "Low"]
+
+
+def sort_key(item):
+    """Orders threats by priority (Critical first), then by threat ID."""
+    p = item.get("priority", "")
+    rank = PRIORITY_ORDER.index(p) if p in PRIORITY_ORDER else len(PRIORITY_ORDER)
+    tid = item.get("threat_id", "")
+    if tid.startswith("T-") and tid[2:].isdigit():
+        return (rank, 0, int(tid[2:]), "")
+    return (rank, 1, 0, tid)
+
+
 def render_chart(final_report_path, output_png_path):
     with open(final_report_path, 'r') as f:
         data = json.load(f)
 
-    # Sort data by threat_id (e.g. T-01, T-02, ...)
-    def sort_key(item):
-        tid = item.get("threat_id", "")
-        if tid.startswith("T-") and tid[2:].isdigit():
-            return (0, int(tid[2:]), "")
-        return (1, 0, tid)
-
+    # Sort by priority (Critical first), then by threat_id (T-01, T-02, ...).
     sorted_data = sorted(data, key=sort_key)
 
     threat_ids = [item.get("threat_id", f"UNKNOWN-{i+1:02d}") for i, item in enumerate(sorted_data)]
@@ -90,11 +97,22 @@ def render_chart(final_report_path, output_png_path):
         if err:
             ax.text(i, 0.02, "ERROR", rotation=90, ha='center', va='bottom', fontsize=8, fontweight='bold', color='white')
 
+    # Separate and label the priority groups.
+    priorities = [item.get("priority", "") for item in sorted_data]
+    start = 0
+    for i in range(1, len(priorities) + 1):
+        if i == len(priorities) or priorities[i] != priorities[start]:
+            if start > 0:
+                ax.axvline(start - 0.5, color='black', linewidth=2)
+            ax.text((start + i - 1) / 2, 1.01, priorities[start] or "Unknown", ha='center', va='bottom',
+                    fontsize=10, fontweight='bold', transform=ax.get_xaxis_transform())
+            start = i
+
     ax.set_ylim(0.0, 1.0)
     ax.set_xlim(-0.5, len(threat_ids) - 0.5)
     ax.set_ylabel("Quality Score (0.0 - 1.0)", fontsize=12, fontweight='bold')
     ax.set_xlabel("Threat ID", fontsize=12, fontweight='bold')
-    ax.set_title("Substrate Security Threat Posture Scores", fontsize=16, fontweight='bold', pad=15)
+    ax.set_title("Substrate Security Threat Posture Scores", fontsize=16, fontweight='bold', pad=25)
 
     # Standard matplotlib way to rotate tick labels cleanly
     plt.xticks(rotation=90, fontsize=9, fontweight='bold')
