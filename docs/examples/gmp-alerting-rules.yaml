@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# See ../slos-and-alerts.md for context on this file.
+# See ../guides/slos-and-alerts.md for context on this file.
 #
 # This file is a Custom Resource for Google Cloud Managed Service for
 # Prometheus ("GMP"), but everything inside of the "spec" is identical to
@@ -74,7 +74,7 @@ spec:
   groups:
   # ============================================================================
   # ResumeActor Capacity Availability (ResourceExhausted vs Success)
-  # See section A.1 in ../slos-and-alerts.md.
+  # See section A.1 in ../guides/slos-and-alerts.md.
   # Target: 99% capacity availability over 30d (error budget = 0.01)
   # For strategy, see https://sre.google/workbook/alerting-on-slos/
   #
@@ -168,7 +168,7 @@ spec:
           description: "ResumeActor ResourceExhausted failure rate has exceeded the 1x burn rate threshold over 3d and 6h."
   # ============================================================================
   # ateapi Per-Method RPC Server-Side Error Rate (5xx-equivalent gRPC codes)
-  # See section A.2 in ../slos-and-alerts.md.
+  # See section A.2 in ../guides/slos-and-alerts.md.
   # Target: 99.9% availability over 30d per RPC method (error budget = 0.001)
   # For strategy, see https://sre.google/workbook/alerting-on-slos/
   #
@@ -278,7 +278,7 @@ spec:
   # ============================================================================
   # Alert on lack of convergence between desired and actual number of workers.
   #
-  # See section B.1 in ../slos-and-alerts.md. NB: this alert fires on the
+  # See section B.1 in ../guides/slos-and-alerts.md. NB: this alert fires on the
   # _overall_ failure rate, of intended workers -> registered pods; that is, it
   # fires whether the failure is because of the pods not being created, or the
   # pods not being registered. To debug which of these it is, look at

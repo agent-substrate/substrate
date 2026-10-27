@@ -1,3 +1,7 @@
+---
+docsite: false
+---
+
 # API Validation
 
 All fields of all APIs must be validated.  This is especially critical for the

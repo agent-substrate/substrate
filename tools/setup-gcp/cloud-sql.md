@@ -200,4 +200,4 @@ proxy sidecar resources, and Managed Connection Pooling — see
 [docs/dev/cloud-sql-scaling-guide.md](../../docs/dev/cloud-sql-scaling-guide.md).
 
 For explicit connection strings or a non-Cloud-SQL PostgreSQL database, see
-the [general PostgreSQL configuration guide](../../docs/postgres.md).
+the [general PostgreSQL configuration guide](../../docs/guides/postgres.md).

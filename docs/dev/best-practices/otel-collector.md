@@ -6,7 +6,7 @@ it.
 
 For how to *instrument* a Substrate service, see
 [Tracing Best Practices](tracing.md). For what Substrate emits and where it
-shows up, see [Actor Observability](../../observability.md).
+shows up, see [Actor Observability](../../guides/observability.md).
 
 ## What Is Available
 
@@ -443,11 +443,11 @@ lifecycle records and the ateworkers' usage samples, through
 instead of stdout, and `otlp,console` to both; only the kind overlay sets it, to
 `otlp,console`, together with `ATE_WORKER_OTEL_LOGS_EXPORTER` for the
 ateworkers. See
-[the same records over OTLP](../../observability.md#the-same-records-over-otlp).
+[the same records over OTLP](../../guides/observability.md#the-same-records-over-otlp).
 
 Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,
 and `ateworker` wraps actor container output with the `ate.*` metadata labels
-described in [Actor Observability](../../observability.md). The ateworker relay
+described in [Actor Observability](../../guides/observability.md). The ateworker relay
 carries logs, traces, and metrics.
 
 Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
