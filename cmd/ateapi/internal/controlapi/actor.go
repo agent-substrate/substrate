@@ -264,6 +264,9 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 	defer lease.Close()
 
 	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapi.Actor) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			return apierror.FailedPrecondition("Actor %s is being deleted", actorRef)
+		}
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is

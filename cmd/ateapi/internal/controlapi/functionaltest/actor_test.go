@@ -1058,6 +1058,34 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
 }
 
+func TestUpdateActor_FailsIfDeleting(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor-deleting")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.persistence.CreateActor(ctx, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	marked, err := tc.persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
+	if err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
+	}
+
+	_, err = tc.client.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
+		Metadata:       marked.GetMetadata(),
+		ActorTemplate:  marked.GetActorTemplate(),
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is being deleted")
+}
+
 func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
 	ns := namespaceForTest("ns-span-update")
 	tc := setupTest(t, ns)
