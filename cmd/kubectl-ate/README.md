@@ -211,7 +211,9 @@ kubectl ate resume actor my-actor -a <atespace>
 # snapshot stays on the worker's node and is uploaded to storage in the background.
 kubectl ate suspend actor my-actor -a <atespace>
 
-# Suspend an actor and wait for its snapshot to reach storage.
+# Suspend a running actor and wait for its snapshot to reach storage.
+# An already suspended actor returns unchanged in either mode, without waiting
+# for a pending upload. Retrying with --mode=sync does not make it durable.
 kubectl ate suspend actor my-actor -a <atespace> --mode=sync
 
 # Revert an actor to its last external snapshot (discards live or crashed state, or suspended state with a node-local snapshot, and returns to SUSPENDED)
@@ -224,7 +226,7 @@ kubectl ate delete actor my-actor -a <atespace>
 
 ### Actor Snapshots
 
-Suspending an actor creates a durable snapshot. Tags give snapshots stable,
+Suspending an actor captures a snapshot. Tags give snapshots stable,
 Atespace-owned names; published tags may be used from other Atespaces. A tag is
 created from a suspended actor and gets its own copy of that actor's snapshot,
 so suspending or deleting the actor afterwards cannot collect it.
@@ -236,7 +238,7 @@ kubectl ate get tags -A
 kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 
 # Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
-# Tagging fails until the snapshot is in storage: suspend with --mode=sync to tag right away.
+# Tag creation uploads a node-local snapshot if needed before copying it to the tag.
 kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
 kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
