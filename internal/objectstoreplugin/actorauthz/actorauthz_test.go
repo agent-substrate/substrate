@@ -267,6 +267,7 @@ func TestAuthorize(t *testing.T) {
 			{Prefix: storagePrefix(t, "gs://snaps/root/atespaces/"+atespace+"/actors/"+uid), Access: actorscope.ReadWrite},
 			{Prefix: storagePrefix(t, tagURI), Access: actorscope.ReadOnly},
 		},
+		Expiry: time.Unix(s.now.Add(time.Hour).Unix(), 0),
 	}
 	for _, state := range []ateapi.ActorState{
 		ateapi.ActorState_ACTOR_STATE_RESUMING,

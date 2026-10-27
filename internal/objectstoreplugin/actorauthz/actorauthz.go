@@ -131,6 +131,9 @@ func checkIssuerCertificate(ctx context.Context, issuer, trusted string, verifie
 type Decision struct {
 	ActorUID string
 	Grants   []actorscope.Grant
+	// Expiry is the token's exp. A credential issued from a Decision must not
+	// outlive it.
+	Expiry time.Time
 }
 
 // Authorizer runs the checks.
@@ -200,7 +203,7 @@ func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, erro
 	if len(grants) == 0 {
 		return nil, status.Error(codes.PermissionDenied, "actor has no snapshot location to grant")
 	}
-	return &Decision{ActorUID: actor.GetMetadata().GetUid(), Grants: grants}, nil
+	return &Decision{ActorUID: actor.GetMetadata().GetUid(), Grants: grants, Expiry: claims.Expiration}, nil
 }
 
 // actorStillOnNode refuses a token minted for a node the actor has since
