@@ -127,31 +127,44 @@ func ValidateCustom_EgressPolicy_Rules(_ context.Context, _ operation.Operation,
 	return append(errs, validateTokenURLsAllowed(p, rules)...)
 }
 
+// maxTokenExchanges bounds the token_exchange entries in one policy, since
+// each costs a pass over every rule here.
+const maxTokenExchanges = 16
+
 func validateTokenURLsAllowed(p *field.Path, rules []*ateapi.EgressRule) field.ErrorList {
-	var errs field.ErrorList
-	var policy *egresspolicy.Policy
+	type tokenURL struct {
+		path *field.Path
+		raw  string
+	}
+	var urls []tokenURL
 	for i, rule := range rules {
 		member, effects := "http", rule.GetHttp().GetEffects()
 		if rule.GetHttps() != nil {
 			member, effects = "https", rule.GetHttps().GetEffects()
 		}
 		for j, inj := range effects.GetReplaceHeaders() {
-			if inj.GetTokenExchange() == nil {
-				continue
-			}
-			raw := inj.GetTokenExchange().GetTokenUrl()
-			dest, ok := egresspolicy.TokenURLDestination(raw)
-			if !ok {
-				continue // reported by the token_url format check
-			}
-			if policy == nil {
-				// Invalid patterns are reported by the hostname checks.
-				policy, _ = egresspolicy.Compile(&ateapi.EgressPolicy{Rules: rules})
-			}
-			if !policy.EvaluateRequest(dest, true).Allowed {
+			if src := inj.GetTokenExchange(); src != nil {
 				path := p.Index(i).Child(member, "effects", "replace_headers").Index(j).Child("token_exchange", "token_url")
-				errs = append(errs, field.Invalid(path, raw, "host and port must be allowed by an https rule in this policy"))
+				urls = append(urls, tokenURL{path, src.GetTokenUrl()})
 			}
+		}
+	}
+	if len(urls) > maxTokenExchanges {
+		return field.ErrorList{field.Invalid(p, len(urls), fmt.Sprintf("at most %d replace_headers entries may set token_exchange", maxTokenExchanges))}
+	}
+	if len(urls) == 0 {
+		return nil
+	}
+	// Invalid patterns are reported by the hostname checks.
+	policy, _ := egresspolicy.Compile(&ateapi.EgressPolicy{Rules: rules})
+	var errs field.ErrorList
+	for _, u := range urls {
+		dest, ok := egresspolicy.TokenURLDestination(u.raw)
+		if !ok {
+			continue // reported by the token_url format check
+		}
+		if !policy.EvaluateRequest(dest, true).Allowed {
+			errs = append(errs, field.Invalid(u.path, u.raw, "host and port must be allowed by an https rule in this policy"))
 		}
 	}
 	return errs

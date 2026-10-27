@@ -1970,7 +1970,8 @@ type CredentialHeader struct {
 	// +k8s:unionMember
 	ActorJwt *ActorJwtSource `protobuf:"bytes,4,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	// An access token obtained by exchanging an actor JWT at an OAuth 2.0
-	// token exchange endpoint (RFC 8693).
+	// token exchange endpoint (RFC 8693). A policy can have at most 16
+	// token_exchange entries.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
