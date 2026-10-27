@@ -541,3 +541,23 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 		t.Fatalf("expected error for missing driver, got nil")
 	}
 }
+
+func TestResetEmptyDirClearsPreviousContents(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "volumes", "shared")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stale"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resetEmptyDir(dir); err != nil {
+		t.Fatalf("resetEmptyDir: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("dir still has %d entries after reset", len(entries))
+	}
+}

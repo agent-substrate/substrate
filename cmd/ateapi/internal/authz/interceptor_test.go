@@ -483,6 +483,17 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"},
 	}}}
 	deleteTag := rpcCall{ateapi.Control_DeleteTag_FullMethodName, &ateapi.DeleteTagRequest{Tag: tag}}
+	externalVolume := &ateapi.ObjectRef{Atespace: "team-a", Name: "ctx"}
+	createExternalVolume := rpcCall{ateapi.Control_CreateExternalVolume_FullMethodName, &ateapi.CreateExternalVolumeRequest{ExternalVolume: &ateapi.ExternalVolume{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "ctx"},
+	}}}
+	getExternalVolume := rpcCall{ateapi.Control_GetExternalVolume_FullMethodName, &ateapi.GetExternalVolumeRequest{ExternalVolume: externalVolume}}
+	listExternalVolumes := rpcCall{ateapi.Control_ListExternalVolumes_FullMethodName, &ateapi.ListExternalVolumesRequest{Atespace: "team-a"}}
+	listAllExternalVolumes := rpcCall{ateapi.Control_ListExternalVolumes_FullMethodName, &ateapi.ListExternalVolumesRequest{}}
+	updateExternalVolume := rpcCall{ateapi.Control_UpdateExternalVolume_FullMethodName, &ateapi.UpdateExternalVolumeRequest{ExternalVolume: &ateapi.ExternalVolume{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "ctx"},
+	}}}
+	deleteExternalVolume := rpcCall{ateapi.Control_DeleteExternalVolume_FullMethodName, &ateapi.DeleteExternalVolumeRequest{ExternalVolume: externalVolume}}
 	mintJWT := rpcCall{ateapi.Control_MintActorJwt_FullMethodName, &ateapi.MintActorJwtRequest{Actor: actor}}
 	mintCert := rpcCall{ateapi.Control_MintActorCertificate_FullMethodName, &ateapi.MintActorCertificateRequest{Actor: actor}}
 	// cloneTag creates an actor in atespace from team-a's tag v1, with a
@@ -571,6 +582,22 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"viewer cannot update tag", "viewer", updateTag, codes.PermissionDenied},
 		{"viewer cannot delete tag", "viewer", deleteTag, codes.PermissionDenied},
 		{"outsider cannot delete tag", "outsider", deleteTag, codes.PermissionDenied},
+
+		// Shared volumes: viewers read, editors write, all within the owning atespace.
+		{"editor creates shared volume", "editor", createExternalVolume, codes.OK},
+		{"viewer cannot create shared volume", "viewer", createExternalVolume, codes.PermissionDenied},
+		{"outsider cannot create shared volume", "outsider", createExternalVolume, codes.PermissionDenied},
+		{"viewer gets shared volume", "viewer", getExternalVolume, codes.OK},
+		{"global viewer gets shared volume", "global-viewer", getExternalVolume, codes.OK},
+		{"outsider cannot get shared volume", "outsider", getExternalVolume, codes.PermissionDenied},
+		{"viewer lists shared volumes", "viewer", listExternalVolumes, codes.OK},
+		{"outsider cannot list shared volumes", "outsider", listExternalVolumes, codes.PermissionDenied},
+		{"global viewer lists all shared volumes", "global-viewer", listAllExternalVolumes, codes.OK},
+		{"atespace editor cannot list all shared volumes", "editor", listAllExternalVolumes, codes.PermissionDenied},
+		{"editor updates shared volume", "editor", updateExternalVolume, codes.OK},
+		{"editor deletes shared volume", "editor", deleteExternalVolume, codes.OK},
+		{"viewer cannot update shared volume", "viewer", updateExternalVolume, codes.PermissionDenied},
+		{"viewer cannot delete shared volume", "viewer", deleteExternalVolume, codes.PermissionDenied},
 		{"bootstrap owner deletes tag", "bootstrap-owner", deleteTag, codes.OK},
 
 		// Cloning from a tag needs editor on the tag's atespace, whatever its

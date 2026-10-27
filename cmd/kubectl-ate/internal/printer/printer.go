@@ -385,6 +385,62 @@ func PrintTagTo(out io.Writer, tag *ateapi.Tag, format string) error {
 	return PrintTagsTo(out, []*ateapi.Tag{tag}, format)
 }
 
+// PrintExternalVolumesTo prints external volumes to the provided writer.
+func PrintExternalVolumesTo(out io.Writer, volumes []*ateapi.ExternalVolume, format string) error {
+	slices.SortFunc(volumes, func(a, b *ateapi.ExternalVolume) int {
+		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
+	})
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapi.ListExternalVolumesResponse{ExternalVolumes: volumes}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ATESPACE\tNAME\tVOLUME TYPE\tVOLUME ID\tDELETE TRIGGER\tREFS\tAGE")
+		for _, volume := range volumes {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				volume.GetMetadata().GetAtespace(), volume.GetMetadata().GetName(),
+				volume.GetVolumeType(), volume.GetVolumeId(), deleteTriggerLabel(volume.GetDeleteTrigger()),
+				externalVolumeRefs(volume), formatAge(volume.GetMetadata().GetCreateTime()))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+func deleteTriggerLabel(trigger ateapi.DeleteTrigger) string {
+	switch trigger {
+	case ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL:
+		return "Manual"
+	case ateapi.DeleteTrigger_DELETE_TRIGGER_LAST_ACTOR:
+		return "LastActor"
+	default:
+		return "<unknown>"
+	}
+}
+
+// externalVolumeRefs renders the reference count as active/total.
+func externalVolumeRefs(volume *ateapi.ExternalVolume) string {
+	active := 0
+	for _, ref := range volume.GetRefs() {
+		if ref.GetActive() {
+			active++
+		}
+	}
+	return fmt.Sprintf("%d/%d", active, len(volume.GetRefs()))
+}
+
+// PrintExternalVolumeTo prints a single external volume to the provided writer.
+func PrintExternalVolumeTo(out io.Writer, volume *ateapi.ExternalVolume, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, volume, format)
+	}
+	return PrintExternalVolumesTo(out, []*ateapi.ExternalVolume{volume}, format)
+}
+
 func sortAtespaces(atespaces []*ateapi.Atespace) {
 	slices.SortFunc(atespaces, func(a, b *ateapi.Atespace) int {
 		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())

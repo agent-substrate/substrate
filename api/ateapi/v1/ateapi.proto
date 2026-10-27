@@ -130,6 +130,31 @@ service Control {
     option (method).resource = "Tag";
   }
 
+  // Register a volume that already exists as an ExternalVolume.
+  rpc CreateExternalVolume(CreateExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // Get an ExternalVolume.
+  rpc GetExternalVolume(GetExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // List ExternalVolumes.
+  rpc ListExternalVolumes(ListExternalVolumesRequest) returns (ListExternalVolumesResponse) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // Update an ExternalVolume's delete trigger.
+  rpc UpdateExternalVolume(UpdateExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // Delete an ExternalVolume and its storage. Rejected while any Actor references it.
+  rpc DeleteExternalVolume(DeleteExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
     option (method).resource = "Worker";
@@ -544,6 +569,15 @@ message ExternalVolumeStatus {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 4;
+
+  // external_volume_name names the ExternalVolume this mount references, in the
+  // actor's atespace. Empty when the actor owns the volume itself.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  string external_volume_name = 5;
 }
 
 message Actor {
@@ -587,6 +621,17 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 5;
+
+  // external_volume_bindings maps each unnamed external.ref in the
+  // template, by volume name, to the ExternalVolume this actor mounts. Every
+  // unnamed ref must be bound; a named ref cannot be rebound. Set at creation.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:format=k8s-short-name
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  // +k8s:immutable
+  map<string, string> external_volume_bindings = 6;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1123,6 +1168,96 @@ message Tag {
   ObjectRef source_actor = 4;
 }
 
+// DeleteTrigger is what removes an ExternalVolume and its storage.
+// TODO: add an ATESPACE trigger that removes the volume with its atespace.
+enum DeleteTrigger {
+  DELETE_TRIGGER_UNSPECIFIED = 0;
+  // Only an explicit DeleteExternalVolume removes the volume.
+  DELETE_TRIGGER_MANUAL = 1;
+  // The volume is removed when the last actor referencing it is deleted.
+  DELETE_TRIGGER_LAST_ACTOR = 2;
+}
+
+// ExternalVolume is an atespace-scoped CSI volume whose lifetime is independent
+// of any actor. It registers a volume that already exists in the storage
+// system. Identity is (atespace, name).
+message ExternalVolume {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "ExternalVolumes"
+  };
+
+  // Common resource metadata: atespace, name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ResourceMetadata metadata = 1;
+
+  // delete_trigger decides what removes the volume. Defaults to MANUAL.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the DeleteTrigger enum
+  // +k8s:mutable
+  DeleteTrigger delete_trigger = 2;
+
+  // volume_id is the storage system's volume ID. Bounded and checked for
+  // control characters only.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:customValidation # no control characters
+  string volume_id = 3;
+
+  // volume_type is the CSI driver name.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:update=NoModify
+  // +k8s:customValidation
+  string volume_type = 4;
+
+  // volume_context is driver metadata needed by the node plugin for mounting.
+  // Attachment metadata is per-node and deliberately not recorded here.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
+  map<string, string> volume_context = 5;
+
+  // refs are the actors referencing the volume, resumed or not. Set by the
+  // control plane; ignored on write.
+  // TODO: move references to their own table before lifting the bound.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=map
+  // +k8s:listMapKey=actor_uid
+  repeated ActorRef refs = 6;
+}
+
+// ActorRef is one actor's reference to an ExternalVolume.
+message ActorRef {
+  // actor_uid identifies the actor, so a recreated namesake does not inherit it.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  string actor_uid = 1;
+
+  // actor_name is the actor's name, for readers.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string actor_name = 2;
+
+  // active is true while the actor is resumed and holds the volume mounted.
+  //
+  // +k8s:optional
+  bool active = 3;
+}
+
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
@@ -1527,6 +1662,12 @@ message ExternalVolumeSource {
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeTemplate template = 1;
+
+  // ref mounts an ExternalVolume that already exists.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeRef ref = 2;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
@@ -1561,6 +1702,21 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+}
+
+// ExternalVolumeRef mounts an ExternalVolume in the actor's atespace. The
+// volume outlives the actor, so several actors can mount it in turn.
+//
+// Actors created from a template with an ExternalVolumeRef do not start from
+// the template's golden snapshot: the first resume boots from the image, and
+// later resumes restore the actor's own snapshot.
+message ExternalVolumeRef {
+  // name of the ExternalVolume. Left empty, the actor names it at creation in
+  // Actor.external_volume_bindings.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string name = 1;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
@@ -2105,6 +2261,72 @@ message DeleteTagRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef tag = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
+}
+
+// Request to create an ExternalVolume.
+message CreateExternalVolumeRequest {
+  // The volume to register. refs is ignored.
+  //
+  // +k8s:required
+  ExternalVolume external_volume = 1;
+}
+
+// GetExternalVolumeRequest identifies one ExternalVolume.
+message GetExternalVolumeRequest {
+  // The volume to get.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef external_volume = 1;
+}
+
+// ListExternalVolumesRequest selects a page of ExternalVolumes.
+message ListExternalVolumesRequest {
+  // The atespace to list from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // options selects the page size and continuation token.
+  //
+  // +k8s:optional
+  ListOptions options = 2;
+}
+
+// ListExternalVolumesResponse is one page of ExternalVolumes.
+message ListExternalVolumesResponse {
+  // The volumes in this page.
+  repeated ExternalVolume external_volumes = 1;
+
+  // Pagination token for the next page. Empty on the last page.
+  string next_page_token = 2;
+}
+
+// Request to update the mutable fields of an ExternalVolume.
+message UpdateExternalVolumeRequest {
+  // The volume to update. metadata.atespace and metadata.name identify it;
+  // metadata.version and metadata.uid are required preconditions.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
+  ExternalVolume external_volume = 1;
+}
+
+// DeleteExternalVolumeRequest identifies one ExternalVolume to delete.
+message DeleteExternalVolumeRequest {
+  // The volume to delete.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef external_volume = 1;
 
   // Optional per-delete preconditions.
   //

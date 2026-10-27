@@ -173,6 +173,26 @@ type Interface interface {
 	// tag the caller observed.
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapi.Tag, error)
 
+	// Stores a new external volume and returns it with server-assigned metadata.
+	// Returns ErrAlreadyExists if the name is taken, or ErrFailedPrecondition if
+	// the atespace does not exist.
+	CreateExternalVolume(ctx context.Context, volume *ateapi.ExternalVolume) (*ateapi.ExternalVolume, error)
+
+	// Fetches an external volume by reference. Returns ErrNotFound if missing.
+	GetExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef) (*ateapi.ExternalVolume, error)
+
+	// Lists external volumes in one atespace, or all atespaces when empty.
+	ListExternalVolumes(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapi.ExternalVolume], error)
+
+	// UpdateExternalVolume performs a guarded read-modify-write like UpdateTag.
+	// Everything naming the storage, and access_mode, is set-once and returns
+	// ErrImmutableField when changed.
+	UpdateExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef, precondition Precondition, mutate func(toUpdate *ateapi.ExternalVolume) error) (*ateapi.ExternalVolume, error)
+
+	// Deletes and returns an external volume record; the storage is the caller's
+	// job.
+	DeleteExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef, precondition DeletePreconditions) (*ateapi.ExternalVolume, error)
+
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
 	// ErrAlreadyExists if the name is taken.

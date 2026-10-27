@@ -38,6 +38,8 @@ func Apply(m proto.Message) {
 		applyAtespaceDefaults(v)
 	case *ateapi.EgressPolicy:
 		applyEgressPolicyDefaults(v)
+	case *ateapi.ExternalVolume:
+		applyExternalVolumeDefaults(v)
 	case *ateapi.Tag:
 		applyTagDefaults(v)
 	case *ateapi.Worker:
@@ -114,6 +116,15 @@ func applyEgressRuleDefaults(rules []*ateapi.EgressRule) {
 		case r.GetHttps() != nil && r.Https.Ports == nil:
 			r.Https.Ports = &ateapi.Ports{Numbers: []int32{443}}
 		}
+	}
+}
+
+func applyExternalVolumeDefaults(v *ateapi.ExternalVolume) {
+	if v == nil {
+		return
+	}
+	if v.DeleteTrigger == ateapi.DeleteTrigger_DELETE_TRIGGER_UNSPECIFIED {
+		v.DeleteTrigger = ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL
 	}
 }
 
