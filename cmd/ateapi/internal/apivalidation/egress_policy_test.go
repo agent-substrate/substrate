@@ -1011,7 +1011,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		name: "token exchange at an endpoint only an http rule allows",
 		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = tokenExchangeHeader("https://sts.example.com/token")
-			p.Rules = append(p.Rules, trivialHTTPRule("sts.example.com"))
+			p.Rules = append(p.Rules, &ateapi.EgressRule{Http: &ateapi.HttpRule{Hostnames: []string{"sts.example.com"}, Ports: portNumbers(443)}})
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("token_exchange", "token_url"), nil, ""),
@@ -1105,6 +1105,28 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.TooShort(staticHeader.Child("token_exchange", "scopes").Index(0), "", 1).WithOrigin("minLength"),
+		},
+	}, {
+		name: "token exchange with a long scope",
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = tokenExchangeHeader("https://sts.example.com/token", strings.Repeat("a", 257))
+			p.Rules = append(p.Rules, httpsRule(nil, "sts.example.com"))
+		},
+		want: field.ErrorList{
+			field.TooLong(staticHeader.Child("token_exchange", "scopes").Index(0), "", 256).WithOrigin("maxLength"),
+		},
+	}, {
+		name: "token exchange with too many scopes",
+		mutate: func(p *ateapi.EgressPolicy) {
+			var scopes []string
+			for i := range 17 {
+				scopes = append(scopes, fmt.Sprintf("scope-%d", i))
+			}
+			p.Rules[0].Http.Effects.ReplaceHeaders[0] = tokenExchangeHeader("https://sts.example.com/token", scopes...)
+			p.Rules = append(p.Rules, httpsRule(nil, "sts.example.com"))
+		},
+		want: field.ErrorList{
+			field.TooMany(staticHeader.Child("token_exchange", "scopes"), 17, 16).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "token exchange with a repeated scope",
