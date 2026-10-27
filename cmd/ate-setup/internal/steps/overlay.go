@@ -275,6 +275,10 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, providers []config
 	if err != nil {
 		return nil, err
 	}
+	raw, err = patchAtenetEgressTokenExchangeCA(raw, e.Cfg.TokenExchangeCAConfigMap)
+	if err != nil {
+		return nil, err
+	}
 	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
 	if e.Cfg.EnvoyConcurrency > 0 {
 		raw, err = patchAtenetEgressEnvoyConcurrency(raw, e.Cfg.EnvoyConcurrency)
@@ -387,6 +391,65 @@ func patchAgentgatewayEgressInject(raw []byte, providers []config.CredentialProv
         root: /run/servicedns-ca/trust-bundle.pem`, p.Name, p.Address, p.ServerName())
 	}
 	return replaceManifestMarker(raw, "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS", block)
+}
+
+const (
+	tokenExchangeCADir = "/run/token-exchange-ca"
+	tokenExchangeCAKey = "ca.crt"
+)
+
+// patchAtenetEgressTokenExchangeCA replaces the token exchange CA markers in
+// the egress sidecar with --token-exchange-ca-file and a mount of configMap's
+// ca.crt, or removes them when configMap is empty.
+func patchAtenetEgressTokenExchangeCA(raw []byte, configMap string) ([]byte, error) {
+	var flag, mount, volume string
+	if configMap != "" {
+		flag = fmt.Sprintf("- --token-exchange-ca-file=%s/%s", tokenExchangeCADir, tokenExchangeCAKey)
+		mount = fmt.Sprintf(`- name: token-exchange-ca
+  mountPath: %s
+  readOnly: true`, tokenExchangeCADir)
+		volume = fmt.Sprintf(`- name: token-exchange-ca
+  configMap:
+    name: %q
+    items:
+    - key: %s
+      path: %s`, configMap, tokenExchangeCAKey, tokenExchangeCAKey)
+	}
+	for _, splice := range []struct{ marker, block string }{
+		{"#ATE_TOKEN_EXCHANGE_CA_FLAG", flag},
+		{"#ATE_TOKEN_EXCHANGE_CA_MOUNT", mount},
+		{"#ATE_TOKEN_EXCHANGE_CA_VOLUME", volume},
+	} {
+		var err error
+		if raw, err = replaceManifestMarker(raw, splice.marker, splice.block); err != nil {
+			return nil, err
+		}
+	}
+	return raw, nil
+}
+
+// requireTokenExchangeCA fails when --token-exchange-ca-configmap names a
+// ConfigMap the install namespace lacks, or one without a ca.crt key, which
+// would leave the egress gateway unable to start.
+func (e *Env) requireTokenExchangeCA(ctx context.Context) error {
+	name := e.Cfg.TokenExchangeCAConfigMap
+	if name == "" {
+		return nil
+	}
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), name)
+	if err != nil {
+		return err
+	}
+	if cm == nil {
+		return fmt.Errorf("token exchange CA ConfigMap %s/%s does not exist; create it with the CA certificates under key %s",
+			e.Namespace(), name, tokenExchangeCAKey)
+	}
+	_, inData := cm.Data[tokenExchangeCAKey]
+	_, inBinary := cm.BinaryData[tokenExchangeCAKey]
+	if !inData && !inBinary {
+		return fmt.Errorf("token exchange CA ConfigMap %s/%s has no %s key", e.Namespace(), name, tokenExchangeCAKey)
+	}
+	return nil
 }
 
 func replaceManifestMarker(raw []byte, marker, block string) ([]byte, error) {
