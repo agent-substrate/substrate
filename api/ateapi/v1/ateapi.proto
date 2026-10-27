@@ -861,7 +861,8 @@ message CredentialHeader {
   ActorJwtSource actor_jwt = 4;
 
   // An access token obtained by exchanging an actor JWT at an OAuth 2.0
-  // token exchange endpoint (RFC 8693).
+  // token exchange endpoint (RFC 8693). A policy can have at most 16
+  // token_exchange entries.
   //
   // +k8s:optional
   // +k8s:unionMember
