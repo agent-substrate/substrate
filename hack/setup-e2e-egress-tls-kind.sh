@@ -81,4 +81,21 @@ spec:
         emptyDir: {}
 EOF
 )"
+# The Envoy gateway's ext-proc also exchanges tokens at local origins, so it
+# trusts the same signer for token exchange. Its container already mounts the
+# bundle. Re-runs leave the flag as it is.
+if [[ "${gateway}" == envoy ]]; then
+  ca_flag=--token-exchange-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+  containers="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{"\n"}{end}')"
+  index="$(grep -nx ext-proc <<<"${containers}" | cut -d: -f1)"
+  if [[ -z "${index}" ]]; then
+    echo "error: the Envoy egress is missing its ext-proc container" >&2
+    exit 1
+  fi
+  args="$(kubectl "${kubectl_args[@]}" get deployment atenet-egress -o jsonpath='{.spec.template.spec.containers[?(@.name=="ext-proc")].args}')"
+  if [[ "${args}" != *"${ca_flag}"* ]]; then
+    kubectl "${kubectl_args[@]}" patch deployment atenet-egress --type=json \
+      --patch "[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/$((index - 1))/args/-\",\"value\":\"${ca_flag}\"}]"
+  fi
+fi
 kubectl "${kubectl_args[@]}" rollout status deployment/atenet-egress --timeout=120s

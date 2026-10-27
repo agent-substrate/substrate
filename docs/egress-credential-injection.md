@@ -16,7 +16,9 @@ the secret, nor choose the value that leaves the cluster.
 
 The gateway can also inject an **actor JWT** in place of a stored secret: a
 token that ateapi mints for the actor making the request, which an upstream
-that trusts Substrate's issuer can verify. See [Actor JWTs](#actor-jwts).
+that trusts Substrate's issuer can verify. See [Actor JWTs](#actor-jwts). Or
+it can exchange that JWT at an OAuth 2.0 token endpoint and inject the access
+token it gets back. See [Token exchange](#token-exchange).
 
 
 ## When you need this
@@ -24,7 +26,8 @@ that trusts Substrate's issuer can verify. See [Actor JWTs](#actor-jwts).
 Actors call APIs that need bearer tokens or API keys, and those secrets must
 stay out of the actor's filesystem, environment, and snapshots. Other APIs
 need to know which actor is calling and accept a signed token that says so;
-for those, inject an actor JWT.
+for those, inject an actor JWT. APIs that take their own OAuth access tokens,
+such as Google Cloud's, can get one for the actor through token exchange.
 
 Injection is supported on HTTP and HTTPS requests allowed by an `http` or
 `https` rule with credential replacement effects. For HTTPS, the actor must
@@ -39,12 +42,14 @@ flowchart LR
     provider["Credential provider"]
     store[("Secret store")]
     ateapi["ateapi"]
+    sts["Token endpoint"]
     upstream["Upstream API"]
 
     actor -->|"HTTPS request,<br/>placeholder header"| gateway
     gateway -->|"credentialUri:<br/>fetch credential<br/>for this actor"| provider
     provider -->|"authorize, then read"| store
     gateway -->|"actorJwt:<br/>mint a JWT<br/>for this actor"| ateapi
+    gateway -->|"tokenExchange:<br/>exchange that JWT"| sts
     gateway -->|"request with<br/>the credential"| upstream
 ```
 
@@ -65,7 +70,8 @@ flowchart LR
 
 For an actor JWT, steps 2 and 3 go to ateapi instead of a credential provider:
 the gateway asks ateapi to mint a token for the actor, or reuses one it minted
-earlier.
+earlier. For a token exchange, the gateway then posts that JWT to the token
+endpoint and injects the access token it returns.
 
 The reference k8s secret provider, `cmd/credential-provider/kubernetes-secrets`, resolves
 Kubernetes Secrets and is the one [For cluster admins](#for-cluster-admins)
@@ -103,6 +109,9 @@ atespace access.
 * `prefix` is prepended verbatim to the credential — include the separator,
   e.g. `"Bearer "` with the trailing space.
 * `credentialUri` names the credential; see [Credential URIs](#credential-uris).
+* An entry sets exactly one of `credentialUri`, `actorJwt`
+  ([Actor JWTs](#actor-jwts)), and `tokenExchange`
+  ([Token exchange](#token-exchange)).
 
 ### Credential URIs
 
@@ -141,7 +150,6 @@ rules:
   against.
 * `expirationSeconds` is the token's lifetime, from 300 to 3600 seconds, with
   no default.
-* An entry sets exactly one of `credentialUri` and `actorJwt`.
 
 The token's `sub` is `actor/<atespace>/<actor-name>`, and its `iss` is the
 issuer the install gave ateapi (`ACTOR_JWT_ISSUER`). It also names the actor's
@@ -153,6 +161,101 @@ The gateway reuses a token for the same actor, audiences, and lifetime until a
 third of its lifetime is left, so the upstream always gets a token with at
 least that much time remaining: 300 seconds for the 900-second lifetime above.
 Concurrent requests that need the same token share one mint.
+
+### Token exchange
+
+An entry can set `tokenExchange` instead. The gateway mints an actor JWT,
+exchanges it at an OAuth 2.0 token exchange endpoint
+([RFC 8693](https://www.rfc-editor.org/rfc/rfc8693)), and puts the prefix and
+the returned access token into the header. Like `actorJwt`, it needs no
+credential provider.
+
+```yaml
+rules:
+- https:
+    hostnames: ["sts.googleapis.com"]
+- https:
+    hostnames: ["storage.googleapis.com"]
+    effects:
+      replaceHeaders:
+      - header: Authorization
+        prefix: "Bearer "
+        tokenExchange:
+          tokenUrl: https://sts.googleapis.com/v1/token
+          audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/ate/providers/actors
+          scopes: ["https://www.googleapis.com/auth/cloud-platform"]
+```
+
+* `tokenUrl` is the endpoint, up to 2048 characters: an `https` URL with a
+  DNS hostname and no userinfo, query, or fragment. An `https` rule in the
+  same policy must allow its host and port, which is 443 unless the URL names
+  one. ateapi rejects a policy without one, and the gateway checks again on
+  each request, which is why the first rule above exists.
+* `audience` becomes the actor JWT's only `aud` and the request's `audience`
+  parameter, up to 512 characters.
+* `scopes` is optional: up to 16 distinct values, each up to 256 printable
+  ASCII characters without spaces, `"`, or `\`. They go in one
+  space-separated `scope` parameter.
+* A policy can have at most 16 `tokenExchange` entries.
+
+The gateway posts an RFC 8693 request with
+`grant_type=urn:ietf:params:oauth:grant-type:token-exchange` and
+`requested_token_type=urn:ietf:params:oauth:token-type:access_token`. The
+`subject_token` is an actor JWT with a 300-second lifetime, of type
+`urn:ietf:params:oauth:token-type:jwt`. The gateway sends no client
+credentials and no `actor_token`, so it works only with endpoints that accept
+an unauthenticated exchange. Endpoints that require client authentication
+aren't supported, and neither are AWS STS and Microsoft Entra, which use their
+own protocols. The gateway follows no redirects and ignores proxy environment
+variables. It accepts a response only with a non-empty `access_token` of
+printable ASCII and, when `issued_token_type` is present, the access token
+type. It verifies the endpoint against the system roots, plus any CA an admin
+adds (see [Private token endpoints](#private-token-endpoints)).
+
+The gateway reuses an access token for the same actor, `tokenUrl`, `audience`,
+and scopes until a third of its lifetime or 30 seconds remains, whichever
+comes first, and for 60 seconds when the response has no `expires_in`. It
+doesn't cache a token with 30 seconds or less to live. Concurrent requests
+that need the same token share one exchange. A request waits at most four
+seconds for it, but the exchange keeps going for up to ten, so a slow
+endpoint still fills the cache for the next request.
+
+#### Google Cloud Workload Identity Federation
+
+Google Cloud's Security Token Service accepts an unauthenticated exchange. To
+use the policy above:
+
+1. Create a workload identity pool and an OIDC provider whose issuer is the
+   actor JWT issuer, set by the `actorJWT.issuer` install setting (see
+   [operator-install.md](operator-install.md)). Google Cloud reads the signing
+   keys through the issuer's discovery document. If the issuer isn't publicly
+   reachable, as the default `https://idp.<namespace>.svc` isn't, upload the
+   JWK set from `<issuer>/openid/v1/jwks` instead. An upload holds at most 8
+   keys and replaces the previous one, so upload again after
+   `kubectl ate admin add-jwt-key` and before activating the new key (see the
+   [kubectl-ate README](../cmd/kubectl-ate/README.md)).
+2. Allow the audience
+   `//iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`
+   as a custom audience of the provider, and use the same string as
+   `audience`. The gateway sends it as both the JWT's `aud` and the STS
+   `audience` parameter, which takes this form.
+3. Map `google.subject=assertion.sub` and
+   `attribute.atespace=assertion.sub.split("/")[1]`. Google Cloud limits
+   `google.subject` to 127 characters, while the `sub`,
+   `actor/<atespace>/<name>`, can reach 133: atespace and actor names can
+   each be 63. The mapping works only when the atespace and actor name total
+   120 characters or less. Longer ones fail the exchange.
+4. Grant roles to
+   `principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<pool>/subject/actor/<atespace>/<name>`
+   for one actor, or to
+   `principalSet://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<pool>/attribute.atespace/<atespace>`
+   for an atespace. Don't grant the whole pool. Any atespace can have the
+   gateway mint its actors a JWT for any audience, so the audience doesn't
+   keep other tenants out.
+
+STS requires a scope, such as `https://www.googleapis.com/auth/cloud-platform`.
+It returns a federated token, which works with services that support direct
+resource access. The gateway doesn't impersonate a service account.
 
 ## What the gateway does
 
@@ -169,6 +272,12 @@ Concurrent requests that need the same token share one mint.
 | `actorJwt` entry, the actor no longer exists | **403**, fail closed |
 | `actorJwt` entry, ateapi unreachable or timed out | **503**, fail closed but retryable |
 | `actorJwt` entry, any other mint failure | **500** (Envoy) or **403** (agentgateway), fail closed |
+| Request decided by an `http` or `https` rule, carries the header of a `tokenExchange` entry, exchange succeeds | Header value replaced with the prefix and the access token, with or without a provider |
+| `tokenExchange` entry whose `tokenUrl` no `https` rule in the policy allows | **500**, fail closed, no exchange |
+| `tokenExchange` entry, the actor no longer exists, or the endpoint refuses the exchange (`invalid_grant`, `invalid_target`, `unauthorized_client`, `invalid_scope`, or `access_denied` with a 400 or 401) | **403**, fail closed |
+| `tokenExchange` entry, ateapi or the endpoint unreachable or timed out, including a TLS failure; the endpoint answers 429 or 5xx, or a 200 without a usable access token | **503**, fail closed but retryable |
+| `tokenExchange` entry, any other endpoint answer, including other 4xx errors and redirects, or any other mint failure | **500**, fail closed |
+| `tokenExchange` entry on the agentgateway dataplane | **403**, fail closed; agentgateway doesn't exchange tokens |
 
 A request that does not carry the header skips injection. On an HTTP or HTTPS
 request that carries it, any failure to produce the credential, including
@@ -261,8 +370,33 @@ kubectl apply -f manifests/egress-credential-injection/sample-secret.yaml
 **3. The actors.** Actors can now add `replaceHeaders` effects to their
 `https` rules, as described under [The policy](#the-policy). Each such actor
 also needs the projected egress trust bundle to do TLS through the gateway at
-all — see [egress-trust-bundle.md](egress-trust-bundle.md). Actor JWT entries
-need no provider; ateapi signs them with a key that every install creates.
+all — see [egress-trust-bundle.md](egress-trust-bundle.md). Actor JWT and
+token exchange entries need no provider; ateapi signs the JWTs with a key that
+every install creates.
+
+### Private token endpoints
+
+The gateway verifies token exchange endpoints against the system roots. For
+an endpoint with a private certificate, put its CA certificates under key
+`ca.crt` in a ConfigMap in the install namespace and name it at install time:
+
+```bash
+kubectl -n ate-system create configmap token-exchange-ca --from-file=ca.crt=corp-root-ca.pem
+go run ./cmd/ate-setup deploy atenet --token-exchange-ca-configmap=token-exchange-ca
+```
+
+Pass the flag with the rest of your install settings.
+
+The installer mounts the ConfigMap into the gateway, which trusts these
+certificates in addition to the system roots. The installer doesn't create
+the ConfigMap, and the install fails if it or its `ca.crt` key is missing.
+The setting needs the Envoy dataplane; see
+[commands.md](../cmd/ate-setup/commands.md). The gateway reads the
+certificates at startup, so restart it after changing the ConfigMap:
+
+```bash
+kubectl -n ate-system rollout restart deployment/atenet-egress
+```
 
 ### Verify
 
@@ -291,10 +425,11 @@ and recreated, the channel can sit in connect backoff for up to a couple of
 minutes before re-resolving; injection fails closed with 503 (deliberately
 retryable) until it reconnects.
 
-**Actor JWTs follow the actor's name.** The gateway caches tokens by actor
-name. An actor that is deleted and recreated under the same name can get its
-predecessor's token until that token's refresh point, up to two thirds of its
-lifetime, and that token's UID claim names the old actor.
+**Actor JWTs and exchanged tokens follow the actor's name.** The gateway
+caches both by actor name. An actor that is deleted and recreated under the
+same name can get its predecessor's token until that token's refresh point,
+up to two thirds of its lifetime, or 60 seconds for an exchanged token without
+`expires_in`. An actor JWT's UID claim then names the old actor.
 
 **Scope of the reference provider's RBAC.** The sample deployment grants read
 on Secrets cluster-wide so the policy may name any namespace; a production

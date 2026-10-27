@@ -229,7 +229,7 @@
     "threat": "Agent leaks credentials exposed in sandbox, because LLMs are unreliable. Due to prompt injection or just agent silliness.",
     "mitigating_invariants": "Credentials are not exposed in sandboxes by default.",
     "suggested_concrete_mitigations": "Opt-in to credentials, none by default. Credential injecting proxy (injects tokens or terminates TLS and holds x509 private key on behalf of sandbox). Delegation to \"drivers\" rather than relying on sandboxed clients (like CSI).  Encrypting credentials exposed in sandboxes, requiring them to be unwrapped by a network proxy to be usable. Consider supporting pluggable per-node or per-worker security sidecars that can interpose network, implement additional policy, add monitoring, etc.",
-    "notes": "May provide an option to expose in sandbox if there are other mitigating factors. For example, the process is NOT an AI agent, or the process limits agent access to env/filesystem."
+    "notes": "May provide an option to expose in sandbox if there are other mitigating factors. For example, the process is NOT an AI agent, or the process limits agent access to env/filesystem. Token exchange (`tokenExchange`) keeps exchanged access tokens in the egress gateway process, like other injected credentials. The token URL must be a host the policy's `https` rules allow, and the gateway follows no redirects."
   },
   {
     "threat_id": "T-30",

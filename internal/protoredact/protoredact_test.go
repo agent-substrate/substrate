@@ -443,6 +443,8 @@ func TestSecretLikeFieldsAreLabeled(t *testing.T) {
 		"next_page_token": "opaque list cursor",
 		"substrate.ateapi.v1.CredentialHeader.credential_uri": "ate-secret:// reference to a credential, not the value",
 		"substrate.ateapi.v1.CredentialHeader.actor_jwt":      "ActorJwtSource: audiences and lifetime for minting, not a token",
+		"substrate.ateapi.v1.CredentialHeader.token_exchange": "TokenExchangeSource: endpoint, audience, and scopes for an exchange, not a token",
+		"substrate.ateapi.v1.TokenExchangeSource.token_url":   "endpoint URL without userinfo or query, so it holds no credential",
 	}
 	forEachField(func(fd protoreflect.FieldDescriptor) {
 		if !secretLikeName.MatchString(string(fd.Name())) || isDebugRedact(fd) {

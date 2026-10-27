@@ -90,6 +90,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
+	if err := e.requireTokenExchangeCA(ctx); err != nil {
+		return err
+	}
 
 	// The namespace has to exist before RBAC or CRDs are applied.
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
@@ -539,6 +542,9 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 		return err
 	}
 	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
+		return err
+	}
+	if err := e.requireTokenExchangeCA(ctx); err != nil {
 		return err
 	}
 	if err := e.EnsureCRDs(ctx); err != nil {

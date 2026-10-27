@@ -15,6 +15,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,7 +55,7 @@ const defaultDialTimeout = 3 * time.Second
 // they arrived, which is how a suite sees what the gateway put on the wire.
 // The /fetch handler for e2e tests that need test requests with bodies.
 // /dial reports whether this pod can open a TCP connection to an address; see
-// dial.
+// dial. POST /token is a fake RFC 8693 token endpoint; see exchangeToken.
 func newHTTPHandler(body string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -81,7 +82,70 @@ func newHTTPHandler(body string) http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/dial", dial)
+	mux.HandleFunc("POST /token", exchangeToken)
 	return mux
+}
+
+// The RFC 8693 values exchangeToken accepts.
+const (
+	grantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
+	tokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"
+	tokenTypeAccessToken   = "urn:ietf:params:oauth:token-type:access_token"
+)
+
+// exchangeToken answers an RFC 8693 token exchange whose audience is the
+// subject JWT's only aud with the access token "exchanged.<sub>.<scope>", so a
+// suite can see which actor and scope the gateway exchanged for. It does not
+// verify the JWT's signature.
+func exchangeToken(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		oauthError(w, "invalid_request", err.Error())
+		return
+	}
+	form := r.PostForm
+	if form.Get("grant_type") != grantTypeTokenExchange || form.Get("subject_token_type") != tokenTypeJWT || form.Get("requested_token_type") != tokenTypeAccessToken {
+		oauthError(w, "invalid_request", "want an RFC 8693 exchange of a JWT for an access token")
+		return
+	}
+	var claims struct {
+		Sub string   `json:"sub"`
+		Aud []string `json:"aud"`
+	}
+	parts := strings.Split(form.Get("subject_token"), ".")
+	if len(parts) != 3 {
+		oauthError(w, "invalid_grant", "subject_token is not a JWT")
+		return
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err == nil {
+		err = json.Unmarshal(payload, &claims)
+	}
+	if err != nil {
+		oauthError(w, "invalid_grant", fmt.Sprintf("decoding the subject_token payload: %v", err))
+		return
+	}
+	if len(claims.Aud) != 1 || claims.Aud[0] != form.Get("audience") {
+		oauthError(w, "invalid_grant", fmt.Sprintf("subject_token aud %q is not [%q]", claims.Aud, form.Get("audience")))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"access_token":      "exchanged." + claims.Sub + "." + form.Get("scope"),
+		"issued_token_type": tokenTypeAccessToken,
+		"token_type":        "Bearer",
+		"expires_in":        600,
+	}); err != nil {
+		log.Printf("testserver http: encoding /token response: %v", err)
+	}
+}
+
+// oauthError writes an RFC 6749 section 5.2 error response.
+func oauthError(w http.ResponseWriter, code, description string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": description}); err != nil {
+		log.Printf("testserver http: encoding /token error: %v", err)
+	}
 }
 
 // acceptingConnect answers every CONNECT with 200, as a forward proxy does
@@ -146,7 +210,7 @@ func newHTTPCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve an HTTP/1.1 origin answering /healthz, /echoheaders, POST /fetch and /dial, and with --accept-connect any CONNECT.",
+		Short: "Serve an HTTP/1.1 origin answering /healthz, /echoheaders, POST /fetch, POST /token and /dial, and with --accept-connect any CONNECT.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			handler := newHTTPHandler(body)

@@ -1398,6 +1398,10 @@ spec:
         # {"enabled":false}. Without a provider, a request matching a rule that
         # requires an injection is denied (see egress.applyEffects).
         #ATE_EGRESS_INJECT_FLAGS -- Don't modify this line.
+        # The installer replaces this marker, and the two below, with
+        # --token-exchange-ca-file and the mount of the ConfigMap that
+        # --token-exchange-ca-configmap names, or removes them when it is unset.
+        #ATE_TOKEN_EXCHANGE_CA_FLAG -- Don't modify this line.
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -1458,6 +1462,7 @@ spec:
           readOnly: true
         - name: drain-signal
           mountPath: /var/run/atenet
+        #ATE_TOKEN_EXCHANGE_CA_MOUNT -- Don't modify this line.
       volumes:
       - name: config
         configMap:
@@ -1503,6 +1508,7 @@ spec:
               items:
               - key: pool
                 path: mitm-pool.json
+      #ATE_TOKEN_EXCHANGE_CA_VOLUME -- Don't modify this line.
 ---
 apiVersion: v1
 kind: Service
