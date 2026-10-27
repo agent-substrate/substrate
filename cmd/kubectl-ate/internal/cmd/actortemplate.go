@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -168,6 +169,14 @@ func actorTemplateFromManifest(data []byte) (*ateapi.ActorTemplate, error) {
 	}
 	template := &ateapi.ActorTemplate{}
 	if err := protojson.Unmarshal(jsonData, template); err != nil {
+		var probe map[string]json.RawMessage
+		if json.Unmarshal(jsonData, &probe) == nil {
+			for _, k := range []string{"apiVersion", "kind", "spec"} {
+				if _, ok := probe[k]; ok {
+					return nil, fmt.Errorf("ActorTemplate is not a Kubernetes CRD; remove apiVersion/kind/spec: %w", err)
+				}
+			}
+		}
 		return nil, err
 	}
 	return template, nil
