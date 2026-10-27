@@ -141,11 +141,7 @@ func (e *Env) CreateAPIConfig(ctx context.Context) error {
 		return err
 	}
 
-	logLevel := e.Cfg.APILogLevel
-	if logLevel == "" {
-		logLevel = defaultAPILogLevel
-	}
-	apiConfig, err := buildAPIConfig(logLevel)
+	apiConfig, err := e.apiConfig()
 	if err != nil {
 		return err
 	}
@@ -156,6 +152,15 @@ func (e *Env) CreateAPIConfig(ctx context.Context) error {
 	return e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIConfig, map[string]string{
 		"apiconfig.textproto": apiConfig,
 	})
+}
+
+// apiConfig renders apiconfig.textproto at the configured log level.
+func (e *Env) apiConfig() (string, error) {
+	logLevel := e.Cfg.APILogLevel
+	if logLevel == "" {
+		logLevel = defaultAPILogLevel
+	}
+	return buildAPIConfig(logLevel)
 }
 
 // buildAPIConfig renders apiconfig.textproto.
@@ -197,6 +202,18 @@ func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 // coordinates on GKE, otherwise read from the cluster's OpenID discovery
 // document, falling back to the in-cluster default.
 func (e *Env) jwtIssuer(ctx context.Context) string {
+	if issuer := e.configuredJWTIssuer(); issuer != "" {
+		return issuer
+	}
+	if issuer := e.Kube.OIDCIssuer(ctx); issuer != "" {
+		return issuer
+	}
+	return inClusterIssuer
+}
+
+// configuredJWTIssuer is the issuer the settings name, from EXPECTED_JWT_ISSUER
+// or the GKE cluster coordinates, or "" when they name none.
+func (e *Env) configuredJWTIssuer() string {
 	cfg := e.Cfg
 	if cfg.ExpectedJWTIssuer != "" {
 		return cfg.ExpectedJWTIssuer
@@ -205,10 +222,7 @@ func (e *Env) jwtIssuer(ctx context.Context) string {
 		return fmt.Sprintf("https://container.googleapis.com/v1/projects/%s/locations/%s/clusters/%s",
 			cfg.ProjectID, cfg.ClusterLocation, cfg.ClusterName)
 	}
-	if issuer := e.Kube.OIDCIssuer(ctx); issuer != "" {
-		return issuer
-	}
-	return inClusterIssuer
+	return ""
 }
 
 // inClusterIssuer is the default issuer for a cluster that does not publish a
