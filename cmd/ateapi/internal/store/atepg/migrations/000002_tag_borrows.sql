@@ -1,0 +1,28 @@
+-- Copyright 2026 Google LLC
+--
+-- Licensed under the Apache License, Version 2.0 (the "License");
+-- you may not use this file except in compliance with the License.
+-- You may obtain a copy of the License at
+--
+--     http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software
+-- distributed under the License is distributed on an "AS IS" BASIS,
+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-- See the License for the specific language governing permissions and
+-- limitations under the License.
+
+-- +goose Up
+
+-- A borrowing Actor's snapshot URI names the Tag by UID.
+CREATE UNIQUE INDEX tags_atespace_uid_idx ON tags (atespace, uid);
+
+-- One row per Actor that borrows a Tag's external snapshot, written in the
+-- same transaction as the actor write that starts or ends the borrow. A Tag
+-- cannot be removed while it is borrowed.
+CREATE TABLE tag_borrows (
+    actor_uid  text PRIMARY KEY,
+    tag_uid    text NOT NULL
+);
+
+CREATE INDEX tag_borrows_tag_idx ON tag_borrows (tag_uid);

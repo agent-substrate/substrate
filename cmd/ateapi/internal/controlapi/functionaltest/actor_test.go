@@ -85,7 +85,7 @@ func TestCreateActor_Success(t *testing.T) {
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t, tc, tmpl)),
 			},
 		},
 		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
@@ -488,6 +488,81 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	}
 }
 
+// TestCreateActor_SourceTagNotReady verifies an Actor is not seeded from a tag
+// still being created or marked for deletion, whether the tag is named
+// explicitly or is the template's golden tag. A refused create records no
+// borrow, so the tag can still be deleted.
+func TestCreateActor_SourceTagNotReady(t *testing.T) {
+	tests := []struct {
+		name     string
+		golden   bool
+		deleting bool
+		wantMsg  string
+	}{
+		{
+			name:    "explicit-creating",
+			wantMsg: "source Tag is still being created or failed creation",
+		},
+		{
+			name:     "explicit-deleting",
+			deleting: true,
+			wantMsg:  "source Tag is being deleted",
+		},
+		{
+			name:     "golden-deleting",
+			golden:   true,
+			deleting: true,
+			wantMsg:  "source Tag is being deleted",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-source-tag-" + tt.name)
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+			ctx := context.Background()
+			tmpl := createTemplate(t, tc, ns)
+
+			actor := &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
+				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+			}
+			var tag *ateapi.Tag
+			if tt.golden {
+				golden, err := tc.persistence.GetTag(ctx, resources.TagRefFromObjectRef(tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()))
+				if err != nil {
+					t.Fatalf("GetTag(golden): %v", err)
+				}
+				tag = golden
+			} else {
+				tag = seedTag(t, tc, "source", "source-tag", func(tag *ateapi.Tag) {
+					tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
+					if !tt.deleting {
+						// A tag still being created is still copying its snapshot.
+						tag.Status.Snapshot.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+					}
+				})
+				actor.SourceTag = resources.TagRefFromTag(tag).ToObjectRef()
+			}
+			if tt.deleting {
+				if _, err := tc.persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{UID: tag.GetMetadata().GetUid()}, nil); err != nil {
+					t.Fatalf("MarkTagForDeletion: %v", err)
+				}
+			}
+
+			_, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: actor})
+			assertGrpcError(t, err, codes.FailedPrecondition, tt.wantMsg)
+			if _, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "clone"}}); status.Code(err) != codes.NotFound {
+				t.Errorf("GetActor(clone) after the refusal = %v, want NotFound", err)
+			}
+			// The refused create recorded no borrow, so the tag can be deleted.
+			if _, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: resources.TagRefFromTag(tag).ToObjectRef()}); err != nil {
+				t.Errorf("DeleteTag after the refusal: %v", err)
+			}
+		})
+	}
+}
+
 // TestGetActor_Found tests that an existing actor can be retrieved.
 func TestGetActor_Found(t *testing.T) {
 	ns := namespaceForTest("ns-get-found")
@@ -775,7 +850,7 @@ func TestUpdateActor_Success(t *testing.T) {
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t, tc, tmpl)),
 			},
 		},
 		WorkerSelector: &ateapi.Selector{
@@ -918,7 +993,7 @@ func TestUpdateActor(t *testing.T) {
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t, tc, tmpl)),
 			},
 		},
 		WorkerSelector: &ateapi.Selector{
@@ -3211,7 +3286,7 @@ func TestResumeActor(t *testing.T) {
 			AssignedNode:           "node1",
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t, tc, tmpl)),
 			},
 			WorkerAssignment: &ateapi.WorkerAssignment{
 				Worker:          &ateapi.ObjectRef{Name: podUID},
@@ -3357,34 +3432,7 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	// Publish the golden snapshot as a tag and point the template at it, as
-	// createTemplateWithContainersAndVolumes does.
-	tag, err := tc.persistence.CreateTag(context.Background(), &ateapi.Tag{
-		Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
-		SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetUid()},
-		Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
-		Status: &ateapi.TagStatus{
-			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, created.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-			ActorTemplateUid: created.GetMetadata().GetUid(),
-		},
-	})
-	if err != nil {
-		t.Fatalf("create golden tag: %v", err)
-	}
-	updated, err := tc.persistence.UpdateActorTemplate(context.Background(),
-		resources.ActorTemplateRefFromActorTemplate(created), store.PreconditionFrom(created),
-		func(dbTemplate *ateapi.ActorTemplate) error {
-			dbTemplate.Status = &ateapi.ActorTemplateStatus{
-				GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
-					GoldenTag: resources.TagRefFromTag(tag).ToObjectRef(),
-				},
-			}
-			return nil
-		})
-	if err != nil {
-		t.Fatalf("failed to record the template's golden snapshot: %v", err)
-	}
-	return updated
+	return publishGoldenTag(t, tc, created, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
 }
 
 // TestResumeActor_DataSnapshotIgnoresGolden drives a resume from a DATA
@@ -4090,6 +4138,16 @@ func TestSuspendActor(t *testing.T) {
 	// The Actor took only what it owned with it.
 	assertSnapshotCollected(t, tc, snapshotURI)
 	assertSnapshotPresent(t, tc, taggedSnapshotURI)
+
+	// The cross-atespace clone never suspended, so the tag's snapshot is still
+	// its starting state. A borrow holds the tag back from whichever atespace it
+	// was taken out in.
+	if _, err := tc.client.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("DeleteTag while other/cross-atespace borrows it = %v, want FailedPrecondition", err)
+	}
+	if _, err := tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: "other", Name: "cross-atespace"}}); err != nil {
+		t.Fatalf("DeleteActor(other/cross-atespace) failed: %v", err)
+	}
 
 	if deleted, err := tc.client.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil || deleted.GetMetadata().GetName() != tagRef.GetName() {
 		t.Fatalf("DeleteTag = (%v, %v)", deleted, err)
@@ -4959,7 +5017,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 					AssignedNode:           "node1",
 					LastAssignedGeneration: 2,
 					Snapshots: []*ateapi.Snapshot{
-						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t, tc, tmpl)),
 						wantPausedSnap,
 					},
 				},
@@ -7156,19 +7214,29 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	// verify that a newly created actor borrowing the golden snapshot, when
 	// worker-a is full and it falls back onto worker-b, restores the golden at
 	// ROOTFS fidelity like any other durable snapshot rather than cold-booting.
-	goldenSnap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t))
-	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapi.ActorSandboxRuntime)
-	stampedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapi.Tag{
+	reservedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapi.Tag{
 		Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "golden-rt-a"},
 		SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: tmpl.GetMetadata().GetUid()},
 		Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapi.TagStatus{
-			Snapshot:         goldenSnap,
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 		},
 	})
 	if err != nil {
 		t.Fatalf("CreateTag(golden-rt-a): %v", err)
+	}
+	goldenURI, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, reservedGoldenTag.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	goldenSnap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenURI.String())
+	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapi.ActorSandboxRuntime)
+	stampedGoldenTag, err := tc.persistence.UpdateTag(ctx, resources.TagRefFromTag(reservedGoldenTag), store.PreconditionFrom(reservedGoldenTag), func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot = goldenSnap
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("recording the snapshot of golden-rt-a: %v", err)
 	}
 	curTmpl, err := tc.persistence.GetActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl))
 	if err != nil {
@@ -7219,7 +7287,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	if got := goldenRestore.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
 		t.Fatalf("golden-actor RestoreRequest.Fidelity = %v, want ROOTFS", got)
 	}
-	if got, want := goldenRestore.GetSnapshot().GetObject().GetSnapshotUri(), goldenSnapshotURI(t); got != want {
+	if got, want := goldenRestore.GetSnapshot().GetObject().GetSnapshotUri(), goldenURI.String(); got != want {
 		t.Fatalf("golden-actor RestoreRequest.SnapshotUri = %q, want golden %q", got, want)
 	}
 	// A borrowed golden snapshot is shared by every actor created from it,

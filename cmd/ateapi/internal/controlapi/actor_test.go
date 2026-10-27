@@ -461,18 +461,21 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	// same-location-slash spells sameLocation differently but resolves to the
 	// same prefix. corrupt has no bucket, which template validation rejects, so
 	// only a write straight to the store can leave it behind.
+	templates := map[string]*ateapi.ActorTemplate{}
 	for name, location := range map[string]string{
 		"same-location":       sameLocation,
 		"same-location-slash": sameLocation + "/",
 		"different-location":  differentLocation,
 		"corrupt":             "gs:///snapshots",
 	} {
-		if _, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		created, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
 			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
 			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: location},
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}
+		templates[name] = created
 	}
 
 	snapshotOwnedByActor := func(t *testing.T, actor *ateapi.Actor) string {
@@ -483,14 +486,11 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 		}
 		return uri.String()
 	}
-	snapshotOwnedByTag := func(t *testing.T, _ *ateapi.Actor) string {
+	snapshotOwnedByTag := func(t *testing.T, actor *ateapi.Actor) string {
 		t.Helper()
-		uri, err := resources.NewTagSnapshotURI(sameLocation, testAtespace, "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60")
-		if err != nil {
-			t.Fatalf("NewTagSnapshotURI: %v", err)
-		}
-		return uri.String()
+		return mustSeedReadyTag(t, ctx, persistence, templates["same-location"], testAtespace, actor.GetMetadata().GetName()).String()
 	}
+
 	tests := []struct {
 		name     string
 		template string
@@ -977,20 +977,49 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 }
 
 func TestCreateActor_GoldenTagDefault(t *testing.T) {
-	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope"} {
+	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "deleting", "wrong template", "data scope"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
 			storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
 			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
 			ref := &ateapi.ObjectRef{Atespace: "team-a", Name: tmpl.GetMetadata().GetUid()}
+			// createTag stores tag with its snapshot under the prefix of the UID
+			// the store assigns, the way the tag workflow does.
+			createTag := func(tag *ateapi.Tag) *ateapi.Tag {
+				t.Helper()
+				tag = proto.CloneOf(tag)
+				snapshot := tag.Status.Snapshot
+				tag.Status.Snapshot = nil
+				reserved, err := persistence.CreateTag(ctx, tag)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if snapshot == nil {
+					return reserved
+				}
+				uri, err := resources.NewTagSnapshotURI("gs://bucket", ref.Atespace, reserved.GetMetadata().GetUid())
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot.Uuid = uri.Name()
+				snapshot.DurableSnapshot.Object.SnapshotUri = uri.String()
+				stored, err := persistence.UpdateTag(ctx, resources.TagRefFromTag(reserved), store.PreconditionFrom(reserved), func(toUpdate *ateapi.Tag) error {
+					toUpdate.Status.Snapshot = snapshot
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return stored
+			}
 			tag := &ateapi.Tag{
 				Metadata:    &ateapi.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
 				SourceActor: ref,
 				Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapi.TagStatus{
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-					Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), someActorUID, "gs://bucket/atespaces/team-a/tags/"+someActorUID, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "", "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				},
 			}
 			wantCode := codes.OK
@@ -1000,6 +1029,8 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			case "pending":
 				tag.Status.Snapshot = nil
 				wantCode = codes.FailedPrecondition
+			case "deleting":
+				wantCode = codes.FailedPrecondition
 			case "wrong template":
 				tag.Status.ActorTemplateUid = "other"
 				wantCode = codes.FailedPrecondition
@@ -1007,7 +1038,10 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				tag.Status.Snapshot.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}
 			if scenario != "missing" {
-				if _, err := persistence.CreateTag(ctx, tag); err != nil {
+				tag = createTag(tag)
+			}
+			if scenario == "deleting" {
+				if _, err := persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{UID: tag.GetMetadata().GetUid()}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1021,10 +1055,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			actor := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
 			if scenario == "explicit tag" {
 				tag.Metadata.Name = "explicit"
-				tag.Status.Snapshot = newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "explicit", "gs://bucket/atespaces/team-a/tags/explicit", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-				if _, err := persistence.CreateTag(ctx, tag); err != nil {
-					t.Fatal(err)
-				}
+				tag = createTag(tag)
 				actor.SourceTag = &ateapi.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
 			svc := &ServiceImpl{store: persistence}

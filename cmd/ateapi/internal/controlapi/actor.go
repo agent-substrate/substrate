@@ -137,8 +137,8 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 		// The Actor starts out borrowing the tag's snapshot rather than
 		// copying it. The snapshot URI is under the tag's prefix, not the Actor's, which
 		// is what keeps the Actor from collecting those objects. Its first
-		// suspend writes a snapshot under its own prefix and takes over from
-		// there.
+		// suspend writes a snapshot under its own prefix, and the borrow ends
+		// once that snapshot is durable.
 		snap := proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
 		snap.Generation = 1
 		snap.Owner = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
@@ -160,6 +160,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
+		}
+		if errors.Is(err, store.ErrTagNotReady) {
+			return nil, apierror.FailedPrecondition("source Tag is being deleted or no longer exists")
 		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
@@ -191,8 +194,9 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	default:
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
-	// TODO: Refuse a tag with delete_time set. DeleteTag may already have
-	// collected its snapshot.
+	if tag.GetMetadata().GetDeleteTime() != nil {
+		return nil, apierror.FailedPrecondition("source Tag is being deleted")
+	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
 	if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")

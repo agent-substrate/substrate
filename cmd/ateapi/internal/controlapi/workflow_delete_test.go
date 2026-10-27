@@ -373,7 +373,7 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			current := mustActorSnapshotURI(t, template, actor, "current")
 			currentType := ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
 			if tt.tagOwnedSnapshot {
-				current = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+				current = mustSeedReadyTag(t, ctx, persistence, template, "team-a", "v1")
 				currentType = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 			}
 			objects.PutSnapshot(t, current, "manifest.json")

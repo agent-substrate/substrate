@@ -413,16 +413,15 @@ func actorSnapshotStoragePrefix(actor *ateapi.Actor) (resources.StoragePrefix, e
 		if err != nil {
 			return resources.StoragePrefix{}, fmt.Errorf("while parsing the external snapshot %q: %w", snapshotURI, err)
 		}
-		// A URI the actor does not own is a tag's snapshot, borrowed until the actor's
-		// first suspend completes, which means it has written nothing of its
-		// own yet.
+		// A URI the actor does not own is a tag's snapshot. The actor borrows it
+		// until a snapshot of its own is COMPLETED.
 		if uri.OwnedBy(actorOwner) {
 			return uri.OwnerPrefix(), nil
 		}
 	}
-	// Nothing of the actor's own is recorded. Unless a suspend died partway,
-	// nothing was ever written under its prefix: the in-progress URI is
-	// recorded before atelet uploads the first object.
+	// The actor has no COMPLETED snapshot of its own. A suspend records a
+	// PENDING snapshot before atelet uploads anything, so if the actor wrote
+	// any objects, its latest PENDING snapshot is under the same prefix.
 	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
 	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if inProgress == "" {

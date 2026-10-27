@@ -20,9 +20,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
@@ -141,5 +144,270 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		if _, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1, PageToken: workerPage.NextPageToken}); err == nil {
 			t.Errorf("ListAtespaces with a worker page token = nil error, want an error")
 		}
+	}
+}
+
+// A MarkTagForDeletion still in flight holds the tag row locked, so a new
+// borrow waits for it and then checks the delete_time it left behind.
+func TestCreateActor_BorrowWaitsForInFlightMarkForDeletion(t *testing.T) {
+	tests := []struct {
+		name               string
+		commit             bool
+		wantCreateActorErr error
+	}{
+		{
+			name:               "mark tx commits",
+			commit:             true,
+			wantCreateActorErr: store.ErrTagNotReady,
+		},
+		{
+			name:               "mark tx rolls back",
+			commit:             false,
+			wantCreateActorErr: nil,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			ctx := context.Background()
+			createTestAtespace(t, s, "team-a")
+			tag := createReadyTestTag(t, s, "team-a", "tag-a")
+
+			deleting := proto.CloneOf(tag)
+			deleting.Metadata.DeleteTime = timestamppb.Now()
+			deletingBytes, err := proto.Marshal(deleting)
+			if err != nil {
+				t.Fatalf("marshaling tag: %v", err)
+			}
+			updateTagTx, err := s.pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("beginning mark: %v", err)
+			}
+			defer updateTagTx.Rollback(ctx) //nolint:errcheck // no-op once committed
+			if _, err := updateTagTx.Exec(ctx, `UPDATE tags SET proto = $1 WHERE uid = $2`, deletingBytes, tag.GetMetadata().GetUid()); err != nil {
+				t.Fatalf("marking tag for deletion: %v", err)
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.CreateActor(ctx, &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "session-1"},
+					Status: &ateapi.ActorStatus{
+						State:     ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+						Snapshots: []*ateapi.Snapshot{proto.CloneOf(tag.GetStatus().GetSnapshot())},
+					},
+				})
+				done <- err
+			}()
+			waitUntilBlockedOnLock(t, s, done)
+
+			if test.commit {
+				err = updateTagTx.Commit(ctx)
+			} else {
+				err = updateTagTx.Rollback(ctx)
+			}
+			if err != nil {
+				t.Fatalf("ending mark: %v", err)
+			}
+			if err := <-done; !errors.Is(err, test.wantCreateActorErr) {
+				t.Errorf("CreateActor borrowing the tag = %v, want %v", err, test.wantCreateActorErr)
+			}
+		})
+	}
+}
+
+// tagBorrowOf returns the UID of the Tag the actor borrows according to
+// tag_borrows, or "" when the actor has no row.
+func tagBorrowOf(t *testing.T, s *Persistence, actorUID string) string {
+	t.Helper()
+	var tagUID string
+	err := s.pool.QueryRow(context.Background(), `SELECT tag_uid FROM tag_borrows WHERE actor_uid = $1`, actorUID).Scan(&tagUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("reading the tag borrow of actor %s: %v", actorUID, err)
+	}
+	return tagUID
+}
+
+// testActorSnapshot is a snapshot an actor took itself, under its own prefix.
+func testActorSnapshot(t *testing.T, gen int32, storageStatus ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+	t.Helper()
+	name := fmt.Sprintf("snapshot-%d", gen)
+	uri, err := resources.NewActorSnapshotURI("gs://bucket", "team-a", "6f1c2d9e-4b7a-4e3f-9a10-2c5d8e7b3f41", name)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI failed: %v", err)
+	}
+	return &ateapi.Snapshot{
+		Uuid:       name,
+		Generation: gen,
+		Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+		Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		DurableSnapshot: &ateapi.SnapshotStorage{
+			Status: storageStatus,
+			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri.String()},
+		},
+	}
+}
+
+func TestCreateActor_RecordsTagBorrow(t *testing.T) {
+	tests := []struct {
+		name      string
+		snapshots func(t *testing.T, tag *ateapi.Tag) []*ateapi.Snapshot
+		wantTag   string
+	}{
+		{
+			name: "a tag's snapshot borrows the tag",
+			snapshots: func(_ *testing.T, tag *ateapi.Tag) []*ateapi.Snapshot {
+				return []*ateapi.Snapshot{proto.CloneOf(tag.GetStatus().GetSnapshot())}
+			},
+			wantTag: "tag-a",
+		},
+		{
+			name: "a snapshot of its own borrows nothing",
+			snapshots: func(t *testing.T, _ *ateapi.Tag) []*ateapi.Snapshot {
+				return []*ateapi.Snapshot{testActorSnapshot(t, 1, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}
+			},
+			wantTag: "",
+		},
+		{
+			name: "a tag's snapshot still being written borrows nothing",
+			snapshots: func(_ *testing.T, tag *ateapi.Tag) []*ateapi.Snapshot {
+				inProgress := proto.CloneOf(tag.GetStatus().GetSnapshot())
+				inProgress.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+				return []*ateapi.Snapshot{inProgress}
+			},
+			wantTag: "",
+		},
+		{
+			name: "a tag's snapshot newer than the actor's own borrows the tag",
+			snapshots: func(t *testing.T, tag *ateapi.Tag) []*ateapi.Snapshot {
+				newer := proto.CloneOf(tag.GetStatus().GetSnapshot())
+				newer.Generation = 2
+				return []*ateapi.Snapshot{newer, testActorSnapshot(t, 1, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}
+			},
+			wantTag: "tag-a",
+		},
+		{
+			name: "a newer tag's snapshot still being written borrows nothing",
+			snapshots: func(t *testing.T, tag *ateapi.Tag) []*ateapi.Snapshot {
+				newer := proto.CloneOf(tag.GetStatus().GetSnapshot())
+				newer.Generation = 2
+				newer.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+				return []*ateapi.Snapshot{newer, testActorSnapshot(t, 1, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}
+			},
+			wantTag: "",
+		},
+		{
+			name:      "no snapshot borrows nothing",
+			snapshots: func(*testing.T, *ateapi.Tag) []*ateapi.Snapshot { return nil },
+			wantTag:   "",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			createTestAtespace(t, s, "team-a")
+			tags := map[string]*ateapi.Tag{"tag-a": createReadyTestTag(t, s, "team-a", "tag-a")}
+
+			created, err := s.CreateActor(context.Background(), &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "session-1"},
+				Status: &ateapi.ActorStatus{
+					State:     ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+					Snapshots: test.snapshots(t, tags["tag-a"]),
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			want := tags[test.wantTag].GetMetadata().GetUid()
+			if got := tagBorrowOf(t, s, created.GetMetadata().GetUid()); got != want {
+				t.Errorf("tag_borrows tag_uid = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestUpdateActor_RecordsTagBorrow(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(t *testing.T, a *ateapi.Actor, otherTag *ateapi.Tag)
+		wantTag string
+	}{
+		// In the tests below, the actor starts borrowing tag-a's snapshot.
+		{
+			name: "a snapshot of its own not uploaded yet keeps the borrow",
+			mutate: func(t *testing.T, a *ateapi.Actor, _ *ateapi.Tag) {
+				a.Status.Snapshots = append(a.Status.Snapshots, testActorSnapshot(t, 2, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+			},
+			wantTag: "tag-a",
+		},
+		{
+			name: "an upload of its own snapshot ends the borrow, with the tag's still listed",
+			mutate: func(t *testing.T, a *ateapi.Actor, _ *ateapi.Tag) {
+				a.Status.Snapshots = append(a.Status.Snapshots, testActorSnapshot(t, 2, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+			},
+			wantTag: "",
+		},
+		{
+			name: "a suspend replacing the tag's snapshot ends the borrow",
+			mutate: func(t *testing.T, a *ateapi.Actor, _ *ateapi.Tag) {
+				a.Status.Snapshots = []*ateapi.Snapshot{testActorSnapshot(t, 2, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}
+			},
+			wantTag: "",
+		},
+		{
+			name:    "dropping the snapshot ends the borrow",
+			mutate:  func(_ *testing.T, a *ateapi.Actor, _ *ateapi.Tag) { a.Status.Snapshots = nil },
+			wantTag: "",
+		},
+		{
+			name: "a suspend that writes no snapshot keeps the borrow",
+			mutate: func(_ *testing.T, a *ateapi.Actor, _ *ateapi.Tag) {
+				a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+			},
+			wantTag: "tag-a",
+		},
+		{
+			name: "moving to another tag moves the borrow",
+			mutate: func(_ *testing.T, a *ateapi.Actor, otherTag *ateapi.Tag) {
+				a.Status.Snapshots = []*ateapi.Snapshot{proto.CloneOf(otherTag.GetStatus().GetSnapshot())}
+			},
+			wantTag: "tag-b",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			ctx := context.Background()
+			createTestAtespace(t, s, "team-a")
+			tags := map[string]*ateapi.Tag{
+				"tag-a": createReadyTestTag(t, s, "team-a", "tag-a"),
+				"tag-b": createReadyTestTag(t, s, "team-a", "tag-b"),
+			}
+
+			created, err := s.CreateActor(ctx, &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "session-1"},
+				Status: &ateapi.ActorStatus{
+					State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+					LastAssignedGeneration: 1,
+					Snapshots:              []*ateapi.Snapshot{proto.CloneOf(tags["tag-a"].GetStatus().GetSnapshot())},
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(toUpdate *ateapi.Actor) error {
+				test.mutate(t, toUpdate, tags["tag-b"])
+				return nil
+			}); err != nil {
+				t.Fatalf("UpdateActor failed: %v", err)
+			}
+			want := tags[test.wantTag].GetMetadata().GetUid()
+			if got := tagBorrowOf(t, s, created.GetMetadata().GetUid()); got != want {
+				t.Errorf("tag_borrows tag_uid = %q, want %q", got, want)
+			}
+		})
 	}
 }
