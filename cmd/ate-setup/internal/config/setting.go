@@ -270,6 +270,11 @@ var Registry = []Setting{
 		Usage: "Worker goroutines per signer in podcertificate-controller",
 	},
 	{
+		Key: "e2e.tuning", Env: "ATE_INSTALL_E2E_TUNING", Flag: "e2e-tuning",
+		Kind: KindBool, Default: "false",
+		Usage: "Apply the e2e test component (short atelet snapshot delays for end-to-end test runs)",
+	},
+	{
 		Key: "e2e.envoyConcurrency", Env: "E2E_ATE_ENVOY_CONCURRENCY",
 		Flag: "e2e-envoy-concurrency", Kind: KindInt, Default: "0",
 		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",

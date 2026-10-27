@@ -18,9 +18,10 @@ $ go test -v ./internal/e2e/suites/... -args --e2e
 
 ## Preconditions
 
-The e2e tests assume you have a cluster set up with Agent Substrate installed,
-for example via `hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`
-or `hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`.
+The e2e tests assume you have a cluster set up with Agent Substrate installed
+with the `--e2e-tuning` component, for example via
+`hack/install-ate.sh deploy ate-system --e2e-tuning --credential-provider='{"name":"k8s.io"}'`
+or `hack/install-ate-kind.sh deploy ate-system --e2e-tuning --credential-provider='{"name":"k8s.io"}'`.
 The egress credential injection suite needs that bundled provider, which is
 what CI installs on the envoy lane; see `internal/e2e/suites/egresscredinject`.
 
@@ -58,17 +59,22 @@ a checkpoint).
 
 ## Settings
 
-The installer reads this setting in addition to those in
+The installer reads these settings in addition to those in
 [docs/operator-install.md](../../docs/operator-install.md#settings), through the same
-flag, environment variable, and configuration document channels. It sets the
-worker thread count (`--concurrency`) of the Envoy container in `atenet-egress`;
-`0` leaves the manifest unchanged. The
-[nighthawk egress benchmark](../../benchmarking/nighthawk-egress/README.md) sets
-it to `1` to measure single-CPU Envoy performance.
+flag, environment variable, and configuration document channels:
+
+* `e2e.tuning` layers `manifests/ate-install/components/e2e` over control
+  plane and data plane applies, configuring short atelet snapshot delays for
+  end-to-end test runs.
+* `e2e.envoyConcurrency` sets the worker thread count (`--concurrency`) of the
+  Envoy container in `atenet-egress`; `0` leaves the manifest unchanged. The
+  [nighthawk egress benchmark](../../benchmarking/nighthawk-egress/README.md)
+  sets it to `1` to measure single-CPU Envoy performance.
 
 | Key                    | Environment variable        | Flag                      | Default | Applies to |
 |------------------------|-----------------------------|---------------------------|---------|------------|
 | `e2e.envoyConcurrency` | `E2E_ATE_ENVOY_CONCURRENCY` | `--e2e-envoy-concurrency` | `0`     | (global)   |
+| `e2e.tuning`           | `ATE_INSTALL_E2E_TUNING`    | `--e2e-tuning`            | `false` | (global)   |
 
 ## Preview features
 

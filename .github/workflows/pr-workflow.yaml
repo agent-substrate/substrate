@@ -191,6 +191,9 @@ jobs:
         preview: ['off', 'on']
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      # Apply the e2e test component (short atelet snapshot delays) across the
+      # initial install and the control plane redeploy in run-microvm-demo-kind.sh.
+      ATE_INSTALL_E2E_TUNING: "true"
       # The installer requires a credential provider selection, and deploys the
       # bundled Kubernetes Secrets provider with the control plane. Job-wide
       # because every ate-setup invocation reads it, including the control

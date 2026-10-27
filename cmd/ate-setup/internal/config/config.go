@@ -217,6 +217,10 @@ type Config struct {
 	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
 	FakeDataPlane bool
 
+	// E2ETuning layers the e2e test kustomize component over control plane and
+	// data plane applies (ATE_INSTALL_E2E_TUNING).
+	E2ETuning bool
+
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
 	// See RequireIngressAllowedSPIFFEIDs.
@@ -516,6 +520,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
 	if c.FakeDataPlane {
 		merged["ATE_INSTALL_FAKE_DATA_PLANE"] = "true"
+	}
+	delete(merged, "ATE_INSTALL_E2E_TUNING")
+	if c.E2ETuning {
+		merged["ATE_INSTALL_E2E_TUNING"] = "true"
 	}
 	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
 	if len(c.IngressAllowedSPIFFEIDs) > 0 {

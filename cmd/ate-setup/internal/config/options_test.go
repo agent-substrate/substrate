@@ -40,6 +40,7 @@ type Options struct {
 	ClusterSize                    string
 	CordonSystemInfraComponents    bool
 	FakeDataPlane                  bool
+	E2ETuning                      bool
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
@@ -105,6 +106,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"kind", opts.Kind},
 		{"cordon-system-infra-components", opts.CordonSystemInfraComponents},
 		{"fake-data-plane", opts.FakeDataPlane},
+		{"e2e-tuning", opts.E2ETuning},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {

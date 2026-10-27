@@ -275,6 +275,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ClusterSize:                    r.String("clusterSize"),
 		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
+		E2ETuning:                      r.Bool("e2e.tuning"),
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),

@@ -37,9 +37,6 @@ patches:
               # Kind clusters are dev/CI: run atelet at debug so e2e suites can
               # assert on per-item log lines. Production installs default to info.
               - --log-level=debug
-              # Upload asynchronous snapshots in the background 2s after a
-              # suspend (5m by default), so e2e suites run alongside uploads.
-              - --snapshot-upload-delay=2s
               # The OTLP endpoint comes from the ate-otel-config ConfigMap the
               # atelet DaemonSet consumes via envFrom; the kind copy lives at
               # ../ate-otel-config.yaml and is applied by the parent overlay or

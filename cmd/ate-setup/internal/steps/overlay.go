@@ -41,6 +41,11 @@ const (
 // infra apply under --cordon-system-infra-components.
 const cordonSystemInfraComponent = installDir + "/components/cordon-system-infra-components"
 
+// e2eComponent is the kustomize component that tunes the control plane and
+// data plane for end-to-end test runs, layered over every control plane apply
+// under --e2e-tuning.
+const e2eComponent = installDir + "/components/e2e"
+
 // fakeDataPlaneComponent is the kustomize component that puts fake-atelet in
 // atelet's DaemonSet and fake-workersync in place of ate-controller, layered
 // over the atelet and ate-controller applies under --fake-data-plane.
@@ -54,6 +59,11 @@ const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-s
 // carries none of them is harmless.
 func (e *Env) components() []string {
 	var components []string
+	// e2e must come before fake-data-plane: e2e appends to atelet's args,
+	// and fake-data-plane removes args entirely.
+	if e.Cfg.E2ETuning {
+		components = append(components, e.Cfg.Path(e2eComponent))
+	}
 	if e.Cfg.FakeDataPlane {
 		components = append(components, e.Cfg.Path(fakeDataPlaneComponent))
 	}
