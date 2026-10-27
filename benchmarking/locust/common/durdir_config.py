@@ -25,7 +25,15 @@ def add_durdir_arguments(parser: LocustArgumentParser) -> None:
         "--durdir-file-size-bytes",
         type=int,
         default=8388608,
-        help="Size of the test file written and read during the DurDir benchmark (default: 8388608 = 8 MiB)",
+        help="Total bytes written and read during the DurDir benchmark, spread over "
+        "--durdir-file-count files (default: 8388608 = 8 MiB)",
+    )
+    group.add_argument(
+        "--durdir-file-count",
+        type=int,
+        default=1,
+        help="Number of files the DurDir bytes are spread over: 1 (default) writes one file, "
+        "larger values write that many smaller files totaling --durdir-file-size-bytes",
     )
     group.add_argument(
         "--durdir-read-mode",
