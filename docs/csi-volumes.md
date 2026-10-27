@@ -227,6 +227,8 @@ Each volume records:
   first and keeps what it does not change.
 - `refs`: every actor referencing the volume, with `active` set and `node`
   recorded while the actor is resumed. A referenced volume cannot be deleted.
+  A volume stays attached to a node while another resumed actor on that node
+  holds it.
 
 A template mounts an `ExternalVolume` with `external.ref`. Name the volume
 in the template, or leave the name empty and bind it per actor at creation:

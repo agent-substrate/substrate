@@ -228,11 +228,25 @@ func TestClaimExternalVolumes_Exclusion(t *testing.T) {
 		other := &ateapi.ActorRef{ActorUid: other.ActorUid, ActorName: other.ActorName, Active: true, Node: "node-b"}
 		mustStoreVolumeWithMode(t, ctx, st, "shared", ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL, ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY, other)
 
-		if _, err := claimExternalVolumes(ctx, st, refTestActor(borrowedMount("shared"))); err != nil {
+		actor := refTestActor(borrowedMount("shared"))
+		if _, err := claimExternalVolumes(ctx, st, actor); err != nil {
 			t.Fatalf("claimExternalVolumes: %v", err)
 		}
 		if diff := cmp.Diff(map[string]bool{refTestOtherUID: true, refTestActorUID: true}, refStates(mustGetVolume(t, ctx, st, "shared"))); diff != "" {
 			t.Errorf("refs mismatch (-want +got):\n%s", diff)
+		}
+
+		actor.Status.AssignedNode = "node-b"
+		held, err := volumesHeldOnNode(ctx, st, actor)
+		if err != nil {
+			t.Fatalf("volumesHeldOnNode: %v", err)
+		}
+		if diff := cmp.Diff(map[string]bool{"shared-data": true}, held); diff != "" {
+			t.Errorf("volumes held on the shared node mismatch (-want +got):\n%s", diff)
+		}
+		actor.Status.AssignedNode = "node-a"
+		if held, err := volumesHeldOnNode(ctx, st, actor); err != nil || len(held) != 0 {
+			t.Errorf("volumesHeldOnNode on another node = (%v, %v), want none", held, err)
 		}
 	})
 

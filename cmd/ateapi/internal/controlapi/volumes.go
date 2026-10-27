@@ -215,8 +215,10 @@ func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
 }
 
-// detachActorVolumes detaches all mounted external volumes for an actor from its assigned node.
-func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapi.Actor, template *ateapi.ActorTemplate, action string) error {
+// detachActorVolumes detaches all mounted external volumes for an actor from
+// its assigned node, except those named in keepAttached, which another actor on
+// the node still holds.
+func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapi.Actor, template *ateapi.ActorTemplate, action string, keepAttached map[string]bool) error {
 	node := actor.GetStatus().GetAssignedNode()
 	if node == "" {
 		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned node during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
@@ -239,6 +241,10 @@ func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 		// Skip volumes that were never created (e.g. creation failed).
 		if vol.GetStorageVolumeId() == "" {
 			slog.WarnContext(ctx, "Volume has no storage volume ID, skipping detach", slog.String("volume_name", vol.GetName()), slog.String("actor_id", actor.GetMetadata().GetName()))
+			continue
+		}
+		if keepAttached[vol.GetName()] {
+			slog.InfoContext(ctx, "Another actor on the node holds the volume, keeping it attached", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 			continue
 		}
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))

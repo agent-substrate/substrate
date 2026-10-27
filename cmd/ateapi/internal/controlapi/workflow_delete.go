@@ -230,7 +230,11 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	// disabling the gate while in use would be an orphaned volume
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
-	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
+	keepAttached, err := volumesHeldOnNode(ctx, w.store, actor)
+	if err != nil {
+		return err
+	}
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete", keepAttached)
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.

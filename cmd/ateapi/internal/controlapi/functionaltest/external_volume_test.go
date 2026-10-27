@@ -340,7 +340,7 @@ func TestExternalVolume_SequentialHandoff(t *testing.T) {
 
 func TestExternalVolume_ReadWriteMany(t *testing.T) {
 	ns := namespaceForTest("ns-extvol-rwx")
-	tc, _ := setupExternalVolumeTest(t, ns)
+	tc, plugin := setupExternalVolumeTest(t, ns)
 	defer tc.cleanup()
 
 	shared := createExternalVolumeWithMode(t, tc, "many", ateapi.DeleteTrigger_DELETE_TRIGGER_MANUAL, ateapi.AccessMode_ACCESS_MODE_READ_WRITE_MANY)
@@ -372,13 +372,22 @@ func TestExternalVolume_ReadWriteMany(t *testing.T) {
 	_, err := tc.client.UpdateExternalVolume(ctx, &ateapi.UpdateExternalVolumeRequest{ExternalVolume: held})
 	assertGrpcErrorRegex(t, err, codes.FailedPrecondition, "access mode cannot change while a reference is active")
 
-	for _, name := range []string{"reader-1", "reader-2"} {
+	suspend := func(name string) {
+		t.Helper()
 		if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 			Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
 			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}); err != nil {
 			t.Fatalf("SuspendActor(%s) failed: %v", name, err)
 		}
+	}
+	suspend("reader-1")
+	if _, _, detached := plugin.snapshot(); len(detached) != 0 {
+		t.Errorf("detached %v after the first suspend, want the volume kept attached for reader-2", detached)
+	}
+	suspend("reader-2")
+	if _, _, detached := plugin.snapshot(); !cmp.Equal([]string{shared.GetVolumeId() + "@node1"}, detached) {
+		t.Errorf("detached %v after the last suspend, want %v", detached, []string{shared.GetVolumeId() + "@node1"})
 	}
 	released := getExternalVolume(t, tc, "many")
 	released.AccessMode = ateapi.AccessMode_ACCESS_MODE_READ_WRITE_ONCE

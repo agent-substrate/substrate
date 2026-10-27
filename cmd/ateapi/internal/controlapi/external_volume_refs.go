@@ -245,6 +245,31 @@ func otherHolderOnNode(volume *ateapi.ExternalVolume, actorUID, node string) boo
 	return false
 }
 
+// volumesHeldOnNode names the actor's borrowed volumes, by template volume
+// name, that another resumed actor holds on the actor's node. They stay
+// attached when this actor leaves the node.
+func volumesHeldOnNode(ctx context.Context, st externalVolumeRefStore, actor *ateapi.Actor) (map[string]bool, error) {
+	node := actor.GetStatus().GetAssignedNode()
+	held := make(map[string]bool)
+	for _, mount := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		if mount.GetExternalVolumeName() == "" {
+			continue
+		}
+		volumeRef := resources.ExternalVolumeRef{Atespace: actor.GetMetadata().GetAtespace(), Name: mount.GetExternalVolumeName()}
+		volume, err := st.GetExternalVolume(ctx, volumeRef)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("while checking the holders of shared volume %s: %w", volumeRef, err)
+		}
+		if otherHolderOnNode(volume, actor.GetMetadata().GetUid(), node) {
+			held[mount.GetName()] = true
+		}
+	}
+	return held, nil
+}
+
 // deactivateExternalVolumes marks the actor's references inactive.
 func deactivateExternalVolumes(ctx context.Context, st externalVolumeRefStore, actor *ateapi.Actor) error {
 	var errs []error
