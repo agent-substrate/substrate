@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
@@ -57,9 +56,9 @@ import (
 //     rootfsupper.go). The RO lower is reconstructed from the OCI image at
 //     restore, so it never ships. The guest is discarded; the actor cold-starts
 //     on restore with its rootfs writes back in place.
-//   - VOLUMES: the durable-dir volumes, as per-volume tars. The guest is
-//     discarded, so the actor cold-starts on restore with its volumes
-//     re-materialized.
+//   - VOLUMES: the durable-dir volumes, as per-volume tars, or no files when
+//     none are mounted. The guest is discarded, so the actor cold-starts on
+//     restore with its volumes re-materialized.
 //
 // Whatever the fidelity the guest is paused first, which is what makes the tar coherent: the
 // durable share is served write-through, so every completed guest write is already on
@@ -120,23 +119,6 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	actorDirs := req.GetActorDirs()
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
-
-	// Check what the request asks for BEFORE touching the guest: these are
-	// properties of the request, and pausing first would leave the actor
-	// suspended mid-flight for a call that could never have succeeded.
-	//
-	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under every fidelity — and are the ONLY thing a VOLUMES snapshot
-	// captures. Without them a VOLUMES snapshot is empty. ROOTFS and MEMORY
-	// always have something to capture: every container has a rootfs upper.
-	durable := hasDurableVolumes(req.GetSpec().GetContainers())
-	switch scope {
-	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-		ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-	default:
-		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
-	}
 
 	// Captured now: the checkpoint unhosts the actor, and the final record
 	// waits for the teardown.
@@ -204,7 +186,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			return err
 		})
 	}
-	if durable {
+	if hasDurableVolumes(req.GetSpec().GetContainers()) {
 		g.Go(func() error {
 			t := time.Now()
 			var err error

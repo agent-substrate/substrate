@@ -858,8 +858,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if len(durablePaths) == 0 {
-			// Nothing to capture. The restore cold-boots the actor.
-			checkpointFn = func(context.Context) error { return nil }
+			// Nothing to capture, and restore cold-boots the actor. Check the
+			// sandbox is running so a dead or OOM-killed actor is not suspended.
+			checkpointFn = func(ctx context.Context) error {
+				if hosted != nil && hosted.oomKilled.Load() {
+					return errors.New("killed for exceeding its memory limit")
+				}
+				return rcmd.checkRunning(ctx, ocispec.SandboxID)
+			}
 			break
 		}
 		checkpointFn = func(ctx context.Context) error {

@@ -1586,31 +1586,60 @@ func TestShouldHaveSnapshots(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "data scope with durable volumes expects snapshots",
+			name: "volumes fidelity with mounted durable volume expects snapshots",
 			req: &ateletpb.CheckpointRequest{
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
 						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 					},
+					Containers: []*ateletpb.Container{
+						{
+							Name: "app",
+							VolumeMounts: []*ateletpb.VolumeMount{
+								{Name: "durable", MountPath: "/data"},
+							},
+						},
+					},
 				},
 			},
 			want: true,
 		},
 		{
-			name: "data scope with only CSI volumes does not expect snapshots",
+			name: "volumes fidelity with unmounted durable volume does not expect snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
+					},
+					Containers: []*ateletpb.Container{{Name: "app"}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "volumes fidelity with only CSI volumes does not expect snapshots",
 			req: &ateletpb.CheckpointRequest{
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
 						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
+					},
+					Containers: []*ateletpb.Container{
+						{
+							Name: "app",
+							VolumeMounts: []*ateletpb.VolumeMount{
+								{Name: "csi", MountPath: "/ext"},
+							},
+						},
 					},
 				},
 			},
 			want: false,
 		},
 		{
-			name: "data scope with both durable and CSI volumes expects snapshots",
+			name: "volumes fidelity with both durable and CSI volumes expects snapshots",
 			req: &ateletpb.CheckpointRequest{
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec: &ateletpb.WorkloadSpec{
@@ -1618,12 +1647,21 @@ func TestShouldHaveSnapshots(t *testing.T) {
 						{Name: "durable", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 						{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
 					},
+					Containers: []*ateletpb.Container{
+						{
+							Name: "app",
+							VolumeMounts: []*ateletpb.VolumeMount{
+								{Name: "durable", MountPath: "/data"},
+								{Name: "csi", MountPath: "/ext"},
+							},
+						},
+					},
 				},
 			},
 			want: true,
 		},
 		{
-			name: "data scope with no volumes does not expect snapshots",
+			name: "volumes fidelity with no volumes does not expect snapshots",
 			req: &ateletpb.CheckpointRequest{
 				Snapshot: &ateletpb.Snapshot{Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 				Spec:     &ateletpb.WorkloadSpec{},
@@ -1634,7 +1672,11 @@ func TestShouldHaveSnapshots(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldHaveSnapshots(tc.req); got != tc.want {
+			spec, err := buildWorkerWorkloadSpec(tc.req.GetSpec(), nil)
+			if err != nil {
+				t.Fatalf("buildWorkerWorkloadSpec: %v", err)
+			}
+			if got := shouldHaveSnapshots(tc.req.GetSnapshot().GetFidelity(), spec); got != tc.want {
 				t.Errorf("shouldHaveSnapshots() = %v, want %v", got, tc.want)
 			}
 		})

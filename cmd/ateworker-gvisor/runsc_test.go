@@ -19,21 +19,70 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
 
+	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateworker"
+	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/atunnel/egress"
+	"go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
+
+const fakeRunscStatusEnv = "FAKE_RUNSC_SANDBOX_STATUS"
+
+func TestMain(m *testing.M) {
+	if filepath.Base(os.Args[0]) == "runsc" {
+		runFakeRunsc()
+	}
+	os.Exit(m.Run())
+}
+
+func runFakeRunsc() {
+	var subcmd string
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "-root" {
+			i++
+			continue
+		}
+		if !strings.HasPrefix(os.Args[i], "-") {
+			subcmd = os.Args[i]
+			break
+		}
+	}
+	switch subcmd {
+	case "state":
+		if os.Args[len(os.Args)-1] != ocispec.SandboxID {
+			os.Exit(128)
+		}
+		status := os.Getenv(fakeRunscStatusEnv)
+		if status == "missing" {
+			os.Exit(128)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(specs.State{Status: specs.ContainerState(status)})
+	case "list", "kill", "wait", "delete":
+	default:
+		fmt.Fprintf(os.Stderr, "unexpected runsc command %q: %v\n", subcmd, os.Args)
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
 
 var testActorDirs = &ateworkerpb.ActorDirs{
 	RootDir:      "/node/actors/test-actor-123",
@@ -378,6 +427,103 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 			_, err := s.RestoreWorkload(context.Background(), tc.req)
 			if apierror.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("RestoreWorkload() = %v, want InvalidArgument naming %s", err, tc.want)
+			}
+		})
+	}
+}
+
+func stageFakeRunsc(t *testing.T, actorUID string) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := nodepath.ActorSandboxAssetsDir(actorUID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "runsc")
+	if err := os.Link(exe, dst); err != nil {
+		b, rerr := os.ReadFile(exe)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if werr := os.WriteFile(dst, b, 0o555); werr != nil {
+			t.Fatal(werr)
+		}
+	}
+	return dst
+}
+
+func TestCheckpointWorkloadVolumesWithoutDurableDir(t *testing.T) {
+	origActorsDir := nodepath.ActorsDir
+	nodepath.ActorsDir = t.TempDir()
+	t.Cleanup(func() { nodepath.ActorsDir = origActorsDir })
+	runscPath := stageFakeRunsc(t, testActor.UID)
+
+	for _, tc := range []struct {
+		name      string
+		status    string
+		oomKilled bool
+		wantErr   string
+	}{
+		{name: "running sandbox writes empty snapshot", status: string(specs.StateRunning)},
+		{name: "stopped sandbox fails", status: string(specs.StateStopped), wantErr: "stopped"},
+		{name: "missing sandbox fails", status: "missing", wantErr: "runsc state"},
+		{name: "oom-killed sandbox fails", status: string(specs.StateRunning), oomKilled: true, wantErr: "memory limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(fakeRunscStatusEnv, tc.status)
+
+			s := NewService(
+				&atunnel.Tunnel{Ingress: &ingress.Server{}, Egress: &egress.Proxy{}},
+				actorlog.NewActorLogger(io.Discard, false),
+				10,
+				mustFlagStore(t),
+			)
+			s.cgroupRoot = t.TempDir()
+			s.readSandboxCgroup = func(string) (cgroupstats.Sample, error) {
+				return cgroupstats.Sample{}, os.ErrNotExist
+			}
+			withUsageRecorder(s)
+			h := hostWithEpoch(s, time.Now(), true)
+			h.ctx, h.cancel = context.WithCancel(context.Background())
+			t.Cleanup(h.cancel)
+			h.oomKilled.Store(tc.oomKilled)
+
+			root := t.TempDir()
+			req := validCheckpointRequest()
+			req.Fidelity = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			req.RunscPath = runscPath
+			req.ActorDirs = &ateworkerpb.ActorDirs{
+				RootDir:                   root,
+				OciBundleDir:              filepath.Join(root, "bundle"),
+				CheckpointDir:             filepath.Join(root, "checkpoint-state"),
+				RestoreDir:                filepath.Join(root, "restore-state"),
+				DurableDirVolumeMountsDir: filepath.Join(root, "durable-dirs"),
+				SystemInfoVolumeRootsDir:  filepath.Join(root, "system-info"),
+				ExternalVolumeMountsDir:   filepath.Join(root, "volumes"),
+				SandboxAssetsDir:          nodepath.ActorSandboxAssetsDir(testActor.UID),
+			}
+
+			resp, err := s.CheckpointWorkload(context.Background(), req)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("CheckpointWorkload() error = %v, want substring %q", err, tc.wantErr)
+				}
+				if got := ateworker.ReuseCheckpoint(req.ActorDirs.CheckpointDir, req.Fidelity); got != nil {
+					t.Fatalf("ReuseCheckpoint() after failed checkpoint = %v, want nil", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CheckpointWorkload() unexpected error: %v", err)
+			}
+			if len(resp.GetSnapshotFiles()) != 0 || len(resp.GetDataSnapshotFiles()) != 0 {
+				t.Fatalf("CheckpointWorkload() = %v, want empty snapshot files", resp)
+			}
+			if got := ateworker.ReuseCheckpoint(req.ActorDirs.CheckpointDir, req.Fidelity); got == nil {
+				t.Fatal("ReuseCheckpoint() = nil, want recorded empty checkpoint")
 			}
 		})
 	}
