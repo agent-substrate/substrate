@@ -50,7 +50,8 @@ type capabilitiesResponse struct {
 // kernel reports it — not merely present in the OCI spec atelet writes. atelet
 // does not spawn containers, so the spec being right and the sandbox applying
 // it are separate claims; only this test covers the second. It also checks
-// that uid 0 cannot write /proc/sys.
+// that uid 0 cannot write /proc/sys and, on microVM, that a masked path is
+// empty.
 //
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gvisor and micro-VM from one suite.
@@ -129,12 +130,21 @@ func TestActorCapabilities(t *testing.T) {
 			// uid 0 must not write /proc/sys. gVisor's procfs makes this file
 			// 0444. On microVM the container is root in the guest kernel, so
 			// this relies on the read-only path.
-			msg := probeWriteFile(t, ctx, rc, namespace, actor, "/proc/sys/kernel/domainname")
-			switch {
-			case msg == "":
-				t.Error("writing /proc/sys/kernel/domainname succeeded, want an error")
-			case e2e.IsMicroVM() && !strings.Contains(msg, "read-only file system"):
-				t.Errorf("writing /proc/sys/kernel/domainname: %s, want a read-only file system error", msg)
+			wantErr := "permission denied"
+			if e2e.IsMicroVM() {
+				wantErr = "read-only file system"
+			}
+			if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/proc/sys/kernel/domainname"); !strings.Contains(got["error"], wantErr) {
+				t.Errorf("writing /proc/sys/kernel/domainname: error %q, want %q", got["error"], wantErr)
+			}
+
+			// gVisor's procfs has no /proc/interrupts. On microVM it reads as
+			// empty only if the /dev/null mask is in force.
+			if e2e.IsMicroVM() {
+				got := probeFile(t, ctx, rc, namespace, actor, "/readfile", "/proc/interrupts")
+				if got["error"] != "" || got["content"] != "" {
+					t.Errorf("reading /proc/interrupts = %q, error %q, want empty content", got["content"], got["error"])
+				}
 			}
 		})
 	}
@@ -207,21 +217,22 @@ func probeCapabilities(t *testing.T, ctx context.Context, rc *e2e.RouterClient, 
 	return out
 }
 
-// probeWriteFile asks the probe to write path and returns the error it reports.
-func probeWriteFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, namespace, id, path string) string {
+// probeFile runs the probe's /readfile or /writefile on path and returns its
+// response.
+func probeFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, namespace, id, endpoint, path string) map[string]string {
 	t.Helper()
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: namespace, Name: id}, "/writefile?path="+url.QueryEscape(path))
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: namespace, Name: id}, endpoint+"?path="+url.QueryEscape(path))
 	if err != nil {
-		t.Fatalf("GET /writefile for %q: %v", id, err)
+		t.Fatalf("GET %s for %q: %v", endpoint, id, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /writefile for %q: status %d, body %q", id, resp.StatusCode, body)
+		t.Fatalf("GET %s for %q: status %d, body %q", endpoint, id, resp.StatusCode, body)
 	}
 	var out map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding /writefile for %q: %v", id, err)
+		t.Fatalf("decoding %s for %q: %v", endpoint, id, err)
 	}
-	return out["error"]
+	return out
 }
