@@ -18,12 +18,14 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/atenet"
@@ -164,6 +166,93 @@ func TestIngressCache_StaleHitReplaysAfterSuspend(t *testing.T) {
 	}
 	if spoiledAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_marked_spoiled"); spoiledAfter != spoiledBefore {
 		t.Fatalf("expected ate_ingress_cache_marked_spoiled unchanged for an idle suspend, before=%.0f, after=%.0f", spoiledBefore, spoiledAfter)
+	}
+}
+
+// TestIngressCache_SuspendMidRequestIsNotReplayed verifies that a cache hit cut
+// off by a suspend after it reached the actor gets a 503 without a replay, and
+// that the tunnel_watcher network filter marks its entry spoiled. No refusal
+// marks the entry stale here, so the 503 doesn't depend on the spoiled mark: the
+// counter checks the mark itself.
+func TestIngressCache_SuspendMidRequestIsNotReplayed(t *testing.T) {
+	e2e.RequireIngressCache(t)
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	fixture := deployWebsocketFixture(t, ctx)
+	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-spoil", fixture)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+
+	// 1. Warm the cache. The router client reuses this connection for the next
+	// request, so it lands on the same Envoy worker thread and hits the entry.
+	waitForRouteReady(t, "Warm up actor route", func() (*http.Response, error) {
+		return router.Get(ctx, actorRef, "/readyz")
+	})
+
+	scrapeBefore, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeRouterEnvoyMetrics before request: %v", err)
+	}
+	spoiledBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_marked_spoiled")
+
+	// 2. Send a request the actor never answers.
+	type result struct {
+		status int
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := router.Get(ctx, actorRef, "/hang")
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		resp.Body.Close()
+		done <- result{status: resp.StatusCode}
+	}()
+
+	// 3. Wait until it reached the actor, asking on another connection.
+	err = wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		resp, err := router.Get(ctx, actorRef, "/hanging")
+		if err != nil {
+			return false, err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return false, err
+		}
+		return resp.StatusCode == http.StatusOK && strings.TrimSpace(string(body)) != "0", nil
+	})
+	if err != nil {
+		t.Fatalf("waiting for /hang to reach the actor: %v", err)
+	}
+
+	// 4. Suspend the actor with the request in flight.
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: networkingAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("SuspendActor: %v", err)
+	}
+
+	// 5. A replay would resume the actor and hang again, so a 503 means no replay.
+	// Don't check the replay counter: other tests running in parallel can replay.
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("GET /hang failed: %v", res.err)
+	}
+	if res.status != http.StatusServiceUnavailable {
+		t.Fatalf("GET /hang returned status %d, want 503 without a replay", res.status)
+	}
+
+	scrapeAfter, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeRouterEnvoyMetrics after request: %v", err)
+	}
+	if spoiledAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_marked_spoiled"); spoiledAfter <= spoiledBefore {
+		t.Fatalf("expected ate_ingress_cache_marked_spoiled to increment, before=%.0f, after=%.0f", spoiledBefore, spoiledAfter)
 	}
 }
 
