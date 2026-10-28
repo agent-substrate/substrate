@@ -1393,7 +1393,7 @@ spec:
         # "Envoy already exited", and reports a drain it never performed.
         - --envoy-admin-address=127.0.0.1:15000
         # Egress credential-injection flags. The installer replaces this marker
-        # with the --credential-provider-* flags for the provider that the
+        # with the --credential-provider-* flags for the providers that the
         # installer's --credential-provider selects, or removes it when that is
         # {"enabled":false}. Without a provider, a request matching a rule that
         # requires an injection is denied (see egress.applyEffects).
