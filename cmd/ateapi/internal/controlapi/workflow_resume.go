@@ -231,6 +231,25 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	return storedActor, nil
 }
 
+// assignWorkerPrerequisiteNotMetError is the FailedPrecondition for an actor
+// in a state ensureWorkerAssigned cannot start from. SUSPENDING and REVERTING
+// carry an ErrorInfo reason, since a concurrent operation moves the actor out
+// of them and a caller that fails fast on FailedPrecondition may retry.
+func assignWorkerPrerequisiteNotMetError(actorRef resources.ActorRef, actor *ateapi.Actor) error {
+	const format = "AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)"
+	state := actor.GetStatus().GetState()
+	var reason apierror.Reason
+	switch state {
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDING:
+		reason = apierror.ReasonActorSuspending
+	case ateapi.ActorState_ACTOR_STATE_REVERTING:
+		reason = apierror.ReasonActorReverting
+	default:
+		return apierror.FailedPrecondition(format, actorRef, state, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	}
+	return apierror.WithReason(apierror.FailedPrecondition(format, actorRef, state, ateapi.ActorState_ACTOR_STATE_SUSPENDED), reason)
+}
+
 // ensureWorkerAssigned assigns a worker and leaves the actor RESUMING.
 // Re-entry validates the recorded assignment before reuse.
 // Version conflicts re-read the actor before retrying.
@@ -248,7 +267,7 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return actor, worker, nil
 	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 	default:
-		return nil, nil, apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		return nil, nil, assignWorkerPrerequisiteNotMetError(actorRef, actor)
 	}
 
 	var assignedActor *ateapi.Actor

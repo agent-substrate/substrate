@@ -41,6 +41,7 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -2228,6 +2229,53 @@ func TestEnsureVolumesCreated(t *testing.T) {
 			}
 			if provisioned := stored.GetStatus().GetExternalVolumes().GetVolumes()[0].GetStorageVolumeId() != ""; provisioned != (tt.wantCreates > 0) {
 				t.Errorf("stored volume provisioned = %t, want %t", provisioned, tt.wantCreates > 0)
+			}
+		})
+	}
+}
+
+// ensureWorkerAssigned refuses every state but SUSPENDED and RESUMING with
+// FailedPrecondition, and attaches an ErrorInfo reason only for the states a
+// concurrent operation moves the actor out of, so a caller that fails fast
+// on FailedPrecondition may retry those.
+func TestEnsureWorkerAssigned(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		state      ateapi.ActorState
+		wantReason apierror.Reason
+	}{
+		{"suspending actor carries ACTOR_SUSPENDING", ateapi.ActorState_ACTOR_STATE_SUSPENDING, apierror.ReasonActorSuspending},
+		{"reverting actor carries ACTOR_REVERTING", ateapi.ActorState_ACTOR_STATE_REVERTING, apierror.ReasonActorReverting},
+		{"crashed actor carries no reason", ateapi.ActorState_ACTOR_STATE_CRASHED, ""},
+		{"deleting actor carries no reason", ateapi.ActorState_ACTOR_STATE_DELETING, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			actor := &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+				Status:   &ateapi.ActorStatus{State: tt.state},
+			}
+			// The state switch runs before any store access.
+			w := &ActorWorkflow{}
+			_, _, err := w.ensureWorkerAssigned(context.Background(), actorRef, actor, nil)
+			if code := apierror.Code(err); code != codes.FailedPrecondition {
+				t.Fatalf("ensureWorkerAssigned code = %v, want FailedPrecondition; error = %v", code, err)
+			}
+			if !strings.Contains(err.Error(), "AssignWorker prerequisite not met") {
+				t.Errorf("ensureWorkerAssigned error = %v, want the AssignWorker prerequisite message", err)
+			}
+			st, _ := apierror.FromError(err)
+			var gotReason apierror.Reason
+			for _, d := range st.Details() {
+				if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == apierror.ErrorInfoDomain {
+					gotReason = apierror.Reason(info.GetReason())
+				}
+			}
+			if gotReason != tt.wantReason {
+				t.Errorf("ErrorInfo reason = %q, want %q", gotReason, tt.wantReason)
 			}
 		})
 	}
