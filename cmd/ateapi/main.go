@@ -94,7 +94,7 @@ var (
 	// These SPIFFE IDs hold the matching system component role when they call
 	// over mTLS.
 	controllerSPIFFEID       = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
-	egressGatewaySPIFFEIDs   = pflag.StringSlice("egress-gateway-spiffe-id", []string{installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv())}, "mTLS SPIFFE IDs of atenet-egress and any other client that holds the egress_gateway authz role, which reads and lists actors and reads their egress policies. Comma-separated or repeated.")
+	egressGatewaySPIFFEIDs   = pflag.StringArray("egress-gateway-spiffe-id", []string{installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv())}, "mTLS SPIFFE IDs of atenet-egress and any other client that holds the egress_gateway authz role, which reads and lists actors and reads their egress policies. Repeat the flag for each ID.")
 	ingressRouterSPIFFEID    = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
 	apiServerSidecarSPIFFEID = pflag.String("api-server-sidecar-spiffe-id", installdefaults.APIServerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of the ate-api-server pod, which its sidecars share. Holds the api_server_sidecar role, which reads actors so the objectstore control plugin can scope their storage credentials.")
 
