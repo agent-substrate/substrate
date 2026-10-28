@@ -25,6 +25,27 @@ or `hack/install-ate-kind.sh deploy ate-system --e2e-tuning --credential-provide
 The egress credential injection suite needs that bundled provider, which is
 what CI installs on the envoy lane; see `internal/e2e/suites/egresscredinject`.
 
+### Local Kind
+
+The full default suite needs the counter and egress demo fixtures, the
+allowlisted e2e router client, the bundled credential provider, and local TLS
+origin trust:
+
+```shell
+$ hack/create-kind-cluster.sh
+$ hack/install-ate-kind.sh deploy ate-system \
+    --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client \
+    --credential-provider='{"name":"k8s.io"}' \
+    --e2e-tuning
+$ hack/install-ate-kind.sh deploy demo counter
+$ hack/install-ate-kind.sh deploy demo egress
+$ hack/setup-e2e-egress-tls-kind.sh
+$ hack/run-e2e-kind.sh ./internal/e2e/suites/... -v -args --no-color
+```
+
+Run `hack/cleanup-e2e.sh` before retrying a failed suite. It deletes retained
+e2e namespaces so their WorkerPools do not exhaust the Kind node's pod limit.
+
 ## Sandbox classes
 
 The suites are runtime-agnostic: the same tests run against gVisor and against
@@ -46,7 +67,7 @@ with `/dev/kvm` (`hack/create-kind-cluster.sh` detects one and labels the node):
 
 ```shell
 $ hack/run-microvm-demo-kind.sh                        # counter-microvm + assets
-$ hack/install-ate-kind.sh --deploy-demo-egress-microvm # egress-microvm
+$ hack/install-ate-kind.sh deploy demo egress-microvm # egress-microvm
 ```
 
 A handful of knobs override the class defaults, mostly for a cluster that

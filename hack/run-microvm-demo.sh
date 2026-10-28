@@ -19,7 +19,7 @@
 # and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
 #
 # Composes:
-#   1. hack/install-ate.sh --deploy-ate-system  (control plane)
+#   1. hack/install-ate.sh deploy ate-system  (control plane)
 #   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
 #                                                microvm SandboxConfig)
 #   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
@@ -105,7 +105,7 @@ fi
 # The demo handler applies the worker pool, creates the atespace and the
 # ActorTemplate through the ate API, and waits for the golden snapshot;
 # dispatch through install-ate.sh like step 1.
-log "Deploying the counter-microvm demo (--deploy-demo-counter-microvm)..."
+log "Deploying the counter-microvm demo..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh deploy demo counter-microvm
 else

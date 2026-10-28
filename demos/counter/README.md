@@ -62,14 +62,14 @@ go run ./cmd/ate-setup deploy demo counter-microvm
 Use the core installation script to build the image and deploy the demo to your cluster:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter
+./hack/install-ate.sh deploy demo counter
 ```
 
 To enable validation of reading from an external volume (e.g.
 `/external-data/test.txt`), run:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-with-external-volume --preview=ExternalVolumes
+./hack/install-ate.sh --preview=ExternalVolumes deploy demo counter --with-external-volume
 ```
 
 This command will:

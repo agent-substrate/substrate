@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Install (or delete) the cluster-wide micro-VM (kata + cloud-hypervisor)
-# dependencies. This is opt-in on top of hack/install-ate.sh --deploy-ate-system,
+# dependencies. This is opt-in on top of hack/install-ate.sh deploy ate-system,
 # which only installs the default gVisor SandboxConfig. Used by:
 #   * hack/run-microvm-demo.sh (before applying the counter-microvm demo)
 #   * benchmarking/automation/orchestrator.py (before deploying a microvm

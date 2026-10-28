@@ -17,7 +17,7 @@ hack/create-kind-cluster.sh
 2. Install the control plane (slow step — pulls ~570 MB):
 
 ```
-hack/install-ate-kind.sh --deploy-ate-system
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"enabled":false}'
 ```
 
 Stop here — the NFS/CSI and demo steps CI runs are for other suites; this suite needs none of them.

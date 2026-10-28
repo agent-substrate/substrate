@@ -23,7 +23,7 @@
 #     certificate, cannot open a tunnel: the gateway trusts the actor-identity
 #     CA, so the mTLS handshake itself is refused.
 #
-# Prerequisites: a substrate cluster with `--deploy-demo-egress` applied, plus
+# Prerequisites: a substrate cluster with `deploy demo egress` applied, plus
 # kubectl and kubectl-ate on PATH. The install's --ingress-allowed-spiffe-ids
 # must include spiffe://cluster.local/ns/ate-system/sa/atenet-client. See demos/egress/README.md.
 #

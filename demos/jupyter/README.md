@@ -22,14 +22,14 @@ For local development, Agent Substrate provides helper scripts to get a Kind clu
 2. **Install Agent Substrate core system to the Kind cluster:**
 
    ```bash
-   ./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' \
+   ./hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}' \
      --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
    ```
 
 3. **Deploy the Jupyter Notebook Demo:**
 
    ```bash
-   ./hack/install-ate-kind.sh --deploy-demo-jupyter
+   ./hack/install-ate-kind.sh deploy demo jupyter
    ```
 
 ## Creating and Accessing Your Jupyter Actor
@@ -99,7 +99,7 @@ Or, even easier, you can rely on "transparent resume" — just refresh the page 
 Uninstall the demo deployment — this deletes the demo's actors, the actor
 template, and the `ate-demo-jupyter` atespace:
 ```bash
-./hack/install-ate-kind.sh --delete-demo-jupyter
+./hack/install-ate-kind.sh delete demo jupyter
 ```
 
 Uninstall the entire local Kind cluster:

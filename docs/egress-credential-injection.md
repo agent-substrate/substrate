@@ -180,12 +180,12 @@ the credential.
 ### Enable it
 
 **1. The gateway.** The provider is selected when the egress gateway is
-deployed, with `--deploy-ate-system` or `--deploy-atenet`, for either the Envoy
+deployed with `deploy ate-system` or `deploy atenet`, for either the Envoy
 or agentgateway dataplane. The selection is required: an install that wants
 no injection says so with `{"enabled":false}`.
 
 ```bash
-hack/install-ate.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
+hack/install-ate.sh deploy atenet --credential-provider='{"name":"k8s.io"}'
 ```
 
 `--credential-provider` (or `ATE_CREDENTIAL_PROVIDER` when the flag is

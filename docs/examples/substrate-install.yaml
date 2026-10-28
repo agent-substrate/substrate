@@ -16,7 +16,7 @@
 # An Agent Substrate installation, as a document an operator owns.
 #
 #   ate-setup deploy ate-system --config substrate-install.yaml
-#   ATE_CONFIG=substrate-install.yaml hack/install-ate.sh --deploy-ate-system
+#   ATE_CONFIG=substrate-install.yaml hack/install-ate.sh deploy ate-system
 #
 # Every setting here can equally be an environment variable or a flag; see
 # docs/operator-install.md for the full list and the precedence between them.

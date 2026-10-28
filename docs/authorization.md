@@ -70,7 +70,7 @@ if those break.
 For example, with a JWT provider whose tokens carry the user's email as `sub`:
 
 ```sh
-ATE_API_AUTHZ_BOOTSTRAP_OWNERS=alice@example.com,bob@example.com hack/install-ate.sh --deploy-ate-system
+ATE_API_AUTHZ_BOOTSTRAP_OWNERS=alice@example.com,bob@example.com hack/install-ate.sh deploy ate-system
 ```
 
 To make your Google account a bootstrap owner, use its numeric `sub`:
@@ -78,7 +78,7 @@ To make your Google account a bootstrap owner, use its numeric `sub`:
 ```sh
 gcloud auth print-identity-token | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sub   # your sub
 ATE_API_AUTHZ_BOOTSTRAP_OWNERS=<sub>,system:serviceaccount:ate-system:ate-client \
-  hack/install-ate.sh --deploy-ate-system   # keep ate-client for demos and benchmarks
+  hack/install-ate.sh deploy ate-system   # keep ate-client for demos and benchmarks
 ```
 
 Then add the Google provider to the `ate-api-authentication` ConfigMap and
@@ -280,7 +280,7 @@ redeploy `ate-api-server` can recover: redeploy with a bootstrap owner they
 can use, fix the policies, then redeploy with the intended owners.
 
 ```sh
-ATE_API_AUTHZ_BOOTSTRAP_OWNERS=alice@example.com hack/install-ate.sh --deploy-ate-system
+ATE_API_AUTHZ_BOOTSTRAP_OWNERS=alice@example.com hack/install-ate.sh deploy ate-system
 ```
 
 ## Production readiness

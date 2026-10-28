@@ -58,11 +58,11 @@ ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
 
 ```bash
 # Envoy (default)
-./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' \
+./hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
 # agentgateway
-./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway --credential-provider='{"name":"k8s.io"}' \
+./hack/install-ate-kind.sh --atenet-dataplane=agentgateway deploy ate-system --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 ```
 

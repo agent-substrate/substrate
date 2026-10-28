@@ -16,7 +16,7 @@
 #
 # Preconditions:
 #   hack/create-kind-cluster.sh
-#   hack/install-ate-kind.sh --deploy-demo-egress, on an install whose
+#   hack/install-ate-kind.sh deploy demo egress, on an install whose
 #   --ingress-allowed-spiffe-ids includes spiffe://cluster.local/ns/ate-system/sa/atenet-client
 #
 # The egress demo Actor accepts {"url":"..."} and performs an HTTP GET. With
