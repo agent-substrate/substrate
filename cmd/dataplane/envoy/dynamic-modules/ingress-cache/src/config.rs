@@ -30,6 +30,9 @@ pub const DEFAULT_ATUNNEL_PORT: u16 = 443;
 /// Default request header carrying the actor's target port to `atunnel`.
 pub const DEFAULT_TARGET_PORT_HEADER: &str = "x-ate-target-port";
 
+/// Default for the most actors one Envoy worker thread's cache binds.
+pub const DEFAULT_MAX_ACTORS_PER_THREAD: usize = 10_000;
+
 /// Filter configuration supplied as JSON in the Envoy HTTP filter config.
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -40,6 +43,8 @@ pub struct Config {
   pub atunnel_port: u16,
   /// Header carrying the actor's target port to `atunnel`.
   pub target_port_header: String,
+  /// The most actors one Envoy worker thread's cache binds.
+  pub max_actors_per_thread: usize,
 }
 
 impl Default for Config {
@@ -48,6 +53,7 @@ impl Default for Config {
       cache_ttl_seconds: DEFAULT_CACHE_TTL_SECONDS,
       atunnel_port: DEFAULT_ATUNNEL_PORT,
       target_port_header: DEFAULT_TARGET_PORT_HEADER.to_string(),
+      max_actors_per_thread: DEFAULT_MAX_ACTORS_PER_THREAD,
     }
   }
 }
@@ -107,7 +113,7 @@ mod tests {
     assert_eq!(Config::from_config(b"{}").unwrap(), Config::default());
 
     let custom = Config::from_config(
-      br#"{"cache_ttl_seconds": 10, "atunnel_port": 8443, "target_port_header": "x-custom-port"}"#,
+      br#"{"cache_ttl_seconds": 10, "atunnel_port": 8443, "target_port_header": "x-custom-port", "max_actors_per_thread": 500}"#,
     )
     .unwrap();
     assert_eq!(
@@ -116,6 +122,7 @@ mod tests {
         cache_ttl_seconds: 10,
         atunnel_port: 8443,
         target_port_header: "x-custom-port".to_string(),
+        max_actors_per_thread: 500,
       }
     );
 

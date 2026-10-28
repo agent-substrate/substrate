@@ -437,6 +437,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
         worker_ip,
         worker_spiffe_id,
         Duration::from_secs(self.config.cache_ttl_seconds),
+        self.config.max_actors_per_thread,
       ));
     }
 
@@ -465,6 +466,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::config::DEFAULT_MAX_ACTORS_PER_THREAD;
   use crate::routing::{
     ActorRef, CONNECT_AUTHORITY_FILTER_STATE_KEY, ORIGINAL_DST_PORT_KEY,
     TARGET_ACTOR_FILTER_STATE_KEY, TARGET_ACTOR_HEADER,
@@ -602,7 +604,7 @@ mod tests {
   fn test_request_with_body_bypasses_cache_and_learns() {
     // Each test uses its own actor: the cache is process-wide and tests run in parallel.
     let key = "team-b/actor-body";
-    let _entry = cache::insert(key.to_string(), "10.244.9.1".to_string(), None, Duration::from_secs(5));
+    let _entry = cache::insert(key.to_string(), "10.244.9.1".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(Config::default());
     let bypass_id = EnvoyCounterId(7);
@@ -728,7 +730,7 @@ mod tests {
   #[test]
   fn test_cache_hit_populates_metadata_and_skips_extproc() {
     let config = Config::default();
-    let _entry = cache::insert("team-c/actor-3".to_string(), "10.244.2.100".to_string(), Some("spiffe://cluster.local/ns/default/sa/worker-pool-2".to_string()), Duration::from_secs(5));
+    let _entry = cache::insert("team-c/actor-3".to_string(), "10.244.2.100".to_string(), Some("spiffe://cluster.local/ns/default/sa/worker-pool-2".to_string()), Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
 
@@ -800,7 +802,7 @@ mod tests {
   #[test]
   fn test_upstream_421_recreates_stream_on_cache_hit() {
     let config = Config::default();
-    let entry = cache::insert("team-d/actor-4".to_string(), "10.244.3.40".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-d/actor-4".to_string(), "10.244.3.40".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-d/actor-4".to_string());
@@ -840,7 +842,7 @@ mod tests {
   #[test]
   fn test_upstream_503_recreates_stream_on_cache_hit() {
     let config = Config::default();
-    let entry = cache::insert("team-d/actor-4-503".to_string(), "10.244.3.41".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-d/actor-4-503".to_string(), "10.244.3.41".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-d/actor-4-503".to_string());
@@ -906,7 +908,7 @@ mod tests {
   #[test]
   fn test_upstream_421_without_stale_header_is_not_treated_as_stale() {
     let config = Config::default();
-    let entry = cache::insert("team-h/actor-8".to_string(), "10.244.5.10".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-h/actor-8".to_string(), "10.244.5.10".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-h/actor-8".to_string());
@@ -938,7 +940,7 @@ mod tests {
   #[test]
   fn test_upstream_421_with_false_stale_header_is_not_treated_as_stale() {
     let config = Config::default();
-    let entry = cache::insert("team-h/actor-9".to_string(), "10.244.5.11".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-h/actor-9".to_string(), "10.244.5.11".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-h/actor-9".to_string());
@@ -969,7 +971,7 @@ mod tests {
   #[test]
   fn test_upstream_421_with_case_insensitive_true_stale_header() {
     let config = Config::default();
-    let entry = cache::insert("team-h/actor-10".to_string(), "10.244.5.12".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-h/actor-10".to_string(), "10.244.5.12".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-h/actor-10".to_string());
@@ -1007,7 +1009,7 @@ mod tests {
   #[test]
   fn test_upstream_503_from_actor_is_not_treated_as_stale() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-11".to_string(), "10.244.6.1".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-11".to_string(), "10.244.6.1".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-11".to_string());
@@ -1035,7 +1037,7 @@ mod tests {
   #[test]
   fn test_upstream_503_with_uh_recreates_stream_for_bodiless_get() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-12".to_string(), "10.244.6.2".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-12".to_string(), "10.244.6.2".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-12".to_string());
@@ -1074,7 +1076,7 @@ mod tests {
   /// Sets up a bodiless cache hit on `key` -> `ip` and returns the filter and the entry it was
   /// routed from.
   fn hit_with_503(key: &str, ip: &str) -> (CacheFilter, Rc<Entry>) {
-    let entry = cache::insert(key.to_string(), ip.to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert(key.to_string(), ip.to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
     let mut filter = CacheFilter::new_test_filter(Config::default());
     filter.actor_key = Some(key.to_string());
     filter.was_cache_hit = true;
@@ -1201,6 +1203,7 @@ mod tests {
       "10.244.7.50".to_string(),
       None,
       Duration::from_secs(5),
+      DEFAULT_MAX_ACTORS_PER_THREAD,
     );
 
     let mut mock = mock_503(RESPONSE_FLAG_UC);
@@ -1211,7 +1214,7 @@ mod tests {
   #[test]
   fn test_upstream_503_with_uh_does_not_replay_when_request_has_body() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-12-body".to_string(), "10.244.6.22".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-12-body".to_string(), "10.244.6.22".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-12-body".to_string());
@@ -1240,7 +1243,7 @@ mod tests {
   #[test]
   fn test_upstream_503_with_uc_does_not_replay_when_request_has_body() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-13".to_string(), "10.244.6.3".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-13".to_string(), "10.244.6.3".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-13".to_string());
@@ -1275,7 +1278,7 @@ mod tests {
   #[test]
   fn test_upstream_503_with_uc_does_not_replay_even_for_bodiless_get() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-14".to_string(), "10.244.6.4".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-14".to_string(), "10.244.6.4".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-14".to_string());
@@ -1307,7 +1310,7 @@ mod tests {
   #[test]
   fn test_upstream_503_with_ur_does_not_replay() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-14-ur".to_string(), "10.244.6.41".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-14-ur".to_string(), "10.244.6.41".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-14-ur".to_string());
@@ -1338,7 +1341,7 @@ mod tests {
   #[test]
   fn test_stale_rejection_does_not_replay_when_request_has_body() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-15".to_string(), "10.244.6.5".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-15".to_string(), "10.244.6.5".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-15".to_string());
@@ -1369,7 +1372,7 @@ mod tests {
   #[test]
   fn test_upstream_421_with_body_does_not_replay() {
     let config = Config::default();
-    let entry = cache::insert("team-j/actor-16-421".to_string(), "10.244.6.7".to_string(), None, Duration::from_secs(5));
+    let entry = cache::insert("team-j/actor-16-421".to_string(), "10.244.6.7".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_ACTORS_PER_THREAD);
 
     let mut filter = CacheFilter::new_test_filter(config);
     filter.actor_key = Some("team-j/actor-16-421".to_string());

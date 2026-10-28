@@ -73,10 +73,6 @@ pub enum Lookup {
   Miss,
 }
 
-/// Most actors one thread's cache binds. A full cache drops expired bindings
-/// before it binds another actor, and doesn't cache it if none had expired.
-pub const MAX_BINDINGS: usize = 10_000;
-
 /// How often a full cache may scan for expired bindings, so a cache full of
 /// unexpired bindings doesn't rescan on every miss.
 const FULL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
@@ -89,10 +85,10 @@ struct Cache {
 }
 
 impl Cache {
-  /// Reports whether `key` can be bound: it already is, or there's room,
-  /// possibly after dropping expired bindings.
-  fn has_room_for(&mut self, key: &str, now: Instant) -> bool {
-    if self.bindings.len() < MAX_BINDINGS || self.bindings.contains_key(key) {
+  /// Reports whether `key` can be bound under `max_actors`: it already is, or
+  /// there's room, possibly after dropping expired bindings.
+  fn has_room_for(&mut self, key: &str, now: Instant, max_actors: usize) -> bool {
+    if self.bindings.len() < max_actors || self.bindings.contains_key(key) {
       return true;
     }
     if self
@@ -103,7 +99,7 @@ impl Cache {
     }
     self.last_full_sweep = Some(now);
     self.bindings.retain(|_, entry| entry.expires_at > now);
-    self.bindings.len() < MAX_BINDINGS
+    self.bindings.len() < max_actors
   }
 
   /// Drops live-entry slots whose entries have been freed. Runs a full sweep
@@ -159,12 +155,13 @@ pub fn current(key: &str) -> Option<Rc<Entry>> {
 }
 
 /// Makes a new binding for `key` current, replacing any previous one, and returns it.
-/// If the cache is full of unexpired bindings, the entry isn't cached.
+/// If the cache already binds `max_actors` unexpired actors, the entry isn't cached.
 pub fn insert(
   key: String,
   worker_ip: String,
   worker_spiffe_id: Option<String>,
   ttl: Duration,
+  max_actors: usize,
 ) -> Rc<Entry> {
   let now = Instant::now();
   let entry = Rc::new(Entry {
@@ -175,7 +172,7 @@ pub fn insert(
     spoiled: Cell::new(false),
   });
   CACHE.with_borrow_mut(|cache| {
-    if !cache.has_room_for(&key, now) {
+    if !cache.has_room_for(&key, now, max_actors) {
       return;
     }
     let slot = cache
@@ -240,6 +237,8 @@ mod tests {
 
   // Each Rust test runs on its own thread, so each test starts with an empty cache.
 
+  const MAX: usize = 100;
+
   #[test]
   fn test_insert_lookup_and_remove() {
     let entry = insert(
@@ -247,6 +246,7 @@ mod tests {
       "10.244.0.42".to_string(),
       Some("spiffe://cluster.local/ns/default/sa/worker-pool-1".to_string()),
       Duration::from_secs(5),
+      MAX,
     );
     match lookup("ns/a", Instant::now()) {
       Lookup::Hit(hit) => assert!(Rc::ptr_eq(&hit, &entry)),
@@ -258,7 +258,7 @@ mod tests {
 
   #[test]
   fn test_lookup_removes_expired_binding() {
-    insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::ZERO);
+    insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::ZERO, MAX);
     assert!(matches!(
       lookup("ns/a", Instant::now() + Duration::from_millis(1)),
       Lookup::Expired
@@ -268,15 +268,15 @@ mod tests {
 
   #[test]
   fn test_remove_if_current_keeps_newer_binding() {
-    let old = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
-    let new = insert("ns/a".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    let old = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
+    let new = insert("ns/a".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5), MAX);
     assert!(!remove_if_current("ns/a", &old));
     assert!(Rc::ptr_eq(&current("ns/a").unwrap(), &new));
   }
 
   #[test]
   fn test_mark_stale_marks_held_entry_and_removes_binding() {
-    let held = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let held = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
     assert_eq!(mark_stale("ns/a", "10.0.0.1"), 1);
     assert!(held.is_stale());
     assert!(!held.is_spoiled());
@@ -286,7 +286,7 @@ mod tests {
 
   #[test]
   fn test_mark_stale_ignores_other_worker() {
-    let on_a = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let on_a = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
     assert_eq!(mark_stale("ns/a", "10.0.0.2"), 0);
     assert!(!on_a.is_stale());
     assert!(current("ns/a").is_some());
@@ -295,8 +295,8 @@ mod tests {
   #[test]
   fn test_marks_reach_entry_held_after_newer_binding_replaces_it() {
     // A request still holds the worker-A entry after ext_proc learned worker B.
-    let old = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
-    let new = insert("ns/a".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    let old = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
+    let new = insert("ns/a".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5), MAX);
     assert_eq!(mark_spoiled("ns/a", "10.0.0.1"), 1);
     assert!(old.is_spoiled());
     assert!(!new.is_spoiled());
@@ -308,8 +308,8 @@ mod tests {
   #[test]
   fn test_marks_reach_every_live_entry_for_the_same_worker() {
     // The actor moved away from worker A and back while a request held the old entry.
-    let first = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
-    let second = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let first = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
+    let second = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
     assert_eq!(mark_spoiled("ns/a", "10.0.0.1"), 2);
     assert!(first.is_spoiled());
     assert!(second.is_spoiled());
@@ -317,7 +317,7 @@ mod tests {
 
   #[test]
   fn test_freed_entries_are_not_marked() {
-    let entry = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+    let entry = insert("ns/a".to_string(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
     assert!(remove_if_current("ns/a", &entry));
     drop(entry);
     assert_eq!(mark_stale("ns/a", "10.0.0.1"), 0);
@@ -327,7 +327,7 @@ mod tests {
   fn test_sweep_drops_dead_live_slots() {
     for i in 0..200 {
       let key = format!("ns/actor-{i}");
-      let entry = insert(key.clone(), "10.0.0.1".to_string(), None, Duration::from_secs(5));
+      let entry = insert(key.clone(), "10.0.0.1".to_string(), None, Duration::from_secs(5), MAX);
       remove_if_current(&key, &entry);
     }
     let live = CACHE.with_borrow(|cache| cache.live.len());
@@ -335,25 +335,25 @@ mod tests {
   }
 
   fn fill(ttl: Duration) {
-    for i in 0..MAX_BINDINGS {
-      insert(format!("ns/actor-{i}"), "10.0.0.1".to_string(), None, ttl);
+    for i in 0..MAX {
+      insert(format!("ns/actor-{i}"), "10.0.0.1".to_string(), None, ttl, MAX);
     }
   }
 
   #[test]
   fn test_full_cache_skips_new_actor_but_rebinds_known_ones() {
     fill(Duration::from_secs(5));
-    insert("ns/new".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    insert("ns/new".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5), MAX);
     assert!(current("ns/new").is_none());
-    let rebound = insert("ns/actor-0".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    let rebound = insert("ns/actor-0".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5), MAX);
     assert!(Rc::ptr_eq(&current("ns/actor-0").unwrap(), &rebound));
-    assert_eq!(CACHE.with_borrow(|cache| cache.bindings.len()), MAX_BINDINGS);
+    assert_eq!(CACHE.with_borrow(|cache| cache.bindings.len()), MAX);
   }
 
   #[test]
   fn test_full_cache_drops_expired_bindings_to_make_room() {
     fill(Duration::ZERO);
-    let entry = insert("ns/new".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    let entry = insert("ns/new".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5), MAX);
     assert!(Rc::ptr_eq(&current("ns/new").unwrap(), &entry));
     assert_eq!(CACHE.with_borrow(|cache| cache.bindings.len()), 1);
   }

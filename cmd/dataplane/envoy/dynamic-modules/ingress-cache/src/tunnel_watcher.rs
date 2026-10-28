@@ -232,7 +232,13 @@ mod tests {
   }
 
   fn held_entry(worker_ip: &str) -> std::rc::Rc<cache::Entry> {
-    cache::insert(ACTOR.to_string(), worker_ip.to_string(), None, Duration::from_secs(5))
+    cache::insert(
+      ACTOR.to_string(),
+      worker_ip.to_string(),
+      None,
+      Duration::from_secs(5),
+      crate::config::DEFAULT_MAX_ACTORS_PER_THREAD,
+    )
   }
 
   #[test]
