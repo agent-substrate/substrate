@@ -16,9 +16,11 @@ package podidentity
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"math/big"
@@ -77,7 +79,7 @@ func newFakePodIdentitySigner(t *testing.T) *fakePodIdentitySigner {
 	}
 }
 
-func (s *fakePodIdentitySigner) status(spec certsv1.PodCertificateRequestSpec) certsv1.PodCertificateRequestStatus {
+func (s *fakePodIdentitySigner) status(spec certsv1.PodCertificateRequestSpec, publicKey crypto.PublicKey) certsv1.PodCertificateRequestStatus {
 	s.t.Helper()
 	s.got = spec
 	if s.denied {
@@ -86,16 +88,12 @@ func (s *fakePodIdentitySigner) status(spec certsv1.PodCertificateRequestSpec) c
 			Reason: "UnsupportedKeyType", Message: "no",
 		}}}
 	}
-	csr, err := x509.ParseCertificateRequest(spec.StubPKCS10Request)
-	if err != nil {
-		s.t.Fatalf("parsing the stub CSR: %v", err)
-	}
 	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(time.Hour),
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}, s.ca, csr.PublicKey, s.caKey)
+	}, s.ca, publicKey, s.caKey)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -120,14 +118,30 @@ func (s *fakePodIdentitySigner) install(kc *fake.Clientset, version string) {
 		switch pcr := action.(k8stesting.CreateAction).GetObject().(type) {
 		case *certsv1.PodCertificateRequest:
 			pcr.Name = pcr.GenerateName + "abcde"
-			pcr.Status = s.status(pcr.Spec)
+			csr, err := x509.ParseCertificateRequest(pcr.Spec.StubPKCS10Request)
+			if err != nil {
+				s.t.Fatalf("parsing the stub CSR: %v", err)
+			}
+			pcr.Status = s.status(pcr.Spec, csr.PublicKey)
 		case *certsv1beta1.PodCertificateRequest:
 			pcr.Name = pcr.GenerateName + "abcde"
+			// Clusters before Kubernetes 1.36 only know the deprecated pair,
+			// and later ones reject it alongside stubPKCS10Request.
+			if len(pcr.Spec.StubPKCS10Request) != 0 {
+				s.t.Error("v1beta1 request sets stubPKCS10Request")
+			}
+			publicKey, err := x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey) //nolint:staticcheck // SA1019: the deprecated field is what v1beta1 requests carry.
+			if err != nil {
+				s.t.Fatalf("parsing pkixPublicKey: %v", err)
+			}
+			digest := sha256.Sum256([]byte(pcr.Spec.PodUID))
+			if !ecdsa.VerifyASN1(publicKey.(*ecdsa.PublicKey), digest[:], pcr.Spec.ProofOfPossession) { //nolint:staticcheck // SA1019: same as above.
+				s.t.Error("proofOfPossession does not verify against pkixPublicKey")
+			}
 			pcr.Status = certsv1beta1.PodCertificateRequestStatus(s.status(certsv1.PodCertificateRequestSpec{
 				SignerName:         pcr.Spec.SignerName,
 				ServiceAccountName: pcr.Spec.ServiceAccountName,
-				StubPKCS10Request:  pcr.Spec.StubPKCS10Request,
-			}))
+			}, publicKey))
 		default:
 			s.t.Fatalf("unexpected PodCertificateRequest type %T", pcr)
 		}

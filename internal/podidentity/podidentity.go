@@ -21,6 +21,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -78,7 +79,7 @@ func RequestCertificate(ctx context.Context, clientset kubernetes.Interface, req
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	name, err := pcrs.create(ctx, pcr)
+	name, err := pcrs.create(ctx, pcr, key)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("creating PodCertificateRequest in %s: %w", namespace, err)
 	}
@@ -140,6 +141,10 @@ func RequestCertificate(ctx context.Context, clientset kubernetes.Interface, req
 // pcrClient creates, reads and deletes PodCertificateRequests through
 // whichever of certificates.k8s.io v1 and v1beta1 the cluster serves,
 // preferring v1, as the podcertificate controller does.
+//
+// v1beta1 requests carry the key as pkixPublicKey with a proofOfPossession:
+// clusters before Kubernetes 1.36 do not know stubPKCS10Request and drop it,
+// and later ones still accept the deprecated pair.
 type pcrClient struct {
 	clientset kubernetes.Interface
 	namespace string
@@ -164,13 +169,23 @@ func podCertificateRequests(clientset kubernetes.Interface, namespace string) (*
 	return nil, fmt.Errorf("the cluster serves neither v1 nor v1beta1 PodCertificateRequest")
 }
 
-func (c *pcrClient) create(ctx context.Context, pcr *certsv1.PodCertificateRequest) (string, error) {
+func (c *pcrClient) create(ctx context.Context, pcr *certsv1.PodCertificateRequest, key *ecdsa.PrivateKey) (string, error) {
 	if c.v1 {
 		created, err := c.clientset.CertificatesV1().PodCertificateRequests(c.namespace).Create(ctx, pcr, metav1.CreateOptions{})
 		if err != nil {
 			return "", err
 		}
 		return created.Name, nil
+	}
+	pkixPublicKey, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("marshaling the public key: %w", err)
+	}
+	// kube-apiserver checks the proof over the SHA-256 of the pod UID.
+	digest := sha256.Sum256([]byte(pcr.Spec.PodUID))
+	proofOfPossession, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
+	if err != nil {
+		return "", fmt.Errorf("signing the proof of possession: %w", err)
 	}
 	beta := &certsv1beta1.PodCertificateRequest{
 		ObjectMeta: pcr.ObjectMeta,
@@ -183,7 +198,8 @@ func (c *pcrClient) create(ctx context.Context, pcr *certsv1.PodCertificateReque
 			NodeName:             pcr.Spec.NodeName,
 			NodeUID:              pcr.Spec.NodeUID,
 			MaxExpirationSeconds: pcr.Spec.MaxExpirationSeconds,
-			StubPKCS10Request:    pcr.Spec.StubPKCS10Request,
+			PKIXPublicKey:        pkixPublicKey,     //nolint:staticcheck // SA1019: see pcrClient.
+			ProofOfPossession:    proofOfPossession, //nolint:staticcheck // SA1019: see pcrClient.
 		},
 	}
 	created, err := c.clientset.CertificatesV1beta1().PodCertificateRequests(c.namespace).Create(ctx, beta, metav1.CreateOptions{})
