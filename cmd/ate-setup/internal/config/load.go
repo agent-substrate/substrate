@@ -459,7 +459,7 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	// configuration rather than part-way through a deploy. Whether one is
 	// required at all is the deploy's question, not this one's.
 	if cfg.CredentialProviderJSON != "" {
-		if _, err := cfg.CredentialProvider(); err != nil {
+		if _, err := cfg.CredentialProviders(); err != nil {
 			// The parser's own message says which part is wrong and what to
 			// write instead; only the channel is added. Replacing it with the
 			// generic "must be <usage>" would drop the reason.

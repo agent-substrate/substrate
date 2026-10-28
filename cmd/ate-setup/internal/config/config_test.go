@@ -1059,6 +1059,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
+		{"provider array empty", Options{CredentialProvider: `[]`}},
+		{"provider array entry disabled", Options{CredentialProvider: `[{"enabled":false}]`}},
+		{"provider array with a repeated name", Options{CredentialProvider: `[{"name":"k8s.io"},{"name":"k8s.io"}]`}},
+		{"provider array entry without an address", Options{CredentialProvider: `[{"name":"k8s.io"},{"name":"vault.example.com"}]`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {
@@ -1069,7 +1073,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 }
 
 // The provider selection is required only where the egress gateway is
-// rendered, so Load accepts an absent value and CredentialProvider refuses it.
+// rendered, so Load accepts an absent value and CredentialProviders refuses it.
 func TestCredentialProvider(t *testing.T) {
 	loadEnv(t)
 
@@ -1137,23 +1141,72 @@ func TestCredentialProvider(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			got, err := cfg.CredentialProvider()
+			got, err := cfg.CredentialProviders()
 			if tc.wantErr {
 				if err == nil {
-					t.Fatal("CredentialProvider() succeeded, want an error")
+					t.Fatal("CredentialProviders() succeeded, want an error")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("CredentialProvider() error = %v", err)
+				t.Fatalf("CredentialProviders() error = %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("CredentialProvider() = %+v, want %+v", got, tc.want)
+			var want []CredentialProvider
+			if tc.want.Enabled() {
+				want = []CredentialProvider{tc.want}
 			}
-			if got.Enabled() != (tc.want.Name != "") {
-				t.Errorf("Enabled() = %v, want %v", got.Enabled(), tc.want.Name != "")
+			if !slices.Equal(got, want) {
+				t.Errorf("CredentialProviders() = %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+func TestCredentialProvidersArray(t *testing.T) {
+	loadEnv(t)
+	k8s := CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want []CredentialProvider
+	}{
+		{name: "an array of one", raw: `[{"name":"k8s.io"}]`, want: []CredentialProvider{k8s}},
+		{
+			name: "several providers",
+			raw:  `[{"name":"k8s.io"},{"name":"sts.example.com","address":"sts.ate-system.svc:50051"}]`,
+			want: []CredentialProvider{k8s, {Name: "sts.example.com", Address: "sts.ate-system.svc:50051"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(Options{CredentialProvider: tc.raw})
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			got, err := cfg.CredentialProviders()
+			if err != nil {
+				t.Fatalf("CredentialProviders() error = %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("CredentialProviders() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasKubernetesProvider(t *testing.T) {
+	k8s := CredentialProvider{Name: K8sCredentialProviderName}
+	vault := CredentialProvider{Name: "vault.example.com"}
+	for _, tc := range []struct {
+		providers []CredentialProvider
+		want      bool
+	}{
+		{nil, false},
+		{[]CredentialProvider{vault}, false},
+		{[]CredentialProvider{vault, k8s}, true},
+	} {
+		if got := HasKubernetesProvider(tc.providers); got != tc.want {
+			t.Errorf("HasKubernetesProvider(%v) = %v, want %v", tc.providers, got, tc.want)
+		}
 	}
 }
 
