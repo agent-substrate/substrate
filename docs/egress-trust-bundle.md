@@ -41,30 +41,33 @@ rule, are answered `NXDOMAIN`.
 Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
 
 ```yaml
-apiVersion: ate.dev/v1
-kind: ActorTemplate
 metadata:
   name: my-actor
-  namespace: my-namespace
-spec:
-  volumes:
+  atespace: my-atespace
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    # This file will contain trust anchors for both the MITM CA and standard
+    # public WebPKI CAs, meaning it will work for actors that use `https` rules,
+    # `tls_passthrough` rules, or a mix.
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        - system-roots.ate.dev
+        path: trust-bundle.pem
+containers:
+- name: app
+  image: ...
+  volumeMounts:
   - name: system-info
-    systemInfo:
-      dataSources:
-      # This file will contain trust anchors for both the MITM CA and standard
-      # public WebPKI CAs, meaning it will work for actors that use `https` rules,
-      # `tls_passthrough` rules, or a mix.
-      - trustBundle:
-          names:
-          - egress-mitm.ate.dev
-          - system-roots.ate.dev
-          path: trust-bundle.pem
-  containers:
-  - name: app
-    image: ...
-    volumeMounts:
-    - name: system-info
-      mountPath: /run/ate/egress-trust-bundle/
+    mountPath: /run/ate/egress-trust-bundle
+```
+
+Apply the template:
+
+```bash
+kubectl ate create actor-template -f actor-template.yaml
 ```
 
 Substrate only offers a few built-in trust bundles with well-known names:
@@ -107,7 +110,7 @@ this setup in your application's startup logic).    See the [example](#example-e
 #!/bin/sh
 set -eu
 sys=/etc/ssl/certs/ca-certificates.crt   # RHEL family: /etc/pki/tls/certs/ca-bundle.crt
-ca=/run/ate/trust-bundle.pem
+ca=/run/ate/egress-trust-bundle/trust-bundle.pem
 out=/tmp/ca-bundle.pem
 { cat "$sys"; echo; cat "$ca"; } > "$out"
 export SSL_CERT_FILE="$out" REQUESTS_CA_BUNDLE="$out" CURL_CA_BUNDLE="$out" GIT_SSL_CAINFO="$out" PIP_CERT="$out"
