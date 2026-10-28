@@ -2474,33 +2474,21 @@ func commitSandboxAssets(actorUID, staging string, paths map[string]string) erro
 // ateletServerTLSConfig builds a *tls.Config for a gRPC server that presents the
 // credential bundle at servingBundlePath, requires a client certificate
 // chaining to a CA in clientCAPath, and authorizes the client with
-// verifyClient. verifyClient must be set on the config GetConfigForClient
-// returns; crypto/tls ignores the outer config's VerifyConnection.
+// verifyClient.
 func ateletServerTLSConfig(servingBundlePath, clientCAPath string, verifyClient func(tls.ConnectionState) error) (*tls.Config, error) {
 	if verifyClient == nil {
 		return nil, fmt.Errorf("client authorization callback is required")
 	}
-	loadClientCAs := credbundle.PoolLoader(clientCAPath)
-	if _, err := loadClientCAs(); err != nil {
-		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
+	cfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		CertPath:     servingBundlePath,
+		ClientCAPath: clientCAPath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyClient,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configuring server TLS: %w", err)
 	}
-	serverCert := credbundle.Loader(servingBundlePath)
-	return &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			clientCAs, err := loadClientCAs()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				MinVersion:       tls.VersionTLS13,
-				GetCertificate:   serverCert,
-				ClientAuth:       tls.RequireAndVerifyClientCert,
-				ClientCAs:        clientCAs,
-				VerifyConnection: verifyClient,
-			}, nil
-		},
-	}, nil
+	return cfg, nil
 }
 
 // verifyClientSPIFFEID returns a TLS callback that accepts only a client whose

@@ -26,15 +26,30 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
+
+// recheckInterval bounds how often get() stats the file: a cached value
+// younger than this is served with no syscall. Tests lower it via
+// SetRecheckIntervalForTesting to avoid waiting it out.
+var recheckInterval = time.Minute
+
+// SetRecheckIntervalForTesting overrides how often Loader, ClientLoader and
+// PoolLoader re-stat their file. Returns a restore function for t.Cleanup;
+// for tests in other packages that need a file change visible immediately.
+func SetRecheckIntervalForTesting(d time.Duration) (restore func()) {
+	prev := recheckInterval
+	recheckInterval = d
+	return func() { recheckInterval = prev }
+}
 
 // Loader reads a private key and certificate chain from a credential bundle file as written by the
 // Kubernetes Pod Certificates mechanism.
 //
 // Returns a function that can be used as GetCertificate in a tls.Config. The parsed bundle is
-// cached: each handshake stats the file and re-reads it only when the file has changed, so
-// pod-certificate rotations are picked up on the next handshake without paying the read and
-// parse cost when nothing changed.
+// cached: a handshake stats the file at most once per recheckInterval, and re-reads it only when
+// the file has changed, so pod-certificate rotations are picked up within recheckInterval of
+// occurring, without paying the read and parse cost on every handshake.
 func Loader(path string) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	c := &certCache{path: path}
 	return func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -44,8 +59,8 @@ func Loader(path string) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 
 // ClientLoader is the client-side counterpart to Loader. It returns a function
 // suitable for use as GetClientCertificate in a tls.Config, caching the parsed
-// bundle in the same way so that pod-certificate rotations are picked up on
-// the next handshake.
+// bundle in the same way so that pod-certificate rotations are picked up
+// within recheckInterval.
 func ClientLoader(path string) func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 	c := &certCache{path: path}
 	return func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
@@ -61,16 +76,16 @@ func ClientLoader(path string) func(*tls.CertificateRequestInfo) (*tls.Certifica
 // so a pool built at startup never sees a CA rotation. Calling the returned
 // function per connection — from GetConfigForClient on the server side — keeps
 // verification current: the parsed pool is cached and the file re-read only
-// when it changes, mirroring Loader, so a rotation is picked up on the next
-// handshake without paying the read and parse cost when nothing changed.
+// when it changes, mirroring Loader, so a rotation is picked up within
+// recheckInterval without paying the read and parse cost on every handshake.
 func PoolLoader(path string) func() (*x509.CertPool, error) {
 	c := &poolCache{path: path}
 	return c.get
 }
 
-// certCache holds the parse of a credential bundle file together with the stat
-// of the file it was parsed from, so unchanged files are not re-parsed on
-// every TLS handshake.
+// certCache holds the parse of a credential bundle file together with the
+// stat of the file it was parsed from, so an unchanged file is neither
+// stat'd nor re-parsed on every TLS handshake.
 type certCache struct {
 	path string
 
@@ -78,12 +93,14 @@ type certCache struct {
 	// fi is the stat of path taken just before cert was parsed; nil until the
 	// first successful parse. cert is served while a fresh stat of path still
 	// matches it.
-	fi   os.FileInfo
-	cert *tls.Certificate
+	fi      os.FileInfo
+	cert    *tls.Certificate
+	checked time.Time
 }
 
-// get returns the parsed bundle, re-reading the file only when it has changed
-// since the last successful parse.
+// get returns the parsed bundle, stat'ing the file at most once per
+// recheckInterval and re-reading it only when that stat shows a change since
+// the last successful parse.
 //
 // A change is any difference in file identity (os.SameFile: device and inode
 // on Unix), modification time, or size. The kubelet rotates projected volume
@@ -93,19 +110,25 @@ type certCache struct {
 // cover in-place rewrites, whose mid-write states a reader may also observe.
 //
 // The file can still change between the stat and the read below. The parse of
-// the newer content is then stored against the older stat, so the next call
-// sees a stat mismatch and re-reads; the cache never lags a rotation by more
-// than one handshake. Errors leave the previous entry in place and are
-// returned to the caller: handshakes fail exactly as they would without
-// caching, and every later call retries until a parse succeeds.
+// the newer content is then stored against the older stat, so the next stat
+// sees a mismatch and re-reads; a rotation is visible within one
+// recheckInterval of occurring, not necessarily on the very next call. Errors
+// leave the previous entry in place and are returned to the caller: a call
+// that actually stats fails exactly as it would without caching, and every
+// later stat retries until a parse succeeds.
 func (c *certCache) get() (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.cert != nil && time.Since(c.checked) < recheckInterval {
+		return c.cert, nil
+	}
 
 	fi, err := os.Stat(c.path)
 	if err != nil {
 		return nil, fmt.Errorf("while getting file info for credential bundle %q: %w", c.path, err)
 	}
+	c.checked = time.Now()
 	if c.cert != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() {
 		return c.cert, nil
 	}
@@ -119,15 +142,16 @@ func (c *certCache) get() (*tls.Certificate, error) {
 }
 
 // poolCache holds the parse of a trust-bundle file together with the stat of
-// the file it was parsed from, so unchanged files are not re-parsed on every
-// TLS handshake. It mirrors certCache; see get for the change-detection and
-// concurrency reasoning.
+// the file it was parsed from, so an unchanged file is neither stat'd nor
+// re-parsed on every TLS handshake. It mirrors certCache; see get for the
+// change-detection and concurrency reasoning.
 type poolCache struct {
 	path string
 
-	mu   sync.Mutex
-	fi   os.FileInfo
-	pool *x509.CertPool
+	mu      sync.Mutex
+	fi      os.FileInfo
+	pool    *x509.CertPool
+	checked time.Time
 }
 
 // get returns the parsed trust pool, re-reading the file only when it has
@@ -137,10 +161,15 @@ func (c *poolCache) get() (*x509.CertPool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.pool != nil && time.Since(c.checked) < recheckInterval {
+		return c.pool, nil
+	}
+
 	fi, err := os.Stat(c.path)
 	if err != nil {
 		return nil, fmt.Errorf("while getting file info for trust bundle %q: %w", c.path, err)
 	}
+	c.checked = time.Now()
 	if c.pool != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() {
 		return c.pool, nil
 	}
