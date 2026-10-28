@@ -493,7 +493,7 @@ message ExternalVolumes {
   // volume appears at most once.
   //
   // +k8s:optional
-  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:maxItems=32 # matches substrate.ateapi.v1.ActorTemplate.volumes
   // +k8s:listType=map
   // +k8s:listMapKey=name
   repeated ExternalVolumeStatus volumes = 1;
@@ -1336,7 +1336,7 @@ message Container {
   // (e.g. "name@sha256:...").
   //
   // +k8s:required
-  // +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
+  // +k8s:maxLength=512 # matches substrate.ateapi.v1.ImageVolumeSource.reference
   // +k8s:customValidation # must be a well-formed image reference, pinned by digest
   string image = 2;
 

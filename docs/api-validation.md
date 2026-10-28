@@ -441,3 +441,42 @@ message Bar {
 In this case, the `Bar.foo.name` field will NOT be validated as required,
 because the `opaqueType` tag cancels the validation rules of the `Foo` type.
 This is a big hammer, use it with care.
+
+### Bounds copied from another proto
+
+A request crosses several protos on its way to a workload: `ateapi.proto`,
+then `atelet.proto`, then `ateworker.proto`. Each validates its own fields, so
+a bound on a downstream field often has to equal the upstream one. If it were
+lower, the API would accept something atelet or the worker then rejects.
+
+validation-gen tags only take literal values, so such a bound is written twice.
+Name the field it copies in the tag's comment, as `matches` followed by the
+field's full proto name:
+
+```
+message WorkloadSpec {
+  // +k8s:maxItems=10 # matches substrate.ateapi.v1.ActorTemplate.containers
+  repeated Container containers = 1;
+}
+```
+
+`apitool validate` (see `tools/apitool`) checks every such comment across all
+three protos. It fails if the named field does not exist, or if it lacks a tag
+of the same name with the same value. Free text may follow the field name after
+a space or a comma. These findings cannot be exempted in
+`tools/apitool/exemptions.json`: fix the bound instead.
+
+The check has limits:
+
+* Nested tags compare whole. `+k8s:eachVal=+k8s:maxLength=253` matches only
+  another `+k8s:eachVal=+k8s:maxLength`, never a plain `+k8s:maxLength`. A
+  per-item bound on a list therefore cannot match the bound on a scalar field,
+  or the other way round, even when the item and the scalar are the same value
+  after conversion. Leave `matches` off such a bound.
+* On a map, `+k8s:eachKey` and `+k8s:eachVal` are different tags. A key bound
+  matches only another key bound, and a value bound only another value bound.
+* Each `matches` is checked one hop. In a chain such as ateworker to atelet to
+  ateapi, a change upstream fails only the first link until that link is fixed.
+  Point every copy at the original field to see every failure at once.
+* A bound that copies something other than a proto field, such as a
+  Kubernetes resource's field, cannot be checked. Do not write `matches` for it.

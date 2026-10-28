@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -27,7 +28,7 @@ import (
 
 var validateCmd = &cobra.Command{
 	Use:           "validate",
-	Short:         "Run API shape rules against ateapi.proto",
+	Short:         "Run API shape rules against ateapi.proto, and cross-proto rules against every proto",
 	RunE:          runValidate,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -37,7 +38,7 @@ var validateCmd = &cobra.Command{
 var updateExemptions bool
 
 func init() {
-	validateCmd.Flags().BoolVar(&updateExemptions, "update", false, "instead of validating, rewrite the exemptions file to match every current finding")
+	validateCmd.Flags().BoolVar(&updateExemptions, "update", false, "instead of validating, rewrite the exemptions file to match every current API shape finding (cross-proto findings cannot be exempted)")
 	rootCmd.AddCommand(validateCmd)
 }
 
@@ -46,22 +47,45 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	protos, err := validate.Protos(cmd.Context())
+	if err != nil {
+		return err
+	}
 	path, err := validate.DefaultExemptionsPath()
 	if err != nil {
 		return err
 	}
-	results, err := validate.All(api)
+	apiResults, err := validate.All(api)
+	if err != nil {
+		return err
+	}
+	crossProtoResults, err := validate.CrossProto(protos)
 	if err != nil {
 		return err
 	}
 	out := cmd.OutOrStdout()
 
 	if updateExemptions {
-		current := validate.AsExemptions(results)
+		current := validate.AsExemptions(apiResults)
 		if err := exemption.Save(path, current); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "wrote %d exemption(s) to %s\n", len(current), path)
+
+		// Also log the findings that can't be exempted and must be fixed
+		// by the user.
+		var crossProtoTotal int
+		for _, r := range crossProtoResults {
+			crossProtoTotal += len(r.Findings)
+		}
+		if crossProtoTotal > 0 {
+			fmt.Fprintf(out, "\nwarning: %d cross-proto finding(s) were not exempted because they cannot be. Fix them:\n", crossProtoTotal)
+			for _, r := range crossProtoResults {
+				if len(r.Findings) > 0 {
+					printRule(out, r.Rule, r.Findings)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -74,10 +98,11 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 	remaining := exemption.NewSet(exemptions)
 
-	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s), %d exemption(s)...\n\n", api.Services[0].Name, len(lint.All), len(exemptions))
+	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s), %d exemption(s), and every proto, %d rule(s)...\n\n", api.Services[0].Name, len(lint.All), len(exemptions), len(lint.CrossProto))
 
-	var total, failedRules, exempted int
-	for _, r := range results {
+	var exempted int
+	var apiTotal, crossProtoTotal, failedRules int
+	for _, r := range apiResults {
 		var shown []lint.Finding
 		for _, f := range r.Findings {
 			if remaining.Consume(r.Rule.Name, f.Subject, f.Message) {
@@ -86,17 +111,18 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			}
 			shown = append(shown, f)
 		}
-
-		if len(shown) == 0 {
-			fmt.Fprintf(out, "  %s %s\n", passIcon(), r.Rule.Name)
-			continue
+		printRule(out, r.Rule, shown)
+		if len(shown) > 0 {
+			failedRules++
+			apiTotal += len(shown)
 		}
-		failedRules++
-		total += len(shown)
-		fmt.Fprintf(out, "  %s %s\n", failIcon(), r.Rule.Name)
-		fmt.Fprintf(out, "    %s\n", r.Rule.Description)
-		for _, f := range shown {
-			fmt.Fprintf(out, "      %s: %s\n", f.Subject, f.Message)
+	}
+	// Cross-proto findings bypass the exemptions: each one fails.
+	for _, r := range crossProtoResults {
+		printRule(out, r.Rule, r.Findings)
+		if len(r.Findings) > 0 {
+			failedRules++
+			crossProtoTotal += len(r.Findings)
 		}
 	}
 	fmt.Fprintln(out)
@@ -110,15 +136,32 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(out)
 	}
 
+	total := apiTotal + crossProtoTotal
 	if total == 0 && len(stale) == 0 {
-		fmt.Fprintf(out, "%s all %d rules passed (%d finding(s) exempted)\n", passIcon(), len(lint.All), exempted)
+		fmt.Fprintf(out, "%s all %d rules passed (%d finding(s) exempted)\n", passIcon(), len(apiResults)+len(crossProtoResults), exempted)
 		return nil
 	}
-	if total > 0 {
-		fmt.Fprintf(out, "Fix the finding(s) above, or if they're intentional for now, run `apitool validate --update` to add them to exemptions.json.\n\n")
+	if apiTotal > 0 {
+		fmt.Fprintf(out, "Fix the API shape finding(s) above, or if they're intentional for now, run `apitool validate --update` to add them to exemptions.json.\n\n")
+	}
+	if crossProtoTotal > 0 {
+		fmt.Fprintf(out, "Fix the cross-proto finding(s) above. They cannot be exempted.\n\n")
 	}
 	fmt.Fprintf(out, "%s %d finding(s) across %d rule(s), %d stale exemption(s)\n", failIcon(), total, failedRules, len(stale))
 	return fmt.Errorf("%d finding(s), %d stale exemption(s)", total, len(stale))
+}
+
+// printRule prints rule's line, then its findings if it has any.
+func printRule(out io.Writer, rule lint.Rule, findings []lint.Finding) {
+	if len(findings) == 0 {
+		fmt.Fprintf(out, "  %s %s\n", passIcon(), rule.Name)
+		return
+	}
+	fmt.Fprintf(out, "  %s %s\n", failIcon(), rule.Name)
+	fmt.Fprintf(out, "    %s\n", rule.Description)
+	for _, f := range findings {
+		fmt.Fprintf(out, "      %s: %s\n", f.Subject, f.Message)
+	}
 }
 
 const (
