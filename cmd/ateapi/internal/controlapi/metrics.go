@@ -20,13 +20,11 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
-	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 const (
@@ -61,11 +59,10 @@ func recordActorCrash(ctx context.Context, attrs []attribute.KeyValue) {
 }
 
 // RegisterWorkerCount wires the ate.workerpool.workers observable against workers
-// (workercache.Cache.Workers in prod) and listPools (a WorkerPool lister's List,
-// used to seed zero-valued series). Worker counts are spatially summable (over
+// (workercache.Cache.Workers in prod). Worker counts are spatially summable (over
 // states = pool size, over pools = fleet), which is the UpDownCounter contract; a
 // gauge would be wrong for a value meant to be summed.
-func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapi.Worker, error), listPools func(labels.Selector) ([]*atev1.WorkerPool, error)) error {
+func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapi.Worker, error)) error {
 	counter, err := meter.Int64ObservableUpDownCounter(
 		workerpoolWorkersMetric,
 		metric.WithUnit("{worker}"),
@@ -83,20 +80,6 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapi.Worker, e
 		}
 		type key struct{ namespace, pool, state, class string }
 		tally := make(map[key]int64)
-		// Seed every state at 0 for every known pool so a saturated or empty pool
-		// reports 0, not an absent series that breaks idle==0 alerts. A failed
-		// list just means no seeding this cycle, not a broken observation.
-		if pools, err := listPools(labels.Everything()); err == nil {
-			for _, p := range pools {
-				class := string(p.Spec.DefaultSandboxClass())
-				if class == "" {
-					class = string(atev1.SandboxClassGvisor)
-				}
-				for _, state := range workerStates {
-					tally[key{p.Namespace, p.Name, state, class}] = 0
-				}
-			}
-		}
 		for _, w := range ws {
 			state := workerState(w)
 			// A Worker has no sandbox class until its worker registers with
@@ -104,6 +87,18 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapi.Worker, e
 			// scheduler puts no actor on a worker that offers no class, thus
 			// the pool's series must not count it as free capacity.
 			class := ateattr.NormalizeSandboxClass(hardware.SandboxClass(w.GetStatus()))
+			if class != ateattr.SandboxClassUnknown {
+				// Seed every state at 0 for the worker's pool so an idle==0
+				// alert sees 0 when the pool is full. Unknown seeds nothing,
+				// so a pool has no series for its class until a worker reports
+				// one; the idle query in docs/observability.md allows for that.
+				for _, s := range workerStates {
+					k := key{w.GetWorkerNamespace(), w.GetWorkerPool(), s, class}
+					if _, exists := tally[k]; !exists {
+						tally[k] = 0
+					}
+				}
+			}
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {

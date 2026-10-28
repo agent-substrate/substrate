@@ -319,6 +319,30 @@ For `ate.workerpool.workers`:
 
   When one backend receives several clusters, add `cluster` to both groupings, or same-named pools in different clusters merge.
 
+* A worker counts under `ate.sandbox.class` `unknown` until its process reports a class, and only a worker with a known class gives its pool zero-valued series for that class. A pool with no `Worker` at all (for example, when none of its pods is scheduled) has no series on `ate.workerpool.workers`. So `idle == 0` alone does not fire when every worker in a pool is `unknown` or when a pool has no `Worker`. Idle workers per pool, with both cases as 0:
+
+  ```promql
+  (
+    sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers", "ate.worker.state"="idle", "ate.sandbox.class"!="unknown"}
+      )
+    )
+    or
+    0 * sum by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      max by ("ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class") (
+        {"ate.workerpool.workers"}
+      )
+    )
+    or
+    0 * max by ("ate.workerpool.namespace", "ate.workerpool.name") (
+      {"ate.workerpool.desired_workers"} > 0
+    )
+  )
+  ```
+
+  Alert on `== 0`. The second branch covers a pool whose workers all report `unknown`. The third branch covers a pool with `spec.replicas > 0` and no `Worker` yet. That branch requires a backend that receives `atecontroller`'s metrics, which the kind Prometheus does not (see [Local Metrics with Prometheus](#local-metrics-with-prometheus-kind-cluster)).
+
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, `denied`, or `resume_error`. `denied` is a request the router refused by policy (a 403 or `PermissionDenied`), such as an egress request outside the actor's egress policy; `resume_error` is left for a resume that failed for any other reason, a router defect.
 * The router and the scheduler both report `no_capacity` for one condition, but they count different events. The scheduler records one sample on `ate.scheduler.assignment.duration` for each resume. The router records one sample for each request. Many requests can join one resume, and one parked request can cause more than one resume. Thus do not compare the two counts directly.
