@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/internal/installdefaults"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // clearAll truncates every table so the next test starts from an empty store
@@ -68,8 +68,8 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 	p.SetPolicyManager(policyManager)
 }
 
-func newTestAtespace(name string) *ateapipb.Atespace {
-	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}
+func newTestAtespace(name string) *ateapi.Atespace {
+	return &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: name}}
 }
 
 func createTestAtespace(t *testing.T, s *Persistence, name string) {

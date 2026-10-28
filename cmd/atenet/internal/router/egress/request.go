@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -29,7 +30,10 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 )
 
-const websocketDeniedBody = "WebSocket egress is not supported"
+const (
+	websocketDeniedBody = "WebSocket egress is not supported"
+	connectDeniedBody   = "CONNECT egress is not supported"
+)
 
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
 // or HTTPS the gateway terminated. It runs per request, because the
@@ -44,6 +48,11 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	if isWebSocketUpgrade(md) {
 		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
+	}
+	// We don't support Actor making a CONNECT (inside the tunnel).
+	if strings.EqualFold(md.Method, http.MethodConnect) {
+		slog.WarnContext(ctx, "egress denied: CONNECT inside the egress tunnel is not supported", slog.String("leg", leg), slog.String("authority", md.Host))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, connectDeniedBody)
 	}
 
 	ref, err := actorFromFilterState(md)

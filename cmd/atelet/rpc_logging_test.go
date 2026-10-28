@@ -47,15 +47,12 @@ func (requestLogHerder) Restore(context.Context, *ateletpb.RestoreRequest) (*ate
 	return nil, apierror.Unavailable("asset fetch failed")
 }
 
-// TestAteletRequestLogMasksSignedAssetURL sends Run and Restore with a
-// signed https asset URL through a server built with atelet's own options and
-// logger, and checks the request log carries neither the URL's user info nor
-// its query.
-func TestAteletRequestLogMasksSignedAssetURL(t *testing.T) {
-	const (
-		signedURL = "https://asset-user:userinfo-secret@storage.example.com/bucket/gvisor.tar.zstd?X-Goog-Signature=query-secret&X-Goog-Expires=900"
-		sum       = "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
-	)
+// TestAteletRequestLogMasksEnvVarValue sends Run and Restore with an
+// environment variable value through a server built with atelet's own options
+// and logger, and checks the request log masks the value while keeping the
+// variable name.
+func TestAteletRequestLogMasksEnvVarValue(t *testing.T) {
+	const secretVal = "sk-secret-env-value"
 	var logBuf bytes.Buffer
 	origLogger := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(origLogger) })
@@ -75,26 +72,24 @@ func TestAteletRequestLogMasksSignedAssetURL(t *testing.T) {
 	t.Cleanup(func() { conn.Close() })
 	client := ateletpb.NewAteletClient(conn)
 
-	assets := &ateletpb.SandboxAssets{
-		SandboxClass: "gvisor",
-		Assets: map[string]*ateletpb.ArchAssets{
-			"amd64": {Files: map[string]*ateletpb.AssetFile{"gvisor": {Url: signedURL, Sha256: sum}}},
-		},
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{
+			Name: "main",
+			Env:  []*ateletpb.EnvVar{{Name: "API_KEY", Value: secretVal}},
+		}},
 	}
 	ctx := t.Context()
-	if _, err := client.Run(ctx, &ateletpb.RunRequest{ActorUid: "uid-run", SandboxAssets: assets}); err != nil {
+	if _, err := client.Run(ctx, &ateletpb.RunRequest{ActorUid: "uid-run", Spec: spec}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if _, err := client.Restore(ctx, &ateletpb.RestoreRequest{ActorUid: "uid-restore", SandboxAssets: assets}); status.Code(err) != codes.Unavailable {
+	if _, err := client.Restore(ctx, &ateletpb.RestoreRequest{ActorUid: "uid-restore", Spec: spec}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("Restore err = %v, want Unavailable", err)
 	}
 	srv.Stop()
 
 	gotLog := logBuf.String()
-	for _, leak := range []string{"userinfo-secret", "query-secret", "asset-user", "X-Goog-Signature"} {
-		if strings.Contains(gotLog, leak) {
-			t.Fatalf("request log contains %q from the signed asset URL:\n%s", leak, gotLog)
-		}
+	if strings.Contains(gotLog, secretVal) {
+		t.Fatalf("request log contains %q from EnvVar.value:\n%s", secretVal, gotLog)
 	}
 	for _, method := range []string{ateletpb.Atelet_Run_FullMethodName, ateletpb.Atelet_Restore_FullMethodName} {
 		var line string
@@ -106,8 +101,8 @@ func TestAteletRequestLogMasksSignedAssetURL(t *testing.T) {
 		if line == "" {
 			t.Fatalf("no request log line for %s:\n%s", method, gotLog)
 		}
-		// The sha256 still names the asset.
-		for _, want := range []string{`"url":"` + protoredact.Placeholder + `"`, `"sha256":"` + sum + `"`} {
+		// The env var name is kept while its value is masked.
+		for _, want := range []string{`"value":"` + protoredact.Placeholder + `"`, `"name":"API_KEY"`} {
 			if !strings.Contains(line, want) {
 				t.Fatalf("%s request log missing %s:\n%s", method, want, line)
 			}

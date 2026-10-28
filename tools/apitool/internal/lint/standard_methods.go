@@ -17,7 +17,7 @@ package lint
 import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
@@ -108,7 +108,7 @@ func checkDeleteRequest(m method) []Finding {
 
 var DeleteOptionsShape = Rule{
 	Name:        "delete-options-shape",
-	Description: "The shared ateapi.DeleteOptions message has only version (int64) and uid (string) fields - nothing else.",
+	Description: "The shared substrate.ateapi.v1.DeleteOptions message has only version (int64) and uid (string) fields - nothing else.",
 	Check:       checkDeleteOptionsShape,
 }
 
@@ -188,7 +188,7 @@ func (m method) listScopeField() wantFields {
 	switch {
 	case m.isSubresource():
 		return m.parentRefField()
-	case m.resource.ResourceAnnotation.Scope == ateapipb.Scope_SCOPE_ATESPACE:
+	case m.resource.ResourceAnnotation.Scope == ateapi.Scope_SCOPE_ATESPACE:
 		return required("atespace", scalar(protoreflect.StringKind))
 	default:
 		return nil
@@ -202,8 +202,8 @@ func (m method) resourcePageField() wantFields {
 }
 
 const (
-	objectRefTypeFullName     protoreflect.FullName = "ateapi.ObjectRef"
-	createOptionsTypeFullName protoreflect.FullName = "ateapi.CreateOptions"
-	deleteOptionsTypeFullName protoreflect.FullName = "ateapi.DeleteOptions"
-	listOptionsTypeFullName   protoreflect.FullName = "ateapi.ListOptions"
+	objectRefTypeFullName     protoreflect.FullName = "substrate.ateapi.v1.ObjectRef"
+	createOptionsTypeFullName protoreflect.FullName = "substrate.ateapi.v1.CreateOptions"
+	deleteOptionsTypeFullName protoreflect.FullName = "substrate.ateapi.v1.DeleteOptions"
+	listOptionsTypeFullName   protoreflect.FullName = "substrate.ateapi.v1.ListOptions"
 )

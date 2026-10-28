@@ -18,47 +18,47 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestToAteletEgressPolicy(t *testing.T) {
-	effects := &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
+	effects := &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{{
 		Header:        "Authorization",
 		CredentialUri: "secret://team-a/token",
 	}}}
 	for _, tc := range []struct {
 		name string
-		in   *ateapipb.EgressPolicy
+		in   *ateapi.EgressPolicy
 		want *ateletpb.EgressPolicy
 	}{{
 		name: "no policy",
 	}, {
 		name: "no rules",
-		in:   &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}},
+		in:   &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default"}},
 		want: &ateletpb.EgressPolicy{},
 	}, {
 		// Metadata and effects are the gateway's, and never reach the worker.
 		name: "every protocol",
-		in: &ateapipb.EgressPolicy{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "uid"},
-			Rules: []*ateapipb.EgressRule{{
-				Http: &ateapipb.HttpRule{
+		in: &ateapi.EgressPolicy{
+			Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "uid"},
+			Rules: []*ateapi.EgressRule{{
+				Http: &ateapi.HttpRule{
 					Hostnames: []string{"api.example.com"},
-					Ports:     &ateapipb.Ports{Numbers: []int32{80, 8080}},
+					Ports:     &ateapi.Ports{Numbers: []int32{80, 8080}},
 					Effects:   effects,
 				},
 			}, {
-				Https: &ateapipb.HttpsRule{
+				Https: &ateapi.HttpsRule{
 					Hostnames: []string{"*.example.com"},
-					Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+					Ports:     &ateapi.Ports{All: &ateapi.AllPorts{}},
 					Effects:   effects,
 				},
 			}, {
-				TlsPassthrough: &ateapipb.TlsPassthroughRule{
+				TlsPassthrough: &ateapi.TlsPassthroughRule{
 					Hostnames: []string{"db.example.com", "cache.example.com"},
-					Ports:     &ateapipb.Ports{Numbers: []int32{5432}},
+					Ports:     &ateapi.Ports{Numbers: []int32{5432}},
 				},
 			}},
 		},
@@ -80,8 +80,8 @@ func TestToAteletEgressPolicy(t *testing.T) {
 		}}},
 	}, {
 		name: "rule without ports",
-		in: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
-			TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"db.example.com"}},
+		in: &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{
+			TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"db.example.com"}},
 		}}},
 		want: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
 			TlsPassthrough: &ateletpb.EgressDestinations{Hostnames: []string{"db.example.com"}},
@@ -90,7 +90,7 @@ func TestToAteletEgressPolicy(t *testing.T) {
 		// A rule of a protocol the copy does not carry keeps its place, and
 		// allows nothing.
 		name: "rule without a protocol",
-		in:   &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{}}},
+		in:   &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{}}},
 		want: &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{}}},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {

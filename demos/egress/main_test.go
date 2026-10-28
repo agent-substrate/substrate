@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -25,7 +26,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -849,4 +852,179 @@ func TestSlowHeadersInvalidRequests(t *testing.T) {
 			t.Errorf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 		}
 	})
+}
+
+// startProxyStub listens on loopback and answers the first CONNECT on each
+// connection with answer, verbatim, then holds the connection open until the
+// test ends -- as a proxy that opened the tunnel would. It returns its
+// host:port and a function listing the request lines it received so far.
+func startProxyStub(t *testing.T, answer string) (string, func() []string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening on loopback: %v", err)
+	}
+	var mu sync.Mutex
+	var received []string
+	done := make(chan struct{})
+	t.Cleanup(func() { listener.Close(); close(done) })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				request, err := http.ReadRequest(bufio.NewReader(conn))
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				received = append(received, request.Method+" "+request.Host)
+				mu.Unlock()
+				_, _ = io.WriteString(conn, answer)
+				<-done
+			}()
+		}
+	}()
+	return listener.Addr().String(), func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(received)
+	}
+}
+
+func TestConnectReportsRefusal(t *testing.T) {
+	proxy, received := startProxyStub(t, "HTTP/1.1 403 Forbidden\r\nContent-Length: 6\r\n\r\ndenied")
+	recorder := postHandler(t, newHandler(http.DefaultClient), "/connect", connectRequest{Proxy: proxy, Target: "example.com:443"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var got connectResponse
+	decodeRecorder(t, recorder, &got)
+	if got.StatusCode != http.StatusForbidden || got.Body != "denied" || got.Protocol != "HTTP/1.1" || got.TLS || got.Error != "" {
+		t.Errorf("response = %+v, want the proxy's 403 and body in the clear", got)
+	}
+	if got, want := received(), []string{"CONNECT example.com:443"}; !slices.Equal(got, want) {
+		t.Errorf("proxy received %q, want %q", got, want)
+	}
+}
+
+// A 2xx has no body: the connection is the tunnel now, and the proxy stub
+// sends nothing further, so a handler that tried to read one would hang.
+func TestConnectReportsOpenedTunnelWithoutWaitingForBody(t *testing.T) {
+	proxy, _ := startProxyStub(t, "HTTP/1.1 200 Connection established\r\n\r\n")
+	start := time.Now()
+	recorder := postHandler(t, newHandler(http.DefaultClient), "/connect", connectRequest{Proxy: proxy, Target: "example.com:443"})
+	if elapsed := time.Since(start); elapsed > requestTimeout/2 {
+		t.Errorf("answering a 200 took %v; the handler waited on a body the tunnel never sends", elapsed)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var got connectResponse
+	decodeRecorder(t, recorder, &got)
+	if got.StatusCode != http.StatusOK || got.Body != "" || got.Error != "" {
+		t.Errorf("response = %+v, want an opened tunnel with no body", got)
+	}
+}
+
+func TestConnectOverTLS(t *testing.T) {
+	server, rootCA := startIPTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "not a CONNECT", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "no tunnels here", http.StatusForbidden)
+	}))
+	proxy := strings.TrimPrefix(server.URL, "https://")
+
+	recorder := postHandler(t, newHandler(http.DefaultClient), "/connect", connectRequest{Proxy: proxy, Target: "example.com:443", TLS: true, RootCA: rootCA})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var got connectResponse
+	decodeRecorder(t, recorder, &got)
+	if got.StatusCode != http.StatusForbidden || !got.TLS || strings.TrimSpace(got.Body) != "no tunnels here" || got.Error != "" {
+		t.Errorf("response = %+v, want the proxy's 403 over verified TLS", got)
+	}
+
+	// Without the root the handshake fails, and that is a failure to get an
+	// answer, not an answer.
+	recorder = postHandler(t, newHandler(http.DefaultClient), "/connect", connectRequest{Proxy: proxy, Target: "example.com:443", TLS: true})
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status without a root = %d, want %d; body = %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	var unverified connectResponse
+	decodeRecorder(t, recorder, &unverified)
+	if unverified.StatusCode != 0 || !strings.Contains(unverified.Error, "TLS handshake") {
+		t.Errorf("response without a root = %+v, want a TLS handshake error and no status", unverified)
+	}
+}
+
+// A rootCA that is not a certificate is refused before anything is dialed:
+// the proxy here refuses connections, so a handler that dialed first would
+// report that instead.
+func TestConnectRejectsBadRootCABeforeDialing(t *testing.T) {
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening on loopback: %v", err)
+	}
+	proxy := closed.Addr().String()
+	closed.Close()
+
+	recorder := postHandler(t, newHandler(http.DefaultClient), "/connect", connectRequest{Proxy: proxy, Target: "example.com:443", TLS: true, RootCA: "not-a-pem"})
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	var got connectResponse
+	decodeRecorder(t, recorder, &got)
+	if !strings.Contains(got.Error, "rootCA") || strings.Contains(got.Error, "dialing") {
+		t.Errorf("error = %q, want the rootCA rejection and no dial", got.Error)
+	}
+}
+
+func TestConnectReportsUnreachableProxy(t *testing.T) {
+	// A port that was just listening and is now closed refuses the connection.
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening on loopback: %v", err)
+	}
+	proxy := closed.Addr().String()
+	closed.Close()
+
+	recorder := postHandler(t, newHandler(http.DefaultClient), "/connect", connectRequest{Proxy: proxy, Target: "example.com:443"})
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	var got connectResponse
+	decodeRecorder(t, recorder, &got)
+	if !strings.Contains(got.Error, "dialing proxy "+proxy) {
+		t.Errorf("error = %q, want the dial failure", got.Error)
+	}
+}
+
+func TestConnectRejectsInvalidRequests(t *testing.T) {
+	handler := newHandler(http.DefaultClient)
+	for name, tc := range map[string]struct {
+		method string
+		body   string
+		want   int
+	}{
+		"GET":                {http.MethodGet, `{"proxy":"127.0.0.1:3128","target":"example.com:443"}`, http.StatusMethodNotAllowed},
+		"not JSON":           {http.MethodPost, `proxy`, http.StatusBadRequest},
+		"no proxy":           {http.MethodPost, `{"target":"example.com:443"}`, http.StatusBadRequest},
+		"proxy without port": {http.MethodPost, `{"proxy":"127.0.0.1","target":"example.com:443"}`, http.StatusBadRequest},
+		"no target":          {http.MethodPost, `{"proxy":"127.0.0.1:3128"}`, http.StatusBadRequest},
+		"target with scheme": {http.MethodPost, `{"proxy":"127.0.0.1:3128","target":"https://example.com:443"}`, http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(tc.method, "/connect", strings.NewReader(tc.body)))
+			if recorder.Code != tc.want {
+				t.Errorf("status = %d, want %d; body = %s", recorder.Code, tc.want, recorder.Body.String())
+			}
+		})
+	}
 }

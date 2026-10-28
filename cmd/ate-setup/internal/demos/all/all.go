@@ -21,7 +21,6 @@
 package all
 
 import (
-	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/autoscaledworkerpool"
 	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/claudemultiplex"
 	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/counter"
 	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/countermicrovm"

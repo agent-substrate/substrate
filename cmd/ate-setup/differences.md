@@ -121,9 +121,9 @@ The rewritten reference then keeps that tag and adds the digest it names, as
 tagged release. Resolving the digest is one HEAD request per image, cached for
 the install, so `--image-repo` needs read access to the registry from wherever
 `ate-setup` runs rather than only from the cluster. It is not optional: an
-ActorTemplate's container image, an image volume's reference, and a
-SandboxConfig's `pauseImage` each carry the CEL rule `self.contains('@')`, so an
-unpinned reference is rejected by admission and every demo fails to deploy.
+ActorTemplate's container image and an image volume's reference each carry the
+CEL rule `self.contains('@')`, so an unpinned reference is rejected by admission
+and every demo fails to deploy.
 Pinning also gives a pre-built install the property a `ko` install had for free,
 that a tag moving afterwards cannot change what is running.
 
@@ -143,7 +143,17 @@ listed package would otherwise inherit its image. `images.Components` is checked
 against the real manifests by a test, so adding a component fails a test rather
 than an install — though only the list is checked that way. The release also has
 to publish the new image under the same repository and tag as the rest, and
-until it does, the component can only be installed by building it.
+until it does, an install has to build it or take it from a registry that
+holds it.
+
+Releases publish `images.ReleaseComponents` and
+`images.ReleaseDockerfileImages`, both allowlists: an image is published only
+once it is added to one, so a new entry in `images.Components`
+stays out of releases until someone adds it on purpose. See
+[`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images) for what
+releases cover. Under `--image-repo`, a component that is not on the allowlist
+is looked up like any other, so a registry that holds it works. If the lookup
+fails, the error adds that releases do not publish it.
 
 ## Cluster access
 
@@ -175,11 +185,12 @@ model, so NotFound is ignored — and so is a kind that no longer resolves, sinc
 teardown after the CRDs are gone must not fail. Beyond that, deletes are
 strict.
 
-**Cluster profiles are new.** `--cluster-size` and `--cordon-control-plane`
+**Cluster profiles are new.** `--cluster-size` and `--cordon-system-infra-components`
 postdate the shell installer, which the shim forwards them to. `size10`
 renders the `podcert-size10` overlay and resizes the bundled PostgreSQL from
-`postgres-size10/postgres-config-patch.yaml`; `--cordon-control-plane`
-composes the `cordon-control-plane` component over every control plane apply
+`postgres-size10/postgres-config-patch.yaml`;
+`--cordon-system-infra-components` composes the
+`cordon-system-infra-components` component over every system infra apply
 path. The size10 PostgreSQL changes are made to the decoded objects before the
 one server-side apply, not patched on afterwards: one rollout, the rollout wait
 sees the resized pod, and there is no second field manager for a later apply to
@@ -232,14 +243,6 @@ demo is its own package registering itself from `init`, and
 `internal/demos/all` is the single list of what gets linked in — with a test
 asserting no demo package is missing from it.
 
-**Kind-only demos are visible but refuse.** `demo-autoscaled-workerpool`
-registered itself only when `ATE_INSTALL_KIND=true`, so on GKE
-`--deploy-demo-autoscaled-workerpool` was rejected as an *unknown option*. The
-cobra tree is built before flags are parsed, so `--kind` is not known yet; the
-subcommand always exists and fails at run time with `demo-autoscaled-workerpool
-is only supported for Kind installations; re-run with --kind`. `delete all`
-still skips it on a non-Kind install, via `demos.For`.
-
 **Template expansion is not sed.** The demo templates were expanded by a stack
 of `sed -e` expressions doing two things: substitute `${PLACEHOLDER}`, or delete
 the whole line (`/${NAME}/d`) when the placeholder is not in play.
@@ -257,8 +260,9 @@ through `ListActors`. The tolerances are preserved: no `ate-api-server`, or an a
 that cannot be reached, skips cleanup rather than failing, because `delete all`
 runs this for every demo.
 
-**`docker buildx imagetools inspect` output is parsed as JSON**, not piped
-through `jq -r '.manifest.digest'`. Build output still goes to stderr so the
+**The pushed digest comes from `docker buildx build --metadata-file`**, not
+from piping `docker buildx imagetools inspect` of the tag through
+`jq -r '.manifest.digest'`. Build output still goes to stderr so the
 stdout/stderr split matches under CI log capture.
 
 ## Errors and diagnostics

@@ -52,6 +52,10 @@ const (
 	ControllerServiceAccount = "ate-controller"
 	APIServerServiceAccount  = "ate-api-server"
 
+	// TransferServiceAccountName is the default name of the Google service
+	// account snapshot transfers run as on GCS, which tools/setup-gcp creates.
+	TransferServiceAccountName = "ate-snapshot-transfer"
+
 	// WorkerServiceAccount is what worker pods run as when their WorkerPool
 	// names none; atecontroller creates it in the pool's namespace.
 	WorkerServiceAccount = "ateworker"
@@ -79,6 +83,12 @@ func ActorJWTIssuer(namespace string) string {
 		Scheme: "https",
 		Host:   IDPServiceName + "." + namespace + ".svc",
 	}).String()
+}
+
+// APIServiceHost returns the in-cluster DNS name of ate-api-server's Service
+// in namespace, the name on its serving certificate.
+func APIServiceHost(namespace string) string {
+	return APIServiceName + "." + namespace + ".svc"
 }
 
 // ClientPrincipal returns the principal ID ate-api-server sees for a bearer

@@ -19,7 +19,7 @@ package externalversions
 import (
 	fmt "fmt"
 
-	v1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	v1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -50,13 +50,13 @@ func (f *genericInformer) Lister() cache.GenericLister {
 // TODO extend this to unknown resources with a client pool
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
-	// Group=api, Version=v1alpha1
-	case v1alpha1.SchemeGroupVersion.WithResource("csidriverconfigs"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Api().V1alpha1().CSIDriverConfigs().Informer()}, nil
-	case v1alpha1.SchemeGroupVersion.WithResource("sandboxconfigs"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Api().V1alpha1().SandboxConfigs().Informer()}, nil
-	case v1alpha1.SchemeGroupVersion.WithResource("workerpools"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Api().V1alpha1().WorkerPools().Informer()}, nil
+	// Group=ate, Version=v1
+	case v1.SchemeGroupVersion.WithResource("csidriverconfigs"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ate().V1().CSIDriverConfigs().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("sandboxconfigs"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ate().V1().SandboxConfigs().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("workerpools"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ate().V1().WorkerPools().Informer()}, nil
 
 	}
 

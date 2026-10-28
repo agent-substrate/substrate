@@ -28,8 +28,8 @@ func TestShapeGVisorGivesEachActorItsOwnCgroupLeaf(t *testing.T) {
 		return spec.Linux.CgroupsPath
 	}
 
-	first := shape("uid-a", PauseContainer)
-	second := shape("uid-b", PauseContainer)
+	first := shape("uid-a", SandboxID)
+	second := shape("uid-b", SandboxID)
 	if first == second {
 		t.Errorf("two actors share the cgroup leaf %q", first)
 	}
@@ -41,46 +41,15 @@ func TestShapeGVisorGivesEachActorItsOwnCgroupLeaf(t *testing.T) {
 		t.Errorf("cgroupsPath %q contains a colon", first)
 	}
 
-	if a, b := shape("uid-a", PauseContainer), shape("uid-a", "app"); a == b {
+	if a, b := shape("uid-a", SandboxID), shape("uid-a", "app"); a == b {
 		t.Errorf("two containers of one actor share the leaf %q", a)
 	}
 }
 
 func TestGVisorCgroupLeafMatchesTheShapedPath(t *testing.T) {
 	spec := &specs.Spec{}
-	ShapeGVisor(spec, GVisorOptions{ActorUID: "uid-a", ContainerName: PauseContainer})
-	if want := "/" + GVisorCgroupLeaf("uid-a", PauseContainer); spec.Linux.CgroupsPath != want {
+	ShapeGVisor(spec, GVisorOptions{ActorUID: "uid-a", ContainerName: SandboxID})
+	if want := "/" + GVisorCgroupLeaf("uid-a", SandboxID); spec.Linux.CgroupsPath != want {
 		t.Errorf("shaped cgroupsPath = %q, want %q", spec.Linux.CgroupsPath, want)
-	}
-}
-
-func TestShapeGVisorBindsTheNamedResolvConf(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		resolvConf string
-		wantSource string
-	}{
-		{name: "default is the worker pod's", wantSource: "/etc/resolv.conf"},
-		{
-			name:       "a sandbox may name its own",
-			resolvConf: "/var/lib/ateworker-gvisor/actors/a/resolv.conf",
-			wantSource: "/var/lib/ateworker-gvisor/actors/a/resolv.conf",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spec := &specs.Spec{}
-			ShapeGVisor(spec, GVisorOptions{
-				ActorUID: "a", ContainerName: "app", ResolvConf: tc.resolvConf,
-			})
-			var got string
-			for _, m := range spec.Mounts {
-				if m.Destination == "/etc/resolv.conf" {
-					got = m.Source
-				}
-			}
-			if got != tc.wantSource {
-				t.Errorf("resolv.conf bound from %q, want %q", got, tc.wantSource)
-			}
-		})
 	}
 }

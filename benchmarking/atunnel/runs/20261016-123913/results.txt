@@ -1,0 +1,72 @@
+=== IngressH1: router-style HTTPS requests over HTTP/1.1 keep-alive into ingress, proxied to the actor
+    unit: request; 10s per rung, first 2s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+         1000      1000   0.79ms   4.18ms  43.45ms      0 |   0.17     173   35.4MiB    8.7MiB    139     0.17   31.6MiB |    0.18    0.10  OK
+         2000      2000    124ms    362ms    476ms      0 |   1.00     503   75.2MiB   36.6MiB   1252     1.00  108.2MiB |    1.15    0.35  SATURATED (atunnel at 1.00 of 1 cores)
+         4000      3237   3722ms   5241ms   5317ms      0 |   0.99     502  130.0MiB   71.8MiB   2370     0.99  195.7MiB |    1.08    0.38  SATURATED (atunnel at 0.99 of 1 cores)
+         8000      2204   4335ms   5481ms   5702ms      0 |   0.99     691  166.1MiB   98.2MiB   2897     0.99  241.3MiB |    1.06    0.38  SATURATED (atunnel at 0.99 of 1 cores)
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":0,"gateway_connections":0,"gateway_rejected":0,"gateway_requests":0,"gateway_tunnels":0,"gateway_tunnels_h2":0,"ingress_actor_connections":40746,"ingress_actor_requests":96807}
+
+=== IngressH2: IngressH1 over HTTP/2, many requests multiplexed on few connections
+    unit: request; 10s per rung, first 2s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+         1000      1000   0.83ms   1.45ms  12.64ms      0 |   0.22     218   45.2MiB   12.9MiB    139     0.22  105.1MiB |    0.15    0.11  OK
+         2000      2000   0.87ms   1.60ms   3.92ms      0 |   0.32     160   44.9MiB   12.9MiB    140     0.32  101.0MiB |    0.23    0.22  OK
+         4000      4000   0.40ms   1.28ms   3.55ms      0 |   0.79     199   44.3MiB   12.4MiB    141     0.79   94.2MiB |    0.47    0.37  OK
+         8000      8000  10.97ms  66.53ms    108ms      0 |   1.00     126   57.0MiB   21.0MiB    498     1.00   98.6MiB |    0.56    0.98  SATURATED (atunnel at 1.00 of 1 cores)
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":0,"gateway_connections":0,"gateway_rejected":0,"gateway_requests":0,"gateway_tunnels":0,"gateway_tunnels_h2":0,"ingress_actor_connections":18940,"ingress_actor_requests":150000}
+
+=== Connect: per request: new TLS connection, CONNECT to the actor's port, one request inside
+    unit: tunnel; 10s per rung, first 2s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+         1000      1000   2.97ms  15.45ms  38.71ms      0 |   0.98     982   44.7MiB   12.2MiB    141     0.98   87.1MiB |    1.12    0.21  SATURATED (atunnel at 0.98 of 1 cores)
+         2000      2000   3885ms   6382ms   6484ms      0 |   1.00     895   72.1MiB   33.4MiB    764     1.00  112.5MiB |    1.08    0.25  SATURATED (atunnel at 1.00 of 1 cores)
+         4000      1784   8420ms   8694ms   8861ms      0 |   1.00    1150   73.3MiB   36.0MiB    764     1.00  113.0MiB |    1.07    0.25  SATURATED (atunnel at 1.00 of 1 cores)
+         8000      1238   8490ms   8702ms   8834ms      0 |   1.00    1657   72.7MiB   34.2MiB    770     1.00  110.2MiB |    1.07    0.25  SATURATED (atunnel at 1.00 of 1 cores)
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":0,"gateway_connections":0,"gateway_rejected":0,"gateway_requests":0,"gateway_tunnels":0,"gateway_tunnels_h2":0,"ingress_actor_connections":74633,"ingress_actor_requests":74633}
+
+=== EgressHTTP: actor-style plain HTTP keep-alive out through egress; one CONNECT stream to the gateway per connection
+    unit: request; 10s per rung, first 2s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+         1000      1000   0.71ms   1.52ms   2.29ms      0 |   0.17     166   45.5MiB   13.5MiB    142     0.17   78.1MiB |    0.18    0.11  OK
+         2000      2000   0.70ms   2.03ms  38.67ms      0 |   0.40     199   45.8MiB   12.9MiB    147     0.40   78.6MiB |    0.35    0.25  OK
+         4000      4000   0.37ms  14.29ms  41.22ms      0 |   0.69     174   45.5MiB   13.8MiB    164     0.69   78.2MiB |    0.63    0.43  OK
+         8000      8000   2.97ms    170ms    240ms      0 |   1.00     125  106.6MiB   65.5MiB    857     1.00  141.0MiB |    1.01    0.69  SATURATED (atunnel at 1.00 of 1 cores)
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":14100000,"gateway_connections":3,"gateway_rejected":0,"gateway_requests":150000,"gateway_tunnels":47104,"gateway_tunnels_h2":47104,"ingress_actor_connections":0,"ingress_actor_requests":0}
+
+=== EgressNewConnection: EgressHTTP with a new connection per request, so a new CONNECT stream per request
+    unit: request; 10s per rung, first 2s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+         1000      1000   1.00ms  12.35ms  40.94ms      0 |   0.51     509   43.3MiB   12.0MiB    105     0.51   76.4MiB |    0.34    0.29  OK
+         2000      2000   0.69ms   8.26ms  34.09ms      0 |   0.81     403   43.2MiB   12.0MiB    121     0.81   76.4MiB |    0.57    0.48  OK
+         4000      4000   1.19ms  71.31ms    117ms      0 |   1.00     249   66.8MiB   52.2MiB   1360     1.00  101.6MiB |    0.82    0.66  SATURATED (atunnel at 1.00 of 1 cores)
+         8000      8000    429ms    659ms    684ms      0 |   1.00     135  107.7MiB   63.5MiB   1403     1.00  142.7MiB |    0.95    0.75  SATURATED (atunnel at 1.00 of 1 cores)
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":16950000,"gateway_connections":1,"gateway_rejected":0,"gateway_requests":150000,"gateway_tunnels":150000,"gateway_tunnels_h2":150000,"ingress_actor_connections":0,"ingress_actor_requests":0}
+
+=== EgressIdleConns: rungs are connection counts: open at 200/s through egress, one request each, then hold
+    unit: held connection; 10s per rung, first 0s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+         1000      1000   1.84ms   5.68ms   8.43ms      0 |   0.12    1197  153.8MiB  156.6MiB   5105     0.12  191.9MiB |    0.07    0.07  OK
+              holding 1000: live heap 155.2MiB after GC, 158.9 KiB and 5.1 goroutines per connection
+         2000      2000   1.87ms   9.74ms  25.38ms      0 |   0.15    1107  380.7MiB  308.4MiB  10115     0.15  424.1MiB |    0.09    0.08  OK
+              holding 2000: live heap 306.9MiB after GC, 157.1 KiB and 5.1 goroutines per connection
+         4000      4000   1.86ms   7.72ms  20.64ms      0 |   0.17    1083  734.8MiB  611.9MiB  20135     0.17  786.3MiB |    0.10    0.10  OK
+              holding 4000: live heap 610.3MiB after GC, 156.2 KiB and 5.0 goroutines per connection
+         8000         0   0.00ms   0.00ms   0.00ms      0 |   0.00       0    0.0MiB    0.0MiB      0     0.00    0.0MiB |    0.00    0.00  DOWN (atunnel stopped answering: Get "http://atunnel-worker:9090/stats": dial tcp 172.18.0.3:9090: connect: connection refused)
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":366912,"gateway_connections":35,"gateway_rejected":0,"gateway_requests":9408,"gateway_tunnels":9408,"gateway_tunnels_h2":9408}
+
+=== EgressTCP: 4 connections write 64 KiB chunks as fast as they can through egress to a discarding gateway; one rung
+    unit: write; 10s per rung, first 2s not measured
+      offered  achieved      p50      p99      max   errs |  cores µs/unit   rss-max  heap-max    gor cg-cores    cg-mem | A cores C cores  verdict
+            -      4642   0.00ms  11.50ms  41.06ms      0 |   1.00     216   33.3MiB    8.4MiB    115     1.00   27.6MiB |    0.05    1.21  SATURATED (atunnel at 1.00 of 1 cores)
+              throughput 304 MB/s
+    cores..cg-mem are atunnel alone (process B); A and C are the traffic generator and the far end
+    sink counters: {"gateway_bytes_in":3050766336,"gateway_connections":1,"gateway_rejected":0,"gateway_requests":0,"gateway_tunnels":4,"gateway_tunnels_h2":4,"ingress_actor_connections":0,"ingress_actor_requests":0}
+
+atunnel died 1 time(s), 1 of them OOM-killed at its 1g limit

@@ -19,6 +19,7 @@ Patch releases add no API fields, public or internal, and no schema migrations.
 ## Components
 
 * `ate-api-server`: serves the public API, calls `atelet`, talks to the database.
+* `ate-idp-server`: publishes the keys that verify actor JWTs. It shares only the actor JWT key pool with `ate-api-server`, and is upgraded with it.
 * `ate-controller`: renders WorkerPools into Deployments, registers workers with `ate-api-server`.
 * `atelet`: one pod per node (DaemonSet), drives the `ateworker` processes on its node.
 * Workers: the pods of a WorkerPool, running `ateworker` and the actors.
@@ -61,15 +62,14 @@ Servers:
 * `ate-api-server` rejects a request that carries a field it does not know, with `INVALID_ARGUMENT`.
 * `ate-api-server` drops the fields it does not know when it reads a stored object, and serves the reduced object. Such a field was written by a newer replica, during `ate-api-server`'s roll or before a rollback, and this release cannot validate it. Rejecting it would make the object unreadable. Keeping it would serve a field this release cannot validate.
 * `atelet` rejects fields it does not know. Its callers, `ate-api-server` and `ateworker`, are never newer than it during an upgrade or a rollback in the supported order, so an unknown field means the upgrade order was not followed.
-* `ateworker` rejects fields it does not know. Its caller, `atelet`, can be one release newer, so `atelet` sends a new field only on releases after `ateworker` learns it (two-step releases).
+* `ateworker` rejects fields it does not know. Its caller, `atelet`, can be one release newer, so `atelet` sends a new field only from the minor release after the one in which `ateworker` learns it (two-step releases).
 
 Clients:
 
 * A client that reads an object, changes it and writes it back keeps the unknown fields. An older client must not strip fields that a newer server still understands.
 * `kubectl-ate` rejects a manifest file that has fields it does not know, as the server does for a create.
 
-Wherever a caller can be newer than its server, the caller sends a new field only one release after the server learns it (two-step releases). Today that is `atelet` calling `ate-api-server` and `ateworker`.
-
+Wherever a caller can be newer than its server, the server learns a new field in one minor release and the caller sends it only from the next minor release on (two-step releases). 
 ### CRDs
 
 The N+1 CRDs are applied with `ate-controller` N+1. Components that upgrade before it read the N CRDs, so users must not set new CRD fields until the upgrade completes.
@@ -78,9 +78,11 @@ Between compatible releases, a CRD change only adds optional fields. The CRDs se
 
 ### SandboxConfig
 
-Each release ships its SandboxConfig under its own name and keeps the earlier ones. The upgrade adds the N+1 one, and WorkerPools without a `configRef` switch to it. That does not change the pod template, so workers do not roll.
+Each sandbox class has a default SandboxConfig, such as `gvisor-default`, that lists the sandbox versions a cluster may run. A release that changes a sandbox version adds the new one, points `defaultVersion` at it, and keeps the previous release's version unless that version has a known vulnerability. 
 
-An actor resolves its pool's SandboxConfig each time it starts. If the runtime its snapshot needs is gone, it cold boots, keeping its files and losing its memory. Rollback deletes the N+1 SandboxConfig.
+A kept version's assets must stay fetchable, so a release does not overwrite them. The upgrade applies these lists. That does not change the pod template, so workers do not roll.
+
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets the version its snapshot was taken with, and stays on it until it next starts without memory state. If that version is gone, it cold boots, keeping its files and losing its memory. Rollback applies the N lists again, which removes the N+1 versions.
 
 <!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
 
@@ -96,7 +98,7 @@ This section is about data one release writes and another release reads, whether
 
 * Data on the node: the directory layout and the files `atelet` keeps there.
   * What N writes, N+1 can read. What N+1 writes, N can read.
-  * So a layout change takes two releases: N+1 reads the old and the new layout but still writes the old one, and N+2 writes the new one. This keeps a rollback possible.
+  * So a layout change takes two minor releases: the first reads the old and the new layout but still writes the old one, and the next writes the new one. This keeps a rollback possible. Neither step can go in a patch release: an upgrade can skip patch releases, and a rollback can land on any of them.
   * `atelet` passes the per-actor directories to `ateworker` in the RPC, so only `atelet` knows the layout. The sockets `atelet` and `ateworker` use to reach each other do not change within a major.
 * Data in snapshots: `manifest.json`, which `atelet` writes and reads.
   * Within a major, a release reads the snapshot data any earlier release of that major wrote.
@@ -115,7 +117,7 @@ To move from N to N+1, in this order, waiting for each step to finish:
 1. `podcertificate-controller`.
 2. `atelet`, node by node.
 3. Every WorkerPool's `spec.workerImage`, which rolls its workers.
-4. `ate-api-server`. The first N+1 replica migrates the schema.
+4. `ate-api-server` and `ate-idp-server`. The first N+1 `ate-api-server` replica migrates the schema.
 5. The CRDs, then `ate-controller`.
 6. `atenet`.
 7. The SandboxConfig admission policy and the default SandboxConfig.

@@ -35,6 +35,8 @@ func enableRequiredAPIs(ctx context.Context, cfg *Config) error {
 		"artifactregistry.googleapis.com",
 		"cloudresourcemanager.googleapis.com",
 		"container.googleapis.com",
+		"iam.googleapis.com",
+		"iamcredentials.googleapis.com",
 		"networkconnectivity.googleapis.com",
 		"serviceusage.googleapis.com",
 		"storage.googleapis.com",

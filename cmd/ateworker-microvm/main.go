@@ -38,6 +38,7 @@ import (
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/spf13/pflag"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
@@ -46,7 +47,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/preview"
@@ -55,7 +56,6 @@ import (
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/workerstats"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -64,18 +64,18 @@ import (
 )
 
 var (
-	podUID        = pflag.String("pod-uid", "", "The UID of the current pod")
-	chBinary      = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	guestDebug    = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
-	vmmMemReserve = pflag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
-	showVersion   = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag  = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
-	previewFlags  = pflag.StringSlice("preview", nil, "Preview gates to enable.")
+	podUID       = pflag.String("pod-uid", "", "The UID of the current pod")
+	podIPs       = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
+	chBinary     = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	guestDebug   = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	tunnelConfig = tunnel.RegisterFlags(pflag.CommandLine)
+	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -127,7 +127,8 @@ func do(ctx context.Context) error {
 	const serviceName = "ateworker-microvm"
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
-	// the providers fall back to dialing the collector directly.
+	// the providers fall back to OTEL_EXPORTER_OTLP_ENDPOINT, and export
+	// nothing without one.
 	//
 	// A relay that cannot be dialed is logged rather than fatal, matching both
 	// ends of the same decision: Dial already treats an absent socket as a
@@ -137,7 +138,7 @@ func do(ctx context.Context) error {
 	// over its telemetry route would turn a misconfigured flag into an outage.
 	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; exporting telemetry directly over the pod network",
+		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; falling back to the OTLP endpoint, if one is set",
 			slog.String("socket", *otlpRelaySocket), slog.Any("err", err))
 	}
 	if relayConn != nil {
@@ -149,7 +150,7 @@ func do(ctx context.Context) error {
 		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 		ExporterConn: relayConn,
 		// So the spans say which path they took, including when relayConn is nil
-		// because the dial above failed and this ateworker is exporting directly.
+		// because the dial above failed and this ateworker exports directly or not at all.
 		RelayCapable: true,
 	})
 	if err != nil {
@@ -172,7 +173,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter does not include otlp.
+	// Nil when there is nothing to export.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -223,17 +224,15 @@ func do(ctx context.Context) error {
 	actorLogger := actorlog.NewActorLogger(logWriter, metadata.OnGCE())
 	// Give each actor's VMM and virtiofsd a cgroup of their own, so one busy
 	// guest cannot starve the rest.
-	actorCgroups, err := cgroup.Delegate(ctx)
-	if err != nil {
+	if err := cgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while delegating the worker cgroup: %w", err)
 	}
 
-	tunnel, err := tunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
-	ateworkerService.actorCgroups = actorCgroups
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger)
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -251,6 +250,7 @@ func do(ctx context.Context) error {
 	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
+	readiness.AddCheck("registered", ateworkerService.epoch.Registered)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination grace
 	// period) and propagate it into the guest so the actor can save its state and
@@ -278,16 +278,25 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
+	reportConfig := register.ReportConfig{
+		SocketPath:           nodepath.WorkerSupportSocket,
+		CredentialBundlePath: tunnelConfig.CredentialBundle,
+		TrustBundlePath:      tunnelConfig.TrustBundle,
+		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
+		Actors:               *maxActors,
+		PodIPs:               register.ParsePodIPs(*podIPs),
+		MemoryReservedBytes:  memoryReservedBytes,
+		ActorOverhead:        actorOverhead,
+		SandboxClass:         string(atev1.SandboxClassMicroVM),
+		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
+	}
+	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
+		slog.ErrorContext(ctx, "Crashed actors will not be reported", slog.Any("err", err))
+	} else {
+		ateworkerService.crashReporter = reporter
+	}
 	go func() {
-		err := register.Report(ctx, register.ReportConfig{
-			SocketPath:           nodepath.WorkerSupportSocket,
-			CredentialBundlePath: tunnelConfig.CredentialBundle,
-			TrustBundlePath:      tunnelConfig.TrustBundle,
-			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
-			Actors:               *maxActors,
-			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
-			RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
-		})
+		err := register.Report(ctx, reportConfig, &ateworkerService.epoch)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -344,6 +353,9 @@ type AteWorkerService struct {
 	locks *actorlock.Locks
 	// Tracks lifecycle RPCs for shutdown cancellation and draining.
 	inFlight *actorlock.InFlight
+	// crashReporter reports actors whose micro-VM died. Nil if it could not
+	// be set up.
+	crashReporter crashReporter
 
 	// shuttingDown is set once SIGTERM has been received. While true, new workload
 	// RPCs are rejected with codes.Unavailable so the control plane reschedules.
@@ -353,20 +365,19 @@ type AteWorkerService struct {
 	// turned away instead of queueing behind it.
 	shuttingDown atomic.Bool
 
+	// epoch is the epoch this process registered with. It starts no workload
+	// before registering.
+	epoch register.Epoch
+
 	podUID     string
 	chBinary   string
 	guestDebug bool
-
-	// memReserveMiB is guest RAM (MiB) held back from the pod's memory limit for
-	// the cloud-hypervisor VMM + virtiofsd (host processes sharing the pod cgroup
-	// with the guest RAM). Set from --vmm-mem-reserve-mib.
-	memReserveMiB int
 
 	// actorLogger forwards the actor container's stdout/stderr to the worker pod's
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateworker-gvisor).
 	actorLogger *actorlog.ActorLogger
-	tunnel      *tunnel.Tunnel
+	tunnel      *atunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
 	usage *workerstats.UsageEmitter
 
@@ -380,27 +391,23 @@ type AteWorkerService struct {
 	// Actors undergoing network cleanup still count against capacity.
 	draining  int
 	maxActors int
-	// actorCgroups is set when the worker's cgroup is delegated, so each actor's
-	// VMM and virtiofsd run in a leaf of their own.
-	actorCgroups bool
 }
 
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *tunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
 	return &AteWorkerService{
-		locks:         actorlock.New(),
-		inFlight:      actorlock.NewInFlight(),
-		actors:        map[string]*hostedActor{},
-		guestSlots:    make(chan struct{}, statsFanOut),
-		maxActors:     maxActors,
-		podUID:        podUID,
-		chBinary:      chBinary,
-		guestDebug:    guestDebug,
-		memReserveMiB: memReserveMiB,
-		tunnel:        tunnel,
-		actorLogger:   actorLogger,
+		locks:       actorlock.New(),
+		inFlight:    actorlock.NewInFlight(),
+		actors:      map[string]*hostedActor{},
+		guestSlots:  make(chan struct{}, statsFanOut),
+		maxActors:   maxActors,
+		podUID:      podUID,
+		chBinary:    chBinary,
+		guestDebug:  guestDebug,
+		tunnel:      tunnel,
+		actorLogger: actorLogger,
 	}
 }
 
@@ -447,7 +454,7 @@ func validateRuntimeAssetPaths(actorUID string, actorDirs *ateworkerpb.ActorDirs
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful
-// shutdown, so the control plane reschedules the actor onto a live worker.
+// shutdown.
 func (s *AteWorkerService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
 		return apierror.Unavailable("worker draining: not accepting new workloads")

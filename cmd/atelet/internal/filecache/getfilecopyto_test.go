@@ -140,8 +140,8 @@ func TestGetFileCopyToEvictedEntryRefetches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvictUnused: %v", err)
 	}
-	if stats.Retired != 1 || stats.PendingBytes != 0 {
-		t.Errorf("evicting a copied-out entry: retired=%d pending=%d, want 1/0", stats.Retired, stats.PendingBytes)
+	if stats.Retired != 1 || stats.SkippedLinked != 0 {
+		t.Errorf("evicting a copied-out entry: retired=%d skipped linked=%d, want 1/0", stats.Retired, stats.SkippedLinked)
 	}
 
 	// The earlier copy is untouched, and the next copy refetches.

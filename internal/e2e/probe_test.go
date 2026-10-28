@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // TestProbeTemplate_TrustBundle checks that the probe template projects
@@ -55,7 +55,7 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 				t.Fatalf("probe template manifest yields %d documents, want 1", len(templates))
 			}
 
-			var sources []*ateapipb.TrustBundleDataSource
+			var sources []*ateapi.TrustBundleDataSource
 			for _, vol := range templates[0].GetVolumes() {
 				for _, ds := range vol.GetSystemInfo().GetDataSources() {
 					if ds.GetTrustBundle() != nil {
@@ -82,7 +82,7 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 	}
 	// The egress name must select the bundle atecontroller publishes, or
 	// actors fail closed on a name atelet rejects.
-	if !strings.HasPrefix(EgressTrustBundleObjectName, egressTrustBundleName+":") {
-		t.Errorf("egress trust bundle name %q does not select %q", egressTrustBundleName, EgressTrustBundleObjectName)
+	if !strings.HasPrefix(EgressTrustBundleObjectName, EgressTrustBundleName+":") {
+		t.Errorf("egress trust bundle name %q does not select %q", EgressTrustBundleName, EgressTrustBundleObjectName)
 	}
 }

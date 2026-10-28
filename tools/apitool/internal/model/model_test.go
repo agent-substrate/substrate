@@ -21,7 +21,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
@@ -206,7 +206,7 @@ message Widget {
 }
 
 func TestBuild_Annotations(t *testing.T) {
-	api, err := model.Build(t.Context(), ateapipb.Source)
+	api, err := model.Build(t.Context(), ateapi.Source)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -218,12 +218,12 @@ func TestBuild_Annotations(t *testing.T) {
 		}
 	}
 	wantResources := map[string]*model.ResourceAnnotation{
-		"Actor":           {Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Actors"},
+		"Actor":           {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"},
 		"EgressPolicy":    {Parents: []string{"Actor"}, Singleton: true, Plural: "EgressPolicies"},
-		"Tag":             {Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Tags"},
-		"Atespace":        {Scope: ateapipb.Scope_SCOPE_GLOBAL, Plural: "Atespaces"},
-		"ActorTemplate":   {Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "ActorTemplates"},
-		"Worker":          {Scope: ateapipb.Scope_SCOPE_GLOBAL, Plural: "Workers"},
+		"Tag":             {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Tags"},
+		"Atespace":        {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Atespaces"},
+		"ActorTemplate":   {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "ActorTemplates"},
+		"Worker":          {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Workers"},
 		"ActorAssignment": {Parents: []string{"Worker"}, Plural: "ActorAssignments"},
 		"AccessPolicy":    {Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"},
 	}
@@ -264,8 +264,8 @@ func TestResources(t *testing.T) {
 		}},
 		Messages: []model.Message{
 			{FullName: "test.GetActorRequest", Name: "GetActorRequest"},
-			{FullName: "test.Worker", Name: "Worker", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_GLOBAL, Plural: "Workers"}},
-			{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Actors"}},
+			{FullName: "test.Worker", Name: "Worker", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Workers"}},
+			{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}},
 			{FullName: "test.EgressPolicy", Name: "EgressPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Global", "Actor"}, Plural: "EgressPolicies"}},
 		},
 	}
@@ -307,7 +307,7 @@ func TestResources_Invalid(t *testing.T) {
 			name: "method without annotation",
 			api: &model.API{
 				Services: []model.Service{{Name: "Control", Methods: []model.Method{{Name: "GetActor"}}}},
-				Messages: []model.Message{{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Actors"}}},
+				Messages: []model.Message{{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}}},
 			},
 			wantErr: "Control.GetActor: no resource annotation",
 		},
@@ -338,7 +338,7 @@ func TestResources_Invalid(t *testing.T) {
 		{
 			name: "resource without plural",
 			api: &model.API{
-				Messages: []model.Message{{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_ATESPACE}}},
+				Messages: []model.Message{{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE}}},
 			},
 			wantErr: "test.Actor: resource has no plural",
 		},
@@ -353,8 +353,8 @@ func TestResources_Invalid(t *testing.T) {
 			name: "subresource with scope",
 			api: &model.API{
 				Messages: []model.Message{
-					{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Actors"}},
-					{FullName: "test.EgressPolicy", Name: "EgressPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Actor"}, Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "EgressPolicies"}},
+					{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}},
+					{FullName: "test.EgressPolicy", Name: "EgressPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Actor"}, Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "EgressPolicies"}},
 				},
 			},
 			wantErr: "test.EgressPolicy: subresource has scope SCOPE_ATESPACE",
@@ -374,7 +374,7 @@ func TestScopeToService(t *testing.T) {
 	control := model.Service{Name: "Control", Methods: []model.Method{
 		{Name: "GetActorEgressPolicy", ServiceName: "Control", InputName: "test.GetActorEgressPolicyRequest", OutputName: "test.EgressPolicy", Resource: "EgressPolicy"},
 	}}
-	actor := model.Message{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapipb.Scope_SCOPE_ATESPACE, Plural: "Actors"}}
+	actor := model.Message{FullName: "test.Actor", Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}}
 	egressPolicy := model.Message{FullName: "test.EgressPolicy", Name: "EgressPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Global", "Actor"}, Plural: "EgressPolicies"}}
 	request := model.Message{FullName: "test.GetActorEgressPolicyRequest", Name: "GetActorEgressPolicyRequest"}
 	unused := model.Message{FullName: "test.Unused", Name: "Unused"}

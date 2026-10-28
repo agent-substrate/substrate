@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/credprovider/v1"
 )
 
 // fakeAccessor is a fake Secret Manager client serving payloads by resource
@@ -431,7 +431,7 @@ func TestFetchSecret(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := NewServer(only(tc.accessor), testAuthorizer(t), time.Second)
-			resp, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: testActor})
+			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: testActor})
 			if tc.wantCode != codes.OK {
 				if status.Code(err) != tc.wantCode {
 					t.Fatalf("FetchSecret(%q) code = %v, want %v (err=%v)", tc.uri, status.Code(err), tc.wantCode, err)
@@ -452,7 +452,7 @@ func TestFetchSecret(t *testing.T) {
 func TestFetchSecretKeyErrorDoesNotQuotePayload(t *testing.T) {
 	const name = "projects/proj-123/secrets/example-api/versions/1"
 	accessor := &fakeAccessor{byName: map[string][]byte{name: []byte(`{"token": Xs3cr3t}`)}}
-	_, err := NewServer(only(accessor), testAuthorizer(t), time.Second).FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+	_, err := NewServer(only(accessor), testAuthorizer(t), time.Second).FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://secretmanager.googleapis.com/" + name + "/keys/token",
 		ActorSpiffeId: testActor,
 	})
@@ -467,7 +467,7 @@ func TestFetchSecretKeyErrorDoesNotQuotePayload(t *testing.T) {
 // A URI that fails to parse is refused before Secret Manager is dialed.
 func TestFetchSecretDoesNotDialOnBadURI(t *testing.T) {
 	accessor := &fakeAccessor{}
-	_, err := NewServer(only(accessor), testAuthorizer(t), time.Second).FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+	_, err := NewServer(only(accessor), testAuthorizer(t), time.Second).FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://secretmanager.googleapis.com/nope",
 		ActorSpiffeId: testActor,
 	})
@@ -507,7 +507,7 @@ func TestFetchSecretAuthorization(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			accessor := &fakeAccessor{byName: map[string][]byte{name: []byte("s3cr3t")}}
-			resp, err := NewServer(only(accessor), tc.authz, time.Second).FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: uri, ActorSpiffeId: tc.actor})
+			resp, err := NewServer(only(accessor), tc.authz, time.Second).FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: uri, ActorSpiffeId: tc.actor})
 			if status.Code(err) != tc.wantCode {
 				t.Fatalf("code = %v, want %v (err=%v)", status.Code(err), tc.wantCode, err)
 			}
@@ -530,7 +530,7 @@ func TestFetchSecretTimesOut(t *testing.T) {
 	const timeout = 50 * time.Millisecond
 	accessor := &fakeAccessor{block: true}
 	start := time.Now()
-	_, err := NewServer(only(accessor), testAuthorizer(t), timeout).FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{
+	_, err := NewServer(only(accessor), testAuthorizer(t), timeout).FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://secretmanager.googleapis.com/projects/proj-123/secrets/example-api/versions/1",
 		ActorSpiffeId: testActor,
 	})
@@ -571,7 +571,7 @@ func TestFetchSecretRoutesByLocation(t *testing.T) {
 		{name: "no client for the region", uri: "ate-secret://secretmanager.googleapis.com/projects/proj-123/locations/europe-west4/secrets/example-api/versions/1", wantCode: codes.Unavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := srv.FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: testActor})
+			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: testActor})
 			if status.Code(err) != tc.wantCode {
 				t.Fatalf("code = %v, want %v (err=%v)", status.Code(err), tc.wantCode, err)
 			}

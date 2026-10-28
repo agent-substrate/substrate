@@ -53,6 +53,7 @@ const (
 	maxWebSocketMessages      = 16
 	maxWebSocketMessageSize   = 64 << 10
 	maxWebSocketHandshakeBody = 4 << 10
+	maxConnectAnswerBody      = 4 << 10
 	muxRequestCount           = 250
 	muxBodySize               = 64
 	// Keep connection around longer than ext_proc cache freshness (10s)
@@ -129,6 +130,29 @@ type grpcResponse struct {
 type streamedMessage struct {
 	Message string `json:"message"`
 	Index   int32  `json:"index"`
+}
+
+// connectRequest parameters for an HTTP CONNECT.
+type connectRequest struct {
+	// Proxy is the host:port the actor dials and sends the CONNECT to.
+	Proxy string `json:"proxy"`
+	// Target is the host:port named in the CONNECT request line.
+	Target string `json:"target"`
+	// TLS wraps the connection to Proxy in TLS before the CONNECT goes out,
+	// which is how a client talks to an HTTPS proxy. The proxy's certificate
+	// is verified against RootCA when set, else the actor's roots.
+	TLS    bool   `json:"tls,omitempty"`
+	RootCA string `json:"rootCA,omitempty"`
+}
+
+// connectResponse is the proxy's answer to the CONNECT.
+type connectResponse struct {
+	StatusCode int    `json:"statusCode,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	Body       string `json:"body,omitempty"`
+	// TLS is true if the CONNECT was sent over TLS.
+	TLS   bool   `json:"tls"`
+	Error string `json:"error,omitempty"`
 }
 
 func main() {
@@ -210,6 +234,7 @@ func newHandler(client *http.Client) http.Handler {
 	mux.HandleFunc("/mux", handleMux)
 	mux.HandleFunc("/websocket", handleWebSocket)
 	mux.HandleFunc("/grpc", handleGRPC)
+	mux.HandleFunc("/connect", handleConnect)
 	return mux
 }
 
@@ -741,7 +766,7 @@ func handleGRPC(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, grpcResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
 		return
 	}
-	if err := validateTarget(input.Target); err != nil {
+	if err := validateTarget(input.Target, "target"); err != nil {
 		writeJSON(w, http.StatusBadRequest, grpcResponse{Error: err.Error()})
 		return
 	}
@@ -862,6 +887,107 @@ func writeGRPCFailure(w http.ResponseWriter, rpc string, err error) {
 	})
 }
 
+// handleConnect sends one HTTP CONNECT, the request a client makes of a
+// forward proxy, and reports the answer.
+func handleConnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, connectResponse{Error: "method must be POST"})
+		return
+	}
+
+	var input connectRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, connectResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+		return
+	}
+	if err := validateTarget(input.Proxy, "proxy"); err != nil {
+		writeJSON(w, http.StatusBadRequest, connectResponse{Error: err.Error()})
+		return
+	}
+	if err := validateTarget(input.Target, "target"); err != nil {
+		writeJSON(w, http.StatusBadRequest, connectResponse{Error: err.Error()})
+		return
+	}
+	// Built before anything is dialed, so a bad rootCA is the caller's
+	// mistake and no connection is opened for it.
+	var tlsCfg *tls.Config
+	if input.TLS {
+		host, _, _ := net.SplitHostPort(input.Proxy)
+		tlsCfg = &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+		if input.RootCA != "" {
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM([]byte(input.RootCA)) {
+				writeJSON(w, http.StatusBadRequest, connectResponse{Error: "rootCA does not contain a valid certificate"})
+				return
+			}
+			tlsCfg.RootCAs = roots
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+	response, err := performConnect(ctx, input, tlsCfg)
+	if err != nil {
+		response.Error = err.Error()
+		writeJSON(w, http.StatusBadGateway, response)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// performConnect dials the proxy, completes a TLS handshake with it when
+// tlsCfg is set, sends the CONNECT and reads its answer.
+func performConnect(ctx context.Context, input connectRequest, tlsCfg *tls.Config) (connectResponse, error) {
+	var response connectResponse
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", input.Proxy)
+	if err != nil {
+		return response, fmt.Errorf("dialing proxy %s: %w", input.Proxy, err)
+	}
+	// Through the variable, so the TLS connection that may replace it below
+	// is the one closed and gets to send its close_notify.
+	defer func() { _ = conn.Close() }()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return response, fmt.Errorf("setting deadline: %w", err)
+		}
+	}
+
+	if tlsCfg != nil {
+		tlsConn := tls.Client(conn, tlsCfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return response, fmt.Errorf("TLS handshake with proxy %s: %w", input.Proxy, err)
+		}
+		response.TLS = tlsConn.ConnectionState().VerifiedChains != nil
+		conn = tlsConn
+	}
+
+	request := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", input.Target, input.Target)
+	if _, err := io.WriteString(conn, request); err != nil {
+		return response, fmt.Errorf("sending CONNECT %s: %w", input.Target, err)
+	}
+	answer, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		return response, fmt.Errorf("reading the answer to CONNECT %s: %w", input.Target, err)
+	}
+	defer answer.Body.Close()
+	response.StatusCode = answer.StatusCode
+	response.Protocol = answer.Proto
+	// A 2xx turns the connection into the tunnel, so there is no body to
+	// read, and reading one would wait on bytes the proxy will never send.
+	if answer.StatusCode/100 == 2 {
+		return response, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(answer.Body, maxConnectAnswerBody))
+	if err != nil {
+		return response, fmt.Errorf("reading the body of the answer to CONNECT %s: %w", input.Target, err)
+	}
+	response.Body = string(body)
+	return response, nil
+}
+
 func validateURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -876,21 +1002,23 @@ func validateURL(raw string) error {
 	return nil
 }
 
-// validateTarget checks that raw is the host:port a gRPC dial needs. Unlike a
-// URL there is no scheme to reject, so a caller that passes one -- or passes a
-// bare hostname and lets the dial default the port -- finds out here rather
-// than in a connection error from somewhere along the egress path.
-func validateTarget(raw string) error {
+// validateTarget checks that raw is a host:port, which is what a gRPC dial, a
+// forward proxy, and a CONNECT's authority all take. Unlike a URL there is no
+// scheme to reject, so a caller that passes one -- or passes a bare hostname
+// and lets the dial default the port -- finds out here rather than in a
+// connection error from somewhere along the egress path. what names the
+// field in the error.
+func validateTarget(raw, what string) error {
 	host, port, err := net.SplitHostPort(raw)
 	if err != nil {
-		return fmt.Errorf("target must be host:port: %w", err)
+		return fmt.Errorf("%s must be host:port: %w", what, err)
 	}
 	if host == "" {
-		return fmt.Errorf("target must include a host")
+		return fmt.Errorf("%s must include a host", what)
 	}
 	number, err := strconv.Atoi(port)
 	if err != nil || number < 1 || number > 65535 {
-		return fmt.Errorf("target port must be a number between 1 and 65535, got %q", port)
+		return fmt.Errorf("%s port must be a number between 1 and 65535, got %q", what, port)
 	}
 	return nil
 }

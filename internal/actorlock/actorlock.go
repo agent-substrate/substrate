@@ -40,6 +40,9 @@ func (m *CancelableMutex) Unlock() { m.ch <- struct{}{} }
 
 // LockContext returns false on cancellation without acquiring the mutex.
 func (m *CancelableMutex) LockContext(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	select {
 	case <-m.ch:
 		return true
@@ -48,7 +51,7 @@ func (m *CancelableMutex) LockContext(ctx context.Context) bool {
 	}
 }
 
-// Locks serializes lifecycle RPCs per actor.
+// Locks serializes lifecycle RPCs per actor. A zero value is ready to use.
 type Locks struct {
 	mu sync.Mutex
 	// References include holders and waiters; unused entries are removed.
@@ -67,7 +70,13 @@ func New() *Locks {
 
 // Lock returns false on cancellation without acquiring the actor's lock.
 func (l *Locks) Lock(ctx context.Context, actorUID string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	l.mu.Lock()
+	if l.held == nil {
+		l.held = map[string]*heldLock{}
+	}
 	entry, ok := l.held[actorUID]
 	if !ok {
 		entry = &heldLock{mutex: NewCancelableMutex()}

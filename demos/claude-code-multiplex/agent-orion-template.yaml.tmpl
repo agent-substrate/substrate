@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the orion
+# ActorTemplate (protojson-shaped ateapi.ActorTemplate) for the orion
 # agent of the claude-code-multiplex demo; see agent-luna-template.yaml.tmpl
 # for the placeholder and apply conventions.
 metadata:
@@ -36,10 +36,8 @@ containers:
 # Sandbox size: see agent-luna-template.yaml.tmpl.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 2Gi
+    cpuMillicores: 1000
+    memoryBytes: 2147483648 # 2Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/claude-multiplex-demo/

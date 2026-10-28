@@ -125,12 +125,6 @@ func (c *Client) Snapshot(ctx context.Context, destDir string) error {
 	return c.api.put(ctx, "/api/v1/vm.snapshot", snapshotConfig{DestinationURL: SnapshotURL(destDir)})
 }
 
-// Shutdown best-effort tears down the VM and the VMM process behind the socket.
-func (c *Client) Shutdown(ctx context.Context) error {
-	_ = c.api.put(ctx, "/api/v1/vm.shutdown", nil)
-	return c.api.put(ctx, "/api/v1/vmm.shutdown", nil)
-}
-
 // SnapshotURL returns the file:// URL cloud-hypervisor expects for a snapshot
 // destination or restore source directory.
 func SnapshotURL(dir string) string { return "file://" + dir }

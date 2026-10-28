@@ -33,19 +33,19 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/atenet"
 	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 type mockClient struct {
-	ateapipb.ControlClient
-	resumeFn func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error)
+	ateapi.ControlClient
+	resumeFn func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error)
 }
 
-func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (m *mockClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	return m.resumeFn(ctx, in, opts...)
 }
 
@@ -58,15 +58,15 @@ func requestMetadata(actorName, atespace string, headers ...*corev3.HeaderValue)
 
 func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
 	clientMock := &mockClient{
-		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		resumeFn: func(_ context.Context, in *ateapi.ResumeActorRequest, _ ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 			if got, want := in.GetActor().GetName(), "actor-1"; got != want {
 				t.Errorf("actor name = %q, want %q", got, want)
 			}
 			if got, want := in.GetActor().GetAtespace(), "team-a"; got != want {
 				t.Errorf("atespace = %q, want %q", got, want)
 			}
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
+			return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{
+				Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -122,7 +122,7 @@ func TestHandleRequestHeadersRejectsDuplicateOrCommaHeaders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var resumeCalls int32
 			clientMock := &mockClient{
-				resumeFn: func(_ context.Context, _ *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(_ context.Context, _ *ateapi.ResumeActorRequest, _ ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					atomic.AddInt32(&resumeCalls, 1)
 					return nil, errors.New("should not be called")
 				},
@@ -155,10 +155,10 @@ func TestHandleRequestHeadersConnectAttributeOverridesInnerHeader(t *testing.T) 
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	var gotActorRef string
 	clientMock := &mockClient{
-		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		resumeFn: func(_ context.Context, in *ateapi.ResumeActorRequest, _ ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 			gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
+			return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{
+				Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -227,8 +227,8 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	h := New(&mockClient{
-		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
+		resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
 	}, ParkedRequestConfig{}, nil)
 
@@ -272,7 +272,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 		actorName          string
 		atespace           string
 		authority          string
-		resumeResp         *ateapipb.ResumeActorResponse
+		resumeResp         *ateapi.ResumeActorResponse
 		resumeErr          error
 		expectErr          bool
 		expectedErrStr     string
@@ -332,9 +332,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 		{
 			name:      "Bad Actor IP from resume returns 500 without leaking IP",
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"invalid-ip"}}},
+			resumeResp: &ateapi.ResumeActorResponse{
+				Actor: &ateapi.Actor{
+					Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"invalid-ip"}}},
 				},
 			},
 			expectErr:      true,
@@ -344,9 +344,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 		{
 			name:      "No Actor IPs from resume returns 500",
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{}},
+			resumeResp: &ateapi.ResumeActorResponse{
+				Actor: &ateapi.Actor{
+					Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{}},
 				},
 			},
 			expectErr:      true,
@@ -356,9 +356,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 		{
 			name:      "No worker SPIFFE ID from resume returns 500",
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+			resumeResp: &ateapi.ResumeActorResponse{
+				Actor: &ateapi.Actor{
+					Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
 				},
 			},
 			expectErr:      true,
@@ -368,9 +368,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 		{
 			name:      "successful resume ignores host and port for actor routing",
 			authority: "127.0.0.1:44681",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
+			resumeResp: &ateapi.ResumeActorResponse{
+				Actor: &ateapi.Actor{
+					Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 				},
 			},
 			expectErr:          false,
@@ -380,9 +380,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 		{
 			name:      "dual-stack resume routes to the first IP",
 			authority: "127.0.0.1:44681",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"fd00::52", "10.0.0.52"}}},
+			resumeResp: &ateapi.ResumeActorResponse{
+				Actor: &ateapi.Actor{
+					Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"fd00::52", "10.0.0.52"}}},
 				},
 			},
 			expectErr:          false,
@@ -402,7 +402,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 				atespace = "team-a"
 			}
 			clientMock := &mockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					if in.GetActor().GetName() != testUUID {
 						t.Errorf("unexpected identifier parsed in test context: %s", in.GetActor().GetName())
 					}
@@ -493,8 +493,8 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev:9090"
 
 	clientMock := &mockClient{
-		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
+		resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}}}}, nil
 		},
 	}
 	h := New(clientMock, ParkedRequestConfig{}, nil)
@@ -525,9 +525,9 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	clientMock := &mockClient{
-		resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
+		resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+			return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{
+				Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 			}}, nil
 		},
 	}
@@ -675,11 +675,11 @@ func TestHandleRequestHeadersConnectRequiresOuterTargetActor(t *testing.T) {
 			var gotActorRef string
 			var resumeCalls int32
 			clientMock := &mockClient{
-				resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(_ context.Context, in *ateapi.ResumeActorRequest, _ ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 					atomic.AddInt32(&resumeCalls, 1)
 					gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
-					return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
+					return &ateapi.ResumeActorResponse{Actor: &ateapi.Actor{
+						Status: &ateapi.ActorStatus{WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.52"}}},
 					}}, nil
 				},
 			}
@@ -736,15 +736,15 @@ func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 	clientMock := &mockClient{
 		resumeFn: func(
 			ctx context.Context,
-			in *ateapipb.ResumeActorRequest,
+			in *ateapi.ResumeActorRequest,
 			opts ...grpc.CallOption,
-		) (*ateapipb.ResumeActorResponse, error) {
+		) (*ateapi.ResumeActorResponse, error) {
 			resumeCalled = true
-			return &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					Status: &ateapipb.ActorStatus{
-						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.1"}},
+			return &ateapi.ResumeActorResponse{
+				Actor: &ateapi.Actor{
+					Status: &ateapi.ActorStatus{
+						State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapi.WorkerAssignment{WorkerSpiffeId: testWorkerSPIFFEID, WorkerPodIps: []string{"10.0.0.1"}},
 					},
 				},
 			}, nil
@@ -830,9 +830,9 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 				clientMock := &mockClient{
 					resumeFn: func(
 						ctx context.Context,
-						in *ateapipb.ResumeActorRequest,
+						in *ateapi.ResumeActorRequest,
 						opts ...grpc.CallOption,
-					) (*ateapipb.ResumeActorResponse, error) {
+					) (*ateapi.ResumeActorResponse, error) {
 						resumeCalls.Add(1)
 						return nil, tc.resumeErr
 					},

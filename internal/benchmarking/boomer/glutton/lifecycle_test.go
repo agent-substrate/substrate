@@ -19,6 +19,7 @@ import (
 	"slices"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
@@ -34,7 +35,7 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 
@@ -48,6 +49,11 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 	if slices.Contains(calls, "SuspendActor(async)") {
 		t.Errorf("did not expect SuspendActor(async) in suspend mode calls, got: %v", calls)
 	}
+	for _, req := range fakeCtrl.recordedSuspendRequests() {
+		if got := req.GetOptions().GetMode(); got != ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS {
+			t.Errorf("suspend mode = %v, want %v", got, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS)
+		}
+	}
 }
 
 func TestGluttonIterate_PauseMode(t *testing.T) {
@@ -57,7 +63,7 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync},
 		}),
 	})
 
@@ -89,8 +95,8 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 	rt.iterate()
 
 	calls := fakeCtrl.recordedCalls()
-	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "PauseActor") {
-		t.Errorf("did not expect SuspendActor or PauseActor during iterate in none mode, got: %v", calls)
+	if slices.Contains(calls, "SuspendActor") || slices.Contains(calls, "SuspendActor(async)") {
+		t.Errorf("did not expect a sync or async SuspendActor during iterate in none mode, got: %v", calls)
 	}
 	if got := countCalls(calls, "ResumeActor"); got != 1 {
 		t.Errorf("ResumeActor count across 2 iterations = %d, want 1 (first activation only); calls = %v", got, calls)
@@ -98,8 +104,8 @@ func TestGluttonIterate_NoneMode(t *testing.T) {
 
 	rt.shutdown(context.Background())
 	afterShutdown := fakeCtrl.recordedCalls()
-	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
-		t.Errorf("shutdown in none mode must end with [SuspendActor, DeleteActor], got %v", afterShutdown)
+	if len(afterShutdown) < 2 || afterShutdown[len(afterShutdown)-2] != "SuspendActor(async)" || afterShutdown[len(afterShutdown)-1] != "DeleteActor" {
+		t.Errorf("shutdown in none mode must end with [SuspendActor(async), DeleteActor], got %v", afterShutdown)
 	}
 }
 
@@ -110,7 +116,7 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeAsync},
 		}),
 	})
 
@@ -128,20 +134,16 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor(async)" || calls[len(calls)-1] != "DeleteActor" {
 		t.Errorf("recordedCalls must end with [SuspendActor(async), DeleteActor], got %v", calls)
 	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
-	}
 }
 
-func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
+func TestGluttonShutdown_StoppedActorOnlyDeleted(t *testing.T) {
 	srv := &fake.Server{}
 	fakeCtrl := &fakeControlClient{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 
@@ -159,10 +161,6 @@ func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
 	if len(calls) != 1 || calls[0] != "DeleteActor" {
 		t.Errorf("expected only DeleteActor call, got %v", calls)
 	}
-	reqs := fakeCtrl.recordedDeleteRequests()
-	if len(reqs) == 0 || !reqs[0].GetAnyState() {
-		t.Errorf("DeleteActor must set AnyState=true, got %v", reqs)
-	}
 }
 
 // newReplacementRuntime builds a one-actor-per-VU suspend-mode runtime whose
@@ -174,7 +172,7 @@ func newReplacementRuntime(t *testing.T, resumeErrs ...error) (*taskRuntime, *fa
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 	return &taskRuntime{cfg: cfg}, fakeCtrl
@@ -262,7 +260,7 @@ func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
 		Dyn: dynconfig.Static(gluttonKnobs{
-			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSync},
 		}),
 	})
 	rt := &taskRuntime{cfg: cfg}

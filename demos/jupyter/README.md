@@ -22,7 +22,8 @@ For local development, Agent Substrate provides helper scripts to get a Kind clu
 2. **Install Agent Substrate core system to the Kind cluster:**
 
    ```bash
-   ./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+   ./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' \
+     --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
    ```
 
 3. **Deploy the Jupyter Notebook Demo:**
@@ -53,30 +54,11 @@ kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template jupyter
 
 ### 2. Access Jupyter via the Proxy!
 
-Substrate routes HTTP traffic using `ate-target-actor: <atespace>/<actor>`.
-A browser cannot add that header to an address-bar navigation or WebSocket
-upgrade, so this demo puts a lightweight NGINX reverse proxy (`jupyter-proxy`)
-between the browser and the Substrate router. Its configuration injects the
-header for the Actor created above, preserves the browser's `Host` as application
-metadata, and preserves Jupyter's WebSocket upgrade:
-
-```nginx
-proxy_pass http://atenet-router.ate-system.svc.cluster.local;
-proxy_set_header Host $http_host;
-proxy_set_header ate-target-actor ate-demo-jupyter/jupyter-notebook;
-proxy_set_header Upgrade $http_upgrade;
-proxy_set_header Connection "upgrade";
-```
-
-The complete configuration is in `jupyter.yaml.tmpl`. If you create the Actor
-under another name or Atespace, update the `ate-target-actor` value before
-deploying the proxy. Do not derive it from an untrusted browser-supplied header.
-
-1. **Port-forward the lightweight proxy to your local machine:**
+1. **Start the local actor proxy:**
 
    Keep this running in a separate terminal:
    ```bash
-   kubectl port-forward --address 0.0.0.0 -n ate-demo-jupyter svc/jupyter-proxy 8888:80
+   kubectl ate proxy actor jupyter-notebook 8888:80 -a ate-demo-jupyter
    ```
 
 2. **Open your browser!**

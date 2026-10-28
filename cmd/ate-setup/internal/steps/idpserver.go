@@ -16,6 +16,7 @@ package steps
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,30 @@ import (
 )
 
 const idpIssuerFlag = "--issuer"
+
+// idpServerManifestPath is the ate-idp-server manifest.
+func (e *Env) idpServerManifestPath() string {
+	return e.Cfg.Manifest("ate-idp-server.yaml")
+}
+
+// deployIDPServer applies ate-idp-server on its own.
+func (e *Env) deployIDPServer(ctx context.Context) error {
+	manifest, err := e.renderIDPServer()
+	if err != nil {
+		return err
+	}
+	return e.ResolveAndApplyBytes(ctx, manifest)
+}
+
+// renderIDPServer renders the ate-idp-server manifest with the install's
+// issuer, as the system bundle carries it.
+func (e *Env) renderIDPServer() ([]byte, error) {
+	manifest, err := e.render(e.idpServerManifestPath())
+	if err != nil {
+		return nil, err
+	}
+	return setIDPServerIssuer(manifest, e.Cfg.ActorJWTIssuer)
+}
 
 // setIDPServerIssuer sets --issuer on the ate-idp-server container in manifest,
 // replacing any --issuer it already carries.

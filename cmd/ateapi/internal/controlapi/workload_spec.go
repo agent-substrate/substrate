@@ -17,38 +17,24 @@ package controlapi
 import (
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// toAteletResources resolves a container's declared limits into the scalars
-// atelet and the workers consume; everything downstream compares numbers.
-// Returns nil when the container declares no limits, so the OCI spec stays
-// untouched for templates that do not use them.
-func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) {
-	out := &ateletpb.ResourceLimits{}
-	for _, limit := range r.GetLimits() {
-		q, err := resource.ParseQuantity(limit.GetQuantity())
-		if err != nil {
-			return nil, fmt.Errorf("invalid container resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), err)
-		}
-		switch limit.GetName() {
-		case "cpu":
-			out.CpuMillis = q.MilliValue()
-		case "memory":
-			out.MemoryBytes = q.Value()
-		}
+// toAteletResources copies declared limits into atelet's form. Returns nil
+// when no limits are declared, so the OCI spec stays untouched for templates
+// that do not use them.
+func toAteletResources(r *ateapi.ResourceRequirements) *ateletpb.ResourceRequirements {
+	l := r.GetLimits()
+	if l.GetMemoryBytes() == 0 && l.GetCpuMillicores() == 0 {
+		return nil
 	}
-	if out.MemoryBytes == 0 && out.CpuMillis == 0 {
-		return nil, nil
-	}
-	return out, nil
+	return &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{CpuMillicores: l.GetCpuMillicores(), MemoryBytes: l.GetMemoryBytes()}}
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
-func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) (*ateletpb.WorkloadSpec, error) {
+func workloadSpecFromActorTemplate(actorTemplate *ateapi.ActorTemplate, actor *ateapi.Actor, volumePublishContexts map[string]map[string]string) (*ateletpb.WorkloadSpec, error) {
 	workloadSpec := &ateletpb.WorkloadSpec{}
 
 	// Convert volumes to atelet's representation.  ActorTemplate validation has
@@ -116,10 +102,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 	}
 
 	for _, ctr := range actorTemplate.GetContainers() {
-		ctrResources, err := toAteletResources(ctr.GetResources())
-		if err != nil {
-			return nil, err
-		}
+		ctrResources := toAteletResources(ctr.GetResources())
 		ateletCtr := &ateletpb.Container{
 			Name:            ctr.GetName(),
 			Image:           ctr.GetImage(),
@@ -151,23 +134,23 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 // and appends them to workloadSpec if they are referenced in container
 // volumeMounts. volumePublishContexts carries the attachment metadata of the current
 // resume by volume name; it is nil on paths that do not mount.
-func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, volumePublishContexts map[string]map[string]string) error {
+func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi.ActorTemplate, actor *ateapi.Actor, volumePublishContexts map[string]map[string]string) error {
 	if template == nil {
 		return nil
 	}
 	for _, vol := range template.GetVolumes() {
-		if vol.GetExternalVolumeTemplate() != nil {
+		if vol.GetExternal().GetTemplate() != nil {
 			if !isVolumeMounted(vol.GetName(), template) {
 				continue
 			}
 			if actor == nil {
-				return fmt.Errorf("actor is required when externalVolumeTemplate is present")
+				return fmt.Errorf("actor is required when an external volume is present")
 			}
 
 			var storageVolID string
 			var volType string
 			var volCtx map[string]string
-			for _, dbVol := range actor.GetStatus().GetExternalVolumes() {
+			for _, dbVol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
 				if dbVol.GetName() == vol.GetName() {
 					storageVolID = dbVol.GetStorageVolumeId()
 					volType = dbVol.GetVolumeType()
@@ -192,7 +175,7 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 	return nil
 }
 
-func isVolumeMounted(volumeName string, template *ateapipb.ActorTemplate) bool {
+func isVolumeMounted(volumeName string, template *ateapi.ActorTemplate) bool {
 	for _, ctr := range template.GetContainers() {
 		for _, mount := range ctr.GetVolumeMounts() {
 			if mount.GetName() == volumeName {
@@ -206,13 +189,13 @@ func isVolumeMounted(volumeName string, template *ateapipb.ActorTemplate) bool {
 // toAteletActorMetadataField projects the template field selector onto the
 // atelet wire enum. Unknown values map to UNSPECIFIED, which atelet skips;
 // template validation makes that unreachable for stored templates.
-func toAteletActorMetadataField(in ateapipb.ActorMetadataField) ateletpb.ActorMetadataField {
+func toAteletActorMetadataField(in ateapi.ActorMetadataField) ateletpb.ActorMetadataField {
 	switch in {
-	case ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:
+	case ateapi.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:
 		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
-	case ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE:
+	case ateapi.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE:
 		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE
-	case ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_UID:
+	case ateapi.ActorMetadataField_ACTOR_METADATA_FIELD_UID:
 		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID
 	default:
 		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED
@@ -222,7 +205,7 @@ func toAteletActorMetadataField(in ateapipb.ActorMetadataField) ateletpb.ActorMe
 // toAteletWakeupProbe projects the template wakeup probe field onto the ateletpb wire
 // type. Returns nil when the source is nil so containers without a probe
 // stay unchanged on the wire.
-func toAteletWakeupProbe(in *ateapipb.WakeupProbe) *ateletpb.WakeupProbe {
+func toAteletWakeupProbe(in *ateapi.WakeupProbe) *ateletpb.WakeupProbe {
 	if in == nil {
 		return nil
 	}
@@ -239,7 +222,7 @@ func toAteletWakeupProbe(in *ateapipb.WakeupProbe) *ateletpb.WakeupProbe {
 // toAteletSecurityContext projects the template securityContext onto the
 // ateletpb wire type. Returns nil when the source is nil or carries nothing,
 // so containers that set no security settings stay unchanged on the wire.
-func toAteletSecurityContext(in *ateapipb.SecurityContext) *ateletpb.SecurityContext {
+func toAteletSecurityContext(in *ateapi.SecurityContext) *ateletpb.SecurityContext {
 	caps := in.GetCapabilities()
 	if caps == nil || (len(caps.GetAdd()) == 0 && len(caps.GetDrop()) == 0) {
 		return nil

@@ -34,7 +34,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/credprovider/v1"
 )
 
 // providerName is the ate-secret:// URI host this backend serves.
@@ -194,12 +194,12 @@ type SecretAccessor interface {
 // or a region.
 type Accessors func(location string) (SecretAccessor, error)
 
-// Server implements credproviderpb.CredentialProviderServer over Secret
+// Server implements credprovider.CredentialProviderServer over Secret
 // Manager. mTLS admits only the egress gateway, which names each request's
 // actor; a secret resolves only in a project the policy grants that actor's
 // atespace.
 type Server struct {
-	credproviderpb.UnimplementedCredentialProviderServer
+	credprovider.UnimplementedCredentialProviderServer
 
 	clients      Accessors
 	authz        *ProjectAuthorizer
@@ -215,7 +215,7 @@ func NewServer(clients Accessors, authz *ProjectAuthorizer, fetchTimeout time.Du
 
 // FetchSecret resolves an ate-secret:// URI to its secret version's payload, or
 // to the string value of the URI's key in it, returned verbatim.
-func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
+func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretRequest) (*credprovider.FetchSecretResponse, error) {
 	ref, err := parseURI(req.GetUri())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -258,13 +258,13 @@ func (s *Server) FetchSecret(ctx context.Context, req *credproviderpb.FetchSecre
 		}
 	}
 	if ref.Key == "" {
-		return &credproviderpb.FetchSecretResponse{OpaqueBytes: payload.GetData()}, nil
+		return &credprovider.FetchSecretResponse{OpaqueBytes: payload.GetData()}, nil
 	}
 	value, err := keyValue(ref, payload.GetData())
 	if err != nil {
 		return nil, err
 	}
-	return &credproviderpb.FetchSecretResponse{OpaqueBytes: value}, nil
+	return &credprovider.FetchSecretResponse{OpaqueBytes: value}, nil
 }
 
 // authorize denies unless the policy grants project to the atespace of the

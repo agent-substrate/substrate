@@ -40,16 +40,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/atelet"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -76,6 +77,7 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -89,6 +91,9 @@ func main() {
 	defer stop()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	if err := applyTuningEnv(pflag.CommandLine, os.LookupEnv); err != nil {
 		serverboot.Fatal(ctx, "Invalid tuning environment", err)
@@ -127,8 +132,9 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
-	workers := ateapipb.NewWorkerServiceClient(ateapiConn)
-	h := &herder{delays: callDelays, storage: storage}
+	workers := ateapi.NewWorkerServiceClient(ateapiConn)
+	epochs := newWorkerEpochs()
+	h := &herder{delays: callDelays, storage: storage, epochs: epochs}
 	if *mintActorCertificate {
 		if h.csr, err = newActorCSR(); err != nil {
 			serverboot.Fatal(ctx, "Failed to create the actor CSR", err)
@@ -149,7 +155,7 @@ func main() {
 	// Its own server and listener, so each port admits only its own caller:
 	// ate-api-server on the herder's, fake-workersync on the relay's.
 	relaySrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(relayTLS)))
-	ateapipb.RegisterWorkerServiceServer(relaySrv, &relay{client: workers})
+	ateapi.RegisterWorkerServiceServer(relaySrv, &relay{client: workers, epochs: epochs})
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
 
 	slog.WarnContext(ctx, "Serving the fake atelet: actor lifecycle calls succeed without running any workload",

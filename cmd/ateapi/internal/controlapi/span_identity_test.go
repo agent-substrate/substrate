@@ -22,9 +22,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // recordRootSpanAttrs runs fn under a fresh recording root span from a local
@@ -66,9 +66,9 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 
 func TestSetSpanActorAttributes(t *testing.T) {
 	t.Parallel()
-	actor := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a1", Uid: "uid-a1", Version: 3},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+	actor := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "a1", Uid: "uid-a1", Version: 3},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 	}
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
@@ -105,6 +105,6 @@ func TestSetSpanActorRefAttributes(t *testing.T) {
 // A context with no recording span must be a safe no-op, so call sites need no guard.
 func TestSetSpanActorAttributes_NoRecordingSpanIsNoop(t *testing.T) {
 	t.Parallel()
-	setSpanActorAttributes(context.Background(), &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "a1"}})
+	setSpanActorAttributes(context.Background(), &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: "a1"}})
 	setSpanActorRefAttributes(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "a1"})
 }

@@ -37,7 +37,7 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/credprovider/v1"
 
 	"go.ate.dev/substrate/internal/plugins/gcp-secret-manager/internal/mtls"
 	"go.ate.dev/substrate/internal/plugins/gcp-secret-manager/internal/provider"
@@ -129,7 +129,7 @@ func run(ctx context.Context) error {
 	defer clients.Close()
 
 	srv := grpc.NewServer(grpc.Creds(creds))
-	credproviderpb.RegisterCredentialProviderServer(srv, provider.NewServer(clients.For, authz, *fetchTimeout))
+	credprovider.RegisterCredentialProviderServer(srv, provider.NewServer(clients.For, authz, *fetchTimeout))
 
 	grpcLis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *listenAddr)
 	if err != nil {

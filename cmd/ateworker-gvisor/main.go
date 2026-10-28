@@ -34,18 +34,20 @@ import (
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/spf13/pflag"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/ateworker"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -58,7 +60,6 @@ import (
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/wakeupprobe"
 	"go.ate.dev/substrate/internal/workerstats"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -75,8 +76,9 @@ func flagsConfigPath() string {
 
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
+	podIPs = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
 
-	tunnelConfig = tunnel.RegisterFlags(pflag.CommandLine)
+	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -89,6 +91,13 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 )
+
+// memoryReservedBytes is how much of the worker pod's memory limit we keep from
+// actors: the worker process itself, and the page cache of checkpoints in
+// flight, which leaves the actor's own cgroup with its sentry (see
+// isolateCheckpointCache). Otherwise an actor's sentry and gofers are charged
+// to its own cgroup, so gVisor reports no actor overhead.
+const memoryReservedBytes = 64 << 20
 
 // minUsageSampleInterval is the floor of --usage-sample-interval, the same as
 // atelet's poll interval floor.
@@ -140,7 +149,8 @@ func do(ctx context.Context) error {
 	const serviceName = "ateworker-gvisor"
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
-	// the providers fall back to dialing the collector directly.
+	// the providers fall back to OTEL_EXPORTER_OTLP_ENDPOINT, and export
+	// nothing without one.
 	//
 	// A relay that cannot be dialed is logged rather than fatal, matching both
 	// ends of the same decision: Dial already treats an absent socket as a
@@ -150,7 +160,7 @@ func do(ctx context.Context) error {
 	// over its telemetry route would turn a misconfigured flag into an outage.
 	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; exporting telemetry directly over the pod network",
+		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; falling back to the OTLP endpoint, if one is set",
 			slog.String("socket", *otlpRelaySocket), slog.Any("err", err))
 	}
 	if relayConn != nil {
@@ -162,7 +172,7 @@ func do(ctx context.Context) error {
 		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 		ExporterConn: relayConn,
 		// So the spans say which path they took, including when relayConn is nil
-		// because the dial above failed and this ateworker is exporting directly.
+		// because the dial above failed and this ateworker exports directly or not at all.
 		RelayCapable: true,
 	})
 	if err != nil {
@@ -185,7 +195,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter does not include otlp.
+	// Nil when there is nothing to export.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -203,13 +213,10 @@ func do(ctx context.Context) error {
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
 	// it with real accounting.
-	cgroupDelegated, err := cgroup.Delegate(ctx)
-	if err != nil {
+	if err := cgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
-	if cgroupDelegated {
-		removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
-	}
+	removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 
 	// Clean up any old socket.
 	sockPath := nodepath.WorkerSocketPath(*podUID)
@@ -233,12 +240,15 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := tunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags)
-	ateworkerService.cgroupDelegated = cgroupDelegated
+	ateworkerService.throttleMemory = psiEnabled(defaultCgroupRoot)
+	if !ateworkerService.throttleMemory {
+		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
+	}
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -248,6 +258,9 @@ func do(ctx context.Context) error {
 	defer usageStdout.Close()
 	ateworkerService.usage = workerstats.NewUsageEmitter(lp, usageStdout, pool)
 	defer workerstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
+	if ateworkerService.throttleMemory {
+		go ateworkerService.watchMemory(ctx)
+	}
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -256,6 +269,7 @@ func do(ctx context.Context) error {
 	ateworkerpb.RegisterWorkerServer(svr, ateworkerService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
+	readiness.AddCheck("registered", ateworkerService.epoch.Registered)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
 	// grace period) and propagate it into the sandbox so the actor can save its
@@ -279,16 +293,24 @@ func do(ctx context.Context) error {
 	// Report retries every failure it can outlast, including the window before
 	// the Worker record exists; anything that reaches here is a misconfiguration
 	// no restart-in-place will fix.
+	reportConfig := register.ReportConfig{
+		SocketPath:           nodepath.WorkerSupportSocket,
+		CredentialBundlePath: tunnelConfig.CredentialBundle,
+		TrustBundlePath:      tunnelConfig.TrustBundle,
+		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
+		Actors:               *maxActors,
+		PodIPs:               register.ParsePodIPs(*podIPs),
+		MemoryReservedBytes:  memoryReservedBytes,
+		SandboxClass:         string(atev1.SandboxClassGvisor),
+		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
+	}
+	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
+		slog.ErrorContext(ctx, "Crashed actors will not be reported", slog.Any("err", err))
+	} else {
+		ateworkerService.crashReporter = reporter
+	}
 	go func() {
-		err := register.Report(ctx, register.ReportConfig{
-			SocketPath:           nodepath.WorkerSupportSocket,
-			CredentialBundlePath: tunnelConfig.CredentialBundle,
-			TrustBundlePath:      tunnelConfig.TrustBundle,
-			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
-			Actors:               *maxActors,
-			SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
-			RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
-		})
+		err := register.Report(ctx, reportConfig, &ateworkerService.epoch)
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
@@ -325,6 +347,9 @@ type AteWorkerService struct {
 	locks *actorlock.Locks
 	// Tracks lifecycle RPCs for shutdown cancellation and draining.
 	inFlight *actorlock.InFlight
+	// crashReporter reports actors whose sandbox died. Nil if it could not be
+	// set up.
+	crashReporter crashReporter
 
 	// Guards actors and draining against concurrent stats reads.
 	actorsMu sync.RWMutex
@@ -335,7 +360,7 @@ type AteWorkerService struct {
 	maxActors int
 
 	actorLogger *actorlog.ActorLogger
-	tunnel      *tunnel.Tunnel
+	tunnel      *atunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
 	usage *workerstats.UsageEmitter
 
@@ -343,14 +368,18 @@ type AteWorkerService struct {
 	// workload RPCs are rejected with codes.Unavailable.
 	shuttingDown atomic.Bool
 
+	// epoch is the epoch this process registered with. It starts no workload
+	// before registering.
+	epoch register.Epoch
+
 	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
 	// own cgroup scope, which cgroup.Delegate prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
 
-	// cgroupDelegated is set when the worker's cgroup is delegated (false on
-	// privileged workers that inherit the host cgroup namespace).
-	cgroupDelegated bool
+	// throttleMemory is set when sandboxes get memory.high in place of
+	// memory.max, with watchMemory killing the ones stuck there.
+	throttleMemory bool
 
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
@@ -365,7 +394,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *tunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
+func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore) *AteWorkerService {
 	return &AteWorkerService{
 		locks:       actorlock.New(),
 		inFlight:    actorlock.NewInFlight(),
@@ -389,7 +418,7 @@ func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.Cancel
 }
 
 // rejectIfDraining returns a codes.Unavailable error if ateworker has begun graceful
-// shutdown, so the control plane reschedules the actor onto a live worker.
+// shutdown.
 func (s *AteWorkerService) rejectIfDraining() error {
 	if s.shuttingDown.Load() {
 		return apierror.Unavailable("worker draining: not accepting new workloads")
@@ -573,11 +602,10 @@ func validateRunscPath(actorUID string, actorDirs *ateworkerpb.ActorDirs, p stri
 	return resources.ToAPIError(errs)
 }
 
-// supportedFidelities are the snapshot fidelities this runtime serves. gVisor
-// keeps rootfs changes inside its memory checkpoint, so it cannot capture
-// ROOTFS without MEMORY.
+// supportedFidelities are the snapshot fidelities this runtime serves.
 var supportedFidelities = []ateworkerpb.SnapshotFidelity{
 	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 	ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 }
 
@@ -590,6 +618,10 @@ func validateFidelity(fidelity ateworkerpb.SnapshotFidelity) error {
 
 func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.RunWorkloadRequest) (resp *ateworkerpb.RunWorkloadResponse, retErr error) {
 	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
+		return nil, err
+	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
 		return nil, err
 	}
 	if err := validateRunscPath(req.GetActorUid(), req.GetActorDirs(), req.GetRunscPath()); err != nil {
@@ -609,6 +641,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := s.removeStaleSandboxLeaf(ctx, req.GetActorUid()); err != nil {
+		return nil, err
+	}
 
 	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
@@ -620,7 +655,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for the pause container.
+	//   * The OCI bundles of the application containers are set up.
 
 	egress, err := s.tunnel.PrepareEgress(ctx, workerstats.ActorAttributionFromRequest(req), req.GetEgressGateway())
 	if err != nil {
@@ -635,7 +670,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
 		actorDirs:      req.GetActorDirs(),
-		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		size:           sizing.FromLimits(req.GetResources().GetLimits()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
@@ -643,6 +678,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			if hosted.oomKilled.Load() {
+				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
+			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
@@ -662,30 +700,33 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateworker's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	// Egress is activated before the sandbox starts, ingress is activated after
+	// the wakeup probe (see tunnel.Tunnel.ActivateEgress).
+	if err := s.tunnel.ActivateEgress(attribution, egress); err != nil {
+		return nil, err
 	}
-	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-	// Attribute runsc CLI output and the pause container's stdio to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	containersToDelete = append(containersToDelete, ocispec.SandboxID)
+	// Attribute the sandbox's runsc CLI output to the actor.
+	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
-		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
 	}
 	defer pw.Close()
-	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
+	if err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, nil); err != nil {
+		return nil, fmt.Errorf("while creating the sandbox: %w", err)
 	}
-	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+	s.pinSandbox(ctx, hosted, req.GetActorDirs())
+	s.throttleSandboxMemory(ctx, hosted)
+	if err := rcmd.cmdStart(ctx, pw, ocispec.SandboxID); err != nil {
+		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
 
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.actor.container.name).
+	// The bundle rootfs is composed here, as an overlay of the node's cached
+	// image layers plus the bundle's private upper. atelet runs with no
+	// capabilities, so ateworker mounts it, and runsc's gofer resolves the
+	// mount in this pod's mount namespace.
 	for _, ac := range req.GetSpec().GetContainers() {
 		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
@@ -708,15 +749,16 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	if err := s.tunnel.Activate(workerstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
+	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, err
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
 	s.recordInitial(ctx, hosted)
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 
-	return &ateworkerpb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
@@ -738,7 +780,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
-	ctx, cancel := context.WithCancel(ctx)
+	if s.lookupActor(req.GetActorUid()) == nil {
+		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), req.GetFidelity()); resp != nil {
+			slog.InfoContext(ctx, "Reusing completed checkpoint from previous attempt", slog.String("actorUID", req.GetActorUid()))
+			return resp, nil
+		}
+	}
+
+	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
 	// Not cancelable: a checkpoint is saving the actor's state.
 	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
@@ -781,6 +830,10 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	checkpointPath := req.GetActorDirs().GetCheckpointDir()
+	// Clear any partial files from a previous failed attempt.
+	if err := os.RemoveAll(checkpointPath); err != nil {
+		return nil, fmt.Errorf("while clearing checkpoint directory: %w", err)
+	}
 	err = os.MkdirAll(checkpointPath, 0o700)
 	timing.prep = lap(&tLast)
 	if err != nil {
@@ -808,6 +861,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		return err
 	}
 
+	fsPaths := slices.Concat(rootfsFSCheckpointPaths(containers), durablePaths)
 	var checkpointFn func(context.Context) error
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
@@ -815,27 +869,51 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
 		checkpointFn = func(ctx context.Context) error {
-			err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
-			timing.durableDir = lap(&tLast)
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, durablePaths)
+			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
 			return nil
 		}
-	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Checkpoint pause container (root of the sandbox), splitting durable-dir
-		// volumes into <checkpointPath>/fs when present.
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		checkpointFn = func(ctx context.Context) error {
-			sandbox, sbErr := openSandboxProcess(req.GetActorDirs())
-			if sbErr != nil {
-				slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", sbErr))
-			} else {
-				defer sandbox.Close()
-			}
-			err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
+			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
+			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
+				return fmt.Errorf("while checkpointing container filesystems: %w", err)
+			}
+			return nil
+		}
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		// Checkpoint the sandbox, splitting container rootfs overlays into the
+		// rootfs bundle and durable-dir volumes into <checkpointPath>/fs when
+		// present.
+		checkpointFn = func(ctx context.Context) error {
+			var sandbox *sandboxProcess
+			if hosted != nil {
+				hosted.stopping.Store(true)
+				sandbox = hosted.sandbox
+			}
+			if sandbox == nil {
+				// never pinned: fall back to the pidfile, still better than
+				// cleaning up before the sandbox is reaped
+				var err error
+				if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
+					slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
+				} else {
+					defer sandbox.Close()
+				}
+			}
+			err := rcmd.cmdCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
+			if err != nil {
+				// the actor may stay RUNNING, so its sandbox dying is a crash
+				// again, including if this checkpoint stopped it
+				if hosted != nil {
+					hosted.stopping.Store(false)
+				}
 				timing.checkpoint = lap(&tLast)
-				return fmt.Errorf("while checkpointing pause: %w", err)
+				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
 			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
 			if sandbox != nil {
@@ -849,13 +927,21 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
-	if err := checkpointIsolated(ctx, s.cgroupDelegated, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+	// the sentry leaves its sandbox leaf for the checkpoint cgroup
+	var memoryLimit uint64
+	if hosted != nil {
+		memoryLimit = pauseMemoryWatch(hosted)
+	}
+	if err := checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), req.GetActorDirs(), checkpointFn, terminate); err != nil {
+		if hosted != nil && memoryLimit != 0 {
+			resumeMemoryWatch(hosted, memoryLimit)
+		}
 		return nil, err
 	}
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
-	// (checkpoint.img plus any pages images and fs/ durable-dir files), rather
-	// than a hardcoded list.
+	// (checkpoint.img and its page files, plus the fs/ and rootfs/ bundle files),
+	// rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
 	if err != nil {
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
@@ -864,11 +950,16 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
+	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
+	if err := ateworker.RecordCheckpoint(checkpointPath, fidelity, resp); err != nil {
+		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+	}
+	return resp, nil
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
-// dir and under dir/fs, which atelet ships to object storage as the snapshot.
+// dir, dir/fs, and dir/rootfs, which atelet ships to object storage as the
+// snapshot.
 func listSnapshotFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -880,23 +971,24 @@ func listSnapshotFiles(dir string) ([]string, error) {
 			files = append(files, e.Name())
 		}
 	}
-	fsEntries, err := os.ReadDir(filepath.Join(dir, resources.FSCheckpointSubdir))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	for _, e := range fsEntries {
-		if e.Type().IsRegular() {
-			files = append(files, filepath.Join(resources.FSCheckpointSubdir, e.Name()))
+	for _, sub := range []string{resources.FSCheckpointSubdir, resources.RootfsCheckpointSubdir} {
+		subEntries, err := os.ReadDir(filepath.Join(dir, sub))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		for _, e := range subEntries {
+			if e.Type().IsRegular() {
+				files = append(files, filepath.Join(sub, e.Name()))
+			}
 		}
 	}
 	sort.Strings(files)
 	return files, nil
 }
 
-// stopContainers stops the actor's application containers. The pause container
-// is left running: it is the sandbox, and cleanupContainers deletes the others
-// through it before deleting it last. Killing it first leaves the sentry a
-// zombie until reaped, which runsc delete mistakes for a live sandbox.
+// stopContainers stops the actor's application containers. The sandbox is left
+// running: cleanupContainers deletes the others through it before deleting it
+// last. runsc kill does not apply to a sandbox with no root container.
 func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) {
 	for _, ctr := range containers {
 		_ = rcmd.cmdKill(ctx, ctr.GetName(), "SIGKILL")
@@ -905,12 +997,12 @@ func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*at
 }
 
 func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateworkerpb.Container) error {
-	// Application containers first, the pause (root) container last.
+	// Application containers first, the sandbox last.
 	names := make([]string, 0, len(containers)+1)
 	for _, ctr := range containers {
 		names = append(names, ctr.GetName())
 	}
-	names = append(names, ocispec.PauseContainer)
+	names = append(names, ocispec.SandboxID)
 
 	// Check state of all containers to mimic containerd.
 	// Without this, `runsc delete` occasionally throws an error.
@@ -954,6 +1046,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := ateworkervalidation.ValidateRestoreWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
+		return nil, err
+	}
 	// Taken before the lock, so prep covers the wait for it.
 	tStart := time.Now()
 	if err := validateFidelity(req.GetFidelity()); err != nil {
@@ -993,6 +1089,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := s.removeStaleSandboxLeaf(ctx, req.GetActorUid()); err != nil {
+		return nil, err
+	}
 
 	err = s.tunnel.Deactivate(ctx, attribution)
 	timing.prep = lap(&tLast)
@@ -1005,7 +1104,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for the pause container.
+	//   * The OCI bundles of the application containers are set up.
 	//   * Checkpoint downloaded and placed on disk
 
 	egress, err := s.tunnel.PrepareEgress(ctx, attribution, req.GetEgressGateway())
@@ -1022,7 +1121,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
 		actorDirs:      req.GetActorDirs(),
-		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		size:           sizing.FromLimits(req.GetResources().GetLimits()),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
@@ -1030,6 +1129,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			if hosted.oomKilled.Load() {
+				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
+			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
@@ -1046,53 +1148,53 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			}
 		}
 	}()
+	err = s.tunnel.ActivateEgress(attribution, egress)
+	timing.activate = lap(&tLast)
+	if err != nil {
+		return nil, err
+	}
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
-	restoreArgs, err := fsRestoreArgs(checkpointDir)
+	restoreArgs, err := fsRestoreArgs(checkpointDir, fidelity)
 	if err != nil {
 		return nil, err
 	}
 
-	// Compose the pause rootfs before create (see RunWorkload). runsc restore
-	// only needs the rootfs to hold the correct content; whether it came from
-	// an untar or an overlay of cached layers is transparent to it.
-	err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer))
-	timing.pauseRootfs = lap(&tLast)
+	// Attribute the sandbox's runsc CLI output to the actor.
+	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
-
-	// Attribute runsc CLI output and the pause container's stdio to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
-	if err != nil {
-		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
 	}
 	defer pw.Close()
 	switch fidelity {
-	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		// Create and start pause container (cold boot with durable-dir volumes restored from fs/)
-		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
-		timing.pauseCreate = lap(&tLast)
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		// Create and start the sandbox (cold boot with filesystem checkpoint bundles restored)
+		containersToDelete = append(containersToDelete, ocispec.SandboxID)
+		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
+		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while creating pause container: %w", err)
+			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
-		err = rcmd.cmdStart(ctx, pw, ocispec.PauseContainer)
-		timing.pauseRestore = lap(&tLast)
+		s.pinSandbox(ctx, hosted, req.GetActorDirs())
+		s.throttleSandboxMemory(ctx, hosted)
+		err = rcmd.cmdStart(ctx, pw, ocispec.SandboxID)
+		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while starting pause container: %w", err)
+			return nil, fmt.Errorf("while starting the sandbox: %w", err)
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Create and restore pause container (restores both process/rootfs and fs/ durable-dir volumes)
-		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, restoreArgs)
-		timing.pauseCreate = lap(&tLast)
+		// Create and restore the sandbox (restores process state and filesystem checkpoint bundles)
+		containersToDelete = append(containersToDelete, ocispec.SandboxID)
+		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
+		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while creating pause container: %w", err)
+			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
-		err = rcmd.cmdRestore(ctx, pw, ocispec.PauseContainer, checkpointDir)
-		timing.pauseRestore = lap(&tLast)
+		s.pinSandbox(ctx, hosted, req.GetActorDirs())
+		s.throttleSandboxMemory(ctx, hosted)
+		err = rcmd.cmdRestore(ctx, pw, ocispec.SandboxID, checkpointDir)
+		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while restoring pause container: %w", err)
+			return nil, fmt.Errorf("while restoring the sandbox: %w", err)
 		}
 	}
 
@@ -1118,7 +1220,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
 		switch fidelity {
-		case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 			err = rcmd.cmdStart(ctx, pw, ac.GetName())
 			timing.appRestore += lap(&tLast)
 			if err != nil {
@@ -1139,19 +1241,19 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	err = s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress)
-	timing.activate = lap(&tLast)
+	err = s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid()))
+	timing.activate += lap(&tLast)
 	if err != nil {
 		return nil, err
 	}
 	dropActorCheckpointCacheAsync(hosted.ctx, req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
 		if fidelity == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
-			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer); err != nil {
+			if err := rcmd.cmdWaitRestore(waitCtx, ocispec.SandboxID); err != nil {
 				return err
 			}
 		}
 		if len(restoreArgs) > 0 {
-			for _, ctr := range fsRestoreContainers(containers) {
+			for _, ctr := range fsRestoreContainers(fidelity, containers) {
 				if err := rcmd.cmdWaitFSRestore(waitCtx, ctr); err != nil {
 					return err
 				}
@@ -1163,8 +1265,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
 	s.recordInitial(ctx, hosted)
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
-	return &ateworkerpb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
@@ -1197,6 +1300,9 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 }
 
 func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateworkerpb.ActorDirs, containers []*ateworkerpb.Container) error {
+	if hosted := s.lookupActor(actorUID); hosted != nil {
+		hosted.stopping.Store(true)
+	}
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))

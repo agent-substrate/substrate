@@ -18,10 +18,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
@@ -103,7 +106,7 @@ func functionBody(t *testing.T, file, signature string) string {
 	return body[:end]
 }
 
-// servicednssigner issues the socat sidecar's serving certificate from the
+// servicednssigner issues the Envoy sidecar's serving certificate from the
 // csi-hostpath-controller Service, so a driver deployed before that Service
 // exists has nothing to be issued against and never becomes ready. The shell
 // installer created the Service first and said why.
@@ -122,7 +125,7 @@ func TestTheHostpathControllerServiceIsCreatedBeforeTheDriver(t *testing.T) {
 		t.Fatal("setupCSIHostpath no longer applies the driver bundle with ApplyTolerant")
 	case service > driver:
 		t.Error("setupCSIHostpath deploys the hostpath driver before creating the " +
-			"csi-hostpath-controller Service; the socat sidecar cannot be issued a " +
+			"csi-hostpath-controller Service; the Envoy sidecar cannot be issued a " +
 			"certificate until the Service exists")
 	}
 }
@@ -195,5 +198,93 @@ func TestCSIDriverSpellings(t *testing.T) {
 				t.Errorf("csiDrivers[%q].installsNothing() = %v for %+v", tc.driver, got.installsNothing(), got)
 			}
 		})
+	}
+}
+
+// decodeYAML unmarshals a manifest defined in csi.go.
+func decodeYAML(t *testing.T, name, src string, into any) {
+	t.Helper()
+	if err := yaml.Unmarshal([]byte(src), into); err != nil {
+		t.Fatalf("%s does not parse: %v", name, err)
+	}
+}
+
+// ateapi verifies tls.serverName, which must be the <service>.<namespace>.svc name servicednssigner issues.
+func TestTheNFSDriverConfigEnablesTLSAgainstTheControllerService(t *testing.T) {
+	var svc corev1.Service
+	decodeYAML(t, "csiNFSControllerService", csiNFSControllerService, &svc)
+	var cfg struct {
+		Spec struct {
+			ControllerEndpoint string `json:"controllerEndpoint"`
+			TLS                *struct {
+				Enabled        bool   `json:"enabled"`
+				UsePodIdentity bool   `json:"usePodIdentity"`
+				ServerName     string `json:"serverName"`
+			} `json:"tls"`
+		} `json:"spec"`
+	}
+	decodeYAML(t, "csiNFSDriverConfig", csiNFSDriverConfig, &cfg)
+
+	if cfg.Spec.TLS == nil || !cfg.Spec.TLS.Enabled || !cfg.Spec.TLS.UsePodIdentity {
+		t.Fatalf("csiNFSDriverConfig tls = %+v, want enabled with pod identity", cfg.Spec.TLS)
+	}
+	if want := svc.Name + "." + svc.Namespace + ".svc"; cfg.Spec.TLS.ServerName != want {
+		t.Errorf("tls.serverName = %q, want %q, the name servicednssigner issues", cfg.Spec.TLS.ServerName, want)
+	}
+	if want := "tcp://" + svc.Name + "." + svc.Namespace + ".svc.cluster.local:" + strconv.Itoa(int(svc.Spec.Ports[0].Port)); cfg.Spec.ControllerEndpoint != want {
+		t.Errorf("controllerEndpoint = %q, want %q", cfg.Spec.ControllerEndpoint, want)
+	}
+}
+
+// hack/setup-csi-nfs-kind.sh is the same install by hand and must keep the same security decisions.
+func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "setup-csi-nfs-kind.sh"))
+	if err != nil {
+		t.Fatalf("reading the shell setup: %v", err)
+	}
+	src := string(script)
+
+	for _, forbidden := range []string{"socat:", "privileged: true"} {
+		if strings.Contains(src, forbidden) {
+			t.Errorf("hack/setup-csi-nfs-kind.sh still contains %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"require_client_certificate: true",
+		"serverName: csi-nfs-controller.kube-system.svc\n",
+		"usePodIdentity: true",
+		"/sa/ate-api-server",
+	} {
+		if !strings.Contains(src, required) {
+			t.Errorf("hack/setup-csi-nfs-kind.sh no longer contains %q", required)
+		}
+	}
+	if service, driver := strings.Index(src, "name: csi-nfs-controller\n  namespace: kube-system"), strings.Index(src, "csi-nfs-controller.yaml"); service < 0 || driver < 0 || service > driver {
+		t.Error("hack/setup-csi-nfs-kind.sh deploys the NFS driver before creating the csi-nfs-controller Service")
+	}
+}
+
+// The hostpath proxy needs no more than root to reach the driver's socket.
+func TestTheHostpathProxyIsNotPrivileged(t *testing.T) {
+	objs, err := kube.LoadPath(filepath.Join(repoRoot(t), "hack", "third_party", "csi-driver-host-path", "deploy", "csi-hostpath-testing.yaml"))
+	if err != nil {
+		t.Fatalf("loading the hostpath proxy manifest: %v", err)
+	}
+	var found bool
+	for _, obj := range objs {
+		if obj.GetKind() != "StatefulSet" {
+			continue
+		}
+		containers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+		for _, c := range containers {
+			c := c.(map[string]any)
+			found = true
+			if privileged, _, _ := unstructured.NestedBool(c, "securityContext", "privileged"); privileged {
+				t.Errorf("%s container %q is privileged", kube.Describe(obj), c["name"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("csi-hostpath-testing.yaml no longer holds a proxy StatefulSet")
 	}
 }

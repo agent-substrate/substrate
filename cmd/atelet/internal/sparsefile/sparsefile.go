@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package sparsefile copies files while preserving holes.
+// Package sparsefile copies files while preserving holes, and measures the
+// disk space a file's data takes.
 //
 // The biggest thing atelet copies is a guest memory image, which is mostly
 // unallocated: a plain io.Copy reads holes as zeroes and writes them as
@@ -25,7 +26,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -37,6 +40,17 @@ var errSparseUnsupported = errors.New("filesystem cannot report holes")
 // errKernelCopyUnsupported means this platform, kernel or filesystem cannot copy a
 // range in the kernel, so the caller should copy through userspace instead.
 var errKernelCopyUnsupported = errors.New("kernel range copy unsupported")
+
+// AllocatedBytes returns the disk space allocated to info (st_blocks * 512)
+// rather than its apparent size, which for a sparse guest memory image is the
+// guest RAM ceiling, often orders of magnitude more than the data it holds.
+// ext4, XFS, and btrfs count delayed allocations before writeback.
+func AllocatedBytes(info fs.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int64(st.Blocks) * 512
+	}
+	return info.Size()
+}
 
 // CopyFile copies src to dst, preserving holes where it can, and returns the number of
 // logical bytes copied. dst is created (truncated if it exists), like os.Create.

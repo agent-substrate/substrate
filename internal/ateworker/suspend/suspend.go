@@ -112,7 +112,7 @@ type Actor struct {
 // The caller's own context bounds the whole thing.
 //
 // A refusal is not retried. The control plane declining -- the actor is no
-// longer assigned to this worker, or a resume, pause, or delete won the race --
+// longer assigned to this worker, or a resume, suspend, or delete won the race --
 // is an answer, and asking again cannot change it.
 func (r *Requester) RequestSuspend(ctx context.Context, actor Actor) error {
 	// A fresh connection per request picks up rotated worker credentials and
@@ -166,7 +166,7 @@ func requestWithRetry(ctx context.Context, conn grpc.ClientConnInterface, actor 
 // holds the actor's lease, or a write lost to a concurrent one. The lease is
 // the likely one here, because a suspend takes it before it does anything
 // else, and it is worth waiting out -- whatever holds it finishes, and the
-// retry re-runs every precondition against fresh state, so a pause or delete
+// retry re-runs every precondition against fresh state, so a suspend or delete
 // that won the race is refused rather than overridden.
 //
 // Everything else is left alone. NotFound and FailedPrecondition are

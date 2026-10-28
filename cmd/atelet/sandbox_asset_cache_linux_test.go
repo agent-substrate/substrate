@@ -23,8 +23,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"go.ate.dev/substrate/internal/nodepath"
 )
 
 // otherMount returns a fresh directory on a mount other than the one
@@ -63,13 +61,20 @@ func TestCanHardLinkRejectsAnotherMount(t *testing.T) {
 	}
 }
 
+// TestOpenSandboxAssetCacheRejectsAnotherMount pins the startup refusal for
+// each directory links go into: the actors dir, and the workers dir where
+// each worker's default runtime is linked.
 func TestOpenSandboxAssetCacheRejectsAnotherMount(t *testing.T) {
 	useTempAssetScratch(t)
-	orig := nodepath.ActorsDir
-	nodepath.ActorsDir = filepath.Join(otherMount(t), "actors")
-	t.Cleanup(func() { nodepath.ActorsDir = orig })
-	_, err := openSandboxAssetCache(t.Context(), filepath.Join(t.TempDir(), "cache"), time.Hour, time.Minute)
-	if !errors.Is(err, syscall.EXDEV) {
-		t.Fatalf("openSandboxAssetCache with the actors dir on another mount = %v, want EXDEV", err)
+	for _, tt := range []struct{ name, actors, workers string }{
+		{"actors dir", filepath.Join(otherMount(t), "actors"), filepath.Join(t.TempDir(), "workers")},
+		{"workers dir", filepath.Join(t.TempDir(), "actors"), filepath.Join(otherMount(t), "workers")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := openSandboxAssetCache(t.Context(), filepath.Join(t.TempDir(), "cache"), time.Hour, time.Minute, tt.actors, tt.workers)
+			if !errors.Is(err, syscall.EXDEV) {
+				t.Fatalf("openSandboxAssetCache with the %s on another mount = %v, want EXDEV", tt.name, err)
+			}
+		})
 	}
 }

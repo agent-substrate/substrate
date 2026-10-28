@@ -19,8 +19,8 @@ package hardware
 import (
 	"runtime"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -31,8 +31,7 @@ const (
 	AttrArchitecture = "architecture"
 
 	// AttrSandboxBundleHash identifies the sandbox runtime bundle: a
-	// sha256 over a SandboxConfig version's asset digests and pause image
-	// digest, computed by atelet.
+	// sha256 over a SandboxConfig version's asset digests, computed by atelet.
 	AttrSandboxBundleHash = "sandbox_bundle_hash"
 
 	// AttrCPUFeatures is the set of CPU features `runsc cpu-features` reports
@@ -68,13 +67,13 @@ func ProbeHost() *ateletpb.VersionedSandboxCompat {
 }
 
 // Requirement is what a worker must run to restore a snapshot: the
-// SandboxRuntime the snapshot was stamped with, prepared for matching against
+// ActorSandboxRuntime the snapshot was stamped with, prepared for matching against
 // many workers. The scheduler asks it once per candidate, so the snapshot's
 // AttrCPUFeatures is parsed here, once, rather than on every comparison. The
 // zero Requirement, like NewRequirement(nil), requires nothing.
 type Requirement struct {
-	snap   *ateapipb.SandboxRuntime
-	compat *ateapipb.VersionedSandboxCompat // snap's version
+	snap   *ateapi.ActorSandboxRuntime
+	compat *ateapi.VersionedSandboxCompat // snap's version
 	// cpuFeatures is compat's AttrCPUFeatures parsed, when it has one.
 	// badCPUFeatures records one that is not a canonical mask, which no
 	// worker satisfies.
@@ -83,13 +82,13 @@ type Requirement struct {
 }
 
 // NewRequirement prepares snap for matching. A nil snap requires nothing.
-func NewRequirement(snap *ateapipb.SandboxRuntime) Requirement {
+func NewRequirement(snap *ateapi.ActorSandboxRuntime) Requirement {
 	r := compatRequirement(snap.GetVersion())
 	r.snap = snap
 	return r
 }
 
-func compatRequirement(compat *ateapipb.VersionedSandboxCompat) Requirement {
+func compatRequirement(compat *ateapi.VersionedSandboxCompat) Requirement {
 	r := Requirement{compat: compat}
 	for _, a := range compat.GetAttributes() {
 		if a.GetKey() == AttrCPUFeatures {
@@ -102,23 +101,23 @@ func compatRequirement(compat *ateapipb.VersionedSandboxCompat) Requirement {
 	return r
 }
 
-// Runtime returns the SandboxRuntime the requirement was prepared from, or
+// Runtime returns the ActorSandboxRuntime the requirement was prepared from, or
 // nil when it requires nothing.
-func (r Requirement) Runtime() *ateapipb.SandboxRuntime {
+func (r Requirement) Runtime() *ateapi.ActorSandboxRuntime {
 	return r.snap
 }
 
-// Matches reports whether a worker's SandboxRuntime can restore the
-// snapshot. A requirement of nothing is met by any worker. Otherwise the
+// Matches reports whether rt, the runtime an assignment records, can restore
+// the snapshot. A requirement of nothing is met by any runtime. Otherwise the
 // sandbox classes must be equal and the compat must match.
-func (r Requirement) Matches(worker *ateapipb.SandboxRuntime) bool {
+func (r Requirement) Matches(rt *ateapi.ActorSandboxRuntime) bool {
 	if r.snap == nil {
 		return true
 	}
-	if worker == nil || worker.GetSandboxClass() != r.snap.GetSandboxClass() {
+	if rt == nil || rt.GetSandboxClass() != r.snap.GetSandboxClass() {
 		return false
 	}
-	return r.matchesCompat(worker.GetVersion())
+	return r.matchesCompat(rt.GetVersion())
 }
 
 // matchesCompat reports whether worker can restore the snapshot: the same
@@ -129,7 +128,7 @@ func (r Requirement) Matches(worker *ateapipb.SandboxRuntime) bool {
 // start reporting a new key under the same schema version without
 // invalidating the snapshots taken before it; removing or recomputing a key
 // is a new schema version, under which older snapshots no longer match.
-func (r Requirement) matchesCompat(worker *ateapipb.VersionedSandboxCompat) bool {
+func (r Requirement) matchesCompat(worker *ateapi.VersionedSandboxCompat) bool {
 	if worker == nil || r.compat == nil {
 		return false
 	}
@@ -173,66 +172,138 @@ func (r Requirement) attributeSatisfied(key, workerVal, snapVal string) bool {
 	return workerVal == snapVal
 }
 
-// MatchingRuntime returns the SandboxRuntime from status that can restore
-// the snapshot (checking DefaultRuntime first, then RestorableRuntimes in
-// order), or nil if none matches. A requirement of nothing returns
-// DefaultRuntime.
-func (r Requirement) MatchingRuntime(status *ateapipb.WorkerStatus) *ateapipb.SandboxRuntime {
-	if def := status.GetDefaultRuntime(); r.snap == nil || r.Matches(def) {
+// classOf returns the entry of status for class, or nil when the worker does
+// not run that class.
+func classOf(status *ateapi.WorkerStatus, class string) *ateapi.WorkerSandboxClass {
+	for _, c := range status.GetSandboxClasses() {
+		if c.GetSandboxClass() == class {
+			return c
+		}
+	}
+	return nil
+}
+
+// runtimeOf is the ActorSandboxRuntime an assignment or snapshot is stamped with
+// for compat under class.
+func runtimeOf(class string, compat *ateapi.VersionedSandboxCompat) *ateapi.ActorSandboxRuntime {
+	return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: compat}
+}
+
+// matchingRuntime returns the runtime from status that can restore the
+// snapshot: in the worker's entry for the snapshot's class, DefaultRuntime
+// first, then RestorableRuntimes in order. nil if the worker does not run
+// that class or nothing in its entry matches. Only for a requirement of
+// something.
+func (r Requirement) matchingRuntime(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
+	c := classOf(status, r.snap.GetSandboxClass())
+	if c == nil {
+		return nil
+	}
+	if def := c.GetDefaultRuntime(); r.matchesCompat(def.GetVersion()) {
 		return def
 	}
-	for _, rt := range status.GetRestorableRuntimes() {
-		if r.Matches(rt) {
+	for _, rt := range c.GetRestorableRuntimes() {
+		if r.matchesCompat(rt.GetVersion()) {
 			return rt
 		}
 	}
 	return nil
 }
 
+// MatchingRuntime returns the runtime from status that can restore the
+// snapshot, as a stamp: the snapshot's class with the version of the runtime
+// matchingRuntime finds, or nil when it finds none. A requirement of nothing
+// returns ColdBootRuntime.
+func (r Requirement) MatchingRuntime(status *ateapi.WorkerStatus) *ateapi.ActorSandboxRuntime {
+	if r.snap == nil {
+		return ColdBootRuntime(status)
+	}
+	if rt := r.matchingRuntime(status); rt != nil {
+		return runtimeOf(r.snap.GetSandboxClass(), rt.GetVersion())
+	}
+	return nil
+}
+
 // WorkerMatches reports whether a worker with status can restore the
 // snapshot. A requirement of nothing is met by any worker.
-func (r Requirement) WorkerMatches(status *ateapipb.WorkerStatus) bool {
-	return r.snap == nil || r.MatchingRuntime(status) != nil
+func (r Requirement) WorkerMatches(status *ateapi.WorkerStatus) bool {
+	return r.snap == nil || r.matchingRuntime(status) != nil
+}
+
+// WorkerRuntimeFor returns the worker's runtime that RuntimeFor stamps, as the
+// worker reported it, or nil before the worker has registered.
+func (r Requirement) WorkerRuntimeFor(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
+	if r.snap != nil {
+		if rt := r.matchingRuntime(status); rt != nil {
+			return rt
+		}
+	}
+	classes := status.GetSandboxClasses()
+	if len(classes) == 0 {
+		return nil
+	}
+	return classes[0].GetDefaultRuntime()
 }
 
 // RuntimeFor returns the runtime a worker with status runs an actor under
 // whose snapshot is stamped with the required runtime: the matching runtime
-// when it can restore the snapshot, else the DefaultRuntime the guest boots
+// when it can restore the snapshot, else the ColdBootRuntime the guest boots
 // fresh under. This is what an assignment records and what the actor's next
 // checkpoint is stamped with.
-func (r Requirement) RuntimeFor(status *ateapipb.WorkerStatus) *ateapipb.SandboxRuntime {
+func (r Requirement) RuntimeFor(status *ateapi.WorkerStatus) *ateapi.ActorSandboxRuntime {
 	if rt := r.MatchingRuntime(status); rt != nil {
 		return rt
 	}
-	return status.GetDefaultRuntime()
+	return ColdBootRuntime(status)
 }
 
-// Matches reports whether a worker's SandboxRuntime can restore a snapshot
-// stamped with snap, for one comparison; a caller holding one snap against
-// many workers should prepare a Requirement once. A nil snap imposes no
-// constraint.
-func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
-	return NewRequirement(snap).Matches(worker)
+// ColdBootRuntime returns the runtime a fresh actor starts under on a worker
+// with status: the DefaultRuntime of its class, as a stamp, or nil before the
+// worker has registered.
+func ColdBootRuntime(status *ateapi.WorkerStatus) *ateapi.ActorSandboxRuntime {
+	classes := status.GetSandboxClasses()
+	if len(classes) == 0 {
+		return nil
+	}
+	return runtimeOf(classes[0].GetSandboxClass(), classes[0].GetDefaultRuntime().GetVersion())
+}
+
+// SandboxClass returns the sandbox class a worker with status registered, or
+// "" before it has.
+func SandboxClass(status *ateapi.WorkerStatus) string {
+	classes := status.GetSandboxClasses()
+	if len(classes) == 0 {
+		return ""
+	}
+	return classes[0].GetSandboxClass()
+}
+
+// Matches reports whether rt, the runtime an assignment records, can restore
+// a snapshot stamped with snap, for one comparison; a caller holding one snap
+// against many workers should prepare a Requirement once. A nil snap imposes
+// no constraint.
+func Matches(rt, snap *ateapi.ActorSandboxRuntime) bool {
+	return NewRequirement(snap).Matches(rt)
 }
 
 // MatchesCompat reports whether worker can restore a snapshot stamped with
 // snap, for one comparison. Unlike Matches, a nil snap is a stamp missing its
 // identity and matches nothing.
-func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
+func MatchesCompat(worker, snap *ateapi.VersionedSandboxCompat) bool {
 	return compatRequirement(snap).matchesCompat(worker)
 }
 
 // MatchingRuntime is NewRequirement(snap).MatchingRuntime(status).
-func MatchingRuntime(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func MatchingRuntime(status *ateapi.WorkerStatus, snap *ateapi.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
 	return NewRequirement(snap).MatchingRuntime(status)
 }
 
 // WorkerMatches is NewRequirement(snap).WorkerMatches(status).
-func WorkerMatches(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) bool {
+func WorkerMatches(status *ateapi.WorkerStatus, snap *ateapi.ActorSandboxRuntime) bool {
 	return NewRequirement(snap).WorkerMatches(status)
 }
 
 // RuntimeFor is NewRequirement(snap).RuntimeFor(status).
-func RuntimeFor(status *ateapipb.WorkerStatus, snap *ateapipb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func RuntimeFor(status *ateapi.WorkerStatus, snap *ateapi.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
 	return NewRequirement(snap).RuntimeFor(status)
 }

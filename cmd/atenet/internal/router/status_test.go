@@ -65,11 +65,16 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := routerConfig{
-		Mode:               ModeIngress,
-		Namespace:          "default",
-		StatusPort:         httpPort,
-		StatusAddr:         statusAddr,
-		HttpPort:           8080,
+		Mode:          ModeIngress,
+		Namespace:     "default",
+		StatusPort:    httpPort,
+		StatusAddr:    statusAddr,
+		HttpsPort:     8443,
+		EnvoyCertPath: clientCertPath,
+		IngressAuth: ingressAuthConfig{
+			ClientCAFile:     caPath,
+			AllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/test/sa/client"},
+		},
 		XdsPort:            18000,
 		ExtprocPort:        50051,
 		ExtProcMaxRequests: defaultExtProcMaxRequests,

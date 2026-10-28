@@ -32,6 +32,8 @@ Standard CSI controller deployments can be made network-accessible and secured i
 
 Create a Kubernetes `Service` targeting the CSI Controller pods. This provides a stable DNS name and load balancing across controller replicas.
 
+Create the `Service` before the controller pods when the proxy's serving certificate comes from Substrate's `servicedns.podcert.ate.dev/identity` signer: it issues the certificate for the `<service>.<namespace>.svc` names of the `Service`s selecting the pod, and refuses to issue one for a pod no `Service` selects yet. The `Service` name is also what `spec.tls.serverName` in the `CSIDriverConfig` must be.
+
 ### Securing with mTLS and Pod Identity
 
 When exposing the CSI Controller over the network, communication should be secured with mutual TLS (mTLS). In the [`CSIDriverConfig`](csi-volumes.md#2-dynamic-csi-driver-discovery-csidriverconfig) resource, configure the following fields under `spec.tls`:
@@ -203,10 +205,20 @@ spec:
           mountPath: /csi
       # Envoy proxy sidecar terminating mTLS and forwarding to /csi/csi.sock
       - name: envoy-proxy
-        image: envoyproxy/envoy:v1.34-latest
+        image: envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
+        command:
+        - "/usr/local/bin/envoy"
         args:
         - "-c"
         - "/etc/envoy/envoy.yaml"
+        # The proxy needs no privilege, only to be able to connect to the
+        # driver's socket, which the nfs container creates root-only.
+        securityContext:
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         volumeMounts:
         - name: socket-dir
           mountPath: /csi
@@ -262,7 +274,7 @@ spec:
 #### 4. Corresponding `CSIDriverConfig`
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io
@@ -273,7 +285,10 @@ spec:
   tls:
     enabled: true
     usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc.cluster.local
+    # The one DNS name servicednssigner puts in the proxy's certificate is
+    # <service>.<namespace>.svc, so that, not the cluster.local form the
+    # endpoint dials, is the server name to verify.
+    serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ---

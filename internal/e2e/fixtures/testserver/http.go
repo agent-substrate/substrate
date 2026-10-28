@@ -84,6 +84,23 @@ func newHTTPHandler(body string) http.Handler {
 	return mux
 }
 
+// acceptingConnect answers every CONNECT with 200, as a forward proxy does
+// when it opens the tunnel, and hands anything else to next. Nothing is
+// relayed: the server stands in for a proxy only so that a client whose
+// CONNECT is refused can tell the refusal did not come from here. A ServeMux
+// alone would answer a CONNECT 404, which is harder to tell from one.
+func acceptingConnect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A 2xx to a CONNECT has no body; say so, or the server frames one.
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
 // dial opens a TCP connection to ?address=<host:port> within ?timeout=
 // (default 3s) and closes it again. A suite uses it to check what this pod
 // can reach, such as whether a NetworkPolicy lets the pod's traffic through.
@@ -125,15 +142,20 @@ func newHTTPCmd() *cobra.Command {
 		certFile      string
 		keyFile       string
 		body          string
+		acceptConnect bool
 	)
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve an HTTP/1.1 origin answering /healthz, /echoheaders, POST /fetch and /dial.",
+		Short: "Serve an HTTP/1.1 origin answering /healthz, /echoheaders, POST /fetch and /dial, and with --accept-connect any CONNECT.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			handler := newHTTPHandler(body)
+			if acceptConnect {
+				handler = acceptingConnect(handler)
+			}
 			server := &http.Server{
 				Addr:              listenAddress,
-				Handler:           newHTTPHandler(body),
+				Handler:           handler,
 				ReadHeaderTimeout: 10 * time.Second,
 				WriteTimeout:      2 * time.Minute,
 			}
@@ -145,5 +167,6 @@ func newHTTPCmd() *cobra.Command {
 	cmd.Flags().StringVar(&certFile, "tls-cert", "", "PEM certificate file; with --tls-key, also serves HTTPS on :8443.")
 	cmd.Flags().StringVar(&keyFile, "tls-key", "", "PEM private key file; with --tls-cert, also serves HTTPS on :8443.")
 	cmd.Flags().StringVar(&body, "body", "", "Response body for /healthz.")
+	cmd.Flags().BoolVar(&acceptConnect, "accept-connect", false, "Answer CONNECT requests 200, as a forward proxy would, without relaying anything.")
 	return cmd
 }

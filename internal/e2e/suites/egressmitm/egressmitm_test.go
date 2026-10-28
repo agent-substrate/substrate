@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const probeTemplate = "probe"
@@ -96,9 +96,9 @@ func TestActorEgressMITMTrust(t *testing.T) {
 
 	const id = "probe-mitm"
 	createAndResumeActor(t, ctx, clients, id, mitm, passthrough)
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(t, ctx, clients, probeNamespace, id, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
@@ -158,29 +158,18 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachableAddress, bySNI.Status)
 	}
 
-	// Envoy closes denied connections at the ClientHello; agentgateway
-	// terminates TLS to return 403. Trust the gateway's CA so a certificate
-	// failure cannot masquerade as either policy-denial response.
-	//
-	// Each name is an origin's fully qualified alias: rules match names
-	// exactly, so only the wrong-port rule lists the first and none the
-	// second. A gateway that relayed either would hand the actor a
-	// certificate the bundle rejects, and the dial keeps the actor off DNS.
+	// Each name is an origin's fully qualified alias: only the wrong-port rule
+	// lists the first and none lists the second. Neither may complete TLS.
+	// Certificate-verification failures must not count as policy refusals.
+	// The dial bypasses DNS.
 	for _, tc := range []struct{ name, origin, dial string }{
 		{"passthrough rule excludes port 443", "https://" + passthrough.SvcName() + ".cluster.local/healthz", passthrough.TLSAddress()},
 		{"host outside the policy", "https://" + mitm.SvcName() + ".cluster.local/healthz", mitm.TLSAddress()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
-			switch {
-			case denied.Status == "403" && denied.Error == "":
-				// An explicit denial after completing TLS with the actor.
-			case denied.Error == "":
-				t.Errorf("fetch of %s returned status %s, want 403 or a connection closed at the ClientHello", tc.origin, denied.Status)
-			case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
-				t.Errorf("fetch of %s failed certificate verification instead of returning a policy denial: %s", tc.origin, denied.Error)
-			case denied.Status != "":
-				t.Errorf("fetch of %s got status %s with error %q, want no HTTP exchange after a TLS failure", tc.origin, denied.Status, denied.Error)
+			if denied.TLSHandshake != "closed" || denied.Status != "" || denied.Error == "" {
+				t.Errorf("fetch of %s: handshake %q, status %q, error %q; want connection closed during TLS with no HTTP response", tc.origin, denied.TLSHandshake, denied.Status, denied.Error)
 			}
 		})
 	}
@@ -213,9 +202,10 @@ const (
 )
 
 type fetchResponse struct {
-	Status string `json:"status"`
-	Error  string `json:"error"`
-	Body   string `json:"body"`
+	Status       string `json:"status"`
+	Error        string `json:"error"`
+	Body         string `json:"body"`
+	TLSHandshake string `json:"tls_handshake"`
 }
 
 // reachWindow bounds the retries of a fetch that must return 200.
@@ -341,12 +331,12 @@ func holdsCertificate(t *testing.T, bundle, commonName string) bool {
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string, mitm, passthrough e2e.Server) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
+	ref := &ateapi.ObjectRef{Atespace: probeNamespace, Name: id}
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: probeNamespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
@@ -361,22 +351,22 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, passthrough.SvcName()+".cluster.local"),
 	)
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
+		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
 			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
 		}
 	})
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
 
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapipb.ActorState) {
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, actorName string, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: atespace, Name: actorName},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return

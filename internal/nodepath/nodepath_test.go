@@ -15,6 +15,7 @@
 package nodepath
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -78,5 +79,29 @@ func TestWorkerPathUniqueness(t *testing.T) {
 
 	if path1 == path2 {
 		t.Errorf("expected different paths for different pod UIDs, got %q", path1)
+	}
+}
+
+func TestUnderBasePath(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"inside", filepath.Join(BasePath, "image-cache"), true},
+		{"inside with doubled separator", BasePath + "//image-cache", true},
+		{"inside via dot-dot", BasePath + "/x/../image-cache", true},
+		{"base path itself is not inside", BasePath, false},
+		{"sibling with the base path as name prefix", BasePath + "-other/image-cache", false},
+		{"outside", "/var/lib/elsewhere/image-cache", false},
+		{"dot-dot escaping the base path", BasePath + "/../elsewhere/image-cache", false},
+		{"relative resolves against the cwd, not the base path", "image-cache", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := UnderBasePath(tc.dir); got != tc.want {
+				t.Errorf("UnderBasePath(%q) = %v, want %v", tc.dir, got, tc.want)
+			}
+		})
 	}
 }

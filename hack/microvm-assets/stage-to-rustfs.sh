@@ -49,7 +49,7 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 
 # Keep in sync with the rustfs-bucket-init Job in
 # manifests/ate-install/kind/rustfs.yaml, which creates the bucket we upload into.
-AWS_CLI_IMAGE="amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73"
+AWS_CLI_IMAGE="amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1"
 
 ASSETS=(cloud-hypervisor virtiofsd vmlinux rootfs.img)
 

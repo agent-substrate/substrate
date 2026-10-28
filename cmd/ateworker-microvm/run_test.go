@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -101,13 +103,10 @@ func TestDialAgentRetryContextCanceled(t *testing.T) {
 	}
 }
 
-// resolveGuestMemMiB must honor a declared limit (minus the VMM reserve) and error
-// when the limit is unset or the reserve leaves too little to boot a guest.
+// resolveGuestMemMiB gives the guest the whole declared limit, and errors when
+// the limit is unset or too small to boot a guest.
 func TestResolveGuestMemMiB(t *testing.T) {
-	const (
-		mib     = 1024 * 1024
-		reserve = 256 // vmmMemReserveMiB
-	)
+	const mib = 1024 * 1024
 	tests := []struct {
 		name        string
 		declaredMiB int64 // 0 => unset
@@ -115,15 +114,13 @@ func TestResolveGuestMemMiB(t *testing.T) {
 		wantErr     bool
 	}{
 		{name: "unset", declaredMiB: 0, wantErr: true},
-		{name: "declared honored minus reserve", declaredMiB: 1536, wantMiB: 1536 - reserve},
-		{name: "just above minimum", declaredMiB: reserve + minGuestMemMiB, wantMiB: minGuestMemMiB},
-		{name: "reserve exactly swallows limit", declaredMiB: reserve, wantErr: true},
-		{name: "limit below reserve", declaredMiB: 128, wantErr: true},
-		{name: "boot-hang band (too little guest RAM)", declaredMiB: 320, wantErr: true},
+		{name: "declared honored", declaredMiB: 1536, wantMiB: 1536},
+		{name: "minimum", declaredMiB: minGuestMemMiB, wantMiB: minGuestMemMiB},
+		{name: "below minimum", declaredMiB: minGuestMemMiB - 1, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveGuestMemMiB(tc.declaredMiB*mib, reserve)
+			got, err := resolveGuestMemMiB(tc.declaredMiB * mib)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("resolveGuestMemMiB(%dMiB) = %d, nil; want an error", tc.declaredMiB, got)
@@ -201,9 +198,20 @@ func TestBuildVMConfigConsole(t *testing.T) {
 // does not know with InvalidContainerId — which aborts the whole graceful
 // shutdown, so a stale id here silently costs the guest its clean exit.
 func TestWorkloadIDs(t *testing.T) {
-	ctrs := []actorContainer{{name: "counter"}, {name: "sidecar"}}
+	dirs := &ateworkerpb.ActorDirs{OciBundleDir: t.TempDir()}
+	var containers []*ateworkerpb.Container
+	for _, name := range []string{"counter", "w"} {
+		if err := os.MkdirAll(filepath.Join(ociBundlePath(dirs, name), "rootfs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		containers = append(containers, &ateworkerpb.Container{Name: name, ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}})
+	}
+	ctrs, err := (&AteWorkerService{}).buildActorContainers("uid", dirs, containers)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := workloadIDs(ctrs)
-	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
+	if want := []string{"c_counter", "c_w"}; !slices.Equal(got, want) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
 	}
 }

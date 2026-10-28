@@ -123,9 +123,9 @@ func TestStandardMethodReturnsResource(t *testing.T) {
 }
 
 func TestGetRequestShape(t *testing.T) {
-	widgetRef := model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
-	misnamedWidgetRef := model.Field{Name: "thing", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
-	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
+	widgetRef := model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
+	misnamedWidgetRef := model.Field{Name: "thing", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
+	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
 	name := model.Field{Name: "name", Kind: protoreflect.StringKind, TypeDisplay: "string"}
 
 	tests := []struct {
@@ -146,7 +146,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("GetWidgetRequest")),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetWidget", Message: `request has no "widget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.GetWidget", Message: `request has no "widget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -155,7 +155,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("GetWidgetRequest", widgetRef, model.Field{Name: "extra"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetWidget", Message: `request field "extra" is not allowed - want only "widget" ateapi.ObjectRef`},
+				{Subject: "test.Control.GetWidget", Message: `request field "extra" is not allowed - want only "widget" substrate.ateapi.v1.ObjectRef`},
 			},
 		},
 		{
@@ -164,8 +164,8 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("GetWidgetRequest", name)),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetWidget", Message: `request field "name" is not allowed - want only "widget" ateapi.ObjectRef`},
-				{Subject: "test.Control.GetWidget", Message: `request has no "widget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.GetWidget", Message: `request field "name" is not allowed - want only "widget" substrate.ateapi.v1.ObjectRef`},
+				{Subject: "test.Control.GetWidget", Message: `request has no "widget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -174,7 +174,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("GetWidgetRequest", misnamedWidgetRef)),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetWidget", Message: `request field "thing" is ateapi.ObjectRef, want it named "widget"`},
+				{Subject: "test.Control.GetWidget", Message: `request field "thing" is substrate.ateapi.v1.ObjectRef, want it named "widget"`},
 			},
 		},
 		{
@@ -217,7 +217,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("GetGadgetWidgetRequest", name)),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetGadgetWidget", Message: `request has no "gadget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.GetGadgetWidget", Message: `request has no "gadget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -227,7 +227,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("GetGadgetWidgetRequest", model.Field{Name: "gadget", Kind: protoreflect.StringKind, TypeDisplay: "string"}, name)),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetGadgetWidget", Message: `request field "gadget" is string, want ateapi.ObjectRef`},
+				{Subject: "test.Control.GetGadgetWidget", Message: `request field "gadget" is string, want substrate.ateapi.v1.ObjectRef`},
 			},
 		},
 		{
@@ -237,7 +237,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("GetGadgetWidgetRequest", widgetRef)),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetGadgetWidget", Message: `request field "widget" is ateapi.ObjectRef, want it named "gadget"`},
+				{Subject: "test.Control.GetGadgetWidget", Message: `request field "widget" is substrate.ateapi.v1.ObjectRef, want it named "gadget"`},
 				{Subject: "test.Control.GetGadgetWidget", Message: `request has no "name" string field`},
 			},
 		},
@@ -248,7 +248,7 @@ func TestGetRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("GetGadgetWidgetRequest", gadgetRef, name, model.Field{Name: "extra"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.GetGadgetWidget", Message: `request field "extra" is not allowed - want only "gadget" ateapi.ObjectRef and "name" string`},
+				{Subject: "test.Control.GetGadgetWidget", Message: `request field "extra" is not allowed - want only "gadget" substrate.ateapi.v1.ObjectRef and "name" string`},
 			},
 		},
 		{
@@ -270,7 +270,7 @@ func TestGetRequestShape(t *testing.T) {
 			name: "subresource of Global: a parent ObjectRef is a stray field",
 			api: methodAPI(rpc("GetGlobalWidget", "Widget", "Widget"),
 				resource("Widget", []string{"Global"}),
-				msg("GetGlobalWidgetRequest", model.Field{Name: "global", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}, name)),
+				msg("GetGlobalWidgetRequest", model.Field{Name: "global", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}, name)),
 			want: []lint.Finding{
 				{Subject: "test.Control.GetGlobalWidget", Message: `request field "global" is not allowed - want only "name" string`},
 			},
@@ -297,9 +297,9 @@ func TestGetRequestShape(t *testing.T) {
 }
 
 func TestListMethodShape(t *testing.T) {
-	options := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ListOptions"}
+	options := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ListOptions"}
 	atespace := model.Field{Name: "atespace", Kind: protoreflect.StringKind, TypeDisplay: "string"}
-	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
+	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
 	widgets := model.Field{Name: "widgets", Repeated: true, Kind: protoreflect.MessageKind, TypeFullName: "test.Widget"}
 	nextPageToken := model.Field{Name: "next_page_token", Kind: protoreflect.StringKind, TypeDisplay: "string"}
 
@@ -322,7 +322,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListWidgetsRequest", atespace),
 				msg("ListWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListWidgets", Message: `request has no "options" ateapi.ListOptions field`},
+				{Subject: "test.Control.ListWidgets", Message: `request has no "options" substrate.ateapi.v1.ListOptions field`},
 			},
 		},
 		{
@@ -334,9 +334,9 @@ func TestListMethodShape(t *testing.T) {
 					model.Field{Name: "page_token", Kind: protoreflect.StringKind, TypeDisplay: "string"}),
 				msg("ListWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListWidgets", Message: `request field "page_size" is not allowed - want only "atespace" string and "options" ateapi.ListOptions`},
-				{Subject: "test.Control.ListWidgets", Message: `request field "page_token" is not allowed - want only "atespace" string and "options" ateapi.ListOptions`},
-				{Subject: "test.Control.ListWidgets", Message: `request has no "options" ateapi.ListOptions field`},
+				{Subject: "test.Control.ListWidgets", Message: `request field "page_size" is not allowed - want only "atespace" string and "options" substrate.ateapi.v1.ListOptions`},
+				{Subject: "test.Control.ListWidgets", Message: `request field "page_token" is not allowed - want only "atespace" string and "options" substrate.ateapi.v1.ListOptions`},
+				{Subject: "test.Control.ListWidgets", Message: `request has no "options" substrate.ateapi.v1.ListOptions field`},
 			},
 		},
 		{
@@ -406,7 +406,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListWidgetsRequest", atespace, options),
 				msg("ListWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListWidgets", Message: `request field "atespace" is not allowed - want only "options" ateapi.ListOptions`},
+				{Subject: "test.Control.ListWidgets", Message: `request field "atespace" is not allowed - want only "options" substrate.ateapi.v1.ListOptions`},
 			},
 		},
 		{
@@ -416,7 +416,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListWidgetsRequest", atespace, options, model.Field{Name: "filter"}),
 				msg("ListWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListWidgets", Message: `request field "filter" is not allowed - want only "atespace" string and "options" ateapi.ListOptions`},
+				{Subject: "test.Control.ListWidgets", Message: `request field "filter" is not allowed - want only "atespace" string and "options" substrate.ateapi.v1.ListOptions`},
 			},
 		},
 		{
@@ -442,7 +442,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
 				{Subject: "test.Control.ListWidgets", Message: `request has no "atespace" string field`},
-				{Subject: "test.Control.ListWidgets", Message: `request has no "options" ateapi.ListOptions field`},
+				{Subject: "test.Control.ListWidgets", Message: `request has no "options" substrate.ateapi.v1.ListOptions field`},
 			},
 		},
 		{
@@ -471,7 +471,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListGadgetWidgetsRequest", options),
 				msg("ListGadgetWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListGadgetWidgets", Message: `request has no "gadget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.ListGadgetWidgets", Message: `request has no "gadget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -482,7 +482,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListGadgetWidgetsRequest", model.Field{Name: "gadget", Kind: protoreflect.StringKind, TypeDisplay: "string"}, options),
 				msg("ListGadgetWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListGadgetWidgets", Message: `request field "gadget" is string, want ateapi.ObjectRef`},
+				{Subject: "test.Control.ListGadgetWidgets", Message: `request field "gadget" is string, want substrate.ateapi.v1.ObjectRef`},
 			},
 		},
 		{
@@ -493,7 +493,7 @@ func TestListMethodShape(t *testing.T) {
 				msg("ListGadgetWidgetsRequest", gadgetRef, atespace, options),
 				msg("ListGadgetWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListGadgetWidgets", Message: `request field "atespace" is not allowed - want only "gadget" ateapi.ObjectRef and "options" ateapi.ListOptions`},
+				{Subject: "test.Control.ListGadgetWidgets", Message: `request field "atespace" is not allowed - want only "gadget" substrate.ateapi.v1.ObjectRef and "options" substrate.ateapi.v1.ListOptions`},
 			},
 		},
 		{
@@ -518,10 +518,10 @@ func TestListMethodShape(t *testing.T) {
 			name: "subresource of Global: parent field is not allowed",
 			api: methodAPI(rpc("ListGlobalWidgets", "Widget", "ListGlobalWidgetsResponse"),
 				resource("Widget", []string{"Global"}),
-				msg("ListGlobalWidgetsRequest", model.Field{Name: "global", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}, options),
+				msg("ListGlobalWidgetsRequest", model.Field{Name: "global", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}, options),
 				msg("ListGlobalWidgetsResponse", widgets, nextPageToken)),
 			want: []lint.Finding{
-				{Subject: "test.Control.ListGlobalWidgets", Message: `request field "global" is not allowed - want only "options" ateapi.ListOptions`},
+				{Subject: "test.Control.ListGlobalWidgets", Message: `request field "global" is not allowed - want only "options" substrate.ateapi.v1.ListOptions`},
 			},
 		},
 		{
@@ -530,7 +530,7 @@ func TestListMethodShape(t *testing.T) {
 				resource("Widget", []string{"Gadget", "GadgetBox"}),
 				resource("Gadget", nil),
 				resource("GadgetBox", nil),
-				msg("ListGadgetBoxWidgetsRequest", model.Field{Name: "gadget_box", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}, options),
+				msg("ListGadgetBoxWidgetsRequest", model.Field{Name: "gadget_box", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}, options),
 				msg("ListGadgetBoxWidgetsResponse", widgets, nextPageToken)),
 		},
 	}
@@ -594,8 +594,8 @@ func TestListResponseNameMatchesMethod(t *testing.T) {
 func TestCreateRequestShape(t *testing.T) {
 	widget := model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "test.Widget"}
 	misnamedWidget := model.Field{Name: "thing", Kind: protoreflect.MessageKind, TypeFullName: "test.Widget"}
-	options := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.CreateOptions"}
-	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
+	options := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.CreateOptions"}
+	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
 
 	tests := []struct {
 		name string
@@ -638,16 +638,16 @@ func TestCreateRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("CreateWidgetRequest", widget, options, options)),
 			want: []lint.Finding{
-				{Subject: "test.Control.CreateWidget", Message: `request has 2 "options" ateapi.CreateOptions fields, want at most 1`},
+				{Subject: "test.Control.CreateWidget", Message: `request has 2 "options" substrate.ateapi.v1.CreateOptions fields, want at most 1`},
 			},
 		},
 		{
 			name: "CreateOptions field misnamed",
 			api: methodAPI(rpc("CreateWidget", "Widget", "Widget"),
 				resource("Widget", nil),
-				msg("CreateWidgetRequest", widget, model.Field{Name: "opts", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.CreateOptions"})),
+				msg("CreateWidgetRequest", widget, model.Field{Name: "opts", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.CreateOptions"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.CreateWidget", Message: `request field "opts" is ateapi.CreateOptions, want it named "options"`},
+				{Subject: "test.Control.CreateWidget", Message: `request field "opts" is substrate.ateapi.v1.CreateOptions, want it named "options"`},
 			},
 		},
 		{
@@ -656,7 +656,7 @@ func TestCreateRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("CreateWidgetRequest", widget, model.Field{Name: "dry_run"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.CreateWidget", Message: `request field "dry_run" is not allowed - want only "widget" test.Widget and optional "options" ateapi.CreateOptions`},
+				{Subject: "test.Control.CreateWidget", Message: `request field "dry_run" is not allowed - want only "widget" test.Widget and optional "options" substrate.ateapi.v1.CreateOptions`},
 			},
 		},
 		{
@@ -672,7 +672,7 @@ func TestCreateRequestShape(t *testing.T) {
 			name: "a Delete method is not checked",
 			api: methodAPI(rpc("DeleteWidget", "Widget", "Widget"),
 				resource("Widget", nil),
-				msg("DeleteWidgetRequest", model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"})),
+				msg("DeleteWidgetRequest", model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"})),
 		},
 		{
 			name: "subresource: parent ObjectRef and resource field",
@@ -695,7 +695,7 @@ func TestCreateRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("CreateGadgetWidgetRequest", widget)),
 			want: []lint.Finding{
-				{Subject: "test.Control.CreateGadgetWidget", Message: `request has no "gadget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.CreateGadgetWidget", Message: `request has no "gadget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -705,7 +705,7 @@ func TestCreateRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("CreateGadgetWidgetRequest", model.Field{Name: "gadget", Kind: protoreflect.StringKind, TypeDisplay: "string"}, widget)),
 			want: []lint.Finding{
-				{Subject: "test.Control.CreateGadgetWidget", Message: `request field "gadget" is string, want ateapi.ObjectRef`},
+				{Subject: "test.Control.CreateGadgetWidget", Message: `request field "gadget" is string, want substrate.ateapi.v1.ObjectRef`},
 			},
 		},
 		{
@@ -741,7 +741,7 @@ func TestCreateRequestShape(t *testing.T) {
 func TestUpdateRequestShape(t *testing.T) {
 	widget := model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "test.Widget"}
 	misnamedWidget := model.Field{Name: "thing", Kind: protoreflect.MessageKind, TypeFullName: "test.Widget"}
-	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
+	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
 
 	tests := []struct {
 		name string
@@ -794,7 +794,7 @@ func TestUpdateRequestShape(t *testing.T) {
 			name: "a Delete method is not checked",
 			api: methodAPI(rpc("DeleteWidget", "Widget", "Widget"),
 				resource("Widget", nil),
-				msg("DeleteWidgetRequest", model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"})),
+				msg("DeleteWidgetRequest", model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"})),
 		},
 		{
 			name: "subresource: parent ObjectRef and resource field",
@@ -810,7 +810,7 @@ func TestUpdateRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("UpdateGadgetWidgetRequest", widget)),
 			want: []lint.Finding{
-				{Subject: "test.Control.UpdateGadgetWidget", Message: `request has no "gadget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.UpdateGadgetWidget", Message: `request has no "gadget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -820,7 +820,7 @@ func TestUpdateRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("UpdateGadgetWidgetRequest", model.Field{Name: "gadget", Kind: protoreflect.StringKind, TypeDisplay: "string"}, widget)),
 			want: []lint.Finding{
-				{Subject: "test.Control.UpdateGadgetWidget", Message: `request field "gadget" is string, want ateapi.ObjectRef`},
+				{Subject: "test.Control.UpdateGadgetWidget", Message: `request field "gadget" is string, want substrate.ateapi.v1.ObjectRef`},
 			},
 		},
 		{
@@ -854,10 +854,10 @@ func TestUpdateRequestShape(t *testing.T) {
 }
 
 func TestDeleteRequestShape(t *testing.T) {
-	widgetRef := model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
-	misnamedWidgetRef := model.Field{Name: "thing", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
-	options := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.DeleteOptions"}
-	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
+	widgetRef := model.Field{Name: "widget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
+	misnamedWidgetRef := model.Field{Name: "thing", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
+	options := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.DeleteOptions"}
+	gadgetRef := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
 	name := model.Field{Name: "name", Kind: protoreflect.StringKind, TypeDisplay: "string"}
 
 	tests := []struct {
@@ -883,7 +883,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("DeleteWidgetRequest")),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteWidget", Message: `request has no "widget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.DeleteWidget", Message: `request has no "widget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -892,7 +892,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("DeleteWidgetRequest", widgetRef, widgetRef)),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteWidget", Message: `request has 2 "widget" ateapi.ObjectRef fields, want at most 1`},
+				{Subject: "test.Control.DeleteWidget", Message: `request has 2 "widget" substrate.ateapi.v1.ObjectRef fields, want at most 1`},
 			},
 		},
 		{
@@ -901,16 +901,16 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("DeleteWidgetRequest", widgetRef, options, options)),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteWidget", Message: `request has 2 "options" ateapi.DeleteOptions fields, want at most 1`},
+				{Subject: "test.Control.DeleteWidget", Message: `request has 2 "options" substrate.ateapi.v1.DeleteOptions fields, want at most 1`},
 			},
 		},
 		{
 			name: "DeleteOptions field misnamed",
 			api: methodAPI(rpc("DeleteWidget", "Widget", "Widget"),
 				resource("Widget", nil),
-				msg("DeleteWidgetRequest", widgetRef, model.Field{Name: "opts", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.DeleteOptions"})),
+				msg("DeleteWidgetRequest", widgetRef, model.Field{Name: "opts", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.DeleteOptions"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteWidget", Message: `request field "opts" is ateapi.DeleteOptions, want it named "options"`},
+				{Subject: "test.Control.DeleteWidget", Message: `request field "opts" is substrate.ateapi.v1.DeleteOptions, want it named "options"`},
 			},
 		},
 		{
@@ -919,7 +919,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("DeleteWidgetRequest", widgetRef, model.Field{Name: "dry_run"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteWidget", Message: `request field "dry_run" is not allowed - want only "widget" ateapi.ObjectRef and optional "options" ateapi.DeleteOptions`},
+				{Subject: "test.Control.DeleteWidget", Message: `request field "dry_run" is not allowed - want only "widget" substrate.ateapi.v1.ObjectRef and optional "options" substrate.ateapi.v1.DeleteOptions`},
 			},
 		},
 		{
@@ -928,7 +928,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Widget", nil),
 				msg("DeleteWidgetRequest", misnamedWidgetRef)),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteWidget", Message: `request field "thing" is ateapi.ObjectRef, want it named "widget"`},
+				{Subject: "test.Control.DeleteWidget", Message: `request field "thing" is substrate.ateapi.v1.ObjectRef, want it named "widget"`},
 			},
 		},
 		{
@@ -968,7 +968,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("DeleteGadgetWidgetRequest", name, options)),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteGadgetWidget", Message: `request has no "gadget" ateapi.ObjectRef field`},
+				{Subject: "test.Control.DeleteGadgetWidget", Message: `request has no "gadget" substrate.ateapi.v1.ObjectRef field`},
 			},
 		},
 		{
@@ -978,7 +978,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("DeleteGadgetWidgetRequest", widgetRef, options)),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteGadgetWidget", Message: `request field "widget" is ateapi.ObjectRef, want it named "gadget"`},
+				{Subject: "test.Control.DeleteGadgetWidget", Message: `request field "widget" is substrate.ateapi.v1.ObjectRef, want it named "gadget"`},
 				{Subject: "test.Control.DeleteGadgetWidget", Message: `request has no "name" string field`},
 			},
 		},
@@ -989,7 +989,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("DeleteGadgetWidgetRequest", gadgetRef, name, options, options)),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteGadgetWidget", Message: `request has 2 "options" ateapi.DeleteOptions fields, want at most 1`},
+				{Subject: "test.Control.DeleteGadgetWidget", Message: `request has 2 "options" substrate.ateapi.v1.DeleteOptions fields, want at most 1`},
 			},
 		},
 		{
@@ -999,7 +999,7 @@ func TestDeleteRequestShape(t *testing.T) {
 				resource("Gadget", nil),
 				msg("DeleteGadgetWidgetRequest", gadgetRef, name, model.Field{Name: "dry_run"})),
 			want: []lint.Finding{
-				{Subject: "test.Control.DeleteGadgetWidget", Message: `request field "dry_run" is not allowed - want only "gadget" ateapi.ObjectRef, "name" string, and optional "options" ateapi.DeleteOptions`},
+				{Subject: "test.Control.DeleteGadgetWidget", Message: `request field "dry_run" is not allowed - want only "gadget" substrate.ateapi.v1.ObjectRef, "name" string, and optional "options" substrate.ateapi.v1.DeleteOptions`},
 			},
 		},
 		{
@@ -1026,7 +1026,7 @@ func TestDeleteOptionsShape(t *testing.T) {
 	version := model.Field{Name: "version", Kind: protoreflect.Int64Kind, TypeDisplay: "int64"}
 	uid := model.Field{Name: "uid", Kind: protoreflect.StringKind, TypeDisplay: "string"}
 	deleteOptions := func(fields ...model.Field) model.Message {
-		return model.Message{FullName: "ateapi.DeleteOptions", Name: "DeleteOptions", Fields: fields}
+		return model.Message{FullName: "substrate.ateapi.v1.DeleteOptions", Name: "DeleteOptions", Fields: fields}
 	}
 
 	tests := []struct {
@@ -1054,21 +1054,21 @@ func TestDeleteOptionsShape(t *testing.T) {
 			name: "version wrong type",
 			api:  messagesAPI(deleteOptions(model.Field{Name: "version", Kind: protoreflect.StringKind, TypeDisplay: "string"}, uid)),
 			want: []lint.Finding{
-				{Subject: "ateapi.DeleteOptions", Message: `DeleteOptions field "version" is string, want int64`},
+				{Subject: "substrate.ateapi.v1.DeleteOptions", Message: `DeleteOptions field "version" is string, want int64`},
 			},
 		},
 		{
 			name: "uid wrong type",
 			api:  messagesAPI(deleteOptions(version, model.Field{Name: "uid", Kind: protoreflect.Int64Kind, TypeDisplay: "int64"})),
 			want: []lint.Finding{
-				{Subject: "ateapi.DeleteOptions", Message: `DeleteOptions field "uid" is int64, want string`},
+				{Subject: "substrate.ateapi.v1.DeleteOptions", Message: `DeleteOptions field "uid" is int64, want string`},
 			},
 		},
 		{
 			name: "extra field beyond version/uid",
 			api:  messagesAPI(deleteOptions(version, uid, model.Field{Name: "dry_run", Kind: protoreflect.BoolKind, TypeDisplay: "bool"})),
 			want: []lint.Finding{
-				{Subject: "ateapi.DeleteOptions", Message: `DeleteOptions field "dry_run" is not allowed - want only optional "version" int64 and optional "uid" string`},
+				{Subject: "substrate.ateapi.v1.DeleteOptions", Message: `DeleteOptions field "dry_run" is not allowed - want only optional "version" int64 and optional "uid" string`},
 			},
 		},
 		{

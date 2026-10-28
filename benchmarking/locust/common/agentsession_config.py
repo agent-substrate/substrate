@@ -57,6 +57,33 @@ def add_agentsession_arguments(parser: LocustArgumentParser) -> None:
         include_in_web_ui=True,
     )
     parser.add_argument(
+        "--agentsession-phase-in",
+        type=float,
+        default=0.0,
+        env_var="LOCUST_AGENTSESSION_PHASE_IN",
+        help=(
+            "Seconds over which session starts are spread: each user waits a "
+            "uniform random share of this before creating its actor, so a "
+            "fleet spawned in one ramp does not reach every later step in a "
+            "single wave (default: 0, every session starts at once)"
+        ),
+        include_in_web_ui=True,
+    )
+    parser.add_argument(
+        "--agentsession-resume-retry-budget",
+        type=float,
+        default=60.0,
+        env_var="LOCUST_AGENTSESSION_RESUME_RETRY_BUDGET",
+        help=(
+            "Seconds a step keeps retrying a wake the fleet had no room for "
+            "(ResumeActor ResourceExhausted or Unavailable, router 503/504/429) "
+            "before giving the step up until its next think gap. The wait "
+            "lands in the TimeToWake row. 0 gives the wake one attempt "
+            "(default: 60)"
+        ),
+        include_in_web_ui=True,
+    )
+    parser.add_argument(
         "--agentsession-snapshot-steps",
         type=str,
         default="",

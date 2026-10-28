@@ -16,7 +16,6 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -27,6 +26,11 @@ import (
 // ValidateRequestActorSuspendRequest runs the generated validation for req.
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) field.ErrorList {
 	return Validate_RequestActorSuspendRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
+// ValidateReportActorCrashedRequest runs the generated validation for req.
+func ValidateReportActorCrashedRequest(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) field.ErrorList {
+	return Validate_ReportActorCrashedRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateGetActorEgressPolicyRequest runs the generated validation for
@@ -70,49 +74,26 @@ func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRe
 	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateSetWorkerSandboxRuntimesRequest runs the generated validation for req.
+func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) field.ErrorList {
+	return Validate_SetWorkerSandboxRuntimesRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
-}
-
-// ValidateCustom_Limits validates one limit with resources.ValidateLimit, the
-// rule the control plane applies to its own Limits. Presence and uniqueness
-// of names are enforced by tags.
-func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.Limits) field.ErrorList {
-	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
 }
 
 func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateHostPort(fldPath, *value)
 }
 
-func ValidateCustom_SandboxAssets_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
-func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
-}
-
-func ValidateCustom_SandboxAssets_PauseImage(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return resources.ValidatePinnedImage(fldPath, *value)
-}
-
-func ValidateCustom_AssetFile_Sha256(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if err := resources.ValidateAssetHash(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
-}
-
-// ValidateCustom_PromoteSnapshotRequest_Atespace rejects the golden atespace:
-// golden actors are never paused, so a paused checkpoint is never promoted to
-// a golden snapshot.
-func ValidateCustom_PromoteSnapshotRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if *value == resources.GoldenActorAtespace {
-		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf("atespace %q holds golden actors, which are never paused", *value))}
-	}
-	return nil
 }
 
 func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestUpdateTemplateLifecycle covers repointing a suspended actor at a
@@ -36,33 +36,30 @@ func TestUpdateTemplateLifecycle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		fidelity ateapipb.SnapshotFidelity
+		fidelity ateapi.SnapshotFidelity
 	}{
 		{
 			name:     "preferredFidelity:VOLUMES",
-			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 		{
 			name:     "preferredFidelity:MEMORY",
-			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		{
 			name:     "preferredFidelity:ROOTFS",
-			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
-			}
 			t.Parallel()
 			runUpdateTemplateTestCase(t, test.fidelity)
 		})
 	}
 }
 
-func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity) {
+func runUpdateTemplateTestCase(t *testing.T, fidelity ateapi.SnapshotFidelity) {
 	nsObj := e2e.CreateNamespace(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -78,7 +75,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// proves B's spec took effect and re-reads the preserved data.
 	nameA, nameB := "update-a-"+nsObj.Name, "update-b-"+nsObj.Name
 	createdA := createUpdateTestTemplate(ctx, t, clients, nsObj, nameA, "update-a", env["BUCKET_NAME"], fidelity, nil)
-	createdB := createUpdateTestTemplate(ctx, t, clients, nsObj, nameB, "update-b", env["BUCKET_NAME"], fidelity, func(tmpl *ateapipb.ActorTemplate) {
+	createdB := createUpdateTestTemplate(ctx, t, clients, nsObj, nameB, "update-b", env["BUCKET_NAME"], fidelity, func(tmpl *ateapi.ActorTemplate) {
 		ctr := tmpl.Containers[0]
 		ctr.Command = append(ctr.Command, "--validate-existing-file-path=/home/counter/a.txt")
 	})
@@ -87,37 +84,37 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// Create an Actor from template A; a fresh actor sits SUSPENDED.
 	//
 	actorID := "update-" + nsObj.Name
-	refA := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: nameA}
-	refB := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: nameB}
+	refA := &ateapi.ObjectRef{Atespace: demoAtespace, Name: nameA}
+	refB := &ateapi.ObjectRef{Atespace: demoAtespace, Name: nameB}
 
 	t.Logf("Creating Actor %q from substrate template %q...", actorID, nameA)
-	createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
+	createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
 		ActorTemplate: refA,
 	}})
 	if err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
 	defer func() {
-		clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 		})
 	}()
-	if got := createResp.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := createResp.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("created Actor state = %v, want SUSPENDED", got)
 	}
 
 	// Run under template A and write to the data volume (every call bumps the
 	// file counter the workload keeps in the durable dir).
 	t.Logf("Resuming Actor %q under template A...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
 	// The first resume also absorbs the freshly created pool's worker
 	// startup, so it gets a longer budget than the steady-state waits.
-	waitForActorStateWithTimeout(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING, 120*time.Second)
+	waitForActorStateWithTimeout(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_RUNNING, 120*time.Second)
 
 	for i := 1; i <= 2; i++ {
 		resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
@@ -133,15 +130,16 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// the resume above) must survive the suspend.
 	//
 	t.Logf("Suspending Actor %q...", actorID)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 
-	suspended, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	suspended, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	})
 	if err != nil {
 		t.Fatalf("failed to get suspended Actor: %v", err)
@@ -160,7 +158,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// Repoint the suspended actor at template B.
 	//
 	t.Logf("Repointing Actor %q at template %q...", actorID, nameB)
-	updated, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+	updated, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
 		Metadata:      suspended.GetMetadata(),
 		ActorTemplate: refB,
 	}})
@@ -170,7 +168,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if got := updated.GetActorTemplate().GetName(); got != nameB {
 		t.Errorf("updated Actor actor_template = %q, want %q", got, nameB)
 	}
-	if got := updated.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := updated.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("updated Actor state = %v, want SUSPENDED", got)
 	}
 
@@ -180,12 +178,12 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// and B's --validate-existing-file-path reads A's file back).
 	//
 	t.Logf("Resuming Actor %q under template B...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor after template update: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -199,74 +197,23 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
 
-	// Pause under template B while status.snapshots still holds the last
-	// committed snapshot from template A. Resuming from pause restores the
-	// local checkpoint (which was captured under template B, since templates
-	// can only be updated while SUSPENDED) and preserves the in-memory counter
-	// when preferredFidelity is MEMORY.
-	t.Logf("Pausing Actor %q under template B...", actorID)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor:   &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-		Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-	}); err != nil {
-		t.Fatalf("failed to pause Actor under template B: %v", err)
-	}
-	waitForActorPaused(ctx, t, clients, actorID)
-
-	paused, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	})
-	if err != nil {
-		t.Fatalf("failed to get paused Actor: %v", err)
-	}
-	if got, want := durableSnapshot(paused.GetStatus()).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
-		t.Errorf("paused Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
-	}
-
-	t.Logf("Resuming Actor %q from pause under template B...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-	}); err != nil {
-		t.Fatalf("failed to resume Actor from pause under template B: %v", err)
-	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-
-	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
-	if err != nil {
-		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
-	}
-	// The pause snapshot was captured under B, so it restores at its own
-	// fidelity: MEMORY keeps both counters, ROOTFS keeps the rootfs one, and
-	// VOLUMES neither.
-	wantMemAfterPause, wantRootfsAfterPause := 2, 2
-	switch fidelity {
-	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		wantMemAfterPause, wantRootfsAfterPause = 1, 1
-	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		wantMemAfterPause = 1
-	}
-	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
-	validateRootfsCounter(t, resp, "after pause/resume under template B", wantRootfsAfterPause)
-
 	// Revert while running under template B: the actor goes back to SUSPENDED
 	// at the external snapshot it still holds, which is template A's. The spec
-	// still points at B and two sprints have already run under it, so nothing
+	// still points at B and a sprint has already run under it, so nothing
 	// about the actor says it is repointed except the snapshot's own record of
 	// what captured it — the next resume has to judge by
 	// external_snapshot.actor_template_uid (A) and restore data-only again.
 	t.Logf("Reverting Actor %q under template B...", actorID)
-	reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	})
 	if err != nil {
 		t.Fatalf("failed to revert Actor under template B: %v", err)
 	}
 	revertedStatus := reverted.GetActor().GetStatus()
-	if got := revertedStatus.GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := revertedStatus.GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("reverted Actor state = %v, want SUSPENDED", got)
 	}
-	// Resume prefers a local checkpoint over the external snapshot, so one
-	// surviving here would hide the repoint the next resume has to detect.
 	if hasLocalSnapshot(revertedStatus) {
 		t.Errorf("reverted Actor local_snapshot present in %v, want cleared", revertedStatus.GetSnapshots())
 	}
@@ -280,12 +227,12 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	}
 
 	t.Logf("Resuming Actor %q after the revert...", actorID)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor after the revert: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -302,18 +249,68 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 		t.Errorf("[after revert under template B] expected %q (template B reading the rewound file), got response: %s", want, resp)
 	}
 
+	// Suspend asynchronously under template B while status.snapshots still
+	// holds the last committed snapshot from template A. Resuming from the
+	// local snapshot restores the local checkpoint (which was captured under
+	// template B, since templates can only be updated while SUSPENDED) and
+	// preserves the in-memory counter when preferredFidelity is MEMORY.
+	t.Logf("Pausing Actor %q under template B...", actorID)
+	paused, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to pause Actor under template B: %v", err)
+	}
+	pausedLocal := localSnapshot(paused.GetActor().GetStatus())
+	if pausedLocal == nil {
+		t.Fatalf("paused Actor holds no local snapshot: %v", paused.GetActor().GetStatus())
+	}
+	if got, want := pausedLocal.GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
+		t.Errorf("paused Actor local snapshot actor_template_uid = %q, want template B's %q", got, want)
+	}
+	if got, want := durableSnapshot(paused.GetActor().GetStatus()).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+		t.Errorf("paused Actor durable snapshot actor_template_uid = %q, want template A's %q", got, want)
+	}
+
+	t.Logf("Resuming Actor %q from pause under template B...", actorID)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor from pause under template B: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
+	if err != nil {
+		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
+	}
+	// The local snapshot was captured under B, so it restores at its own
+	// fidelity: MEMORY keeps both counters, ROOTFS keeps the rootfs one, and
+	// VOLUMES neither.
+	wantMemAfterPause, wantRootfsAfterPause := 2, 2
+	switch fidelity {
+	case ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		wantMemAfterPause, wantRootfsAfterPause = 1, 1
+	case ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		wantMemAfterPause = 1
+	}
+	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
+	validateRootfsCounter(t, resp, "after pause/resume under template B", wantRootfsAfterPause)
+
 	// A second suspend closes the loop: the new snapshot is captured under B,
 	// so the actor is no longer repointed and the next resume restores at the
 	// snapshot's own scope rather than being forced down to data-only.
 	t.Logf("Suspending Actor %q again...", actorID)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
+		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor again: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	suspended, err = clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	suspended, err = clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	})
 	if err != nil {
 		t.Fatalf("failed to get re-suspended Actor: %v", err)
@@ -325,8 +322,8 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 
 // createUpdateTestTemplate creates a per-test WorkerPool plus a substrate
 // ActorTemplate copying the deployed counter fixture's resolved runtime,
-// capturing at the scope under test on both pause and commit.
-func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name, poolName, bucket string, fidelity ateapipb.SnapshotFidelity, modify func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
+// capturing at the scope under test on suspend.
+func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name, poolName, bucket string, fidelity ateapi.SnapshotFidelity, modify func(*ateapi.ActorTemplate)) *ateapi.ActorTemplate {
 	t.Helper()
 	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace:     demoAtespace,
@@ -334,7 +331,7 @@ func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		PoolName:     poolName,
 		PoolReplicas: 2,
 		Labels:       map[string]string{"demo": nsObj.Name},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
+		SnapshotConfig: &ateapi.SnapshotConfig{
 			StorageLocation:   "gs://" + bucket + "/ate-demo-" + nsObj.Name,
 			PreferredFidelity: fidelity,
 		},

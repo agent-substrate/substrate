@@ -23,11 +23,11 @@ import (
 	"os"
 	"sync"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // runtimeIndex is this node's view of the sandbox runtimes its workers
@@ -88,7 +88,7 @@ type indexedRuntime struct {
 // config's runtimes. A pool runs one class today, so a worker advertises
 // one; the shape admits the several a pool will be allowed to run.
 type workerRuntime struct {
-	classes map[v1alpha1.SandboxClass]*classRuntime
+	classes map[atev1.SandboxClass]*classRuntime
 }
 
 // classRuntime is what a worker advertises for one sandbox class.
@@ -100,7 +100,7 @@ type classRuntime struct {
 }
 
 // class returns what the worker advertises for c.
-func (w *workerRuntime) class(c v1alpha1.SandboxClass) (*classRuntime, bool) {
+func (w *workerRuntime) class(c atev1.SandboxClass) (*classRuntime, bool) {
 	cr, ok := w.classes[c]
 	return cr, ok
 }
@@ -108,7 +108,7 @@ func (w *workerRuntime) class(c v1alpha1.SandboxClass) (*classRuntime, bool) {
 // advertisedClass is one sandbox class a worker advertises: the config its
 // pool runs for the class, with the config's versions hashed.
 type advertisedClass struct {
-	class  v1alpha1.SandboxClass
+	class  atev1.SandboxClass
 	config string
 	hashed []hashedVersion
 }
@@ -158,11 +158,7 @@ func checkIndexedRuntime(hash string, e indexedRuntimeFile) error {
 	if e.Record == nil {
 		return errors.New("no record")
 	}
-	got, err := versionBundleHash(e.Record)
-	if err != nil {
-		return fmt.Errorf("while hashing the record: %w", err)
-	}
-	if got != hash {
+	if got := bundleHash(e.Record); got != hash {
 		return fmt.Errorf("record hashes to %s", got)
 	}
 	return nil
@@ -195,7 +191,7 @@ func (x *runtimeIndex) writeIndex(extraHash string, extra *indexedRuntime) error
 func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	wr := &workerRuntime{classes: make(map[v1alpha1.SandboxClass]*classRuntime, len(advertised))}
+	wr := &workerRuntime{classes: make(map[atev1.SandboxClass]*classRuntime, len(advertised))}
 	for _, a := range advertised {
 		cr := &classRuntime{config: a.config}
 		seen := make(map[string]bool, len(a.hashed))
@@ -237,9 +233,9 @@ func (x *runtimeIndex) registerRuntimes(config string, hashed []hashedVersion) e
 
 // addRuntime records v under its hash, unless the hash is already known,
 // persisting the index first when it has a path. The hash covers every
-// asset's name and digest and the pause image, so two versions with one
-// hash differ at most in where identical bytes are fetched from; keeping
-// the first keeps the version the file was built from. Called with mu held.
+// asset's name and digest, so two versions with one hash differ at most in
+// where identical bytes are fetched from; keeping the first keeps the version
+// the file was built from. Called with mu held.
 func (x *runtimeIndex) addRuntime(config string, v hashedVersion) error {
 	if _, ok := x.runtimes[v.hash]; ok {
 		return nil
@@ -283,13 +279,12 @@ func (x *runtimeIndex) worker(podUID string) (*workerRuntime, bool) {
 // under rt's bundle hash. ate-api-server fills rt from the worker
 // assignment, which is a runtime the worker registered from the file this
 // node wrote, so the hash resolves as long as the request reached the node
-// the actor was placed on. The request's sandbox_assets are not consulted.
+// the actor was placed on.
 //
-// A miss is not served from the request: it means the request reached a
-// node whose workers never advertised the runtime, which must surface. A
-// runtime registered before an atelet restart is no miss: the index is
-// loaded from disk before atelet serves.
-func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRuntime) (*sandboxAssetsRecord, error) {
+// A miss means the request reached a node whose workers never advertised the
+// runtime, which must surface. A runtime registered before an atelet restart
+// is no miss: the index is loaded from disk before atelet serves.
+func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.ActorSandboxRuntime) (*sandboxAssetsRecord, error) {
 	hash, err := bundleHashOf(rt)
 	if err != nil {
 		return nil, apierror.InvalidArgument("sandbox_runtime: %v", err)
@@ -309,7 +304,7 @@ func (s *Atelet) advertisedRuntime(ctx context.Context, rt *ateletpb.SandboxRunt
 
 // bundleHashOf returns the sandbox_bundle_hash attribute of rt, which names
 // the SandboxConfig version a worker runs an actor under.
-func bundleHashOf(rt *ateletpb.SandboxRuntime) (string, error) {
+func bundleHashOf(rt *ateletpb.ActorSandboxRuntime) (string, error) {
 	if rt == nil {
 		return "", errors.New("missing")
 	}

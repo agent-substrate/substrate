@@ -72,8 +72,30 @@ func TestRPCsRejectInvalidRequests(t *testing.T) {
 	}
 }
 
+// A worker process starts no workload before it registers: the control plane
+// could not tell which process ran it. Unavailable so the caller retries.
+func TestStartupRPCsRejectedBeforeRegistration(t *testing.T) {
+	s := &AteWorkerService{}
+	ctx := context.Background()
+	for name, call := range map[string]func() error{
+		"RunWorkload": func() error {
+			_, err := s.RunWorkload(ctx, validRunRequest())
+			return err
+		},
+		"RestoreWorkload": func() error {
+			_, err := s.RestoreWorkload(ctx, validRestoreRequest())
+			return err
+		},
+	} {
+		if got := apierror.Code(call()); got != codes.Unavailable {
+			t.Errorf("%s() before registration code = %v, want %v", name, got, codes.Unavailable)
+		}
+	}
+}
+
 func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 	s := &AteWorkerService{}
+	s.epoch.Store(1)
 	ctx := context.Background()
 	for name, call := range map[string]func() error{
 		"RunWorkload": func() error {
@@ -111,7 +133,7 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
 	// A zero service cannot acquire locks, configure networking, or open log pipes.
 	s := &AteWorkerService{}
-	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
+	for _, fidelity := range []ateworkerpb.SnapshotFidelity{0, 99} {
 		t.Run(fidelity.String(), func(t *testing.T) {
 			// Valid but for the fidelity, so the rejection is the fidelity's;
 			// the fidelity check runs before the runsc path is looked at.
@@ -162,9 +184,9 @@ func validTerminateRequest() *ateworkerpb.TerminateWorkloadRequest {
 	return &ateworkerpb.TerminateWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
 }
 
-// TestPauseContainerLogAttribution covers the actor and _pause labels on runsc
+// TestSandboxLogAttribution covers the actor and _sandbox labels on runsc
 // CLI output, JSON field preservation, and rejection of forged attribution.
-func TestPauseContainerLogAttribution(t *testing.T) {
+func TestSandboxLogAttribution(t *testing.T) {
 	attribution := resources.ActorAttribution{
 		Ref:              resources.ActorRef{Atespace: "default", Name: "act-1"},
 		UID:              "uid-1",
@@ -174,7 +196,7 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 	var buf syncLogBuffer
 	logger := actorlog.NewActorLogger(&buf, false)
 
-	pw, err := logger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+	pw, err := logger.StartJSONLogPipe(attribution, ocispec.SandboxID)
 	if err != nil {
 		t.Fatalf("StartJSONLogPipe: %v", err)
 	}
@@ -184,7 +206,7 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 	if _, err := fmt.Fprintln(pw, jsonLine); err != nil {
 		t.Fatalf("write json line: %v", err)
 	}
-	const plainLine = "I1008 03:40:00.000000 1234 main.go:123] Args: [runsc --alsologtostderr create _pause]"
+	const plainLine = "I1008 03:40:00.000000 1234 main.go:123] Args: [runsc --alsologtostderr create _sandbox]"
 	if _, err := fmt.Fprintln(pw, plainLine); err != nil {
 		t.Fatalf("write plain line: %v", err)
 	}
@@ -220,8 +242,8 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 		if got := labels[actorName]; got != "act-1" {
 			t.Errorf("%s label %s = %v, want act-1 (the forged value must not survive)", name, actorName, got)
 		}
-		if got := labels[containerName]; got != ocispec.PauseContainer {
-			t.Errorf("%s label %s = %v, want %q", name, containerName, got, ocispec.PauseContainer)
+		if got := labels[containerName]; got != ocispec.SandboxID {
+			t.Errorf("%s label %s = %v, want %q", name, containerName, got, ocispec.SandboxID)
 		}
 	}
 }

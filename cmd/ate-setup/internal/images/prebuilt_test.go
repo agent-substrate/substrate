@@ -83,8 +83,8 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 		},
 		{
 			name: "flow sequence",
-			in:   `images: [ko://go.ate.dev/substrate/demos/counter, other]`,
-			want: `images: [example.com/substrate/counter:v1.2.3` + digestSuffix + `, other]`,
+			in:   `images: [ko://go.ate.dev/substrate/cmd/atecontroller, other]`,
+			want: `images: [example.com/substrate/atecontroller:v1.2.3` + digestSuffix + `, other]`,
 		},
 		{
 			// The reference is a plain CRD field here, not a pod spec, which is
@@ -103,14 +103,9 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			want: "image: example.com/substrate/ateapi:v1.2.3" + digestSuffix + "\n",
 		},
 		{
-			name: "nested package maps to its image name",
-			in:   "image: ko://go.ate.dev/substrate/demos/multi-template/fspersist\n",
-			want: "image: example.com/substrate/fspersist:v1.2.3" + digestSuffix + "\n",
-		},
-		{
 			name: "two references on one line",
-			in:   "a: ko://go.ate.dev/substrate/cmd/ateapi, b: ko://go.ate.dev/substrate/demos/egress\n",
-			want: "a: example.com/substrate/ateapi:v1.2.3" + digestSuffix + ", b: example.com/substrate/egress:v1.2.3" + digestSuffix + "\n",
+			in:   "a: ko://go.ate.dev/substrate/cmd/ateapi, b: ko://go.ate.dev/substrate/cmd/atelet\n",
+			want: "a: example.com/substrate/ateapi:v1.2.3" + digestSuffix + ", b: example.com/substrate/atelet:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			// The demo templates carry "# ko:// image reference" as prose. The
@@ -230,6 +225,41 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error is missing %q:\n%v", want, err)
 		}
+	}
+}
+
+// An image releases do not publish resolves from a registry that holds it,
+// such as one the operator published to. When the lookup fails, the error says
+// releases do not publish it; for a released image it does not.
+func TestPrebuiltUnreleasedImages(t *testing.T) {
+	const ref = "image: ko://go.ate.dev/substrate/demos/counter\n"
+	const hint = "releases do not publish counter"
+
+	got, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
+		ResolveBytes(context.Background(), []byte(ref))
+	if err != nil {
+		t.Fatalf("ResolveBytes() from a registry that holds it = %v", err)
+	}
+	if want := "image: example.com/substrate/counter:v1.2.3" + digestSuffix + "\n"; string(got) != want {
+		t.Errorf("ResolveBytes() = %q, want %q", got, want)
+	}
+
+	missing := newStubRegistry()
+	missing.err = errors.New("MANIFEST_UNKNOWN")
+	_, err = images.NewPrebuilt(testSource, missing.digest).ResolveBytes(context.Background(), []byte(ref))
+	if err == nil {
+		t.Fatal("ResolveBytes() from a registry without it = nil error, want one")
+	}
+	for _, want := range []string{"MANIFEST_UNKNOWN", hint, "dropping --image-repo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
+
+	_, err = images.NewPrebuilt(testSource, missing.digest).
+		ResolveBytes(context.Background(), []byte("image: ko://go.ate.dev/substrate/cmd/ateapi\n"))
+	if err == nil || strings.Contains(err.Error(), "releases do not publish") {
+		t.Errorf("ResolveBytes() for a released image = %v, want a lookup error without the release hint", err)
 	}
 }
 
@@ -370,10 +400,10 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 			if refs := koRefPattern.FindAllString(string(out), -1); len(refs) > 0 {
 				t.Errorf("unresolved references survived: %v", refs)
 			}
-			// Every reference has to name a digest. ActorTemplate images,
-			// image volume references, and a SandboxConfig's pauseImage all
-			// carry the CEL rule self.contains('@'), so an unpinned reference
-			// is not applied at all, it is rejected by admission.
+			// Every reference has to name a digest. ActorTemplate images and
+			// image volume references carry the CEL rule self.contains('@'), so
+			// an unpinned reference is not applied at all, it is rejected by
+			// admission.
 			for _, ref := range resolvedRef.FindAllString(string(out), -1) {
 				if !strings.Contains(ref, "@sha256:") {
 					t.Errorf("%s is not pinned to a digest", ref)

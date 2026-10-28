@@ -52,11 +52,16 @@ func TestUploaderBudgetFitsBothPaths(t *testing.T) {
 			if plan.workers < 1 || plan.workers > runtime.GOMAXPROCS(0) || plan.memory > capacity {
 				t.Fatalf("%T: invalid plan %+v for capacity %d", client, plan, capacity)
 			}
-			if plan.memory < uploadBufferMemory(client)+int64(plan.workers)*parallelWorkerMemory {
-				t.Fatalf("%T: streaming pipeline under-reserved: %+v", client, plan)
+			if _, ok := client.(sparseFilePutter); ok && plan.parts >= 2 {
+				// Only the range-parallel path runs.
+				if int64(plan.parts)*sparseUploadMemory > plan.memory {
+					t.Fatalf("%T: sparse pipeline under-reserved: %+v", client, plan)
+				}
+				continue
 			}
-			if _, ok := client.(sparseFilePutter); ok && (plan.parts < 1 || int64(plan.parts)*sparseUploadMemory > plan.memory) {
-				t.Fatalf("%T: sparse pipeline under-reserved: %+v", client, plan)
+			// An all-holes file streams a few bytes.
+			if plan.memory < streamBufferMemory(client, sparseEncodedBound(0, 0))+int64(plan.workers)*parZstdWorkerMemory(parZstdMinChunk) {
+				t.Fatalf("%T: streaming pipeline under-reserved: %+v", client, plan)
 			}
 		}
 	}
@@ -70,10 +75,10 @@ func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
 		populatedMiB int
 		gcs, s3      uploadPlan
 	}{
-		{"all_holes", 0, uploadPlan{1, 1, 384 << 20}, uploadPlan{1, 1, 224 << 20}},
-		{"small", 1, uploadPlan{1, 1, 384 << 20}, uploadPlan{1, 1, 224 << 20}},
-		{"two_chunks", 9, uploadPlan{2, 1, 448 << 20}, uploadPlan{2, 1, 288 << 20}},
-		{"multiple_ranges", 192, uploadPlan{3, 3, 512 << 20}, uploadPlan{5, 3, 480 << 20}},
+		{"all_holes", 0, uploadPlan{1, 1, 8<<20 + 512<<10}, uploadPlan{1, 1, 168 << 20}},
+		{"small", 1, uploadPlan{1, 1, 8<<20 + 2560<<10}, uploadPlan{1, 1, 168 << 20}},
+		{"two_chunks", 9, uploadPlan{2, 1, 146<<20 + 512<<10}, uploadPlan{2, 1, 288 << 20}},
+		{"multiple_ranges", 192, uploadPlan{3, 3, 144 << 20}, uploadPlan{5, 3, 480 << 20}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			offsets := make([]int64, tc.populatedMiB)
@@ -113,6 +118,40 @@ func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
 	}
 }
 
+func TestUploaderReservesOnlyTheChosenPath(t *testing.T) {
+	previous := runtime.GOMAXPROCS(192)
+	defer runtime.GOMAXPROCS(previous)
+	offsets := make([]int64, 292)
+	for i := range offsets {
+		offsets[i] = int64(i) << 20
+	}
+	ranged := sparseFileWith(t, 2<<30, offsets)
+	small := sparseFileWith(t, 2<<30, []int64{0})
+	for _, capacity := range []int64{DefaultUploadMemory, 16 << 30} {
+		u, err := NewUploader(&gcsClient{}, capacity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 292 MiB populated: four ranged parts, whatever the budget or GOMAXPROCS.
+		got, err := u.plan(ranged)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.parts != 4 || got.memory != 4*sparseUploadMemory {
+			t.Errorf("capacity %d: ranged plan = %+v, want 4 parts reserving %d", capacity, got, 4*sparseUploadMemory)
+		}
+		// 1 MiB populated: one request, sized to the bounded stream and 1 MiB
+		// compression chunks.
+		got, err = u.plan(small)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := streamBufferMemory(&gcsClient{}, sparseEncodedBound(1<<20, 1)) + parZstdWorkerMemory(parZstdMinChunk); got.memory != want {
+			t.Errorf("capacity %d: small plan = %+v, want %d", capacity, got, want)
+		}
+	}
+}
+
 func TestUploaderSmallSparseFilesShareBudget(t *testing.T) {
 	previous := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(previous)
@@ -123,7 +162,7 @@ func TestUploaderSmallSparseFilesShareBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		gate := make(chan struct{})
 		store := &gatedUploadStore{started: make(chan string, len(files)), release: gate}
-		u, err := NewUploader(store, 2*parallelWorkerMemory)
+		u, err := NewUploader(store, parallelWorkerMemory)
 		if err != nil {
 			t.Fatal(err)
 		}

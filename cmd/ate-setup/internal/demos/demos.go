@@ -54,11 +54,6 @@ type Demo interface {
 	Delete(ctx context.Context, e *steps.Env) error
 }
 
-// kindOnlyDemo is implemented by demos that cannot run on GKE.
-type kindOnlyDemo interface {
-	KindOnly() bool
-}
-
 // registry holds every demo, keyed by name.
 var registry = map[string]Demo{}
 
@@ -97,30 +92,13 @@ func All() []Demo {
 	return list
 }
 
-// For returns the demos that apply to cfg, sorted by name.
-//
-// Kind-only demos are filtered out for non-Kind installs, mirroring how the
-// autoscaled-workerpool demo only registered itself with the shell installer
-// when ATE_INSTALL_KIND was true. DeleteAll iterates this, so a GKE teardown
-// does not try to delete resources that could never have been installed.
-func For(cfg *config.Config) []Demo {
-	var list []Demo
-	for _, d := range All() {
-		if ko, ok := d.(kindOnlyDemo); ok && ko.KindOnly() && !cfg.Kind {
-			continue
-		}
-		list = append(list, d)
-	}
-	return list
-}
-
-// Deleters returns the demos that apply to cfg as the narrower interface
+// Deleters returns every registered demo as the narrower interface
 // [steps.Env.DeleteAll] takes.
 //
 // The conversion lives here because the dependency only runs one way: the demos
 // import steps for Env, so steps cannot name this package's Demo.
-func Deleters(cfg *config.Config) []steps.Deleter {
-	list := For(cfg)
+func Deleters() []steps.Deleter {
+	list := All()
 	deleters := make([]steps.Deleter, 0, len(list))
 	for _, d := range list {
 		deleters = append(deleters, d)

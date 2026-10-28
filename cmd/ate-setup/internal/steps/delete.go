@@ -26,9 +26,9 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // DeleteAteSystem removes the control plane.
@@ -82,7 +82,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	// Removing the protection finalizer by hand is safe here. atecontroller,
 	// which would remove it, went away with the namespace. Deleting the CRDs
 	// above deleted every WorkerPool, so no pool uses a config anymore.
-	if err := releaseSandboxConfigs(ctx, e.Kube.Dynamic.Resource(atev1alpha1.GroupVersion.WithResource("sandboxconfigs"))); err != nil {
+	if err := releaseSandboxConfigs(ctx, e.Kube.Dynamic.Resource(atev1.GroupVersion.WithResource("sandboxconfigs"))); err != nil {
 		return err
 	}
 	// The podcertificate controller republishes its bundles every few
@@ -113,7 +113,7 @@ func releaseSandboxConfigs(ctx context.Context, res dynamic.ResourceInterface) e
 				return err
 			}
 			finalizers := slices.DeleteFunc(sc.GetFinalizers(), func(f string) bool {
-				return f == atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer
+				return f == atev1.SandboxConfigWorkerPoolProtectionFinalizer
 			})
 			if len(finalizers) == len(sc.GetFinalizers()) {
 				return nil

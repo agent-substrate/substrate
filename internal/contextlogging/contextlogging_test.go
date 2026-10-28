@@ -26,9 +26,9 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/protoredact"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -143,17 +143,17 @@ func TestHandleUngroupedKeepsTraceFieldsTopLevel(t *testing.T) {
 // tokenValuer stands in for a type that implements slog.LogValuer and
 // resolves to a proto; the handler must resolve it before deciding.
 type tokenValuer struct {
-	m *ateapipb.MintActorJwtResponse
+	m *ateapi.MintActorJwtResponse
 }
 
 func (v tokenValuer) LogValue() slog.Value { return slog.AnyValue(v.m) }
 
 func TestHandleRedactsProtoAttrsAnywhereInTheRecord(t *testing.T) {
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
-	resp := &ateapipb.MintActorJwtResponse{ActorJwt: token}
-	ref := &ateapipb.ObjectRef{Atespace: "ate-demo-sandbox", Name: "agent"}
-	tpl := &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{
-		Name: "c", Env: []*ateapipb.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
+	resp := &ateapi.MintActorJwtResponse{ActorJwt: token}
+	ref := &ateapi.ObjectRef{Atespace: "ate-demo-sandbox", Name: "agent"}
+	tpl := &ateapi.ActorTemplate{Containers: []*ateapi.Container{{
+		Name: "c", Env: []*ateapi.EnvVar{{Name: "API_KEY", Value: "sk-secret"}},
 	}}}
 
 	var buf bytes.Buffer
@@ -202,7 +202,7 @@ func (stringValuer) LogValue() slog.Value { return slog.StringValue("resolved") 
 // groupValuer resolves to a group that holds a proto, the shape a typed
 // reference with a nested message would take.
 type groupValuer struct {
-	m *ateapipb.MintActorJwtResponse
+	m *ateapi.MintActorJwtResponse
 }
 
 func (g groupValuer) LogValue() slog.Value {
@@ -215,8 +215,8 @@ type countingValuer struct{ n *int }
 func (c countingValuer) LogValue() slog.Value { *c.n++; return slog.StringValue("once") }
 
 func TestRedactValueReportsWhatItChanges(t *testing.T) {
-	sensitive := &ateapipb.MintActorJwtResponse{ActorJwt: "token"}
-	envless := &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c"}}}
+	sensitive := &ateapi.MintActorJwtResponse{ActorJwt: "token"}
+	envless := &ateapi.ActorTemplate{Containers: []*ateapi.Container{{Name: "c"}}}
 	for _, tc := range []struct {
 		name    string
 		in      slog.Value
@@ -226,10 +226,10 @@ func TestRedactValueReportsWhatItChanges(t *testing.T) {
 		{"int", slog.IntValue(1), false},
 		{"non-proto any", slog.AnyValue(struct{ X int }{1}), false},
 		{"nil any", slog.AnyValue(nil), false},
-		{"clean type", slog.AnyValue(&ateapipb.ObjectRef{Name: "n"}), false},
+		{"clean type", slog.AnyValue(&ateapi.ObjectRef{Name: "n"}), false},
 		{"labeled type, nothing set", slog.AnyValue(envless), false},
-		{"typed nil labeled type", slog.AnyValue((*ateapipb.MintActorJwtResponse)(nil)), false},
-		{"group of plain values", slog.GroupValue(slog.String("a", "b"), slog.Any("ref", &ateapipb.ObjectRef{})), false},
+		{"typed nil labeled type", slog.AnyValue((*ateapi.MintActorJwtResponse)(nil)), false},
+		{"group of plain values", slog.GroupValue(slog.String("a", "b"), slog.Any("ref", &ateapi.ObjectRef{})), false},
 		{"empty group", slog.GroupValue(), false},
 		{"sensitive", slog.AnyValue(sensitive), true},
 		{"group holding sensitive", slog.GroupValue(slog.String("a", "b"), slog.Group("in", slog.Any("r", sensitive))), true},
@@ -256,28 +256,28 @@ func TestRedactValueReportsWhatItChanges(t *testing.T) {
 }
 
 func TestRedactAttrsReturnsTheInputWhenNothingChanges(t *testing.T) {
-	in := []slog.Attr{slog.String("a", "b"), slog.Any("ref", &ateapipb.ObjectRef{Name: "n"}), slog.Group("g", slog.Int("n", 1))}
+	in := []slog.Attr{slog.String("a", "b"), slog.Any("ref", &ateapi.ObjectRef{Name: "n"}), slog.Group("g", slog.Int("n", 1))}
 	out := redactAttrs(in)
 	if len(out) != len(in) || &out[0] != &in[0] {
 		t.Fatal("redactAttrs copied a slice with nothing to change")
 	}
-	sensitive := &ateapipb.MintActorJwtResponse{ActorJwt: "token"}
+	sensitive := &ateapi.MintActorJwtResponse{ActorJwt: "token"}
 	in = append(in, slog.Group("g2", slog.Any("r", sensitive)))
 	out = redactAttrs(in)
 	if &out[0] == &in[0] {
 		t.Fatal("redactAttrs returned the input although an attribute changed")
 	}
-	if in[3].Value.Group()[0].Value.Any().(*ateapipb.MintActorJwtResponse).GetActorJwt() != "token" {
+	if in[3].Value.Group()[0].Value.Any().(*ateapi.MintActorJwtResponse).GetActorJwt() != "token" {
 		t.Fatal("redactAttrs modified the input slice")
 	}
-	if out[3].Value.Group()[0].Value.Any().(*ateapipb.MintActorJwtResponse).GetActorJwt() != protoredact.Placeholder {
+	if out[3].Value.Group()[0].Value.Any().(*ateapi.MintActorJwtResponse).GetActorJwt() != protoredact.Placeholder {
 		t.Fatal("redactAttrs did not mask the group member")
 	}
 }
 
 func TestHandleCoversGroupsBoundAttrsAndNilsTogether(t *testing.T) {
 	const token = "eyJhbGciOiJSUzI1NiJ9.token"
-	sensitive := &ateapipb.MintActorJwtResponse{ActorJwt: token}
+	sensitive := &ateapi.MintActorJwtResponse{ActorJwt: token}
 	var buf bytes.Buffer
 	base := slog.New(NewHandler(slog.NewJSONHandler(&buf, &slog.HandlerOptions{ReplaceAttr: dropTime})))
 
@@ -288,7 +288,7 @@ func TestHandleCoversGroupsBoundAttrsAndNilsTogether(t *testing.T) {
 		With(slog.Group("bound", slog.Any("resp", sensitive))).
 		WithGroup("inner").
 		Info("x",
-			slog.Any("nilresp", (*ateapipb.MintActorJwtResponse)(nil)),
+			slog.Any("nilresp", (*ateapi.MintActorJwtResponse)(nil)),
 			slog.Any("valuer", groupValuer{sensitive}),
 			slog.String("plain", "keep"),
 		)
@@ -313,7 +313,7 @@ func TestHandleResolvesLogValuersOnce(t *testing.T) {
 		calls := 0
 		attrs := []slog.Attr{slog.Any("v", countingValuer{&calls}), slog.String("a", "b")}
 		if withProto {
-			attrs = append(attrs, slog.Any("resp", &ateapipb.MintActorJwtResponse{ActorJwt: "t"}))
+			attrs = append(attrs, slog.Any("resp", &ateapi.MintActorJwtResponse{ActorJwt: "t"}))
 		}
 		slog.New(NewHandler(slog.NewJSONHandler(io.Discard, nil))).LogAttrs(context.Background(), slog.LevelInfo, "x", attrs...)
 		if calls != 1 {
@@ -326,12 +326,12 @@ func TestHandleRebuildsOnlyWhenAnAttributeChanges(t *testing.T) {
 	// Same record through the bare JSON handler and through ours must match
 	// byte for byte when it carries only values redactValue leaves alone,
 	// including a proto of a labeled type with nothing set.
-	envless := &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c", Image: "img"}}}
+	envless := &ateapi.ActorTemplate{Containers: []*ateapi.Container{{Name: "c", Image: "img"}}}
 	var plainBuf, oursBuf bytes.Buffer
 	plain := slog.New(slog.NewJSONHandler(&plainBuf, &slog.HandlerOptions{ReplaceAttr: dropTime}))
 	ours := slog.New(NewHandler(slog.NewJSONHandler(&oursBuf, &slog.HandlerOptions{ReplaceAttr: dropTime})))
 	for _, l := range []*slog.Logger{plain, ours} {
-		l.Info("x", slog.Any("tpl", envless), slog.Any("ref", &ateapipb.ObjectRef{Name: "n"}), slog.Int("n", 1), slog.String("a", "b"), slog.Bool("c", true), slog.Float64("f", 1.5), slog.Duration("d", time.Second))
+		l.Info("x", slog.Any("tpl", envless), slog.Any("ref", &ateapi.ObjectRef{Name: "n"}), slog.Int("n", 1), slog.String("a", "b"), slog.Bool("c", true), slog.Float64("f", 1.5), slog.Duration("d", time.Second))
 	}
 	if plainBuf.String() != oursBuf.String() {
 		t.Fatalf("records differ:\n plain: %s\n ours:  %s", plainBuf.String(), oursBuf.String())
@@ -340,8 +340,8 @@ func TestHandleRebuildsOnlyWhenAnAttributeChanges(t *testing.T) {
 	// allocating, whatever its size.
 	for _, attrs := range [][]slog.Attr{
 		{slog.Int("n", 1), slog.String("a", "b"), slog.Bool("c", true)},
-		{slog.Any("ref", &ateapipb.ObjectRef{Name: "n"}), slog.Any("resp", &ateapipb.ListActorsResponse{}), slog.Int("n", 1)},
-		{slog.Int("n", 1), slog.String("a", "b"), slog.Bool("c", true), slog.Float64("f", 1.5), slog.Duration("d", time.Second), slog.Any("ref", &ateapipb.ObjectRef{Name: "n"}), slog.Group("g", slog.String("k", "v"))},
+		{slog.Any("ref", &ateapi.ObjectRef{Name: "n"}), slog.Any("resp", &ateapi.ListActorsResponse{}), slog.Int("n", 1)},
+		{slog.Int("n", 1), slog.String("a", "b"), slog.Bool("c", true), slog.Float64("f", 1.5), slog.Duration("d", time.Second), slog.Any("ref", &ateapi.ObjectRef{Name: "n"}), slog.Group("g", slog.String("k", "v"))},
 	} {
 		rec := slog.NewRecord(time.Now(), slog.LevelInfo, "x", 0)
 		rec.AddAttrs(attrs...)
@@ -358,7 +358,7 @@ func TestHandleLeavesRecordsWithoutProtosAlone(t *testing.T) {
 	plain := slog.New(slog.NewJSONHandler(&plainBuf, &slog.HandlerOptions{ReplaceAttr: dropTime}))
 	ours := slog.New(NewHandler(slog.NewJSONHandler(&oursBuf, &slog.HandlerOptions{ReplaceAttr: dropTime})))
 	for _, l := range []*slog.Logger{plain, ours} {
-		l.Info("x", slog.String("a", "b"), slog.Int("n", 1), slog.Any("nilproto", (*ateapipb.ObjectRef)(nil)), slog.Any("m", map[string]int{"k": 1}))
+		l.Info("x", slog.String("a", "b"), slog.Int("n", 1), slog.Any("nilproto", (*ateapi.ObjectRef)(nil)), slog.Any("m", map[string]int{"k": 1}))
 	}
 	if plainBuf.String() != oursBuf.String() {
 		t.Fatalf("records differ:\n plain: %s\n ours:  %s", plainBuf.String(), oursBuf.String())
@@ -376,23 +376,23 @@ func dropTime(_ []string, a slog.Attr) slog.Attr {
 // the three shapes that matter: no proto at all, a proto whose type has no
 // debug_redact field (returned without a copy), and one that has.
 func BenchmarkHandle(b *testing.B) {
-	listResp := &ateapipb.ListActorsResponse{}
+	listResp := &ateapi.ListActorsResponse{}
 	for i := 0; i < 50; i++ {
-		listResp.Actors = append(listResp.Actors, &ateapipb.Actor{
-			Metadata:      &ateapipb.ResourceMetadata{Atespace: "s", Name: "agent", Uid: "86fae7b8-c9b4-479c-b7c8-6ef3ede0ab0b", Version: 1},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: "s", Name: "tpl"},
+		listResp.Actors = append(listResp.Actors, &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: "s", Name: "agent", Uid: "86fae7b8-c9b4-479c-b7c8-6ef3ede0ab0b", Version: 1},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "s", Name: "tpl"},
 		})
 	}
-	tpl := &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "c"}}}
+	tpl := &ateapi.ActorTemplate{Containers: []*ateapi.Container{{Name: "c"}}}
 	for i := 0; i < 32; i++ {
-		tpl.Containers[0].Env = append(tpl.Containers[0].Env, &ateapipb.EnvVar{Name: "VAR", Value: "some-fairly-long-value-1234567890"})
+		tpl.Containers[0].Env = append(tpl.Containers[0].Env, &ateapi.EnvVar{Name: "VAR", Value: "some-fairly-long-value-1234567890"})
 	}
 	cases := []struct {
 		name  string
 		attrs []slog.Attr
 	}{
 		{"no_proto", []slog.Attr{slog.String("host", "example.com"), slog.String("leg", "mitm"), slog.Int("n", 3)}},
-		{"clean_objectref", []slog.Attr{slog.Any("actor", &ateapipb.ObjectRef{Atespace: "s", Name: "agent"})}},
+		{"clean_objectref", []slog.Attr{slog.Any("actor", &ateapi.ObjectRef{Atespace: "s", Name: "agent"})}},
 		{"clean_listactors_50", []slog.Attr{slog.Any("resp", listResp)}},
 		{"sensitive_template_32env", []slog.Attr{slog.Any("resp", tpl)}},
 	}
@@ -419,7 +419,7 @@ func BenchmarkHandle(b *testing.B) {
 // with ==: a value receiver and a slice field. Comparing two of them as
 // interfaces panics at run time.
 type uncomparableMsg struct {
-	*ateapipb.MintActorJwtResponse
+	*ateapi.MintActorJwtResponse
 	_ []int
 }
 
@@ -435,8 +435,8 @@ func TestHandleToleratesUncomparableMessageTypes(t *testing.T) {
 		msg  uncomparableMsg
 		want string
 	}{
-		{"nothing to mask", uncomparableMsg{MintActorJwtResponse: &ateapipb.MintActorJwtResponse{}}, `"v":{}`},
-		{"secret set", uncomparableMsg{MintActorJwtResponse: &ateapipb.MintActorJwtResponse{ActorJwt: "token"}}, protoredact.Placeholder},
+		{"nothing to mask", uncomparableMsg{MintActorJwtResponse: &ateapi.MintActorJwtResponse{}}, `"v":{}`},
+		{"secret set", uncomparableMsg{MintActorJwtResponse: &ateapi.MintActorJwtResponse{ActorJwt: "token"}}, protoredact.Placeholder},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer

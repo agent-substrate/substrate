@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
@@ -55,9 +56,8 @@ func TestBuildAPIServerEnvVars(t *testing.T) {
 	}
 }
 
-// The expected strings here are what the shell installer's
-// create_api_authentication_config produced, so a regression shows up as a
-// diff rather than as an apiserver that silently trusts the wrong issuer.
+// The expected strings are the whole rendered file, so a regression shows up
+// as a diff rather than as an apiserver that silently trusts the wrong issuer.
 func TestBuildAuthenticationConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -67,8 +67,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		{
 			name:   "external issuer needs no discovery credentials",
 			issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
-			want: "actorIdentityJWTProvider: kubernetes\n" +
-				"jwtProviders:\n" +
+			want: "jwtProviders:\n" +
 				"- name: kubernetes\n" +
 				"  issuer: https://container.googleapis.com/v1/projects/p/locations/l/clusters/c\n" +
 				"  audiences: [api.ate-system.svc]",
@@ -76,8 +75,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		{
 			name:   "in-cluster issuer projects the service account CA and token",
 			issuer: inClusterIssuer,
-			want: "actorIdentityJWTProvider: kubernetes\n" +
-				"jwtProviders:\n" +
+			want: "jwtProviders:\n" +
 				"- name: kubernetes\n" +
 				"  issuer: https://kubernetes.default.svc\n" +
 				"  audiences: [api.ate-system.svc]\n" +
@@ -87,8 +85,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		{
 			name:   "cluster.local form is treated as in-cluster too",
 			issuer: inClusterIssuer + ".cluster.local",
-			want: "actorIdentityJWTProvider: kubernetes\n" +
-				"jwtProviders:\n" +
+			want: "jwtProviders:\n" +
 				"- name: kubernetes\n" +
 				"  issuer: https://kubernetes.default.svc.cluster.local\n" +
 				"  audiences: [api.ate-system.svc]\n" +
@@ -116,7 +113,8 @@ func TestNewCAPoolSecretData(t *testing.T) {
 		keyType localca.KeyType
 		wantAlg x509.PublicKeyAlgorithm
 	}{
-		{"actor identity", poolKeyID, localca.KeyTypeED25519, x509.Ed25519},
+		{"pod certificates", poolKeyID, localca.KeyTypeED25519, x509.Ed25519},
+		{"actor identity", poolKeyID, localca.KeyTypeECDSAP256, x509.ECDSA},
 		{"egress mitm", poolKeyID, localca.KeyTypeECDSAP256, x509.ECDSA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,6 +164,27 @@ func TestNewCAPoolSecretData(t *testing.T) {
 				t.Errorf("root validity = %v, want %v", got, caValidity)
 			}
 		})
+	}
+}
+
+// External relying parties trust the actor identity root, and many accept
+// ECDSA but not Ed25519.
+func TestCreateActorIDCAPoolSecretIsECDSA(t *testing.T) {
+	ctx := context.Background()
+	e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t)}
+	if err := e.CreateActorIDCAPoolSecret(ctx); err != nil {
+		t.Fatalf("CreateActorIDCAPoolSecret() error = %v", err)
+	}
+	secret, err := e.Kube.Typed.CoreV1().Secrets(e.Namespace()).Get(ctx, SecretActorIDCAPool, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get(%s) error = %v", SecretActorIDCAPool, err)
+	}
+	pool, err := localca.Unmarshal(secret.Data["pool"])
+	if err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := pool.CAs[0].RootCertificate.PublicKeyAlgorithm; got != x509.ECDSA {
+		t.Errorf("root key algorithm = %v, want %v", got, x509.ECDSA)
 	}
 }
 

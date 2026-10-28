@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/resources"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,11 +31,11 @@ type failingControlPlugin struct {
 	err error
 }
 
-func (p failingControlPlugin) CleanupSnapshot(context.Context, *objectstorev1.CleanupSnapshotRequest, ...grpc.CallOption) (*objectstorev1.CleanupSnapshotResponse, error) {
+func (p failingControlPlugin) CleanupSnapshot(context.Context, *objectstore.CleanupSnapshotRequest, ...grpc.CallOption) (*objectstore.CleanupSnapshotResponse, error) {
 	return nil, p.err
 }
 
-func (p failingControlPlugin) CopySnapshot(context.Context, *objectstorev1.CopySnapshotRequest, ...grpc.CallOption) (*objectstorev1.CopySnapshotResponse, error) {
+func (p failingControlPlugin) CopySnapshot(context.Context, *objectstore.CopySnapshotRequest, ...grpc.CallOption) (*objectstore.CopySnapshotResponse, error) {
 	return nil, p.err
 }
 

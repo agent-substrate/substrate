@@ -457,6 +457,66 @@ class ClusterFactsTest(unittest.TestCase):
         self.assertNotIn("resume_actor_failure_ratio", row["measurements"])
         self.assertNotIn("suspend_actor_failure_ratio", row["measurements"])
 
+    def test_live_actors_from_create_and_delete(self):
+        metal_facts = {
+            **FACTS,
+            "node_count": 1,
+            "allocatable_cores": 191.25,
+            "allocatable_ram_gb": 369.51,
+            "worker_pod_count": 100,
+        }
+        # 1523 CreateActor (0 failed) minus 223 DeleteActor (warmup retries)
+        # leaves 1300 surviving actors at run end.
+        stats_ok = (STATS_HEADER
+                    + "grpc,CreateActor,1523,0\n"
+                    + "grpc,DeleteActor,223,0\n"
+                    + ",Aggregated,5000,0\n")
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(metal_facts, td, stats_ok, users=1300,
+                          user_counts=[650, 1300, 1300])["measurements"]
+        self.assertEqual(m["actors_per_node"], "1300.0")
+        self.assertEqual(m["actors_per_vcpu"], "6.8")
+        self.assertEqual(m["actors_per_pod_p50"], "13.0")
+        self.assertEqual(m["multi_actor_worker"], "true")
+
+        # 100% CreateActor failure: Locust still spawned 1300 VU goroutines,
+        # but 0 actors were created, so density is 0 rather than 1300.
+        stats_fail = (STATS_HEADER
+                      + "grpc,CreateActor,44507,44507\n"
+                      + ",Aggregated,44507,44507\n")
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(metal_facts, td, stats_fail, users=1300,
+                          user_counts=[650, 1300, 1300])["measurements"]
+        self.assertEqual(m["actors_per_node"], "0.0")
+        self.assertEqual(m["actors_per_vcpu"], "0.0")
+        self.assertEqual(m["actors_per_gb_ram"], "0.0")
+        self.assertEqual(m["actors_per_pod_p50"], "0.0")
+        self.assertEqual(m["multi_actor_worker"], "false")
+
+        # Partial survival: 800 created, 100 deleted -> 700 surviving actors.
+        stats_partial = (STATS_HEADER
+                         + "grpc,CreateActor,900,100\n"
+                         + "grpc,DeleteActor,100,0\n"
+                         + ",Aggregated,1000,100\n")
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(metal_facts, td, stats_partial, users=1300,
+                          user_counts=[650, 1300, 1300])["measurements"]
+        self.assertEqual(m["actors_per_node"], "700.0")
+        self.assertEqual(m["actors_per_pod_p50"], "7.0")
+
+        # sweperf retires completed trajectories (TaskWallClock) with
+        # DeleteActor mid-run; VUs between trajectories at run end still count.
+        stats_sweperf = (STATS_HEADER
+                         + "grpc,CreateActor,490,0\n"
+                         + "grpc,DeleteActor,400,0\n"
+                         + "actor,TaskWallClock,400,0\n"
+                         + ",Aggregated,1290,0\n")
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(metal_facts, td, stats_sweperf, users=100,
+                          user_counts=[50, 100, 100])["measurements"]
+        self.assertEqual(m["actors_per_node"], "100.0")
+        self.assertEqual(m["actors_per_pod_p50"], "1.0")
+
     def test_worker_pod_snapshot(self):
         api = fake_api(ns_pods=[
             worker_pod("a", restarts=2, last="OOMKilled"),

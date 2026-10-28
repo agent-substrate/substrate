@@ -88,9 +88,18 @@ type workerSupportStub struct {
 	ca         *testCA
 	lifetime   time.Duration
 	publicKeys chan []byte
+	// failFirst mints fail with failCode before the stub answers; calls counts every mint.
+	failFirst int
+	failCode  codes.Code
+	calls     int
 }
 
 func (s *workerSupportStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
+	s.calls++
+	if s.failFirst > 0 {
+		s.failFirst--
+		return nil, status.Error(s.failCode, "broker busy")
+	}
 	if req.GetActorUid() != "actor-uid" {
 		return nil, status.Error(codes.FailedPrecondition, "unexpected actor UID")
 	}
@@ -222,4 +231,34 @@ func issueTestPodCertificate(t *testing.T, ca *testCA, identity *substratex509.P
 		t.Fatal(err)
 	}
 	return cert
+}
+
+func TestBrokerCertificateSourceRetriesUnavailable(t *testing.T) {
+	source, broker := newTestBrokerCertificateSource(t, testAteletIdentity("node-a"), time.Hour)
+	broker.failFirst, broker.failCode = 2, codes.Unavailable
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := source.MintWorkerCertificate(ctx); err != nil {
+		t.Fatalf("MintWorkerCertificate after two Unavailable answers: %v", err)
+	}
+	receiveWithin(t, broker.publicKeys, "certificate public key")
+	if broker.calls != 3 {
+		t.Fatalf("broker calls = %d, want 3 (two Unavailable, one mint)", broker.calls)
+	}
+}
+
+func TestBrokerCertificateSourceDoesNotRetryOtherErrors(t *testing.T) {
+	source, broker := newTestBrokerCertificateSource(t, testAteletIdentity("node-a"), time.Hour)
+	broker.failFirst, broker.failCode = 1, codes.FailedPrecondition
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := source.MintWorkerCertificate(ctx)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("MintWorkerCertificate error = %v, want FailedPrecondition", err)
+	}
+	if broker.calls != 1 {
+		t.Fatalf("broker calls = %d, want 1 (no retry)", broker.calls)
+	}
 }

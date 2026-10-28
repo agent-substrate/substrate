@@ -61,9 +61,9 @@ Standalone Substrate defaults to the `substrate` schema, including under Kagent'
 - Keep each startup migration short.
 - A database administrator must configure the owner role's default table and sequence privileges for the read/write role before migrations. These grants do not go to `PUBLIC` or Kagent's roles. In this first pass, migration ledgers receive the same table privileges as other objects.
 
-Before the first stable v1 release, developers can change or squash migration files. Recreate a development database after its migration history changes.
+Migrations up to v0.6.0 were squashed into `000001_initial.sql`. A database created before the squash cannot be upgraded. Recreate it.
 
-After the first stable v1 release, do not change or delete a released migration file. Add a new migration to correct it.
+Do not change or delete a migration file after it merges. Add a new migration to correct it.
 
 Do not edit the `schema_migrations` ledger manually.
 
@@ -76,6 +76,6 @@ Do not edit the `schema_migrations` ledger manually.
 5. Run the migration verifier and PostgreSQL store tests.
 
 ```sh
-hack/verify/postgresql-migrations.sh
+hack/verify/postgresql-migrations.sh origin/main
 go test ./cmd/ateapi/internal/store/atepg
 ```

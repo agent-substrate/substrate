@@ -635,7 +635,7 @@ func TestSweepUsageDeadSandboxConcurrentSweeps(t *testing.T) {
 }
 
 // drainedCgroup is the sandbox leaf after a drain has killed the app
-// containers: the sentry and gofers stay in the pause leaf, so it is still
+// containers: the sentry and gofers stay in the sandbox leaf, so it is still
 // populated.
 var drainedCgroup = map[string]string{
 	"memory.current": "31457280\n",
@@ -671,18 +671,18 @@ func TestDeadSandboxCheckDuringDrain(t *testing.T) {
 	}
 }
 
-// TestDrainNeverKillsPauseContainer: gracefulShutdown kills the names
+// TestDrainNeverKillsTheSandbox: gracefulShutdown kills the names
 // containerNames takes from the spec. atelet requires container names to be
-// DNS-1123 labels (k8s-short-name) and the pause container's name is not one,
+// DNS-1123 labels (k8s-short-name) and the sandbox ID is not one,
 // so no spec can name it and the drain cannot stop the sandbox itself.
-func TestDrainNeverKillsPauseContainer(t *testing.T) {
-	if resources.IsValidResourceName(ocispec.PauseContainer) {
-		t.Fatalf("%q is a valid container name; a spec could then put it on the drain's kill list", ocispec.PauseContainer)
+func TestDrainNeverKillsTheSandbox(t *testing.T) {
+	if resources.IsValidResourceName(ocispec.SandboxID) {
+		t.Fatalf("%q is a valid container name; a spec could then put it on the drain's kill list", ocispec.SandboxID)
 	}
 	spec := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
 	for _, name := range containerNames(spec) {
-		if name == ocispec.PauseContainer {
-			t.Fatalf("containerNames(%v) includes %q", spec, ocispec.PauseContainer)
+		if name == ocispec.SandboxID {
+			t.Fatalf("containerNames(%v) includes %q", spec, ocispec.SandboxID)
 		}
 	}
 }

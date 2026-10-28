@@ -28,22 +28,24 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 // fakeControlClient keeps each actor's state, so a resume of a running actor
 // reports Resumed false the way ateapi does.
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	mu     sync.Mutex
 	calls  []string // "<RPC> <actor>"
-	states map[string]ateapipb.ActorState
+	states map[string]ateapi.ActorState
 	// resumeErr, when set, fails every ResumeActor without changing state.
 	resumeErr error
 	// resumeFailures is how many ResumeActor calls fail with Unavailable,
@@ -58,6 +60,9 @@ type fakeControlClient struct {
 	// deleteAborts is how many DeleteActor calls fail with Aborted, as when
 	// another operation holds the actor lease, before deletes succeed.
 	deleteAborts int
+	// serverElapsedUS, when set, is returned in the ServerElapsedTrailer of
+	// every ResumeActor and SuspendActor.
+	serverElapsedUS string
 	// resumeEntered and resumeGate, when set, hold every ResumeActor: it
 	// signals resumeEntered and then waits for resumeGate to close or its
 	// context to end.
@@ -66,36 +71,49 @@ type fakeControlClient struct {
 }
 
 func newFake() *fakeControlClient {
-	return &fakeControlClient{states: map[string]ateapipb.ActorState{}}
+	return &fakeControlClient{states: map[string]ateapi.ActorState{}}
+}
+
+// setTrailer fills the trailer a call asked for, as ate-api-server's
+// ateinterceptors.ServerUnaryInterceptor does.
+func (f *fakeControlClient) setTrailer(opts []grpc.CallOption) {
+	if f.serverElapsedUS == "" {
+		return
+	}
+	for _, o := range opts {
+		if t, ok := o.(grpc.TrailerCallOption); ok {
+			*t.TrailerAddr = metadata.Pairs(ateinterceptors.ServerElapsedTrailer, f.serverElapsedUS)
+		}
+	}
 }
 
 func (f *fakeControlClient) record(rpc, actor string) {
 	f.calls = append(f.calls, rpc+" "+actor)
 }
 
-func (f *fakeControlClient) setState(name string, s ateapipb.ActorState) {
+func (f *fakeControlClient) setState(name string, s ateapi.ActorState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.states[name] = s
 }
 
-func (f *fakeControlClient) state(name string) ateapipb.ActorState {
+func (f *fakeControlClient) state(name string) ateapi.ActorState {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.states[name]
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("CreateAtespace", in.GetAtespace().GetMetadata().GetName())
 	if f.atespaceErr != nil {
 		return nil, f.atespaceErr
 	}
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetMetadata().GetName()
@@ -103,11 +121,11 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	f.states[name] = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	return &ateapipb.Actor{}, nil
+	f.states[name] = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetName()
@@ -116,10 +134,10 @@ func (f *fakeControlClient) GetActor(ctx context.Context, in *ateapipb.GetActorR
 	if !ok {
 		return nil, status.Error(codes.NotFound, "no such actor")
 	}
-	return &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: s}}, nil
+	return &ateapi.Actor{Status: &ateapi.ActorStatus{State: s}}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	if f.resumeGate != nil {
 		f.resumeEntered <- struct{}{}
 		select {
@@ -130,6 +148,7 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.setTrailer(opts)
 	name := in.GetActor().GetName()
 	f.record("ResumeActor", name)
 	if f.resumeErr != nil {
@@ -140,37 +159,38 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 		return nil, status.Error(codes.Unavailable, "down")
 	}
 	switch f.states[name] {
-	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
-		return &ateapipb.ResumeActorResponse{Resumed: false}, nil
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
-		f.states[name] = ateapipb.ActorState_ACTOR_STATE_RUNNING
-		return &ateapipb.ResumeActorResponse{Resumed: true}, nil
+	case ateapi.ActorState_ACTOR_STATE_RUNNING:
+		return &ateapi.ResumeActorResponse{Resumed: false}, nil
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
+		f.states[name] = ateapi.ActorState_ACTOR_STATE_RUNNING
+		return &ateapi.ResumeActorResponse{Resumed: true}, nil
 	}
 	return nil, status.Error(codes.Aborted, "actor crashed")
 }
 
 // SuspendActor fakes only an async suspend, which is how the user pauses.
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.setTrailer(opts)
 	name := in.GetActor().GetName()
 	f.record("SuspendActor(async)", name)
-	if in.GetOptions().GetMode() != ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+	if in.GetOptions().GetMode() != ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
 		return nil, status.Error(codes.Unimplemented, "only async suspend is faked")
 	}
 	if f.pauseErr != nil {
 		return nil, f.pauseErr
 	}
-	if f.states[name] != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if f.states[name] != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return nil, status.Error(codes.FailedPrecondition, "not running")
 	}
 	// A paused actor is SUSPENDED holding a node-local snapshot; the fake
 	// tracks only the state.
-	f.states[name] = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	return &ateapipb.SuspendActorResponse{}, nil
+	f.states[name] = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := in.GetActor().GetName()
@@ -180,7 +200,7 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 		return nil, status.Error(codes.Aborted, "lease held")
 	}
 	delete(f.states, name)
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
 // callsTo returns the actors of every recorded call to rpc, in order.
@@ -296,7 +316,7 @@ func TestFirstIterationMakesTheUsersActorCold(t *testing.T) {
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(name); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 	if got := trackedActors(r); !slices.Equal(got, actors) {
@@ -304,6 +324,39 @@ func TestFirstIterationMakesTheUsersActorCold(t *testing.T) {
 	}
 	if got := requestCount(t, "ResumeActorCold", "success") - cold; got != 0 {
 		t.Errorf("ResumeActorCold successes grew by %v during setup, want 0", got)
+	}
+}
+
+// Each cycle records ate-api-server's own elapsed time beside the client
+// latency, so the gap between them is network and client time.
+func TestIterateRecordsServerLatency(t *testing.T) {
+	fake := newFake()
+	r := newTestRuntime(fake)
+	r.iterate()
+	fake.serverElapsedUS = "1500"
+	resumes, pauses := serverLatencySum(t, "ResumeActorCold"), serverLatencySum(t, "SuspendActorAsync")
+	r.iterate()
+	if got := serverLatencySum(t, "ResumeActorCold") - resumes; got != 1.5 {
+		t.Errorf("ResumeActorCold server latency sum grew by %v ms, want 1.5", got)
+	}
+	if got := serverLatencySum(t, "SuspendActorAsync") - pauses; got != 1.5 {
+		t.Errorf("SuspendActorAsync server latency sum grew by %v ms, want 1.5", got)
+	}
+}
+
+// A failed call stays out of the server histogram, which has no status: its
+// client sample counts as a failure, so the two would describe different
+// requests.
+func TestIterateLeavesFailuresOutOfServerLatency(t *testing.T) {
+	fake := newFake()
+	r := newTestRuntime(fake)
+	r.iterate()
+	fake.serverElapsedUS = "1500"
+	fake.resumeErr = status.Error(codes.Aborted, "lease held")
+	before := serverLatencySum(t, "ResumeActorCold")
+	r.iterate()
+	if got := serverLatencySum(t, "ResumeActorCold") - before; got != 0 {
+		t.Errorf("ResumeActorCold server latency sum grew by %v ms after a failed resume, want 0", got)
 	}
 }
 
@@ -393,7 +446,7 @@ func TestSetupDeletesAnActorThatDoesNotWarmAndRetries(t *testing.T) {
 	if len(actors) != 1 || actors[0] == created[0] {
 		t.Fatalf("got user actors %v, want a new one", actors)
 	}
-	if got := fake.state(actors[0]); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(actors[0]); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
@@ -436,24 +489,24 @@ func TestIterateFailsAResumeOfARunningActor(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 	name := userActors(r)[0]
-	fake.setState(name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	fake.setState(name, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	fake.resetCalls()
 	before := requestCount(t, "ResumeActorCold", "failure")
-	recoveries := requestCount(t, "PauseActorRecovery", "success")
+	recoveries := requestCount(t, "SuspendActorAsyncRecovery", "success")
 
 	r.iterate()
 	if got := requestCount(t, "ResumeActorCold", "failure") - before; got != 1 {
 		t.Errorf("ResumeActorCold failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "success") - recoveries; got != 1 {
-		t.Errorf("PauseActorRecovery successes grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "success") - recoveries; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery successes grew by %v, want 1", got)
 	}
 	// Recovery pauses the running actor.
 	want := []string{"ResumeActor " + name, "SuspendActor(async) " + name}
 	if !slices.Equal(fake.calls, want) {
 		t.Errorf("calls: got %v, want %v", fake.calls, want)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(name); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
@@ -469,7 +522,7 @@ func TestIterateKeepsTheActorAfterAFailedResume(t *testing.T) {
 	if got := userActors(r); !slices.Equal(got, []string{name}) {
 		t.Errorf("user actors: got %v, want [%s]", got, name)
 	}
-	if got := fake.state(name); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if got := fake.state(name); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("actor is %v, want paused (SUSPENDED)", got)
 	}
 }
@@ -498,9 +551,9 @@ func TestIterateRecordsTheRecoveryPauseOfAPausedActorAsASuccess(t *testing.T) {
 	fake.resetCalls()
 	fake.resumeErr = status.Error(codes.Aborted, "lease held")
 	resumeFailures := requestCount(t, "ResumeActorCold", "failure")
-	pauseFailures := requestCount(t, "PauseActor", "failure")
-	recoverySuccesses := requestCount(t, "PauseActorRecovery", "success")
-	recoveryFailures := requestCount(t, "PauseActorRecovery", "failure")
+	pauseFailures := requestCount(t, "SuspendActorAsync", "failure")
+	recoverySuccesses := requestCount(t, "SuspendActorAsyncRecovery", "success")
+	recoveryFailures := requestCount(t, "SuspendActorAsyncRecovery", "failure")
 
 	// The resume fails with the actor still paused, so the recovery pause
 	// finds it paused: a success, as the actor is cold.
@@ -511,14 +564,14 @@ func TestIterateRecordsTheRecoveryPauseOfAPausedActorAsASuccess(t *testing.T) {
 	if got := requestCount(t, "ResumeActorCold", "failure") - resumeFailures; got != 1 {
 		t.Errorf("ResumeActorCold failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActor", "failure") - pauseFailures; got != 0 {
-		t.Errorf("PauseActor failures grew by %v, want 0", got)
+	if got := requestCount(t, "SuspendActorAsync", "failure") - pauseFailures; got != 0 {
+		t.Errorf("SuspendActorAsync failures grew by %v, want 0", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "success") - recoverySuccesses; got != 1 {
-		t.Errorf("PauseActorRecovery successes grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "success") - recoverySuccesses; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery successes grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "failure") - recoveryFailures; got != 0 {
-		t.Errorf("PauseActorRecovery failures grew by %v, want 0", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "failure") - recoveryFailures; got != 0 {
+		t.Errorf("SuspendActorAsyncRecovery failures grew by %v, want 0", got)
 	}
 }
 
@@ -527,17 +580,17 @@ func TestIterateRecordsAFailedRecoveryPause(t *testing.T) {
 	r := newTestRuntime(fake)
 	r.iterate()
 	fake.pauseErr = status.Error(codes.Unavailable, "down")
-	pauseFailures := requestCount(t, "PauseActor", "failure")
-	recoveryFailures := requestCount(t, "PauseActorRecovery", "failure")
+	pauseFailures := requestCount(t, "SuspendActorAsync", "failure")
+	recoveryFailures := requestCount(t, "SuspendActorAsyncRecovery", "failure")
 
 	// The resume succeeds, the measured pause fails, and so does the
 	// recovery pause of the running actor.
 	r.iterate()
-	if got := requestCount(t, "PauseActor", "failure") - pauseFailures; got != 1 {
-		t.Errorf("PauseActor failures grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsync", "failure") - pauseFailures; got != 1 {
+		t.Errorf("SuspendActorAsync failures grew by %v, want 1", got)
 	}
-	if got := requestCount(t, "PauseActorRecovery", "failure") - recoveryFailures; got != 1 {
-		t.Errorf("PauseActorRecovery failures grew by %v, want 1", got)
+	if got := requestCount(t, "SuspendActorAsyncRecovery", "failure") - recoveryFailures; got != 1 {
+		t.Errorf("SuspendActorAsyncRecovery failures grew by %v, want 1", got)
 	}
 }
 
@@ -564,7 +617,7 @@ func TestShutdownRetriesAnAbortedDelete(t *testing.T) {
 	if got := fake.callsTo("DeleteActor"); len(got) != 3 {
 		t.Errorf("DeleteActor calls = %v, want 3 calls", got)
 	}
-	if _, err := fake.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
+	if _, err := fake.GetActor(context.Background(), &ateapi.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
 		t.Errorf("actor still exists after shutdown: err = %v", err)
 	}
 }
@@ -719,7 +772,7 @@ func TestShutdownCancelsACycleThatOutlastsItsShare(t *testing.T) {
 	if got := fake.callsTo("DeleteActor"); !slices.Equal(got, []string{name}) {
 		t.Errorf("deleted %v, want [%s]", got, name)
 	}
-	if _, err := fake.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
+	if _, err := fake.GetActor(context.Background(), &ateapi.GetActorRequest{Actor: r.ref(name)}); status.Code(err) != codes.NotFound {
 		t.Errorf("actor still exists after shutdown: err = %v", err)
 	}
 }
@@ -736,6 +789,11 @@ func closing(r *runtime) bool {
 func requestCount(t *testing.T, name, result string) float64 {
 	t.Helper()
 	return scrape(t, `locust_requests_total{method="grpc",name="`+name+`",status="`+result+`",user_class="ResumePausedUser"} `)
+}
+
+func serverLatencySum(t *testing.T, name string) float64 {
+	t.Helper()
+	return scrape(t, `locust_server_duration_milliseconds_sum{method="grpc",name="`+name+`",user_class="ResumePausedUser"} `)
 }
 
 func scrape(t *testing.T, prefix string) float64 {

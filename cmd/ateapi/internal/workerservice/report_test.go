@@ -22,43 +22,43 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const reportActorUID = "5f2c1a90-7b34-4e6d-8a11-0c3e9d5b7f42"
 
-func reportRequest() *ateapipb.ReportActorSnapshotStateRequest {
-	durable := &ateapipb.SnapshotReport{
+func reportRequest() *ateapi.ReportActorSnapshotStateRequest {
+	durable := &ateapi.SnapshotReport{
 		Uuid:            "snap-1",
 		Generation:      1,
-		Fidelity:        ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Object:          &ateapipb.ObjectSnapshot{SnapshotUri: "gs://bucket/actors/a/snap-1"},
+		Fidelity:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Object:          &ateapi.ObjectSnapshot{SnapshotUri: "gs://bucket/actors/a/snap-1"},
 		LocalCommitTime: timestamppb.Now(),
 	}
-	return &ateapipb.ReportActorSnapshotStateRequest{
-		Actor:    &ateapipb.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+	return &ateapi.ReportActorSnapshotStateRequest{
+		Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 		ActorUid: reportActorUID,
-		State:    &ateapipb.ActorSnapshotState{LatestDurable: durable},
+		State:    &ateapi.ActorSnapshotState{LatestDurable: durable},
 	}
 }
 
 // A report reaches the control plane with the node from the caller's
 // certificate. The handler reads nothing from the store.
 func TestReportActorSnapshotState(t *testing.T) {
-	suspender := &fakeSuspender{}
-	s := New(nil, suspender, testAteletSPIFFEID, nil, "", nil)
+	control := &fakeControl{}
+	s := New(nil, control, testAteletSPIFFEID, nil, "", nil)
 
 	req := reportRequest()
 	if _, err := s.ReportActorSnapshotState(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), req); err != nil {
 		t.Fatalf("ReportActorSnapshotState() failed: %v", err)
 	}
-	if len(suspender.reports) != 1 {
-		t.Fatalf("got %d applied reports, want 1", len(suspender.reports))
+	if len(control.reports) != 1 {
+		t.Fatalf("got %d applied reports, want 1", len(control.reports))
 	}
-	got := suspender.reports[0]
+	got := control.reports[0]
 	if want := (resources.ActorRef{Atespace: suspendAtespace, Name: suspendActor}); got.actorRef != want {
 		t.Errorf("actorRef = %v, want %v", got.actorRef, want)
 	}
@@ -80,7 +80,7 @@ func TestReportActorSnapshotState_Refused(t *testing.T) {
 	tests := []struct {
 		name        string
 		ctx         context.Context
-		req         *ateapipb.ReportActorSnapshotStateRequest
+		req         *ateapi.ReportActorSnapshotStateRequest
 		controlErr  error
 		want        codes.Code
 		wantApplied bool
@@ -92,13 +92,13 @@ func TestReportActorSnapshotState_Refused(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			suspender := &fakeSuspender{reportErr: tt.controlErr}
-			s := New(nil, suspender, testAteletSPIFFEID, nil, "", nil)
+			control := &fakeControl{reportErr: tt.controlErr}
+			s := New(nil, control, testAteletSPIFFEID, nil, "", nil)
 			_, err := s.ReportActorSnapshotState(tt.ctx, tt.req)
 			if got := apierror.Code(err); got != tt.want {
 				t.Fatalf("ReportActorSnapshotState() error = %v, want code %v", err, tt.want)
 			}
-			if applied := len(suspender.reports) > 0; applied != tt.wantApplied {
+			if applied := len(control.reports) > 0; applied != tt.wantApplied {
 				t.Errorf("report reached the control plane = %v, want %v", applied, tt.wantApplied)
 			}
 		})

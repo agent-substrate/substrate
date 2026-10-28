@@ -27,10 +27,11 @@ import (
 )
 
 func testRuntimes(defaultHash string) *File {
-	return &File{
-		DefaultRuntime:     Attributes{"sandbox_bundle_hash": defaultHash},
-		RestorableRuntimes: []Attributes{{"sandbox_bundle_hash": "sha256:41ab"}},
-	}
+	return &File{SandboxClasses: []Class{{
+		SandboxClass:       "gvisor",
+		DefaultRuntime:     Runtime{Version: Attributes{"sandbox_bundle_hash": defaultHash}},
+		RestorableRuntimes: []Runtime{{Version: Attributes{"sandbox_bundle_hash": "sha256:41ab"}}},
+	}}}
 }
 
 func TestWrite(t *testing.T) {
@@ -144,15 +145,16 @@ func TestRead(t *testing.T) {
 		wantErr:  true,
 	}, {
 		name:     "unknown field",
-		contents: `{"defaultRuntime": {"sandbox_bundle_hash": "sha256:7c2e"}, "nope": 1}`,
+		contents: `{"sandboxClasses": [{"sandboxClass": "gvisor", "defaultRuntime": {"version": {"sandbox_bundle_hash": "sha256:7c2e"}}}], "nope": 1}`,
 		wantErr:  true,
 	}, {
 		name:     "valid file",
-		contents: `{"defaultRuntime": {"sandbox_bundle_hash": "sha256:7c2e"}, "restorableRuntimes": [{"sandbox_bundle_hash": "sha256:41ab"}]}`,
-		want: &File{
-			DefaultRuntime:     Attributes{"sandbox_bundle_hash": "sha256:7c2e"},
-			RestorableRuntimes: []Attributes{{"sandbox_bundle_hash": "sha256:41ab"}},
-		},
+		contents: `{"sandboxClasses": [{"sandboxClass": "gvisor", "defaultRuntime": {"version": {"sandbox_bundle_hash": "sha256:7c2e"}}, "restorableRuntimes": [{"version": {"sandbox_bundle_hash": "sha256:41ab"}}]}]}`,
+		want: &File{SandboxClasses: []Class{{
+			SandboxClass:       "gvisor",
+			DefaultRuntime:     Runtime{Version: Attributes{"sandbox_bundle_hash": "sha256:7c2e"}},
+			RestorableRuntimes: []Runtime{{Version: Attributes{"sandbox_bundle_hash": "sha256:41ab"}}},
+		}}},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

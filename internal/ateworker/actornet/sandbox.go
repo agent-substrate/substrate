@@ -98,6 +98,9 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 			_ = netns.RemoveNamed(actorNSName)
 		}
 	}()
+	if err := netns.Do(ctx, actorNS, prepareNamespace); err != nil {
+		return nil, err
+	}
 
 	// Without a veth, atunnel shares the namespace with the runtime's tap.
 	atunnelNS := actorNS
@@ -114,7 +117,7 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 		}()
 		atunnelNS = outer
 	}
-	if err := setupGatewaySide(ctx, atunnelNS, cfg.EgressPort); err != nil {
+	if err := installEgressRules(atunnelNS, cfg.EgressPort); err != nil {
 		return nil, err
 	}
 
@@ -123,6 +126,59 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 		RuntimeNetNS: actorNS,
 		GatewayNetNS: atunnelNS,
 	}, nil
+}
+
+// prepareNamespace pins sandboxSysctls and brings up lo. It must run before
+// the namespace has any link but lo: a link copies conf/default when it is
+// created, and a later write to conf/default does not reach links whose
+// settings the node had set explicitly.
+func prepareNamespace(context.Context) error {
+	if err := netns.SetSysctls(sandboxSysctls...); err != nil {
+		return err
+	}
+	// lo carries the namespace's own traffic. gVisor builds the actor's
+	// loopback from it.
+	return linkUp("lo")
+}
+
+// sandboxSysctls are set in every sandbox namespace, in this order. A new
+// namespace copies its IPv4 conf/all and conf/default from the node, where
+// kube-proxy and CNI plugins set their own values, and takes the kernel's
+// IPv6 defaults. Neither suits a link with an untrusted actor on the other end.
+var sandboxSysctls = []netns.Sysctl{
+	// atunnel answers the actor's DNS on 53, and the worker holds no
+	// CAP_NET_BIND_SERVICE. Per-namespace, so it grants nothing outside.
+	{Key: "net/ipv4/ip_unprivileged_port_start", Value: "0"},
+	// Nothing in a sandbox namespace routes. The forward chain in
+	// installEgressRules backs this up.
+	{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv4/conf/default/forwarding", Value: "0"},
+	{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv6/conf/default/forwarding", Value: "0"},
+	// conf/all/accept_redirects defaults to 1 and the kernel sets it back to
+	// 1 whenever conf/all/forwarding changes to 0, so it comes after
+	// forwarding. With forwarding off the kernel takes ICMP redirects when
+	// either conf/all or the interface allows them.
+	{Key: "net/ipv4/conf/all/accept_redirects", Value: "0"},
+	{Key: "net/ipv4/conf/default/accept_redirects", Value: "0"},
+	// kube-proxy's iptables mode enables this on nodes. It would deliver
+	// actor packets addressed to 127.0.0.0/8 to sockets in the gateway
+	// namespace.
+	{Key: "net/ipv4/conf/all/route_localnet", Value: "0"},
+	{Key: "net/ipv4/conf/default/route_localnet", Value: "0"},
+	// Drop packets from the actor that claim a gateway address as their
+	// source, carry a source route, or come from outside the /30.
+	{Key: "net/ipv4/conf/all/accept_local", Value: "0"},
+	{Key: "net/ipv4/conf/default/accept_local", Value: "0"},
+	{Key: "net/ipv4/conf/all/accept_source_route", Value: "0"},
+	{Key: "net/ipv4/conf/default/accept_source_route", Value: "0"},
+	{Key: "net/ipv4/conf/all/rp_filter", Value: "1"},
+	{Key: "net/ipv4/conf/default/rp_filter", Value: "1"},
+	// Don't take router advertisements or redirects from the actor. IPv6
+	// reads both only from the link's own copy, which it takes from
+	// conf/default when the link is created.
+	{Key: "net/ipv6/conf/default/accept_ra", Value: "0"},
+	{Key: "net/ipv6/conf/default/accept_redirects", Value: "0"},
 }
 
 // setupVethPair creates the gateway namespace and the veth pair joining it to
@@ -141,7 +197,10 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 	}()
 
 	// Keep the kernel-owned peer outside gVisor's namespace.
-	if err := netns.Do(ctx, outer, func(context.Context) error {
+	if err := netns.Do(ctx, outer, func(ctx context.Context) error {
+		if err := prepareNamespace(ctx); err != nil {
+			return err
+		}
 		veth := &netlink.Veth{
 			LinkAttrs: netlink.LinkAttrs{Name: gatewayVethName},
 			PeerName:  ActorVethName,
@@ -171,10 +230,6 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 
 	// gVisor imports these addresses and routes into its network stack.
 	if err := netns.Do(ctx, actorNS, func(context.Context) error {
-		// Loopback lets the actor reach its own address.
-		if err := linkUp("lo"); err != nil {
-			return err
-		}
 		eth0, err := netlink.LinkByName(ActorVethName)
 		if err != nil {
 			return err
@@ -203,26 +258,12 @@ func linkUp(name string) error {
 	return netlink.LinkSetUp(link)
 }
 
-// setupGatewaySide brings up lo and puts atunnel in front of the actor's TCP.
-func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) error {
-	if err := netns.Do(ctx, ns, func(context.Context) error {
-		// atunnel answers the actor's DNS on 53, and the worker holds no
-		// CAP_NET_BIND_SERVICE.
-		if err := netns.AllowUnprivilegedPorts(); err != nil {
-			return err
-		}
-		return linkUp("lo")
-	}); err != nil {
-		return err
-	}
-	return installEgressRules(ns, egressPort)
-}
-
 // installEgressRules rejects link-local traffic before it reaches the egress PEP,
 // then redirects other TCP egress to atunnel. The actor's own /30 is excluded
 // from both rules so ingress replies and DNS reach their local sockets.
 func installEgressRules(ns netns.Handle, egressPort uint16) error {
 	const (
+		icmpNetUnreachable                          = 0
 		icmpDestinationAdministrativelyProhibited   = 13
 		icmpv6DestinationAdministrativelyProhibited = 1
 	)
@@ -252,6 +293,13 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 		if family.tableFamily == nftables.TableFamilyIPv4 {
 			ipv4Table = table
 		}
+		// Backs up the forwarding sysctls: nothing in this namespace is routed.
+		dropPolicy := nftables.ChainPolicyDrop
+		c.AddChain(&nftables.Chain{
+			Name: "forward", Table: table, Type: nftables.ChainTypeFilter,
+			Hooknum: nftables.ChainHookForward, Priority: nftables.ChainPriorityFilter,
+			Policy: &dropPolicy,
+		})
 		filter := c.AddChain(&nftables.Chain{
 			Name: "disallowed-egress", Table: table, Type: nftables.ChainTypeFilter,
 			Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityRaw,
@@ -277,6 +325,15 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: mask, Xor: make([]byte, family.addressLen)},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: address},
 				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: family.rejectCode},
+			)
+			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
+		}
+		if family.tableFamily == nftables.TableFamilyIPv4 {
+			// With forwarding off, the kernel drops unroutable packets silently instead
+			// of returning ICMP net unreachable. Reject non-TCP egress leaving the /30
+			// so UDP or ping fails fast rather than waiting out a timeout.
+			expressions := append(l4ProtocolNotEqual(unix.IPPROTO_TCP),
+				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: icmpNetUnreachable},
 			)
 			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
 		}

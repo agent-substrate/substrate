@@ -19,10 +19,11 @@ import (
 	"fmt"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/hardware"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/labels"
@@ -64,7 +65,7 @@ func recordActorCrash(ctx context.Context, attrs []attribute.KeyValue) {
 // used to seed zero-valued series). Worker counts are spatially summable (over
 // states = pool size, over pools = fleet), which is the UpDownCounter contract; a
 // gauge would be wrong for a value meant to be summed.
-func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker, error), listPools func(labels.Selector) ([]*atev1alpha1.WorkerPool, error)) error {
+func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapi.Worker, error), listPools func(labels.Selector) ([]*atev1.WorkerPool, error)) error {
 	counter, err := meter.Int64ObservableUpDownCounter(
 		workerpoolWorkersMetric,
 		metric.WithUnit("{worker}"),
@@ -89,7 +90,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 			for _, p := range pools {
 				class := string(p.Spec.DefaultSandboxClass())
 				if class == "" {
-					class = string(atev1alpha1.SandboxClassGvisor)
+					class = string(atev1.SandboxClassGvisor)
 				}
 				for _, state := range workerStates {
 					tally[key{p.Namespace, p.Name, state, class}] = 0
@@ -98,11 +99,11 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := workerState(w)
-			// CreateWorker accepts an empty class, as the field is optional.
-			// Report it as unknown, not as the pool's class: the scheduler puts
-			// no actor on a worker that offers no class, thus the pool's series
-			// must not count it as free capacity.
-			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
+			// A Worker has no sandbox class until its worker registers with
+			// WorkerService. Report it as unknown, not as the pool's class: the
+			// scheduler puts no actor on a worker that offers no class, thus
+			// the pool's series must not count it as free capacity.
+			class := ateattr.NormalizeSandboxClass(hardware.SandboxClass(w.GetStatus()))
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {
@@ -130,9 +131,9 @@ var workerStates = []string{
 
 // workerState counts actor slots only. A capacity not yet reported is
 // unschedulable, not full.
-func workerState(w *ateapipb.Worker) string {
+func workerState(w *ateapi.Worker) string {
 	capacity := w.GetStatus().GetCapacity().GetActors()
-	if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE || capacity <= 0 {
+	if w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE || capacity <= 0 {
 		return ateattr.WorkerStateUnschedulable
 	}
 	switch allocated := w.GetStatus().GetAllocated().GetActors(); {
@@ -201,15 +202,15 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
-// lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
+// lifecycleOpAttrs builds the resume/suspend/revert dimensions from
 // workflow state. Nil-safe, and omits the template, pool, sandbox-class,
 // snapshot-kind and snapshot-fidelity labels until they are known so a failure
 // before the load/assign/restore steps never emits an empty-string series.
-// snapshotKind is empty for suspend/pause, which do not restore; snapshotScope
-// applies to all three and separates a full restore from a data-only one of the
-// same kind.
+// snapshotKind is empty for suspend, which does not restore; snapshotScope
+// applies to resume and suspend and separates a full restore from a data-only
+// one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
-func lifecycleOpAttrs(actor *ateapipb.Actor, snapshotKind, snapshotScope string) []attribute.KeyValue {
+func lifecycleOpAttrs(actor *ateapi.Actor, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
 	if actor != nil {
 		attrs = append(attrs,

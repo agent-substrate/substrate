@@ -15,11 +15,21 @@
 package controlapi
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 func TestMain(m *testing.M) {
+	// Most tests store snapshots under their template's storageLocation, which
+	// is honored only with this gate. Tests that need it off call
+	// preview.InitForTest.
+	if err := preview.Init(string(preview.GatePerTemplateSnapshotLocation)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	storetest.RunTests(m)
 }

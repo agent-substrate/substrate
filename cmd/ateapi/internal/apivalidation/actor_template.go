@@ -18,49 +18,51 @@ import (
 	"context"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
+func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapi.CreateActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
+func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapi.GetActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
+func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapi.ListActorTemplatesRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
+func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapi.DeleteActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
+func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
 	op := MakeUpdateOp(ctx)
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
-// that span more than one field of a template: container volume mounts must
-// reference volumes the template declares.
-func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
+// that span more than one field of a template.
+func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
+	if value.GetGoldenEgressPolicy() != nil && value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+		errs = append(errs, field.Forbidden(fldPath.Child("golden_egress_policy"), "requires golden snapshots to be enabled"))
+	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true
@@ -83,16 +85,13 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 
 // ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
 // limit, which the scheduler books against worker capacity.
-func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
-	set := sets.New[string]()
-	for _, l := range value.GetLimits() {
-		set.Insert(l.GetName())
-	}
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ResourceRequirements) field.ErrorList {
 	var errs field.ErrorList
-	for _, name := range []string{resources.ResourceCPU, resources.ResourceMemory} {
-		if !set.Has(name) {
-			errs = append(errs, field.Required(fldPath.Child("limits"), "must set a "+name+" limit"))
-		}
+	if value.GetLimits().GetCpuMillicores() == 0 {
+		errs = append(errs, field.Required(fldPath.Child("limits", "cpu_millicores"), ""))
+	}
+	if value.GetLimits().GetMemoryBytes() == 0 {
+		errs = append(errs, field.Required(fldPath.Child("limits", "memory_bytes"), ""))
 	}
 	return errs
 }
@@ -107,7 +106,7 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 
 // ValidateCustom_Container_VolumeMounts rejects mounts that nest under one
 // another. Mount-path uniqueness is enforced by the list key.
-func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
+func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapi.VolumeMount) field.ErrorList {
 	paths := make([]string, len(value))
 	for i, m := range value {
 		paths[i] = m.GetMountPath()
@@ -127,7 +126,7 @@ func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Op
 // actor_metadata entry and requires every projected file path to be unique
 // across all data sources: atelet writes them in order into one tree, so a
 // repeated path silently clobbers the earlier file.
-func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.SystemInfoDataSource) field.ErrorList {
+func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapi.SystemInfoDataSource) field.ErrorList {
 	var errs field.ErrorList
 	seen := sets.New[string]()
 	sawMetadata := false
@@ -166,17 +165,20 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if _, err := resource.ParseQuantity(*value); err != nil {
-		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
-	}
-	return nil
-}
-
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an
 // ActorTemplate's snapshotConfig.location is a well-formed
 // URI with a bucket, so a bad location fails fast.
-func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+//
+// The field is ignored while the PerTemplateSnapshotLocation gate is off, so a
+// declarative ifDisabled=forbidden would reject the templates that set it
+// on servers without the gate. Instead, with the gate on, a request that
+// did not opt in to preview features is forbidden from setting it.
+func ValidateCustom_SnapshotConfig_StorageLocation(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) && preview.IsOptedOut(ctx) {
+		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf(
+			"requires a client that opts in to preview features (kubectl ate --preview, or the %s header) while the %s preview gate is enabled",
+			preview.Header, preview.GatePerTemplateSnapshotLocation))}
+	}
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
 	}

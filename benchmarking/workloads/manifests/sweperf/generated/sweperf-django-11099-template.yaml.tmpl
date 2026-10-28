@@ -43,10 +43,8 @@ containers:
 # the measured execution time, so keep it fixed across runs.
 resources:
   limits:
-  - name: cpu
-    quantity: "2"
-  - name: memory
-    quantity: 4Gi
+    cpuMillicores: 2000
+    memoryBytes: 4294967296 # 4Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/sweperf-django-11099/

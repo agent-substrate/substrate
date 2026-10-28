@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -37,8 +39,6 @@ type hostedActor struct {
 	// Attribution is available during boot.
 	attribution resources.ActorAttribution
 	network     *actornet.SandboxSession
-	// resolvConf is the actor's resolver bind source, removed with its network.
-	resolvConf string
 	// Set once the containers exist.
 	session *workloadSession
 	// usage is this activation's epoch, CPU baseline, and latest sample.
@@ -48,6 +48,22 @@ type hostedActor struct {
 	// ctx is canceled when the actor is replaced or unhosted.
 	ctx    context.Context
 	cancel context.CancelFunc
+	// stopping is set before ateworker itself stops the sandbox, so watchSandbox
+	// can tell that exit from a crash.
+	stopping atomic.Bool
+	// sandbox pins the sandbox process from the moment runsc creates it, so
+	// nothing that waits on it later can be fooled by a reused pid. Nil if it
+	// could not be pinned. Set once, under the actor's lock.
+	sandbox *sandboxProcess
+	// memoryLimit is the sandbox leaf's memory.high, or 0 while watchMemory
+	// should leave it alone.
+	memoryLimit atomic.Uint64
+	// oomKilled is set before watchMemory kills the sandbox.
+	oomKilled atomic.Bool
+	// memoryMu is held while watchMemory checks or kills the sandbox, and
+	// guards memoryWatch.
+	memoryMu    sync.Mutex
+	memoryWatch cgroup.MemoryWatch
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
@@ -59,6 +75,12 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 	if old, ok := s.actors[attribution.UID]; ok {
 		stale = old.network
 		old.cancel()
+		// the old activation's sandbox exiting from here on is not a crash
+		old.stopping.Store(true)
+		if old.sandbox != nil {
+			old.sandbox.Close()
+			old.sandbox = nil
+		}
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
@@ -103,17 +125,8 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		return nil, fmt.Errorf("while setting up the sandbox network: %w", err)
 	}
 
-	// Use the actor's gateway as its DNS resolver.
-	resolvConf, err := actorResolvConf(actorDirs)
-	if err != nil {
-		_ = session.Close(ctx)
-		evict()
-		return nil, err
-	}
-
 	s.actorsMu.Lock()
 	hosted.network = session
-	hosted.resolvConf = resolvConf
 	s.actorsMu.Unlock()
 	return hosted, nil
 }
@@ -138,7 +151,12 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		s.actorsMu.Unlock()
 	}()
 
-	removeActorResolvConf(ctx, hosted.resolvConf)
+	s.actorsMu.Lock()
+	if hosted.sandbox != nil {
+		hosted.sandbox.Close()
+		hosted.sandbox = nil
+	}
+	s.actorsMu.Unlock()
 	if hosted.network == nil {
 		return nil
 	}
@@ -147,6 +165,18 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		return err
 	}
 	return nil
+}
+
+// pinSandbox pins the actor's sandbox, which runsc has just created.
+func (s *AteWorkerService) pinSandbox(ctx context.Context, hosted *hostedActor, actorDirs *ateworkerpb.ActorDirs) {
+	sandbox, err := openSandboxProcess(actorDirs)
+	if err != nil {
+		slog.WarnContext(ctx, "Cannot pin the sandbox process", slog.String("actorUID", hosted.attribution.UID), slog.Any("err", err))
+		return
+	}
+	s.actorsMu.Lock()
+	hosted.sandbox = sandbox
+	s.actorsMu.Unlock()
 }
 
 // lookupActor returns the actor or nil without taking its lifecycle lock.

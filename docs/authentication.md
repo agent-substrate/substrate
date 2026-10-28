@@ -4,7 +4,6 @@
 configured with the file passed to `--authentication-config`:
 
 ```yaml
-actorIdentityJWTProvider: kubernetes
 jwtProviders:
 - name: kubernetes
   issuer: https://kubernetes.default.svc.cluster.local
@@ -23,11 +22,10 @@ Provider names and issuers must be unique. `issuer` must be an HTTPS URL and
 matches. `certificateAuthorityFile` and `discoveryTokenFile` are optional and
 are needed for OIDC discovery against some private Kubernetes API servers.
 
-`actorIdentityJWTProvider` identifies the provider allowed to call
-`ActorIdentity.MintJWT`. What an authenticated caller may do is decided by
-authorization; see [authorization.md](authorization.md). Its principal ID does
-not record which provider issued the token, so only configure providers you
-trust not to issue a token whose subject is another principal's ID.
+What an authenticated caller may do is decided by authorization; see
+[authorization.md](authorization.md). Its principal ID does not record which
+provider issued the token, so only configure providers you trust not to issue
+a token whose subject is another principal's ID.
 
 ## Google Cloud CLI tokens
 

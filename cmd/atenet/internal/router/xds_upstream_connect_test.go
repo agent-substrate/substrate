@@ -44,8 +44,9 @@ import (
 func upstreamConnectSnapshot(t *testing.T) *cachev3.Snapshot {
 	t.Helper()
 	server := NewXdsServer(18000)
-	server.SetConfig(8085, 50053, "127.0.0.1")
-	server.SetConnectPorts(8081, 0)
+	server.SetConfig(50053, "127.0.0.1")
+	server.SetConnectTLSPort(8444)
+	setIngressTLS(server)
 	server.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem")
 	server.SetUpstreamConnect(true)
 	if err := server.UpdateSnapshot(); err != nil {
@@ -89,12 +90,20 @@ func TestUpstreamConnectFlag(t *testing.T) {
 			wantErr: "--upstream-connect=false",
 		},
 	}
+	caPath, certPath := writeTestTLSMaterial(t)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg routerConfig
 			fs := pflag.NewFlagSet("router", pflag.ContinueOnError)
 			bindRouterFlags(fs, &cfg)
-			if err := fs.Parse(append([]string{"--mode=ingress", "--otlp-collector-address="}, tc.args...)); err != nil {
+			args := []string{
+				"--mode=ingress",
+				"--otlp-collector-address=",
+				"--envoy-cert-path=" + certPath,
+				"--ingress-client-ca-file=" + caPath,
+				"--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/demo/sa/client",
+			}
+			if err := fs.Parse(append(args, tc.args...)); err != nil {
 				t.Fatalf("parsing flags: %v", err)
 			}
 			err := cfg.validate()
@@ -175,7 +184,7 @@ func TestXdsServer_UpstreamConnectResources(t *testing.T) {
 	// The tunnel filter copies ext_proc's decision, and the router picks a
 	// tunnel by it. The worker identity filter follows it (see
 	// TestXdsServer_WorkerIdentityFilter).
-	for _, name := range []string{IngressHTTPListener, MainInternalName} {
+	for _, name := range []string{IngressHTTPSListener, MainInternalName} {
 		hcm := &hcmv3.HttpConnectionManager{}
 		if err := listeners[name].(*listenerv3.Listener).GetFilterChains()[0].GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
 			t.Fatalf("listener %s: unmarshal HCM: %v", name, err)
@@ -356,7 +365,7 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 		}
 		return opts
 	}
-	checkCircuitBreakers := func(t *testing.T, c *clusterv3.Cluster) {
+	checkCircuitBreakers := func(t *testing.T, c *clusterv3.Cluster, want uint32) {
 		t.Helper()
 		limits := c.GetCircuitBreakers().GetThresholds()[0]
 		for name, got := range map[string]uint32{
@@ -364,8 +373,8 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 			"max_pending_requests": limits.GetMaxPendingRequests().GetValue(),
 			"max_requests":         limits.GetMaxRequests().GetValue(),
 		} {
-			if got != tunnelCircuitBreakerLimit {
-				t.Errorf("cluster %s %s = %d, want %d", c.GetName(), name, got, tunnelCircuitBreakerLimit)
+			if got != want {
+				t.Errorf("cluster %s %s = %d, want %d", c.GetName(), name, got, want)
 			}
 		}
 	}
@@ -384,7 +393,7 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 		if got := opts.GetCommonHttpProtocolOptions().GetIdleTimeout().AsDuration(); got != tunnelIdleTimeout {
 			t.Errorf("http2=%v: tunnel idle timeout = %v, want %v", http2, got, tunnelIdleTimeout)
 		}
-		checkCircuitBreakers(t, c)
+		checkCircuitBreakers(t, c, tunnelCircuitBreakerLimit)
 	}
 
 	x := NewXdsServer(0)
@@ -410,5 +419,5 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	if got := protocolOptions(t, c).GetExplicitHttpConfig().GetHttp2ProtocolOptions(); got == nil {
 		t.Error("actor_connect is not HTTP/2; tunnels to one worker would each need a connection")
 	}
-	checkCircuitBreakers(t, c)
+	checkCircuitBreakers(t, c, actorConnectCircuitBreakerLimit)
 }

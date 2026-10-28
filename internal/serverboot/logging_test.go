@@ -27,10 +27,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actorevent"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/contextlogging"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestResolveLogsExporter pins the logs names on top of the shared rules: otlp
@@ -284,7 +284,7 @@ func TestInitLoggerInstallsRedactingHandler(t *testing.T) {
 	}
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.secret-token"
-	slog.Info("Handle RPC", slog.Any("resp", &ateapipb.MintActorJwtResponse{ActorJwt: token}))
+	slog.Info("Handle RPC", slog.Any("resp", &ateapi.MintActorJwtResponse{ActorJwt: token}))
 	got := buf.String()
 	if strings.Contains(got, token) {
 		t.Fatalf("default logger wrote a debug_redact field: %s", got)

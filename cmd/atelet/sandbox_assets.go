@@ -33,20 +33,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -60,16 +57,11 @@ const sandboxManifestName = "manifest.json"
 // ponytail: 8GiB ceiling, make it a flag if a rootfs ever needs more.
 var maxAssetBytes int64 = 8 << 30
 
-const (
-	// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.zstd). The
-	// tarball carries `runsc` together with the `gvisor-bin/` helper binaries,
-	// so it is extracted into a content-addressed directory rather than as a
-	// single file.
-	gvisorAssetName = "gvisor"
-
-	// runscAssetName is the legacy single-binary gVisor asset.
-	runscAssetName = "runsc"
-)
+// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.zstd). The
+// tarball carries `runsc` together with the `gvisor-bin/` helper binaries,
+// so it is extracted into a content-addressed directory rather than as a
+// single file.
+const gvisorAssetName = "gvisor"
 
 // assetEntry is one content-addressed sandbox asset (url + sha256).
 type assetEntry struct {
@@ -84,20 +76,14 @@ func (e assetEntry) displayURL() string {
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
-// the local node's architecture: the sandbox class and pause image plus the
-// asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
-// asset; records written before the tarball release mechanism use a bare
-// "runsc" asset).
+// the local node's architecture: the sandbox class plus the asset set keyed by
+// asset name (gVisor uses a single "gvisor" release-tarball asset).
 // It is both the per-actor on-node record (written at Run/Restore, read at
 // Checkpoint) and the snapshot manifest (written at Checkpoint, read at
 // Restore).
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
-	// PauseImage is the root sandbox container's image. It is recorded here
-	// rather than taken from the request at Restore so a snapshot is rebuilt
-	// with the same sandbox it was captured from. Only gVisor has one.
-	PauseImage string `json:"pauseImage,omitempty"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace              string `json:"atespace,omitempty"`
@@ -120,47 +106,19 @@ type sandboxAssetsRecord struct {
 	// is knowable from the manifest alone. Empty in the on-node record written at
 	// Run/Restore.
 	Fidelity string `json:"fidelity,omitempty"`
-}
-
-// recordFromRequest projects a request's per-architecture SandboxAssets onto the
-// local node's architecture.
-func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error) {
-	if sa == nil {
-		return nil, fmt.Errorf("missing sandbox_assets")
-	}
-	arch := runtime.GOARCH
-	archAssets := sa.GetAssets()[arch]
-	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
-		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
-	}
-	if err := checkPauseImage(sa.GetSandboxClass(), sa.GetPauseImage()); err != nil {
-		return nil, fmt.Errorf("invalid sandbox_assets: %w", err)
-	}
-	rec := &sandboxAssetsRecord{
-		SandboxClass: sa.GetSandboxClass(),
-		PauseImage:   sa.GetPauseImage(),
-		Assets:       make(map[string]assetEntry, len(archAssets.GetFiles())),
-	}
-	for name, f := range archAssets.GetFiles() {
-		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
-	}
-	return rec, nil
-}
-
-// checkPauseImage requires a pause image for gVisor, the only sandbox class
-// that runs a pause container.
-func checkPauseImage(sandboxClass, pauseImage string) error {
-	if sandboxClass == string(v1alpha1.SandboxClassGvisor) && pauseImage == "" {
-		return fmt.Errorf("gvisor sandbox has no pauseImage")
-	}
-	return nil
+	// BootID is the node's boot ID when atelet wrote this local copy of the
+	// snapshot. Not every file of a local copy is synced to disk, so one
+	// written before the node last rebooted may be torn and is deleted on
+	// reboot. Set only in the manifest of a local copy, never in an uploaded
+	// one.
+	BootID string `json:"bootId,omitempty"`
 }
 
 // ensureSandboxAssets stages every asset in the record under dstDir, named
 // by asset name, and returns a map of asset name to the local path the worker
 // runs it from. gVisor has a single "gvisor" release-tarball asset (staged
-// as a directory, the path is its runsc) or a bare "runsc" binary; the
-// micro-VM runtime has several (kata-shim, cloud-hypervisor, ...).
+// as a directory, the path is its runsc); the micro-VM runtime has several
+// (kata-shim, cloud-hypervisor, ...).
 //
 // Each asset is served from the node's content-addressed asset cache as a
 // hard link, so the download runs once per node, concurrent callers for one
@@ -174,6 +132,14 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return nil, wrapFileSystemErr("while creating sandbox assets dir", err)
 	}
+	return s.stageSandboxAssets(ctx, rec, dstDir)
+}
+
+// stageSandboxAssets is ensureSandboxAssets into a dstDir that exists: it
+// creates nothing above the assets, so a caller whose dstDir may be removed
+// under it, as the prewarmer's is when its worker goes, fails instead of
+// recreating the directory.
+func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
 		if !plainAssetName(name) {
@@ -203,19 +169,10 @@ func plainAssetName(name string) bool {
 	return name != "" && name != "." && name == filepath.Base(name) && filepath.IsLocal(name)
 }
 
-// runscAssetNames are the assets that carry the gVisor `runsc` binary, most
-// preferred first.
-var runscAssetNames = []string{gvisorAssetName, runscAssetName}
-
 // runscPathFor returns the local path of the gVisor `runsc` binary from a
 // fetched asset-path map, or "" if the runtime has none (e.g. micro-VM).
 func runscPathFor(paths map[string]string) string {
-	for _, name := range runscAssetNames {
-		if p := paths[name]; p != "" {
-			return p
-		}
-	}
-	return ""
+	return paths[gvisorAssetName]
 }
 
 // assetKey is the asset's cache key: its content hash, which the key
@@ -471,7 +428,7 @@ func (s *Atelet) downloadAnonymous(ctx context.Context, entry assetEntry, shown,
 // signed URL or other credential in a form no scrubber can recognize.
 func (s *Atelet) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string) codes.Code {
 	slog.DebugContext(ctx, "Fetching sandbox asset through the object-store plugin", slog.String("url", shown))
-	_, err := s.assetPlugin.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
+	_, err := s.assetPlugin.FetchAsset(ctx, &objectstore.FetchAssetRequest{
 		AssetUri:  entry.URL,
 		Sha256:    entry.SHA256,
 		WritePath: path,
@@ -489,7 +446,7 @@ func (s *Atelet) pluginError(ctx context.Context, entry assetEntry, shown string
 	switch code {
 	case codes.Unimplemented:
 		msg = fmt.Sprintf("the object-store plugin at %s does not serve %s; private sandbox assets need a plugin that implements it",
-			s.pluginSocket, objectstorev1.AssetProvider_ServiceDesc.ServiceName)
+			s.pluginSocket, objectstore.AssetProvider_ServiceDesc.ServiceName)
 	case codes.Unavailable:
 		newErr, msg = apierror.Unavailable, fmt.Sprintf("the object-store plugin at %s is unavailable", s.pluginSocket)
 	case codes.Canceled, codes.DeadlineExceeded:
@@ -709,9 +666,6 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
-	}
-	if err := checkPauseImage(rec.SandboxClass, rec.PauseImage); err != nil {
-		return nil, fmt.Errorf("invalid sandbox record/manifest: %w", err)
 	}
 	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
 		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)

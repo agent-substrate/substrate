@@ -16,14 +16,26 @@
 
 The runner Job wraps benchmarking/locust/runner.py, which drives locust
 (and boomer for glutton tests) and uploads its own results.
+
+An optional `controlPlane:` block shapes ate-api-server and Postgres for a
+capacity run (see controlplane.py); without it pre_test leaves the cluster
+as installed.
 """
 
 import os
 from typing import Any
 
+import controlplane
 from util import build_and_push
 
 TEST_TYPE = "locust"
+
+
+def control_plane_config(test: dict[str, Any]) -> dict[str, Any] | None:
+    """The test's `controlPlane:` block merged over its defaults, or None."""
+    if "controlPlane" not in test:
+        return None
+    return controlplane.config(test["controlPlane"])
 
 
 def validate(test: dict[str, Any]) -> None:
@@ -31,6 +43,12 @@ def validate(test: dict[str, Any]) -> None:
     for field in ("file", "duration", "users"):
         if field not in test:
             raise ValueError(f"locust test {name!r} missing {field!r}")
+    if "controlPlane" not in test:
+        return
+    try:
+        controlplane.validate(test["controlPlane"])
+    except ValueError as e:
+        raise ValueError(f"locust test {name!r}: {e}") from None
 
 
 def build_image(commit: str) -> str:
@@ -43,7 +61,11 @@ def build_image(commit: str) -> str:
 
 
 def pre_test(test: dict[str, Any]) -> None:
-    """Nothing to shape on the cluster before a locust run."""
+    """With a `controlPlane:` block, shape the control plane for the run."""
+    cfg = control_plane_config(test)
+    if cfg is None:
+        return
+    controlplane.shape(cfg)
 
 
 def job_tmpl(manifests_dir: str) -> str:

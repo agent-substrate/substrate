@@ -309,6 +309,97 @@ func TestClientDialContextHTTP2ReconnectsAfterConnectionClose(t *testing.T) {
 	}
 }
 
+func TestClientDialContextHTTP2RetiresConnectionAfterRenewal(t *testing.T) {
+	ca := newTestCA(t)
+	serials := make(chan string, 4)
+	gatewayAddress, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serials <- r.TLS.PeerCertificates[0].SerialNumber.String()
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = io.Copy(w, r.Body)
+	}))
+
+	issue := func() *tls.Certificate {
+		cert := ca.issue(t,
+			"spiffe://substrate-actor.local/worker-for-actor/team/actor",
+			[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		)
+		return &cert
+	}
+	var current atomic.Pointer[tls.Certificate]
+	current.Store(issue())
+	trustPath := filepath.Join(t.TempDir(), "trust.pem")
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstConnClosed := make(chan struct{})
+	var tcpDials atomic.Int32
+	client, err := NewClient(ClientConfig{
+		GatewayAddress:       "127.0.0.1:1",
+		ServerName:           "egress.test",
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return current.Load(), nil },
+		TrustBundlePath:      trustPath,
+	}, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddress)
+		if err != nil {
+			return nil, err
+		}
+		if tcpDials.Add(1) == 1 {
+			return &closeNotifyingConn{Conn: c, closed: firstConnClosed}, nil
+		}
+		return c, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	before, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer before.Close()
+	first := receiveWithin(t, serials, "CONNECT before the renewal")
+
+	current.Store(issue())
+
+	after, err := client.DialContext(context.Background(), "192.0.2.11:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	if second := receiveWithin(t, serials, "CONNECT after the renewal"); second == first {
+		t.Errorf("CONNECT after the renewal presented certificate %s, want the renewed one", second)
+	}
+	if dials := tcpDials.Load(); dials != 2 {
+		t.Errorf("tcpDials = %d, want 2", dials)
+	}
+	select {
+	case <-firstConnClosed:
+		t.Fatal("first connection closed while its stream was still open")
+	default:
+	}
+
+	if _, err := io.WriteString(before, "still-open"); err != nil {
+		t.Fatal(err)
+	}
+	if cw, ok := before.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+	got, err := io.ReadAll(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "still-open" {
+		t.Errorf("stream opened before the renewal got %q, want still-open", got)
+	}
+	_ = before.Close()
+
+	receiveWithin(t, firstConnClosed, "retired connection to close after its last stream finished")
+}
+
 func TestClientDialContextHTTP2Deadlines(t *testing.T) {
 	ca := newTestCA(t)
 	releaseServerSend := make(chan struct{})
@@ -832,4 +923,151 @@ func issueDNSCertificate(t *testing.T, ca *testCA, dnsName string) tls.Certifica
 		t.Fatal(err)
 	}
 	return cert
+}
+
+// serveTestH2EchoGateway serves an HTTP/2 CONNECT gateway that echoes each
+// stream back until the client ends it.
+func serveTestH2EchoGateway(t *testing.T, ca *testCA) string {
+	t.Helper()
+	address, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		rc := http.NewResponseController(w)
+		_ = rc.Flush()
+		buf := make([]byte, 8<<10)
+		for {
+			n, err := r.Body.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return
+				}
+				_ = rc.Flush()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}))
+	return address
+}
+
+func TestCopyBothWaysHTTP2Stream(t *testing.T) {
+	ca := newTestCA(t)
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(serveTestH2EchoGateway(t, ca))))
+	upstream, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	app, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	downstream, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer downstream.Close()
+
+	copied := make(chan struct{})
+	go func() {
+		copyBothWays(downstream, upstream)
+		close(copied)
+	}()
+
+	// Mix write sizes around streamCopy's buffer sizes, then end the stream.
+	var sent []byte
+	for i, size := range []int{1, streamCopySmallBufSize, streamCopySmallBufSize + 1, streamCopyBufSize, 3 << 20} {
+		chunk := make([]byte, size)
+		for j := range chunk {
+			chunk[j] = byte(i + j)
+		}
+		sent = append(sent, chunk...)
+	}
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := app.Write(sent)
+		if err == nil {
+			err = app.(*net.TCPConn).CloseWrite()
+		}
+		writeErr <- err
+	}()
+
+	got, err := io.ReadAll(app)
+	if err != nil {
+		t.Fatalf("reading echo: %v", err)
+	}
+	if err := receiveWithin(t, writeErr, "write to finish"); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	if len(got) != len(sent) || string(got) != string(sent) {
+		t.Fatalf("echo returned %d bytes, want the %d sent", len(got), len(sent))
+	}
+	receiveWithin(t, copied, "copyBothWays to return")
+}
+
+func TestH2StreamConnWriteToStopsOnClose(t *testing.T) {
+	ca := newTestCA(t)
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(serveTestH2EchoGateway(t, ca))))
+	conn, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := conn.(*h2StreamConn)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.writeTo(io.Discard)
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	_ = conn.Close()
+	if err := receiveWithin(t, done, "writeTo to return"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("writeTo after Close = %v, want net.ErrClosed", err)
+	}
+}
+
+func TestH2StreamConnWriteToHonorsReadDeadline(t *testing.T) {
+	ca := newTestCA(t)
+	releaseServerSend := make(chan struct{})
+	gatewayAddress, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = http.NewResponseController(w).Flush()
+		<-releaseServerSend
+		_, _ = io.WriteString(w, "delayed")
+	}))
+	client := newTestClient(t, ca, withDialer(dialFixedAddress(gatewayAddress)))
+	conn, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	stream := conn.(*h2StreamConn)
+
+	if err := conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.writeTo(io.Discard); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("writeTo error = %v, want os.ErrDeadlineExceeded", err)
+	}
+
+	// The timed-out read is still in flight, so writeTo must collect its
+	// result instead of reading the body itself.
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseServerSend)
+	var got strings.Builder
+	if _, err := stream.writeTo(&got); err != nil {
+		t.Fatalf("writeTo after clearing deadline: %v", err)
+	}
+	if got.String() != "delayed" {
+		t.Errorf("got %q, want delayed", got.String())
+	}
 }

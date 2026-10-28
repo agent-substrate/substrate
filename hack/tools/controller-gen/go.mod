@@ -2,6 +2,8 @@ module go.ate.dev/substrate/hack/tools/controller-gen
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect

@@ -47,11 +47,6 @@ func pidFilePath(actorDirs *ateworkerpb.ActorDirs, containerName string) string 
 	return filepath.Join(pidFileDir(actorDirs), containerName+".pid")
 }
 
-// resolvConfPath is the resolver bind source outside the actor's rootfs.
-func resolvConfPath(actorDirs *ateworkerpb.ActorDirs) string {
-	return filepath.Join(actorDirs.GetRootDir(), "resolv.conf")
-}
-
 // resetRunscStateAndPidFileDirs empties both directories for a new activation.
 // runsc can leave mounts behind in its state directory (its null-netns), which
 // must be detached in this mount namespace before they can be removed.

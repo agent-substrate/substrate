@@ -25,13 +25,12 @@ import (
 	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/volume"
-	v1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -168,16 +167,10 @@ func (p *Plugin) DriverName(ctx context.Context) (string, error) {
 
 // CreateVolume maps to CSI Controller CreateVolume.
 func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
-	qty, err := resource.ParseQuantity(req.Capacity)
-	if err != nil {
-		return volume.CreateVolumeResponse{}, fmt.Errorf("failed to parse capacity %q: %w", req.Capacity, err)
-	}
-	capBytes := qty.Value()
-
 	csiReq := &csi.CreateVolumeRequest{
 		Name: req.Name,
 		CapacityRange: &csi.CapacityRange{
-			RequiredBytes: capBytes,
+			RequiredBytes: req.CapacityBytes,
 		},
 		VolumeCapabilities: getStandardCapabilities(),
 		Parameters:         req.Parameters,
@@ -383,9 +376,9 @@ func getStandardCapabilities() []*csi.VolumeCapability {
 }
 
 // CSIDriverConfigGetter provides access to retrieve a CSIDriverConfig by name.
-// Both listersv1alpha1.CSIDriverConfigLister and direct client getters implement this interface.
+// Both atelisters.CSIDriverConfigLister and direct client getters implement this interface.
 type CSIDriverConfigGetter interface {
-	Get(name string) (*v1alpha1.CSIDriverConfig, error)
+	Get(name string) (*atev1.CSIDriverConfig, error)
 }
 
 // NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
@@ -450,7 +443,7 @@ func newCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName 
 	return csiPlugin, nil
 }
 
-func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Config, error) {
+func resolveTLSConfig(cfg *atev1.CSIDriverConfig, paths tlsPaths) (*tls.Config, error) {
 	if cfg == nil || cfg.Spec.TLS == nil || !cfg.Spec.TLS.Enabled {
 		return nil, nil
 	}

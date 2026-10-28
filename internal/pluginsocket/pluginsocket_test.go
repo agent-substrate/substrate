@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -34,7 +34,7 @@ import (
 // slowControl is a ControlProvider whose CleanupSnapshot takes delay, and
 // closes started when a call arrives.
 type slowControl struct {
-	objectstorev1.UnimplementedControlProviderServer
+	objectstore.UnimplementedControlProviderServer
 
 	delay   time.Duration
 	once    sync.Once
@@ -45,11 +45,11 @@ func newSlowControl(delay time.Duration) *slowControl {
 	return &slowControl{delay: delay, started: make(chan struct{})}
 }
 
-func (c *slowControl) CleanupSnapshot(ctx context.Context, _ *objectstorev1.CleanupSnapshotRequest) (*objectstorev1.CleanupSnapshotResponse, error) {
+func (c *slowControl) CleanupSnapshot(ctx context.Context, _ *objectstore.CleanupSnapshotRequest) (*objectstore.CleanupSnapshotResponse, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
 	case <-time.After(c.delay):
-		return &objectstorev1.CleanupSnapshotResponse{}, nil
+		return &objectstore.CleanupSnapshotResponse{}, nil
 	case <-ctx.Done():
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
@@ -60,13 +60,13 @@ func (c *slowControl) CleanupSnapshot(ctx context.Context, _ *objectstorev1.Clea
 type sidecar struct {
 	t       *testing.T
 	path    string
-	control objectstorev1.ControlProviderServer
+	control objectstore.ControlProviderServer
 
 	mu  sync.Mutex
 	srv *grpc.Server
 }
 
-func newSidecar(t *testing.T, control objectstorev1.ControlProviderServer) *sidecar {
+func newSidecar(t *testing.T, control objectstore.ControlProviderServer) *sidecar {
 	t.Helper()
 	// Unix socket paths are length-limited; t.TempDir can exceed that on macOS.
 	dir, err := os.MkdirTemp("", "snapplug")
@@ -87,7 +87,7 @@ func (s *sidecar) start() {
 		return
 	}
 	srv := grpc.NewServer()
-	objectstorev1.RegisterControlProviderServer(srv, s.control)
+	objectstore.RegisterControlProviderServer(srv, s.control)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go srv.Serve(lis)
 	s.mu.Lock()
@@ -109,7 +109,7 @@ func (s *sidecar) stop() {
 
 // dialReady connects to s with the given wait and passes the startup
 // readiness check.
-func (s *sidecar) dialReady(wait time.Duration) (*grpc.ClientConn, objectstorev1.ControlProviderClient) {
+func (s *sidecar) dialReady(wait time.Duration) (*grpc.ClientConn, objectstore.ControlProviderClient) {
 	s.t.Helper()
 	conn, err := Dial(s.path, wait)
 	if err != nil {
@@ -121,7 +121,7 @@ func (s *sidecar) dialReady(wait time.Duration) (*grpc.ClientConn, objectstorev1
 	if err := WaitReady(ctx, conn); err != nil {
 		s.t.Fatalf("WaitReady = %v", err)
 	}
-	return conn, objectstorev1.NewControlProviderClient(conn)
+	return conn, objectstore.NewControlProviderClient(conn)
 }
 
 // lose stops s and waits until conn has seen the plugin go, so the next call
@@ -138,7 +138,7 @@ func (s *sidecar) lose(conn *grpc.ClientConn) {
 	}
 }
 
-var cleanupReq = &objectstorev1.CleanupSnapshotRequest{SnapshotUri: "gs://bucket/root/snap1"}
+var cleanupReq = &objectstore.CleanupSnapshotRequest{SnapshotUri: "gs://bucket/root/snap1"}
 
 // A plugin lost after startup fails a call with Unavailable once the ready
 // wait runs out, not when the caller's deadline does.

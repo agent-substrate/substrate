@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the glutton-storage
+# ActorTemplate (protojson-shaped ateapi.ActorTemplate) for the glutton-storage
 # benchmark workload, created through the ate API by workloads/deploy.sh.
 # Attaches an external volume backed by ${STORAGE_CLASS_NAME}. The DurDir load
 # runs it with --durdir-template glutton-storage.
@@ -24,9 +24,10 @@ workerSelector:
     workload: benchmark-worker
 volumes:
 - name: external-storage
-  externalVolumeTemplate:
-    capacity: 1Gi
-    storageClassName: ${STORAGE_CLASS_NAME}
+  external:
+    template:
+      capacityBytes: 1073741824 # 1Gi
+      storageClassName: ${STORAGE_CLASS_NAME}
 containers:
 - name: glutton-storage
   image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
@@ -52,10 +53,8 @@ containers:
       port: 80
 resources:
   limits:
-  - name: cpu
-    quantity: "${ACTOR_CPU}"
-  - name: memory
-    quantity: "${ACTOR_MEMORY}"
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-storage/

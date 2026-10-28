@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the luna agent
+# ActorTemplate (protojson-shaped ateapi.ActorTemplate) for the luna agent
 # of the claude-code-multiplex demo; one of three agents sharing the 2-pod
 # pool in claude-code-multiplex.yaml.tmpl. Applied with
 # `kubectl ate create actor-template -f -`; the claude-multiplex-demo
@@ -44,10 +44,8 @@ containers:
 # running tools.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 2Gi
+    cpuMillicores: 1000
+    memoryBytes: 2147483648 # 2Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/claude-multiplex-demo/

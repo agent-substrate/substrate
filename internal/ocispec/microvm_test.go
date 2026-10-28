@@ -15,11 +15,30 @@
 package ocispec
 
 import (
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
+
+// kata's verify_id, see GuestContainerID
+var kataID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]+$`)
+
+func TestGuestContainerID(t *testing.T) {
+	shares := []string{ShareDurable, ShareCSI, ShareSystemInfo}
+	for _, name := range append([]string{"w", "app", strings.Repeat("a", 63)}, shares...) {
+		id := GuestContainerID(name)
+		if !kataID.MatchString(id) {
+			t.Errorf("GuestContainerID(%q) = %q, which kata rejects", name, id)
+		}
+		if slices.Contains(shares, id) {
+			t.Errorf("GuestContainerID(%q) = %q, which collides with a share dir", name, id)
+		}
+	}
+}
 
 // The device allowlist and CPU shares from guestResources are the proven-good
 // kata shape. Overlaying a memory limit must not drop them: a container without
@@ -123,9 +142,9 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 	const declared = 64 * 1024 * 1024
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{
 		Args:      []string{"/app"},
-		Resources: &ateworkerpb.ResourceLimits{MemoryBytes: declared},
+		Resources: &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: declared}},
 	}}})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 
@@ -141,7 +160,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 // RAM is the real ceiling, and a cap equal to the whole guest can never bind.
 func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
 	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
-	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 
@@ -150,5 +169,29 @@ func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
 	}
 	if c := spec.Linux.Resources.CPU; c != nil && c.Quota != nil && *c.Quota > 0 {
 		t.Errorf("cpu quota = %d, want unset for a container that declared none", *c.Quota)
+	}
+}
+
+func TestShapeMicroVM_AllowsLowPortsInTheGuest(t *testing.T) {
+	const portStart = "net.ipv4.ip_unprivileged_port_start"
+
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
+	if _, ok := spec.Linux.Sysctl[portStart]; ok {
+		t.Errorf("Build() set %s; it must be micro-VM only", portStart)
+	}
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	if v := spec.Linux.Sysctl[portStart]; v != "0" {
+		t.Errorf("%s = %q, want \"0\"", portStart, v)
+	}
+
+	preset := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
+	preset.Linux.Sysctl = map[string]string{portStart: "1024"}
+	if err := ShapeMicroVM(preset, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	if v := preset.Linux.Sysctl[portStart]; v != "1024" {
+		t.Errorf("%s = %q, want the caller's value kept", portStart, v)
 	}
 }

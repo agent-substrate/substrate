@@ -58,10 +58,12 @@ ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
 
 ```bash
 # Envoy (default)
-./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
 # agentgateway
-./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway --credential-provider='{"name":"k8s.io"}'
+./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 ```
 
 | | Envoy | agentgateway |
@@ -79,7 +81,8 @@ rejects that option with agentgateway rather than silently omitting it.
 
 - **Egress app (`main.go`)** — the Actor: `POST /` fetches an HTTP(S) URL and returns the status,
   body, and observed protocol. `POST /websocket` probes a `ws` or `wss` origin; `POST /grpc` makes
-  unary and streaming gRPC calls, described below.
+  unary and streaming gRPC calls, described below; `POST /connect` sends a forward proxy an HTTP
+  CONNECT, in the clear or over TLS, and returns its answer.
 - **Egress gateway** — the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
   container started with `--mode=egress`; agentgateway uses its built-in `substrateEgress` policy
   and does not need that sidecar. The installer renders the matching configuration and container.
@@ -104,7 +107,7 @@ rejects that option with agentgateway rather than silently omitting it.
 ## Deploy the demo fixture
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress
+go run ./cmd/ate-setup deploy demo egress
 ```
 
 The install applies the worker pool, creates the `ate-demo-egress` atespace and
@@ -167,16 +170,13 @@ EOF
 # 4. Drive the Actor's egress through the ingress gateway. The gateway caches a
 #    missing policy as deny for 10s (--egress-policy-cache-ttl), so a fetch tried
 #    before step 3 keeps failing for up to that long after the policy appears.
-kubectl -n ate-system port-forward service/atenet-router 8000:80 &
+kubectl ate proxy actor egress-demo 8000:80 -a ate-demo-egress &
 curl -s -X POST http://localhost:8000/ \
-  -H 'ate-target-actor: ate-demo-egress/egress-demo' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
 
-The `ate-target-actor` header selects the Actor receiving this ingress request. The
-URL in the JSON body selects that Actor's egress destination and is unrelated
-to Actor routing.
+The URL in the JSON body selects the Actor's egress destination.
 
 ### What to observe
 
@@ -185,7 +185,7 @@ With Envoy:
 ```bash
 # The egress gateway logs each tunneled CONNECT against the verified peer certificate:
 kubectl -n ate-system logs deploy/atenet-egress -c envoy | grep '\[egress\]'
-#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress/actor/egress-demo … code=200 …
+#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/ate-demo-egress/egress-demo … code=200 …
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress tunnel opened\|egress denied'
@@ -252,5 +252,5 @@ from the cluster, works for a manual run.
 
 ```bash
 ./demos/egress/test-egress.sh --cleanup
-./hack/install-ate.sh --delete-demo-egress
+go run ./cmd/ate-setup delete demo egress
 ```

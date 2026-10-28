@@ -16,6 +16,7 @@ package actoridjwt
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -84,6 +85,11 @@ type SubstrateClaims struct {
 	Atespace  string
 	ActorName string
 	ActorUID  string
+	// Node is the node ate-api-server minted a worker-for-actor token for,
+	// the one holding the actor at that moment. A relying party compares it
+	// with where the actor is when the token is used. Empty on an actor's
+	// own token, which is not tied to a node.
+	Node string
 }
 
 type WireClaims struct {
@@ -118,6 +124,7 @@ type WireSubstrateClaims struct {
 	Atespace  string `json:"atespace,omitempty"`
 	ActorName string `json:"actorName,omitempty"`
 	ActorUID  string `json:"actorUID,omitempty"`
+	Node      string `json:"node,omitempty"`
 }
 
 func ClaimsToWire(claims *Claims) (*WireClaims, error) {
@@ -139,9 +146,13 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		Atespace:  claims.Substrate.Atespace,
 		ActorName: claims.Substrate.ActorName,
 		ActorUID:  claims.Substrate.ActorUID,
+		Node:      claims.Substrate.Node,
 	}
 	switch claims.Kind {
 	case KindActor:
+		if substrate.Node != "" {
+			return nil, errors.New("an actor's own token carries no node")
+		}
 		wire.Actor = substrate
 	case KindWorkerForActor:
 		wire.WorkerForActor = substrate

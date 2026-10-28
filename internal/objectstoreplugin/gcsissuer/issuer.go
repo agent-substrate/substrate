@@ -16,12 +16,13 @@
 // GCS half of the control plugin's credential exchange: actorscope decides what
 // an actor may touch, this package turns that into a credential GCS enforces.
 //
-// The source credential comes from the default credential chain, which on GKE
-// with Workload Identity is the federated token. The downscope package
-// exchanges it at STS with a Credential Access Boundary and returns an access
-// token GCS limits to the boundary. STS reports no lifetime for that token, so
-// the package falls back to the source token's expiry, and the two expire
-// together.
+// The source credential is a token for the snapshot transfer service account,
+// which the pod's own identity impersonates through the IAM Credentials API.
+// GCS audit logs then name that account rather than ate-api-server. The
+// downscope package exchanges the token at STS with a Credential Access
+// Boundary and returns an access token GCS limits to the boundary. STS reports
+// no lifetime for that token, so the package falls back to the source token's
+// expiry, and the two expire together.
 package gcsissuer
 
 import (
@@ -33,11 +34,14 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/google/downscope"
+	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/utils/lru"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
+	"go.ate.dev/substrate/internal/objectstoreplugin/credential"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsboundary"
 )
 
@@ -47,9 +51,8 @@ const (
 	cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
 	// minServeLifetime is the least remaining lifetime a token is cached and
-	// served with, so a transfer never starts on a token about to expire. There
-	// is no mid-transfer refresh.
-	minServeLifetime = 20 * time.Minute
+	// served with, the same on the node plugin's side.
+	minServeLifetime = credential.MinServeLifetime
 	// defaultCacheSize bounds the per-actor cache. A miss costs an exchange,
 	// never correctness.
 	defaultCacheSize = 100_000
@@ -58,32 +61,32 @@ const (
 	stsTimeout = 30 * time.Second
 )
 
-// Token is a downscoped GCS access token and when it expires.
-type Token struct {
-	AccessToken string
-	Expiry      time.Time
-}
-
-// Issuer exchanges the pod's credential for per-actor downscoped tokens and
-// caches them by actor UID.
+// Issuer exchanges the transfer account's token for per-actor downscoped
+// tokens and caches them by actor UID.
 type Issuer struct {
-	source oauth2.TokenSource
-	client *http.Client
-	now    func() time.Time
-	cache  *lru.Cache
+	source     oauth2.TokenSource
+	iamOptions []option.ClientOption
+	client     *http.Client
+	now        func() time.Time
+	cache      *lru.Cache
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
 // tell whether the token covers it.
 type entry struct {
-	token  Token
+	token  credential.Token
 	grants []actorscope.Grant
 }
 
 // Option configures an Issuer.
 type Option func(*Issuer)
 
-// WithTokenSource overrides the source credential, for tests.
+// WithIAMCredentialsOptions configures the IAM Credentials client, for tests.
+func WithIAMCredentialsOptions(opts ...option.ClientOption) Option {
+	return func(i *Issuer) { i.iamOptions = opts }
+}
+
+// WithTokenSource replaces the transfer account's token, for tests.
 func WithTokenSource(ts oauth2.TokenSource) Option { return func(i *Issuer) { i.source = ts } }
 
 // WithHTTPClient overrides the client used for STS, for tests.
@@ -98,10 +101,11 @@ func WithCacheSize(n int) Option {
 	return func(i *Issuer) { i.cache = lru.New(max(n, 1)) }
 }
 
-// New returns an Issuer whose source credential is the default credential
-// chain, unless an option replaces it. The credential keeps refreshing for the
-// Issuer's whole life, so ctx is detached from cancellation.
-func New(ctx context.Context, opts ...Option) (*Issuer, error) {
+// New returns an Issuer whose source credential is a token for the transfer
+// service account with email account. Tests that replace the source with
+// WithTokenSource pass an empty account. The credential keeps refreshing for
+// the Issuer's whole life, so ctx is detached from cancellation.
+func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 	i := &Issuer{
 		client: &http.Client{Timeout: stsTimeout},
 		now:    time.Now,
@@ -111,13 +115,11 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 		o(i)
 	}
 	if i.source == nil {
-		creds, err := google.FindDefaultCredentialsWithParams(context.WithoutCancel(ctx), google.CredentialsParams{
-			Scopes: []string{cloudPlatformScope},
-		})
+		src, err := newTransferAccountSource(context.WithoutCancel(ctx), account, i.iamOptions...)
 		if err != nil {
-			return nil, fmt.Errorf("while loading the default credential: %w", err)
+			return nil, err
 		}
-		i.source = creds.TokenSource
+		i.source = src
 	}
 	return i, nil
 }
@@ -125,14 +127,12 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 // Issue returns a token downscoped to grants for the actor. A cached token is
 // returned while it covers the grants and has at least minServeLifetime left,
 // unless force is set, which mints regardless and is what the node plugin
-// sends after GCS refused a token. A minted token with less than
-// minServeLifetime left is handed out anyway, since a short token beats a
-// failed transfer, but it is not cached. That happens for a stretch at the
-// end of every hour of the source credential's life: the downscoped token
-// expires with its source, and the GKE metadata server serves the same cached
-// source token until shortly before it expires, so no early refresh helps. In
-// that stretch every exchange reaches STS and the node plugin re-exchanges
-// once if a transfer outlives its token.
+// sends after GCS refused a token. A minted token expires with the source
+// token, which is fetched again once less than sourceRefreshMargin is left, so
+// it starts with at least that long. If that fetch fails, the previous source
+// token is used until it expires. A minted token with less than
+// minServeLifetime left, which only that leaves behind, is handed out anyway,
+// since a short token beats a failed transfer, but it is not cached.
 //
 // The cache is keyed by actor UID and each entry remembers its grants. Grants
 // narrow when the tag an actor was created from drops out after its first
@@ -140,11 +140,14 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 // widen when a never-suspended actor is repointed to another storage
 // location, and the cached token lacks it, a mint. So the common path costs
 // nothing and a repoint never hands out a token GCS would refuse.
-func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (Token, error) {
+//
+// A grant set the access boundary cannot express fails with codes.Internal.
+// Every other failure is an STS or network error and carries no code.
+func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	if len(grants) == 0 {
 		// Checked before the cache: an empty set is covered by any cached
 		// token, but an actor with no grants must get nothing.
-		return Token{}, errors.New("actor has no storage grants")
+		return credential.Token{}, status.Error(codes.Internal, "actor has no storage grants")
 	}
 	if !force {
 		if v, ok := i.cache.Get(actorUID); ok {
@@ -155,7 +158,7 @@ func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope
 	}
 	tok, err := i.mint(ctx, grants)
 	if err != nil {
-		return Token{}, err
+		return credential.Token{}, err
 	}
 	if tok.Expiry.Sub(i.now()) >= minServeLifetime {
 		i.cache.Add(actorUID, entry{token: tok, grants: slices.Clone(grants)})
@@ -178,10 +181,10 @@ func covers(cached, requested []actorscope.Grant) bool {
 	return true
 }
 
-func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (Token, error) {
+func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (credential.Token, error) {
 	rules, err := gcsboundary.FromGrants(grants)
 	if err != nil {
-		return Token{}, fmt.Errorf("while building the access boundary: %w", err)
+		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
 	}
 	// The downscope package reads its HTTP client from the context but sends
 	// the STS request without one, so the caller's deadline is attached by the
@@ -192,21 +195,21 @@ func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (Token, er
 	})
 	ts, err := downscope.NewTokenSource(ctx, downscope.DownscopingConfig{RootSource: i.source, Rules: rules})
 	if err != nil {
-		return Token{}, fmt.Errorf("while building the access boundary: %w", err)
+		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
 	}
 	tok, err := ts.Token()
 	if err != nil {
-		return Token{}, fmt.Errorf("while exchanging at STS: %w", err)
+		return credential.Token{}, fmt.Errorf("while exchanging at STS: %w", err)
 	}
 	if tok.AccessToken == "" {
-		return Token{}, errors.New("STS returned no access token")
+		return credential.Token{}, errors.New("STS returned no access token")
 	}
 	if tok.Expiry.IsZero() {
 		// Without an expiry the node plugin could not know when to stop using
 		// the token.
-		return Token{}, errors.New("downscoped token has no expiry")
+		return credential.Token{}, errors.New("downscoped token has no expiry")
 	}
-	return Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
+	return credential.Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
 }
 
 // contextTransport sends every request with ctx, so a cancelled or expired

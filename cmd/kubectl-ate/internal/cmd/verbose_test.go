@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -75,9 +75,9 @@ func TestVlogfLevels(t *testing.T) {
 }
 
 func TestLoggingUnaryInterceptor(t *testing.T) {
-	req := &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "demo", Name: "act-1"}}
-	wantActor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "demo", Name: "act-1"}}
-	const method = ateapipb.Control_GetActor_FullMethodName
+	req := &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: "demo", Name: "act-1"}}
+	wantActor := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "demo", Name: "act-1"}}
+	const method = ateapi.Control_GetActor_FullMethodName
 
 	okInvoker := func(_ context.Context, _ string, _, reply any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
 		proto.Merge(reply.(proto.Message), wantActor)
@@ -92,7 +92,7 @@ func TestLoggingUnaryInterceptor(t *testing.T) {
 		var errOut bytes.Buffer
 		ic := newLoggingUnaryInterceptor(&errOut)
 
-		reply := &ateapipb.Actor{}
+		reply := &ateapi.Actor{}
 		if err := ic(context.Background(), method, req, reply, nil, okInvoker); err != nil {
 			t.Fatalf("interceptor unexpected error: %v", err)
 		}
@@ -101,8 +101,8 @@ func TestLoggingUnaryInterceptor(t *testing.T) {
 		}
 
 		_ = ic(context.Background(), method, req, reply, nil, errInvoker)
-		if !strings.Contains(errOut.String(), "gRPC /ateapi.Control/GetActor failed") {
-			t.Errorf("vBasic failure stderr = %q, want 'gRPC /ateapi.Control/GetActor failed'", errOut.String())
+		if !strings.Contains(errOut.String(), "gRPC /substrate.ateapi.v1.Control/GetActor failed") {
+			t.Errorf("vBasic failure stderr = %q, want 'gRPC /substrate.ateapi.v1.Control/GetActor failed'", errOut.String())
 		}
 	})
 
@@ -111,12 +111,12 @@ func TestLoggingUnaryInterceptor(t *testing.T) {
 		var errOut bytes.Buffer
 		ic := newLoggingUnaryInterceptor(&errOut)
 
-		reply := &ateapipb.Actor{}
+		reply := &ateapi.Actor{}
 		if err := ic(context.Background(), method, req, reply, nil, okInvoker); err != nil {
 			t.Fatalf("interceptor unexpected error: %v", err)
 		}
 		got := errOut.String()
-		if !strings.Contains(got, "gRPC /ateapi.Control/GetActor\n") || !strings.Contains(got, "gRPC /ateapi.Control/GetActor completed in ") {
+		if !strings.Contains(got, "gRPC /substrate.ateapi.v1.Control/GetActor\n") || !strings.Contains(got, "gRPC /substrate.ateapi.v1.Control/GetActor completed in ") {
 			t.Errorf("vFlow stderr = %q, want call and completion lines", got)
 		}
 	})
@@ -126,12 +126,12 @@ func TestLoggingUnaryInterceptor(t *testing.T) {
 		var errOut bytes.Buffer
 		ic := newLoggingUnaryInterceptor(&errOut)
 
-		reply := &ateapipb.Actor{}
+		reply := &ateapi.Actor{}
 		if err := ic(context.Background(), method, req, reply, nil, okInvoker); err != nil {
 			t.Fatalf("interceptor unexpected error: %v", err)
 		}
 		got := errOut.String()
-		if !strings.Contains(got, "gRPC /ateapi.Control/GetActor request:") || !strings.Contains(got, `"act-1"`) || !strings.Contains(got, "gRPC /ateapi.Control/GetActor response") {
+		if !strings.Contains(got, "gRPC /substrate.ateapi.v1.Control/GetActor request:") || !strings.Contains(got, `"act-1"`) || !strings.Contains(got, "gRPC /substrate.ateapi.v1.Control/GetActor response") {
 			t.Errorf("vTrace stderr = %q, want request and response payloads", got)
 		}
 	})
@@ -143,7 +143,7 @@ func TestLogsActorRunner_FollowVerboseSurfacesDelaysAndErrors(t *testing.T) {
 	var mu sync.Mutex
 	var getCalls int
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			getCalls++
@@ -151,16 +151,16 @@ func TestLogsActorRunner_FollowVerboseSurfacesDelaysAndErrors(t *testing.T) {
 			case 1:
 				return nil, errors.New("transient apiserver error")
 			case 2:
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: "act-1"},
-					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: "act-1"},
+					Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			default:
-				return &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: "act-1"},
-					Status: &ateapipb.ActorStatus{
-						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{
+				return &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{Name: "act-1"},
+					Status: &ateapi.ActorStatus{
+						State: ateapi.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapi.WorkerAssignment{
 							WorkerPod:       "pod-1",
 							WorkerNamespace: "ns-1",
 						},
@@ -217,15 +217,15 @@ func TestLogsActorRunner_FollowVerboseSurfacesDelaysAndErrors(t *testing.T) {
 }
 
 func TestTopWorkersRunner_VerboseSurfacesMetricsIssues(t *testing.T) {
-	workers := []*ateapipb.Worker{
+	workers := []*ateapi.Worker{
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "w-1"},
+			Metadata:        &ateapi.ResourceMetadata{Name: "w-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 		},
 		{
-			Metadata:        &ateapipb.ResourceMetadata{Name: "w-2"},
+			Metadata:        &ateapi.ResourceMetadata{Name: "w-2"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-2",

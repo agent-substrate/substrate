@@ -36,10 +36,10 @@ import (
 	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/retry"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 // fakeSandboxConfigs is an in-memory dynamic.ResourceInterface implementing
@@ -58,7 +58,7 @@ type fakeSandboxConfigs struct {
 	updates   int
 }
 
-var sandboxConfigsGR = atev1alpha1.GroupVersion.WithResource("sandboxconfigs").GroupResource()
+var sandboxConfigsGR = atev1.GroupVersion.WithResource("sandboxconfigs").GroupResource()
 
 func (f *fakeSandboxConfigs) List(context.Context, metav1.ListOptions) (*unstructured.UnstructuredList, error) {
 	if f.listErr != nil {
@@ -69,7 +69,7 @@ func (f *fakeSandboxConfigs) List(context.Context, metav1.ListOptions) (*unstruc
 		list.Items = append(list.Items, *o.DeepCopy())
 	}
 	for _, name := range f.gone {
-		list.Items = append(list.Items, *newSandboxConfig(name, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer))
+		list.Items = append(list.Items, *newSandboxConfig(name, atev1.SandboxConfigWorkerPoolProtectionFinalizer))
 	}
 	return list, nil
 }
@@ -94,14 +94,14 @@ func (f *fakeSandboxConfigs) Update(_ context.Context, obj *unstructured.Unstruc
 
 func newSandboxConfig(name string, finalizers ...string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(atev1alpha1.GroupVersion.WithKind("SandboxConfig"))
+	u.SetGroupVersionKind(atev1.GroupVersion.WithKind("SandboxConfig"))
 	u.SetName(name)
 	u.SetFinalizers(finalizers)
 	return u
 }
 
 func TestReleaseSandboxConfigs(t *testing.T) {
-	const inUse = atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer
+	const inUse = atev1.SandboxConfigWorkerPoolProtectionFinalizer
 	tests := []struct {
 		name string
 		res  *fakeSandboxConfigs

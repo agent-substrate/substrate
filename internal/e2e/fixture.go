@@ -16,11 +16,12 @@ package e2e
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -64,9 +65,9 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) 
 // placeholder landing at the wrong depth or a misspelled field fails here
 // rather than applying cleanly and doing nothing — the same contract
 // `kubectl ate create actor-template` enforces.
-func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTemplate {
+func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapi.ActorTemplate {
 	t.Helper()
-	var templates []*ateapipb.ActorTemplate
+	var templates []*ateapi.ActorTemplate
 	for doc := range strings.SplitSeq(string(rendered), "\n---") {
 		jsonData, err := yaml.YAMLToJSON([]byte(doc))
 		if err != nil {
@@ -75,7 +76,7 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTe
 		if string(jsonData) == "null" {
 			continue
 		}
-		tmpl := &ateapipb.ActorTemplate{}
+		tmpl := &ateapi.ActorTemplate{}
 		if err := protojson.Unmarshal(jsonData, tmpl); err != nil {
 			t.Fatalf("decoding protojson ActorTemplate: %v", err)
 		}
@@ -85,6 +86,24 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTe
 		t.Fatalf("ActorTemplate manifest holds no documents")
 	}
 	return templates
+}
+
+// FixtureOption adjusts what DeploySubstrateFixture installs.
+type FixtureOption func(*fixtureConfig)
+
+type fixtureConfig struct {
+	templateValues map[string]string
+}
+
+// WithTemplateValue replaces the inline placeholder ${name} in the fixture's
+// ActorTemplate manifest with value.
+func WithTemplateValue(name, value string) FixtureOption {
+	return func(c *fixtureConfig) {
+		if c.templateValues == nil {
+			c.templateValues = map[string]string{}
+		}
+		c.templateValues["${"+name+"}"] = value
+	}
 }
 
 // SubstrateFixtureManifests names the two manifest templates a substrate
@@ -115,8 +134,13 @@ type SubstrateFixtureManifests struct {
 //
 // Returns the fixture's atespace (the same string that names the k8s
 // namespace holding the pool) and the created templates.
-func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundles []string) (string, []*ateapipb.ActorTemplate) {
+func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundles []string, opts ...FixtureOption) (string, []*ateapi.ActorTemplate) {
 	t.Helper()
+
+	var cfg fixtureConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	// The pool manifest also carries the namespace. Its cleanup is registered
 	// first so it runs last (t.Cleanup is LIFO), after the templates that
@@ -133,6 +157,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 	})
 
 	tmplInline, tmplBlocks := substrateTemplateSubstitutions(bucket, name, trustBundles)
+	maps.Copy(tmplInline, cfg.templateValues)
 	rendered := koResolve(t, renderManifest(t, manifests.Template, tmplInline, tmplBlocks))
 	templates := decodeSubstrateTemplates(t, rendered)
 
@@ -143,7 +168,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		}
 	}
 
-	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
+	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("failed to create atespace %q: %v", atespace, err)
 	}
 	t.Cleanup(func() {
@@ -151,18 +176,18 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		// next run tolerates AlreadyExists anyway.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if _, err := clients.SubstrateAPI.DeleteAtespace(cleanupCtx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespace}}); err != nil && status.Code(err) != codes.NotFound {
+		if _, err := clients.SubstrateAPI.DeleteAtespace(cleanupCtx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: atespace}}); err != nil && status.Code(err) != codes.NotFound {
 			t.Logf("failed to delete atespace %q: %v", atespace, err)
 		}
 	})
 
-	created := make([]*ateapipb.ActorTemplate, 0, len(templates))
+	created := make([]*ateapi.ActorTemplate, 0, len(templates))
 	for _, tmpl := range templates {
-		ref := &ateapipb.ObjectRef{Atespace: atespace, Name: tmpl.GetMetadata().GetName()}
-		if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
+		ref := &ateapi.ObjectRef{Atespace: atespace, Name: tmpl.GetMetadata().GetName()}
+		if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
 			t.Fatalf("failed to clear leaked ActorTemplate %s/%s: %v", atespace, ref.GetName(), err)
 		}
-		c, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl})
+		c, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl})
 		if err != nil {
 			t.Fatalf("failed to create ActorTemplate %s/%s: %v", atespace, tmpl.GetMetadata().GetName(), err)
 		}
@@ -171,7 +196,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		t.Cleanup(func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			if _, err := clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
+			if _, err := clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
 				t.Logf("failed to delete ActorTemplate %s/%s: %v", atespace, ref.GetName(), err)
 			}
 		})

@@ -42,7 +42,7 @@ import (
 	"regexp"
 	"strings"
 
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -218,7 +218,7 @@ type OpenFunc func(ctx context.Context) (rc io.ReadCloser, size int64, err error
 //
 // The caller checks the URI (ParseURI, CheckObjectName) first, so a refused
 // request reads nothing.
-func (s *Stager) Fetch(ctx context.Context, req *objectstorev1.FetchAssetRequest, uri string, open OpenFunc, toStatus func(error) error) error {
+func (s *Stager) Fetch(ctx context.Context, req *objectstore.FetchAssetRequest, uri string, open OpenFunc, toStatus func(error) error) error {
 	if !sha256Pattern.MatchString(req.GetSha256()) {
 		return status.Errorf(codes.InvalidArgument, "sha256 %q is not 64 lower-case hex characters", req.GetSha256())
 	}

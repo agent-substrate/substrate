@@ -19,14 +19,14 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // setSpanActorAttributes annotates the RPC's server span (from ctx) with the
 // actor's full identity. A no-op when ctx carries no recording span.
-func setSpanActorAttributes(ctx context.Context, a *ateapipb.Actor) {
+func setSpanActorAttributes(ctx context.Context, a *ateapi.Actor) {
 	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorAttributes(a)...)
 }
 

@@ -1,5 +1,64 @@
 # Agent Substrate
 
+## Rules for contributors
+
+- Read `CONTRIBUTING.md` and the "Using AI" section of `COLLABORATING.md`. You are responsible for everything your agent submits.
+- Say in the PR description that you used AI, and how. Don't add AI co-author or assisted-by trailers. Submit commits and PRs from your own account. We can't accept contributions from agent or bot accounts.
+- Agents must never sign off a commit as themselves. Only a human can certify the [DCO](https://developercertificate.org/).
+- Before asking for review, review your own diff. For substantial changes, also have a fresh agent session review it adversarially, then validate its findings and fix the confirmed issues.
+- **Be brief.** Code comments, commit messages, PR descriptions and issues should be short, plain English, and read the way an experienced maintainer writes by hand. Reviewer time and agent context windows are limited.
+  - `COLLABORATING.md` doesn't allow AI-generated commit messages, because they have usually been low quality and unreviewed. If you are asked to write one anyway, hold it to the same standard, and the person submitting it must review it.
+  - Write short, direct sentences with one idea each, subject first.
+  - Use the real identifiers from the code. Don't coin new names, and avoid noun stacks like "the store-wide pin-lock pre-flight".
+  - Prefer verbs to abstract nouns: "evicts" instead of "performs eviction".
+  - Say each thing once. Don't restate the diff, open with "This PR …" or "This commit …", or repeat the same explanation in several comments.
+  - Explain why only when the code doesn't make it obvious, in a clause or a line.
+  - Write `microVM` (`MicroVM` at the start of a sentence) without a hyphen in docs, comments, and commits. Use `microvm` for API strings and flags.
+  - Avoid:
+    - em-dashes, and chains of semicolons
+    - headings, bold, or test plans in commit messages
+    - epigrams and contrast pairs, like "X, not Y" or "So treat ENOENT as what it is."
+    - numbers added for color, like "measured at a flat 51ms"
+    - giving code motives or editorializing about it, like "wants", "decides", "is responsible for", "lands", "owns", or "X is what makes Y". Plain active voice is fine: "the reaper collects" is how Go doc comments read.
+    - filler words: load-bearing, footgun, surfaced, robust, comprehensive, seamless, leverage
+    - "No behavior change" unless the diff is a pure refactor
+    - long sentences that pile up clauses, or put the subject after a long lead-in
+
+### Scope
+
+- Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Sizing PRs for review" in `CONTRIBUTING.md`.
+- Split a PR into commits that are easy to review in order. PRs are squash-merged, so only the branch `HEAD` needs to build and pass tests.
+- Follow "Contribution process" in `CONTRIBUTING.md`: open an issue first for anything beyond a small fix, and search open PRs and issues before you start.
+- Start the PR description with why the change is needed, or link the issue. Only write "Fixes #N" if the PR fully fixes it, and keep the description in sync with the final diff.
+- Rebase onto upstream `main` before opening a PR, and don't merge main into your branch. This file may have changed there. Follow that version.
+- When updating a PR, keep rebases and other changes in separate pushes, so reviewers can see what changed:
+  - To address review comments or test failures, push the fix without rebasing.
+  - To rebase, push only the rebase.
+- After a rebase, check your diff against what main renamed or rewrote since you branched: packages, the module path, helpers you call.
+
+### Code
+
+- Search the repo and its dependencies before writing a helper, cache, client, flag set or test fixture. Reuse or extend what exists, and handle a case the way nearby code already does.
+- Build only what the change needs. Don't add options, interfaces, wrappers, flags, exports or API fields for later. Prefer a sensible default to a new knob. Delete code your change makes unused.
+- Pass dependencies through constructors or functional options. Don't add callback hooks, setters or package globals just so tests can swap behavior.
+- Fail loudly. Ignore only the specific errors you expect, like ENOENT. Don't guard against states the code can't reach, and don't fall back silently to an insecure or no-op mode.
+- Comment the final state of the code. Bugs that only existed while you were writing the change, and links to planning docs outside the repository, are noise to the next reader.
+- Check every claim in comments, docs and the PR description against the code. Don't claim a guarantee the code doesn't enforce. When you change behavior, update the comments, docs and scripts elsewhere that describe it. Link to existing docs instead of copying them.
+- Find the root cause before fixing a symptom. Back performance claims with a measurement.
+- Keep atelet and the worker runtimes opaque to each other. The only knowledge they may share is `internal/proto/ateworkerpb` and the paths in `internal/nodepath`. Using the same library code is fine; depending on how the other side is built is not. We want atelet to roll ahead of workers eventually, so don't widen that interface casually. Until v1.0.0 nothing enforces this; see Backward Compatibility.
+- Actor features work on both gVisor and microVM, with e2e coverage for both, unless the issue or PR description scopes the change to one runtime.
+- Don't assume kind, GKE, amd64 or a newer kernel than the repo already needs. Dev scripts must work on arm64 macOS. Don't change host-wide state.
+- Put shell code in standalone `.sh` scripts so shellcheck can lint them. Place each script near what uses it, such as `hack/` for dev scripts or a directory under `.github/` for a workflow. Don't inline it in YAML, such as a GitHub workflow `run:` block, in JSON, or in another language's source, such as Go or Python. Have those call the script. Get a reviewer's agreement before making an exception.
+- Read the `CI` environment variable only inside a named fail-closed predicate, never inline. See Testing Instructions 5.
+- Before changing an API, read `docs/api-style-guide.md` and `docs/api-validation.md`.
+- Pin image references you add or update by digest, and look the digest up yourself: `go run github.com/google/go-containerregistry/cmd/crane@latest digest <image>`.
+
+### Tests
+
+- Test new behavior in ways that help future changes. Update tests when you change existing behavior. Don't add tests just for coverage. Every test costs CI time on every PR.
+- Make sure each new test fails without your change. Follow the Testing section of `docs/code-style-guide.md`; prefer adding rows to an existing table test.
+- Don't use fixed sleeps or wall-clock waits. Run new tests locally with `-count=3 -shuffle=on`.
+
 ## Project Overview
 
 Agent Substrate is a system built on top of Kubernetes which manages agent-like workloads to achieve higher scale and efficiency than Kubernetes alone can offer, with lower latency.
@@ -12,6 +71,7 @@ See `hack/install-ate.sh` and `tools/setup-gcp` for provisioning and deploying c
 ## Repository Layout
 
 ```
+api/          # Public APIs: protos and CRD types, one directory per API and version
 cmd/          # One subdirectory per binary (ateapi, atelet, atenet, …)
 internal/     # Shared packages, internal to this module only
 pkg/          # Shared packages intended for external import
@@ -30,11 +90,12 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Only used by one binary | `cmd/<binary>/internal/<pkg>` |
 | Shared across binaries, not for external import | `internal/<pkg>` |
 | Public API for external consumers | `pkg/<pkg>` |
-| Public proto (control-plane gRPC API) | `pkg/proto/<name>` |
+| Public gRPC API | `api/<name>/<version>` |
+| Kubernetes CRD types | `api/infra/k8s/<group>/<version>` |
 | Internal proto (atelet / ateworker) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
-| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |
+| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `api/` and `pkg/`; see `internal/plugins/README.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 
@@ -45,7 +106,8 @@ The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` insta
 ### Building and Installing
 - **Install from source**: `go run ./cmd/ate-setup deploy ate-system` (or the `hack/install-ate.sh` shim) builds every image with ko as part of the install; see `cmd/ate-setup/README.md`
 - **Binaries**: `go build -o bin/kubectl-ate ./cmd/kubectl-ate`, `go build -o bin/ate-setup ./cmd/ate-setup`
-- **Release images**: `VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`)
+- **Release images**: `VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO` (the release set, `images.ReleaseComponents`, all tagged `TAG`; see `docs/dev/releasing.md`)
+- **Release binaries**: `VERSION=TAG go run ./cmd/ate-setup publish release-binaries --out DIR` (`kubectl-ate` for linux and darwin, amd64 and arm64, with `.sha256` files)
 
 ### Testing and Verification
 - **Run Unit Tests**: `go test -race ./...`
@@ -58,7 +120,6 @@ The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` insta
 - **Copyright Headers**: All files must contain appropriate copyright and license headers. See templates in `hack/boilerplate/`.
 - **Modularity**: Submit small, focused Pull Requests that touch a limited part of the codebase for easier reviews and rebasing.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
-- **Comments**: Keep them brief and to the point. Comment the final state of the code, not the path taken to it — a problem that only existed partway through writing the change is noise to the next reader, as is a pointer to a scratch or planning file that isn't in the repository.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
 
 ## Backward Compatibility
@@ -88,22 +149,17 @@ See the [metric registry](docs/observability.md#the-metric-registry) section of 
 
 ## Testing Instructions
 
-1. Write tests for all new code. We will not merge code that lacks tests.
+1. Write tests for new behavior. Update tests when you change existing behavior. Consider the value of tests for future changes.
 2. Ensure changes do not break existing tests.
 3. Run `go test -race ./...` and `hack/verify-all.sh` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
 4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
-5. A test that skips when a precondition is missing — Docker, a cluster, an artifact directory — must **fail** on it in CI, because a skip and a pass are the same exit code. Resolve strictness through a named predicate rather than an inline `os.Getenv("CI")`; `cmd/ateapi/internal/store/dockerenv.Required()` is the reference implementation. Prove the strict branch red before merging: a guard only ever observed passing is not known to guard anything. See `docs/dev/best-practices/ci-fail-closed.md`.
+5. A test that skips when a precondition is missing (Docker, a cluster, an artifact directory) must **fail** on it in CI, because a skip and a pass are the same exit code. Check for CI with a named predicate like `cmd/ateapi/internal/store/dockerenv.Required()` instead of an inline `os.Getenv("CI")`. Make sure the CI branch actually fails before merging. See `docs/dev/best-practices/ci-fail-closed.md`.
 
 ## Security Considerations
 
-The security story for Substrate is very early and many features are missing.
-However! Take care to respect security best practices when writing code in order to improve Substrate's security over time.
-The following is what Substrate currently offers.
-Keep this up to date when updating AGENTS.md.
+Agent Substrate is built for zero-trust, multi-tenant execution of untrusted actors. Preserve and extend these invariants when modifying the codebase (see `docs/security.md` and `docs/threat-model.md` for the full architecture):
 
-- **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods.
-- **JWTs and JWKs**: Signing and JWK set encoding (`internal/localjwtauthority`) and verification (`internal/oidcjwt`) are built on the standard library's crypto packages. Extend those packages rather than adding go-jose or another JOSE library, so the code that decides whether a token is valid stays small and supports only the algorithms Substrate uses.
-- **Ingress Authentication**: `atenet-router --ingress-auth-mode=static-mtls` requires clients to present a SPIFFE certificate signed by `--ingress-client-ca-file` whose ID is in `--ingress-allowed-spiffe-ids`; that list is the whole authorization policy, so any listed client may reach any Actor. The default, `deprecated-insecure`, checks a certificate only when a client presents one, and also serves plaintext listeners that accept any client. Install with it via `ate-setup --ingress-auth-mode=static-mtls` (`manifests/ate-install/components/router-static-mtls`); the allowlist lives in `manifests/ate-install/atenet-router.yaml`.
-- **Control API Authorization**: `ate-api-server` checks every Control RPC against an embedded OpenFGA model (`cmd/ateapi/internal/authz/model.fga`), on by default. Every served unary RPC needs an entry in `defaultRPCPermissions` (`registry.go`): with enforcement on, an RPC without one is denied, and a test fails the build. Access is granted per global scope and atespace through AccessPolicy (`kubectl ate access-policy`); the install's bootstrap owner is the shared `ate-client` ServiceAccount that `kubectl ate` uses. See `docs/authorization.md` for roles and known gaps.
-
-For future plans for security, reference `docs/roadmap.md`.
+- **Workload & Storage Isolation**: Actors run strictly inside `gVisor` (`cmd/ateworker-gvisor`) or `Cloud Hypervisor` microVM (`cmd/ateworker-microvm`) sandboxes; plain Linux containers are not supported. `atelet` scrubs actor directories across lifecycle transitions (`resetActorDirs`), and snapshots are stamped with `ActorSandboxRuntime` metadata and transferred via `cmd/objectstore-plugin`.
+- **Component & Actor Identity (mTLS, JWTs, and JWKs)**: Inter-component communication uses mTLS backed by `cmd/podcertcontroller` (`podid`, `servicedns`, and `postgres` signers). Actor JWT signing (`internal/localjwtauthority`), verification (`internal/oidcjwt`), and key discovery (served via `cmd/ate-idp-server`) are built on the standard library's crypto packages. Extend those packages rather than adding `go-jose` or another JOSE library, so the code that decides whether a token is valid stays small and supports only the algorithms Substrate uses.
+- **Control-Plane Authentication & Authorization**: `ate-api-server` checks every Control RPC against an embedded OpenFGA model (`cmd/ateapi/internal/authz/model.fga`), always enforced. Every served unary RPC needs an entry in `defaultRPCPermissions` (`registry.go`): an RPC without one is denied, and a test fails the build. Access is granted per global scope and atespace through AccessPolicy (`kubectl ate access-policy`); the install's bootstrap owner is the shared `ate-client` ServiceAccount that `kubectl ate` uses. See `docs/authorization.md` for roles and known gaps. Callers are authenticated via `SPIFFE` mTLS or configured OIDC `JWTProvider`s (`cmd/ateapi/internal/apiauthn`).
+- **Network Isolation, Ingress, & Egress**: `manifests/ate-install/ate-system-networkpolicies.yaml` enforces default-deny ingress across `ate-system`, and `cmd/atecontroller` reconciles per-`WorkerPool` `NetworkPolicy` objects. Actors run in private `/30` point-to-point veth network namespaces (`internal/ateworker/actornet`) with link-local blocking, policy-enforced DNS filtering (`internal/atunnel/dns`), and zero ambient credentials. Outbound traffic traverses `atunnel` to `atenet-egress`, which enforces per-actor `EgressPolicy` and injects credentials out-of-band via `cmd/credential-provider/kubernetes-secrets` (`k8s-credential-provider`) or actor JWT minting.

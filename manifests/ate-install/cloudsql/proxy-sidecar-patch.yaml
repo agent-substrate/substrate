@@ -35,7 +35,7 @@ spec:
       # keeps running for the pod's lifetime. Requires Kubernetes 1.29+.
       initContainers:
       - name: cloud-sql-proxy
-        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.2
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.26.3@sha256:f333a9c59890c3c67b8505166c5dbdcc0b29fca9173a2e09ca0446ab6997a736
         restartPolicy: Always
         args:
         - "$(ATE_API_POSTGRES_CLOUDSQL_INSTANCE)"

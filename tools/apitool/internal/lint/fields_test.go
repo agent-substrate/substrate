@@ -24,13 +24,13 @@ import (
 )
 
 func TestCheckFields(t *testing.T) {
-	ref := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}
+	ref := model.Field{Name: "gadget", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}
 	name := model.Field{Name: "name", Kind: protoreflect.StringKind, TypeDisplay: "string"}
-	opts := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.DeleteOptions"}
+	opts := model.Field{Name: "options", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.DeleteOptions"}
 	want := []wantFields{
-		required("gadget", message("ateapi.ObjectRef")),
+		required("gadget", message("substrate.ateapi.v1.ObjectRef")),
 		required("name", scalar(protoreflect.StringKind)),
-		optional("options", message("ateapi.DeleteOptions")),
+		optional("options", message("substrate.ateapi.v1.DeleteOptions")),
 	}
 
 	tests := []struct {
@@ -62,44 +62,44 @@ func TestCheckFields(t *testing.T) {
 		},
 		{
 			name:   "field of a required type, misnamed",
-			fields: []model.Field{{Name: "parent", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}, name},
+			fields: []model.Field{{Name: "parent", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}, name},
 			want: []Finding{
-				{Subject: "s", Message: `request field "parent" is ateapi.ObjectRef, want it named "gadget"`},
+				{Subject: "s", Message: `request field "parent" is substrate.ateapi.v1.ObjectRef, want it named "gadget"`},
 			},
 		},
 		{
 			name:   "field of an already filled wanted field's type is stray",
-			fields: []model.Field{ref, name, {Name: "other", Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}},
+			fields: []model.Field{ref, name, {Name: "other", Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}},
 			want: []Finding{
-				{Subject: "s", Message: `request field "other" is not allowed - want only "gadget" ateapi.ObjectRef, "name" string, and optional "options" ateapi.DeleteOptions`},
+				{Subject: "s", Message: `request field "other" is not allowed - want only "gadget" substrate.ateapi.v1.ObjectRef, "name" string, and optional "options" substrate.ateapi.v1.DeleteOptions`},
 			},
 		},
 		{
 			name:   "stray field",
 			fields: []model.Field{ref, name, {Name: "dry_run", Kind: protoreflect.BoolKind, TypeDisplay: "bool"}},
 			want: []Finding{
-				{Subject: "s", Message: `request field "dry_run" is not allowed - want only "gadget" ateapi.ObjectRef, "name" string, and optional "options" ateapi.DeleteOptions`},
+				{Subject: "s", Message: `request field "dry_run" is not allowed - want only "gadget" substrate.ateapi.v1.ObjectRef, "name" string, and optional "options" substrate.ateapi.v1.DeleteOptions`},
 			},
 		},
 		{
 			name:   "optional field twice",
 			fields: []model.Field{ref, name, opts, opts},
 			want: []Finding{
-				{Subject: "s", Message: `request has 2 "options" ateapi.DeleteOptions fields, want at most 1`},
+				{Subject: "s", Message: `request has 2 "options" substrate.ateapi.v1.DeleteOptions fields, want at most 1`},
 			},
 		},
 		{
 			name:   "named field twice",
 			fields: []model.Field{ref, ref, name},
 			want: []Finding{
-				{Subject: "s", Message: `request has 2 "gadget" ateapi.ObjectRef fields, want at most 1`},
+				{Subject: "s", Message: `request has 2 "gadget" substrate.ateapi.v1.ObjectRef fields, want at most 1`},
 			},
 		},
 		{
 			name:   "repeated field where a singular message is wanted",
-			fields: []model.Field{{Name: "gadget", Repeated: true, Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"}, name},
+			fields: []model.Field{{Name: "gadget", Repeated: true, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"}, name},
 			want: []Finding{
-				{Subject: "s", Message: `request field "gadget" is repeated ateapi.ObjectRef, want ateapi.ObjectRef`},
+				{Subject: "s", Message: `request field "gadget" is repeated substrate.ateapi.v1.ObjectRef, want substrate.ateapi.v1.ObjectRef`},
 			},
 		},
 		{

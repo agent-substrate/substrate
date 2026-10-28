@@ -17,7 +17,7 @@
 # One binary for both directions, so what counts as a working RPC cannot differ
 # between them.
 #
-# A protojson-shaped ateapipb.ActorTemplate (NOT the ate.dev/v1alpha1 CRD),
+# A protojson-shaped ateapi.ActorTemplate (NOT the ate.dev/v1 CRD),
 # created through the ate API by e2e.DeploySubstrateFixture.
 
 metadata:
@@ -47,9 +47,7 @@ containers:
     timeoutSeconds: 60
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-grpcecho${FIXTURE_SUFFIX}/

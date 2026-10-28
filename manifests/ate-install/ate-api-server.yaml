@@ -22,11 +22,13 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
+# Tells a deleted node from a missing atelet, so revert and delete of an actor
+# on a node that is gone do not wait for that atelet forever.
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get"]
 - apiGroups: ["ate.dev"]
-  resources: ["workerpools", "sandboxconfigs", "csidriverconfigs"]
-  verbs: ["get", "watch", "list"]
-- apiGroups: ["ate.dev"]
-  resources: ["workerpools"]
+  resources: ["workerpools", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
@@ -94,6 +96,21 @@ spec:
         args:
         - control
         - --socket=/run/objectstore-plugin/control.sock
+        # The credential exchange. On GCS, node plugins trade an actor JWT for
+        # a token scoped to that actor's snapshots. On S3 it answers
+        # UNIMPLEMENTED and the node plugins never call it. It serves over TLS
+        # on its own port with the pod's service DNS certificate, verifies
+        # JWTs with the public keys mounted below, and reaches ate-api-server
+        # over the loopback with the pod identity certificate. The issuer must
+        # be the one ate-api-server mints with, so both read it from the same
+        # ConfigMap key. On GCS it downscopes a token for the snapshot
+        # transfer service account, which it impersonates.
+        - --exchange-listen=:8445
+        - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
+        ports:
+        - name: exchange
+          containerPort: 8445
         # The plugin listens on a Unix socket, which a gRPC probe cannot
         # reach, and the image has no shell, so the binary checks itself.
         startupProbe:
@@ -105,6 +122,8 @@ spec:
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
           capabilities:
             drop:
             - ALL
@@ -118,12 +137,41 @@ spec:
         # set on it.
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
+        - name: ATE_API_ACTOR_JWT_ISSUER
+          valueFrom:
+            configMapKeyRef:
+              name: ate-api-server-envvars
+              key: ATE_API_ACTOR_JWT_ISSUER
+        - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+          valueFrom:
+            configMapKeyRef:
+              name: ate-api-server-envvars
+              key: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
+        # The exchange verifies ate-api-server's certificate against the API
+        # Service name in this namespace.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         envFrom:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        # For the exchange: its serving certificate, the client certificate it
+        # dials ate-api-server with, and the public keys of the actor JWT
+        # pool. Only the jwks item is projected, never the pool itself, so the
+        # sidecar cannot mint JWTs.
+        - name: "servicedns"
+          mountPath: "/run/servicedns.podcert.ate.dev"
+          readOnly: true
+        - name: "podidentity"
+          mountPath: "/run/podidentity.podcert.ate.dev"
+          readOnly: true
+        - name: "actor-id-jwt-jwks"
+          mountPath: "/run/actor-id-jwt-jwks"
+          readOnly: true
       containers:
       - name: ate-api-server
         image: ko://go.ate.dev/substrate/cmd/ateapi
@@ -151,6 +199,15 @@ spec:
           - --drain-delay=13s
           - --drain-timeout=15s
           - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
+          - --snapshot-location=@env
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+            - ALL
         env:
         - name: POD_NAME
           valueFrom:
@@ -311,6 +368,17 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
+      # The same Secret's public keys alone, for the objectstore-plugin
+      # sidecar's JWT verification. ate-setup and kubectl ate admin keep the
+      # jwks key in step with pool.
+      - name: "actor-id-jwt-jwks"
+        projected:
+          sources:
+          - secret:
+              name: "actor-id-jwt-pool"
+              items:
+              - key: "jwks"
+                path: "jwks.json"
       - name: "actor-id-ca-pool"
         projected:
           sources:
@@ -362,3 +430,9 @@ spec:
     protocol: TCP
     port: 443
     targetPort: 443
+  # The objectstore-plugin sidecar's credential exchange, called by the node
+  # plugins beside atelet.
+  - name: exchange
+    protocol: TCP
+    port: 8445
+    targetPort: 8445

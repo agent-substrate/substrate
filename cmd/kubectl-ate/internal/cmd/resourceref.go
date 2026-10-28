@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"strings"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // parseAtespacedName parses a reference to an atespace-scoped resource,
 // either as <atespace>/<name> or as <name>, which defaults to defaultAtespace
-func parseAtespacedName(value, defaultAtespace string) (*ateapipb.ObjectRef, error) {
+func parseAtespacedName(value, defaultAtespace string) (*ateapi.ObjectRef, error) {
 	atespace, name, ok := strings.Cut(value, "/")
 	if !ok {
 		atespace, name = defaultAtespace, value
@@ -32,5 +32,5 @@ func parseAtespacedName(value, defaultAtespace string) (*ateapipb.ObjectRef, err
 	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(name) {
 		return nil, fmt.Errorf("malformed reference %q (expected <name> or <atespace>/<name>)", value)
 	}
-	return &ateapipb.ObjectRef{Atespace: atespace, Name: name}, nil
+	return &ateapi.ObjectRef{Atespace: atespace, Name: name}, nil
 }

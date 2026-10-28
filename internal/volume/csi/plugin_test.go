@@ -224,8 +224,8 @@ func TestPlugin_CreateVolume(t *testing.T) {
 
 	ctx := context.Background()
 	resp, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
-		Name:     "test-vol",
-		Capacity: "1Gi",
+		Name:          "test-vol",
+		CapacityBytes: 1 << 30,
 	})
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)

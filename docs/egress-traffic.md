@@ -26,6 +26,10 @@ cannot reach the collector until the actor has an `http` egress rule for it. See
 | 53 | DNS to the sandbox's gateway | Allowed for hostnames matching the actor's egress policy | sandbox DNS relay -> worker pod's resolvers | `NXDOMAIN` |
 | any | Any other TCP | Blocked | n/a | The connection is accepted and then closed with no bytes returned. There is no status code. atunnel logs the failure. |
 
+See the [Network Egress Contract](network-egress.md#refusal-responses-and-policy-changes)
+for refusal status codes, policy-refresh semantics, and the distinction between DNS
+refusals and HTTP policy denials.
+
 ## UDP
 
 

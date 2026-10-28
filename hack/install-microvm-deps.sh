@@ -39,7 +39,10 @@
 # registry / bucket settings unless NO_DEV_ENV is set.
 #
 # Env (most come from .ate-dev-env.sh):
-#   BUCKET_NAME      object store bucket for assets/snapshots (default: ate-snapshots).
+#   BUCKET_NAME      object store bucket for snapshots (default: ate-snapshots). On
+#                    kind the assets share it. On GKE they go to BUCKET_NAME-assets,
+#                    which tools/setup-gcp creates, so nodes can read assets
+#                    without being able to read snapshots.
 #   KUBECTL_CONTEXT  (optional) kube context; threaded into kubectl.
 #   PROJECT_ID       (optional) GCP project for the GCS asset upload (GKE path).
 #   ARCH             target arch (default: from KO_DEFAULTPLATFORMS, else host arch).
@@ -120,8 +123,10 @@ MANIFEST_TEMPLATE="manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
 # backend's, which is S3 (rustfs) on kind and GCS on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   BUCKET_SCHEME="s3"
+  ASSET_BUCKET_NAME="${BUCKET_NAME}"
 else
   BUCKET_SCHEME="gs"
+  ASSET_BUCKET_NAME="${BUCKET_NAME}-assets"
 fi
 
 if [[ "${action}" == "delete" ]]; then
@@ -153,7 +158,7 @@ if [[ "${action}" == "delete" ]]; then
     echo "       again." >&2
     exit 1
   fi
-  log "Done. (Bucket assets at ${BUCKET_SCHEME}://${BUCKET_NAME}/kata-assets/ left in place.)"
+  log "Done. (Bucket assets at ${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/ left in place.)"
   exit 0
 fi
 
@@ -201,13 +206,13 @@ fi
 
 # --- 2. stage assets to rustfs (kind) / GCS (GKE) --------------------------
 # Upload the four assets under kata-assets/, where atelet fetches them: the
-# in-cluster rustfs (S3 API) on kind, or the GCS bucket on GKE.
+# in-cluster rustfs (S3 API) on kind, or the GCS asset bucket on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
   OUT="${OUT}" BUCKET="${BUCKET_NAME}" KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/microvm-assets/stage-to-rustfs.sh
 else
-  log "Uploading assets to gs://${BUCKET_NAME}/kata-assets/ ..."
-  OUT="${OUT}" BUCKET="${BUCKET_NAME}" hack/microvm-assets/stage-to-gcs.sh
+  log "Uploading assets to gs://${ASSET_BUCKET_NAME}/kata-assets/ ..."
+  OUT="${OUT}" BUCKET="${ASSET_BUCKET_NAME}" hack/microvm-assets/stage-to-gcs.sh
 fi
 
 # --- 3. apply the cluster-wide microvm SandboxConfig -----------------------
@@ -216,7 +221,7 @@ fi
 # substitutions left.
 log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."
 sed -e "s|\${BUCKET_SCHEME}|${BUCKET_SCHEME}|g" \
-    -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+    -e "s|\${ASSET_BUCKET_NAME}|${ASSET_BUCKET_NAME}|g" \
     "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 

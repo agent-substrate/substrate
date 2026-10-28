@@ -29,11 +29,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const (
@@ -49,8 +49,8 @@ type fixture struct {
 	clients   *e2e.Clients
 	bootstrap *principal
 	atespace  string
-	template  *ateapipb.ObjectRef
-	actor     *ateapipb.ObjectRef
+	template  *ateapi.ObjectRef
+	actor     *ateapi.ObjectRef
 }
 
 // outcome is the set of status codes a call may return to pass.
@@ -199,8 +199,8 @@ func serviceAccountExists(t *testing.T, ctx context.Context, clients *e2e.Client
 	return true
 }
 
-func binding(role string, ps ...*principal) *ateapipb.Binding {
-	b := &ateapipb.Binding{Role: role}
+func binding(role string, ps ...*principal) *ateapi.Binding {
+	b := &ateapi.Binding{Role: role}
 	for _, p := range ps {
 		b.Members = append(b.Members, p.member)
 	}
@@ -210,17 +210,17 @@ func binding(role string, ps ...*principal) *ateapipb.Binding {
 // setAtespacePolicy replaces atespace's AccessPolicy bindings, creating the
 // policy if it doesn't exist yet. The caller deletes it, with
 // cleanupAtespacePolicy at the scope the policy must last for.
-func setAtespacePolicy(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace string, bindings ...*ateapipb.Binding) {
+func setAtespacePolicy(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace string, bindings ...*ateapi.Binding) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Name: atespace}
-	policy := &ateapipb.AccessPolicy{Metadata: &ateapipb.ResourceMetadata{Name: resources.SingletonName}, Bindings: bindings}
-	current, err := clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	ref := &ateapi.ObjectRef{Name: atespace}
+	policy := &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: resources.SingletonName}, Bindings: bindings}
+	current, err := clients.SubstrateAPI.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	switch {
 	case status.Code(err) == codes.NotFound:
-		_, err = clients.SubstrateAPI.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
+		_, err = clients.SubstrateAPI.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
 	case err == nil:
 		policy.Metadata = current.GetMetadata()
-		_, err = clients.SubstrateAPI.UpdateAtespaceAccessPolicy(ctx, &ateapipb.UpdateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
+		_, err = clients.SubstrateAPI.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
 	}
 	if err != nil {
 		t.Fatalf("setting the AccessPolicy of atespace %q: %v", atespace, err)
@@ -239,8 +239,8 @@ func cleanupAtespacePolicy(t *testing.T, clients *e2e.Clients, atespace string) 
 // deleteAtespacePolicy deletes atespace's AccessPolicy; one already gone is
 // not an error.
 func deleteAtespacePolicy(ctx context.Context, clients *e2e.Clients, atespace string) error {
-	_, err := clients.SubstrateAPI.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{
-		Atespace: &ateapipb.ObjectRef{Name: atespace},
+	_, err := clients.SubstrateAPI.DeleteAtespaceAccessPolicy(ctx, &ateapi.DeleteAtespaceAccessPolicyRequest{
+		Atespace: &ateapi.ObjectRef{Name: atespace},
 		Name:     resources.SingletonName,
 	})
 	if status.Code(err) == codes.NotFound {
@@ -253,8 +253,8 @@ func deleteAtespacePolicy(ctx context.Context, clients *e2e.Clients, atespace st
 // it when t ends. Deleting it also deletes its AccessPolicy.
 func createAtespace(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}},
+	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+		Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: name}},
 	}); err != nil {
 		t.Fatalf("CreateAtespace %q: %v", name, err)
 	}
@@ -267,7 +267,7 @@ func createAtespace(t *testing.T, ctx context.Context, clients *e2e.Clients, nam
 
 // deleteAtespace deletes an atespace; one already gone is not an error.
 func deleteAtespace(ctx context.Context, clients *e2e.Clients, name string) error {
-	_, err := clients.SubstrateAPI.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}})
+	_, err := clients.SubstrateAPI.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: name}})
 	if status.Code(err) == codes.NotFound {
 		return nil
 	}
@@ -281,16 +281,16 @@ func deployFixture(t *testing.T, ctx context.Context, bucket string) *fixture {
 	t.Helper()
 	clients := e2e.GetClients()
 	atespace, _ := e2e.DeployProbe(t, bucket, "authz")
-	actor := &ateapipb.ObjectRef{Atespace: atespace, Name: actorName}
-	template := &ateapipb.ObjectRef{Atespace: atespace, Name: e2e.ProbeName}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorName},
+	actor := &ateapi.ObjectRef{Atespace: atespace, Name: actorName}
+	template := &ateapi.ObjectRef{Atespace: atespace, Name: e2e.ProbeName}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: actorName},
 		ActorTemplate: template,
 	}}); err != nil {
 		t.Fatalf("CreateActor %s/%s: %v", atespace, actorName, err)
 	}
 	t.Cleanup(func() {
-		if _, err := clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actor}); err != nil {
+		if _, err := clients.SubstrateAPI.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{Actor: actor}); err != nil {
 			t.Logf("cleanup: DeleteActor %s/%s: %v", atespace, actorName, err)
 		}
 	})
@@ -304,11 +304,11 @@ func deployFixture(t *testing.T, ctx context.Context, bucket string) *fixture {
 }
 
 // waitForActorState polls actor, as the bootstrap owner, until it is in want.
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.ObjectRef, want ateapipb.ActorState) {
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapi.ObjectRef, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actor})
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actor})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return
 		}
@@ -322,28 +322,28 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 
 func getAtespace(name string) rpc {
 	return func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}})
+		_, err := api.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: name}})
 		return err
 	}
 }
 
-func getActor(ref *ateapipb.ObjectRef) rpc {
+func getActor(ref *ateapi.ObjectRef) rpc {
 	return func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+		_, err := api.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
 		return err
 	}
 }
 
 func listActors(atespace string) rpc {
 	return func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.ListActors(ctx, &ateapipb.ListActorsRequest{Atespace: atespace})
+		_, err := api.ListActors(ctx, &ateapi.ListActorsRequest{Atespace: atespace})
 		return err
 	}
 }
 
-func suspendActor(ref *ateapipb.ObjectRef) rpc {
+func suspendActor(ref *ateapi.ObjectRef) rpc {
 	return func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+		_, err := api.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
 		return err
 	}
 }
@@ -351,10 +351,10 @@ func suspendActor(ref *ateapipb.ObjectRef) rpc {
 // createActorUnnamed asks for an actor with no name: the check reads only
 // its atespace and template, and validation then rejects it, so nothing is
 // created.
-func createActorUnnamed(atespace string, template *ateapipb.ObjectRef) rpc {
+func createActorUnnamed(atespace string, template *ateapi.ObjectRef) rpc {
 	return func(ctx context.Context, api *ateclient.Client) error {
-		_, err := api.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-			Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace},
+		_, err := api.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: atespace},
 			ActorTemplate: template,
 		}})
 		return err

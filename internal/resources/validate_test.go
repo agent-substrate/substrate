@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,12 +23,14 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -74,8 +77,8 @@ func TestToAPIErrorEmpty(t *testing.T) {
 func TestDeepEqual(t *testing.T) {
 	// Proto messages carry internal state that reflect.DeepEqual would
 	// compare; proto.Equal compares only field values.
-	a := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
-	b := &ateapipb.ObjectRef{Atespace: "a", Name: "x"}
+	a := &ateapi.ObjectRef{Atespace: "a", Name: "x"}
+	b := &ateapi.ObjectRef{Atespace: "a", Name: "x"}
 	_ = a.String() // populates a's internal state, not b's
 
 	tests := []struct {
@@ -84,8 +87,8 @@ func TestDeepEqual(t *testing.T) {
 		want bool
 	}{
 		{name: "equal protos", got: DeepEqual(a, b), want: true},
-		{name: "different protos", got: DeepEqual(a, &ateapipb.ObjectRef{Atespace: "a", Name: "y"}), want: false},
-		{name: "nil protos", got: DeepEqual[*ateapipb.ObjectRef](nil, nil), want: true},
+		{name: "different protos", got: DeepEqual(a, &ateapi.ObjectRef{Atespace: "a", Name: "y"}), want: false},
+		{name: "nil protos", got: DeepEqual[*ateapi.ObjectRef](nil, nil), want: true},
 		{name: "equal non-protos", got: DeepEqual([]string{"a"}, []string{"a"}), want: true},
 		{name: "different non-protos", got: DeepEqual(1, 2), want: false},
 	}
@@ -140,31 +143,6 @@ func TestValidateWorkerPodUID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := ValidateWorkerPodUID(tt.uid); (err != nil) != tt.wantErr {
 				t.Errorf("ValidateWorkerPodUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateAssetHash(t *testing.T) {
-	const valid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-	tests := []struct {
-		name    string
-		hash    string
-		wantErr bool
-	}{
-		{"valid lowercase", valid, false},
-		{"valid uppercase", strings.ToUpper(valid), false},
-		{"empty", "", true},
-		{"too short", "abc123", true},
-		{"too long", valid + "00", true},
-		{"separator", strings.Repeat("a", 60) + "/../", true},
-		{"non-hex", strings.Repeat("g", 64), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateAssetHash(tt.hash); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAssetHash(%q) err = %v, wantErr %v", tt.hash, err, tt.wantErr)
 			}
 		})
 	}
@@ -298,38 +276,6 @@ func TestValidateSandboxClass(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateSandboxClass(path, tt.class))
-		})
-	}
-}
-
-func TestValidateLimit(t *testing.T) {
-	path := field.NewPath("limits").Index(0)
-	quantityPath := path.Child("quantity")
-	tests := []struct {
-		name     string
-		limit    string
-		quantity string
-		want     field.ErrorList
-	}{
-		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
-		{name: "cpu at the millicore bound", limit: "cpu", quantity: "999.999"},
-		{name: "memory", limit: "memory", quantity: "1Gi"},
-		{name: "memory at the int64 bound", limit: "memory", quantity: "9223372036854775807"},
-		{name: "missing quantity left to tags", limit: "cpu"},
-		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
-		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu at 1000 cores", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu rounds up to 1000 cores in millicores", limit: "cpu", quantity: "999.9995", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu far beyond int64 millicores", limit: "cpu", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "memory past the int64 bound", limit: "memory", quantity: "9223372036854775808", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "memory rounds up past the int64 bound", limit: "memory", quantity: "9223372036854775807.5", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "memory far beyond int64 bytes", limit: "memory", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateLimit(path, tt.limit, tt.quantity))
 		})
 	}
 }
@@ -713,5 +659,48 @@ func TestValidateSandboxAssetsDir(t *testing.T) {
 				t.Errorf("ValidateSandboxAssetsDir(%q, %q) = %v, wantErr %v", tc.actorUID, tc.dir, errs, tc.wantErr)
 			}
 		})
+	}
+}
+
+// A duplicate entry error carries the whole entry as its bad value, and the
+// error text renders it as JSON. The error is logged as a string, past the
+// logging handler's proto redaction, so a debug_redact field in the entry must
+// be masked before the text is built.
+func TestValidationErrorsRedactDebugRedactFields(t *testing.T) {
+	const secret = "sk-do-not-log"
+	env := []*ateapi.EnvVar{
+		{Name: "API_KEY", Value: secret},
+		{Name: "API_KEY", Value: secret},
+	}
+	errs := validate.PtrSliceUnique(context.Background(), operation.Operation{Type: operation.Create},
+		field.NewPath("env"), env, nil,
+		func(a, b *ateapi.EnvVar) bool { return a.Name == b.Name })
+	if len(errs) == 0 {
+		t.Fatal("PtrSliceUnique found no duplicate")
+	}
+
+	// A nil entry renders by panicking, so it is dropped and the rest of the
+	// list still reaches the message.
+	withNil := append(field.ErrorList{nil}, errs...)
+	for name, toErr := range map[string]func(field.ErrorList) error{
+		"ToAPIError":        ToAPIError,
+		"ToGRPCStatusError": ToGRPCStatusError,
+		"ToInternalError":   ToInternalError,
+	} {
+		for _, list := range []field.ErrorList{errs, withNil} {
+			msg := toErr(list).Error()
+			if strings.Contains(msg, secret) {
+				t.Errorf("%s: message %q contains the env value", name, msg)
+			}
+			if !strings.Contains(msg, "API_KEY") {
+				t.Errorf("%s: message %q does not name the duplicate", name, msg)
+			}
+		}
+		if msg := toErr(field.ErrorList{nil}).Error(); !strings.Contains(msg, "validation failed") {
+			t.Errorf("%s: message for a nil-only list = %q", name, msg)
+		}
+	}
+	if got := errs[0].BadValue.(*ateapi.EnvVar).GetValue(); got != secret {
+		t.Errorf("caller's error list was modified: value = %q", got)
 	}
 }

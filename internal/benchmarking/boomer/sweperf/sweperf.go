@@ -36,13 +36,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -93,9 +93,15 @@ func init() {
 
 // knobs is the SweperfUser slice of the runtime config. Each zero falls
 // back to the default above; the master populates the keys from the
-// --sweperf-* locust flags (common/sweperf_config.py).
+// --sweperf-* locust flags (common/sweperf_config.py) and the shared
+// --lifecycle-mode flag (common/lifecycle_mode.py).
 type knobs struct {
 	dynconfig.WaitTime
+	// Lifecycle picks how each cycle ends: lifecycle_mode "async" (or
+	// empty) sends an asynchronous SuspendActor, "sync" a synchronous one.
+	// "none" and resume_mode "implicit" are refused, since every sweperf
+	// cycle ends in a suspend and resumes with ResumeActor.
+	dynconfig.Lifecycle
 	Template       string `json:"sweperf_template"`
 	TotalSteps     int    `json:"sweperf_total_steps"`
 	NumCycles      int    `json:"sweperf_num_cycles"`
@@ -115,6 +121,15 @@ var knobsCodec = dynconfig.Typed[knobs]{
 		}
 		if k.PollIntervalMs < 0 {
 			return fmt.Errorf("sweperf_poll_interval_ms cannot be negative: %d", k.PollIntervalMs)
+		}
+		if err := k.Lifecycle.Validate(); err != nil {
+			return err
+		}
+		if k.LifecycleMode == dynconfig.LifecycleModeNone {
+			return fmt.Errorf("sweperf does not support lifecycle_mode %q: every cycle ends in a suspend", k.LifecycleMode)
+		}
+		if k.ResumeMode == dynconfig.ResumeModeImplicit {
+			return fmt.Errorf("sweperf does not support resume_mode %q: it resumes with ResumeActor", k.ResumeMode)
 		}
 		return nil
 	},
@@ -416,11 +431,11 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err err
 
 // retireUser deletes the actor of a session that finished its trajectory and
 // unbinds it from goroutine gid, so the next iterate starts a fresh actor. The
-// final cycle leaves the actor running, and DeleteActor with AnyState removes
-// it from any state, so no suspend is sent first. The delete runs detached
-// from the run context so shutdown cannot cut it short. A failed delete is
-// retried once, with a fresh timeout; if that also fails the actor is left
-// behind and logged.
+// final cycle leaves the actor running, and DeleteActor removes it from any
+// state, so no suspend is sent first. The delete runs detached from the run
+// context so shutdown cannot cut it short. A failed delete is retried once,
+// with a fresh timeout; if that also fails the actor is left behind and
+// logged.
 func (r *sweperfRuntime) retireUser(gid int64, u *sweperfUser) {
 	r.users.CompareAndDelete(gid, u)
 	if !u.cleanedUp.CompareAndSwap(false, true) {
@@ -536,8 +551,8 @@ type sweperfUser struct {
 }
 
 // ref is the control-plane reference to this user's actor.
-func (u *sweperfUser) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
+func (u *sweperfUser) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 // setActorRouting names the actor the atenet router should route this request
@@ -551,9 +566,9 @@ func (u *sweperfUser) setActorRouting(req *http.Request) {
 // success so concurrent users racing the first creation all proceed.
 func (u *sweperfUser) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: u.cfg.Atespace,
 				},
 			},
@@ -573,10 +588,10 @@ func (u *sweperfUser) ensureAtespace(ctx context.Context) error {
 // (see pollLiveness).
 func (u *sweperfUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: u.templateName},
+		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: u.templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -588,7 +603,7 @@ func (u *sweperfUser) create(ctx context.Context) error {
 // to abandon the cycle rather than talk to a sandbox that is not running.
 func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
 	latency, err := u.tracedCallRecord(ctx, "ResumeActor", !u.awake, func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
@@ -601,16 +616,23 @@ func (u *sweperfUser) resume(ctx context.Context) (time.Duration, bool) {
 }
 
 // suspend snapshots the actor and puts it to sleep, ending a cycle. It reports
-// whether the suspend succeeded, like resume.
+// whether the suspend succeeded, like resume. By default (async lifecycle mode)
+// the suspend is asynchronous and recorded as SuspendActorAsync; in sync
+// lifecycle mode it is synchronous and recorded as SuspendActor.
 func (u *sweperfUser) suspend(ctx context.Context) bool {
-	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			Actor: u.ref(),
+	name, mode := "SuspendActorAsync", ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
+	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
+		name, mode = "SuspendActor", ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
+	}
+	err := u.tracedCall(ctx, name, func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
+			Actor:   u.ref(),
+			Options: &ateapi.SuspendOptions{Mode: mode},
 		}, grpc.Trailer(tr))
 		return err
 	})
 	if err != nil {
-		slog.Error("SuspendActor failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
+		slog.Error(name+" failed", slog.String("actor", u.actorName), slog.String("err", err.Error()))
 		return false
 	}
 	return true
@@ -620,19 +642,17 @@ func (u *sweperfUser) suspend(ctx context.Context) bool {
 // and returned so the caller can retry.
 func (u *sweperfUser) delete(ctx context.Context) error {
 	return u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapi.DeleteActorRequest{
 			Actor: u.ref(),
-			// Teardown discards the actor, so skip the SUSPENDED precondition.
-			AnyState: true,
 		}, grpc.Trailer(tr))
 		return err
 	})
 }
 
 // teardown releases the actor and the worker it holds, and decrements the
-// user gauge. Like retireUser, it deletes with AnyState and sends no suspend
-// first. Safe to call more than once and from several goroutines: only the
-// first call does anything.
+// user gauge. Like retireUser, it sends no suspend before deleting. Safe to
+// call more than once and from several goroutines: only the first call does
+// anything.
 func (u *sweperfUser) teardown(ctx context.Context) {
 	if !u.cleanedUp.CompareAndSwap(false, true) {
 		return

@@ -83,14 +83,14 @@ func assertCalls(t *testing.T, f *fakeRunsc, want ...string) {
 var appContainers = []*ateworkerpb.Container{{Name: "app"}}
 
 func TestCleanupContainers_DeletesEveryContainerRunscKnows(t *testing.T) {
-	f := newFakeRunsc("app", "_pause")
+	f := newFakeRunsc("app", "_sandbox")
 
 	if err := cleanupContainers(context.Background(), f, appContainers); err != nil {
 		t.Fatalf("cleanupContainers: %v", err)
 	}
 
 	// Happy path: no `runsc list` at all.
-	assertCalls(t, f, "state app", "state _pause", "delete app", "delete _pause")
+	assertCalls(t, f, "state app", "state _sandbox", "delete app", "delete _sandbox")
 	if len(f.containers) != 0 {
 		t.Errorf("containers survived cleanup: %v", slices.Sorted(maps.Keys(f.containers)))
 	}
@@ -106,7 +106,7 @@ func TestCleanupContainers_SkipsContainersRunscHasNoRecordOf(t *testing.T) {
 		t.Fatalf("cleanupContainers: %v", err)
 	}
 
-	assertCalls(t, f, "state app", "state _pause", "list", "delete app")
+	assertCalls(t, f, "state app", "state _sandbox", "list", "delete app")
 }
 
 func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
@@ -116,10 +116,10 @@ func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
 		t.Fatalf("cleanupContainers: %v", err)
 	}
 
-	assertCalls(t, f, "state app", "list", "state _pause", "list")
+	assertCalls(t, f, "state app", "list", "state _sandbox", "list")
 }
 
-// The pause container is the sandbox: it must outlive the deletes of the
+// The sandbox must outlive the deletes of the
 // containers inside it, so stopping the actor leaves it to cleanup.
 func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
 	f := newFakeRunsc()

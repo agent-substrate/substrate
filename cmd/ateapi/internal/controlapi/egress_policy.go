@@ -19,17 +19,17 @@ import (
 	"errors"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
 	// First scrub any fields that users are not allowed to set, then fill the
 	// defaults so validation sees the final resource state.
 	policy := req.GetEgressPolicy()
@@ -44,12 +44,12 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
 }
 
-func (s *ServiceImpl) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+func (s *ServiceImpl) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error) {
 	created, err := s.store.CreateEgressPolicy(ctx, actorRef, policy)
 	return mapEgressPolicyWrite(created, err)
 }
 
-func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
 	if errs := apivalidation.ValidateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -57,7 +57,7 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.Get
 	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 }
 
-func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
+func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error) {
 	policy, err := s.store.GetEgressPolicy(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("EgressPolicy for actor %s not found", actorRef)
@@ -68,7 +68,7 @@ func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.Ac
 	return policy, nil
 }
 
-func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
 	policy := req.GetEgressPolicy()
 	if policy != nil {
 		scrubResourceMetadataForUpdate(policy.Metadata)
@@ -77,7 +77,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
+	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapi.EgressPolicy) error {
 		metadata := toUpdate.GetMetadata()
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, policy)
@@ -87,9 +87,9 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 	})
 }
 
-func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error) {
-	updated, err := s.store.UpdateEgressPolicy(ctx, actorRef, precondition, func(toUpdate *ateapipb.EgressPolicy) error {
-		oldVal := proto.Clone(toUpdate).(*ateapipb.EgressPolicy)
+func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.EgressPolicy) error) (*ateapi.EgressPolicy, error) {
+	updated, err := s.store.UpdateEgressPolicy(ctx, actorRef, precondition, func(toUpdate *ateapi.EgressPolicy) error {
+		oldVal := proto.Clone(toUpdate).(*ateapi.EgressPolicy)
 		if err := mutate(toUpdate); err != nil {
 			return err
 		}
@@ -102,7 +102,7 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return mapEgressPolicyWrite(updated, err)
 }
 
-func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
+func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapi.DeleteActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
 	if errs := apivalidation.ValidateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -110,12 +110,12 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.
 	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
+func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.EgressPolicy, error) {
 	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef, precondition)
 	return mapEgressPolicyWrite(deleted, err)
 }
 
-func mapEgressPolicyWrite(policy *ateapipb.EgressPolicy, err error) (*ateapipb.EgressPolicy, error) {
+func mapEgressPolicyWrite(policy *ateapi.EgressPolicy, err error) (*ateapi.EgressPolicy, error) {
 	switch {
 	case err == nil:
 		return policy, nil

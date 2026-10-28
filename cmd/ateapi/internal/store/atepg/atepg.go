@@ -34,10 +34,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -111,7 +113,7 @@ func (p *Persistence) publishLocally(ctx context.Context, payload []byte) {
 	}
 	for ch := range p.watchers {
 		select {
-		case ch <- store.WorkerEvent{Type: event.Type, Worker: proto.Clone(event.Worker).(*ateapipb.Worker)}:
+		case ch <- store.WorkerEvent{Type: event.Type, Worker: proto.Clone(event.Worker).(*ateapi.Worker)}:
 		default:
 		}
 	}
@@ -272,6 +274,9 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 		}
 		return nil
 	}
+	// Per-statement trace spans; the watch and probe pools inherit this through
+	// resizedPoolConfig.
+	cfg.ConnConfig.Tracer = newQueryTracer(otel.GetTracerProvider(), cfg.ConnConfig)
 	usesTLS := cfg.ConnConfig.TLSConfig != nil
 	for _, fallback := range cfg.ConnConfig.Fallbacks {
 		usesTLS = usesTLS || fallback.TLSConfig != nil
@@ -400,16 +405,17 @@ func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
 	return nil
 }
 
-func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
+func setCreateMetadata(metadata *ateapi.ResourceMetadata) {
 	metadata.Uid = uuid.NewString()
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
+	metadata.DeleteTime = nil
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database
 // matches the metadata in the proto.
-func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
+func validateProtoMetadataMatchesColumns(resource string, metadata *ateapi.ResourceMetadata, uid string, version int64) error {
 	if metadata.GetUid() != uid {
 		return fmt.Errorf("%s uid projection %q does not match proto metadata uid %q", resource, uid, metadata.GetUid())
 	}
@@ -419,11 +425,26 @@ func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.Res
 	return nil
 }
 
-func setUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
+// validateSnapshotURIs requires the URI of every durable snapshot to parse, so
+// readers can rely on resources.ParseSnapshotURI.
+func validateSnapshotURIs(resource string, snapshots ...*ateapi.Snapshot) error {
+	for _, snap := range snapshots {
+		if snap.GetDurableSnapshot() == nil {
+			continue
+		}
+		if _, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri()); err != nil {
+			return fmt.Errorf("%s snapshot %s: %w", resource, snap.GetUuid(), err)
+		}
+	}
+	return nil
+}
+
+func setUpdateMetadata(newMeta, oldMeta *ateapi.ResourceMetadata) {
 	newMeta.Uid = oldMeta.Uid
 	newMeta.Version = oldMeta.Version + 1
 	newMeta.CreateTime = oldMeta.CreateTime
 	newMeta.UpdateTime = timestamppb.Now()
+	newMeta.DeleteTime = oldMeta.DeleteTime
 }
 
 func mapDeleteError(err error, uid string, version int64, precondition store.DeletePreconditions) error {
@@ -433,7 +454,7 @@ func mapDeleteError(err error, uid string, version int64, precondition store.Del
 	if err != nil {
 		return fmt.Errorf("reading after a guarded delete matched nothing: %w", err)
 	}
-	if err := precondition.Check(&ateapipb.ResourceMetadata{Uid: uid, Version: version}); err != nil {
+	if err := precondition.Check(&ateapi.ResourceMetadata{Uid: uid, Version: version}); err != nil {
 		return err
 	}
 	// The row matches the guards now, so it changed between the two statements.

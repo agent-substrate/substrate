@@ -30,6 +30,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/ateworker"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
@@ -78,7 +79,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
-	ctx, cancel := context.WithCancel(ctx)
+	if s.lookupActor(req.GetActorUid()) == nil {
+		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), req.GetFidelity()); resp != nil {
+			slog.InfoContext(ctx, "Reusing completed checkpoint from previous attempt", slog.String("actorUID", req.GetActorUid()))
+			return resp, nil
+		}
+	}
+
+	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
 	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
 
@@ -252,7 +260,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
 	s.recordFinalIfEnded(ctx, hosted)
-	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
+	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
+	if err := ateworker.RecordCheckpoint(checkpointDir, scope, resp); err != nil {
+		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+	return resp, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -335,27 +347,18 @@ func listFiles(dir string) ([]string, error) {
 
 // teardownActor stops the ateworker-owned CH VMM for an actor. ra may be
 // nil (e.g. ateworker restarted and lost in-memory state).
-func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDirs *ateworkerpb.ActorDirs, ra *runningActor, client *ch.Client) error {
+func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDirs *ateworkerpb.ActorDirs, ra *runningActor) error {
 	// Stop offering the guest to GetWorkloadStats first, before anything below
 	// makes it stop answering. Clearing it here rather than alongside the
 	// attribution is what keeps a poll that lands mid-teardown on the
 	// FAILED_PRECONDITION path ("no numbers right now") instead of surfacing a
 	// closed connection as a failed read.
 	s.setGuestStats(id, nil)
-
-	var errs []error
-	if client != nil {
-		tShutdown := time.Now()
-		shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		if err := client.Shutdown(shutCtx); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				slog.WarnContext(ctx, "CH shutdown returned error during teardown", slog.Any("err", err))
-			}
-		}
-		cancel()
-		slog.InfoContext(ctx, "CH API shutdown done", slog.Duration("took", time.Since(tShutdown)))
+	if ra != nil {
+		ra.stopping.Store(true)
 	}
 
+	var errs []error
 	if ra != nil {
 		// Close the kata-agent client kept open for stdout/stderr forwarding. This
 		// fails the forwarding goroutines' in-flight ReadStdout/ReadStderr calls, so
@@ -370,14 +373,12 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 		}
 
 		// Kill the CH process ateworker launched.
-		if ra.chCmd != nil && ra.chCmd.Process != nil {
-			_ = ra.chCmd.Process.Kill()
-			_, _ = ra.chCmd.Process.Wait()
+		if ra.chProc != nil {
+			ra.chProc.Stop()
 		}
 		// Kill the virtiofsd (after CH, its only client).
-		if ra.vfsdCmd != nil && ra.vfsdCmd.Process != nil {
-			_ = ra.vfsdCmd.Process.Kill()
-			_, _ = ra.vfsdCmd.Process.Wait()
+		if ra.vfsdProc != nil {
+			ra.vfsdProc.Stop()
 		}
 	}
 
@@ -440,11 +441,11 @@ func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworker
 // Restore. Ending the activation also stops a late recordInitial from writing.
 func (s *AteWorkerService) endPreviousActivation(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs) error {
 	old := s.lookupActor(actorUID)
-	if s.runningVM(actorUID) != nil {
+	if ra := s.runningVM(actorUID); ra != nil {
 		if old != nil {
 			s.readFinal(ctx, old)
 		}
-		if err := s.stopActorVM(ctx, actorUID, actorDirs); err != nil {
+		if err := s.teardownActor(ctx, actorUID, actorDirs, ra); err != nil {
 			return fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
 		}
 	}
@@ -454,16 +455,6 @@ func (s *AteWorkerService) endPreviousActivation(ctx context.Context, actorUID s
 	return nil
 }
 
-// stopActorVM tears down the actor's micro-VM, if any, keeping it hosted.
-func (s *AteWorkerService) stopActorVM(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs) error {
-	ra := s.runningVM(actorUID)
-	chSocket := kata.CLHSocketPath(actorUID)
-	if ra != nil && ra.apiSocket != "" {
-		chSocket = ra.apiSocket
-	}
-	return s.teardownActor(ctx, actorUID, actorDirs, ra, ch.NewClient(chSocket))
-}
-
 func (s *AteWorkerService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) error {
 	var errs []error
 	if err := s.tunnel.Deactivate(ctx, actor); err != nil {
@@ -471,7 +462,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actor resource
 	}
 
 	actorUID := actor.UID
-	if err := s.stopActorVM(ctx, actorUID, actorDirs); err != nil {
+	if err := s.teardownActor(ctx, actorUID, actorDirs, s.runningVM(actorUID)); err != nil {
 		errs = append(errs, fmt.Errorf("while tearing down actor: %w", err))
 	}
 	// Remove attribution after teardown; a failed checkpoint may leave the VM running.

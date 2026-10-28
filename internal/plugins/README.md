@@ -13,7 +13,7 @@ own, and its path here goes away when it does. Until then:
 - **Do not import these packages.** Code outside a plugin must not import it.
   Go already refuses most such imports, since a plugin's packages sit under its
   own `internal/` or are `main` packages.
-- **A plugin imports only substrate's public `pkg/` packages**, so it can move
-  out as it is. Its `go.mod` replaces the substrate module with this checkout,
-  so it builds against the current tree.
+- **A plugin imports only substrate's public `api/` and `pkg/` packages**, so
+  it can move out as it is. Its `go.mod` replaces the substrate module with this
+  checkout, so it builds against the current tree.
 

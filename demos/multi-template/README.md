@@ -9,7 +9,8 @@ or namespace.
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`).
+- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
+  or [GKE Quickstart](../../README.md#gke-quickstart-development).
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
 
@@ -23,7 +24,7 @@ or namespace.
 > variable during deployment.
 
 ```bash
-./hack/install-ate.sh --deploy-demo-multi-template
+go run ./cmd/ate-setup deploy demo multi-template
 ```
 
 This command will:
@@ -51,28 +52,26 @@ kubectl ate create actor c1 -a ate-demo-multi-template-counter --template counte
 kubectl ate create actor f1 -a ate-demo-multi-template-fspersist --template fspersist
 ```
 
-### 3. Port-forward the atenet router
+### 3. Proxy to the actors
 
-To interact with the router locally:
+Start a local proxy for each actor:
 
 ```bash
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+kubectl ate proxy actor c1 8000:80 -a ate-demo-multi-template-counter &
+kubectl ate proxy actor f1 8001:80 -a ate-demo-multi-template-fspersist &
 ```
 
 ## How to Use
 
-When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
-The two headers form the complete routing key: the Actor name alone is not
-enough, so each request below pairs it with the Atespace where that Actor was
-created.
+When you send an HTTP request through the proxy, `atenet-router` automatically activates (resumes) the actor onto an available worker pod and routes the traffic:
 
 ```bash
 # counter binary
-curl -s -H "ate-target-actor: ate-demo-multi-template-counter/c1" http://localhost:8000
+curl -s http://localhost:8000
 # -> hello from: <ip> | preserved memory count: 1
 
 # fspersist binary
-curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000
+curl -s http://localhost:8001
 # -> pod: <ip>
 #    --- history ---
 #    pod=<ip> | count=0 | time=<timestamp>
@@ -90,7 +89,7 @@ preserves that state across the snapshot/restore cycle:
 
 ```bash
 kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
-curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000  # history persists; count keeps climbing
+curl -s http://localhost:8001  # history persists; count keeps climbing
 ```
 
 ## How to Uninstall
@@ -99,5 +98,5 @@ Remove the demo — this deletes the actors (suspending running ones first), the
 templates, both atespaces, and then the pool and its namespace:
 
 ```bash
-./hack/install-ate.sh --delete-demo-multi-template
+go run ./cmd/ate-setup delete demo multi-template
 ```

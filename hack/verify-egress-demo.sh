@@ -16,7 +16,8 @@
 #
 # Preconditions:
 #   hack/create-kind-cluster.sh
-#   hack/install-ate-kind.sh --deploy-demo-egress
+#   hack/install-ate-kind.sh --deploy-demo-egress, on an install whose
+#   --ingress-allowed-spiffe-ids includes spiffe://cluster.local/ns/ate-system/sa/atenet-client
 #
 # The egress demo Actor accepts {"url":"..."} and performs an HTTP GET. With
 # egress turned on, the Actor's outbound TCP is nftables-REDIRECTed
@@ -50,11 +51,10 @@ echo "== snapshot gateway authentication log offset =="
 BEFORE=$(${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null | wc -l | tr -d ' ')
 
 echo "== drive actor egress: GET ${TARGET_URL} via the actor =="
-${K} -n ate-system port-forward service/atenet-router 18000:80 >/tmp/pf.log 2>&1 &
+kubectl-ate --context "${CTX}" proxy actor "${ACTOR}" 18000:80 --atespace "${ATESPACE}" >/tmp/pf.log 2>&1 &
 PF=$!; trap 'kill ${PF} 2>/dev/null || true' EXIT
 sleep 3
 RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:18000/ \
-  -H "ate-target-actor: ${ATESPACE}/${ACTOR}" \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"${TARGET_URL}\"}") || true
 echo "actor round-trip HTTP ${RESP} (200 = the actor fetched ${TARGET_URL} through egress)"

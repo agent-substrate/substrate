@@ -49,7 +49,7 @@ gcloud beta container clusters update CLUSTER_NAME \
 
 **Local (kind):**
 
-The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` already provisions an in-cluster OpenTelemetry Collector and a Jaeger all-in-one in the `otel-system` namespace. No additional setup is required.
+The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` already provisions an in-cluster OpenTelemetry Collector and Jaeger in the `otel-system` namespace. No additional setup is required.
 
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
@@ -111,7 +111,7 @@ kubectl ate get workers -l <label-selector>
 |---|---|
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises while building its golden tag. |
-| `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
+| `TEMPLATE` | The `ActorTemplate` the actor references, displayed as `<atespace>/<name>`. |
 | `STATE` | Current lifecycle state (`ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`, `ACTOR_STATE_REVERTING`). |
 | `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `WORKER IP` | The pod IP of that worker. Empty while suspended. |
@@ -160,10 +160,11 @@ kubectl ate delete atespace <atespace>
 An **actor template** describes what an actor runs: containers, volumes,
 snapshot policy, and worker selection. Templates live in an
 atespace and are immutable — there is no update; delete and recreate to change
-one.
+one (or create a new template and repoint suspended actors to it with
+`kubectl ate update actor --template`).
 
 ```bash
-# Create a template from a manifest (protojson-shaped ateapipb.ActorTemplate,
+# Create a template from a manifest (protojson-shaped ateapi.ActorTemplate,
 # a single YAML/JSON document; use -f - for stdin). The metadata's atespace
 # must already exist.
 kubectl ate create actor-template -f template.yaml
@@ -198,20 +199,42 @@ Manage the execution state of your workloads.
 # Create a new actor from an ActorTemplate.
 kubectl ate create actor my-actor --template=<template-name> -a <atespace>
 
+# Update an actor's template (requires the actor to be SUSPENDED) or worker selector.
+kubectl ate update actor my-actor --template=<new-template-name> -a <atespace>
+kubectl ate update actor my-actor --worker-selector=tier=paid,env=prod -a <atespace>
+kubectl ate update actor my-actor --worker-selector="" -a <atespace>
+
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>
 
-# Suspend an actor (snapshots its state to storage and frees the worker)
+# Suspend an actor (snapshots its state and frees the worker). By default the
+# snapshot stays on the worker's node and is uploaded to storage in the background.
 kubectl ate suspend actor my-actor -a <atespace>
 
-# Revert an actor to its last external snapshot (discards live, paused, or crashed state and returns to SUSPENDED)
+# Suspend an actor and wait for its snapshot to reach storage.
+kubectl ate suspend actor my-actor -a <atespace> --mode=sync
+
+# Revert an actor to its last external snapshot (discards live or crashed state, or suspended state with a node-local snapshot, and returns to SUSPENDED)
+# A suspended actor without a node-local snapshot is already at its external snapshot, so it cannot be reverted
 kubectl ate revert actor my-actor -a <atespace>
 
-# Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
+# Delete an actor, terminating workloads and detaching volumes.
 kubectl ate delete actor my-actor -a <atespace>
+```
 
-# Delete an actor from any state (e.g. RUNNING), terminating workloads and detaching volumes.
-kubectl ate delete actor my-actor -a <atespace> --any-state
+### Sending Requests to an Actor
+
+`proxy actor` forwards one or more local TCP ports to an actor. It presents
+the client certificate for `spiffe://cluster.local/ns/ate-system/sa/atenet-client`, so the install must list that ID in
+`--ingress-allowed-spiffe-ids`.
+
+```bash
+# Forward 127.0.0.1:8000 to actor port 80 (default when no ports are given).
+kubectl ate proxy actor my-actor -a <atespace>
+curl http://127.0.0.1:8000/
+
+# Forward specific [local-port:]remote-port mappings.
+kubectl ate proxy actor my-actor 8000:80 9090:9090 -a <atespace>
 ```
 
 ### Actor Snapshots
@@ -228,6 +251,7 @@ kubectl ate get tags -A
 kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 
 # Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
+# Tagging fails until the snapshot is in storage: suspend with --mode=sync to tag right away.
 kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
 kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace

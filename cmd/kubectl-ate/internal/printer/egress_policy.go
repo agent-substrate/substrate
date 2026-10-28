@@ -19,12 +19,12 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // PrintEgressPolicyTo prints one actor's egress policy. json and yaml emit the
 // bare EgressPolicy. The policy carries no actor name, so the caller passes it.
-func PrintEgressPolicyTo(out io.Writer, actor string, policy *ateapipb.EgressPolicy, format string) error {
+func PrintEgressPolicyTo(out io.Writer, actor string, policy *ateapi.EgressPolicy, format string) error {
 	switch format {
 	case "json", "yaml":
 		return printProto(out, policy, format)
