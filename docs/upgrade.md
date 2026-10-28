@@ -71,6 +71,8 @@ cd new
 
 Run every step from this shell. A record holds no database connection strings: with an external database, uncomment the `export` line, and export `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` too if you set it.
 
+A record doesn't store `--component` either. If you installed with `--component`, pass the same directories to every `ate-setup deploy` command below except `deploy sandboxconfig`, rollback included.
+
 Keep `old.yaml` as it is, for rollback. With prebuilt images, `new.yaml` now names the new tag. From source, the checkout you run from decides the release.
 
 > [!CAUTION]
