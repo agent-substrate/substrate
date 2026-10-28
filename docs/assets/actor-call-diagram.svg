@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1620 1090" width="1620" height="1090" font-family="Helvetica, Arial, sans-serif">
+  <title>Substrate architecture and data flows</title>
+  <!-- Edit coordinates directly. Arrows point from the caller to the callee. -->
+  <defs>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e65100"/></marker>
+    <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#212121"/></marker>
+    <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a8a8a8"/></marker>
+    <marker id="arrowT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#00838f"/></marker>
+  </defs>
+  <rect width="1620" height="1090" fill="#ffffff"/>
+  <!-- Trust boundaries -->
+  <rect x="240" y="118" width="1060" height="878" rx="10" fill="#ffffff" stroke="#616161" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="250" y="136" font-size="13.5" font-weight="bold" fill="#616161">Kubernetes cluster</text>
+  <rect x="262" y="160" width="800" height="392" rx="10" fill="#f7fbff" stroke="#1565c0" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="272" y="178" font-size="13.5" font-weight="bold" fill="#1565c0">ate-system namespace: control plane</text>
+  <rect x="1100" y="160" width="185" height="232" rx="10" fill="#fafafa" stroke="#616161" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="1110" y="178" font-size="13.5" font-weight="bold" fill="#616161">Kubernetes</text>
+  <rect x="262" y="592" width="1018" height="384" rx="10" fill="#fbfefb" stroke="#2e7d32" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="272" y="610" font-size="13.5" font-weight="bold" fill="#2e7d32">Worker node</text>
+  <rect x="282" y="626" width="590" height="340" rx="10" fill="#fdfaff" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="292" y="957" font-size="13.5" font-weight="bold" fill="#6a1b9a">Worker Pod, worker namespace</text>
+  <rect x="302" y="790" width="270" height="130" rx="10" fill="#fff7f7" stroke="#c62828" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="312" y="911" font-size="13.5" font-weight="bold" fill="#c62828">Sandbox: gVisor or microVM</text>
+  <rect x="592" y="790" width="265" height="130" rx="10" fill="#fff7f7" stroke="#c62828" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="602" y="911" font-size="13.5" font-weight="bold" fill="#c62828">Sandbox: gVisor or microVM</text>
+  <!-- Flows -->
+  <polyline points="110,190 110,100 620,100 620,190" fill="none" stroke="#e65100" stroke-width="1.8" marker-end="url(#arrowA)"/>
+  <polyline points="675,274 675,320" fill="none" stroke="#e65100" stroke-width="1.8" marker-end="url(#arrowA)"/>
+  <polyline points="200,228 290,228" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="470,232 550,232" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="795,274 795,302 1072,302 1072,665" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="1200,682 1330,682" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="930,682 602,682" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="460,264 460,665" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="380,735 380,806" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="500,806 500,735" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="570,665 570,572 961,572 961,494" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="961,430 961,374" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <polyline points="1052,462 1330,462" fill="none" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <!-- atelet -> registry: image pull on a cache miss -->
+  <polyline points="1110,735 1110,922 1330,922" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- atunnel -> actor B -->
+  <polyline points="590,735 590,770 690,770 690,806" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- actor B -> atunnel -->
+  <polyline points="780,806 780,722 602,722" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- worker -> atelet: actor certificates (UDS) -->
+  <polyline points="602,705 930,705" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- atelet -> API: worker registration, actor certificates, storage credentials -->
+  <polyline points="1088,665 1088,290 815,290 815,274" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- egress -> API: egress policy, actor JWTs -->
+  <polyline points="870,470 775,470 775,274" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- API -> snapshot bucket: copy and delete -->
+  <polyline points="760,190 760,132 1595,132 1595,682 1570,682" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- atelet -> microVM asset bucket -->
+  <polyline points="1150,735 1150,802 1330,802" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- controller -> API -->
+  <polyline points="870,228 830,228" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- controller -> kube-apiserver -->
+  <polyline points="1052,228 1115,228" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- API -> kube-apiserver -->
+  <polyline points="800,190 800,150 1235,150 1235,200" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- podcertcontroller -> kube-apiserver -->
+  <polyline points="1190,300 1190,256" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- atelet -> kube-apiserver -->
+  <polyline points="1185,665 1185,640 1278,640 1278,240 1265,240" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- relying parties -> IdP -->
+  <polyline points="200,352 290,352" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- Components -->
+  <!-- Application layer -->
+  <rect x="20" y="190" width="180" height="70" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="110.0" y="213.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Application layer</text>
+  <text x="110.0" y="230.0" font-size="12.5" text-anchor="middle" fill="#212121">agent framework,</text>
+  <text x="110.0" y="247.0" font-size="12.5" text-anchor="middle" fill="#212121">end-user auth</text>
+  <!-- External relying -->
+  <rect x="20" y="320" width="180" height="64" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="110.0" y="348.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">External relying</text>
+  <text x="110.0" y="365.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">parties</text>
+  <!-- External services -->
+  <rect x="1330" y="430" width="240" height="64" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="458.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">External services</text>
+  <text x="1450.0" y="475.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">and tools</text>
+  <!-- Snapshot bucket -->
+  <path d="M1330 657 v50 a120.0 7 0 0 0 240 0 v-50" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <ellipse cx="1450.0" cy="657" rx="120.0" ry="7" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="690.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Snapshot bucket</text>
+  <!-- MicroVM asset bucket -->
+  <path d="M1330 777 v50 a120.0 7 0 0 0 240 0 v-50" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <ellipse cx="1450.0" cy="777" rx="120.0" ry="7" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="810.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">MicroVM asset bucket</text>
+  <!-- atenet-router -->
+  <rect x="290" y="200" width="180" height="64" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="380.0" y="228.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">atenet-router</text>
+  <text x="380.0" y="245.5" font-size="12.5" text-anchor="middle" fill="#212121">ingress gateway</text>
+  <!-- ate-api-server -->
+  <rect x="550" y="190" width="280" height="84" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="690.0" y="220.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">ate-api-server</text>
+  <text x="690.0" y="237.0" font-size="12.5" text-anchor="middle" fill="#212121">OpenFGA authz, identity minting,</text>
+  <text x="690.0" y="254.0" font-size="12.5" text-anchor="middle" fill="#212121">objectstore-plugin sidecar</text>
+  <!-- ate-controller -->
+  <rect x="870" y="200" width="182" height="56" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="961.0" y="233.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">ate-controller</text>
+  <!-- ate-idp-server -->
+  <rect x="290" y="310" width="150" height="64" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="365.0" y="338.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">ate-idp-server</text>
+  <text x="365.0" y="355.5" font-size="12.5" text-anchor="middle" fill="#212121">OIDC discovery, JWKS</text>
+  <!-- PostgreSQL -->
+  <path d="M600 327 v46 a75.0 7 0 0 0 150 0 v-46" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <ellipse cx="675.0" cy="327" rx="75.0" ry="7" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="675.0" y="358.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">PostgreSQL</text>
+  <!-- k8s-credential-provider -->
+  <rect x="870" y="310" width="182" height="64" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="961.0" y="338.5" font-size="13" font-weight="bold" text-anchor="middle" fill="#212121">k8s-credential-provider</text>
+  <text x="961.0" y="355.5" font-size="12.5" text-anchor="middle" fill="#212121">egress secrets</text>
+  <!-- atenet-egress -->
+  <rect x="870" y="430" width="182" height="64" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="961.0" y="458.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">atenet-egress</text>
+  <text x="961.0" y="475.5" font-size="12.5" text-anchor="middle" fill="#212121">egress gateway</text>
+  <!-- kube-apiserver -->
+  <rect x="1115" y="200" width="150" height="56" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1190.0" y="233.0" font-size="14" font-weight="bold" text-anchor="middle" fill="#212121">kube-apiserver</text>
+  <!-- podcertcontroller -->
+  <rect x="1115" y="300" width="150" height="64" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1190.0" y="328.5" font-size="13.5" font-weight="bold" text-anchor="middle" fill="#212121">podcertcontroller</text>
+  <text x="1190.0" y="345.5" font-size="12.5" text-anchor="middle" fill="#212121">pod, DNS, DB certs</text>
+  <!-- ateworker + atunnel -->
+  <rect x="302" y="665" width="300" height="70" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="452.0" y="688.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">ateworker + atunnel</text>
+  <text x="452.0" y="705.0" font-size="12.5" text-anchor="middle" fill="#212121">ingress listener, egress redirect,</text>
+  <text x="452.0" y="722.0" font-size="12.5" text-anchor="middle" fill="#212121">DNS relay</text>
+  <!-- atelet DaemonSet -->
+  <rect x="930" y="665" width="270" height="70" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="1065.0" y="696.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">atelet DaemonSet</text>
+  <text x="1065.0" y="713.5" font-size="12.5" text-anchor="middle" fill="#212121">objectstore-plugin sidecar</text>
+  <!-- Actor A -->
+  <rect x="322" y="806" width="230" height="64" rx="8" fill="#fdecea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="437.0" y="834.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Actor A</text>
+  <text x="437.0" y="851.5" font-size="12.5" text-anchor="middle" fill="#212121">untrusted code, no credentials</text>
+  <!-- Actor B -->
+  <rect x="612" y="806" width="225" height="64" rx="8" fill="#fdecea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="724.5" y="834.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Actor B</text>
+  <text x="724.5" y="851.5" font-size="12.5" text-anchor="middle" fill="#212121">untrusted code, no credentials</text>
+  <!-- Container image -->
+  <rect x="1330" y="890" width="240" height="64" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="918.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Container image</text>
+  <text x="1450.0" y="935.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">registry</text>
+  <!-- Flow numbers and boundary tags -->
+  <circle cx="300" cy="100" r="12" fill="#ffffff" stroke="#e65100" stroke-width="1.6"/>
+  <text x="300" y="104" font-size="11" font-weight="bold" text-anchor="middle" fill="#e65100">A1</text>
+  <text x="318" y="104" font-size="12" font-weight="bold" text-anchor="start" fill="#e65100" stroke="#ffffff" stroke-width="4" paint-order="stroke">create actor</text>
+  <circle cx="675" cy="297" r="12" fill="#ffffff" stroke="#e65100" stroke-width="1.6"/>
+  <text x="675" y="301" font-size="11" font-weight="bold" text-anchor="middle" fill="#e65100">A2</text>
+  <text x="692" y="301" font-size="12" font-weight="bold" text-anchor="start" fill="#e65100" stroke="#ffffff" stroke-width="4" paint-order="stroke">save record</text>
+  <circle cx="222" cy="228" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="222" y="232" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B1</text>
+  <text x="245" y="250" font-size="12" font-weight="bold" text-anchor="middle" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">send request</text>
+  <circle cx="510" cy="232" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="510" y="236" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B2</text>
+  <text x="510" y="254" font-size="12" font-weight="bold" text-anchor="middle" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">resume actor</text>
+  <circle cx="1072" cy="612" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="1072" y="616" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B3</text>
+  <text x="1056" y="616" font-size="12" font-weight="bold" text-anchor="end" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">restore actor</text>
+  <circle cx="1222" cy="682" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="1222" y="686" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B4</text>
+  <text x="1240" y="672" font-size="12" font-weight="bold" text-anchor="start" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">get snapshot</text>
+  <circle cx="700" cy="682" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="700" y="686" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B5</text>
+  <text x="800" y="674" font-size="12" font-weight="bold" text-anchor="middle" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">start sandbox</text>
+  <circle cx="460" cy="572" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="460" y="576" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B6</text>
+  <text x="476" y="600" font-size="12" font-weight="bold" text-anchor="start" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">forward request</text>
+  <circle cx="380" cy="762" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="380" y="766" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B7</text>
+  <text x="364" y="766" font-size="12" font-weight="bold" text-anchor="end" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">deliver</text>
+  <circle cx="500" cy="762" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="500" y="766" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B8</text>
+  <text x="516" y="766" font-size="12" font-weight="bold" text-anchor="start" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">call a tool</text>
+  <circle cx="680" cy="572" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="680" y="576" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B9</text>
+  <text x="698" y="562" font-size="12" font-weight="bold" text-anchor="start" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">forward as this actor</text>
+  <circle cx="961" cy="402" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="961" y="406" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B10</text>
+  <text x="979" y="406" font-size="12" font-weight="bold" text-anchor="start" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">get credential</text>
+  <circle cx="1120" cy="462" r="12" fill="#ffffff" stroke="#212121" stroke-width="1.6"/>
+  <text x="1120" y="466" font-size="11" font-weight="bold" text-anchor="middle" fill="#212121">B11</text>
+  <text x="1138" y="452" font-size="12" font-weight="bold" text-anchor="start" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">call with credential</text>
+  <polyline points="20,1024 60,1024" stroke="#e65100" stroke-width="1.8" marker-end="url(#arrowA)"/>
+  <text x="70" y="1028" font-size="12" fill="#212121">A: create an actor</text>
+  <polyline points="20,1046 60,1046" stroke="#212121" stroke-width="1.8" marker-end="url(#arrowB)"/>
+  <text x="70" y="1050" font-size="12" fill="#212121">B: send a request to an actor</text>
+  <polyline points="20,1068 60,1068" stroke="#a8a8a8" stroke-width="1.8" marker-end="url(#arrowG)"/>
+  <text x="70" y="1072" font-size="12" fill="#212121">Supporting connection</text>
+  <rect x="420" y="1022" width="34" height="20" rx="4" fill="#fff7f7" stroke="#c62828" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="464" y="1036" font-size="12" fill="#212121">Sandbox: untrusted actor code</text>
+  <rect x="710" y="1022" width="34" height="20" rx="4" fill="#fdfaff" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="754" y="1036" font-size="12" fill="#212121">Worker Pod: shared by many actors</text>
+  <rect x="1000" y="1022" width="34" height="20" rx="4" fill="#fbfefb" stroke="#2e7d32" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="1044" y="1036" font-size="12" fill="#212121">Node</text>
+  <rect x="1290" y="1022" width="34" height="20" rx="4" fill="#f7fbff" stroke="#1565c0" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="1334" y="1036" font-size="12" fill="#212121">Control plane namespace</text>
+  <rect x="420" y="1052" width="34" height="20" rx="4" fill="#fdecea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="464" y="1066" font-size="12" fill="#212121">Untrusted</text>
+  <rect x="710" y="1052" width="34" height="20" rx="4" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="754" y="1066" font-size="12" fill="#212121">Node and worker components</text>
+  <rect x="1000" y="1052" width="34" height="20" rx="4" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="1044" y="1066" font-size="12" fill="#212121">Control plane components</text>
+  <rect x="1290" y="1052" width="34" height="20" rx="4" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1334" y="1066" font-size="12" fill="#212121">Outside Substrate</text>
+</svg>

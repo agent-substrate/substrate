@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1620 1090" width="1620" height="1090" font-family="Helvetica, Arial, sans-serif">
+  <title>Substrate actor template creation</title>
+  <!-- Edit coordinates directly. Arrows point from the caller to the callee. -->
+  <defs>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e65100"/></marker>
+    <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#212121"/></marker>
+    <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a8a8a8"/></marker>
+    <marker id="arrowT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#00838f"/></marker>
+  </defs>
+  <rect width="1620" height="1090" fill="#ffffff"/>
+  <!-- Trust boundaries -->
+  <rect x="240" y="118" width="1060" height="878" rx="10" fill="#ffffff" stroke="#616161" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="250" y="136" font-size="13.5" font-weight="bold" fill="#616161">Kubernetes cluster</text>
+  <rect x="262" y="160" width="800" height="392" rx="10" fill="#f7fbff" stroke="#1565c0" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="272" y="178" font-size="13.5" font-weight="bold" fill="#1565c0">ate-system namespace: control plane</text>
+  <rect x="262" y="592" width="1018" height="384" rx="10" fill="#fbfefb" stroke="#2e7d32" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="272" y="610" font-size="13.5" font-weight="bold" fill="#2e7d32">Worker node</text>
+  <rect x="282" y="626" width="590" height="340" rx="10" fill="#fdfaff" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="292" y="957" font-size="13.5" font-weight="bold" fill="#6a1b9a">Worker Pod, worker namespace</text>
+  <rect x="302" y="790" width="270" height="130" rx="10" fill="#fff7f7" stroke="#c62828" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="312" y="911" font-size="13.5" font-weight="bold" fill="#c62828">Sandbox: gVisor or microVM</text>
+  <!-- Flows -->
+  <polyline points="110,190 110,100 620,100 620,190" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="675,274 675,320" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="795,274 795,302 1072,302 1072,665" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="1110,735 1110,922 1330,922" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="930,682 602,682" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="602,705 930,705" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="1088,665 1088,290 815,290 815,274" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <polyline points="1200,682 1330,682" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <!-- atunnel -> golden actor -->
+  <polyline points="380,735 380,806" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- atelet -> microVM asset bucket -->
+  <polyline points="1150,735 1150,802 1330,802" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
+  <!-- Components -->
+  <!-- Application layer -->
+  <rect x="20" y="190" width="180" height="70" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="110.0" y="213.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Application layer</text>
+  <text x="110.0" y="230.0" font-size="12.5" text-anchor="middle" fill="#212121">agent framework,</text>
+  <text x="110.0" y="247.0" font-size="12.5" text-anchor="middle" fill="#212121">end-user auth</text>
+  <!-- ate-api-server -->
+  <rect x="550" y="190" width="280" height="84" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="690.0" y="220.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">ate-api-server</text>
+  <text x="690.0" y="237.0" font-size="12.5" text-anchor="middle" fill="#212121">OpenFGA authz, identity minting,</text>
+  <text x="690.0" y="254.0" font-size="12.5" text-anchor="middle" fill="#212121">objectstore-plugin sidecar</text>
+  <!-- PostgreSQL -->
+  <path d="M600 327 v46 a75.0 7 0 0 0 150 0 v-46" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <ellipse cx="675.0" cy="327" rx="75.0" ry="7" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="675.0" y="358.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">PostgreSQL</text>
+  <!-- ateworker + atunnel -->
+  <rect x="302" y="665" width="300" height="70" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="452.0" y="688.0" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">ateworker + atunnel</text>
+  <text x="452.0" y="705.0" font-size="12.5" text-anchor="middle" fill="#212121">ingress listener, egress redirect,</text>
+  <text x="452.0" y="722.0" font-size="12.5" text-anchor="middle" fill="#212121">DNS relay</text>
+  <!-- atelet DaemonSet -->
+  <rect x="930" y="665" width="270" height="70" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="1065.0" y="696.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">atelet DaemonSet</text>
+  <text x="1065.0" y="713.5" font-size="12.5" text-anchor="middle" fill="#212121">objectstore-plugin sidecar</text>
+  <!-- Golden actor -->
+  <rect x="322" y="806" width="230" height="64" rx="8" fill="#fdecea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="437.0" y="834.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Golden actor</text>
+  <text x="437.0" y="851.5" font-size="12.5" text-anchor="middle" fill="#212121">built from the template</text>
+  <!-- Snapshot bucket -->
+  <path d="M1330 657 v50 a120.0 7 0 0 0 240 0 v-50" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <ellipse cx="1450.0" cy="657" rx="120.0" ry="7" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="690.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Snapshot bucket</text>
+  <!-- MicroVM asset bucket -->
+  <path d="M1330 777 v50 a120.0 7 0 0 0 240 0 v-50" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <ellipse cx="1450.0" cy="777" rx="120.0" ry="7" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="810.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">MicroVM asset bucket</text>
+  <!-- Container image -->
+  <rect x="1330" y="890" width="240" height="64" rx="8" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1450.0" y="918.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Container image</text>
+  <text x="1450.0" y="935.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">registry</text>
+  <!-- Flow numbers and boundary tags -->
+  <circle cx="300" cy="100" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="300" y="104" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T1</text>
+  <text x="318" y="104" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">create template</text>
+  <circle cx="675" cy="297" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="675" y="301" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T10</text>
+  <text x="692" y="301" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">template ready</text>
+  <circle cx="1072" cy="520" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="1072" y="524" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T2</text>
+  <text x="1104" y="524" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">run golden actor</text>
+  <circle cx="1072" cy="600" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="1072" y="604" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T7</text>
+  <text x="1104" y="604" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">suspend golden actor</text>
+  <circle cx="1110" cy="860" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="1110" y="864" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T3</text>
+  <text x="1128" y="864" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">pull image</text>
+  <circle cx="700" cy="682" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="700" y="686" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T4</text>
+  <text x="800" y="674" font-size="12" font-weight="bold" text-anchor="middle" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">start sandbox</text>
+  <circle cx="700" cy="705" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="700" y="709" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T5</text>
+  <text x="850" y="724" font-size="12" font-weight="bold" text-anchor="middle" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">get actor certificate</text>
+  <circle cx="1088" cy="560" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="1088" y="564" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T6</text>
+  <text x="1104" y="564" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">mint certificate</text>
+  <circle cx="1088" cy="640" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="1088" y="644" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T8</text>
+  <text x="1104" y="644" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">get storage credential</text>
+  <circle cx="1222" cy="682" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="1222" y="686" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">T9</text>
+  <text x="1265" y="702" font-size="12" font-weight="bold" text-anchor="middle" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">upload snapshot</text>
+  <polyline points="20,1024 60,1024" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowT)"/>
+  <text x="70" y="1028" font-size="12" fill="#212121">T: create an actor template</text>
+  <polyline points="20,1046 60,1046" stroke="#a8a8a8" stroke-width="1.8" marker-end="url(#arrowG)"/>
+  <text x="70" y="1050" font-size="12" fill="#212121">Other connection</text>
+  <rect x="420" y="1022" width="34" height="20" rx="4" fill="#fff7f7" stroke="#c62828" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="464" y="1036" font-size="12" fill="#212121">Sandbox: untrusted actor code</text>
+  <rect x="710" y="1022" width="34" height="20" rx="4" fill="#fdfaff" stroke="#6a1b9a" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="754" y="1036" font-size="12" fill="#212121">Worker Pod: shared by many actors</text>
+  <rect x="1000" y="1022" width="34" height="20" rx="4" fill="#fbfefb" stroke="#2e7d32" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="1044" y="1036" font-size="12" fill="#212121">Node</text>
+  <rect x="1290" y="1022" width="34" height="20" rx="4" fill="#f7fbff" stroke="#1565c0" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="1334" y="1036" font-size="12" fill="#212121">Control plane namespace</text>
+  <rect x="420" y="1052" width="34" height="20" rx="4" fill="#fdecea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="464" y="1066" font-size="12" fill="#212121">Untrusted</text>
+  <rect x="710" y="1052" width="34" height="20" rx="4" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="754" y="1066" font-size="12" fill="#212121">Node and worker components</text>
+  <rect x="1000" y="1052" width="34" height="20" rx="4" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="1044" y="1066" font-size="12" fill="#212121">Control plane components</text>
+  <rect x="1290" y="1052" width="34" height="20" rx="4" fill="#f5f5f5" stroke="#616161" stroke-width="1.5"/>
+  <text x="1334" y="1066" font-size="12" fill="#212121">Outside Substrate</text>
+</svg>
