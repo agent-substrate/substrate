@@ -3090,7 +3090,10 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
-	t.Run("DeleteWorker_DropsItsAssignments", func(t *testing.T) {
+	// Deleting a Worker or an Actor while an assignment joins them would leave
+	// the Actor naming a Worker that is gone, or the Worker booking an Actor
+	// that is gone.
+	t.Run("DeleteWorker_RefusesWhileAssigned", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
@@ -3099,22 +3102,55 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 		assignment := newTestAssignment(t, s, "1", 0, 0)
 		bind(t, s, testWorkerName, assignment)
-		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); err != nil {
-			t.Fatalf("DeleteWorker failed: %v", err)
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("DeleteWorker of an assigned worker = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); err != nil {
+			t.Fatalf("GetWorkerAssignment after the refused delete failed: %v", err)
 		}
 
-		// A Worker's assignments cannot outlive it: the pod is gone, so nothing
-		// is hosted, and a leftover row would keep an Actor looking placed.
-		assignmentsPage, err := s.ListWorkerAssignments(ctx, testWorkerName, store.ListOptions{})
+		release(t, s, assignment)
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteWorker after release failed: %v", err)
+		}
+	})
+
+	t.Run("DeleteActor_RefusesWhileAssigned", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		assignment := newTestAssignment(t, s, "1", 0, 0)
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
 		if err != nil {
-			t.Fatalf("ListWorkerAssignments failed: %v", err)
+			t.Fatalf("GetActor failed: %v", err)
 		}
-		assignments := assignmentsPage.Items
-		if len(assignments) != 0 {
-			t.Errorf("deleted worker still holds %d assignments", len(assignments))
+		// DeleteActor reads the Actor's status, so the bind has to set it.
+		bound, err := s.BindActorToWorker(ctx, testWorkerName, assignment, nil, ref, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.WorkerAssignment = &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: testWorkerName}}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("BindActorToWorker failed: %v", err)
 		}
-		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetWorkerAssignment still finds the deleted worker's assignment: %v", err)
+		if _, err := s.DeleteActor(ctx, ref, store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("DeleteActor of an assigned actor = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.GetActor(ctx, ref); err != nil {
+			t.Fatalf("GetActor after the refused delete failed: %v", err)
+		}
+
+		if _, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(bound), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.WorkerAssignment = nil
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateActorAndRelease failed: %v", err)
+		}
+		if _, err := s.DeleteActor(ctx, ref, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteActor after release failed: %v", err)
 		}
 	})
 

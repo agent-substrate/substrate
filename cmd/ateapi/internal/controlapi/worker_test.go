@@ -543,24 +543,6 @@ func TestDeleteWorker_Absent(t *testing.T) {
 	}
 }
 
-// An assigned worker deletes like any other: the delete does not cascade, and
-// an Actor pointing at a Worker that is gone is an expected steady state.
-func TestDeleteWorker_AssignedWorkerDeletesAnyway(t *testing.T) {
-	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
-
-	got, err := svc.DeleteWorker(ctx, &ateapi.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
-	if err != nil {
-		t.Fatalf("DeleteWorker() failed: %v", err)
-	}
-	// The record carries the total, not the assignments themselves.
-	if n := got.GetStatus().GetAllocated().GetActors(); n != 1 {
-		t.Errorf("deleted worker hosted %d actors, want the 1 it was holding", n)
-	}
-}
-
 func TestDeleteWorker_Preconditions(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)

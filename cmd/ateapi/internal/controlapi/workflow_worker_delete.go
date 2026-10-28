@@ -102,8 +102,7 @@ func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name strin
 		}
 		// Scheduling only places on ACTIVE Workers, so draining first stops a
 		// concurrent resume from binding to a page the sweep has already passed.
-		// The delete would cascade that assignment away and leave the Actor
-		// pointing at a Worker that is gone.
+		// The delete would then find that assignment and refuse.
 		if toUpdate.Status == nil {
 			toUpdate.Status = &ateapi.WorkerStatus{}
 		}
@@ -380,6 +379,10 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapi.Wor
 			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		case errors.Is(err, store.ErrFailedPrecondition):
+			// The sweep released every Actor that names this Worker, so a
+			// leftover assignment means the store is inconsistent.
+			return nil, apierror.Internal("Worker %s still holds assignments after its Actors were released", name)
 		}
 		return nil, fmt.Errorf("while deleting worker from DB: %w", err)
 	}

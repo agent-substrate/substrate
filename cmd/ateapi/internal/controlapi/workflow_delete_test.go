@@ -726,6 +726,13 @@ func TestEnsureWorkerReleased_RecreatedActorKeepsAssignment(t *testing.T) {
 
 	deleted := storetest.MustCreateActor(t, ctx, persistence, bound(""))
 	actorRef := resources.ActorRefFromActor(deleted)
+	// The delete that finished released the Actor's worker before removing it.
+	if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, func(a *ateapi.Actor) error {
+		a.Status.WorkerAssignment = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
+	}
 	if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteActor: %v", err)
 	}

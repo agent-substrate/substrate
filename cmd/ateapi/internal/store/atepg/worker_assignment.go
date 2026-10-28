@@ -142,8 +142,8 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 		if err != nil {
 			return nil, err
 		}
-		// A row released, or a Worker deleted, since the caller read the
-		// Actor also moved the Actor on, so its version check fails here.
+		// A row released since the caller read the Actor also moved the
+		// Actor on, so its version check fails here.
 		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
 			return nil, err
 		}
@@ -170,7 +170,8 @@ func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Work
 	}
 	worker, err := getWorkerForUpdate(ctx, tx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
-		// Deleting the Worker deleted its assignments.
+		// A Worker is deleted only once it holds no assignments, so the row
+		// was released after the first read.
 		return nil, nil
 	}
 	if err != nil {

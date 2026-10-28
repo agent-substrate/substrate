@@ -391,6 +391,11 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapi.Actor
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
+		if errors.Is(err, store.ErrFailedPrecondition) {
+			// The release step cleared the Actor's worker assignment, and
+			// only a resume, which refuses a DELETING Actor, sets it again.
+			return nil, apierror.Internal("Actor %s names a worker after its release", actorRef)
+		}
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}
 	logActorDeleted(ctx, deleted, ateattr.OperationDelete)

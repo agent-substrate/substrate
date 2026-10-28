@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
@@ -33,6 +34,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 // newWorkerDeleteWorkflow returns a workflow backed by a real store, which is
@@ -83,8 +85,8 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 // that noticed the pod had vanished, because an assignment write stays
 // in-process: there is no bind/release RPC for that caller to reach for.
 // A Worker left ACTIVE through the sweep can take a bind onto a page already
-// passed, and the delete then cascades that assignment away while the Actor
-// still points at it. Failing the release keeps the record around, so the
+// passed, and the delete then refuses. Failing the release keeps the record
+// around, so the
 // state it held during the sweep can be read.
 func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	ctx := context.Background()
@@ -205,72 +207,62 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 	}
 }
 
-// The Worker's assignment names the Actor incarnation it was bound to. An Actor
-// that has since been recreated under the same name is a different incarnation,
-// so the dead Worker's assignment says nothing about it and must not crash it.
-func TestDeleteWorkerWorkflow_IgnoresStaleIncarnationAssignment(t *testing.T) {
-	ctx := context.Background()
-	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, "old-incarnation-uid")
+// An assignment that no Actor matches cannot be written, since every bind and
+// release updates its Actor in the same transaction. The sweep leaves such a
+// row alone, and the delete fails as INTERNAL instead of a retryable code,
+// keeping the Worker and leaving any Actor untouched.
+func TestDeleteWorkerWorkflow_LeftoverAssignmentFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed func(t *testing.T, ctx context.Context, persistence store.Interface)
+	}{
+		{
+			name: "earlier incarnation",
+			seed: func(t *testing.T, ctx context.Context, persistence store.Interface) {
+				seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
+				assignAPIWorker(t, ctx, persistence, apiWorkerName, "old-incarnation-uid")
+			},
+		},
+		{
+			name: "actor on another worker",
+			seed: func(t *testing.T, ctx context.Context, persistence store.Interface) {
+				actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
+					a.Status.WorkerAssignment.Worker = workerRef(apiOtherWorkerName)
+				})
+				assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+			},
+		},
+		{
+			name: "absent actor",
+			seed: func(t *testing.T, ctx context.Context, persistence store.Interface) {
+				assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			wf, persistence := newWorkerDeleteWorkflow(t)
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			tc.seed(t, ctx, persistence)
+			before, err := persistence.GetActor(ctx, apiActorRef)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetActor() failed: %v", err)
+			}
 
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker() failed: %v", err)
-	}
-
-	got, err := persistence.GetActor(ctx, apiActorRef)
-	if err != nil {
-		t.Fatalf("GetActor() failed: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("actor state = %v, want RUNNING: the dead worker was bound to a different incarnation", got.GetStatus().GetState())
-	}
-}
-
-// An Actor that has since been placed on another Worker is no longer this
-// Worker's to release, even though this Worker still points at it.
-func TestDeleteWorkerWorkflow_IgnoresActorMovedElsewhere(t *testing.T) {
-	ctx := context.Background()
-	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
-		a.Status.WorkerAssignment.Worker = workerRef(apiOtherWorkerName)
-	})
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
-
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker() failed: %v", err)
-	}
-
-	got, err := persistence.GetActor(ctx, apiActorRef)
-	if err != nil {
-		t.Fatalf("GetActor() failed: %v", err)
-	}
-	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("actor state = %v, want RUNNING: it is running on another worker", got.GetStatus().GetState())
-	}
-	if got.GetStatus().GetWorkerAssignment().GetWorker().GetName() != apiOtherWorkerName {
-		t.Errorf("actor worker assignment = %v, want it left pointing at the other worker", got.GetStatus().GetWorkerAssignment())
-	}
-}
-
-// An assignment whose Actor no longer exists leaves nothing to release, so the
-// delete goes through: the state it is driving towards — no Actor pointing at
-// this Worker — already holds.
-func TestDeleteWorkerWorkflow_AssignedToAbsentActorDeletesAnyway(t *testing.T) {
-	ctx := context.Background()
-	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
-
-	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker() failed: %v", err)
-	}
-	// An assignment is its own record now, so what proves the delete went
-	// through is that nothing is left pointing at the Worker.
-	if got := firstAssignment(t, persistence, apiWorkerName); got != nil {
-		t.Errorf("assignment after delete = %v, want none", got)
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); apierror.Code(err) != codes.Internal {
+				t.Fatalf("DeleteWorker() = %v (err %v), want Internal", apierror.Code(err), err)
+			}
+			if _, err := persistence.GetWorker(ctx, apiWorkerName); err != nil {
+				t.Errorf("GetWorker() after the failed delete = %v, want the worker kept", err)
+			}
+			after, err := persistence.GetActor(ctx, apiActorRef)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetActor() failed: %v", err)
+			}
+			if diff := cmp.Diff(before, after, protocmp.Transform()); diff != "" {
+				t.Errorf("actor changed by the failed delete (-before +after):\n%s", diff)
+			}
+		})
 	}
 }
 

@@ -113,8 +113,9 @@ type Interface interface {
 	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
-	// missing, or ErrUIDConflict/ErrVersionConflict if precondition does not
-	// describe the actor the caller observed.
+	// missing, ErrUIDConflict/ErrVersionConflict if precondition does not
+	// describe the actor the caller observed, or ErrFailedPrecondition if the
+	// actor's status.worker_assignment is set.
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions) (*ateapi.Actor, error)
 
 	// Creates the 1:1 policy subresource for an existing Actor.
@@ -279,17 +280,17 @@ type Interface interface {
 	// write wins, or mutate's error.
 	MarkWorkerForDeletion(ctx context.Context, name string, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error)
 
-	// Removes a worker by name, along with every assignment it holds, and
-	// returns the deleted resource. Returns ErrNotFound if missing, or
-	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
-	// worker the caller observed.
+	// Removes a worker by name and returns the deleted resource. Returns
+	// ErrNotFound if missing, ErrUIDConflict/ErrVersionConflict if
+	// precondition does not describe the worker the caller observed, or
+	// ErrFailedPrecondition if the worker still holds an assignment.
 	DeleteWorker(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.Worker, error)
 
 	// An assignment is written only together with its Actor, and Worker
 	// allocation moves with it, so an Actor names a Worker in
 	// status.worker_assignment exactly while the Worker holds its assignment.
-	// Deleting a Worker deletes its assignments; DeleteWorker's callers release
-	// its Actors first.
+	// DeleteWorker refuses while the Worker holds an assignment, and
+	// DeleteActor while the Actor names a Worker.
 
 	// BindActorToWorker assigns an Actor, updates the Worker's allocation, and
 	// applies mutate to the Actor as UpdateActor does, all in one transaction.
