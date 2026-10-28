@@ -8,7 +8,7 @@ description: >
 
 # Substrate Threat Model
 
-Last updated: Oct 14, 2026
+Last updated: Oct 28, 2026
 
 
 # Overview
@@ -24,25 +24,71 @@ This threat model catalogs the security threats inherent to high-density statefu
 
 # Architecture of Substrate
 
-![Substrate Architecture Diagram](../assets/threat-model-diagram.svg)
+Two diagrams show the same components in the same positions. The first prepares an actor template. The second creates an actor from it and serves a request.
+
+## Creating an actor template
+
+![Substrate actor template creation](../assets/actor-template-diagram.svg)
+
+Creating a template runs a golden actor once, snapshots it, and keeps that snapshot. Actors created from the template start from it.
+
+| Step | What happens | What's checked |
+| :---- | :---- | :---- |
+| T1 | The application creates an actor template. `ate-api-server` stores it, and a background reconciler starts building its golden snapshot. | OpenFGA allows the caller to create templates in the atespace. Container images must be pinned by digest. |
+| T2 | The reconciler creates a golden actor in the template's atespace, picks a worker, and tells that node's `atelet` to run it. | `atelet` accepts only `ate-api-server`'s identity. |
+| T3 | `atelet` pulls the container image into the node's layer cache, which all actors on the node share. MicroVM nodes also fetch the guest kernel and image from the asset bucket. | The image is fetched by digest, with the node's registry credentials. |
+| T4 | `atelet` tells `ateworker` to start the sandbox. | The call stays on the node. |
+| T5 | `atunnel` asks `atelet` for the actor's certificate. | `atelet` accepts only workers on its own node. |
+| T6 | `atelet` asks `ate-api-server` to mint it. | It is minted only for the worker the actor is assigned to. |
+| T7 | Once the workload is ready and warmed up, the reconciler suspends the golden actor, and `atelet` checkpoints its memory and disk. | Only `ate-api-server` can order a suspend. |
+| T8 | `atelet` trades a JWT for this actor for storage credentials. | The credentials cover only this actor's snapshot location. |
+| T9 | `atelet` uploads the golden snapshot. | The sandbox never touches storage. |
+| T10 | The reconciler tags the snapshot, deletes the golden actor, and marks the template ready. | The worker's actor directories are wiped before it is reused. |
+
+The golden actor has no network egress unless the template sets a golden egress policy.
+
+## Creating an actor and serving a request
+
+![Substrate architecture and data flows](../assets/actor-call-diagram.svg)
+
+In **A**, an application creates an actor. In **B**, it sends the actor a request, which resumes the actor on a worker, and the actor then calls an external tool.
+
+| Step | What happens | What's checked |
+| :---- | :---- | :---- |
+| A1 | The application asks `ate-api-server` to create an actor from a template. | The caller is authenticated, and OpenFGA allows it to create actors in the atespace and use the template. |
+| A2 | `ate-api-server` saves the actor as suspended. It points at the template's golden snapshot without copying it, and nothing runs until its first request. | Only `ate-api-server` can reach the database, with a client certificate. |
+| B1 | The application sends a request for `<atespace>/<actor>` to `atenet-router`. | The caller's mTLS identity must be on the router's allowlist. |
+| B2 | The router asks `ate-api-server` to resume the actor and return its worker. | Only the router's identity can resume actors this way. |
+| B3 | `ate-api-server` tells the `atelet` on the chosen node to restore the actor. | `atelet` accepts only `ate-api-server`'s identity. |
+| B4 | `atelet` downloads the actor's snapshot. | The storage credentials are scoped to this one actor. |
+| B5 | `atelet` tells `ateworker` to start a sandbox from the snapshot. If the node hasn't cached the image, `atelet` pulls it first. | The call stays on the node. |
+| B6 | The router forwards the request to `atunnel` in the actor's Worker Pod. | `atunnel` accepts only the router's identity, and NetworkPolicy admits only the router. |
+| B7 | `atunnel` delivers the request to the actor's sandbox. | It goes only to the actor named in the request. |
+| B8 | The actor calls a tool. nftables outside the sandbox send the connection to `atunnel`. | DNS answers only names in the actor's egress policy. Other protocols are dropped. |
+| B9 | `atunnel` forwards the call to `atenet-egress` with a certificate for this actor. | The certificate is issued only to the worker the actor is assigned to. |
+| B10 | `atenet-egress` fetches the credential the egress rule names. | Only `atenet-egress` can reach the credential provider. |
+| B11 | `atenet-egress` calls the external service and injects the credential. | Destinations not in the actor's egress policy are refused. The credential never enters the sandbox. |
 
 # Key Components
 
-* **ate-api-server:** Control plane server managing actor lifecycle, scheduling, OpenFGA authorization, and credential issuance.
-* **ate-controller:** Kubernetes controller managing worker pool deployments and network policies.
-* **podcertcontroller:** Kubernetes controller issuing short-lived mTLS certificates for pod identity, service DNS, and database access.
-* **atelet:** Per-node supervisor daemon coordinating sandbox lifecycle, checkpoint/restore, and node-attested credentials.
-* **ateworker:** Per-worker Pod runtime daemon managing interior sandboxes (`gVisor` or `Cloud Hypervisor` microVMs).
-* **Worker:** Pre-provisioned Pods that host active actors.
 * **Actor:** The core stateful compute primitive, grouped into atespaces and scheduled onto workers via Run or Resume.
-* **Actor Network:** Private per-actor network namespace and point-to-point veth link behind `atunnel`'s authenticated listener on port 443.
+* **Actor Network:** Private per-actor network namespace with a point-to-point veth (gVisor) or tap device (microVM). nftables rules outside the sandbox send all of its traffic to `atunnel`.
 * **Actor Routing:** Ingress requests identify the target actor via `ate-target-actor: <atespace>/<actor>`.
-* **atenet-router:** Envoy ingress proxy with an `ext_proc` processor that authenticates callers over mTLS, resolves worker assignments, and routes to `atunnel`.
+* **ate-api-server:** Control plane API that manages actor lifecycle, scheduling, OpenFGA authorization, and actor credential minting. Its `objectstore-plugin` sidecar copies and deletes snapshots and issues per-actor storage credentials.
+* **ate-controller:** Kubernetes controller that turns WorkerPools into worker Deployments and their NetworkPolicies.
+* **ate-idp-server:** Serves the public OIDC discovery document and JWKS that relying parties use to verify actor JWTs.
+* **atelet:** Per-node supervisor (DaemonSet) that coordinates sandbox lifecycle and checkpoint/restore, and brokers credentials for the actors on its node. Its `objectstore-plugin` sidecar moves snapshots.
 * **atenet-egress:** Multi-tenant Envoy egress forward proxy that enforces declarative egress policies and injects credentials.
-* **Object Storage:** Stores partitioned actor snapshots, accessed through the out-of-process `objectstore-plugin`.
+* **atenet-router:** Envoy ingress proxy with an `ext_proc` processor that authenticates callers over mTLS, resolves worker assignments, and routes to `atunnel`.
+* **ateworker:** Runtime daemon in each Worker Pod. It runs the sandboxes (`gVisor` or `Cloud Hypervisor` microVMs) and includes `atunnel`.
+* **atunnel:** Terminates mTLS ingress from `atenet-router`, tunnels each actor's redirected outbound TCP to `atenet-egress`, and relays DNS filtered by egress policy.
 * **Filesystem Support:** Container rootfs overlays and working directories captured in snapshots and wiped on actor teardown.
-* **Substrate Database:** PostgreSQL (or Cloud SQL on GCP), accessed over TLS by `ate-api-server`.
+* **k8s-credential-provider:** Gives `atenet-egress` the Kubernetes Secrets that egress rules reference.
 * **Kubernetes:** The underlying cluster infrastructure providing node isolation and network policies.
+* **Object Storage:** A snapshot bucket, partitioned by atespace and actor and reached only with per-actor credentials, and a separate read-only bucket of microVM assets.
+* **podcertcontroller:** Kubernetes controller that issues short-lived mTLS certificates for pod identity, service DNS, and database access.
+* **Substrate Database:** PostgreSQL (or a managed PostgreSQL service). Only `ate-api-server` can reach it.
+* **Worker Pod:** Pre-provisioned Pod that hosts many actors, each in its own sandbox.
 
 # Threats and Mitigations
 

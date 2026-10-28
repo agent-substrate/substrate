@@ -12,6 +12,19 @@ Substrate delivers zero trust for agents. Every agent has an identity, but no cr
 
 Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls operate within Substrate's cold-start and resume latency budget. This document defines the high-level security principles. For identity and credential configuration, see the [Authentication Guide](../guides/authentication.md). Detailed threat scenarios and mitigating invariants are documented [in the threat model](threat-model.md).
 
+## Security Boundaries
+
+![Substrate security boundaries](../assets/security-boundaries.svg)
+
+The numbered tags mark the boundaries Substrate holds:
+
+1. **Sandbox.** Each actor runs in its own gVisor or microVM sandbox, with its own network namespace and storage. Actor code can't reach the node, the worker, or other actors.
+2. **Gateways.** Traffic reaches actors only through the ingress gateway, from authenticated callers. Traffic leaves only through the egress gateway, which allows only the destinations in policy and injects credentials, so sandboxes hold none.
+3. **Control plane.** Actors and worker pods have no network path to the Substrate API, its database, or the Kubernetes API. API callers are authorized per atespace.
+4. **Storage.** Sandboxes never touch snapshot storage. The node supervisor moves an actor's snapshots using credentials scoped to that one actor, and only the control plane copies or deletes them.
+
+Your application is outside these boundaries: it authenticates end users and decides which actors they can reach. A more detailed diagram is available in the [threat model](threat-model.md#architecture-of-substrate).
+
 ## Security Scope
 
 Substrate provides the foundational base for agent security:
