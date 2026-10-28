@@ -45,7 +45,7 @@
 - Comment the final state of the code. Bugs that only existed while you were writing the change, and links to planning docs outside the repository, are noise to the next reader.
 - Check every claim in comments, docs and the PR description against the code. Don't claim a guarantee the code doesn't enforce. When you change behavior, update the comments, docs and scripts elsewhere that describe it. Link to existing docs instead of copying them.
 - Find the root cause before fixing a symptom. Back performance claims with a measurement.
-- Keep atelet and the worker runtimes opaque to each other. The only knowledge they may share is `internal/proto/ateworkerpb` and the paths in `internal/nodepath`. Using the same library code is fine; depending on how the other side is built is not. We want atelet to roll ahead of workers eventually, so don't widen that interface casually. Until v1.0.0 nothing enforces this; see Backward Compatibility.
+- Keep atelet and the worker runtimes opaque to each other. The only knowledge they may share is `internal/proto/ateworkerpb` and the paths in `internal/nodepath`. Using the same library code is fine; depending on how the other side is built is not. We want atelet to roll ahead of workers eventually, so don't widen that interface casually.
 - Actor features work on both gVisor and microVM, with e2e coverage for both, unless the issue or PR description scopes the change to one runtime.
 - Don't assume kind, GKE, amd64 or a newer kernel than the repo already needs. Dev scripts must work on arm64 macOS. Don't change host-wide state.
 - Put shell code in standalone `.sh` scripts so shellcheck can lint them. Place each script near what uses it, such as `hack/` for dev scripts or a directory under `.github/` for a workflow. Don't inline it in YAML, such as a GitHub workflow `run:` block, in JSON, or in another language's source, such as Go or Python. Have those call the script. Get a reviewer's agreement before making an exception.
@@ -121,14 +121,6 @@ The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` insta
 - **Modularity**: Submit small, focused Pull Requests that touch a limited part of the codebase for easier reviews and rebasing.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
-
-## Backward Compatibility
-
-<!-- TODO #2004: Remove this section at the v1.0.0 release. -->
-
-Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code to stay compatible with older clients, binaries, protos, flags, or config.
-Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
-Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
 
 ## Commit Messages
 
