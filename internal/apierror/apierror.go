@@ -31,13 +31,31 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+)
+
+// ErrorInfoDomain is the domain of every ErrorInfo detail a substrate server
+// attaches to a status.
+const ErrorInfoDomain = "ate.dev"
+
+// Reason is the reason field of the ErrorInfo detail a FailedPrecondition
+// carries. Each value names a transient actor state that a concurrent
+// operation moves the actor out of, so a caller that fails fast on
+// FailedPrecondition may retry these.
+type Reason string
+
+const (
+	ReasonActorSuspending Reason = "ACTOR_SUSPENDING" // the suspend in flight ends in SUSPENDED
+	ReasonActorReverting  Reason = "ACTOR_REVERTING"  // the revert in flight ends in SUSPENDED
 )
 
 type apiError struct {
 	code codes.Code
 	err  error
+	// reason, when set, is sent as an ErrorInfo detail of the status.
+	reason Reason
 }
 
 func (e *apiError) Error() string { return e.err.Error() }
@@ -68,6 +86,17 @@ func AlreadyExists(format string, args ...any) error {
 // requires. Retrying is pointless until that state changes.
 func FailedPrecondition(format string, args ...any) error {
 	return newf(codes.FailedPrecondition, format, args...)
+}
+
+// WithReason returns err with reason attached, so FromError sends it to the
+// client as an ErrorInfo detail. err must come from a constructor in this
+// package; anything else maps to Internal, since the reason would be lost.
+func WithReason(err error, reason Reason) error {
+	var e *apiError
+	if !errors.As(err, &e) {
+		return newf(codes.Internal, "WithReason on %v, which is not an apierror", err)
+	}
+	return &apiError{code: e.code, err: e.err, reason: reason}
 }
 
 // Aborted reports a request that lost a concurrency conflict, such as a
@@ -135,7 +164,15 @@ func FromError(err error) (s *status.Status, ok bool) {
 	}
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
-		return status.New(apiErr.code, apiErr.Error()), true
+		st := status.New(apiErr.code, apiErr.Error())
+		if apiErr.reason == "" {
+			return st, true
+		}
+		withReason, err := st.WithDetails(&errdetails.ErrorInfo{Domain: ErrorInfoDomain, Reason: string(apiErr.reason)})
+		if err != nil {
+			return status.New(codes.Internal, fmt.Sprintf("while attaching ErrorInfo reason %q: %v", apiErr.reason, err)), true
+		}
+		return withReason, true
 	}
 	if s := status.FromContextError(err); s.Code() != codes.Unknown {
 		return s, true

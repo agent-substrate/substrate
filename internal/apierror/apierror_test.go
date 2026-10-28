@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -34,6 +35,7 @@ func TestConstructors(t *testing.T) {
 		{name: "NotFound", err: NotFound("tier %d", 1), wantCode: codes.NotFound},
 		{name: "AlreadyExists", err: AlreadyExists("tier %d", 1), wantCode: codes.AlreadyExists},
 		{name: "FailedPrecondition", err: FailedPrecondition("tier %d", 1), wantCode: codes.FailedPrecondition},
+		{name: "WithReason", err: WithReason(FailedPrecondition("tier %d", 1), ReasonActorSuspending), wantCode: codes.FailedPrecondition},
 		{name: "Aborted", err: Aborted("tier %d", 1), wantCode: codes.Aborted},
 		{name: "PermissionDenied", err: PermissionDenied("tier %d", 1), wantCode: codes.PermissionDenied},
 		{name: "Unauthenticated", err: Unauthenticated("tier %d", 1), wantCode: codes.Unauthenticated},
@@ -183,6 +185,80 @@ func TestFromError(t *testing.T) {
 			}
 			if s.Message() != tt.wantMessage {
 				t.Errorf("FromError() message = %q, want %q", s.Message(), tt.wantMessage)
+			}
+		})
+	}
+}
+
+// TestFromErrorReason checks the ErrorInfo detail a reason becomes, and that
+// errors without one carry no detail.
+func TestFromErrorReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason Reason
+	}{
+		{
+			name:       "reason becomes an ErrorInfo detail",
+			err:        WithReason(FailedPrecondition("actor is SUSPENDING"), ReasonActorSuspending),
+			wantReason: ReasonActorSuspending,
+		},
+		{
+			name:       "wrapped error keeps the detail",
+			err:        fmt.Errorf("while resuming: %w", WithReason(FailedPrecondition("actor is REVERTING"), ReasonActorReverting)),
+			wantReason: ReasonActorReverting,
+		},
+		{
+			name: "plain FailedPrecondition has no detail",
+			err:  FailedPrecondition("actor is CRASHED"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _ := FromError(tt.err)
+			var info *errdetails.ErrorInfo
+			for _, d := range s.Details() {
+				if i, ok := d.(*errdetails.ErrorInfo); ok {
+					info = i
+				}
+			}
+			if tt.wantReason == "" {
+				if info != nil {
+					t.Fatalf("FromError() ErrorInfo = %v, want none", info)
+				}
+				return
+			}
+			if info == nil {
+				t.Fatalf("FromError() has no ErrorInfo detail, want reason %q", tt.wantReason)
+			}
+			if info.GetDomain() != ErrorInfoDomain || Reason(info.GetReason()) != tt.wantReason {
+				t.Errorf("FromError() ErrorInfo = %s/%s, want %s/%s", info.GetDomain(), info.GetReason(), ErrorInfoDomain, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestWithReason checks that WithReason keeps the code of an apierror, also
+// through a wrapping error, and maps anything else to Internal rather than
+// dropping the reason.
+func TestWithReason(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode codes.Code
+		wantMsg  string
+	}{
+		{name: "apierror keeps its code", err: WithReason(FailedPrecondition("actor is SUSPENDING"), ReasonActorSuspending), wantCode: codes.FailedPrecondition, wantMsg: "actor is SUSPENDING"},
+		{name: "wrapped apierror keeps its code", err: WithReason(fmt.Errorf("while resuming: %w", FailedPrecondition("actor is SUSPENDING")), ReasonActorSuspending), wantCode: codes.FailedPrecondition, wantMsg: "actor is SUSPENDING"},
+		{name: "plain error maps to Internal and says why", err: WithReason(errors.New("boom"), ReasonActorSuspending), wantCode: codes.Internal, wantMsg: "WithReason on boom, which is not an apierror"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Code(tt.err); got != tt.wantCode {
+				t.Errorf("Code() = %v, want %v (err=%v)", got, tt.wantCode, tt.err)
+			}
+			if got := tt.err.Error(); got != tt.wantMsg {
+				t.Errorf("Error() = %q, want %q", got, tt.wantMsg)
 			}
 		})
 	}

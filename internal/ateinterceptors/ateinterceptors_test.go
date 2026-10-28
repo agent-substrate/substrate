@@ -43,6 +43,7 @@ func TestStatusErrorInterceptor(t *testing.T) {
 		handlerErr     error
 		wantCode       codes.Code
 		wantMsg        string
+		wantReason     apierror.Reason // ErrorInfo reason the caller must see, if any
 		expectResponse bool
 	}{
 		{
@@ -80,6 +81,13 @@ func TestStatusErrorInterceptor(t *testing.T) {
 			wantCode:   codes.DeadlineExceeded,
 			wantMsg:    "while loading actor: context deadline exceeded",
 		},
+		{
+			name:       "APIErrorReasonReachesTheCaller",
+			handlerErr: fmt.Errorf("while resuming: %w", apierror.WithReason(apierror.FailedPrecondition("actor is SUSPENDING"), apierror.ReasonActorSuspending)),
+			wantCode:   codes.FailedPrecondition,
+			wantMsg:    "actor is SUSPENDING",
+			wantReason: apierror.ReasonActorSuspending,
+		},
 	}
 
 	for _, tt := range tests {
@@ -115,6 +123,11 @@ func TestStatusErrorInterceptor(t *testing.T) {
 
 			if st.Message() != tt.wantMsg {
 				t.Errorf("expected message %q, got %q", tt.wantMsg, st.Message())
+			}
+
+			info := errorInfoOf(t, err)
+			if got := apierror.Reason(info.GetReason()); got != tt.wantReason {
+				t.Errorf("ErrorInfo reason = %q, want %q", got, tt.wantReason)
 			}
 		})
 	}
