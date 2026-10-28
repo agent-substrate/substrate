@@ -10,6 +10,13 @@ policy, or for a hostname not allowed by any rule, are answered `NXDOMAIN`.
 A policy created, updated, or deleted while the actor runs applies to its DNS
 within about 5 seconds.
 
+> [!NOTE]
+> The actor sees a denied name as an ordinary resolver failure, such as
+> `wget: bad address 'api.github.com'` or `curl: (6) Could not resolve host`.
+> Nothing logs the denied name. If an external name does not resolve, check that
+> the actor's egress policy has a rule for it with
+> `kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml`.
+
 Other UDP and other traffic is filtered by nftables and never reaches the gateway.
 
 This applies to an actor's own telemetry too: an OpenTelemetry SDK inside the actor
