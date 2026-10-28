@@ -228,6 +228,14 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while delegating the worker cgroup: %w", err)
 	}
 
+	var guestRAMReady bool
+	goldenTmpfsRoot, guestRAMReady = setupGoldenSlotTmpfs(ctx, true)
+	goldenZeroCopyDisabled = !guestRAMReady
+	if !guestRAMReady {
+		slog.WarnContext(ctx, "The golden slot tmpfs cannot hold guest RAM; zero-copy restores will fall back",
+			slog.String("dir", goldenTmpfsRoot))
+	}
+
 	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
 	if err != nil {
 		return err
