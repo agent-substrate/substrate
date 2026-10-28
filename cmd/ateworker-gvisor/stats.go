@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/apierror"
@@ -206,6 +208,34 @@ func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 	}
 }
 
+// readDeadFinal reads the cgroup of h's sandbox, which has died, for the final
+// record. The cgroup keeps its CPU counter and memory peak until the teardown
+// removes it, but the memory went with the processes, so memory usage and
+// working set are left unset: no one measured them at the death. A failed
+// read leaves the newest sample to stand in, as in readFinal.
+func (s *AteWorkerService) readDeadFinal(ctx context.Context, h *hostedActor) {
+	sample, _, err := s.measure(ctx, h)
+	if err != nil {
+		return
+	}
+	sample.MemoryCurrentBytes = nil
+	sample.MemoryWorkingSetBytes = nil
+	h.usage.Store(sample)
+}
+
+// endActivation reads h's final usage with read, tears the activation down,
+// and writes its final record, in that order: the reading needs the sandbox's
+// cgroup, which the teardown removes. h is nil for an actor not hosted. It
+// returns the teardown's error.
+func (s *AteWorkerService) endActivation(ctx context.Context, h *hostedActor, read func(context.Context, *hostedActor), teardown func() error) error {
+	if h != nil {
+		read(ctx, h)
+	}
+	err := teardown()
+	s.recordFinalIfEnded(ctx, h)
+	return err
+}
+
 // recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
 // its activation down, which unhosts the actor even when a later step fails.
 // The caller holds the actor's lock.
@@ -285,9 +315,9 @@ func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*a
 		SandboxClass: string(atev1.SandboxClassGvisor),
 		Source:       ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 
-		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
+		MemoryCurrentBytes:    proto.Uint64(sample.MemoryCurrentBytes),
 		MemoryPeakBytes:       sample.MemoryPeakBytes,
-		MemoryWorkingSetBytes: sample.MemoryWorkingSetBytes,
+		MemoryWorkingSetBytes: proto.Uint64(sample.MemoryWorkingSetBytes),
 		CpuUsageUsec:          sample.CPUUsageUsec,
 
 		ObservedAtUnixNano: observedAt.UnixNano(),
