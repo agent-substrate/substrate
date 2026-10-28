@@ -118,9 +118,9 @@ groups:
       own, or a re-host on a microVM. It is read just before the teardown and
       repeats the newest sample when that read fails or times out, or is
       pending when none was measured. After a gVisor sandbox dies, the read
-      gives its CPU at death, and memory usage and working set are the newest
-      taken while it ran; a dead microVM cannot be read, so its newest sample
-      stands in. It is absent when the activation ends otherwise, as by a lost
+      gives its CPU and memory peak at death, and memory usage and working set
+      are absent, since its memory went with its processes; a dead microVM
+      cannot be read, so its newest sample stands in. It is absent when the activation ends otherwise, as by a lost
       worker or a re-host on gVisor. Thus take the highest
       ate.stats.cpu.time per ate.actor.uid and ate.actor.epoch rather than
       wait for the final record.

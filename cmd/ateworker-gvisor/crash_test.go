@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"go.ate.dev/substrate/internal/actorlock"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -108,21 +110,20 @@ func crashFixture(t *testing.T) (*AteWorkerService, *hostedActor, string) {
 
 func TestReadDeadFinal(t *testing.T) {
 	s, h, _ := crashFixture(t)
-	live := h.usage.Latest()
 	s.readDeadFinal(context.Background(), h)
 	got := h.usage.Latest()
 	if got.GetCpuUsageUsec() != 2000000 {
 		t.Errorf("CPU = %d, want the 2000000 read after the death", got.GetCpuUsageUsec())
 	}
-	if got.GetMemoryCurrentBytes() != live.GetMemoryCurrentBytes() || got.GetMemoryWorkingSetBytes() != live.GetMemoryWorkingSetBytes() {
-		t.Errorf("memory = %d/%d, want the live sample's %d/%d", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes(), live.GetMemoryCurrentBytes(), live.GetMemoryWorkingSetBytes())
+	if got.MemoryCurrentBytes != nil || got.MemoryWorkingSetBytes != nil {
+		t.Errorf("memory = %d/%d, want both unset: not measured at the death", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes())
 	}
 }
 
 // TestWatchSandboxCrashWritesFinal drives the watcher through a sandbox that
 // dies on its own: the actor is torn down after its cgroup is read, its final
-// record carries the CPU at death and the memory last seen live, and the crash
-// is reported.
+// record carries the CPU and memory peak at death but no memory usage or
+// working set, and the crash is reported.
 func TestWatchSandboxCrashWritesFinal(t *testing.T) {
 	s, h, leaf := crashFixture(t)
 	rec := withUsageRecorder(s)
@@ -155,7 +156,34 @@ func TestWatchSandboxCrashWritesFinal(t *testing.T) {
 	if got := rec.Value(0, string(ateattr.StatsCPUTimeKey)); got != "2" {
 		t.Errorf("final cpu.time = %q, want 2 (seconds) read after the death", got)
 	}
-	if got := rec.Value(0, string(ateattr.StatsMemoryUsageKey)); got != "157286400" {
-		t.Errorf("final memory.usage = %q, want the live 157286400", got)
+	for _, key := range []attribute.Key{ateattr.StatsMemoryUsageKey, ateattr.StatsMemoryWorkingSetKey} {
+		if got := rec.Value(0, string(key)); got != "" {
+			t.Errorf("final %s = %q, want absent", key, got)
+		}
+	}
+	if got := rec.Value(0, string(ateattr.StatsMemoryPeakKey)); got == "" {
+		t.Error("final memory.peak absent, want the cgroup's high-water mark")
+	}
+}
+
+// TestEndActivationLiveFinalKeepsMemory pins that a final record read while the
+// sandbox runs, as Terminate's is, keeps every measurement.
+func TestEndActivationLiveFinalKeepsMemory(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	rec := withUsageRecorder(s)
+	h := hostWithEpoch(s, time.Now(), true)
+	if err := s.endActivation(context.Background(), h, s.readFinal, func() error {
+		setHostedActor(s, nil)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Fatalf("records = %v, want one final", got)
+	}
+	for _, key := range []attribute.Key{ateattr.StatsCPUTimeKey, ateattr.StatsMemoryUsageKey, ateattr.StatsMemoryWorkingSetKey, ateattr.StatsMemoryPeakKey} {
+		if rec.Value(0, string(key)) == "" {
+			t.Errorf("final %s absent, want it measured", key)
+		}
 	}
 }

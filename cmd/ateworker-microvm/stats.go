@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/agentstats"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
@@ -371,9 +373,9 @@ func (s *AteWorkerService) sampleGuest(ctx context.Context, h *hostedActor) (*at
 		SandboxClass: string(atev1.SandboxClassMicroVM),
 		Source:       ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT,
 
-		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
+		MemoryCurrentBytes:    proto.Uint64(sample.MemoryCurrentBytes),
 		MemoryPeakBytes:       sample.MemoryPeakBytes,
-		MemoryWorkingSetBytes: sample.MemoryWorkingSetBytes,
+		MemoryWorkingSetBytes: proto.Uint64(sample.MemoryWorkingSetBytes),
 		CpuUsageUsec:          sample.CPUUsageUsec,
 
 		ObservedAtUnixNano: observedAt.UnixNano(),
