@@ -33,6 +33,11 @@ rules:
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["get", "watch", "list"]
+# Rejects tokens of deleted ServiceAccounts. get reads one the cache has not
+# seen yet.
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "watch", "list"]
 ---
 # Create Service Account for Workload Identity
 apiVersion: v1

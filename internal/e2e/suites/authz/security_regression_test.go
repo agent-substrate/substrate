@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
@@ -40,6 +41,7 @@ func testSecurityRegression(t *testing.T, ctx context.Context, f *fixture) {
 	t.Run("revocation takes effect", func(t *testing.T) { testRevocation(t, ctx, f) })
 	t.Run("recreated atespace drops old grants", func(t *testing.T) { testAtespaceRecreated(t, ctx, f) })
 	t.Run("recreated AccessPolicy rejects stale updates", func(t *testing.T) { testAccessPolicyRecreated(t, ctx, f) })
+	t.Run("deleted ServiceAccount's token is rejected", func(t *testing.T) { testServiceAccountDeleted(t, ctx, f) })
 	t.Run("WorkerService accepts only atelet", func(t *testing.T) { testWorkerServiceRequiresAtelet(t, ctx, f) })
 }
 
@@ -264,6 +266,32 @@ func testAccessPolicyRecreated(t *testing.T, ctx context.Context, f *fixture) {
 	if len(cur.GetBindings()) != 0 {
 		t.Errorf("recreated AccessPolicy bindings = %v, want none", cur.GetBindings())
 	}
+}
+
+// testServiceAccountDeleted checks that a ServiceAccount token stops working
+// once its ServiceAccount is deleted, also after another ServiceAccount with
+// the same name replaces it. The policy names the ServiceAccount, so the new
+// one's token keeps the grant.
+func testServiceAccountDeleted(t *testing.T, ctx context.Context, f *fixture) {
+	const name = "deleted-zed"
+	old := newPrincipal(t, ctx, f.clients, f.atespace, name)
+	setAtespacePolicy(t, ctx, f.clients, f.atespace, binding("viewer", old))
+	cleanupAtespacePolicy(t, f.clients, f.atespace)
+	expectAll(t, ctx, []call{{"GetActor", old, getActor(f.actor), allowed}})
+	if t.Failed() {
+		return
+	}
+
+	if err := f.clients.K8s.CoreV1().ServiceAccounts(f.atespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("deleting ServiceAccount %s/%s: %v", f.atespace, name, err)
+	}
+	expectAll(t, ctx, []call{{"GetActor", old, getActor(f.actor), unauthenticated}})
+
+	recreated := newPrincipal(t, ctx, f.clients, f.atespace, name)
+	expectAll(t, ctx, []call{
+		{"GetActor", old, getActor(f.actor), unauthenticated},
+		{"GetActor", recreated, getActor(f.actor), allowed},
+	})
 }
 
 // testWorkerServiceRequiresAtelet checks that WorkerService rejects every

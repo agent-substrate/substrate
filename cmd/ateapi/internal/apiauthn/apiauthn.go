@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"go.ate.dev/substrate/internal/oidcjwt"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -50,6 +51,9 @@ func ValidateServerConfig(cfg ServerConfig) error {
 		}
 		issuers[provider.Issuer] = true
 	}
+	if cfg.ServiceAccounts == nil {
+		return fmt.Errorf("a ServiceAccount checker is required")
+	}
 	return nil
 }
 
@@ -57,7 +61,7 @@ func ValidateServerConfig(cfg ServerConfig) error {
 type JWTProvider struct {
 	Name   string
 	Issuer string
-	Verify func(context.Context, string) (string, error)
+	Verify func(context.Context, string) (*oidcjwt.Claims, error)
 }
 
 // ServerConfig configures the server-side auth interceptor.
@@ -65,6 +69,9 @@ type ServerConfig struct {
 	// JWTProviders authenticate clients that did not present a certificate
 	// identity (e.g. kubectl-ate).
 	JWTProviders []JWTProvider
+	// ServiceAccounts rejects ServiceAccount tokens whose ServiceAccount is
+	// gone, whichever provider verified them.
+	ServiceAccounts *ServiceAccountChecker
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor enforcing cfg.
@@ -101,7 +108,8 @@ func (w *wrappedStream) Context() context.Context { return w.ctx }
 func newChainedAuthenticator(cfg ServerConfig) chainedServerAuthenticator {
 	return chainedServerAuthenticator{
 		jwt: jwtServerAuthenticator{
-			providers: cfg.JWTProviders,
+			providers:       cfg.JWTProviders,
+			serviceAccounts: cfg.ServiceAccounts,
 		},
 	}
 }
@@ -160,7 +168,8 @@ func mtlsPeerIdentity(ctx context.Context) (string, bool) {
 }
 
 type jwtServerAuthenticator struct {
-	providers []JWTProvider
+	providers       []JWTProvider
+	serviceAccounts *ServiceAccountChecker
 }
 
 func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
@@ -176,13 +185,16 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 		if provider.Issuer != issuer {
 			continue
 		}
-		id, err := provider.Verify(ctx, bearer)
+		claims, err := provider.Verify(ctx, bearer)
 		if err != nil {
 			slog.DebugContext(ctx, "JWT verification failed", slog.String("provider", provider.Name), slog.Any("err", err))
 			return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 		}
+		if err := a.serviceAccounts.check(ctx, claims); err != nil {
+			return nil, err
+		}
 		return principal.InjectContext(ctx, principal.PrincipalInfo{
-			ID:     id,
+			ID:     claims.Subject,
 			Kind:   principal.KindJWT,
 			Issuer: provider.Issuer,
 		}), nil
