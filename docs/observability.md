@@ -554,8 +554,4 @@ Substrate puts no OTLP configuration into an actor container. Set `OTEL_EXPORTER
 
 > **GCP-specific.** These are **Google Cloud Monitoring** dashboards; they apply only to a GKE / Google Cloud deployment. There is no dashboard support on Kind — use the Prometheus UI in [Metrics](#2-metrics) for local development.
 
-Dashboard definitions live in [`tools/setup-gcp/dashboards/`](../tools/setup-gcp/dashboards/) (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.
-
-```sh
-go run ./tools/setup-gcp create dashboards   # also part of: bootstrap
-```
+Dashboard definitions live in [`tools/setup-gcp/dashboards/`](https://github.com/ai-on-gke/substrate-gke/tree/main/tools/setup-gcp/dashboards) in the [substrate-gke](https://github.com/ai-on-gke/substrate-gke) repository (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: substrate-gke's `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.
