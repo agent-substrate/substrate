@@ -664,9 +664,9 @@ func snapshotSandboxClass(actor *ateapi.Actor) string {
 // requiredSnapshotRuntime returns the ActorSandboxRuntime stamped on snap, the
 // snapshotToResume, when the resume restores its memory or rootfs state, or nil
 // when it does not (cold boot, VOLUMES fidelity, or replaced template). A rootfs
-// upper can hold binaries for the architecture it was written on, and
-// compatibility is not yet judged per attribute, so ROOTFS pins the runtime
-// like MEMORY.
+// upper can hold binaries for the architecture it was written on, so ROOTFS
+// pins the runtime like MEMORY; ensureAteletRestored keeps the rootfs on a
+// worker of another runtime unless its architecture differs.
 func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) *ateapi.ActorSandboxRuntime {
 	if snap.GetFidelity() == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES || templateReplaced(snap, tmpl) {
 		return nil
@@ -843,8 +843,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	case templateReplaced(snap, actorTemplate):
 		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	case runtimeIncompatible:
-		logRuntimeFallback(ctx, actorRef, assignment, requiredRuntime)
-		fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		if hardware.MatchesArch(assignment.GetSandboxRuntime(), requiredRuntime) {
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		} else {
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		}
+		logRuntimeFallback(ctx, actorRef, assignment, requiredRuntime, fidelity)
 	}
 	tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 	req := &ateletpb.RestoreRequest{
@@ -887,12 +891,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	return tele, resp.GetWorkerEpoch(), nil
 }
 
-// logRuntimeFallback records a resume that restores volumes only because the
+// logRuntimeFallback records a resume downgraded to fidelity because the
 // assigned worker does not run the runtime the snapshot was captured under.
-func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime) {
-	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring volumes only",
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapi.WorkerAssignment, required *ateapi.ActorSandboxRuntime, fidelity ateletpb.SnapshotFidelity) {
+	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; restoring at a lower fidelity",
 		slog.String("actor", actorRef.String()),
 		slog.String("worker", assignment.GetWorkerPod()),
+		slog.String("fidelity", fidelity.String()),
 		slog.Any("required_runtime", required),
 		slog.Any("assigned_runtime", assignment.GetSandboxRuntime()))
 }

@@ -4626,7 +4626,7 @@ func TestResumeActor_PausedLocalSnapshotRuntimeFallback(t *testing.T) {
 			wantWorker:   "worker-1",
 			wantNode:     "node1",
 			wantRuntime:  rtB,
-			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			wantFidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 		{
 			name:           "unreachable node uses the uploaded checkpoint",
@@ -4953,8 +4953,8 @@ func TestResumeActor_RetryRelaxedPauseAssignmentRestoresSameSnapshot(t *testing.
 	if got := restoreReq.GetSnapshot().GetObject().GetSnapshotUri(); got != paused.GetDurableSnapshot().GetObject().GetSnapshotUri() {
 		t.Errorf("RestoreRequest.SnapshotUri = %q, want the pause checkpoint's upload %q", got, paused.GetDurableSnapshot().GetObject().GetSnapshotUri())
 	}
-	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-		t.Errorf("RestoreRequest.Fidelity = %v, want VOLUMES (assigned worker cannot run the checkpoint's runtime)", got)
+	if got := restoreReq.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		t.Errorf("RestoreRequest.Fidelity = %v, want ROOTFS (assigned worker cannot run the checkpoint's runtime)", got)
 	}
 }
 
@@ -7086,7 +7086,7 @@ func reportWorkerRuntime(t *testing.T, tc *testContext, workerName string, defau
 //  2. A subsequent ResumeActor places the actor onto the runtime-compatible
 //     worker and restores at full MEMORY fidelity when that worker has room.
 //  3. When the compatible worker is full, ResumeActor falls back to the other
-//     worker, downgrades the restore to VOLUMES whether the snapshot is the
+//     worker, downgrades the restore to ROOTFS whether the snapshot is the
 //     actor's own or a borrowed golden, and re-stamps the new worker's runtime
 //     on the next SuspendActor.
 //  4. When the other worker advertises the snapshot's runtime in
@@ -7210,7 +7210,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	}
 
 	// With worker-a full, resuming actor-1 must fall back to worker-b, downgrade
-	// the restore to VOLUMES fidelity, and re-stamp rtB on the next suspend.
+	// the restore to ROOTFS fidelity, and re-stamp rtB on the next suspend.
 	resumed3, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("fallback ResumeActor failed: %v", err)
@@ -7221,8 +7221,8 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	if got := resumed3.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(got, rtB) {
 		t.Fatalf("fallback WorkerAssignment.SandboxRuntime = %v, want %v", got, rtB)
 	}
-	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-		t.Fatalf("fallback RestoreRequest.Fidelity = %v, want VOLUMES", got)
+	if got := tc.fakeAtelet.lastRestoreRequest().GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		t.Fatalf("fallback RestoreRequest.Fidelity = %v, want ROOTFS", got)
 	}
 
 	suspended3, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
@@ -7237,7 +7237,7 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 	// Point the template's golden tag at a golden snapshot stamped with rtA and
 	// verify that a newly created actor borrowing the golden snapshot, when
 	// worker-a is full and it falls back onto worker-b, restores the golden at
-	// VOLUMES fidelity like any other durable snapshot rather than cold-booting.
+	// ROOTFS fidelity like any other durable snapshot rather than cold-booting.
 	goldenSnap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t))
 	goldenSnap.SandboxRuntime = proto.Clone(rtA).(*ateapi.ActorSandboxRuntime)
 	stampedGoldenTag, err := tc.persistence.CreateTag(ctx, &ateapi.Tag{
@@ -7298,8 +7298,8 @@ func TestResumeActor_SandboxRuntimePlacementAndFallback(t *testing.T) {
 		t.Fatalf("golden-actor fallback: RunCalled=%v RestoreCalled=%v, want RunCalled=false RestoreCalled=true", runCalled, restoreCalled)
 	}
 	goldenRestore := tc.fakeAtelet.lastRestoreRequest()
-	if got := goldenRestore.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-		t.Fatalf("golden-actor RestoreRequest.Fidelity = %v, want VOLUMES", got)
+	if got := goldenRestore.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		t.Fatalf("golden-actor RestoreRequest.Fidelity = %v, want ROOTFS", got)
 	}
 	if got, want := goldenRestore.GetSnapshot().GetObject().GetSnapshotUri(), goldenSnapshotURI(t); got != want {
 		t.Fatalf("golden-actor RestoreRequest.SnapshotUri = %q, want golden %q", got, want)

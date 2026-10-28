@@ -82,7 +82,7 @@ Each sandbox class has a default SandboxConfig, such as `gvisor-default`, that l
 
 A kept version's assets must stay fetchable, so a release does not overwrite them. The upgrade applies these lists. That does not change the pod template, so workers do not roll.
 
-An actor that starts without memory or rootfs state, new or cold booting, gets the default version. An actor restoring memory or rootfs state gets the version its snapshot was taken with, and stays on it until it next starts without that state. If that version is gone, it cold boots, keeping its volumes and losing its memory and rootfs writes. Rollback applies the N lists again, which removes the N+1 versions.
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets the version its snapshot was taken with, and stays on it until it next starts without memory state. If that version is gone, it cold boots, keeping its files and losing its memory. Rollback applies the N lists again, which removes the N+1 versions.
 
 <!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
 
@@ -92,7 +92,7 @@ The schema is updated with `ate-api-server`, and migrations follow [postgresql-s
 
 ### Data on nodes and in snapshots
 
-This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the volumes.
+This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the file systems.
 
 This section is about data one release writes and another release reads, whether that is a different component or the same component after an upgrade or a rollback. Substrate's data comes in two kinds, by how long it lives.
 

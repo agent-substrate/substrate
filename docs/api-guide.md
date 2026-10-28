@@ -466,9 +466,13 @@ a `Snapshot` with the following fields:
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
     template's golden snapshot a new actor starts from — falls back to any eligible
-    worker and downgrades the restore to `SNAPSHOT_FIDELITY_VOLUMES`, preserving
-    the snapshot's volume data while booting the guest fresh under the
-    `defaultRuntime` of that class on the new worker.
+    worker, picked by load, and boots the guest fresh under the `defaultRuntime`
+    of that class on the new worker. On a worker of the snapshot's CPU
+    `architecture` the restore downgrades to `SNAPSHOT_FIDELITY_ROOTFS`, keeping
+    the snapshot's rootfs and volume data. On a worker of another `architecture`
+    it downgrades to `SNAPSHOT_FIDELITY_VOLUMES`, because the rootfs upper layer
+    holds binaries for the architecture it was written on. Pools selected by one
+    `ActorTemplate` should therefore share a CPU architecture.
   - A local checkpoint first tries compatible workers on its attached node.
     If that fails, `ResumeActor` checks capacity without the node and runtime
     restrictions. When that capacity exists, it detaches the checkpoint and

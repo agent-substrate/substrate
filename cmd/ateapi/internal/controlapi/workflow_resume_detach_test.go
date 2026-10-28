@@ -582,12 +582,13 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 		// uploaded is false when atelet finds no upload to restore.
 		uploaded bool
 		// otherRuntime gives the only free worker a runtime other than the
-		// snapshot's, so the restore falls back to VOLUMES.
+		// snapshot's, of the same architecture, so the restore falls back to
+		// ROOTFS.
 		otherRuntime bool
 	}{
 		{name: "uploaded: restores on another node", assignedNode: "node-3", uploaded: true},
 		{name: "released by an earlier resume: restores on another node", uploaded: true},
-		{name: "uploaded, only another runtime has room: restores at VOLUMES", assignedNode: "node-3", uploaded: true, otherRuntime: true},
+		{name: "uploaded, only another runtime has room: restores at ROOTFS", assignedNode: "node-3", uploaded: true, otherRuntime: true},
 		{name: "never uploaded: crashes, then revert and resume restore the older snapshot", assignedNode: "node-3"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -605,8 +606,8 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			workerRuntime := testSandboxRuntime()
 			wantFidelity := ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			if tt.otherRuntime {
-				workerRuntime = testRuntime("arm64", "")
-				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+				workerRuntime = testRuntime("amd64", "other-bundle")
+				wantFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			}
 			worker := seedRuntimeWorker(t, ctx, st, "pod-2", "node-2", workerRuntime)
 			memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
@@ -614,7 +615,7 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 			pending := newPausedSnapshot(t, 2, memory, "", "pending-2", "node-3")
 			if tt.otherRuntime {
-				pending.SandboxRuntime = testRuntime("amd64", "")
+				pending.SandboxRuntime = testRuntime("amd64", "orig-bundle")
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = tt.assignedNode
