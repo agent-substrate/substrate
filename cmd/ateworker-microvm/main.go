@@ -125,6 +125,10 @@ func do(ctx context.Context) error {
 	if *usageSampleInterval < minUsageSampleInterval {
 		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
 	}
+	bootID, err := bootid.Read(bootid.Path)
+	if err != nil {
+		return err
+	}
 
 	const serviceName = "ateworker-microvm"
 	// Export through atelet's node-local relay when it is there, so telemetry
@@ -231,10 +235,6 @@ func do(ctx context.Context) error {
 	}
 
 	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
-	if err != nil {
-		return err
-	}
-	bootID, err := bootid.Read(bootid.Path)
 	if err != nil {
 		return err
 	}
