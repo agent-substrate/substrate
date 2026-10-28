@@ -208,7 +208,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 	tmpl := &ateapi.ActorTemplate{
 		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"pool": "b"}},
 	}
-	resuming, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+	resuming, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl, nil)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt: %v", err)
 	}

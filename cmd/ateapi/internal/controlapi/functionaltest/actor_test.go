@@ -3178,7 +3178,7 @@ func TestResumeActor(t *testing.T) {
 	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	name := "id1"
-	_, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+	created, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}})
@@ -3186,9 +3186,16 @@ func TestResumeActor(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	_, err = tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{
-		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
-	})
+	expected := &ateapi.ExpectedSnapshot{ActorUid: created.GetMetadata().GetUid(), SnapshotUuid: goldenSnapshotName, Generation: 2}
+	request := &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name}, Expected: expected}
+	if _, err := tc.client.ResumeActor(context.Background(), request); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ResumeActor with wrong generation = %v, want FailedPrecondition", err)
+	}
+	if tc.fakeAtelet.RestoreCalled {
+		t.Fatal("rejected resume called Restore")
+	}
+	expected.Generation = 1
+	_, err = tc.client.ResumeActor(context.Background(), request)
 	if err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
