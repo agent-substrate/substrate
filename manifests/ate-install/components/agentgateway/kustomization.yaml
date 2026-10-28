@@ -47,8 +47,13 @@ patches:
           - -f
           - /etc/agentgateway/config.yaml
           env:
+          # The OTLP collector (host:port) for the tracing policy in
+          # configmap.yaml. agentgateway refuses to start when the variable is
+          # missing, so it is declared empty here and the provider sets it:
+          # the kind-agentgateway overlay points it at the in-cluster
+          # collector, and substrate-gke at GKE's managed collector.
           - name: AGENTGATEWAY_OTLP_ADDRESS
-            value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+            value: ""
           ports:
           - name: http
             containerPort: 8080

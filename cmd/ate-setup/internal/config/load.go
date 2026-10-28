@@ -168,8 +168,36 @@ func mergeDevEnv(root string, env map[string]string, noDevEnv, kind bool) error 
 	return nil
 }
 
+// removedCloudSQLEnv are the environment variables of the Cloud SQL settings
+// ate-setup no longer has. Their flags and configuration file keys are
+// rejected as unknown; the variables would otherwise be ignored, and the
+// install would quietly fall back to the bundled PostgreSQL.
+var removedCloudSQLEnv = []string{
+	"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
+	"ATE_API_POSTGRES_CLOUDSQL_GSA",
+	"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
+	"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
+}
+
+// rejectRemovedCloudSQLEnv fails when env sets any of removedCloudSQLEnv to a
+// non-empty value. An empty value asked for no Cloud SQL, which is now the
+// only behavior, so it is accepted.
+func rejectRemovedCloudSQLEnv(env map[string]string) error {
+	for _, name := range removedCloudSQLEnv {
+		if env[name] != "" {
+			return fmt.Errorf("%s is set, but ate-setup no longer configures Cloud SQL. "+
+				"Install on GKE with Cloud SQL through substrate-gke (https://github.com/ai-on-gke/substrate-gke), "+
+				"or set ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING to reach an existing database", name)
+		}
+	}
+	return nil
+}
+
 // buildConfig projects the resolved settings onto Config.
 func buildConfig(root string, env map[string]string, r *Resolved) (*Config, error) {
+	if err := rejectRemovedCloudSQLEnv(env); err != nil {
+		return nil, err
+	}
 	// Before the projection, so Config, the report and the record all describe
 	// one install rather than Config describing a different one.
 	if r.Bool(kindEnabledKey) {
@@ -205,7 +233,6 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	if ownerConnectionString == "" {
 		ownerConnectionString = readWriteConnectionString
 	}
-	instance, _ := r.Value("ateapi.postgres.cloudsql.instance")
 	actorJWTIssuer := r.String("actorJWT.issuer")
 	if actorJWTIssuer == "" {
 		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
@@ -254,39 +281,25 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PostgresOwnerConnectionString:     ownerConnectionString,
 		PostgresReadWriteRole:             r.String("ateapi.postgres.readWrite.role"),
 		PostgresOwnerRole:                 r.String("ateapi.postgres.owner.role"),
-		// Whether a role was chosen rather than defaulted. Taken from the
-		// resolver, which knows about all three channels, rather than from an
-		// environment lookup that only sees one.
-		PostgresReadWriteRoleSet: r.Supplied("ateapi.postgres.readWrite.role"),
-		PostgresOwnerRoleSet:     r.Supplied("ateapi.postgres.owner.role"),
-		CloudSQL: CloudSQLConfig{
-			Instance: instance.Raw,
-			// Any channel may now express "explicitly empty", not just the
-			// environment, so a file can clear Cloud SQL.
-			InstanceSet: instance.Supplied,
-			GSA:         r.String("ateapi.postgres.cloudsql.gsa"),
-			IAMAuth:     r.String("ateapi.postgres.cloudsql.iamAuth"),
-			IPType:      r.String("ateapi.postgres.cloudsql.ipType"),
-		},
-		RolloutTimeout:                 rolloutTimeout,
-		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
-		PodcertWorkersPerSigner:        podcertWorkers,
-		EnvoyConcurrency:               envoyConcurrency,
-		ClusterSize:                    r.String("clusterSize"),
-		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
-		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
-		E2ETuning:                      r.Bool("e2e.tuning"),
-		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
-		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
-		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
-		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
-		OtlpEndpoint:                   r.String("otlpEndpoint"),
-		APILogLevel:                    r.String("ateapi.logLevel"),
-		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
-		PreviewGates:                   splitList(r.String("preview")),
-		kubeconfigEnv:                  kubeconfigEnv,
-		shellEnv:                       env,
-		resolved:                       r,
+		RolloutTimeout:                    rolloutTimeout,
+		rolloutTimeoutSet:                 r.Supplied("rolloutTimeout"),
+		PodcertWorkersPerSigner:           podcertWorkers,
+		EnvoyConcurrency:                  envoyConcurrency,
+		ClusterSize:                       r.String("clusterSize"),
+		CordonSystemInfraComponents:       r.Bool("cordonSystemInfraComponents"),
+		FakeDataPlane:                     r.Bool("fakeDataPlane.enabled"),
+		E2ETuning:                         r.Bool("e2e.tuning"),
+		IngressAllowedSPIFFEIDs:           splitList(r.String("ingressAllowedSPIFFEIDs")),
+		AdditionalEgressExtprocService:    r.String("atenet.egress.additionalExtprocService"),
+		CredentialProviderJSON:            r.String("atenet.egress.credentialProvider"),
+		AnthropicAPIKey:                   r.String("demo.anthropicAPIKey"),
+		OtlpEndpoint:                      r.String("otlpEndpoint"),
+		APILogLevel:                       r.String("ateapi.logLevel"),
+		BenchmarkActorMemory:              r.String("benchmark.actorMemory"),
+		PreviewGates:                      splitList(r.String("preview")),
+		kubeconfigEnv:                     kubeconfigEnv,
+		shellEnv:                          env,
+		resolved:                          r,
 	}
 
 	if err := validateResolved(cfg, r); err != nil {
@@ -398,15 +411,6 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	case RouterEnvoy, RouterAgentgateway:
 	default:
 		return &InvalidError{Value: dataplane, Want: RouterEnvoy + " or " + RouterAgentgateway}
-	}
-
-	if ipType, _ := r.Value("ateapi.postgres.cloudsql.ipType"); ipType.Raw != "" {
-		switch ipType.Raw {
-		case CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC:
-		default:
-			return &InvalidError{Value: ipType, Want: strings.Join(
-				[]string{CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC}, ", ")}
-		}
 	}
 
 	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {

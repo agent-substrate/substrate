@@ -71,8 +71,8 @@ number rather than maximizing.
 
 The proxy imposes no connection limit and adds
 sub-millisecond latency, but it encrypts all database traffic, so its CPU
-use scales with throughput. The patch
-(`manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml`) requests `100m` — sized
+use scales with throughput. The sidecar, which
+[substrate-gke](https://github.com/ai-on-gke/substrate-gke) adds, requests `100m` — sized
 for control-plane traffic. For sustained thousands of ops/s, raise the
 sidecar's CPU request so node pressure cannot throttle it into becoming the
 bottleneck. Connection *churn* has a separate ceiling: IAM database logins

@@ -67,14 +67,6 @@ const (
 	DefaultPostgresOwnerRole     = postgressetup.OwnerRole
 )
 
-// Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE
-// accepts.
-const (
-	CloudSQLIPTypePrivate = "private"
-	CloudSQLIPTypePublic  = "public"
-	CloudSQLIPTypePSC     = "psc"
-)
-
 // devEnvFile is the optional per-developer environment script at the repo root.
 const devEnvFile = ".ate-dev-env.sh"
 
@@ -165,10 +157,6 @@ type Config struct {
 	PostgresOwnerConnectionString     string
 	PostgresReadWriteRole             string
 	PostgresOwnerRole                 string
-	// These distinguish an explicit role override from the default when
-	// adopting an existing Cloud SQL installation.
-	PostgresReadWriteRoleSet bool
-	PostgresOwnerRoleSet     bool
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
@@ -183,9 +171,6 @@ type Config struct {
 	// PostgresStorageClass is the StorageClass of the bundled PostgreSQL volume
 	// (ATE_API_POSTGRES_STORAGE_CLASS). Empty leaves the cluster default.
 	PostgresStorageClass string
-	// CloudSQL points the apiserver at a Cloud SQL instance through the Auth
-	// Proxy sidecar instead of a directly reachable PostgreSQL.
-	CloudSQL CloudSQLConfig
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -323,33 +308,6 @@ func defaultsOnly() *Resolved {
 		panic("config: declared defaults do not parse: " + err.Error())
 	}
 	return r
-}
-
-// CloudSQLConfig is the operator's Cloud SQL intent, as expressed by the
-// ATE_API_POSTGRES_CLOUDSQL_* variables.
-//
-// Every field is empty-means-unspecified except Instance, which is three-way:
-// a non-empty instance selects Cloud SQL, an explicitly empty one removes it,
-// and an unset one (InstanceSet false) adopts whatever the target cluster
-// already records. Without that distinction a redeploy from a shell that
-// simply never exported the variable would tear the proxy sidecar out from
-// under a working installation.
-type CloudSQLConfig struct {
-	// Instance is the instance connection name, PROJECT:REGION:INSTANCE.
-	Instance string
-	// InstanceSet records whether ATE_API_POSTGRES_CLOUDSQL_INSTANCE was
-	// present in the environment at all, empty value included.
-	InstanceSet bool
-
-	// GSA is the Google service account the proxy authenticates as, and whose
-	// email (minus the .gserviceaccount.com suffix) is the IAM database user.
-	GSA string
-	// IAMAuth enables automatic IAM database authentication ("true" or
-	// "false"). Empty defaults to enabled.
-	IAMAuth string
-	// IPType selects which instance address the proxy dials: one of the
-	// CloudSQLIPType constants. Empty defaults to private.
-	IPType string
 }
 
 // extprocServiceForm and extprocServicePort describe the accepted value, for

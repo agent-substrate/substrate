@@ -175,43 +175,6 @@ func (c *Client) PatchDeployment(ctx context.Context, namespace, name string, pa
 	return nil
 }
 
-// SetServiceAccountAnnotation adds or removes one annotation on a
-// ServiceAccount; an empty value removes it. A missing ServiceAccount is not
-// an error, matching the `|| true` the shell installer removed one under.
-func (c *Client) SetServiceAccountAnnotation(ctx context.Context, namespace, name, key, value string) error {
-	var annotation any
-	if value != "" {
-		annotation = value
-	}
-	patch, err := json.Marshal(map[string]any{
-		"metadata": map[string]any{"annotations": map[string]any{key: annotation}},
-	})
-	if err != nil {
-		return fmt.Errorf("while building the patch for serviceaccount %s/%s: %w", namespace, name, err)
-	}
-	if _, err := c.Typed.CoreV1().ServiceAccounts(namespace).Patch(
-		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("while annotating serviceaccount %s/%s: %w", namespace, name, err)
-	}
-	return nil
-}
-
-// ServiceAccountAnnotation reads one annotation from a ServiceAccount. A
-// missing ServiceAccount or annotation yields the empty string.
-func (c *Client) ServiceAccountAnnotation(ctx context.Context, namespace, name, key string) (string, error) {
-	sa, err := c.Typed.CoreV1().ServiceAccounts(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("while getting serviceaccount %s/%s: %w", namespace, name, err)
-	}
-	return sa.Annotations[key], nil
-}
-
 // OIDCIssuer reads the cluster's OpenID configuration and returns its issuer.
 // An empty string means the endpoint is unavailable or has no issuer, which
 // callers treat as "fall back to the in-cluster default".

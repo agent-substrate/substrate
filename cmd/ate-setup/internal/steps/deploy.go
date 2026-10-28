@@ -123,15 +123,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	// Resolved before the bundle apply: adopting a Cloud SQL instance reads
-	// the ConfigMap that EnsureAPIServerPrerequisites has already rewritten,
-	// and the answer decides both the apply and the rollout wait below. The
-	// bundled database is rendered at its final size before the apply, so the
-	// rollout wait covers the one pod that will actually serve.
-	postgres, err := e.planPostgres(ctx)
-	if err != nil {
-		return err
-	}
+	// Resolved before the bundle apply: the answer decides both the apply and
+	// the rollout wait below. The bundled database is rendered at its final
+	// size before the apply, so the rollout wait covers the one pod that will
+	// actually serve.
+	postgres := e.planPostgres()
 	if err := e.deployPostgres(ctx, postgres); err != nil {
 		return err
 	}
@@ -145,11 +141,6 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
-		return err
-	}
-
-	// After the bundle, which resets the pod template to the sidecar-free base.
-	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
 
@@ -315,10 +306,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
 	}
-	postgres, err := e.planPostgres(ctx)
-	if err != nil {
-		return err
-	}
+	postgres := e.planPostgres()
 	if postgres.bundled {
 		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
 			return err
@@ -329,10 +317,6 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 		return err
 	}
 	if err := e.applyWithAPIServerEnvHash(ctx, manifest); err != nil {
-		return err
-	}
-	// After the manifest, which resets the pod template to the sidecar-free base.
-	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
 	// ate-idp-server shares only the actor JWT pool with ate-api-server. It

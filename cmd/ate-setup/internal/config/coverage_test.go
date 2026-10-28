@@ -20,15 +20,11 @@ import (
 	"testing"
 )
 
-// notFromASetting are Config fields no setting feeds: derived values, the
-// repository root, and the companions that record whether a setting was
-// supplied rather than holding a value of their own.
+// notFromASetting are Config fields no setting feeds: derived values and the
+// repository root.
 var notFromASetting = map[string]bool{
-	"Root":                     true,
-	"Images":                   true, // assembled from images.repo and images.tag
-	"CloudSQL":                 true, // assembled from the ateapi.postgres.cloudsql.* settings
-	"PostgresOwnerRoleSet":     true,
-	"PostgresReadWriteRoleSet": true,
+	"Root":   true,
+	"Images": true, // assembled from images.repo and images.tag
 
 	// kindCluster.enabled feeds Kind, but the fixture sets it false to reach
 	// the cloud path, so its zero value here says nothing.
@@ -92,8 +88,6 @@ func valueFor(key string) string {
 		return ClusterSizeSize0
 	case "ingressAllowedSPIFFEIDs":
 		return "spiffe://cluster.local/ns/a/sa/b"
-	case "ateapi.postgres.cloudsql.ipType":
-		return CloudSQLIPTypePSC
 	case "atenet.egress.additionalExtprocService":
 		return "ns/svc:8080"
 	case "atenet.egress.credentialProvider":

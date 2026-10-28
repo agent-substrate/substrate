@@ -101,15 +101,6 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 			ownerDSN:      "postgres://owner@database/atepg",
 			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
 		},
-		{
-			name: "Cloud SQL one login",
-			cfg: config.Config{
-				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
-				PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
-				CloudSQL: config.CloudSQLConfig{Instance: "p:r:i", InstanceSet: true, GSA: "svc@p.iam.gserviceaccount.com"},
-			},
-			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.cfg.SnapshotLocation = "gs://ate-snapshots/"
@@ -127,11 +118,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 			}
 			readWrite := secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"]
 			owner := secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"]
-			if tc.cfg.CloudSQL.Instance != "" {
-				if !strings.Contains(readWrite, "svc@p.iam") || readWrite != owner {
-					t.Fatalf("Cloud SQL one-login connections: %q, %q", readWrite, owner)
-				}
-			} else if readWrite != tc.readWriteDSN || owner != tc.ownerDSN {
+			if readWrite != tc.readWriteDSN || owner != tc.ownerDSN {
 				t.Fatalf("unexpected connections: %q, %q", readWrite, owner)
 			}
 			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
@@ -164,7 +151,6 @@ func TestCreateAPIServerEnvVarsRejectsCustomBundledIdentity(t *testing.T) {
 func TestCreateAPIServerEnvVarsKeepsExternalPostgres(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		cloudSQL config.CloudSQLConfig
 		recorded string
 		wantErr  bool
 	}{
@@ -172,17 +158,17 @@ func TestCreateAPIServerEnvVarsKeepsExternalPostgres(t *testing.T) {
 		{name: "bundled install", recorded: bundledPostgresDSN(postgressetup.ReadWriteUser)},
 		{name: "external install", recorded: "postgres://runtime@database/atepg", wantErr: true},
 		{
-			// An explicitly empty instance is how an operator leaves Cloud SQL.
-			name:     "leaving Cloud SQL",
-			cloudSQL: config.CloudSQLConfig{InstanceSet: true},
+			// ate-setup no longer configures Cloud SQL, but an install it set
+			// up earlier still records a DSN to the proxy sidecar.
+			name:     "Cloud SQL install",
 			recorded: "user=svc@p.iam host=127.0.0.1 port=5432 dbname=atepg sslmode=disable",
+			wantErr:  true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
 				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
-				CloudSQL:         tc.cloudSQL,
 				SnapshotLocation: "gs://ate-snapshots/",
 			}
 			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
@@ -319,106 +305,6 @@ func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
 	}
 	if got := cm.Data["ATE_API_ACTOR_JWT_ISSUER"]; got != cfg.ActorJWTIssuer {
 		t.Errorf("ATE_API_ACTOR_JWT_ISSUER = %q, want %q", got, cfg.ActorJWTIssuer)
-	}
-}
-
-func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
-	const recordedDSN = "user=svc@p.iam host=127.0.0.1 dbname=atepg"
-	const explicitOwnerDSN = "user=new-owner@p.iam host=127.0.0.1 dbname=atepg"
-	for _, tc := range []struct {
-		name          string
-		cfg           config.Config
-		wantReadWrite string
-		wantOwner     string
-		wantOwnerDSN  string
-		wantSchema    string
-		wantPoolSize  string
-	}{
-		{
-			name: "preserve recorded identity",
-			cfg: config.Config{
-				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
-				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
-				PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
-			},
-			wantReadWrite: "tenant_readwrite",
-			wantOwner:     "tenant_owner",
-			wantOwnerDSN:  recordedDSN,
-			wantSchema:    "tenant_schema",
-			wantPoolSize:  "20",
-		},
-		{
-			name: "explicit overrides win",
-			cfg: config.Config{
-				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
-				PostgresReadWriteRole:         config.DefaultPostgresReadWriteRole,
-				PostgresOwnerRole:             config.DefaultPostgresOwnerRole,
-				PostgresReadWriteRoleSet:      true,
-				PostgresOwnerRoleSet:          true,
-				PostgresOwnerConnectionString: explicitOwnerDSN,
-				PostgresSchema:                "other_schema",
-				PostgresPoolMaxConns:          "30",
-			},
-			wantReadWrite: config.DefaultPostgresReadWriteRole,
-			wantOwner:     config.DefaultPostgresOwnerRole,
-			wantOwnerDSN:  explicitOwnerDSN,
-			wantSchema:    "other_schema",
-			wantPoolSize:  "30",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.SnapshotLocation = "gs://ate-snapshots/"
-			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t,
-				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
-				&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem},
-					Data: map[string]string{
-						"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i",
-						"ATE_API_POSTGRES_READ_WRITE_ROLE":   "tenant_readwrite",
-						"ATE_API_POSTGRES_OWNER_ROLE":        "tenant_owner",
-						"ATE_API_POSTGRES_POOL_MAX_CONNS":    "20",
-					},
-				},
-				&corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
-					Data: map[string][]byte{
-						"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte(recordedDSN),
-						"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      []byte(recordedDSN),
-						"ATE_API_POSTGRES_SCHEMA":                       []byte("tenant_schema"),
-					},
-				},
-				&corev1.ServiceAccount{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:        "ate-api-server",
-						Namespace:   NamespaceAteSystem,
-						Annotations: map[string]string{workloadIdentityAnnotation: "svc@p.iam.gserviceaccount.com"},
-					},
-				},
-			)}
-			if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
-			if err != nil {
-				t.Fatal(err)
-			}
-			secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"] != tc.wantReadWrite ||
-				cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.wantOwner ||
-				cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"] != tc.wantPoolSize ||
-				secret.StringData["ATE_API_POSTGRES_SCHEMA"] != tc.wantSchema ||
-				secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != recordedDSN ||
-				secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != tc.wantOwnerDSN {
-				t.Fatalf("identity after redeploy: roles %q/%q, schema %q, pool size %q, connections %q/%q",
-					cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"], cm.Data["ATE_API_POSTGRES_OWNER_ROLE"],
-					secret.StringData["ATE_API_POSTGRES_SCHEMA"], cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"],
-					secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"],
-					secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"])
-			}
-		})
 	}
 }
 

@@ -244,27 +244,6 @@ var Registry = []Setting{
 			"An existing install must delete the postgres StatefulSet and its claim first",
 	},
 	{
-		Key: "ateapi.postgres.cloudsql.instance", Env: "ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
-		Flag: "ateapi-postgres-cloudsql-instance", Kind: KindString,
-		Usage: "Cloud SQL instance connection name, PROJECT:REGION:INSTANCE",
-	},
-	{
-		Key: "ateapi.postgres.cloudsql.gsa", Env: "ATE_API_POSTGRES_CLOUDSQL_GSA",
-		Flag: "ateapi-postgres-cloudsql-gsa", Kind: KindString,
-		Usage: "Google service account the Cloud SQL Auth Proxy authenticates as",
-	},
-	{
-		Key: "ateapi.postgres.cloudsql.iamAuth", Env: "ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
-		Flag: "ateapi-postgres-cloudsql-iam-auth", Kind: KindString,
-		Usage: "Enable automatic IAM database authentication: true or false",
-	},
-	{
-		Key: "ateapi.postgres.cloudsql.ipType", Env: "ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
-		Flag: "ateapi-postgres-cloudsql-ip-type", Kind: KindString,
-		Usage: "Instance address the Cloud SQL proxy dials: private, public or psc",
-	},
-
-	{
 		Key: "podcert.workersPerSigner", Env: "ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		Flag: "podcert-workers-per-signer", Kind: KindInt, Default: "0",
 		Usage: "Worker goroutines per signer in podcertificate-controller",

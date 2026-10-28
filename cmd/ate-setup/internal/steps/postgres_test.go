@@ -242,8 +242,6 @@ func TestPlanPostgres(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		connString string
-		cloudSQL   config.CloudSQLConfig
-		recorded   map[string]string
 		want       postgresPlan
 	}{
 		{
@@ -255,38 +253,10 @@ func TestPlanPostgres(t *testing.T) {
 			connString: "postgresql://user@db.example.com:5432/atepg",
 			want:       postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
 		},
-		{
-			name:     "Cloud SQL instance from the environment",
-			cloudSQL: config.CloudSQLConfig{Instance: "p:r:i", InstanceSet: true},
-			want:     postgresPlan{external: "Cloud SQL instance p:r:i"},
-		},
-		{
-			name:     "Cloud SQL instance adopted from the cluster",
-			recorded: map[string]string{envCloudSQLInstance: "p:r:i"},
-			want:     postgresPlan{external: "Cloud SQL instance p:r:i"},
-		},
-		{
-			// The removal case: the cluster still records an instance, but
-			// the operator asked for it to go away.
-			name:     "explicitly empty instance ignores the cluster record",
-			cloudSQL: config.CloudSQLConfig{InstanceSet: true},
-			recorded: map[string]string{envCloudSQLInstance: "p:r:i"},
-			want:     postgresPlan{bundled: true},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Env{
-				Cfg: &config.Config{
-					PostgresReadWriteConnectionString: tc.connString,
-					CloudSQL:                          tc.cloudSQL,
-				},
-				Kube: fakeKube(t, apiServerEnvVarsConfigMap(tc.recorded)),
-			}
-			got, err := e.planPostgres(t.Context())
-			if err != nil {
-				t.Fatalf("planPostgres() error = %v", err)
-			}
-			if got != tc.want {
+			e := &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: tc.connString}}
+			if got := e.planPostgres(); got != tc.want {
 				t.Errorf("planPostgres() = %+v, want %+v", got, tc.want)
 			}
 		})

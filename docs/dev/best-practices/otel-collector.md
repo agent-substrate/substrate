@@ -46,8 +46,9 @@ You get a collector reachable at:
 opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
 ```
 
-When running on GKE, this is the address every Substrate manifest already
-defaults to, so no further configuration is needed. Telemetry is forwarded to
+When installing on GKE with [substrate-gke](https://github.com/ai-on-gke/substrate-gke), this is the address its
+install sets, so no further configuration is needed. Core's own manifests set
+no collector address. Telemetry is forwarded to
 Google Cloud Observability and surfaces in Cloud Trace, Cloud Monitoring, and
 Cloud Logging.
 

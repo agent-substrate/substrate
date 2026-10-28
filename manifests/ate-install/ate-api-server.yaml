@@ -271,8 +271,8 @@ spec:
         # postgres-server-ca: server CA for an external Postgres, referenced
         # by the DSN via sslrootcert (sslmode=verify-ca). Empty unless the
         # postgres-server-ca Secret exists. Cloud SQL does not need this: it
-        # uses the Auth Proxy sidecar (see
-        # manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml), which handles TLS
+        # uses the Auth Proxy sidecar that substrate-gke
+        # (https://github.com/ai-on-gke/substrate-gke) adds, which handles TLS
         # itself.
         - name: "postgres-server-ca"
           mountPath: "/run/postgres-server-ca"

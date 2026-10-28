@@ -146,16 +146,6 @@ spec:
       - key: ate.dev/sandboxClass
         operator: Exists
         effect: NoSchedule
-      # GKE taints the nodes it creates for a ComputeClass with
-      # cloud.google.com/compute-class=<class>:NoSchedule and adds the matching
-      # toleration to pods that select the class, so a WorkerPool whose
-      # template.nodeSelector selects a ComputeClass runs its workers on those
-      # nodes.
-      # TODO(roycaihw): move this GKE-specific toleration into the GKE install
-      # overlay once the new installer lands (#2760).
-      - key: cloud.google.com/compute-class
-        operator: Exists
-        effect: NoSchedule
       # The node object-store plugin moves external snapshots between this
       # node and object storage and fetches sandbox assets for atelet, over a
       # Unix socket in a pod-local emptyDir.
