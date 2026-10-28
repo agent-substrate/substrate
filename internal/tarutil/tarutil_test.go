@@ -18,8 +18,10 @@ package tarutil
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -189,6 +191,80 @@ func TestRoundTrip(t *testing.T) {
 			t.Error("hard.txt is a copy, want the same inode as a.txt")
 		}
 	})
+}
+
+// TestExtractKeepsFileSparse verifies a sparse file comes back with the same
+// contents and length but without its holes allocated: a durable dir commonly
+// holds a disk image that is mostly holes, and restoring it dense would cost
+// its full length in disk space and write time on every resume.
+func TestExtractKeepsFileSparse(t *testing.T) {
+	const size = 16<<20 + 100 // not a block multiple, and ends in a hole
+	src := t.TempDir()
+	f, err := os.Create(filepath.Join(src, "disk.img"))
+	if err != nil {
+		t.Fatalf("creating disk.img: %v", err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatalf("truncating disk.img: %v", err)
+	}
+	// Data straddling a block boundary, and a run of written zeros, which
+	// may come back as a hole since it reads the same.
+	for off, data := range map[int64][]byte{
+		1000:    []byte(strings.Repeat("a", 5000)),
+		8 << 20: make([]byte, 64<<10),
+		9 << 20: []byte("b"),
+	} {
+		if _, err := f.WriteAt(data, off); err != nil {
+			t.Fatalf("writing at %d: %v", off, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing disk.img: %v", err)
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "out.tar")
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	want, err := os.ReadFile(filepath.Join(src, "disk.img"))
+	if err != nil {
+		t.Fatalf("reading source: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "disk.img"))
+	if err != nil {
+		t.Fatalf("reading extracted: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("extracted contents differ from source (len %d, want %d)", len(got), len(want))
+	}
+	var st unix.Stat_t
+	if err := unix.Stat(filepath.Join(dst, "disk.img"), &st); err != nil {
+		t.Fatalf("stat extracted: %v", err)
+	}
+	if allocated := st.Blocks * 512; allocated > 1<<20 {
+		t.Errorf("extracted disk.img allocates %d bytes of its %d, want its holes left unallocated", allocated, size)
+	}
+}
+
+// TestExtractNamesTruncatedFile verifies an archive cut off inside a file's
+// contents fails with an error naming that file, rather than the file being
+// restored short.
+func TestExtractNamesTruncatedFile(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "trunc.tar")
+	writeTar(t, tarPath, tar.Header{Name: "data.bin", Mode: 0o644, Size: 10000, Typeflag: tar.TypeReg})
+	// Keep the 512-byte header and the first 5000 bytes of contents.
+	if err := os.Truncate(tarPath, 512+5000); err != nil {
+		t.Fatalf("truncating tar: %v", err)
+	}
+	err := Extract(tarPath, t.TempDir())
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "data.bin") {
+		t.Fatalf("Extract = %v, want an unexpected-EOF error naming data.bin", err)
+	}
 }
 
 func TestCreateEmptyDir(t *testing.T) {
