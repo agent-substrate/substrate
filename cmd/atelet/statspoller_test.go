@@ -29,6 +29,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,8 +69,8 @@ func executingResponse(templateNS, templateName string, class string, source ate
 			ActorTemplateName:     templateName,
 			SandboxClass:          class,
 			Source:                source,
-			MemoryCurrentBytes:    current,
-			MemoryWorkingSetBytes: workingSet,
+			MemoryCurrentBytes:    proto.Uint64(current),
+			MemoryWorkingSetBytes: proto.Uint64(workingSet),
 		}},
 	}
 }
@@ -82,8 +83,8 @@ func measuredSample(actorUID, templateNS, templateName string, current, workingS
 		ActorTemplateName:     templateName,
 		SandboxClass:          "gvisor",
 		Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
-		MemoryCurrentBytes:    current,
-		MemoryWorkingSetBytes: workingSet,
+		MemoryCurrentBytes:    proto.Uint64(current),
+		MemoryWorkingSetBytes: proto.Uint64(workingSet),
 		CpuUsageUsec:          cpuUsec,
 	}
 }
