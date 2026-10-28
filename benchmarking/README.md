@@ -564,6 +564,9 @@ deleted, and its user creates another on its next iteration. When a step lowers
 the user count, the actors of the stopped users stay suspended, unused, until
 boomer exits.
 
+To run the cold resume tests in `automation/tests.yaml` from a workstation,
+see [automation/ateapi-cold-resume.md](automation/ateapi-cold-resume.md).
+
 #### ResumePaused Configuration Knobs
 
 * `--target-rps`: Cold resumes per second the whole boomer process paces to

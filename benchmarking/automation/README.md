@@ -7,6 +7,8 @@ Each run uploads results to GCS via `benchmarking/locust/runner.py`
 (`type: locust`) or `benchmarking/nighthawk-ingress/runner.py` (`type: nighthawk-ingress`,
 the router capacity benchmark — see
 [benchmarking/nighthawk-ingress/README.md](../nighthawk-ingress/README.md)).
+To run the cold resume tests from your workstation instead, see
+[ateapi-cold-resume.md](ateapi-cold-resume.md).
 
 ## How it works
 
