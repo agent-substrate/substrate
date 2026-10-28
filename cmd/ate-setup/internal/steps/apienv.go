@@ -365,9 +365,19 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 const apiServerAuthzFlag = "--authz-bootstrap-owners"
 
 // setAPIServerAuthzArgs sets ate-api-server's bootstrap owners flag on its
-// container in objs, replacing any the manifest already carries. A changed
-// flag changes the pod template, so it rolls the Deployment.
+// container in objs, replacing any the manifest already carries.
 func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners string) error {
+	var values []string
+	if strings.Trim(bootstrapOwners, " ,") != "" {
+		values = []string{bootstrapOwners}
+	}
+	return setAPIServerFlag(objs, apiServerAuthzFlag, values)
+}
+
+// setAPIServerFlag replaces every flag arg on ate-api-server's container in
+// objs with one flag=value arg per value, in order. A changed flag changes the
+// pod template, so it rolls the Deployment.
+func setAPIServerFlag(objs []*unstructured.Unstructured, flag string, values []string) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
 		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
@@ -376,7 +386,7 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners st
 		}
 	}
 	if dep == nil {
-		return fmt.Errorf("the manifest has no deployment/ate-api-server to set authorization flags on")
+		return fmt.Errorf("the manifest has no deployment/ate-api-server to set %s on", flag)
 	}
 	containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
 	if err != nil || !found {
@@ -392,10 +402,10 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners st
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
 		}
 		args = slices.DeleteFunc(args, func(arg string) bool {
-			return arg == apiServerAuthzFlag || strings.HasPrefix(arg, apiServerAuthzFlag+"=")
+			return arg == flag || strings.HasPrefix(arg, flag+"=")
 		})
-		if strings.Trim(bootstrapOwners, " ,") != "" {
-			args = append(args, apiServerAuthzFlag+"="+bootstrapOwners)
+		for _, v := range values {
+			args = append(args, flag+"="+v)
 		}
 		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
