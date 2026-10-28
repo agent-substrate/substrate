@@ -48,40 +48,36 @@ rule, are answered `NXDOMAIN`.
 
 ## Configuring a workload to trust public and man-in-the-middle CAs
 
-Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
+Add a `systemInfo` volume with a `trustBundle` data source to the actor
+template (the manifest you pass to `kubectl ate create actor-template -f`),
+and mount it in each container that makes TLS connections:
 
 ```yaml
-apiVersion: ate.dev/v1
-kind: ActorTemplate
-metadata:
-  name: my-actor
-  namespace: my-namespace
-spec:
-  volumes:
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    # This file will contain trust anchors for both the MITM CA and standard
+    # public WebPKI CAs, meaning it will work for actors that use `https` rules,
+    # `tls_passthrough` rules, or a mix.
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        - system-roots.ate.dev
+        path: trust-bundle.pem
+containers:
+- name: app
+  # ...
+  volumeMounts:
   - name: system-info
-    systemInfo:
-      dataSources:
-      # This file will contain trust anchors for both the MITM CA and standard
-      # public WebPKI CAs, meaning it will work for actors that use `https` rules,
-      # `tls_passthrough` rules, or a mix.
-      - trustBundle:
-          names:
-          - egress-mitm.ate.dev
-          - system-roots.ate.dev
-          path: trust-bundle.pem
-  containers:
-  - name: app
-    image: ...
-    volumeMounts:
-    - name: system-info
-      mountPath: /run/ate/egress-trust-bundle/
+    mountPath: /run/ate/egress-trust-bundle
 ```
 
 Substrate only offers a few built-in trust bundles with well-known names:
 * `egress-mitm.ate.dev` — the egress gateway CA.
 * `system-roots.ate.dev` — A selection of public CA root certificates provided
   by Substrate.  In official Substrate images, this is the Mozilla Root Store as
-  shipped on Debian (consumed via the distroless-static base image).
+  shipped on Debian, read from atelet's `distroless/base-debian13` base image.
 
 You then need to configure your application to use the trust-bundle file.  In
 general, this is application specific, but many runtimes respect the
@@ -117,7 +113,7 @@ this setup in your application's startup logic).    See the [example](#example-e
 #!/bin/sh
 set -eu
 sys=/etc/ssl/certs/ca-certificates.crt   # RHEL family: /etc/pki/tls/certs/ca-bundle.crt
-ca=/run/ate/trust-bundle.pem
+ca=/run/ate/egress-trust-bundle/trust-bundle.pem
 out=/tmp/ca-bundle.pem
 { cat "$sys"; echo; cat "$ca"; } > "$out"
 export SSL_CERT_FILE="$out" REQUESTS_CA_BUNDLE="$out" CURL_CA_BUNDLE="$out" GIT_SSL_CAINFO="$out" PIP_CERT="$out"
@@ -130,7 +126,9 @@ Note: Do not bake the bundle into the image at build time. It will tie the image
 ## Verify
 
 `demos/egress/egress-template.yaml.tmpl` is a complete working template that
-does exactly this. Deploy it:
+projects both bundles to `/run/ate/egress-trust-bundle/trust-bundle.pem`, the
+file this recipe uses. Its Go app finds the file through `SSL_CERT_DIR`. Deploy
+it:
 
 ```bash
 go run ./cmd/ate-setup deploy demo egress
@@ -145,7 +143,7 @@ bundle did the validating.
 
 * Problems with trust bundles will block actor startup.  Error messages:
   - `... unknown trust bundle "foo"`: You tried to use an unknown trust bundle name.
-  - `... trust bundle "foo": unusable contents ...`: Your substrate installation is misconfigured.
+  - `... trust bundle "egress-mitm.ate.dev": ClusterTrustBundle "egress-mitm.ate.dev:mitm:primary-bundle" not found`: Your substrate installation is misconfigured.
 * Certificate errors are likely problems with the actor, not the gateway: If you
   see an error message like `... certificate signed by unknown authority ...`,
   the most likely cause is that your actor is not configured to trust the MITM
