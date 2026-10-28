@@ -363,3 +363,64 @@ func TestWorkerRuntimeFor(t *testing.T) {
 		t.Errorf("WorkerRuntimeFor() before registration = %v, want nil", got)
 	}
 }
+
+func TestMatchesArch(t *testing.T) {
+	runtimeWith := func(class, ver string, attrs ...*ateapi.AttributeEntry) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{
+			SandboxClass: class,
+			Version: &ateapi.VersionedSandboxCompat{
+				SchemaVersion: ver,
+				Attributes:    attrs,
+			},
+		}
+	}
+	amd64V1 := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:v1"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
+	)
+	amd64V2 := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:v2"},
+		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "3"},
+	)
+	arm64V1 := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "arm64"},
+		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:v1"},
+	)
+	amd64MicroVM := runtimeWith("microvm", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+	)
+	amd64SchemaV2 := runtimeWith("gvisor", "v2",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
+	)
+	noArch := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:v1"},
+	)
+	emptyArch := runtimeWith("gvisor", "v1",
+		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: ""},
+	)
+
+	for _, tc := range []struct {
+		name   string
+		worker *ateapi.ActorSandboxRuntime
+		snap   *ateapi.ActorSandboxRuntime
+		want   bool
+	}{
+		{"nil snapshot imposes no constraint", arm64V1, nil, true},
+		{"same arch with different bundle and cpu_features matches", amd64V2, amd64V1, true},
+		{"different arch fails", arm64V1, amd64V1, false},
+		{"different sandbox class fails", amd64MicroVM, amd64V1, false},
+		{"different schema version fails", amd64SchemaV2, amd64V1, false},
+		{"snapshot missing architecture fails", amd64V1, noArch, false},
+		{"snapshot with empty architecture fails", amd64V1, emptyArch, false},
+		{"snapshot with nil version fails", amd64V1, &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, false},
+		{"nil worker fails when snapshot is stamped", nil, amd64V1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MatchesArch(tc.worker, tc.snap); got != tc.want {
+				t.Errorf("MatchesArch() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -286,6 +286,32 @@ func Matches(rt, snap *ateapi.ActorSandboxRuntime) bool {
 	return NewRequirement(snap).Matches(rt)
 }
 
+// MatchesArch reports whether rt shares snap's sandbox class, schema version,
+// and non-empty AttrArchitecture. A nil snap imposes no constraint.
+func MatchesArch(rt, snap *ateapi.ActorSandboxRuntime) bool {
+	if snap == nil {
+		return true
+	}
+	if rt == nil || rt.GetSandboxClass() != snap.GetSandboxClass() {
+		return false
+	}
+	rv, sv := rt.GetVersion(), snap.GetVersion()
+	if rv == nil || sv == nil || sv.GetSchemaVersion() == "" || rv.GetSchemaVersion() != sv.GetSchemaVersion() {
+		return false
+	}
+	arch := attrValue(sv, AttrArchitecture)
+	return arch != "" && attrValue(rv, AttrArchitecture) == arch
+}
+
+func attrValue(v *ateapi.VersionedSandboxCompat, key string) string {
+	for _, a := range v.GetAttributes() {
+		if a.GetKey() == key {
+			return a.GetValue()
+		}
+	}
+	return ""
+}
+
 // MatchesCompat reports whether worker can restore a snapshot stamped with
 // snap, for one comparison. Unlike Matches, a nil snap is a stamp missing its
 // identity and matches nothing.
