@@ -41,9 +41,10 @@ const failFastResumeBudget = 15 * time.Second
 // the router's reply.
 const ExtProcTimeoutMargin = 5 * time.Second
 
-// replyMargin is how long before Envoy's timeout the router stops waiting, so
-// its reply gets to Envoy in time.
-const replyMargin = time.Second
+// routerExtProcTimeout is how much longer than the park budget the router
+// waits before answering. It must be less than ExtProcTimeoutMargin: if
+// Envoy's timeout fires first, Envoy sends the client an empty 504.
+const routerExtProcTimeout = ExtProcTimeoutMargin - time.Second
 
 // resumeBackoff builds the backoff between resume attempts while a request is
 // parked, from the configured retry parameters.
@@ -284,7 +285,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	// router ends the wait itself and sends the client a 503. Without this,
 	// Envoy would end the request with a 504 and no useful error message. The flight
 	// keeps going, and later requests join it.
-	maxWait := r.budget + ExtProcTimeoutMargin - replyMargin
+	maxWait := r.budget + routerExtProcTimeout
 	waitCtx, cancel := context.WithTimeout(ctx, maxWait)
 	defer cancel()
 
