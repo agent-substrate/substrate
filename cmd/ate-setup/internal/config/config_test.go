@@ -61,6 +61,7 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
+		"ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INGRESS_ALLOWED_SPIFFE_IDS",
@@ -311,6 +312,44 @@ func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 			got, exported := scriptEnvMap(t, cfg)["ATE_INGRESS_ALLOWED_SPIFFE_IDS"]
 			if want := strings.Join(tc.want, ","); exported != (want != "") || got != want {
 				t.Errorf("ScriptEnv() ATE_INGRESS_ALLOWED_SPIFFE_IDS = %q (exported %v), want %q", got, exported, want)
+			}
+		})
+	}
+}
+
+func TestLoadEgressGatewayExtraSPIFFEIDs(t *testing.T) {
+	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
+	for _, tc := range []struct {
+		name    string
+		env     string
+		want    []string
+		wantErr string
+	}{
+		{name: "unset", want: nil},
+		{name: "several, with stray separators", env: " " + a + ",," + b + ", ", want: []string{a, b}},
+		{name: "not a SPIFFE ID", env: a + ",https://example.com/x", wantErr: "ateapi.authz.egressGatewayExtraSPIFFEIDs must be a comma-separated list of SPIFFE IDs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != "" {
+				t.Setenv("ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS", tc.env)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !slices.Equal(cfg.EgressGatewayExtraSPIFFEIDs, tc.want) {
+				t.Errorf("EgressGatewayExtraSPIFFEIDs = %q, want %q", cfg.EgressGatewayExtraSPIFFEIDs, tc.want)
+			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS"]
+			if want := strings.Join(tc.want, ","); exported != (want != "") || got != want {
+				t.Errorf("ScriptEnv() ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS = %q (exported %v), want %q", got, exported, want)
 			}
 		})
 	}
