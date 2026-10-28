@@ -677,9 +677,6 @@ func credentialProvider(raw string) (CredentialProvider, error) {
 func (c *Config) CredentialProviders() ([]CredentialProvider, error) {
 	raw := c.CredentialProviderJSON
 	if raw == "" {
-		// Every channel is named, not just the flag: a provider set in the
-		// configuration document is the documented way to do it, and a reader
-		// told only about the flag goes looking in the wrong place.
 		return nil, fmt.Errorf("a credential provider is required; set one of %s: %s",
 			channelsFor(credentialProviderKey), credentialProviderUsage)
 	}
