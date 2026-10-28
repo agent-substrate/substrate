@@ -355,6 +355,9 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIAuthzBootstrapOwners); err != nil {
 		return err
 	}
+	if err := setAPIServerEgressGatewayArgs(objs, e.Namespace(), e.Cfg.EgressGatewayExtraSPIFFEIDs); err != nil {
+		return err
+	}
 	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
 		log.Warnf("%s", msg)
 	}
@@ -372,6 +375,27 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners st
 		values = []string{bootstrapOwners}
 	}
 	return setAPIServerFlag(objs, apiServerAuthzFlag, values)
+}
+
+// apiServerEgressGatewayFlag is the ate-api-server flag
+// setAPIServerEgressGatewayArgs owns.
+const apiServerEgressGatewayFlag = "--egress-gateway-spiffe-id"
+
+// setAPIServerEgressGatewayArgs passes atenet-egress's SPIFFE ID and then each
+// of extras, without duplicates, to ate-api-server's egress gateway flag. With
+// no extras it drops the flag, leaving ate-api-server's default.
+func setAPIServerEgressGatewayArgs(objs []*unstructured.Unstructured, namespace string, extras []string) error {
+	var ids []string
+	if len(extras) > 0 {
+		// Passing the flag replaces ate-api-server's default.
+		ids = []string{installdefaults.EgressSPIFFEID(namespace)}
+		for _, id := range extras {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return setAPIServerFlag(objs, apiServerEgressGatewayFlag, ids)
 }
 
 // setAPIServerFlag replaces every flag arg on ate-api-server's container in

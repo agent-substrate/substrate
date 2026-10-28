@@ -135,7 +135,7 @@ through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
 | Role | Held by | Allows |
 |---|---|---|
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
-| `egress_gateway` | `atenet-egress`, and any other SPIFFE IDs passed with `--egress-gateway-spiffe-id` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
+| `egress_gateway` | `atenet-egress`, and any other SPIFFE IDs passed with `--egress-gateway-spiffe-id`, which ate-setup sets from `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
 | `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |

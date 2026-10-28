@@ -230,7 +230,8 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ClusterLocation:   r.String("gcp.clusterLocation"),
 		ExpectedJWTIssuer: r.String("ateapi.expectedJWTIssuer"),
 
-		APIAuthzBootstrapOwners: bootstrapOwners,
+		APIAuthzBootstrapOwners:     bootstrapOwners,
+		EgressGatewayExtraSPIFFEIDs: splitList(r.String("ateapi.authz.egressGatewayExtraSPIFFEIDs")),
 
 		BucketName:         r.String("storage.bucketName"),
 		SnapshotLocation:   r.String("storage.snapshotLocation"),
@@ -413,11 +414,17 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
 	}
 
-	// The router rejects a malformed ID at startup; catch it before the
-	// rollout does.
+	// The router and ate-api-server reject a malformed ID at startup; catch it
+	// before the rollout does.
 	for _, id := range cfg.IngressAllowedSPIFFEIDs {
 		if _, err := spiffeid.FromString(id); err != nil {
 			ids, _ := r.Value("ingressAllowedSPIFFEIDs")
+			return &InvalidError{Value: ids, Want: fmt.Sprintf("a comma-separated list of SPIFFE IDs (%q: %v)", id, err)}
+		}
+	}
+	for _, id := range cfg.EgressGatewayExtraSPIFFEIDs {
+		if _, err := spiffeid.FromString(id); err != nil {
+			ids, _ := r.Value("ateapi.authz.egressGatewayExtraSPIFFEIDs")
 			return &InvalidError{Value: ids, Want: fmt.Sprintf("a comma-separated list of SPIFFE IDs (%q: %v)", id, err)}
 		}
 	}

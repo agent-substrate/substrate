@@ -188,6 +188,13 @@ var Registry = []Setting{
 			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
 	},
 	{
+		Key: "ateapi.authz.egressGatewayExtraSPIFFEIDs", Env: "ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS",
+		Flag: "egress-gateway-extra-spiffe-ids", Kind: KindString,
+		Usage: "Comma-separated SPIFFE IDs that hold ate-api-server's egress_gateway role next to atenet-egress, " +
+			"such as a credential provider that mints actor JWTs. The role also reads actors and mints actor " +
+			"certificates. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
+	},
+	{
 		// The egress gateway's credential provider, as a JSON object. Upstream
 		// takes it as one value on one flag; it is carried the same way here
 		// so the two channels accept the same text.

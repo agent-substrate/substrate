@@ -121,6 +121,10 @@ type Config struct {
 	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
 	APIAuthzBootstrapOwners string
 
+	// EgressGatewayExtraSPIFFEIDs hold ate-api-server's egress_gateway role
+	// next to atenet-egress (ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS).
+	EgressGatewayExtraSPIFFEIDs []string
+
 	// ActorJWTAlgorithm is the signing algorithm of the key in a new actor JWT
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
 	ActorJWTAlgorithm string
@@ -517,6 +521,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
 	if len(c.IngressAllowedSPIFFEIDs) > 0 {
 		merged["ATE_INGRESS_ALLOWED_SPIFFE_IDS"] = strings.Join(c.IngressAllowedSPIFFEIDs, ",")
+	}
+	delete(merged, "ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS")
+	if len(c.EgressGatewayExtraSPIFFEIDs) > 0 {
+		merged["ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS"] = strings.Join(c.EgressGatewayExtraSPIFFEIDs, ",")
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService
