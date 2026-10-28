@@ -212,6 +212,25 @@ type SandboxConfigList struct {
 	Items           []SandboxConfig `json:"items"`
 }
 
+// ClassDefaultSandboxConfig returns the default SandboxConfig of class among
+// configs, or nil if there is none. It is the newest config of the class with
+// SandboxConfigClassDefaultAnnotation set to "true" that is not being deleted.
+// Of two created in the same second, the one whose name sorts first wins.
+func ClassDefaultSandboxConfig(configs []SandboxConfig, class SandboxClass) *SandboxConfig {
+	var best *SandboxConfig
+	for i := range configs {
+		sc := &configs[i]
+		if sc.Spec.SandboxClass != class || sc.Annotations[SandboxConfigClassDefaultAnnotation] != "true" || !sc.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if best == nil || best.CreationTimestamp.Before(&sc.CreationTimestamp) ||
+			(sc.CreationTimestamp.Equal(&best.CreationTimestamp) && sc.Name < best.Name) {
+			best = sc
+		}
+	}
+	return best
+}
+
 func init() {
 	SchemeBuilder.Register(&SandboxConfig{}, &SandboxConfigList{})
 }

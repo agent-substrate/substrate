@@ -17,7 +17,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,10 +72,7 @@ func PreflightChecks() error {
 		if err != nil {
 			return fmt.Errorf("failed to list SandboxConfigs: %w", err)
 		}
-		if !slices.ContainsFunc(list.Items, func(sc atev1.SandboxConfig) bool {
-			return sc.Spec.SandboxClass == atev1.SandboxClassMicroVM &&
-				sc.Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true" && sc.DeletionTimestamp.IsZero()
-		}) {
+		if atev1.ClassDefaultSandboxConfig(list.Items, atev1.SandboxClassMicroVM) == nil {
 			return fmt.Errorf("E2E_SANDBOX_CLASS=%s but no SandboxConfig of the class is annotated %s=true (see docs/dev/microvm-local.md for cluster setup)",
 				SandboxClassMicroVM, atev1.SandboxConfigClassDefaultAnnotation)
 		}

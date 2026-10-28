@@ -31,9 +31,8 @@ import (
 //
 //   - With configRef, that config is used. It must exist, belong to the same
 //     class, and not be being deleted.
-//   - Without configRef, the newest config of the class that is annotated as
-//     the class default and is not being deleted is used. If two were created
-//     at the same time, the name that sorts first wins.
+//   - Without configRef, the class default from
+//     atev1.ClassDefaultSandboxConfig is used.
 func resolveLatestSandboxConfig(entry atev1.WorkerPoolSandboxClass, configs []atev1.SandboxConfig) (*atev1.SandboxConfig, string, string) {
 	if entry.ConfigRef != nil {
 		name := entry.ConfigRef.Name
@@ -54,22 +53,13 @@ func resolveLatestSandboxConfig(entry atev1.WorkerPoolSandboxClass, configs []at
 		return sc, "", ""
 	}
 
-	isDefault := func(sc atev1.SandboxConfig) bool {
-		return sc.Spec.SandboxClass == entry.Name &&
-			sc.Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true"
-	}
-	var best *atev1.SandboxConfig
-	for i := range configs {
-		sc := &configs[i]
-		if isDefault(*sc) && sc.DeletionTimestamp.IsZero() && (best == nil || newerSandboxConfig(sc, best)) {
-			best = sc
-		}
-	}
-	if best != nil {
-		return best, "", ""
+	if sc := atev1.ClassDefaultSandboxConfig(configs, entry.Name); sc != nil {
+		return sc, "", ""
 	}
 	isDeletingDefault := func(sc atev1.SandboxConfig) bool {
-		return isDefault(sc) && !sc.DeletionTimestamp.IsZero()
+		return sc.Spec.SandboxClass == entry.Name &&
+			sc.Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true" &&
+			!sc.DeletionTimestamp.IsZero()
 	}
 	if slices.ContainsFunc(configs, isDeletingDefault) {
 		return nil, atev1.WorkerPoolReasonSandboxConfigDeleting,
@@ -120,15 +110,6 @@ func keepSandboxConfig(class atev1.SandboxClass, inUse string, configs []atev1.S
 		Reason:  reason,
 		Message: message,
 	}
-}
-
-// newerSandboxConfig reports whether a takes precedence over b as a class
-// default.
-func newerSandboxConfig(a, b *atev1.SandboxConfig) bool {
-	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
-		return b.CreationTimestamp.Before(&a.CreationTimestamp)
-	}
-	return a.Name < b.Name
 }
 
 // resolveSandboxClasses resolves every entry of wp.Spec.SandboxClasses. It

@@ -163,17 +163,13 @@ func sandboxConfigName(version string, class atev1.SandboxClass) (string, error)
 //   - It warns when the class has no default, so pools of the class without a
 //     configRef resolve none.
 func checkClassDefault(configs []atev1.SandboxConfig, name string, class atev1.SandboxClass) (string, error) {
-	var existing, newest *atev1.SandboxConfig
+	var existing *atev1.SandboxConfig
 	for i := range configs {
-		sc := &configs[i]
-		if sc.Name == name {
-			existing = sc
-		}
-		if sc.Spec.SandboxClass == class && sc.Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true" && sc.DeletionTimestamp.IsZero() &&
-			(newest == nil || newerSandboxConfig(sc, newest)) {
-			newest = sc
+		if configs[i].Name == name {
+			existing = &configs[i]
 		}
 	}
+	newest := atev1.ClassDefaultSandboxConfig(configs, class)
 	if existing != nil && !existing.DeletionTimestamp.IsZero() {
 		return "", fmt.Errorf("SandboxConfig %s is being deleted; wait until it is gone, then run this again", name)
 	}
@@ -186,14 +182,4 @@ func checkClassDefault(configs []atev1.SandboxConfig, name string, class atev1.S
 			name, atev1.SandboxConfigClassDefaultAnnotation, class, newest.Name), nil
 	}
 	return "", nil
-}
-
-// newerSandboxConfig reports whether a takes precedence over b as a class
-// default: it was created later, or in the same second with a smaller name.
-// atecontroller applies the same rule.
-func newerSandboxConfig(a, b *atev1.SandboxConfig) bool {
-	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
-		return b.CreationTimestamp.Before(&a.CreationTimestamp)
-	}
-	return a.Name < b.Name
 }
