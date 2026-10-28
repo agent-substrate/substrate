@@ -121,10 +121,14 @@ data:
             namespaces:
               names:
                 - benchmarking
+                - ate-system
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
             action: keep
             regex: "true"
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
             action: replace
             target_label: pod
@@ -133,6 +137,38 @@ data:
             target_label: __metrics_path__
             regex: (.+)
           - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+
+      # Control-plane controllers in ate-system (such as ate-controller)
+      # expose controller-runtime metrics on a named "metrics" containerPort
+      # (port 8080) without prometheus.io annotations. Match both the port
+      # name and port 8080 so pods that name port 9090 "metrics" (such as
+      # atenet-router, already scraped by kubernetes-pods) are not scraped twice.
+      - job_name: 'kubernetes-pods-8080'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ate-system
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_container_port_name
+              - __meta_kubernetes_pod_container_port_number
+            action: keep
+            regex: metrics;8080
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: replace
+            target_label: app
+          - source_labels: [__address__, __meta_kubernetes_pod_container_port_number]
             action: replace
             regex: ([^:]+)(?::\d+)?;(\d+)
             replacement: $1:$2
@@ -199,12 +235,29 @@ data:
             action: replace
             target_label: pod
 
+      # Scrape kube-apiserver /metrics for control-plane CPU, memory, request
+      # rate, and APF seat telemetry.
+      - job_name: 'kubernetes-apiservers'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        static_configs:
+          - targets: ['kubernetes.default.svc:443']
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            action: keep
+            regex: (process_(cpu_seconds_total|resident_memory_bytes|start_time_seconds)|go_memstats_(alloc_bytes|heap_inuse_bytes)|apiserver_(request_total|request_duration_seconds_bucket|flowcontrol_(rejected_requests_total|current_inqueue_requests|current_executing_seats|nominal_limit_seats)|storage_(objects|size_bytes)))
+
       # The container memory directly from the cAdvisor endpoint of the
       # kubelet. `kubectl top` reads metrics-server, which reports an average
       # across its own window and hides short peaks.
       # container_memory_working_set_bytes is the value that the OOM killer
       # uses.
       - job_name: 'kubernetes-cadvisor'
+        scrape_interval: 60s
+        scrape_timeout: 45s
         scheme: https
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
@@ -233,10 +286,16 @@ data:
           # cAdvisor sends a very large number of metrics. Keep only the
           # metrics that the benchmarks read: kernel pressure stall (PSI),
           # container network bandwidth, disk I/O, memory RSS/working-set,
-          # CPU utilization, CFS throttling, and OOM kill events.
+          # CPU utilization, CFS throttling, OOM kill events, and node machine capacity.
           - source_labels: [__name__]
             action: keep
-            regex: container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes|oom_events_total)
+            regex: (container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes|oom_events_total)|machine_(cpu_cores|memory_bytes))
+          # Drop per-actor sandbox sub-cgroups (which otherwise create >10M
+          # series at 100k running actors) while keeping worker pod rollups
+          # and per-actor container_oom_events_total.
+          - source_labels: [__name__, id]
+            action: drop
+            regex: container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes);.*/(sb-[^/]+|cri-containerd-[^/]+\.scope/.+)
           # Drop the series that have an empty container label only for cumulative
           # memory working set and CPU usage. cAdvisor gives a rollup for the whole
           # pod cgroup next to the series for each container; keeping both counts
@@ -244,7 +303,7 @@ data:
           # metrics (such as network or PSI) would drop valid pod/node stats.
           - source_labels: [__name__, container]
             action: drop
-            regex: container_(memory_working_set_bytes|cpu_usage_seconds_total);$
+            regex: container_(memory_working_set_bytes|memory_rss|spec_memory_limit_bytes|cpu_usage_seconds_total|cpu_cfs_.*);$
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -276,6 +335,15 @@ spec:
         args:
           - "--config.file=/etc/prometheus/prometheus.yml"
           - "--storage.tsdb.path=/prometheus/"
+          - "--storage.tsdb.retention.time=24h"
+          - "--web.enable-admin-api"
+        resources:
+          requests:
+            cpu: "2"
+            memory: "8Gi"
+          limits:
+            cpu: "4"
+            memory: "16Gi"
         ports:
         - containerPort: 9090
         volumeMounts:
