@@ -17,7 +17,7 @@ package ingress
 import (
 	"sync/atomic"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -75,7 +75,7 @@ func (f *resumeActorFlight) retryErr() error {
 // resume reports "unknown": the gRPC code alone does not carry the fact. A
 // canceled leader's flight outlives its request and keeps restoring the actor,
 // and a DeadlineExceeded can land in the middle of a restore.
-func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
+func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapi.Actor, ResumeOutcome, error) {
 	res := f.result
 	if res == nil {
 		return nil, ResumeOutcomeUnknown, status.Error(codes.Internal, "resume call returned nil result")

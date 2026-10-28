@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the glutton
+# ActorTemplate (protojson-shaped ateapi.ActorTemplate) for the glutton
 # benchmark workload, created through the ate API by workloads/deploy.sh.
 metadata:
   atespace: benchmark-workloads
@@ -55,10 +55,8 @@ containers:
 # exercise glutton's WriteRAM path.
 resources:
   limits:
-  - name: cpu
-    quantity: "${ACTOR_CPU}"
-  - name: memory
-    quantity: "${ACTOR_MEMORY}"
+    cpuMillicores: "${ACTOR_CPU_MILLICORES}"
+    memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/

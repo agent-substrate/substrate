@@ -29,15 +29,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 )
 
 // Outbox payload format: one event-type byte followed by the binary Worker proto.
 // The tag byte is read by other replicas during rolling deploys, so
 // store.WorkerEventType values must stay append-only stable and fit a byte.
-func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) ([]byte, error) {
+func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapi.Worker) ([]byte, error) {
 	b, err := proto.Marshal(worker)
 	if err != nil {
 		return nil, fmt.Errorf("in proto.Marshal: %w", err)
@@ -58,7 +58,7 @@ func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 	default:
 		return store.WorkerEvent{}, fmt.Errorf("unknown worker event type byte %d", payload[0])
 	}
-	worker := &ateapipb.Worker{}
+	worker := &ateapi.Worker{}
 	if err := unmarshalStored(payload[1:], worker); err != nil {
 		return store.WorkerEvent{}, fmt.Errorf("in unmarshalStored: %w", err)
 	}
@@ -76,7 +76,7 @@ func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 // committed. The worker comes from fn rather than from the caller because an
 // update only knows what it wrote once its mutation has run inside the
 // transaction.
-func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.WorkerEventType, fn func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error)) (*ateapipb.Worker, error) {
+func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.WorkerEventType, fn func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error)) (*ateapi.Worker, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning transaction: %w", err)

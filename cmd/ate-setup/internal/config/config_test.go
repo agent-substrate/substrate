@@ -15,6 +15,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,7 +48,6 @@ func loadEnv(t *testing.T) {
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
-		"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
 		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
@@ -63,9 +63,10 @@ func loadEnv(t *testing.T) {
 		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
-		"ATE_INGRESS_AUTH_MODE",
+		"ATE_INGRESS_ALLOWED_SPIFFE_IDS",
 		"ATE_INSTALL_CLUSTER_SIZE",
-		"ATE_INSTALL_CORDON_CONTROL_PLANE",
+		"ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS",
+		"ATE_INSTALL_E2E_TUNING",
 		"ATE_INSTALL_FAKE_DATA_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
@@ -86,6 +87,8 @@ func loadEnv(t *testing.T) {
 		"KUBECTL_CONTEXT",
 		"MEMORYSTORE_INSTANCE",
 		"PROJECT_ID",
+		"SNAPSHOT_LOCATION",
+		"SNAPSHOT_TRANSFER_GSA_NAME",
 		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
 		// Unset, not blanked. An exported empty variable is a value a channel
@@ -127,11 +130,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ClusterSize != ClusterSizeSize0 {
 		t.Errorf("ClusterSize = %q, want %q", cfg.ClusterSize, ClusterSizeSize0)
 	}
-	if cfg.CordonControlPlane {
-		t.Error("CordonControlPlane = true, want false")
-	}
-	if cfg.IngressAuthMode != IngressAuthDeprecatedInsecure {
-		t.Errorf("IngressAuthMode = %q, want %q", cfg.IngressAuthMode, IngressAuthDeprecatedInsecure)
+	if cfg.CordonSystemInfraComponents {
+		t.Error("CordonSystemInfraComponents = true, want false")
 	}
 }
 
@@ -192,30 +192,30 @@ func TestLoadClusterSize(t *testing.T) {
 	}
 }
 
-func TestLoadCordonControlPlane(t *testing.T) {
+func TestLoadCordonSystemInfraComponents(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		opts Options
 		env  string
 		want bool
 	}{
-		{name: "flag", opts: Options{CordonControlPlane: true}, want: true},
+		{name: "flag", opts: Options{CordonSystemInfraComponents: true}, want: true},
 		{name: "environment true", env: "true", want: true},
 		{name: "environment false", env: "false", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)
-			t.Setenv("ATE_INSTALL_CORDON_CONTROL_PLANE", tc.env)
+			t.Setenv("ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS", tc.env)
 			cfg, err := Load(tc.opts)
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.CordonControlPlane != tc.want {
-				t.Errorf("CordonControlPlane = %v, want %v", cfg.CordonControlPlane, tc.want)
+			if cfg.CordonSystemInfraComponents != tc.want {
+				t.Errorf("CordonSystemInfraComponents = %v, want %v", cfg.CordonSystemInfraComponents, tc.want)
 			}
-			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
+			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS"]
 			if exported != tc.want {
-				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS = %v, want %v", exported, tc.want)
 			}
 		})
 	}
@@ -248,35 +248,130 @@ func TestLoadFakeDataPlane(t *testing.T) {
 		})
 	}
 }
-func TestLoadIngressAuthMode(t *testing.T) {
+
+func TestLoadE2ETuning(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		opts       Options
-		env        string
-		want       string
-		wantExport bool
+		name string
+		opts Options
+		env  string
+		want bool
 	}{
-		{name: "flag static-mtls", opts: Options{IngressAuthMode: IngressAuthStaticMTLS}, want: IngressAuthStaticMTLS, wantExport: true},
-		{name: "environment static-mtls", env: IngressAuthStaticMTLS, want: IngressAuthStaticMTLS, wantExport: true},
-		{name: "environment deprecated-insecure", env: IngressAuthDeprecatedInsecure, want: IngressAuthDeprecatedInsecure},
-		{name: "flag outranks environment", opts: Options{IngressAuthMode: IngressAuthDeprecatedInsecure}, env: IngressAuthStaticMTLS, want: IngressAuthDeprecatedInsecure},
+		{name: "off by default"},
+		{name: "flag", opts: Options{E2ETuning: true}, want: true},
+		{name: "environment", env: "true", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_INSTALL_E2E_TUNING", tc.env)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.E2ETuning != tc.want {
+				t.Errorf("E2ETuning = %v, want %v", cfg.E2ETuning, tc.want)
+			}
+			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_E2E_TUNING"]; exported != tc.want {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_E2E_TUNING = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
+	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
+	for _, tc := range []struct {
+		name    string
+		env     string
+		want    []string
+		wantErr string
+	}{
+		{name: "unset", want: nil},
+		{name: "one", env: a, want: []string{a}},
+		{name: "several, with stray separators", env: " " + a + ",," + b + ", ", want: []string{a, b}},
+		{name: "not a SPIFFE ID", env: a + ",https://example.com/x", wantErr: "ingressAllowedSPIFFEIDs must be a comma-separated list of SPIFFE IDs"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)
 			if tc.env != "" {
-				t.Setenv("ATE_INGRESS_AUTH_MODE", tc.env)
+				t.Setenv("ATE_INGRESS_ALLOWED_SPIFFE_IDS", tc.env)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !slices.Equal(cfg.IngressAllowedSPIFFEIDs, tc.want) {
+				t.Errorf("IngressAllowedSPIFFEIDs = %q, want %q", cfg.IngressAllowedSPIFFEIDs, tc.want)
+			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_INGRESS_ALLOWED_SPIFFE_IDS"]
+			if want := strings.Join(tc.want, ","); exported != (want != "") || got != want {
+				t.Errorf("ScriptEnv() ATE_INGRESS_ALLOWED_SPIFFE_IDS = %q (exported %v), want %q", got, exported, want)
+			}
+		})
+	}
+}
+
+// The credential exchange impersonates the transfer account only on GCS, so
+// only a GKE deploy needs one, and its email needs both the name and the
+// project.
+func TestRequireTransferServiceAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		wantKey string
+	}{
+		{name: "GKE without a name", cfg: Config{ProjectID: "proj"}, wantKey: "storage.transferGSAName"},
+		{name: "GKE without a project", cfg: Config{TransferGSAName: "xfer"}, wantKey: "gcp.projectID"},
+		{name: "GKE with both", cfg: Config{TransferGSAName: "xfer", ProjectID: "proj"}},
+		{name: "kind without either", cfg: Config{Kind: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.RequireTransferServiceAccount()
+			if tc.wantKey == "" {
+				if err != nil {
+					t.Fatalf("RequireTransferServiceAccount() = %v, want nil", err)
+				}
+				return
+			}
+			var required *RequiredError
+			if !errors.As(err, &required) || required.Setting.Key != tc.wantKey {
+				t.Fatalf("RequireTransferServiceAccount() = %v, want a RequiredError for %s", err, tc.wantKey)
+			}
+		})
+	}
+}
+
+func TestLoadTransferServiceAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		opts     Options
+		env      map[string]string
+		wantName string
+		want     string
+	}{
+		{name: "built from the name and the project", env: map[string]string{"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj"}, wantName: "xfer", want: "xfer@proj.iam.gserviceaccount.com"},
+		{name: "no default name", env: map[string]string{"PROJECT_ID": "proj"}},
+		{name: "kind ignores the environment", opts: Options{Kind: true}, env: map[string]string{"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
 			}
 			cfg, err := Load(tc.opts)
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.IngressAuthMode != tc.want {
-				t.Errorf("IngressAuthMode = %q, want %q", cfg.IngressAuthMode, tc.want)
+			if cfg.TransferGSAName != tc.wantName {
+				t.Errorf("TransferGSAName = %q, want %q", cfg.TransferGSAName, tc.wantName)
 			}
-			got, exported := scriptEnvMap(t, cfg)["ATE_INGRESS_AUTH_MODE"]
-			if exported != tc.wantExport || (exported && got != tc.want) {
-				t.Errorf("ScriptEnv() ATE_INGRESS_AUTH_MODE = %q (exported %v), want %q (exported %v)", got, exported, tc.want, tc.wantExport)
-
+			if got := cfg.TransferServiceAccount(); got != tc.want {
+				t.Errorf("TransferServiceAccount() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -609,36 +704,27 @@ func TestLoadAPIAuthz(t *testing.T) {
 		owners      = "alice@example.com,bob@example.com"
 	)
 	for _, tc := range []struct {
-		name        string
-		env         map[string]string
-		wantEnabled bool
-		wantOwners  string
-		wantErr     bool
+		name       string
+		env        map[string]string
+		wantOwners string
+		wantErr    bool
 	}{
 		{
-			name:        "on by default, owned by the client ServiceAccount",
-			wantEnabled: true,
-			wantOwners:  clientOwner,
-		},
-		{
-			name:        "default owner follows the namespace",
-			env:         map[string]string{"ATE_NAMESPACE": "custom"},
-			wantEnabled: true,
-			wantOwners:  "system:serviceaccount:custom:ate-client",
-		},
-		{
-			name:        "explicit owners replace the default",
-			env:         map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
-			wantEnabled: true,
-			wantOwners:  owners,
-		},
-		{
-			name:       "turned off",
-			env:        map[string]string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ": "false"},
+			name:       "owned by the client ServiceAccount by default",
 			wantOwners: clientOwner,
 		},
 		{
-			name:    "enabled with only separators",
+			name:       "default owner follows the namespace",
+			env:        map[string]string{"ATE_NAMESPACE": "custom"},
+			wantOwners: "system:serviceaccount:custom:ate-client",
+		},
+		{
+			name:       "explicit owners replace the default",
+			env:        map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": owners},
+			wantOwners: owners,
+		},
+		{
+			name:    "only separators",
 			env:     map[string]string{"ATE_API_AUTHZ_BOOTSTRAP_OWNERS": " , "},
 			wantErr: true,
 		},
@@ -658,8 +744,8 @@ func TestLoadAPIAuthz(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.APIExperimentalEnableAuthz != tc.wantEnabled || cfg.APIAuthzBootstrapOwners != tc.wantOwners {
-				t.Errorf("authz = %v, %q, want %v, %q", cfg.APIExperimentalEnableAuthz, cfg.APIAuthzBootstrapOwners, tc.wantEnabled, tc.wantOwners)
+			if cfg.APIAuthzBootstrapOwners != tc.wantOwners {
+				t.Errorf("APIAuthzBootstrapOwners = %q, want %q", cfg.APIAuthzBootstrapOwners, tc.wantOwners)
 			}
 		})
 	}
@@ -935,9 +1021,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
-		{"ingress auth mode", Options{IngressAuthMode: "mtls"}},
-		{"old insecure ingress auth mode", Options{IngressAuthMode: "insecure"}},
-		{"static-mtls agentgateway", Options{Router: RouterAgentgateway, IngressAuthMode: IngressAuthStaticMTLS}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {

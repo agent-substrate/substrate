@@ -64,7 +64,7 @@ func fill(seed, n int) []byte {
 	return b
 }
 
-// TestMergeDeltaIntoBase asserts the fast (rename+overlay) merge produces exactly
+// TestMergeDeltaIntoBase asserts the fast (in-place overlay + link) merge produces
 // base-with-delta-overlaid — byte-identical to the reference copying merge
 // (MergeSparseOverlay). This is the guest memory image, so any divergence = a dead
 // or corrupted guest on resume.
@@ -95,7 +95,7 @@ func TestMergeDeltaIntoBase(t *testing.T) {
 
 	ctx := context.Background()
 
-	// --- fast path: MergeDeltaIntoBase (consumes base, result lands in delta) ---
+	// --- fast path: MergeDeltaIntoBase (overlays base in place, links result at delta) ---
 	dir := t.TempDir()
 	base := filepath.Join(dir, "restore-state", "memory-ranges")
 	delta := filepath.Join(dir, "checkpoint-state", "memory-ranges")
@@ -118,9 +118,18 @@ func TestMergeDeltaIntoBase(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("MergeDeltaIntoBase result != expected (len got=%d want=%d)", len(got), len(want))
 	}
-	// base must have been consumed (renamed away), not left behind as a stale copy.
-	if _, err := os.Stat(base); !os.IsNotExist(err) {
-		t.Errorf("base still present after MergeDeltaIntoBase (err=%v); expected it consumed", err)
+	// base remains in restore-state/ hard-linked to delta (same inode, no extra blocks)
+	// so a retry after a sibling checkpoint step fails and wipes checkpoint-state/ still has base.
+	bi, err := os.Stat(base)
+	if err != nil {
+		t.Fatalf("stat base after MergeDeltaIntoBase: %v", err)
+	}
+	di, err := os.Stat(delta)
+	if err != nil {
+		t.Fatalf("stat delta after MergeDeltaIntoBase: %v", err)
+	}
+	if !os.SameFile(bi, di) {
+		t.Errorf("expected base and delta to share an inode after fast-path merge")
 	}
 	// The merged image must stay sparse (the holes between regions are not allocated).
 	if fi, err := os.Stat(delta); err == nil {
@@ -277,5 +286,91 @@ func TestCopySparseFileLeavesZeroBlocksAsHoles(t *testing.T) {
 	// st.Blocks counts 512-byte units; allow slack for the filesystem's block size.
 	if allocated := st.Blocks * 512; allocated > 64<<10 {
 		t.Errorf("dst allocates %d bytes, want the zero runs left as holes", allocated)
+	}
+}
+
+func TestMergeDeltaIntoBaseSurvivesCancelledAttemptAndCheckpointDirWipe(t *testing.T) {
+	const size = 4 << 20 // 4 MiB logical
+	baseRegions := []region{
+		{off: 0, data: fill(1, 4096)},
+		{off: 1 << 20, data: fill(2, 65536)},
+	}
+	deltaRegions := []region{
+		{off: 1 << 20, data: fill(99, 65536)},
+		{off: 2 << 20, data: fill(42, 8192)},
+	}
+	want := make([]byte, size)
+	for _, r := range baseRegions {
+		copy(want[r.off:], r.data)
+	}
+	for _, r := range deltaRegions {
+		copy(want[r.off:], r.data)
+	}
+
+	dir := t.TempDir()
+	restoreDir := filepath.Join(dir, "restore-state")
+	checkpointDir := filepath.Join(dir, "checkpoint-state")
+	if err := os.MkdirAll(restoreDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(restoreDir, "memory-ranges")
+	delta := filepath.Join(checkpointDir, "memory-ranges")
+	writeSparse(t, base, size, baseRegions)
+	writeSparse(t, delta, size, deltaRegions)
+
+	// Attempt 1: context already cancelled when delta is all holes (SEEK_DATA returns ENXIO).
+	writeSparse(t, delta, size, nil)
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := MergeDeltaIntoBase(cancelledCtx, base, delta); err == nil {
+		t.Fatal("expected cancelled MergeDeltaIntoBase on empty delta to fail, got nil")
+	}
+
+	// Attempt 2: context already cancelled when delta has data regions.
+	writeSparse(t, delta, size, deltaRegions)
+	if err := MergeDeltaIntoBase(cancelledCtx, base, delta); err == nil {
+		t.Fatal("expected cancelled MergeDeltaIntoBase to fail, got nil")
+	}
+
+	// Attempt 3: MergeDeltaIntoBase succeeds (hard-linking base -> delta), then a
+	// sibling checkpoint step (e.g. rootfs or volume tar) fails, causing the next
+	// CheckpointWorkload retry to wipe checkpoint-state/ and re-snapshot delta.
+	writeSparse(t, delta, size, deltaRegions)
+	if err := MergeDeltaIntoBase(context.Background(), base, delta); err != nil {
+		t.Fatalf("MergeDeltaIntoBase before sibling failure: %v", err)
+	}
+	if err := os.RemoveAll(checkpointDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeSparse(t, delta, size, deltaRegions)
+
+	// Attempt 4: retry must still succeed on the fast path because unlinking delta
+	// dropped base's Nlink back to 1 in restore-state/.
+	if err := MergeDeltaIntoBase(context.Background(), base, delta); err != nil {
+		t.Fatalf("retry MergeDeltaIntoBase failed: %v", err)
+	}
+	got, err := os.ReadFile(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("retry MergeDeltaIntoBase result != expected")
+	}
+	bi, err := os.Stat(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	di, err := os.Stat(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(bi, di) {
+		t.Errorf("expected retry MergeDeltaIntoBase to stay on fast path (same inode)")
 	}
 }

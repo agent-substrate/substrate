@@ -41,7 +41,7 @@ rule, are answered `NXDOMAIN`.
 Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
 
 ```yaml
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: ActorTemplate
 metadata:
   name: my-actor
@@ -123,7 +123,7 @@ Note: Do not bake the bundle into the image at build time. It will tie the image
 does exactly this. Deploy it:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress
+go run ./cmd/ate-setup deploy demo egress
 ```
 
 Then drive an actor's egress at an HTTPS URL an `https` rule allows and

@@ -28,6 +28,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google/downscope"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsboundary"
@@ -96,7 +98,7 @@ func newTestIssuer(t *testing.T, sts *fakeSTS, src oauth2.TokenSource, now func(
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
 	client := &http.Client{Transport: redirect{sts: sts, target: target}}
-	i, err := New(t.Context(), WithTokenSource(src), WithHTTPClient(client), WithClock(now), WithCacheSize(2))
+	i, err := New(t.Context(), "", WithTokenSource(src), WithHTTPClient(client), WithClock(now), WithCacheSize(2))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -273,7 +275,7 @@ func TestIssue_StopsWhenTheCallerGivesUp(t *testing.T) {
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
 	client := &http.Client{Transport: redirect{sts: &fakeSTS{t: t}, target: target}, Timeout: time.Minute}
-	i, err := New(t.Context(), WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(client), WithClock(func() time.Time { return now }))
+	i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(client), WithClock(func() time.Time { return now }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +296,7 @@ func TestWithCacheSize_ZeroIsBounded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(sts.handler))
 	t.Cleanup(srv.Close)
 	target, _ := url.Parse(srv.URL)
-	i, err := New(t.Context(), WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(&http.Client{Transport: redirect{sts: sts, target: target}}), WithClock(func() time.Time { return now }), WithCacheSize(0))
+	i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(&http.Client{Transport: redirect{sts: sts, target: target}}), WithClock(func() time.Time { return now }), WithCacheSize(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,18 +339,24 @@ func TestIssue_Errors(t *testing.T) {
 		source oauth2.TokenSource
 		grants []actorscope.Grant
 		want   string
+		// code is Internal for a failure the same request would hit again
+		// and Unknown for an STS or source failure, which carries no code.
+		code codes.Code
 	}{
-		{"source without expiry", &fakeSTS{t: t}, staticSource(time.Time{}), testGrants, "no expiry"},
-		{"STS refuses", &fakeSTS{t: t, status: 400, body: `{"error":"invalid_grant"}`}, staticSource(now.Add(time.Hour)), testGrants, "400"},
-		{"STS answers without a token", &fakeSTS{t: t, body: `{}`}, staticSource(now.Add(time.Hour)), testGrants, "no access token"},
-		{"no grants", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), nil, "no storage grants"},
-		{"too many grants", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), manyGrants(11), "greater than 10"},
+		{"source without expiry", &fakeSTS{t: t}, staticSource(time.Time{}), testGrants, "no expiry", codes.Unknown},
+		{"STS refuses", &fakeSTS{t: t, status: 400, body: `{"error":"invalid_grant"}`}, staticSource(now.Add(time.Hour)), testGrants, "400", codes.Unknown},
+		{"STS answers without a token", &fakeSTS{t: t, body: `{}`}, staticSource(now.Add(time.Hour)), testGrants, "no access token", codes.Unknown},
+		{"no grants", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), nil, "no storage grants", codes.Internal},
+		{"too many grants", &fakeSTS{t: t}, staticSource(now.Add(time.Hour)), manyGrants(11), "greater than 10", codes.Internal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			i := newTestIssuer(t, tc.sts, tc.source, clock)
 			_, err := i.Issue(t.Context(), "9f1e", tc.grants, false)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
+			}
+			if status.Code(err) != tc.code {
+				t.Errorf("code = %v, want %v", status.Code(err), tc.code)
 			}
 		})
 	}

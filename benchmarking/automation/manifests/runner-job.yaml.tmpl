@@ -175,6 +175,11 @@ spec:
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # boomer's /metrics; the boomer-worker job of
+        # benchmarking/monitoring.yaml scrapes it.
+        ports:
+        - name: boomer-metrics
+          containerPort: 8001
         volumeMounts:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca

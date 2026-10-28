@@ -44,6 +44,11 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
   verbs: ["get", "list", "watch"]
+# Sync failures are reported as Warning Events on the worker pod
+# (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 # ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
 # resolved on the node: atelet reads them through an informer and projects
 # the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
@@ -183,6 +188,7 @@ spec:
         # Reads and writes snapshot and asset files under the /var/lib/ate
         # hostPath as root, like atelet; needs no capabilities.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
@@ -202,14 +208,29 @@ spec:
         # on it.
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
+        # On GCS each transfer runs on a token scoped to its actor, from the
+        # credential exchange the control sidecar serves on the ate-api-server
+        # Service. The plugin derives the exchange's address and certificate
+        # name from the pod's namespace, and verifies the certificate with the
+        # service DNS trust bundle mounted below. S3 never calls it.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         envFrom:
         - configMapRef:
             name: ate-otel-config
         volumeMounts:
+        # HostToContainer so we also see mounts made under /var/lib/ate after
+        # the pod starts, e.g. a snapshots disk or CSI volumes.
         - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
         # Sandbox assets are downloaded here and verified against their sha256
         # before the plugin copies them below /var/lib/ate. Only this container
         # mounts it, so atelet never sees bytes it did not pin.
@@ -242,6 +263,7 @@ spec:
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
@@ -282,7 +304,6 @@ spec:
         ports:
         - name: grpc
           containerPort: 21998
-          hostPort: 21998
         - name: prometheus
           containerPort: 9090
           protocol: TCP
@@ -305,8 +326,11 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
+        # HostToContainer so we also see mounts made under /var/lib/ate after
+        # the pod starts, e.g. a snapshots disk or CSI volumes.
         - name: ate-base
           mountPath: /var/lib/ate
+          mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
         - name: podidentity

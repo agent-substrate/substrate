@@ -94,12 +94,12 @@ PHASE_ORDER = [
     # ateworker restore: micro-VM (cmd/ateworker-microvm/phaselog.go) and gVisor
     # (cmd/ateworker-gvisor/phaselog.go), each in its own sequential order
     "prep", "egress_prepare", "net_setup", "bundles", "upper_join", "lowers",
-    "pause_rootfs", "pause_create", "pause_restore",
+    "sandbox_create", "sandbox_restore",
     "app_rootfs", "app_create", "app_restore",
     "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
     # atelet + ateworker checkpoint
     "pause", "checkpoint", "snapshot", "durable_dir", "rootfs_upper",
-    "worker_checkpoint", "teardown", "persist", "cleanup",
+    "fs_checkpoint", "worker_checkpoint", "teardown", "persist", "cleanup",
     UNATTRIBUTED, TOTAL,
 ]
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_ORDER)}
@@ -294,9 +294,9 @@ def fmt_s(seconds: float) -> str:
 
 def report_phases(breakdowns: list[Breakdown], writer) -> list[dict]:
     """Per (source, op, sandbox class, kind, scope, phase) percentiles. A
-    golden restore (which downloads the golden image) and a latest restore,
-    or a gVisor and a micro-VM checkpoint, are different distributions and
-    must not be pooled. Returns the rows for CSV."""
+    local restore and a latest one, or a gVisor and a micro-VM checkpoint,
+    are different distributions and must not be pooled. Returns the rows
+    for CSV."""
     groups: dict[tuple, list[float]] = defaultdict(list)
     for b in breakdowns:
         if b.failed:

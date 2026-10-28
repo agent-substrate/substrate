@@ -20,9 +20,9 @@ package objectstoreplugintest
 import (
 	"context"
 
+	objectstorev1 "go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/objectstore"
 	"go.ate.dev/substrate/internal/objectstoreplugin"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 )
 

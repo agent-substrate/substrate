@@ -29,6 +29,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -175,4 +176,181 @@ func TestGCSSparseUploadHonorsReservedParts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestUploaderGCSSnapshotBurstFitsDefaultBudget(t *testing.T) {
+	dir := t.TempDir()
+	var smallFiles []*os.File
+	for i := range 6 {
+		path := filepath.Join(dir, fmt.Sprintf("small-%d.img", i))
+		writeSparseSource(t, path, 2<<30, []region{{0, 64 << 10, byte(i + 1)}})
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		smallFiles = append(smallFiles, f)
+	}
+	pagesPath := filepath.Join(dir, "pages.img")
+	writeSparseSource(t, pagesPath, 2<<30, []region{{0, 2 * sparsePartTarget, 0x7f}})
+	pages, err := os.Open(pagesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pages.Close()
+
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		transport := &slowGCSTransport{parts: make(chan string, 16), release: gate}
+		client, err := NewGCSClient(t.Context(), option.WithoutAuthentication(), option.WithHTTPClient(&http.Client{Transport: transport}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := client.(*gcsClient)
+		defer func() {
+			g.client.Close()
+			for _, c := range g.pool {
+				c.Close()
+			}
+		}()
+		u, err := NewUploader(client, DefaultUploadMemory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, len(smallFiles)+1)
+		for i, f := range smallFiles {
+			go func() {
+				done <- u.SendFile(t.Context(), fmt.Sprintf("gs://bucket/small-%d.img", i), f)
+			}()
+		}
+		go func() {
+			done <- u.SendFile(t.Context(), "gs://bucket/pages.img", pages)
+		}()
+		synctest.Wait()
+		// All 6 small files and both ranged parts of pages.img must fit in
+		// the 512 MiB default budget simultaneously without queueing.
+		if got, want := len(transport.parts), len(smallFiles)+2; got != want {
+			t.Errorf("started %d concurrent GCS uploads, want %d", got, want)
+		}
+		close(gate)
+		synctest.Wait()
+		for range len(smallFiles) + 1 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+}
+
+func TestSingleUploadChunkSize(t *testing.T) {
+	const unit = int64(googleapi.MinUploadChunkSize)
+	for _, tc := range []struct {
+		size int64
+		want int64
+	}{
+		{-1, unit},
+		{0, unit},
+		{1, unit},
+		{unit - 1, unit},
+		{unit, 2 * unit},
+		{unit + 1, 2 * unit},
+		{uploadCompositeMin - 1, uploadCompositeMin},
+	} {
+		got := singleUploadChunkSize(tc.size)
+		if got != tc.want {
+			t.Errorf("singleUploadChunkSize(%d) = %d, want %d", tc.size, got, tc.want)
+		}
+		if got <= max(tc.size, 0) {
+			t.Errorf("singleUploadChunkSize(%d) = %d, must be strictly greater than size", tc.size, got)
+		}
+		if got%unit != 0 {
+			t.Errorf("singleUploadChunkSize(%d) = %d, must be a multiple of %d", tc.size, got, unit)
+		}
+	}
+
+	// An object whose size is an exact multiple of MinUploadChunkSize (256 KiB)
+	// must still hit EOF inside PutObject's lookahead and take the single-request
+	// path rather than spilling into composite parts.
+	closed := make(chan struct{})
+	close(closed)
+	transport := &slowGCSTransport{parts: make(chan string, 4), release: closed}
+	client, err := NewGCSClient(t.Context(), option.WithoutAuthentication(), option.WithHTTPClient(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := client.(*gcsClient)
+	defer func() {
+		g.client.Close()
+		for _, c := range g.pool {
+			c.Close()
+		}
+	}()
+	payload := bytes.Repeat([]byte{0xab}, int(unit))
+	body := boundedReader{Reader: bytes.NewReader(payload), max: unit}
+	if err := client.PutObject(t.Context(), "bucket", "exact-256k", body); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(transport.parts); got != 1 {
+		t.Errorf("256 KiB object sent %d requests, want 1", got)
+	}
+}
+
+type wrappedReader struct {
+	r io.Reader
+}
+
+func (w wrappedReader) Read(p []byte) (int, error) { return w.r.Read(p) }
+func (w wrappedReader) Unwrap() io.Reader          { return w.r }
+
+type lookaheadCaptureStore struct {
+	lookaheads []int64
+}
+
+func (*lookaheadCaptureStore) supportsStreamingPut() {}
+func (*lookaheadCaptureStore) GetObject(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("unused")
+}
+func (s *lookaheadCaptureStore) PutObject(_ context.Context, _, _ string, r io.Reader) error {
+	// Wrap the reader before checking singleUploadLookahead to verify the size
+	// bound survives decorator unwrapping through the public upload paths.
+	s.lookaheads = append(s.lookaheads, singleUploadLookahead(wrappedReader{r: r}))
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+
+func TestSingleUploadLookaheadThroughPublicUploaders(t *testing.T) {
+	dir := t.TempDir()
+	sparsePath := filepath.Join(dir, "small.img")
+	writeSparseSource(t, sparsePath, 2<<30, []region{{0, 64 << 10, 0x33}})
+	sparseFile, err := os.Open(sparsePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sparseFile.Close()
+
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestFile, err := os.Open(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manifestFile.Close()
+
+	store := &lookaheadCaptureStore{}
+	u, err := NewUploader(store, DefaultUploadMemory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := u.SendFile(t.Context(), "gs://bucket/small.img", sparseFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Send(t.Context(), "gs://bucket/manifest.json", manifestFile); err != nil {
+		t.Fatal(err)
+	}
+	const want = int64(googleapi.MinUploadChunkSize)
+	if len(store.lookaheads) != 2 || store.lookaheads[0] != want || store.lookaheads[1] != want {
+		t.Errorf("captured lookaheads = %v, want [%d %d]", store.lookaheads, want, want)
+	}
 }

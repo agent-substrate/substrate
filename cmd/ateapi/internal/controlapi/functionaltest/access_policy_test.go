@@ -19,8 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -39,13 +39,13 @@ func TestGlobalAccessPolicy_CRUD(t *testing.T) {
 	defer tc.cleanup()
 	ctx := context.Background()
 
-	_, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
+	_, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
 	wantCode(t, "Get before create", err, codes.NotFound)
 
-	created, err := tc.client.CreateGlobalAccessPolicy(ctx, &ateapipb.CreateGlobalAccessPolicyRequest{
-		AccessPolicy: &ateapipb.AccessPolicy{
-			Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-			Bindings: []*ateapipb.Binding{{Role: "owner", Members: []string{"user:alice"}}},
+	created, err := tc.client.CreateGlobalAccessPolicy(ctx, &ateapi.CreateGlobalAccessPolicyRequest{
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: "default"},
+			Bindings: []*ateapi.Binding{{Role: "owner", Members: []string{"user:alice"}}},
 		},
 	})
 	if err != nil {
@@ -55,15 +55,15 @@ func TestGlobalAccessPolicy_CRUD(t *testing.T) {
 		t.Errorf("created metadata = %v, want name default, a uid and version 1", md)
 	}
 
-	_, err = tc.client.CreateGlobalAccessPolicy(ctx, &ateapipb.CreateGlobalAccessPolicyRequest{
-		AccessPolicy: &ateapipb.AccessPolicy{
-			Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-			Bindings: []*ateapipb.Binding{{Role: "owner", Members: []string{"user:alice"}}},
+	_, err = tc.client.CreateGlobalAccessPolicy(ctx, &ateapi.CreateGlobalAccessPolicyRequest{
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: "default"},
+			Bindings: []*ateapi.Binding{{Role: "owner", Members: []string{"user:alice"}}},
 		},
 	})
 	wantCode(t, "second Create", err, codes.AlreadyExists)
 
-	got, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
+	got, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -71,12 +71,12 @@ func TestGlobalAccessPolicy_CRUD(t *testing.T) {
 		t.Errorf("Get mismatch (-created +got):\n%s", diff)
 	}
 
-	update := proto.Clone(created).(*ateapipb.AccessPolicy)
-	update.Bindings = []*ateapipb.Binding{
+	update := proto.Clone(created).(*ateapi.AccessPolicy)
+	update.Bindings = []*ateapi.Binding{
 		{Role: "owner", Members: []string{"user:alice"}},
 		{Role: "viewer", Members: []string{"user:bob"}},
 	}
-	updated, err := tc.client.UpdateGlobalAccessPolicy(ctx, &ateapipb.UpdateGlobalAccessPolicyRequest{AccessPolicy: update})
+	updated, err := tc.client.UpdateGlobalAccessPolicy(ctx, &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: update})
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestGlobalAccessPolicy_CRUD(t *testing.T) {
 	}
 
 	// The update above consumed created's version.
-	_, err = tc.client.UpdateGlobalAccessPolicy(ctx, &ateapipb.UpdateGlobalAccessPolicyRequest{AccessPolicy: update})
+	_, err = tc.client.UpdateGlobalAccessPolicy(ctx, &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: update})
 	wantCode(t, "stale Update", err, codes.Aborted)
 }
 
@@ -97,29 +97,29 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 	defer tc.cleanup()
 	ctx := context.Background()
 	createAtespace(t, tc, "team-a")
-	ref := &ateapipb.ObjectRef{Name: "team-a"}
-	policy := &ateapipb.AccessPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
-		Bindings: []*ateapipb.Binding{{Role: "editor", Members: []string{"user:alice"}}},
+	ref := &ateapi.ObjectRef{Name: "team-a"}
+	policy := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{{Role: "editor", Members: []string{"user:alice"}}},
 	}
 
-	_, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{
-		Atespace:     &ateapipb.ObjectRef{Name: "missing"},
+	_, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{
+		Atespace:     &ateapi.ObjectRef{Name: "missing"},
 		AccessPolicy: policy,
 	})
 	wantCode(t, "Create on missing atespace", err, codes.FailedPrecondition)
 
-	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get before create", err, codes.NotFound)
 
-	created, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
+	created, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	_, err = tc.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
+	_, err = tc.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
 	wantCode(t, "second Create", err, codes.AlreadyExists)
 
-	got, err := tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	got, err := tc.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -127,9 +127,9 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 		t.Errorf("Get mismatch (-created +got):\n%s", diff)
 	}
 
-	update := proto.Clone(created).(*ateapipb.AccessPolicy)
-	update.Bindings = []*ateapipb.Binding{{Role: "viewer", Members: []string{"user:bob"}}}
-	updated, err := tc.client.UpdateAtespaceAccessPolicy(ctx, &ateapipb.UpdateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: update})
+	update := proto.Clone(created).(*ateapi.AccessPolicy)
+	update.Bindings = []*ateapi.Binding{{Role: "viewer", Members: []string{"user:bob"}}}
+	updated, err := tc.client.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: update})
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
@@ -137,28 +137,28 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 		t.Errorf("updated bindings mismatch (-want +got):\n%s", diff)
 	}
 
-	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{
+	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapi.DeleteAtespaceAccessPolicyRequest{
 		Atespace: ref,
 		Name:     resources.SingletonName,
-		Options:  &ateapipb.DeleteOptions{Version: created.GetMetadata().GetVersion()},
+		Options:  &ateapi.DeleteOptions{Version: created.GetMetadata().GetVersion()},
 	})
 	wantCode(t, "Delete with stale version", err, codes.Aborted)
 
-	if _, err := tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName}); err != nil {
+	if _, err := tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapi.DeleteAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName}); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get after delete", err, codes.NotFound)
-	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapi.DeleteAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "second Delete", err, codes.NotFound)
 
 	// Deleting the atespace removes its policy with it.
-	if _, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy}); err != nil {
+	if _, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy}); err != nil {
 		t.Fatalf("re-Create failed: %v", err)
 	}
-	if _, err := tc.client.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: ref}); err != nil {
+	if _, err := tc.client.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: ref}); err != nil {
 		t.Fatalf("DeleteAtespace failed: %v", err)
 	}
-	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
+	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get after DeleteAtespace", err, codes.NotFound)
 }

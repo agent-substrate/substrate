@@ -25,6 +25,7 @@ import (
 	"slices"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -34,7 +35,6 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -43,7 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
+func (s *RPCService) CreateActor(ctx context.Context, req *ateapi.CreateActorRequest) (created *ateapi.Actor, err error) {
 	// First scrub any fields that users are not allowed to set, then fill the
 	// defaults so validation sees the final resource state.
 	inActor := req.Actor
@@ -77,7 +77,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	return stored, err
 }
 
-func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
+func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*ateapi.Actor, error) {
 	// Check that the referenced ActorTemplate exists.
 	// FIXME: This is not atomic and it is not a guarantee that the template
 	// will still exist later.  Checking it here produces a nice error UX, but
@@ -96,22 +96,17 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
 		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
-			if volume.GetExternalVolumeTemplate() != nil {
+			if volume.GetExternal().GetTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
 				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
 			}
 		}
 	}
-	var sourceTag *ateapipb.Tag
+	var sourceTag *ateapi.Tag
 	if tagRef != nil {
 		sourceTag, err = s.resolveTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
 		if err != nil {
 			return nil, err
-		}
-		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
-				return nil, err
-			}
 		}
 	}
 
@@ -119,7 +114,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	var initVols []*ateapipb.ExternalVolume
+	var initVols []*ateapi.ExternalVolumeStatus
 	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
 	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
@@ -134,9 +129,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
-	outActor.Status = &ateapipb.ActorStatus{
-		State:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ExternalVolumes: initVols,
+	outActor.Status = &ateapi.ActorStatus{
+		State:           ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+		ExternalVolumes: externalVolumesStatus(initVols),
 	}
 	if sourceTag != nil {
 		// The Actor starts out borrowing the tag's snapshot rather than
@@ -146,15 +141,15 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// there.
 		snap := proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
 		snap.Generation = 1
-		snap.Owner = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
+		snap.Owner = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 		// The Actor is born with guest state, so stamp the template that state
 		// was built on now rather than at the first resume.
 		snap.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
-		outActor.Status.Snapshots = []*ateapipb.Snapshot{snap}
+		outActor.Status.Snapshots = []*ateapi.Snapshot{snap}
 		outActor.Status.LastAssignedGeneration = 1
 	}
 	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
+		return nil, resources.ToInternalError(errs)
 	}
 
 	// Save the data in the storage layer.
@@ -179,7 +174,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 // resolveTagSource resolves a CreateActor request's source tag
 // and checks that the tag is usable for creating an Actor in actorAtespace
 // from template.
-func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.Tag, error) {
+func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapi.ObjectRef, template *ateapi.ActorTemplate) (*ateapi.Tag, error) {
 	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.FailedPrecondition("Tag not found")
@@ -188,16 +183,18 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
 	switch tag.GetScope() {
-	case ateapipb.TagScope_TAG_SCOPE_ATESPACE:
+	case ateapi.TagScope_TAG_SCOPE_ATESPACE:
 		if tag.GetMetadata().GetAtespace() != actorAtespace {
 			return nil, apierror.FailedPrecondition("Tag is not published outside its Atespace")
 		}
-	case ateapipb.TagScope_TAG_SCOPE_PUBLISHED:
+	case ateapi.TagScope_TAG_SCOPE_PUBLISHED:
 	default:
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
+	// TODO: Refuse a tag with delete_time set. DeleteTag may already have
+	// collected its snapshot.
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
+	if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
 	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
@@ -207,7 +204,7 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	return tag, nil
 }
 
-func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
+func (s *RPCService) GetActor(ctx context.Context, req *ateapi.GetActorRequest) (*ateapi.Actor, error) {
 	if errs := apivalidation.ValidateGetActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -221,11 +218,11 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest
 	return actor, nil
 }
 
-func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
 	return s.store.GetActor(ctx, actorRef)
 }
 
-func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+func (s *RPCService) ListActors(ctx context.Context, req *ateapi.ListActorsRequest) (*ateapi.ListActorsResponse, error) {
 	if errs := apivalidation.ValidateListActorsRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -234,17 +231,17 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
-	return &ateapipb.ListActorsResponse{
+	return &ateapi.ListActorsResponse{
 		Actors:        page.Items,
 		NextPageToken: page.NextPageToken,
 	}, nil
 }
 
-func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Actor], error) {
 	return s.store.ListActors(ctx, atespace, opts)
 }
 
-func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
+func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorRequest) (*ateapi.Actor, error) {
 	// First scrub any fields that users are not allowed to set.
 	inActor := req.Actor
 	if inActor != nil { // otherwise validation will flag it
@@ -260,7 +257,13 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 	actorRef := resources.ActorRefFromActor(inActor)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapipb.Actor) error {
+	ctx, lease, err := acquireLease(ctx, s.impl, actorLeaseKey(actorRef), "actor")
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+
+	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapi.Actor) error {
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is
@@ -283,8 +286,8 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 	return storedActor, err
 }
 
-func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
-	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
+func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapi.Actor) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
 		if err := mutate(toUpdate); err != nil {
@@ -306,22 +309,15 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// the old template's. It must also store snapshots under the location
 		// the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
-			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			if state := oldVal.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 				return apierror.FailedPrecondition(
-					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
-			}
-			// A paused actor resumes from its node-local snapshot, uploaded or
-			// not, which was captured from the old template's sandbox; suspend
-			// or revert it first.
-			if latestSnapshotIsLocal(oldVal.GetStatus()) {
-				return apierror.FailedPrecondition(
-					"actor must hold no node-local snapshot to change its actor template: suspend or revert it first")
+					"actor must be %s to change its actor template (got: %s)", ateapi.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
 				return err
 			}
-			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
+			if err := s.validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
@@ -340,7 +336,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 
 		// Validate the final value before storing it.
 		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
-			return toGRPCInternalError(errs)
+			return resources.ToInternalError(errs)
 		}
 
 		return nil
@@ -370,15 +366,15 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 // volumes list must be identical, and containers present in both templates
 // must keep identical mounts, order included; containers added or removed by
 // the new template are unconstrained.
-func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTemplate) error {
-	if !slices.EqualFunc(oldTemplate.GetVolumes(), newTemplate.GetVolumes(), func(a, b *ateapipb.Volume) bool {
+func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapi.ActorTemplate) error {
+	if !slices.EqualFunc(oldTemplate.GetVolumes(), newTemplate.GetVolumes(), func(a, b *ateapi.Volume) bool {
 		return proto.Equal(a, b)
 	}) {
 		return apierror.FailedPrecondition(
 			"volumes differ between the current and the new actor template; volumes must be identical to repoint an actor")
 	}
 
-	newContainers := make(map[string]*ateapipb.Container, len(newTemplate.GetContainers()))
+	newContainers := make(map[string]*ateapi.Container, len(newTemplate.GetContainers()))
 	for _, c := range newTemplate.GetContainers() {
 		newContainers[c.GetName()] = c
 	}
@@ -387,7 +383,7 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 		if !ok {
 			continue
 		}
-		if !slices.EqualFunc(oldC.GetVolumeMounts(), newC.GetVolumeMounts(), func(a, b *ateapipb.VolumeMount) bool {
+		if !slices.EqualFunc(oldC.GetVolumeMounts(), newC.GetVolumeMounts(), func(a, b *ateapi.VolumeMount) bool {
 			return proto.Equal(a, b)
 		}) {
 			return apierror.FailedPrecondition(
@@ -402,8 +398,10 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // already owns. This is needed to not leak snapshots when the actor is deleted:
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
-func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+func (s *ServiceImpl) validateSnapshotLocationUnchanged(actor *ateapi.Actor, newTemplate *ateapi.ActorTemplate) error {
+	snap := latestSnapshot(actor.GetStatus(), func(snapshot *ateapi.Snapshot) bool {
+		return snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri() != ""
+	})
 	currentSnapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
 		return nil
@@ -418,7 +416,10 @@ func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateap
 	}
 	// Compared as prefixes, so a newLocation spelled with and without a
 	// trailing slash counts as the same.
-	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
+	newLocation, err := resolveSnapshotLocation(s.clusterSnapshotLocation, newTemplate)
+	if err != nil {
+		return err
+	}
 	// Generate what the new snapshot prefix would look like for this actor.
 	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
 	if err != nil {
@@ -432,14 +433,14 @@ func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateap
 	return nil
 }
 
-func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
+func (s *RPCService) DeleteActor(ctx context.Context, req *ateapi.DeleteActorRequest) (deleted *ateapi.Actor, err error) {
 	if errs := apivalidation.ValidateDeleteActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
 	// actor, so failures before the load carry none. No pool pair, even when
-	// any_state deletes an actor that still holds a worker.
+	// the deleted actor still held a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -453,7 +454,7 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState(), toDeletePreconditions(req.GetOptions()))
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, toDeletePreconditions(req.GetOptions()))
 	if err != nil {
 		return nil, err
 	}
@@ -461,33 +462,15 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	return deleted, nil
 }
 
-func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
+func (s *ServiceImpl) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	return s.store.MarkActorForDeletion(ctx, actorRef, precondition, mutate)
+}
+
+func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
 	return s.store.DeleteActor(ctx, actorRef, precondition)
 }
 
-func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
-	if errs := apivalidation.ValidatePauseActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToAPIError(errs)
-	}
-	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	setSpanActorRefAttributes(ctx, actorRef)
-
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendAsync)
-	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return nil, err
-	}
-
-	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.PauseActorResponse{Actor: actor}, nil
-}
-
-func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorRequest) (*ateapi.ResumeActorResponse, error) {
 	if errs := apivalidation.ValidateResumeActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -506,10 +489,10 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	}
 
 	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
+	return &ateapi.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
 }
 
-func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
 	if errs := apivalidation.ValidateSuspendActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -527,10 +510,25 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 		return nil, err
 	}
 	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
+	return &ateapi.SuspendActorResponse{Actor: actor}, nil
 }
 
-func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
+// CrashActorReportedByWorker crashes a RUNNING actor whose sandbox died, on
+// behalf of the worker hosting it. The caller authorizes the worker.
+func (s *RPCService) CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error) {
+	setSpanActorRefAttributes(ctx, actorRef)
+	actor, err := s.actorWorkflow.CrashActorReportedByWorker(ctx, actorRef, actorUID, workerName, message)
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		return nil, err
+	}
+	setSpanActorAttributes(ctx, actor)
+	return actor, nil
+}
+
+func (s *RPCService) RevertActor(ctx context.Context, req *ateapi.RevertActorRequest) (*ateapi.RevertActorResponse, error) {
 	if errs := apivalidation.ValidateRevertActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -548,10 +546,10 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 		return nil, err
 	}
 	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.RevertActorResponse{Actor: actor}, nil
+	return &ateapi.RevertActorResponse{Actor: actor}, nil
 }
 
-func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJwtRequest) (*ateapipb.MintActorJwtResponse, error) {
+func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtRequest) (*ateapi.MintActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -599,13 +597,13 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapipb.MintActorJw
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
 
-	return &ateapipb.MintActorJwtResponse{
+	return &ateapi.MintActorJwtResponse{
 		ActorJwt:   actorJWT,
 		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
 }
 
-func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
+func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapi.MintActorCertificateRequest) (*ateapi.MintActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -684,7 +682,7 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 		return nil, fmt.Errorf("while signing certificate: %w", err)
 	}
 
-	return &ateapipb.MintActorCertificateResponse{
+	return &ateapi.MintActorCertificateResponse{
 		ActorCertificates: chain,
 	}, nil
 }

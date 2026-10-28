@@ -67,8 +67,7 @@ func validRunWorkloadRequest(mutate ...func(*ateworkerpb.RunWorkloadRequest)) *a
 		Spec:                  fullSpec(),
 		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel", "virtiofsd": "/opt/virtiofsd"},
 		EgressGateway:         &ateworkerpb.EgressGateway{Address: "gateway:443"},
-		CpuMilli:              1500,
-		MemoryBytes:           1 << 30,
+		Resources:             &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1500, MemoryBytes: 1 << 30}},
 		ActorDirs:             fullActorDirs(),
 	}
 	for _, m := range mutate {
@@ -92,7 +91,7 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 	}, {
 		name: "valid: gVisor shape, no assets, no egress, unset size",
 		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
-			r.RuntimeAssetPaths, r.EgressGateway, r.CpuMilli, r.MemoryBytes = nil, nil, 0, 0
+			r.RuntimeAssetPaths, r.EgressGateway, r.Resources = nil, nil, nil
 		}),
 	}, {
 		name: "missing atespace",
@@ -148,17 +147,23 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.TooLong(assets.Key("kata-kernel"), nil, 4096).WithOrigin("maxLength")},
 	}, {
-		name: "negative cpu_milli",
-		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.CpuMilli = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+		name: "negative cpu_millicores",
+		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "cpu_milli past atelet's bound",
-		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.CpuMilli = 1000000 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+		name: "cpu_millicores past atelet's bound",
+		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1000000}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "negative memory_bytes",
-		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.MemoryBytes = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("memory_bytes"), nil, "").WithOrigin("minimum")},
+		obj: valid(func(r *ateworkerpb.RunWorkloadRequest) {
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "empty egress_gateway",
 		obj:  valid(func(r *ateworkerpb.RunWorkloadRequest) { r.EgressGateway = &ateworkerpb.EgressGateway{} }),
@@ -432,7 +437,7 @@ func TestValidateContainer(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
 	}, {
 		name: "invalid name: the sandbox's own container",
-		obj:  valid(func(c *ateworkerpb.Container) { c.Name = "_pause" }),
+		obj:  valid(func(c *ateworkerpb.Container) { c.Name = "_sandbox" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "too many external mounts",
@@ -591,8 +596,7 @@ func validRestoreWorkloadRequest(mutate ...func(*ateworkerpb.RestoreWorkloadRequ
 		RuntimeAssetPaths:     map[string]string{"kata-kernel": "/opt/kernel"},
 		Fidelity:              ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		EgressGateway:         &ateworkerpb.EgressGateway{Address: "gateway:443"},
-		CpuMilli:              1500,
-		MemoryBytes:           1 << 30,
+		Resources:             &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1500, MemoryBytes: 1 << 30}},
 		ActorDirs:             fullActorDirs(),
 	}
 	for _, m := range mutate {
@@ -645,13 +649,17 @@ func TestValidateRestoreWorkloadRequest(t *testing.T) {
 		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.ActorDirs = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("actor_dirs"), "")},
 	}, {
-		name: "negative cpu_milli",
-		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.CpuMilli = -1 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("minimum")},
+		name: "negative cpu_millicores",
+		obj: valid(func(r *ateworkerpb.RestoreWorkloadRequest) {
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: -1}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("minimum")},
 	}, {
-		name: "cpu_milli past atelet's bound",
-		obj:  valid(func(r *ateworkerpb.RestoreWorkloadRequest) { r.CpuMilli = 1000000 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("cpu_milli"), nil, "").WithOrigin("maximum")},
+		name: "cpu_millicores past atelet's bound",
+		obj: valid(func(r *ateworkerpb.RestoreWorkloadRequest) {
+			r.Resources = &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{CpuMillicores: 1000000}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("resources", "limits", "cpu_millicores"), nil, "").WithOrigin("maximum")},
 	}, {
 		name: "runtime asset path too long",
 		obj: valid(func(r *ateworkerpb.RestoreWorkloadRequest) {

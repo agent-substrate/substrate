@@ -67,7 +67,7 @@ Rules of thumb:
   it ends, you subtract one. `ate.workerpool.workers` is one because ateapi
   assigns and releases every worker, so it is the one keeping that tally. A
   gauge is a dial you read: memory working set is whatever the sandbox reports
-  when atelet polls it (a cgroup on gVisor, the guest agent on micro-VM),
+  when atelet polls it (a cgroup on gVisor, the guest agent on microVM),
   written down per template. Ask "did I get this number by
   adding and subtracting, or by looking?" and the answer is the instrument.
   How a dashboard later aggregates the number does not enter into it. The

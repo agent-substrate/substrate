@@ -24,11 +24,11 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -73,17 +73,6 @@ func (f *fakeWorkerPlugin) UnmountVolume(ctx context.Context, volumeID string, t
 }
 
 var _ volume.VolumePluginWorkerPlane = (*fakeWorkerPlugin)(nil)
-
-// withTempActorsDir redirects nodepath.ActorsDir at a temp dir for the
-// duration of the test. Every path derived from ActorsDir moves with it,
-// including the ones resetActorDirs and the bundle preparation compute
-// independently of the volume mount code.
-func withTempActorsDir(t *testing.T) {
-	t.Helper()
-	orig := nodepath.ActorsDir
-	nodepath.ActorsDir = filepath.Join(t.TempDir(), "actors")
-	t.Cleanup(func() { nodepath.ActorsDir = orig })
-}
 
 func TestUnmountExternalVolumes(t *testing.T) {
 	ctx := context.Background()
@@ -191,7 +180,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	}
 
 	t.Run("success mounts external volumes and creates mount directory", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -235,7 +224,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("target directory already exists is handled cleanly", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		expectedPath := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		if err := os.MkdirAll(expectedPath, 0o750); err != nil {
@@ -259,7 +248,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("plugin lookup failure returns error", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		unknownVol := &ateletpb.Volume{
 			Name: "vol-unknown",
@@ -283,7 +272,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("plugin mount failure returns error", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("mount operation failed: device or resource busy"),
@@ -304,7 +293,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("multi-volume partial failure aborts on first failure", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{
 			mountErr: errors.New("cannot mount volume"),
@@ -325,7 +314,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	})
 
 	t.Run("multi-volume partial failure does not roll back already mounted volume", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		expectedPath1 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")
 		expectedPath2 := ateletpath.ExternalVolumeHostPath(actorUID, "vol-2")
@@ -394,7 +383,7 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 	}
 
 	t.Run("unmountExternalVolumes preserves host mount directories", func(t *testing.T) {
-		withTempActorsDir(t)
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -427,8 +416,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("resetActorDirs removes empty unmounted volume host directories", func(t *testing.T) {
-		withTempActorsDir(t)
+	t.Run("ResetActorDirs removes empty unmounted volume host directories", func(t *testing.T) {
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -453,14 +442,14 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			}
 		}
 
-		// resetActorDirs cleans up empty volume directories left after unmount.
-		if err := resetActorDirs(actorUID); err != nil {
-			t.Fatalf("resetActorDirs failed: %v", err)
+		// actordirs.ResetActorDirs cleans up empty volume directories left after unmount.
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			t.Fatalf("ResetActorDirs failed: %v", err)
 		}
 
 		for _, p := range []string{path1, path2} {
 			if _, err := os.Stat(p); !os.IsNotExist(err) {
-				t.Errorf("expected mount path %q to be deleted by resetActorDirs, stat err = %v", p, err)
+				t.Errorf("expected mount path %q to be deleted by ResetActorDirs, stat err = %v", p, err)
 			}
 		}
 
@@ -475,8 +464,8 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("resetActorDirs preserves non-empty volume directories and returns error", func(t *testing.T) {
-		withTempActorsDir(t)
+	t.Run("ResetActorDirs preserves non-empty volume directories and returns error", func(t *testing.T) {
+		useTempNodeDirs(t)
 
 		fake := &fakeWorkerPlugin{}
 		s := &Atelet{
@@ -496,9 +485,9 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 			t.Fatalf("writing test file: %v", err)
 		}
 
-		err := resetActorDirs(actorUID)
+		err := actordirs.ResetActorDirs(actorUID)
 		if err == nil {
-			t.Fatal("expected resetActorDirs to fail on non-empty volume dir, got nil")
+			t.Fatal("expected ResetActorDirs to fail on non-empty volume dir, got nil")
 		}
 		if !strings.Contains(err.Error(), "while removing volume dir") {
 			t.Errorf("error = %v, want error containing 'while removing volume dir'", err)
@@ -510,11 +499,11 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 		}
 	})
 
-	t.Run("resetActorDirs succeeds cleanly when volumes directory does not exist", func(t *testing.T) {
-		withTempActorsDir(t)
+	t.Run("ResetActorDirs succeeds cleanly when volumes directory does not exist", func(t *testing.T) {
+		useTempNodeDirs(t)
 
-		if err := resetActorDirs(actorUID); err != nil {
-			t.Fatalf("resetActorDirs failed when volumes dir does not exist: %v", err)
+		if err := actordirs.ResetActorDirs(actorUID); err != nil {
+			t.Fatalf("ResetActorDirs failed when volumes dir does not exist: %v", err)
 		}
 
 		volumesDir := ateletpath.ExternalVolumeMountsDir(actorUID)
@@ -525,11 +514,11 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 }
 
 func TestDirectCSIDriverConfigGetter(t *testing.T) {
-	fakeClient := fake.NewSimpleClientset(&v1alpha1.CSIDriverConfig{
+	fakeClient := fake.NewSimpleClientset(&atev1.CSIDriverConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test.csi.k8s.io",
 		},
-		Spec: v1alpha1.CSIDriverConfigSpec{
+		Spec: atev1.CSIDriverConfigSpec{
 			DriverName:         "test.csi.k8s.io",
 			ControllerEndpoint: "tcp://127.0.0.1:9000",
 		},

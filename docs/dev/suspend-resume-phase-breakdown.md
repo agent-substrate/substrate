@@ -24,10 +24,10 @@ the report.
   or the [GKE Quickstart](../../README.md#gke-quickstart-development). For GKE
   the scripts below read `.ate-dev-env.sh` from the repository root
   (`collect_logs.sh` sources it itself; set `NO_DEV_ENV` to opt out).
-* A **micro-VM** or **gVisor** pool: both ateworkers write the inner records,
+* A **microVM** or **gVisor** pool: both ateworkers write the inner records,
   so the report shows both layers for either class (a worker image that
   predates the gVisor records shows the atelet layer only on a gVisor pool).
-  For micro-VM see [microvm-local.md](microvm-local.md).
+  For microVM see [microvm-local.md](microvm-local.md).
 * `kubectl`, `kubectl-ate` (`go install ./cmd/kubectl-ate`), and `python3`
   (standard library only).
 
@@ -87,7 +87,7 @@ The form fields are the flags documented in
 `benchmarking/locust/common/memload_config.py`; the boomer workers fetch the
 values from the master on each spawn. Let it run for about 90 seconds (≈10
 cycles per user), then stop the test. For a single operation without locust,
-`kubectl ate suspend actor <name> -a benchmark-workloads` and
+`kubectl ate suspend actor <name> -a benchmark-workloads --mode=sync` and
 `kubectl ate resume actor <name> -a benchmark-workloads` on any actor in the
 atespace produce one record pair each.
 

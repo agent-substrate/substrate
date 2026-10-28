@@ -133,9 +133,12 @@ func mountImageVolume(mountpoint string, layers []string) error {
 		if err := unix.Mount(fsDir, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 			return fmt.Errorf("while binding %q: %w", fsDir, err)
 		}
-		// MS_BIND and MS_RDONLY cannot be combined; a second call applies read-only.
-		if err := unix.Mount("", mountpoint, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
-			return fmt.Errorf("while remounting %q read-only: %w", mountpoint, err)
+		// A bind can't be created read-only, so set it after, on every mount the
+		// rbind brought along. Also private, otherwise a mount made under fsDir
+		// later would propagate in writable.
+		attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY, Propagation: unix.MS_PRIVATE}
+		if err := unix.MountSetattr(unix.AT_FDCWD, mountpoint, unix.AT_RECURSIVE, attr); err != nil {
+			return fmt.Errorf("while making %q read-only: %w", mountpoint, err)
 		}
 		return nil
 	}
@@ -151,10 +154,10 @@ func mountImageVolume(mountpoint string, layers []string) error {
 // An empty upper mounts the overlay without a writable layer, which overlayfs
 // makes read-only.
 //
-// Minimum supported kernel: Linux 6.5, where overlayfs gained the
-// incremental "lowerdir+" option. Every current GKE channel is at or above
-// it (Stable runs COS 121 LTS on kernel 6.6; Regular and Rapid run COS
-// 125/129 on 6.12).
+// Requires overlayfs's "lowerdir+" option: Linux 6.7+, or 6.6.23+ where it was
+// backported.
+// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=24e16e385f2272b1a9df51337a5c32d28a29c7ad
+// https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=cc0918b3582c98f12cfb30bf7496496d14bff3e9
 func mountOverlay(mountpoint string, lowers []string, upper, work string) error {
 	fsfd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {

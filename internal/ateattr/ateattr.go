@@ -27,7 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/pkg/sandboxclass"
 )
 
@@ -97,7 +97,7 @@ const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 // actor identity, which no metric may carry.
 const ActorStateKey = attribute.Key("ate.actor.state")
 
-// Values for ActorStateKey, mirroring ateapipb.ActorState with the
+// Values for ActorStateKey, mirroring ateapi.ActorState with the
 // ACTOR_STATE_ prefix dropped so the two cannot fork. ActorStateDeleted is the
 // exception and has no enum counterpart: the record is gone, so no stored state
 // can stand for it.
@@ -115,21 +115,21 @@ const (
 
 // ActorStateValue maps the committed state onto its label value, so a producer
 // reports the state the store holds rather than one it names by hand.
-func ActorStateValue(state ateapipb.ActorState) string {
+func ActorStateValue(state ateapi.ActorState) string {
 	switch state {
-	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+	case ateapi.ActorState_ACTOR_STATE_RESUMING:
 		return ActorStateResuming
-	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+	case ateapi.ActorState_ACTOR_STATE_RUNNING:
 		return ActorStateRunning
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 		return ActorStateSuspending
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 		return ActorStateSuspended
-	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+	case ateapi.ActorState_ACTOR_STATE_CRASHED:
 		return ActorStateCrashed
-	case ateapipb.ActorState_ACTOR_STATE_DELETING:
+	case ateapi.ActorState_ACTOR_STATE_DELETING:
 		return ActorStateDeleting
-	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
+	case ateapi.ActorState_ACTOR_STATE_REVERTING:
 		return ActorStateReverting
 	default:
 		return ActorStateUnknown
@@ -161,6 +161,8 @@ const (
 	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
+	FileCacheNameKey       = attribute.Key("ate.filecache.name")
+	FileCacheGCOutcomeKey  = attribute.Key("ate.filecache.gc.outcome")
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
@@ -237,13 +239,34 @@ const (
 	ImageCacheOutcomeTimeout   = "timeout"
 )
 
+// Values for FileCacheNameKey.
+const (
+	// FileCacheSandboxAsset is the sandbox asset cache: the runsc binaries,
+	// kernels and guest images the workers run actors with.
+	FileCacheSandboxAsset = "sandbox_asset"
+	// FileCacheSnapshot is the snapshot cache: the files of shared snapshots,
+	// the ones many actors restore from.
+	FileCacheSnapshot = "snapshot"
+)
+
+// Values for FileCacheGCOutcomeKey. A pass is quiet when the cache is within
+// its budget and nothing is asked of it; those are not recorded.
+const (
+	FileCacheGCOutcomeComplete  = "complete"  // the pass freed what the budget asked
+	FileCacheGCOutcomeShortfall = "shortfall" // it freed what it could, less than asked
+	FileCacheGCOutcomeSkipped   = "skipped"   // it could not size the cache and did nothing
+)
+
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
 // that meets the constraints of the actor had room. scheduling.ErrNoCapacity
 // reports the same condition. It is a capacity signal, not a defect. A request
 // that the router sheds from a full parking lot is RouterOutcomeNoCapacity when
 // its resume failed with ResourceExhausted. A 503 without a gRPC cause, such as
-// a denied egress request, a failed policy lookup, or a shed request whose
-// resume failed for a different reason, is RouterOutcomeUnavailable.
+// a failed policy lookup or a shed request whose resume failed for a different
+// reason, is RouterOutcomeUnavailable. RouterOutcomeDenied is a request the
+// router refused by policy (a 403 or PermissionDenied), such as an egress
+// request outside the actor's egress policy. It is a policy decision, not a
+// defect.
 const (
 	RouterOutcomeOK                 = "ok"
 	RouterOutcomeCancelled          = "cancelled"
@@ -254,6 +277,7 @@ const (
 	RouterOutcomeNotFound           = "not_found"
 	RouterOutcomeUnavailable        = "unavailable"
 	RouterOutcomeRateLimited        = "rate_limited"
+	RouterOutcomeDenied             = "denied"
 	RouterOutcomeResumeError        = "resume_error"
 )
 
@@ -310,12 +334,11 @@ const (
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so
 // the label is bounded at the producer: Local restores an in-node snapshot,
-// Latest pulls the actor's durable snapshot from object storage, Golden pulls the
-// template's golden image, Boot is a from-scratch start (not a restore).
+// Latest pulls a durable snapshot from object storage (including a template's
+// golden snapshot), Boot is a from-scratch start (not a restore).
 // atelet derives the same values for its own histograms, where the kind is the
 // snapshot a restore reads or a checkpoint writes; Boot never appears there.
 const (
-	SnapshotKindGolden = "golden"
 	SnapshotKindLatest = "latest"
 	SnapshotKindLocal  = "local"
 	SnapshotKindBoot   = "boot"
@@ -327,6 +350,18 @@ const (
 	SnapshotFidelityRootfs  = "rootfs"
 	SnapshotFidelityMemory  = "memory"
 	SnapshotFidelityUnknown = "unknown"
+)
+
+// SnapshotUploadOverdueBandKey buckets how long past the upload delay an
+// actor's undurable local snapshot has been waiting on atelet.
+const SnapshotUploadOverdueBandKey = attribute.Key("ate.snapshot.upload_overdue_band")
+
+// Values for SnapshotUploadOverdueBandKey.
+const (
+	SnapshotUploadOverdueBandUnder1m = "under_1m"
+	SnapshotUploadOverdueBand1mTo5m  = "1m_to_5m"
+	SnapshotUploadOverdueBand5mTo15m = "5m_to_15m"
+	SnapshotUploadOverdueBandOver15m = "over_15m"
 )
 
 // SnapshotFidelityValue maps the wire enum onto its label value, shared so
@@ -418,7 +453,7 @@ func ActorRefAttributes(actorRef resources.ActorRef) []attribute.KeyValue {
 }
 
 // ActorAttributes is nil-safe; a nil Actor yields zero-valued attributes.
-func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
+func ActorAttributes(a *ateapi.Actor) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
@@ -476,7 +511,7 @@ func ActorRefLogAttrs(actorRef resources.ActorRef) []slog.Attr {
 // The worker-pool pair is omitted while the actor holds no assignment, so a
 // crash before the actor reaches a worker reports no pool rather than an
 // empty-string one.
-func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName string) []attribute.KeyValue {
+func ActorMetricAttributes(a *ateapi.Actor, sandboxClass, operationName string) []attribute.KeyValue {
 	if a == nil {
 		return nil
 	}

@@ -82,6 +82,27 @@ func testSpec() *ateworkerpb.WorkloadSpec {
 	return &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{Name: "app"}}}
 }
 
+// A worker process starts no workload before it registers: the control plane
+// could not tell which process ran it. Unavailable so the caller retries.
+func TestStartupRPCsRejectedBeforeRegistration(t *testing.T) {
+	s := &AteWorkerService{}
+	ctx := context.Background()
+	for name, call := range map[string]func() error{
+		"RunWorkload": func() error {
+			_, err := s.RunWorkload(ctx, validRunRequest())
+			return err
+		},
+		"RestoreWorkload": func() error {
+			_, err := s.RestoreWorkload(ctx, validRestoreRequest())
+			return err
+		},
+	} {
+		if got := apierror.Code(call()); got != codes.Unavailable {
+			t.Errorf("%s() before registration code = %v, want %v", name, got, codes.Unavailable)
+		}
+	}
+}
+
 func validRunRequest() *ateworkerpb.RunWorkloadRequest {
 	return &ateworkerpb.RunWorkloadRequest{Atespace: testActor.Ref.Atespace, ActorName: testActor.Ref.Name, ActorUid: testActor.UID, Spec: testSpec(), ActorDirs: testDirs()}
 }

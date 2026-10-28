@@ -24,13 +24,12 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
-	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sizing"
 )
 
@@ -84,36 +83,52 @@ func durableVolumeNames(spec *ateworkerpb.WorkloadSpec) []string {
 	return slices.Compact(names)
 }
 
-// pauseContainer is the sandbox root container. It only reaps, so it gets no
-// capabilities and mounts nothing.
-func pauseContainer() *ateworkerpb.Container {
-	return &ateworkerpb.Container{
-		Name:          ocispec.PauseContainer,
-		ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/pause"}},
+// noRootContainerArgs returns the flag that tells runsc the sandbox has no
+// root container. runsc refuses the flag for any other container.
+func noRootContainerArgs(containerName string) []string {
+	if containerName == ocispec.SandboxID {
+		return []string{"-no-root-container"}
 	}
+	return nil
 }
 
 // writeSpec builds the container's OCI spec, shapes it for gVisor, and saves it
 // into the container's bundle.
 func (r *runsc) writeSpec(containerName string) error {
-	container := pauseContainer()
-	if containerName != ocispec.PauseContainer {
+	bundlePath := ociBundlePath(r.actorDirs, containerName)
+	var spec *specs.Spec
+	if containerName == ocispec.SandboxID {
+		// atelet makes only the application containers' bundles.
+		if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+			return fmt.Errorf("while creating bundle %q: %w", bundlePath, err)
+		}
+		spec = ocispec.BuildSandbox(r.actorUID)
+	} else {
 		i := slices.IndexFunc(r.containers, func(c *ateworkerpb.Container) bool { return c.GetName() == containerName })
 		if i < 0 {
 			return fmt.Errorf("container %q is not in the workload spec", containerName)
 		}
-		container = r.containers[i]
+		spec = ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: r.containers[i]})
 	}
-	spec := ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: container})
 	ocispec.ShapeGVisor(spec, ocispec.GVisorOptions{
 		ActorUID:       r.actorUID,
 		ActorDirs:      r.actorDirs,
 		ContainerName:  containerName,
 		DurableVolumes: r.durableVolumes,
 		Size:           r.size,
-		ResolvConf:     resolvConfPath(r.actorDirs),
 	})
-	return ocispec.Save(ociBundlePath(r.actorDirs, containerName), spec)
+	return ocispec.Save(bundlePath, spec)
+}
+
+// createArgs builds the argv for `runsc create <container>`. Factored out so
+// the argument construction can be unit-tested without executing runsc.
+func (r *runsc) createArgs(containerName string, additionalArgs []string) []string {
+	args := append(noRootContainerArgs(containerName),
+		"-bundle", ociBundlePath(r.actorDirs, containerName),
+		"-pid-file", pidFilePath(r.actorDirs, containerName),
+	)
+	args = append(args, additionalArgs...)
+	return r.buildArgs("create", containerName, args...)
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
@@ -123,18 +138,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
-	args := make([]string, 0, 4+len(additionalArgs))
-	args = append(args,
-		"-bundle", ociBundlePath(r.actorDirs, containerName),
-		"-pid-file", pidFilePath(r.actorDirs, containerName),
-	)
-	args = append(args, additionalArgs...)
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		r.buildArgs("create", containerName, args...)...,
-	)
+	cmd := exec.CommandContext(ctx, r.path, r.createArgs(containerName, additionalArgs)...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -164,9 +168,10 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 // checkpointArgs builds the argv for `runsc checkpoint <container>`. Factored
 // out so the argument construction can be unit-tested without executing runsc.
 func (r *runsc) checkpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
-	extra := []string{"-image-path", checkpointPath}
-	if len(fsCheckpointPaths) > 0 {
-		extra = append(extra, "-fs-checkpoint-paths", strings.Join(fsCheckpointPaths, ","))
+	extra := make([]string, 0, 2+2*len(fsCheckpointPaths))
+	extra = append(extra, "-image-path", checkpointPath)
+	for _, p := range fsCheckpointPaths {
+		extra = append(extra, "-fs-checkpoint-paths", p)
 	}
 	return r.buildArgs("checkpoint", containerName, extra...)
 }
@@ -189,7 +194,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 // executing runsc.
 func (r *runsc) fsCheckpointArgs(containerName, checkpointPath string, fsCheckpointPaths []string) []string {
 	extra := make([]string, 0, 2+2*len(fsCheckpointPaths))
-	extra = append(extra, "-image-path", filepath.Join(checkpointPath, resources.FSCheckpointSubdir))
+	extra = append(extra, "-image-path", checkpointPath)
 	for _, ddv := range fsCheckpointPaths {
 		extra = append(extra, "-path", ddv)
 	}
@@ -212,15 +217,16 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 // restoreArgs builds the argv for `runsc restore <container>`. Factored out so
 // the argument construction can be unit-tested without executing runsc.
 func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
-	return r.buildArgs("restore", containerName,
+	args := append(noRootContainerArgs(containerName),
 		"-bundle", ociBundlePath(r.actorDirs, containerName),
 		"-image-path", checkpointPath,
 		"-pid-file", pidFilePath(r.actorDirs, containerName),
 	)
+	return r.buildArgs("restore", containerName, args...)
 }
 
-// We take a checkpoint only of the root container of the sandbox, but we need
-// to call restore on each container, using the same checkpoint.
+// We take a checkpoint only of the sandbox, but we need to call restore on each
+// container, using the same checkpoint.
 func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
 

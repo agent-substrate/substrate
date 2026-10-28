@@ -6,7 +6,7 @@
 
 A [substrate](https://github.com/agent-substrate/substrate) credential provider
 backed by Google Cloud Secret Manager. It implements substrate's
-`CredentialProvider` gRPC API (`pkg/proto/credproviderpb`) for egress
+`CredentialProvider` gRPC API (`api/credprovider/v1`) for egress
 credential injection: given an `ate-secret://secretmanager.googleapis.com/...`
 URI, it reads the secret version from Secret Manager and returns its payload,
 so the secret stays in Secret Manager and substrate never stores it.
@@ -22,7 +22,7 @@ namespace:
 |---|---|
 | Provider name | `secretmanager.googleapis.com`, the host of its `ate-secret://` credential URIs |
 | Address | `gsm-credential-provider.ate-system.svc:50051` |
-| API | `credprovider.CredentialProvider/FetchSecret` over mutual TLS |
+| API | `substrate.credprovider.v1.CredentialProvider/FetchSecret` over mutual TLS |
 
 The provider's serving certificate names the Service's DNS name, so callers
 must use exactly this address.
@@ -267,14 +267,14 @@ make release-manifest   # manifests with the image pinned by digest
 ```
 
 `go.mod` replaces the substrate module with the enclosing checkout, so the
-provider builds and tests against the current `credproviderpb` API.
+provider builds and tests against the current `credprovider` API.
 
-The module imports nothing of substrate's but its public `pkg/` packages, so
-it can be copied out as it is; `TestImportsOnlySubstratePublicPackages` fails
-on any other substrate import. For that reason, two packages are copies kept in
-step by hand: `internal/credbundle` of substrate's `internal/credbundle`, and
-`internal/mtls` of the server credentials in
-`cmd/credential-provider/kubernetes-secrets`.
+The module imports nothing of substrate's but its public `api/` and `pkg/`
+packages, so it can be copied out as it is;
+`TestImportsOnlySubstratePublicPackages` fails on any other substrate import.
+For that reason, two packages are copies kept in step by hand:
+`internal/credbundle` of substrate's `internal/credbundle`, and `internal/mtls`
+of the server credentials in `cmd/credential-provider/kubernetes-secrets`.
 
 To move the module to its own repository, rename the module path in `go.mod`,
 in the Go imports, and in the `ko://` image of `config/deployment.yaml`, then

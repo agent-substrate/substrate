@@ -17,11 +17,13 @@ package scheduling
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -51,6 +53,13 @@ func TestSchedule(t *testing.T) {
 			name: "worker with no sandbox class is never scheduled",
 			fleet: fleet{
 				worker("w-unclassed", "", "node-a", tierTwo),
+			},
+			constraints: Constraints{},
+		},
+		{
+			name: "worker with no default runtime is never scheduled",
+			fleet: fleet{
+				worker("w-unregistered", "gvisor", "node-a", tierTwo, withRuntimes(nil)),
 			},
 			constraints: Constraints{},
 		},
@@ -102,21 +111,21 @@ func TestSchedule(t *testing.T) {
 		{
 			name: "draining workers never scheduled",
 			fleet: fleet{
-				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapi.WorkerState_WORKER_STATE_DRAINING)),
 			},
 			constraints: Constraints{},
 		},
 		{
 			name: "unspecified workers never scheduled",
 			fleet: fleet{
-				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
+				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapi.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			},
 			constraints: Constraints{},
 		},
 		{
 			name: "picks active worker over draining one",
 			fleet: fleet{
-				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapi.WorkerState_WORKER_STATE_DRAINING)),
 				worker("w-active", "gvisor", "node-a", tierTwo),
 			},
 			constraints: Constraints{},
@@ -289,22 +298,6 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-known",
 		},
 		{
-			name: "prefers worker with known resource utilization over malformed allocated quantities",
-			fleet: fleet{
-				worker("w-malformed", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
-					func(w *ateapipb.Worker) {
-						w.Status.Allocated = &ateapipb.WorkerResources{
-							Actors:    1,
-							Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
-						}
-					}),
-				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
-					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
-			},
-			constraints: Constraints{},
-			wantPod:     "w-known",
-		},
-		{
 			name: "breaks utilization ties using remaining actor slots",
 			fleet: fleet{
 				// Both workers are at 50% actor-slot utilization (1/2 vs 4/8) and
@@ -375,13 +368,33 @@ func TestSchedule(t *testing.T) {
 	}
 }
 
+func TestRegistered(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ateapi.Worker)
+		want   bool
+	}{
+		{name: "registered with runtimes", mutate: func(*ateapi.Worker) {}, want: true},
+		{name: "no registered epoch", mutate: func(w *ateapi.Worker) { w.Status.RegisteredEpoch = 0 }},
+		{name: "no sandbox class", mutate: func(w *ateapi.Worker) { w.Status.SandboxClasses = nil }},
+		{name: "no status", mutate: func(w *ateapi.Worker) { w.Status = nil }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Registered(worker("w", "gvisor", "node-a", nil, tc.mutate)); got != tc.want {
+				t.Errorf("Registered() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplies(t *testing.T) {
 	tierSel := labels.SelectorFromSet(labels.Set{"tier": "1"})
 	workloadSel := labels.SelectorFromSet(labels.Set{"workload": "a"})
 
 	tests := []struct {
 		name        string
-		worker      *ateapipb.Worker
+		worker      *ateapi.Worker
 		constraints Constraints
 		want        bool
 	}{
@@ -401,6 +414,14 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "worker with no sandbox class",
 			worker:      worker("w", "", "node-a", nil),
+			constraints: Constraints{},
+			want:        false,
+		},
+		{
+			name: "worker process not registered",
+			worker: worker("w", "gvisor", "node-a", nil, func(w *ateapi.Worker) {
+				w.Status.RegisteredEpoch = 0
+			}),
 			constraints: Constraints{},
 			want:        false,
 		},
@@ -458,19 +479,25 @@ func TestApplies(t *testing.T) {
 		},
 		{
 			name:        "skips draining worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapi.WorkerState_WORKER_STATE_DRAINING)),
 			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "skips unavailable worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)),
 			constraints: Constraints{},
 			want:        false,
 		},
 		{
 			name:        "skips unspecified worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapi.WorkerState_WORKER_STATE_UNSPECIFIED)),
+			constraints: Constraints{},
+			want:        false,
+		},
+		{
+			name:        "skips worker with no sandbox classes",
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(nil)),
 			constraints: Constraints{},
 			want:        false,
 		},
@@ -505,18 +532,24 @@ func TestApplies(t *testing.T) {
 	}
 }
 
-type fleet []*ateapipb.Worker
+type fleet []*ateapi.Worker
 
-func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }
+func (f fleet) Workers() ([]*ateapi.Worker, error) { return f, nil }
 
-func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapipb.Worker)) *ateapipb.Worker {
-	w := &ateapipb.Worker{
-		WorkerPod:    pod,
-		SandboxClass: class,
-		NodeName:     node,
-		Labels:       lbls,
+func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateapi.Worker)) *ateapi.Worker {
+	w := &ateapi.Worker{
+		WorkerPod: pod,
+		NodeName:  node,
+		Labels:    lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
-		Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapi.WorkerStatus{
+			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
+			RegisteredEpoch: 1,
+			Capacity:        &ateapi.WorkerResources{Actors: 1},
+		},
+	}
+	if class != "" {
+		withRuntimes(sandboxRuntime(class, "amd64"))(w)
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -524,34 +557,48 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func sandboxRuntime(class, arch string, bundleHash ...string) *ateapipb.SandboxRuntime {
-	attrs := []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}}
+func sandboxRuntime(class, arch string, bundleHash ...string) *ateapi.ActorSandboxRuntime {
+	attrs := []*ateapi.AttributeEntry{{Key: "architecture", Value: arch}}
 	if len(bundleHash) > 0 && bundleHash[0] != "" {
-		attrs = append(attrs, &ateapipb.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
+		attrs = append(attrs, &ateapi.AttributeEntry{Key: "sandbox_bundle_hash", Value: bundleHash[0]})
 	}
-	return &ateapipb.SandboxRuntime{
+	return &ateapi.ActorSandboxRuntime{
 		SandboxClass: class,
-		Version: &ateapipb.VersionedSandboxCompat{
+		Version: &ateapi.VersionedSandboxCompat{
 			SchemaVersion: "v1",
 			Attributes:    attrs,
 		},
 	}
 }
 
-func withRuntimes(def *ateapipb.SandboxRuntime, restorable ...*ateapipb.SandboxRuntime) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
-		w.Status.DefaultRuntime = def
-		w.Status.RestorableRuntimes = restorable
+// sandboxClass is the WorkerSandboxClass entry of def's class, with def as
+// its default runtime and restorable as the others.
+func sandboxClass(def *ateapi.ActorSandboxRuntime, restorable ...*ateapi.ActorSandboxRuntime) *ateapi.WorkerSandboxClass {
+	c := &ateapi.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: def.GetVersion()}}
+	for _, r := range restorable {
+		c.RestorableRuntimes = append(c.RestorableRuntimes, &ateapi.WorkerSandboxRuntime{Version: r.GetVersion()})
+	}
+	return c
+}
+
+// withRuntimes gives the worker one sandbox class, def's. A nil def leaves
+// the worker as before it registered: no class at all.
+func withRuntimes(def *ateapi.ActorSandboxRuntime, restorable ...*ateapi.ActorSandboxRuntime) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
+		w.Status.SandboxClasses = nil
+		if def != nil {
+			w.Status.SandboxClasses = []*ateapi.WorkerSandboxClass{sandboxClass(def, restorable...)}
+		}
 	}
 }
 
-func withState(state ateapipb.WorkerState) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withState(state ateapi.WorkerState) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		w.Status.State = state
 	}
 }
 
-func assigned(atespace, name string) func(*ateapipb.Worker) {
+func assigned(atespace, name string) func(*ateapi.Worker) {
 	return assignedFor(atespace, name, nil)
 }
 
@@ -559,38 +606,35 @@ func assigned(atespace, name string) func(*ateapipb.Worker) {
 // place against what is left rather than against the whole capacity. Only the
 // allocation total, which is all placement reads: the assignments themselves are
 // their own records and never on the worker.
-func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func assignedFor(atespace, name string, took *ateapi.Resources) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		if w.Status == nil {
-			w.Status = &ateapipb.WorkerStatus{}
+			w.Status = &ateapi.WorkerStatus{}
 		}
-		allocated, err := resources.AddToAllocated(w.Status.Allocated,
-			&ateapipb.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
-		if err != nil {
-			panic(err)
-		}
-		w.Status.Allocated = allocated
+		w.Status.Allocated = resources.AddToAllocated(w.Status.Allocated,
+			&ateapi.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
 	}
 }
 
-func withMaxActors(n int32) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withMaxActors(n int32) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		if w.Status == nil {
-			w.Status = &ateapipb.WorkerStatus{}
+			w.Status = &ateapi.WorkerStatus{}
 		}
 		if w.Status.Capacity == nil {
-			w.Status.Capacity = &ateapipb.WorkerResources{}
+			w.Status.Capacity = &ateapi.WorkerResources{}
 		}
 		w.Status.Capacity.Actors = n
 	}
 }
 
-func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
-	return func(w *ateapipb.Worker) {
+func withCapacity(cpuMilli, memBytes int64) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
 		if w.Status.Capacity == nil {
-			w.Status.Capacity = &ateapipb.WorkerResources{}
+			w.Status.Capacity = &ateapi.WorkerResources{}
 		}
-		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+		w.Status.Capacity.CpuMillicores = cpuMilli
+		w.Status.Capacity.MemoryBytes = memBytes
 	}
 }
 
@@ -671,16 +715,86 @@ func TestSchedulePowerOfTwoChoicesShiftedSecondSample(t *testing.T) {
 	}
 }
 
-func TestScheduleMalformedLimitsIsNotNoCapacity(t *testing.T) {
-	f := fleet{worker("w-1", "gvisor", "node-a", nil)}
-	constraints := Constraints{
-		Limits: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: resources.ResourceCPU, Quantity: "not-a-quantity"}}},
+// withOverhead sets the actor overhead on the worker's runtimes: def on the
+// default, restorable on the restorable ones in order.
+func withOverhead(def *ateapi.RuntimeOverhead, restorable ...*ateapi.RuntimeOverhead) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
+		c := w.Status.SandboxClasses[0]
+		c.DefaultRuntime.ActorOverhead = def
+		for i, o := range restorable {
+			c.RestorableRuntimes[i].ActorOverhead = o
+		}
 	}
-	_, err := New(f, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
-	if err == nil {
-		t.Fatal("Schedule() error = nil, want a parse error")
+}
+
+func TestBooking(t *testing.T) {
+	const gib = 1 << 30
+	limits := &ateapi.Resources{CpuMillicores: 500, MemoryBytes: gib / 2}
+	current, old := sandboxRuntime("microvm", "amd64", "new"), sandboxRuntime("microvm", "amd64", "old")
+	w := worker("w", "", "node-a", nil,
+		withRuntimes(current, old),
+		withOverhead(&ateapi.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}, &ateapi.RuntimeOverhead{MemoryBytes: 16 << 20}))
+	for _, tc := range []struct {
+		name        string
+		constraints Constraints
+		want        int64
+	}{
+		{name: "cold boot books the default runtime's", constraints: Constraints{Limits: limits}, want: gib/2 + 4<<20 + 4<<20},
+		{
+			name:        "a restore books the matching runtime's",
+			constraints: Constraints{Limits: limits, RequiredRuntime: hardware.NewRequirement(old), SnapshotRuntime: hardware.NewRequirement(old)},
+			want:        gib/2 + 16<<20,
+		},
+		{
+			// relaxing what the worker must match doesn't change the runtime the
+			// actor restores under, so it doesn't change the price
+			name:        "a relaxed restore still books the matching runtime's",
+			constraints: Constraints{Limits: limits, SnapshotRuntime: hardware.NewRequirement(old)},
+			want:        gib/2 + 16<<20,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := Booking(w, tc.constraints)
+			if !ok || got.GetMemoryBytes() != tc.want || got.GetCpuMillicores() != 500 {
+				t.Errorf("Booking() = %v, %v, want %d memory bytes and 500 millicores", got, ok, tc.want)
+			}
+		})
 	}
-	if errors.Is(err, ErrNoCapacity) {
-		t.Fatalf("Schedule() error = %v, want an error other than ErrNoCapacity", err)
+	plain := worker("plain", "gvisor", "node-a", nil)
+	if got, ok := Booking(plain, Constraints{Limits: limits}); !ok || !proto.Equal(got, limits) {
+		t.Errorf("Booking() without overhead = %v, %v, want the limits %v", got, ok, limits)
+	}
+}
+
+// A booking that overflows fits nowhere, rather than wrapping negative and
+// fitting everywhere.
+func TestBookingOverflow(t *testing.T) {
+	w := worker("w", "microvm", "node-a", nil, withMaxActors(10), withCapacity(0, 1<<30),
+		withOverhead(&ateapi.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}))
+	for _, memory := range []int64{math.MaxInt64, math.MaxInt64 - 1<<20} {
+		constraints := Constraints{Limits: &ateapi.Resources{MemoryBytes: memory}}
+		if got, ok := Booking(w, constraints); ok {
+			t.Errorf("Booking(%d) = %v, want overflow", memory, got)
+		}
+		if New(fleet{w}).HasRoom(w, constraints) {
+			t.Errorf("HasRoom(%d) = true, want false", memory)
+		}
+	}
+}
+
+// An actor that fits the worker's free memory alone can still not fit with its
+// runtime's overhead.
+func TestHasRoomBooksRuntimeOverhead(t *testing.T) {
+	const gib = 1 << 30
+	constraints := Constraints{Limits: &ateapi.Resources{MemoryBytes: gib}}
+	overhead := withOverhead(&ateapi.RuntimeOverhead{MemoryBytes: 4 << 20})
+	tight := worker("tight", "microvm", "node-a", nil, withMaxActors(10), withCapacity(0, gib), overhead)
+	roomy := worker("roomy", "microvm", "node-a", nil, withMaxActors(10), withCapacity(0, gib+4<<20), overhead)
+	s := New(fleet{tight, roomy})
+	if s.HasRoom(tight, constraints) {
+		t.Error("HasRoom() = true without room for the actor's overhead, want false")
+	}
+	if !s.HasRoom(roomy, constraints) {
+		t.Error("HasRoom() = false with room for the actor and its overhead, want true")
 	}
 }

@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TODO(yufan-su): Move these constructors into an internal/e2e/egresspolicy package.
@@ -32,44 +32,44 @@ import (
 // and address, as cleartext HTTP on any port and as intercepted HTTPS on 443.
 // TLS forwarded unread is not decided by the gateway yet, and a passthrough
 // rule on every port would tie with the http rule, which the API rejects.
-func EgressAllowAll() []*ateapipb.EgressRule {
-	return []*ateapipb.EgressRule{
-		{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
-		{Https: &ateapipb.HttpsRule{Hostnames: []string{"*"}}},
+func EgressAllowAll() []*ateapi.EgressRule {
+	return []*ateapi.EgressRule{
+		{Http: &ateapi.HttpRule{Hostnames: []string{"*"}, Ports: &ateapi.Ports{All: &ateapi.AllPorts{}}}},
+		{Https: &ateapi.HttpsRule{Hostnames: []string{"*"}}},
 	}
 }
 
 // EgressAllowHTTP is a rule that lets an actor send cleartext HTTP to the
 // hosts matching patterns (exact names, or "*." plus a name for one leftmost
 // label) on port 80.
-func EgressAllowHTTP(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: patterns}}
+func EgressAllowHTTP(patterns ...string) *ateapi.EgressRule {
+	return &ateapi.EgressRule{Http: &ateapi.HttpRule{Hostnames: patterns}}
 }
 
 // EgressAllowHTTPS is a rule that lets an actor send HTTPS, intercepted by the
 // gateway, to the hosts matching patterns on port 443.
-func EgressAllowHTTPS(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: patterns}}
+func EgressAllowHTTPS(patterns ...string) *ateapi.EgressRule {
+	return &ateapi.EgressRule{Https: &ateapi.HttpsRule{Hostnames: patterns}}
 }
 
 // EgressAllowPassthrough is a rule that lets an actor send TLS to the hosts
 // matching patterns on any port, relayed by the gateway without decryption.
-func EgressAllowPassthrough(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{
-		TlsPassthrough: &ateapipb.TlsPassthroughRule{
+func EgressAllowPassthrough(patterns ...string) *ateapi.EgressRule {
+	return &ateapi.EgressRule{
+		TlsPassthrough: &ateapi.TlsPassthroughRule{
 			Hostnames: patterns,
-			Ports:     &ateapipb.Ports{All: &ateapipb.AllPorts{}},
+			Ports:     &ateapi.Ports{All: &ateapi.AllPorts{}},
 		},
 	}
 }
 
 // EgressAllowPassthroughOnPorts is EgressAllowPassthrough confined to the
 // given ports.
-func EgressAllowPassthroughOnPorts(ports []int32, patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{
-		TlsPassthrough: &ateapipb.TlsPassthroughRule{
+func EgressAllowPassthroughOnPorts(ports []int32, patterns ...string) *ateapi.EgressRule {
+	return &ateapi.EgressRule{
+		TlsPassthrough: &ateapi.TlsPassthroughRule{
 			Hostnames: patterns,
-			Ports:     &ateapipb.Ports{Numbers: ports},
+			Ports:     &ateapi.Ports{Numbers: ports},
 		},
 	}
 }
@@ -78,7 +78,7 @@ func EgressAllowPassthroughOnPorts(ports []int32, patterns ...string) *ateapipb.
 // a replace_headers effect: on a match, the gateway resolves credentialURI
 // through its credential provider and replaces header with prefix plus the
 // credential.
-func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string) *ateapi.EgressRule {
 	rule := EgressAllowHTTPS(patterns...)
 	rule.Https.Effects = replaceHeaderEffects(header, prefix, credentialURI)
 	return rule
@@ -86,15 +86,15 @@ func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string
 
 // EgressInjectHeaderHTTP is an http rule (see EgressAllowHTTP) carrying the
 // same credential replacement effect as EgressInjectHeader.
-func EgressInjectHeaderHTTP(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
+func EgressInjectHeaderHTTP(header, prefix, credentialURI string, patterns ...string) *ateapi.EgressRule {
 	rule := EgressAllowHTTP(patterns...)
 	rule.Http.Effects = replaceHeaderEffects(header, prefix, credentialURI)
 	return rule
 }
 
-func replaceHeaderEffects(header, prefix, credentialURI string) *ateapipb.HttpRuleEffects {
-	return &ateapipb.HttpRuleEffects{
-		ReplaceHeaders: []*ateapipb.CredentialHeader{{
+func replaceHeaderEffects(header, prefix, credentialURI string) *ateapi.HttpRuleEffects {
+	return &ateapi.HttpRuleEffects{
+		ReplaceHeaders: []*ateapi.CredentialHeader{{
 			Header:        header,
 			Prefix:        prefix,
 			CredentialUri: credentialURI,
@@ -104,13 +104,13 @@ func replaceHeaderEffects(header, prefix, credentialURI string) *ateapipb.HttpRu
 
 // EnsureEgressPolicy gives actor an EgressPolicy with exactly rules, replacing
 // any it had. Deleting the actor deletes the policy, so there is no cleanup.
-func EnsureEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, actor *ateapipb.ObjectRef, rules ...*ateapipb.EgressRule) {
+func EnsureEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, actor *ateapi.ObjectRef, rules ...*ateapi.EgressRule) {
 	t.Helper()
-	policy := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: resources.SingletonName},
+	policy := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: actor.GetAtespace(), Name: resources.SingletonName},
 		Rules:    rules,
 	}
-	_, err := clients.SubstrateAPI.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
+	_, err := clients.SubstrateAPI.CreateActorEgressPolicy(ctx, &ateapi.CreateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: policy,
 	})
@@ -120,12 +120,12 @@ func EnsureEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, act
 		}
 		return
 	}
-	existing, err := clients.SubstrateAPI.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
+	existing, err := clients.SubstrateAPI.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetActorEgressPolicy for %s/%s: %v", actor.GetAtespace(), actor.GetName(), err)
 	}
 	policy.Metadata = existing.GetMetadata()
-	if _, err := clients.SubstrateAPI.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{
+	if _, err := clients.SubstrateAPI.UpdateActorEgressPolicy(ctx, &ateapi.UpdateActorEgressPolicyRequest{
 		Actor:        actor,
 		EgressPolicy: policy,
 	}); err != nil {

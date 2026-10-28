@@ -23,15 +23,17 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
@@ -40,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sizing"
@@ -59,13 +62,17 @@ type runningActor struct {
 	baseID string
 
 	// ateworker owns this CH process (booted at Run or relaunched at Restore).
-	chCmd *exec.Cmd
-	// vfsdCmd is the virtiofsd serving the unified share (merged rootfs overlay,
+	chProc *child.Process
+	// vfsdProc is the virtiofsd serving the unified share (merged rootfs overlay,
 	// durable-dir volumes, and CSI volumes). ateworker owns it; teardownActor
 	// kills it after the CH process.
-	vfsdCmd *exec.Cmd
+	vfsdProc *child.Process
 	// apiSocket is the CH api-socket for this ateworker-owned VMM.
 	apiSocket string
+	// stopping is set once teardown starts, so watchVM can tell an expected
+	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
+	// virtiofsd exits once its only client is gone.
+	stopping atomic.Bool
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -129,30 +136,24 @@ const (
 // boots it as PID 1 (init=), so it is the guest's entire userspace.
 const kataAgentPath = "/usr/bin/kata-agent"
 
-// vmmMemReserveMiB is the DEFAULT guest RAM held back from the pod's memory limit
-// for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the same
-// pod cgroup as the guest RAM; without a margin the pod OOMs. Overridable per
-// deployment via --vmm-mem-reserve-mib (see AteWorkerService.memReserveMiB).
+// actorOverhead is what an actor costs outside its guest, in the same worker
+// pod cgroup, which the control plane books with every actor: cloud-hypervisor
+// and virtiofsd, and the host page tables for guest RAM, KVM's EPT and the
+// memfd's xarray.
 //
-// Measured on the worker pod's cgroup with one 256MiB-guest actor: the VMM stack's own
-// cost is ~12MiB (anon 8.1 + kernel 3.7; the rest of cloud-hypervisor's RSS is the guest
-// memfd, already accounted as guest RAM), and two virtiofsds are ~3MiB each. What needs
-// the rest of the margin is transient: a pause/resume cycle took the cgroup from 94MiB
-// to 153MiB, and the 57MiB difference was page cache from writing and reading the
-// snapshot.
-//
-// That transient scales with snapshot size, so no fixed reserve is right for every guest
-// size — this one is halved rather than cut to the ~32MiB the steady state would justify.
-// The fix that would let it drop that far is keeping snapshot I/O out of the page cache
-// (posix_fadvise(DONTNEED) after the checkpoint write and the restore read); until then
-// the margin absorbs it, and a deployment running large guests can raise the flag.
-const vmmMemReserveMiB = 128
+// The fixed part also covers the page cache of the actor's snapshot writes,
+// which are not capped yet, so tight pods don't OOM on suspend.
+// TODO: drop that part once snapshot writes are capped
+var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 128 << 20, MemoryBytesPerGib: 8 << 20}
 
-// minGuestMemMiB is the floor for guest RAM (the declared limit minus the VMM
-// reserve); a declared memory limit that leaves less is rejected at cold boot with a
-// clear error instead of being silently honored (see resolveGuestMemMiB), since too
-// little RAM makes the guest hang on boot rather than fail cleanly. Keep the admission
-// floor on ActorTemplate.spec.resources in sync (it is this value + vmmMemReserveMiB).
+// memoryReservedBytes is how much of the worker pod's memory limit we keep from
+// actors: the worker process itself, and the page cache of snapshot writes in
+// flight.
+const memoryReservedBytes = 64 << 20
+
+// minGuestMemMiB is the floor for guest RAM, and so for an actor's memory limit. A
+// smaller one is rejected at cold boot (see resolveGuestMemMiB), since too little
+// RAM makes the guest hang on boot rather than fail cleanly.
 //
 // Measured against the counter demo on a guest booting the agent as PID 1: 32MiB never
 // reaches Ready, 64MiB boots but idles with 1.1MB free (it only survives because page
@@ -166,23 +167,22 @@ const minGuestMemMiB = 128
 // workloads to signal and wait on, and it must name what the guest actually
 // runs: a container the agent does not know is rejected with InvalidContainerId,
 // and graceful shutdown then gives up without ever reaching the workload.
-//
-// Containers run under their bare name.
 func workloadIDs(ctrs []actorContainer) []string {
 	ids := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
-		ids = append(ids, c.name)
+		ids = append(ids, c.id)
 	}
 	return ids
 }
 
 // actorContainer is one of the actor's containers prepared for the shared micro-VM:
-// its name (also the kata containerID + the merged rootfs's find-paths subdir), its
+// its name, its kata container ID (also the merged rootfs's find-paths subdir), its
 // host OCI bundle and the bundle rootfs that backs the overlay lower, and its OCI
 // spec. The writable upper is a host directory (see rootfsupper.go); the host kernel
 // merges the two.
 type actorContainer struct {
 	name         string
+	id           string // see ocispec.GuestContainerID
 	bundle       string
 	bundleRootfs string
 	// spec is the container's OCI spec shaped for micro-VM execution.
@@ -235,6 +235,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	if err := ateworkervalidation.ValidateRunWorkloadRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	epoch, err := s.epoch.Require()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateRuntimeAssetPaths(req.GetActorUid(), req.GetActorDirs(), req.GetRuntimeAssetPaths()); err != nil {
 		return nil, err
 	}
@@ -264,7 +268,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		containers:       req.GetSpec().GetContainers(),
 		assetPaths:       req.GetRuntimeAssetPaths(),
 		egressGateway:    req.GetEgressGateway(),
-		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		size:             sizing.FromLimits(req.GetResources().GetLimits()),
 	}
 
 	attribution := p.actorAttribution()
@@ -291,7 +295,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
-	return &ateworkerpb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
@@ -437,11 +441,17 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		}
 	}()
 
+	// Egress before the guest boots, ingress after the wakeup probe (see
+	// tunnel.Tunnel.ActivateEgress).
+	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
+		return err
+	}
+
 	kparams := s.kernelParams()
 
 	// Size the VM to the actor's declared limits (see internal/sizing), which the
-	// API requires. vCPUs round up; VM RAM reserves a fixed margin for the VMM +
-	// virtiofsd, which share the pod cgroup with the guest RAM. NB: a MEMORY
+	// API requires. vCPUs round up; VM RAM is the memory limit, and what the actor
+	// costs outside the guest is booked as its overhead (see actorOverhead). NB: a MEMORY
 	// snapshot restore reuses the size baked into the snapshot
 	// (restoreMemoryFidelity), so resizing an existing actor takes effect on its
 	// next cold boot.
@@ -449,7 +459,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	if vcpus == 0 {
 		return errors.New("actor has no cpu limit to size the micro-VM's vCPUs")
 	}
-	memMiB, err := resolveGuestMemMiB(p.size.MemoryBytes, s.memReserveMiB)
+	memMiB, err := resolveGuestMemMiB(p.size.MemoryBytes)
 	if err != nil {
 		return err
 	}
@@ -466,10 +476,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// template spec is immutable, so an actor's limits were validated when its
 	// golden was built.
 	if err := checkResourceEnvelope(ctrs, guestEnvelope{
-		memMiB:        memMiB,
-		vcpus:         vcpus,
-		declaredBytes: p.size.MemoryBytes,
-		reserveMiB:    s.memReserveMiB,
+		memMiB: memMiB,
+		vcpus:  vcpus,
 	}); err != nil {
 		return err
 	}
@@ -484,25 +492,24 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
 	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
 	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := s.actorLeaf(actorUID, p.size)
+	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU)
 	if err != nil {
 		return err
 	}
 	defer leaf.Close()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
+	vfsdProc, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if retErr != nil && vfsdCmd.Process != nil {
-			_ = vfsdCmd.Process.Kill()
-			_, _ = vfsdCmd.Process.Wait()
+		if retErr != nil {
+			vfsdProc.Stop()
 		}
 	}()
 
 	// Launch a bare VMM (CH + api-socket); ateworker owns this process for teardown.
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
-	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
+	chProc, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary:      rr.chBinary,
 		APISocket:   apiSocket,
 		Stdout:      slogWriter{ctx},
@@ -513,9 +520,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return fmt.Errorf("while launching VMM: %w", err)
 	}
 	defer func() {
-		if retErr != nil && chCmd.Process != nil {
-			_ = chCmd.Process.Kill()
-			_, _ = chCmd.Process.Wait()
+		if retErr != nil {
+			chProc.Stop()
 		}
 	}()
 
@@ -601,21 +607,21 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
-	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
 	s.setRunningVM(actorUID, ra)
+	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
-	// container id (== the name; see StartRootfsContainer). The goroutines read
-	// over ac for the actor's lifetime and exit (io.EOF) when teardownActor
-	// closes ac.
+	// container id (see StartRootfsContainer). The goroutines read over ac for
+	// the actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	workloadIDs := make([]string, 0, len(ctrs))
 	attribution := p.actorAttribution()
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, attribution, c.name, c.name)
-		workloadIDs = append(workloadIDs, c.name)
+		s.startActorLogForwarding(ac, attribution, c.id, c.name)
+		workloadIDs = append(workloadIDs, c.id)
 	}
 
 	// Publish the guest to GetWorkloadStats, past every error return above: a
@@ -644,7 +650,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
 		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
-		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerID: cn}); err != nil {
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerName: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
@@ -658,11 +664,12 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
 		// Set guest DNS and hosts before serving the rootfs over virtio-fs, on boot and restore.
-		if err := writeActorEtcFiles(bundleRootfs); err != nil {
+		if err := actornet.WriteRootfsEtcFiles(bundleRootfs, ocispec.Hostname); err != nil {
 			return nil, fmt.Errorf("while writing guest /etc files for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
 			name:         cn,
+			id:           ocispec.GuestContainerID(cn),
 			bundle:       bundle,
 			bundleRootfs: bundleRootfs,
 			spec:         spec,
@@ -681,15 +688,15 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 // wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
-func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*child.Process, error) {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
-		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
+		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
 			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetName())
-			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetName()); err != nil {
+			if err := kata.StageImageVolume(ctx, src, id, c.id, vm.GetName()); err != nil {
 				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetName(), c.name, err)
 			}
 		}
@@ -710,7 +717,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 		}
 	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
+	vfsdProc, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:      rr.virtiofsd,
 		SocketPath:  kata.VirtiofsdSocketPath(id),
 		SharedDir:   kata.SharedDir(id),
@@ -720,7 +727,7 @@ func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRun
 	if err != nil {
 		return nil, fmt.Errorf("while starting virtiofsd: %w", err)
 	}
-	return vfsdCmd, nil
+	return vfsdProc, nil
 }
 
 // kernelParams returns the guest kernel params
@@ -733,19 +740,16 @@ func (s *AteWorkerService) kernelParams() string {
 }
 
 // resolveGuestMemMiB returns the micro-VM guest RAM (MiB) for an actor's declared
-// memory limit: the declared memory minus the VMM reserve. It errors if the limit is
-// unset or leaves less than a bootable minimum (see vmmMemReserveMiB, minGuestMemMiB,
-// and internal/sizing).
-func resolveGuestMemMiB(declaredBytes int64, reserveMiB int) (int, error) {
+// memory limit, which is all of it (see actorOverhead). It errors if the limit
+// is unset or below minGuestMemMiB.
+func resolveGuestMemMiB(declaredBytes int64) (int, error) {
 	if declaredBytes <= 0 {
 		return 0, errors.New("actor has no memory limit to size the micro-VM's RAM")
 	}
-	declaredMiB := int(declaredBytes / (1024 * 1024))
-	m := declaredMiB - reserveMiB
+	m := int(declaredBytes / (1024 * 1024))
 	if m < minGuestMemMiB {
-		return 0, fmt.Errorf("actor memory limit %dMiB is too small for a micro-VM: "+
-			"the %dMiB VMM reserve leaves %dMiB, below the %dMiB guest minimum",
-			declaredMiB, reserveMiB, m, minGuestMemMiB)
+		return 0, fmt.Errorf("actor memory limit %dMiB is too small for a microVM, the minimum is %dMiB",
+			m, minGuestMemMiB)
 	}
 	return m, nil
 }
@@ -892,19 +896,19 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<name>/rootfs). On failure it
+// stock kata flow: create + start against shared/<id>/rootfs). On failure it
 // dumps the guest's view of the shared tree.
 //
 // Its spec binds every declared volume at its mount path.
 func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
+	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
 	cancel()
 	if err != nil {
 		if s.guestDebug {
 			dump := kata.DebugConsoleDump(ctx, vsockPath,
 				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
+					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.id+"/rootfs/ 2>&1 | head; "+
 					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
 			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
 		}

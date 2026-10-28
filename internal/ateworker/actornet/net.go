@@ -86,3 +86,14 @@ func l4ProtocolEqual(proto byte) []expr.Any {
 		},
 	}
 }
+
+func l4ProtocolNotEqual(proto byte) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpNeq,
+			Register: 1,
+			Data:     []byte{proto},
+		},
+	}
+}

@@ -42,7 +42,7 @@ flowchart LR
     end
 
     subgraph pod["atenet-router pod — pinned to envoyCpu CPUs"]
-        envoy["envoy :8080<br/>--concurrency envoyCpu"]
+        envoy["envoy :8443<br/>--concurrency envoyCpu"]
         extproc["atenet-router sidecar<br/>ext_proc routing decision"]
         envoy -->|request headers| extproc
         extproc -->|x-ate-original-dst| envoy
@@ -54,7 +54,7 @@ flowchart LR
         atunnel["atunnel :443"] --> glutton["glutton actor<br/>POST /ping :80"]
     end
 
-    svc -->|"HTTP :80<br/>ate-target-actor"| envoy
+    svc -->|"mTLS :443<br/>ate-target-actor"| envoy
     extproc -->|ResumeActor| ateapi
     envoy -->|"mTLS :443"| atunnel
 ```
@@ -120,7 +120,9 @@ requests 2×`envoyCpu` CPUs; the runner requests `clientConcurrency`+1).
 
 ```bash
 # .ate-dev-env.sh at the repo root, then:
-hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+hack/install-ate.sh deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner
 benchmarking/workloads/deploy.sh --deploy --worker-count 50 --sandbox-class gvisor
 ```
 
@@ -147,7 +149,7 @@ Flags: `--envoy-cpu`, `--actors`, `--tail-latency-slo-ms`, `--atespace`,
 Notes:
 
 - The script does not redeploy substrate — if substrate code changed,
-  rerun `hack/install-ate.sh --deploy-ate-system` first.
+  rerun `hack/install-ate.sh deploy ate-system` first.
 - `--atespace` isolates actor *fleets* between experiments sharing a
   cluster; capacity runs themselves still need the router exclusively
   (the cpu pin is global and the run saturates it).

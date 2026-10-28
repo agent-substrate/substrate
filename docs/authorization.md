@@ -24,29 +24,20 @@ callers authenticate, see [authentication.md](authentication.md).
 
 ## Settings
 
-These are `ate-setup` settings, so the environment variable is read by
-`ate-setup`. It passes them to `ate-api-server` as the
-`--experimental-enable-authz` and `--authz-bootstrap-owners` flags on its
-container; an install that doesn't use `ate-setup` sets those flags in its
-manifest. A change rolls `ate-api-server`.
+Authorization is always enforced. `ate-setup` reads the setting below and
+passes it to `ate-api-server` as the `--authz-bootstrap-owners` flag on its
+container; an install that doesn't use `ate-setup` sets that flag in its
+manifest. `ate-api-server` won't start without a bootstrap owner. A change
+rolls `ate-api-server`.
 
 | Setting | Environment variable | Example |
 |---|---|---|
-| `ateapi.authz.enabled` | `ATE_API_EXPERIMENTAL_ENABLE_AUTHZ` | `true` (the default) |
 | `ateapi.authz.bootstrapOwners` | `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` | `alice@example.com,bob@example.com` |
 
 If you don't set `ateapi.authz.bootstrapOwners`, `ate-setup` uses the shared
 `ate-client` ServiceAccount (`system:serviceaccount:<namespace>:ate-client`),
 so the demos, benchmarks and e2e tests work. See the warning at the top of
 this page.
-
-```sh
-ATE_API_EXPERIMENTAL_ENABLE_AUTHZ=false hack/install-ate.sh --deploy-ate-system   # turn it off
-```
-
-With authorization off, access policy RPCs are still checked, so nobody can
-grant themselves access while it is off and keep it once it is on. Bootstrap
-owners still apply, so they can set up policies before turning it on.
 
 ## Principals
 
@@ -69,7 +60,7 @@ policies say. They write an install's first access policies and recover access
 if those break.
 
 - They come from configuration, not the API. `ate-api-server` reads them at
-  startup and exits if authorization is on and the list is empty. Restarting
+  startup and exits if the list is empty. Restarting
   it with a new list takes effect immediately.
 - Any principal `ate-api-server` can authenticate can be one.
 - `ate-setup` warns whenever `ate-client` is one.
@@ -126,7 +117,7 @@ one **atespace**.
 | Create, update, delete access policies | ✅ | | ✅ (its own) | | |
 | Get and list actors, actor templates, tags, egress policies | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Create, update, delete actors and actor templates | ✅ | | ✅ | ✅ | |
-| Pause, resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
+| Resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
 | Create, update, delete egress policies | ✅ | | ✅ | ✅ | |
 | Create, publish, delete tags | ✅ | | ✅ | ✅ | |
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
@@ -176,8 +167,6 @@ viewer, and a global role holds the same role in every atespace. So
 | `GetAtespaceAccessPolicy` | `can_get_access_policy`, the atespace | Atespace viewer |
 | `CreateAtespaceAccessPolicy`, `UpdateAtespaceAccessPolicy`, `DeleteAtespaceAccessPolicy` | `can_create_access_policy` / `can_update_access_policy` / `can_delete_access_policy`, the atespace | Atespace owner |
 
-The access policy RPCs are checked even with authorization off.
-
 ### Actor templates and actors
 
 | RPC | Permission, on | Allowed for |
@@ -191,7 +180,7 @@ The access policy RPCs are checked even with authorization off.
 | `GetActor` | `can_get`, the actor | Viewer of its atespace; `atenet-egress`; the objectstore control plugin |
 | `DeleteActor` | `can_delete`, the actor | Editor of its atespace |
 | `ListActors` | `can_list_actors`, the atespace, or global if none is given | Atespace viewer; for all atespaces, global viewer, `atenet-router` or `atenet-egress` |
-| `PauseActor`, `SuspendActor`, `RevertActor` | `can_pause` / `can_suspend` / `can_revert`, the actor | Editor of its atespace |
+| `SuspendActor`, `RevertActor` | `can_suspend` / `can_revert`, the actor | Editor of its atespace |
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
 | `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |
@@ -228,19 +217,22 @@ certificate.
 
 | RPC | The caller must be |
 |---|---|
+| `AcquireWorkerEpoch` | `atelet` on the worker's node |
 | `RegisterWorker` | `atelet` on the worker's node |
+| `SetWorkerSandboxRuntimes` | `atelet` on the worker's node |
+| `ReportActorCrashed` | `atelet` on the node of the worker hosting the actor |
 | `RequestActorSuspend` | `atelet` on the node of the worker hosting the actor |
 | `MintWorkerActorJwt` | `atelet` on the node hosting the actor |
 | `MintWorkerActorCertificate` | `atelet` on the node of the worker the actor is assigned to |
-
-`ReportActorSnapshotState` has a rule but is not served yet.
+| `ReportActorSnapshotState` | `atelet` on the node the actor is placed on |
 
 ### Every RPC
 
-With authorization on:
-
 - An RPC with no rule is denied, and a test fails the build if a served RPC
   has none.
+- gRPC reflection is open to any authenticated caller, like Kubernetes API
+  discovery, since it returns only the API schema, which is public in
+  `api/ateapi/v1/ateapi.proto`. Any other streaming RPC is denied.
 - An unauthenticated caller gets `Unauthenticated` before its request is read.
 - A missing or invalid resource name returns `InvalidArgument`; no check is
   skipped.

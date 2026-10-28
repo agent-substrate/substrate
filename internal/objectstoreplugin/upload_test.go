@@ -26,7 +26,7 @@ import (
 	"testing"
 	"testing/synctest"
 
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -80,10 +80,10 @@ func snapshotUploadFiles(t *testing.T, dir string, n int) []string {
 func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 	root := t.TempDir()
 	const snapshots, filesPerSnapshot = 10, 8
-	requests := make([]*objectstorev1.UploadSnapshotRequest, snapshots)
+	requests := make([]*objectstore.UploadSnapshotRequest, snapshots)
 	for i := range snapshots {
 		dir := filepath.Join(root, fmt.Sprintf("src%d", i))
-		requests[i] = &objectstorev1.UploadSnapshotRequest{
+		requests[i] = &objectstore.UploadSnapshotRequest{
 			SnapshotUri: fmt.Sprintf("%s%d", testURI, i), LocalPath: dir,
 			Files: snapshotUploadFiles(t, dir, filesPerSnapshot),
 		}
@@ -91,8 +91,9 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		gate := make(chan struct{})
 		store := &slowSnapshotStore{memObjects: newMemObjects(), release: gate}
-		// This backend has no SDK buffers. Two compression reservations fit.
-		node, err := NewNodePlugin(store, root, 128<<20)
+		// This backend has no SDK buffers. Eight small-file compression
+		// reservations (8 MiB each) fit in the 64 MiB minimum budget.
+		node, err := NewNodePlugin(store, root, 64<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,8 +102,8 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 			go func() { _, err := node.UploadSnapshot(t.Context(), req); done <- err }()
 		}
 		synctest.Wait()
-		if got := store.active.Load(); got != 2 {
-			t.Errorf("active uploads = %d, want 2 across all requests", got)
+		if got := store.active.Load(); got != 8 {
+			t.Errorf("active uploads = %d, want 8 across all requests", got)
 		}
 		if got := store.manifests.Load(); got != 0 {
 			t.Errorf("committed %d manifests before data finished", got)
@@ -114,8 +115,8 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if got := store.peak.Load(); got != 2 {
-			t.Errorf("peak uploads = %d, want 2", got)
+		if got := store.peak.Load(); got != 8 {
+			t.Errorf("peak uploads = %d, want 8", got)
 		}
 		if got := len(store.keys()); got != snapshots*(filesPerSnapshot+1) {
 			t.Fatalf("uploaded %d objects", got)
@@ -126,7 +127,7 @@ func TestUploadBudgetSharedAcrossSnapshots(t *testing.T) {
 		if err := os.Mkdir(dst, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := node.FetchSnapshot(t.Context(), &objectstorev1.FetchSnapshotRequest{
+		if _, err := node.FetchSnapshot(t.Context(), &objectstore.FetchSnapshotRequest{
 			SnapshotUri: requests[0].SnapshotUri, WritePath: dst, Files: requests[0].Files,
 		}); err != nil {
 			t.Fatal(err)
@@ -151,7 +152,7 @@ func TestUploadFailureDoesNotCommitManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := node.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+	if _, err := node.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: dir, Files: files,
 	}); status.Code(err) != codes.Internal {
 		t.Fatalf("got %v, want upload error", err)
@@ -160,7 +161,7 @@ func TestUploadFailureDoesNotCommitManifest(t *testing.T) {
 		t.Fatalf("committed %d manifests after data failed", got)
 	}
 	store.fail = false
-	if _, err := node.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+	if _, err := node.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: dir, Files: files,
 	}); err != nil {
 		t.Fatalf("retry after failure: %v", err)
@@ -170,7 +171,7 @@ func TestUploadFailureDoesNotCommitManifest(t *testing.T) {
 func TestUploadCanceledWaiterReturnsCanceled(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "src")
-	files := snapshotUploadFiles(t, dir, 1)
+	files := snapshotUploadFiles(t, dir, 8)
 	synctest.Test(t, func(t *testing.T) {
 		gate := make(chan struct{})
 		store := &slowSnapshotStore{memObjects: newMemObjects(), release: gate}
@@ -178,7 +179,7 @@ func TestUploadCanceledWaiterReturnsCanceled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req := &objectstorev1.UploadSnapshotRequest{SnapshotUri: testURI, LocalPath: dir, Files: files}
+		req := &objectstore.UploadSnapshotRequest{SnapshotUri: testURI, LocalPath: dir, Files: files}
 		first := make(chan error, 1)
 		go func() { _, err := node.UploadSnapshot(t.Context(), req); first <- err }()
 		synctest.Wait()

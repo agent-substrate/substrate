@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/apivalidation"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
@@ -33,8 +33,8 @@ import (
 
 type workerSupportServer struct {
 	ateletpb.UnimplementedWorkerSupportServer
-	workers ateapipb.WorkerServiceClient
-	control ateapipb.ControlClient
+	workers ateapi.WorkerServiceClient
+	control ateapi.ControlClient
 }
 
 func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -52,10 +52,10 @@ func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ate
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
-	resp, err := b.workers.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
+	resp, err := b.workers.MintWorkerActorCertificate(ctx, &ateapi.MintWorkerActorCertificateRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Actor: &ateapipb.ObjectRef{
+		Worker: &ateapi.ObjectRef{Name: workerIdentity.PodUID},
+		Actor: &ateapi.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
 		},
@@ -102,17 +102,36 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 	}
 }
 
-// RegisterWorker registers the calling worker with the control plane: what the
-// worker says its capacity and sandbox runtimes are, in one
-// WorkerService.RegisterWorker call so capacity and runtimes land atomically.
+// AcquireWorkerEpoch hands the calling worker process a new epoch from the
+// control plane's WorkerService.AcquireWorkerEpoch.
 //
-// It returns the control plane's error unwrapped so the caller retries: an
-// accepted call is the only thing that puts capacity and the current runtimes
-// on the Worker, and a Worker record the syncer has not created yet is the
-// ordinary reason for a first attempt to fail.
+// Each of the registration calls below returns the control plane's error
+// unwrapped, so the caller can tell a refusal from a failure to retry: a Worker
+// record the syncer has not created yet is the ordinary reason for a first
+// attempt to fail.
+func (s *workerSupportServer) AcquireWorkerEpoch(ctx context.Context, _ *ateletpb.AcquireWorkerEpochRequest) (*ateletpb.AcquireWorkerEpochResponse, error) {
+	// Identity comes only from the mTLS certificate, never from the request:
+	// a worker can acquire an epoch for itself and no one else.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.workers.AcquireWorkerEpoch(ctx, &ateapi.AcquireWorkerEpochRequest{
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapi.ObjectRef{Name: workerIdentity.PodUID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ateletpb.AcquireWorkerEpochResponse{Epoch: resp.GetEpoch()}, nil
+}
+
+// RegisterWorker registers the calling worker process with the control plane:
+// it activates the epoch the process acquired and records its pod IPs and
+// capacity, in one WorkerService.RegisterWorker call.
 func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
-	// a worker can report its own capacity and runtimes and no one else's.
+	// a worker can register itself and no one else.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
@@ -123,62 +142,120 @@ func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.
 	if errs := apivalidation.ValidateRegisterWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
-	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
+	if _, err := s.workers.RegisterWorker(ctx, &ateapi.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker:             &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Capacity:           toWorkerResources(req.GetCapacity()),
-		DefaultRuntime:     toAteAPISandboxRuntime(req.GetDefaultRuntime()),
-		RestorableRuntimes: toAteAPISandboxRuntimes(req.GetRestorableRuntimes()),
+		Worker:   &ateapi.ObjectRef{Name: workerIdentity.PodUID},
+		Epoch:    req.GetEpoch(),
+		Ips:      req.GetIps(),
+		Capacity: toWorkerResources(req.GetCapacity()),
 	}); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtimes",
+	slog.InfoContext(ctx, "Registered worker",
 		slog.String("pod_uid", workerIdentity.PodUID),
-		slog.Any("capacity", req.GetCapacity()),
-		slog.Any("default_runtime", req.GetDefaultRuntime()),
-		slog.Any("restorable_runtimes", req.GetRestorableRuntimes()))
+		slog.Int64("epoch", req.GetEpoch()),
+		slog.Any("ips", req.GetIps()),
+		slog.Any("capacity", req.GetCapacity()))
 	return &ateletpb.RegisterWorkerResponse{}, nil
+}
+
+// SetWorkerSandboxRuntimes records the sandbox runtimes of the calling worker
+// process through WorkerService.SetWorkerSandboxRuntimes.
+func (s *workerSupportServer) SetWorkerSandboxRuntimes(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) (*ateletpb.SetWorkerSandboxRuntimesResponse, error) {
+	// Identity comes only from the mTLS certificate, never from the request:
+	// a worker can report its own runtimes and no one else's.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if errs := apivalidation.ValidateSetWorkerSandboxRuntimesRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	if _, err := s.workers.SetWorkerSandboxRuntimes(ctx, &ateapi.SetWorkerSandboxRuntimesRequest{
+		Worker:         &ateapi.ObjectRef{Name: workerIdentity.PodUID},
+		Epoch:          req.GetEpoch(),
+		SandboxClasses: toAteAPISandboxClasses(req.GetSandboxClasses()),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Recorded worker sandbox runtimes",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.Int64("epoch", req.GetEpoch()),
+		slog.Any("sandbox_classes", req.GetSandboxClasses()))
+	return &ateletpb.SetWorkerSandboxRuntimesResponse{}, nil
 }
 
 // toWorkerResources converts atelet's WorkerResources to the control plane's,
 // which it mirrors field for field.
-func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
+func toWorkerResources(in *ateletpb.WorkerResources) *ateapi.WorkerResources {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.WorkerResources{Actors: in.GetActors()}
-	if r := in.GetResources(); r != nil {
-		out.Resources = &ateapipb.Resources{}
-		for _, l := range r.GetLimits() {
-			out.Resources.Limits = append(out.Resources.Limits, &ateapipb.Limits{Name: l.GetName(), Quantity: l.GetQuantity()})
-		}
+	return &ateapi.WorkerResources{
+		CpuMillicores: in.GetCpuMillicores(),
+		MemoryBytes:   in.GetMemoryBytes(),
+		Actors:        in.GetActors(),
+	}
+}
+
+// toAteAPISandboxClasses converts atelet's WorkerSandboxClass list to the
+// control plane's, which it mirrors field for field.
+func toAteAPISandboxClasses(in []*ateletpb.WorkerSandboxClass) []*ateapi.WorkerSandboxClass {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ateapi.WorkerSandboxClass, 0, len(in))
+	for _, c := range in {
+		out = append(out, &ateapi.WorkerSandboxClass{
+			SandboxClass:       c.GetSandboxClass(),
+			DefaultRuntime:     toAteAPISandboxRuntime(c.GetDefaultRuntime()),
+			RestorableRuntimes: toAteAPISandboxRuntimes(c.GetRestorableRuntimes()),
+		})
 	}
 	return out
 }
 
-// toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control
+// toAteAPISandboxRuntime converts atelet's WorkerSandboxRuntime to the control
 // plane's, which it mirrors field for field.
-func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
+func toAteAPISandboxRuntime(in *ateletpb.WorkerSandboxRuntime) *ateapi.WorkerSandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
-	if v := in.GetVersion(); v != nil {
-		out.Version = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
-		for _, a := range v.GetAttributes() {
-			out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
-		}
+	return &ateapi.WorkerSandboxRuntime{
+		Version:       toAteAPICompat(in.GetVersion()),
+		ActorOverhead: toAteAPIOverhead(in.GetActorOverhead()),
+	}
+}
+
+// toAteAPIOverhead converts atelet's RuntimeOverhead to the control plane's,
+// which it mirrors field for field.
+func toAteAPIOverhead(in *ateletpb.RuntimeOverhead) *ateapi.RuntimeOverhead {
+	if in == nil {
+		return nil
+	}
+	return &ateapi.RuntimeOverhead{MemoryBytes: in.GetMemoryBytes(), MemoryBytesPerGib: in.GetMemoryBytesPerGib()}
+}
+
+func toAteAPISandboxRuntimes(in []*ateletpb.WorkerSandboxRuntime) []*ateapi.WorkerSandboxRuntime {
+	if in == nil {
+		return nil
+	}
+	out := make([]*ateapi.WorkerSandboxRuntime, 0, len(in))
+	for _, rt := range in {
+		out = append(out, toAteAPISandboxRuntime(rt))
 	}
 	return out
 }
 
-func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
+// toAteAPICompat converts atelet's VersionedSandboxCompat to the control
+// plane's, which it mirrors field for field.
+func toAteAPICompat(in *ateletpb.VersionedSandboxCompat) *ateapi.VersionedSandboxCompat {
 	if in == nil {
 		return nil
 	}
-	out := make([]*ateapipb.SandboxRuntime, 0, len(in))
-	for _, r := range in {
-		out = append(out, toAteAPISandboxRuntime(r))
+	out := &ateapi.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateapi.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
 	}
 	return out
 }
@@ -189,8 +266,8 @@ func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxR
 //
 // The control plane's error is returned unwrapped: a refusal is a real answer
 // here -- the actor is no longer assigned to this worker, or the suspend lost a
-// race to a resume, pause, or delete -- and the worker needs to tell those from
-// a transport failure it should retry.
+// race to a resume, suspend, or delete -- and the worker needs to tell those
+// from a transport failure it should retry.
 func (s *workerSupportServer) RequestActorSuspend(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) (*ateletpb.RequestActorSuspendResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request: a
 	// worker can speak for the actors it hosts and no others. Which those are
@@ -206,10 +283,10 @@ func (s *workerSupportServer) RequestActorSuspend(ctx context.Context, req *atel
 	if errs := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
-	if _, err := s.workers.RequestActorSuspend(ctx, &ateapipb.RequestActorSuspendRequest{
+	if _, err := s.workers.RequestActorSuspend(ctx, &ateapi.RequestActorSuspendRequest{
 		// Workers are global-scoped and named by their pod UID.
-		Worker: &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		Actor: &ateapipb.ObjectRef{
+		Worker: &ateapi.ObjectRef{Name: workerIdentity.PodUID},
+		Actor: &ateapi.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
 		},
@@ -241,8 +318,8 @@ func (s *workerSupportServer) GetActorEgressPolicy(
 
 	// TODO(bowei): add validation for which Actor requested this.
 
-	policy, err := s.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{
-		Actor: &ateapipb.ObjectRef{
+	policy, err := s.control.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{
+		Actor: &ateapi.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
 		},
@@ -268,4 +345,33 @@ func (s *workerSupportServer) GetActorEgressPolicy(
 		slog.String("actor_name", req.GetActorName()))
 
 	return &ateletpb.GetActorEgressPolicyResponse{EgressPolicy: toAteletEgressPolicy(policy)}, nil
+}
+
+// ReportActorCrashed forwards a worker's report that the sandbox of an actor
+// it hosts died on its own. Authorized like RequestActorSuspend.
+func (s *workerSupportServer) ReportActorCrashed(ctx context.Context, req *ateletpb.ReportActorCrashedRequest) (*ateletpb.ReportActorCrashedResponse, error) {
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if errs := apivalidation.ValidateReportActorCrashedRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
+	}
+	if _, err := s.workers.ReportActorCrashed(ctx, &ateapi.ReportActorCrashedRequest{
+		Worker: &ateapi.ObjectRef{Name: workerIdentity.PodUID},
+		Actor: &ateapi.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		ActorUid: req.GetActorUid(),
+		Message:  req.GetMessage(),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Forwarded an actor crash report",
+		slog.String("pod_uid", workerIdentity.PodUID),
+		slog.String("actor_atespace", req.GetActorAtespace()),
+		slog.String("actor_name", req.GetActorName()),
+		slog.String("actor_uid", req.GetActorUid()))
+	return &ateletpb.ReportActorCrashedResponse{}, nil
 }

@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 )
 
 // workerPoolSandboxConfigIndex names the cache index from a SandboxConfig's
@@ -59,12 +59,12 @@ type SandboxConfigProtectionReconciler struct {
 // when atecontroller starts, which releases a config whose last user went
 // away while atecontroller was down.
 func (r *SandboxConfigProtectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	sc := &atev1alpha1.SandboxConfig{}
+	sc := &atev1.SandboxConfig{}
 	if err := r.Get(ctx, req.NamespacedName, sc); err != nil {
 		// Already deleted. Nothing to release.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if sc.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) {
+	if sc.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer) {
 		// Not being deleted, or already released. Other finalizers, if
 		// any, decide the rest.
 		return ctrl.Result{}, nil
@@ -83,14 +83,14 @@ func (r *SandboxConfigProtectionReconciler) Reconcile(ctx context.Context, req c
 // does it list from the API server. That is rare, because a config is deleted
 // far less often than a pool reconciles.
 func (r *SandboxConfigProtectionReconciler) usedByWorkerPool(ctx context.Context, name string) (bool, error) {
-	var cached atev1alpha1.WorkerPoolList
+	var cached atev1.WorkerPoolList
 	if err := r.List(ctx, &cached, client.MatchingFields{workerPoolSandboxConfigIndex: name}); err != nil {
 		return false, fmt.Errorf("failed to list WorkerPools using SandboxConfig %q: %w", name, err)
 	}
 	if len(cached.Items) > 0 {
 		return true, nil
 	}
-	var pools atev1alpha1.WorkerPoolList
+	var pools atev1.WorkerPoolList
 	if err := r.APIReader.List(ctx, &pools); err != nil {
 		return false, fmt.Errorf("failed to list WorkerPools: %w", err)
 	}
@@ -105,12 +105,12 @@ func (r *SandboxConfigProtectionReconciler) usedByWorkerPool(ctx context.Context
 // removeProtectionFinalizer removes the protection finalizer from sc. The
 // patch carries sc's resourceVersion, so a concurrent change to the config
 // fails with a conflict and the reconcile is retried.
-func removeProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1alpha1.SandboxConfig) error {
-	if !controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) {
+func removeProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1.SandboxConfig) error {
+	if !controllerutil.ContainsFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer) {
 		return nil
 	}
 	orig := sc.DeepCopy()
-	controllerutil.RemoveFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	controllerutil.RemoveFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 	if err := c.Patch(ctx, sc, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("failed to update finalizers of SandboxConfig %q: %w", sc.Name, err)
 	}
@@ -131,9 +131,9 @@ func removeProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1al
 //     being marked for deletion, and for every SandboxConfig a WorkerPool's
 //     status names when that WorkerPool changes.
 func (r *SandboxConfigProtectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex,
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &atev1.WorkerPool{}, workerPoolSandboxConfigIndex,
 		func(obj client.Object) []string {
-			wp, ok := obj.(*atev1alpha1.WorkerPool)
+			wp, ok := obj.(*atev1.WorkerPool)
 			if !ok {
 				return nil
 			}
@@ -143,13 +143,13 @@ func (r *SandboxConfigProtectionReconciler) SetupWithManager(mgr ctrl.Manager) e
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("sandboxconfig-protection").
-		For(&atev1alpha1.SandboxConfig{}).
+		For(&atev1.SandboxConfig{}).
 		// A config that is being deleted waits for the last pool that uses
 		// it to go away. For an update, this runs for the old and the new
 		// object, so the config a pool switches away from is reconciled too.
-		Watches(&atev1alpha1.WorkerPool{}, handler.EnqueueRequestsFromMapFunc(
+		Watches(&atev1.WorkerPool{}, handler.EnqueueRequestsFromMapFunc(
 			func(_ context.Context, obj client.Object) []reconcile.Request {
-				wp, ok := obj.(*atev1alpha1.WorkerPool)
+				wp, ok := obj.(*atev1.WorkerPool)
 				if !ok {
 					return nil
 				}

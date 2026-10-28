@@ -16,7 +16,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11-devel
 // 	protoc        v4.25.3
-// source: apiconfig.proto
+// source: pkg/proto/ateconfigpb/apiconfig.proto
 
 package ateconfigpb
 
@@ -45,7 +45,7 @@ type APIConfig struct {
 
 func (x *APIConfig) Reset() {
 	*x = APIConfig{}
-	mi := &file_apiconfig_proto_msgTypes[0]
+	mi := &file_pkg_proto_ateconfigpb_apiconfig_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -57,7 +57,7 @@ func (x *APIConfig) String() string {
 func (*APIConfig) ProtoMessage() {}
 
 func (x *APIConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_apiconfig_proto_msgTypes[0]
+	mi := &file_pkg_proto_ateconfigpb_apiconfig_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -70,7 +70,7 @@ func (x *APIConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIConfig.ProtoReflect.Descriptor instead.
 func (*APIConfig) Descriptor() ([]byte, []int) {
-	return file_apiconfig_proto_rawDescGZIP(), []int{0}
+	return file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *APIConfig) GetLogging() *APILogging {
@@ -90,7 +90,7 @@ type APILogging struct {
 
 func (x *APILogging) Reset() {
 	*x = APILogging{}
-	mi := &file_apiconfig_proto_msgTypes[1]
+	mi := &file_pkg_proto_ateconfigpb_apiconfig_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -102,7 +102,7 @@ func (x *APILogging) String() string {
 func (*APILogging) ProtoMessage() {}
 
 func (x *APILogging) ProtoReflect() protoreflect.Message {
-	mi := &file_apiconfig_proto_msgTypes[1]
+	mi := &file_pkg_proto_ateconfigpb_apiconfig_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -115,7 +115,7 @@ func (x *APILogging) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APILogging.ProtoReflect.Descriptor instead.
 func (*APILogging) Descriptor() ([]byte, []int) {
-	return file_apiconfig_proto_rawDescGZIP(), []int{1}
+	return file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *APILogging) GetLevel() string {
@@ -125,11 +125,11 @@ func (x *APILogging) GetLevel() string {
 	return ""
 }
 
-var File_apiconfig_proto protoreflect.FileDescriptor
+var File_pkg_proto_ateconfigpb_apiconfig_proto protoreflect.FileDescriptor
 
-const file_apiconfig_proto_rawDesc = "" +
+const file_pkg_proto_ateconfigpb_apiconfig_proto_rawDesc = "" +
 	"\n" +
-	"\x0fapiconfig.proto\x12\vateconfigpb\">\n" +
+	"%pkg/proto/ateconfigpb/apiconfig.proto\x12\vateconfigpb\">\n" +
 	"\tAPIConfig\x121\n" +
 	"\alogging\x18\x01 \x01(\v2\x17.ateconfigpb.APILoggingR\alogging\"\"\n" +
 	"\n" +
@@ -137,23 +137,23 @@ const file_apiconfig_proto_rawDesc = "" +
 	"\x05level\x18\x01 \x01(\tR\x05levelB,Z*go.ate.dev/substrate/pkg/proto/ateconfigpbb\x06proto3"
 
 var (
-	file_apiconfig_proto_rawDescOnce sync.Once
-	file_apiconfig_proto_rawDescData []byte
+	file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescOnce sync.Once
+	file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescData []byte
 )
 
-func file_apiconfig_proto_rawDescGZIP() []byte {
-	file_apiconfig_proto_rawDescOnce.Do(func() {
-		file_apiconfig_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_apiconfig_proto_rawDesc), len(file_apiconfig_proto_rawDesc)))
+func file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescGZIP() []byte {
+	file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescOnce.Do(func() {
+		file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_pkg_proto_ateconfigpb_apiconfig_proto_rawDesc), len(file_pkg_proto_ateconfigpb_apiconfig_proto_rawDesc)))
 	})
-	return file_apiconfig_proto_rawDescData
+	return file_pkg_proto_ateconfigpb_apiconfig_proto_rawDescData
 }
 
-var file_apiconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_apiconfig_proto_goTypes = []any{
+var file_pkg_proto_ateconfigpb_apiconfig_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_pkg_proto_ateconfigpb_apiconfig_proto_goTypes = []any{
 	(*APIConfig)(nil),  // 0: ateconfigpb.APIConfig
 	(*APILogging)(nil), // 1: ateconfigpb.APILogging
 }
-var file_apiconfig_proto_depIdxs = []int32{
+var file_pkg_proto_ateconfigpb_apiconfig_proto_depIdxs = []int32{
 	1, // 0: ateconfigpb.APIConfig.logging:type_name -> ateconfigpb.APILogging
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
@@ -162,26 +162,26 @@ var file_apiconfig_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_apiconfig_proto_init() }
-func file_apiconfig_proto_init() {
-	if File_apiconfig_proto != nil {
+func init() { file_pkg_proto_ateconfigpb_apiconfig_proto_init() }
+func file_pkg_proto_ateconfigpb_apiconfig_proto_init() {
+	if File_pkg_proto_ateconfigpb_apiconfig_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_apiconfig_proto_rawDesc), len(file_apiconfig_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_proto_ateconfigpb_apiconfig_proto_rawDesc), len(file_pkg_proto_ateconfigpb_apiconfig_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_apiconfig_proto_goTypes,
-		DependencyIndexes: file_apiconfig_proto_depIdxs,
-		MessageInfos:      file_apiconfig_proto_msgTypes,
+		GoTypes:           file_pkg_proto_ateconfigpb_apiconfig_proto_goTypes,
+		DependencyIndexes: file_pkg_proto_ateconfigpb_apiconfig_proto_depIdxs,
+		MessageInfos:      file_pkg_proto_ateconfigpb_apiconfig_proto_msgTypes,
 	}.Build()
-	File_apiconfig_proto = out.File
-	file_apiconfig_proto_goTypes = nil
-	file_apiconfig_proto_depIdxs = nil
+	File_pkg_proto_ateconfigpb_apiconfig_proto = out.File
+	file_pkg_proto_ateconfigpb_apiconfig_proto_goTypes = nil
+	file_pkg_proto_ateconfigpb_apiconfig_proto_depIdxs = nil
 }

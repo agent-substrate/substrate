@@ -56,7 +56,10 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_restore_duration",
 	"ate_actor_checkpoint_duration",
 	"atelet_snapshot_size",
+	"atelet_snapshot_upload_overdue_actors",
+	"atelet_snapshot_undurable_age_max",
 	"atenet_router_route_duration",
+	"ate_filecache_size",
 }
 
 // ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native

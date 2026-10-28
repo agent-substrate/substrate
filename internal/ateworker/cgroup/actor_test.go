@@ -95,13 +95,3 @@ func TestActorLeafRejectsUnsafeNames(t *testing.T) {
 		}
 	}
 }
-
-func TestNilActorLeaf(t *testing.T) {
-	var leaf *ActorLeaf
-	if leaf.SysProcAttr() != nil {
-		t.Error("a nil leaf set SysProcAttr")
-	}
-	if err := leaf.Close(); err != nil {
-		t.Error(err)
-	}
-}

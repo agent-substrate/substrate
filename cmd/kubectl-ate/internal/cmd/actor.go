@@ -28,34 +28,39 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
+const maxWorkerSelectorLabels = 10
+
 var (
-	getActorAtespaceFlag     string
-	getActorAllAtespacesFlag bool
-	createActorAtespaceFlag  string
-	createActorTemplateFlag  string
-	createActorTagFlag       string
-	deleteActorAtespaceFlag  string
-	deleteActorAnyStateFlag  bool
-	pauseActorAtespaceFlag   string
-	resumeActorAtespaceFlag  string
-	suspendActorAtespaceFlag string
-	logsActorAtespaceFlag    string
-	logsActorFollowFlag      bool
-	logsActorContainerFlag   string
-	logsActorSourceFlag      string
+	getActorAtespaceFlag          string
+	getActorAllAtespacesFlag      bool
+	createActorAtespaceFlag       string
+	createActorTemplateFlag       string
+	createActorTagFlag            string
+	updateActorAtespaceFlag       string
+	updateActorTemplateFlag       string
+	updateActorWorkerSelectorFlag string
+	deleteActorAtespaceFlag       string
+	resumeActorAtespaceFlag       string
+	suspendActorAtespaceFlag      string
+	suspendActorModeFlag          string
+	logsActorAtespaceFlag         string
+	logsActorFollowFlag           bool
+	logsActorContainerFlag        string
+	logsActorSourceFlag           string
 )
 
 var getActorsCmd = &cobra.Command{
@@ -76,10 +81,10 @@ var getActorsCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		if len(args) > 0 {
-			actors := make([]*ateapipb.Actor, 0, len(args))
+			actors := make([]*ateapi.Actor, 0, len(args))
 			for _, actorName := range args {
 				actorRef := resources.ActorRef{Atespace: getActorAtespaceFlag, Name: actorName}
-				resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+				resp, err := apiClient.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef.ToObjectRef()})
 				if err != nil {
 					return fmt.Errorf("failed to get actor %q: %w", actorName, err)
 				}
@@ -91,11 +96,11 @@ var getActorsCmd = &cobra.Command{
 			return printer.PrintActorsTo(cmd.OutOrStdout(), actors, outputFmt)
 		}
 
-		var allActors []*ateapipb.Actor
+		var allActors []*ateapi.Actor
 		pageToken := ""
 		for {
-			resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
-				Options:  &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+			resp, err := apiClient.ListActors(ctx, &ateapi.ListActorsRequest{
+				Options:  &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 				Atespace: getActorAtespaceFlag,
 			})
 			if err != nil {
@@ -139,6 +144,59 @@ var createActorCmd = &cobra.Command{
 	},
 }
 
+var updateActorCmd = &cobra.Command{
+	Use:   "actor <actor-name>",
+	Short: "Update an actor",
+	Args:  exactlyOneArg("<actor-name>", "atespace"),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		templateSet := cmd.Flags().Changed("template")
+		workerSelectorSet := cmd.Flags().Changed("worker-selector")
+		if !templateSet && !workerSelectorSet {
+			return usageErrorf("at least one of --template or --worker-selector is required")
+		}
+
+		var templateRef *ateapi.ObjectRef
+		if templateSet {
+			ref, err := parseAtespacedName(updateActorTemplateFlag, updateActorAtespaceFlag)
+			if err != nil {
+				return wrapUsageError(err)
+			}
+			templateRef = ref
+		}
+
+		var selector *ateapi.Selector
+		if workerSelectorSet {
+			s, err := parseWorkerSelector(updateActorWorkerSelectorFlag)
+			if err != nil {
+				return wrapUsageError(err)
+			}
+			selector = s
+		}
+
+		ctx := cmd.Context()
+		apiClient, err := newAPIClient(cmd)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		actorRef := resources.ActorRef{Atespace: updateActorAtespaceFlag, Name: args[0]}
+		resp, err := updateActor(ctx, apiClient, actorRef.ToObjectRef(), func(actor *ateapi.Actor) {
+			if templateSet {
+				actor.ActorTemplate = templateRef
+			}
+			if workerSelectorSet {
+				actor.WorkerSelector = selector // nil clears the selector
+			}
+		})
+		if err != nil {
+			return err
+		}
+
+		return printer.PrintActorTo(cmd.OutOrStdout(), resp, outputFmt)
+	},
+}
+
 var deleteActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Delete an actor",
@@ -152,9 +210,8 @@ var deleteActorCmd = &cobra.Command{
 		defer c.Close()
 
 		actorRef := resources.ActorRef{Atespace: deleteActorAtespaceFlag, Name: args[0]}
-		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor:    actorRef.ToObjectRef(),
-			AnyState: deleteActorAnyStateFlag,
+		_, err = c.ControlClient.DeleteActor(ctx, &ateapi.DeleteActorRequest{
+			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {
 			return err
@@ -162,31 +219,6 @@ var deleteActorCmd = &cobra.Command{
 
 		fmt.Printf("actor %q deleted\n", actorRef.Name)
 		return nil
-	},
-}
-
-var pauseActorCmd = &cobra.Command{
-	Use:   "actor <actor-name>",
-	Short: "Pause an actor",
-	Args:  exactlyOneArg("<actor-name>", "atespace"),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-		apiClient, err := newAPIClient(cmd)
-		if err != nil {
-			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
-		}
-		defer apiClient.Close()
-
-		actorRef := resources.ActorRef{Atespace: pauseActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor:   actorRef.ToObjectRef(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-		})
-		if err != nil {
-			return fmt.Errorf("failed to pause actor: %w", err)
-		}
-
-		return printer.PrintActorTo(cmd.OutOrStdout(), resp.GetActor(), outputFmt)
 	},
 }
 
@@ -203,7 +235,7 @@ var resumeActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: resumeActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		resp, err := apiClient.ResumeActor(ctx, &ateapi.ResumeActorRequest{
 			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {
@@ -219,6 +251,10 @@ var suspendActorCmd = &cobra.Command{
 	Short: "Suspend an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		mode, err := parseSuspendMode(suspendActorModeFlag)
+		if err != nil {
+			return wrapUsageError(err)
+		}
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
 		if err != nil {
@@ -227,9 +263,7 @@ var suspendActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: suspendActorAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: actorRef.ToObjectRef(),
-		})
+		resp, err := apiClient.SuspendActor(ctx, buildSuspendActorRequest(actorRef, mode))
 		if err != nil {
 			return fmt.Errorf("failed to suspend actor: %w", err)
 		}
@@ -245,13 +279,39 @@ var logsActorsCmd = &cobra.Command{
 	RunE:  runLogsActor,
 }
 
-func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
+// Values of kubectl ate suspend actor --mode.
+const (
+	suspendModeAsync = "async"
+	suspendModeSync  = "sync"
+)
+
+// parseSuspendMode maps the --mode flag value to a durability mode.
+func parseSuspendMode(mode string) (ateapi.DurabilityMode, error) {
+	switch mode {
+	case suspendModeAsync:
+		return ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, nil
+	case suspendModeSync:
+		return ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, nil
+	default:
+		return ateapi.DurabilityMode_DURABILITY_MODE_UNSPECIFIED, fmt.Errorf("invalid --mode %q: must be one of %s, %s", mode, suspendModeAsync, suspendModeSync)
+	}
+}
+
+// buildSuspendActorRequest builds the SuspendActor request for an actor.
+func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapi.DurabilityMode) *ateapi.SuspendActorRequest {
+	return &ateapi.SuspendActorRequest{
+		Actor:   actorRef.ToObjectRef(),
+		Options: &ateapi.SuspendOptions{Mode: mode},
+	}
+}
+
+func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi.CreateActorRequest, error) {
 	templateRef, err := parseAtespacedName(template, atespace)
 	if err != nil {
 		return nil, err
 	}
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
+	actor := &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace: atespace,
 			Name:     actorName,
 		},
@@ -265,12 +325,61 @@ func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi
 		}
 		actor.SourceTag = ref
 	}
-	return &ateapipb.CreateActorRequest{Actor: actor}, nil
+	return &ateapi.CreateActorRequest{Actor: actor}, nil
+}
+
+type actorUpdater interface {
+	GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
+	UpdateActor(ctx context.Context, in *ateapi.UpdateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
+}
+
+func updateActor(ctx context.Context, client actorUpdater, ref *ateapi.ObjectRef, mutate func(*ateapi.Actor)) (*ateapi.Actor, error) {
+	actor, err := client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get actor %q: %w", ref.GetName(), err)
+	}
+	mutate(actor)
+
+	resp, err := client.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: actor})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update actor: %w", err)
+	}
+	return resp, nil
+}
+
+// parseWorkerSelector parses a comma-separated key=value label selector into a
+// Selector proto. An empty string returns nil, which clears the actor's
+// worker_selector on update.
+func parseWorkerSelector(raw string) (*ateapi.Selector, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	matchLabels := make(map[string]string)
+	for entry := range strings.SplitSeq(raw, ",") {
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid worker selector %q: entry %q must be in key=value format", raw, entry)
+		}
+		if errs := content.IsLabelKey(key); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid worker selector %q: invalid label key %q: %s", raw, key, strings.Join(errs, "; "))
+		}
+		if errs := content.IsLabelValue(val); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid worker selector %q: invalid label value %q for key %q: %s", raw, val, key, strings.Join(errs, "; "))
+		}
+		if _, exists := matchLabels[key]; exists {
+			return nil, fmt.Errorf("invalid worker selector %q: duplicate label key %q", raw, key)
+		}
+		matchLabels[key] = val
+	}
+	if len(matchLabels) > maxWorkerSelectorLabels {
+		return nil, fmt.Errorf("invalid worker selector %q: at most %d labels are allowed, got %d", raw, maxWorkerSelectorLabels, len(matchLabels))
+	}
+	return &ateapi.Selector{MatchLabels: matchLabels}, nil
 }
 
 // AteAPIClient abstracts the gRPC client calls.
 type AteAPIClient interface {
-	GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
+	GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
 	Close()
 }
 
@@ -324,7 +433,7 @@ func (r *LogsActorRunner) Run(ctx context.Context) error {
 }
 
 func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
-	actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
+	actor, err := r.apiClient.GetActor(ctx, &ateapi.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 	if err != nil {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
@@ -332,7 +441,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 	podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
 	namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 
-	if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return fmt.Errorf("actor %s is not currently running on any worker pod", r.actorRef)
 	}
 
@@ -365,7 +474,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 	// lastWorkerPod, the resume cursor for a reconnect to it.
 	var lastSeenTime time.Time
 	var waitingLogged bool
-	var lastWaitingState ateapipb.ActorState
+	var lastWaitingState ateapi.ActorState
 
 	for {
 		select {
@@ -374,7 +483,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		default:
 		}
 
-		actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
+		actor, err := r.apiClient.GetActor(ctx, &ateapi.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return fmt.Errorf("actor %s not found: %w", r.actorRef, err)
@@ -392,7 +501,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 		state := actor.GetStatus().GetState()
 
-		if podName == "" || namespace == "" || state != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		if podName == "" || namespace == "" || state != ateapi.ActorState_ACTOR_STATE_RUNNING {
 			if !waitingLogged || state != lastWaitingState {
 				vlogf(r.stderr, vBasic, "Actor %s is not running (state=%s); waiting for worker assignment...", r.actorRef, state)
 				waitingLogged = true
@@ -505,7 +614,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
+				resp, err := r.apiClient.GetActor(ctx, &ateapi.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 				if err != nil {
 					if ctx.Err() == nil {
 						vlogf(r.stderr, vBasic, "Migration monitor failed to get actor %s: %v", r.actorRef, err)
@@ -513,7 +622,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 					continue
 				}
 				act := resp
-				if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
+				if act.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
 					// Actor suspended or migrated! Cancel stream context to reconnect.
 					vlogf(r.stderr, vBasic, "Actor %s left pod %s (state=%s, pod=%s); closing current log stream",
 						r.actorRef, currentPod, act.GetStatus().GetState(), act.GetStatus().GetWorkerAssignment().GetWorkerPod())
@@ -638,7 +747,7 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 		}
 	}
 	if f.container == "" {
-		return containerName != ocispec.PauseContainer
+		return containerName != ocispec.SandboxID
 	}
 	return containerName == f.container
 }
@@ -743,22 +852,24 @@ func init() {
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
 	createCmd.AddCommand(createActorCmd)
 
-	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "delete the actor regardless of current state")
-	deleteCmd.AddCommand(deleteActorCmd)
+	updateActorCmd.Flags().StringVarP(&updateActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	updateActorCmd.Flags().StringVar(&updateActorTemplateFlag, "template", "", "actor-template to repoint the actor to, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
+	updateActorCmd.Flags().StringVar(&updateActorWorkerSelectorFlag, "worker-selector", "", "comma-separated key=value label selector for worker pools, or empty string to clear")
+	updateCmd.AddCommand(updateActorCmd)
 
-	pauseActorCmd.Flags().StringVarP(&pauseActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	pauseCmd.AddCommand(pauseActorCmd)
+	deleteActorCmd.Flags().StringVarP(&deleteActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	deleteCmd.AddCommand(deleteActorCmd)
 
 	resumeActorCmd.Flags().StringVarP(&resumeActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
 	resumeCmd.AddCommand(resumeActorCmd)
 
 	suspendActorCmd.Flags().StringVarP(&suspendActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
+	suspendActorCmd.Flags().StringVar(&suspendActorModeFlag, "mode", suspendModeAsync, "how the snapshot is made durable: async (return once the snapshot is on the worker's node, and upload it in the background) or sync (return once the snapshot is in object storage)")
 	suspendCmd.AddCommand(suspendActorCmd)
 
 	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "stream logs continuously")
 	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "show only logs from a named container; use _pause for runsc diagnostics")
+	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "show only logs from a named container; use _sandbox for runsc diagnostics")
 	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "which lines to show: all, containers (container output, no lifecycle events), or lifecycle (only the actor's lifecycle events)")
 	logsCmd.AddCommand(logsActorsCmd)
 }

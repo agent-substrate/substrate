@@ -43,9 +43,10 @@ var (
 	SandboxAssetCacheDir = filepath.Join(nodepath.BasePath, "sandbox-asset-cache")
 
 	// SandboxAssetScratchDir holds short-lived destination directories for
-	// asset fetches that have no actor, such as prewarming a SandboxConfig's
-	// default version. Wiped at startup. Under BasePath so the links the
-	// cache serves into it are on the cache's mount.
+	// asset fetches that have no actor and no worker directory to link into:
+	// the assets the worker sandbox syncer stages when checking a version.
+	// Wiped at startup. Under BasePath so the links the cache serves into it
+	// are on the cache's mount.
 	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
 
 	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this
@@ -55,6 +56,15 @@ var (
 	// runtime registered before a restart resolves the moment atelet serves
 	// again.
 	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
+
+	// SnapshotCacheDir is the node-local cache of shared snapshot files, the
+	// snapshots many actors are created from (see
+	// cmd/atelet/internal/filecache). It lives under BasePath because cache
+	// hits are served as hard links into the per-actor restore dirs under
+	// SnapshotsDir, and link(2) requires both ends on one mounted filesystem,
+	// the same mount, not merely the same disk. With SnapshotsDir on its own
+	// mount, hits are served as copies instead.
+	SnapshotCacheDir = filepath.Join(nodepath.BasePath, "snapshot-cache")
 )
 
 func ActorPath(actorUID string) string {
@@ -64,12 +74,22 @@ func ActorPath(actorUID string) string {
 	)
 }
 
+// ActorSnapshotPath is the actor's snapshot staging directory, which may be on
+// a different filesystem from ActorPath. Checkpoints link and rename files
+// between its subdirectories, so they must stay on one filesystem.
+func ActorSnapshotPath(actorUID string) string {
+	return filepath.Join(
+		nodepath.SnapshotsDir,
+		actorUID,
+	)
+}
+
 // ActorSandboxAssetsFile is the per-actor file where atelet records the sandbox
 // binaries (class + content-addressed asset set, for this node's architecture)
 // the actor is currently running. It is written at Run/Restore and read at
 // Checkpoint (when the request no longer carries the sandbox config). It lives
-// directly under ActorPath — NOT under a subdir wiped by atelet's
-// resetActorDirs — so it survives between Run and a later Checkpoint.
+// directly under ActorPath — NOT under a subdir wiped by
+// actordirs.ResetActorDirs — so it survives between Run and a later Checkpoint.
 func ActorSandboxAssetsFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -80,7 +100,7 @@ func ActorSandboxAssetsFile(actorUID string) string {
 // ActorSnapshotStateFile is the per-actor file where atelet keeps what it
 // tracks of the actor's snapshots: its latest local and durable snapshots, so
 // a restarted atelet still knows them. Like ActorSandboxAssetsFile it lives
-// directly under ActorPath, outside the subdirs resetActorDirs wipes.
+// directly under ActorPath, outside the subdirs actordirs.ResetActorDirs wipes.
 func ActorSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -99,7 +119,7 @@ func SandboxAssetsDir(actorUID string) string {
 // SandboxAssetsStagingDir is where Run stages an activation's assets before
 // moving them into SandboxAssetsDir, so a failed fetch leaves whatever a
 // live activation has there untouched. Not among the directories
-// resetActorDirs empties.
+// actordirs.ResetActorDirs empties.
 func SandboxAssetsStagingDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
@@ -123,19 +143,19 @@ func OCIBundlePath(actorUID, containerName string) string {
 
 func CheckpointStateDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"checkpoint-state",
 	)
 }
 
 func LocalCheckpointsDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"local-checkpoint",
 	)
 }
 
-// LocalSnapshotDir is the directory holding one named local (pause) snapshot
+// LocalSnapshotDir is the directory holding one named node-local snapshot
 // of an actor: the checkpoint files plus their manifest.
 func LocalSnapshotDir(actorUID, snapshotName string) string {
 	return filepath.Join(LocalCheckpointsDir(actorUID), snapshotName)
@@ -202,7 +222,7 @@ func SystemInfoVolumeRoot(actorUID, volumeName string) string {
 // yet been loaded.
 func RestoreStateDir(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		"restore-state",
 	)
 }

@@ -26,9 +26,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var accessPolicyFlags struct {
@@ -103,8 +103,8 @@ func (s accessPolicyScope) String() string {
 	return fmt.Sprintf("atespace %q", s.atespace)
 }
 
-func (s accessPolicyScope) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Name: s.atespace}
+func (s accessPolicyScope) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Name: s.atespace}
 }
 
 // scopeFromFlags requires exactly one of --atespace and --global.
@@ -121,12 +121,12 @@ func scopeFromFlags(atespace string, global bool) (accessPolicyScope, error) {
 // accessPolicyFromManifest parses a single protojson-shaped YAML or JSON
 // document into an AccessPolicy. Parsing is strict: unknown fields are an
 // error.
-func accessPolicyFromManifest(data []byte) (*ateapipb.AccessPolicy, error) {
+func accessPolicyFromManifest(data []byte) (*ateapi.AccessPolicy, error) {
 	jsonData, err := manifestToJSON(data)
 	if err != nil {
 		return nil, err
 	}
-	policy := &ateapipb.AccessPolicy{}
+	policy := &ateapi.AccessPolicy{}
 	if err := protojson.Unmarshal(jsonData, policy); err != nil {
 		return nil, fmt.Errorf("invalid AccessPolicy: %w", err)
 	}
@@ -137,7 +137,7 @@ func accessPolicyFromManifest(data []byte) (*ateapipb.AccessPolicy, error) {
 // filename is "-", parses it, and checks its metadata. An access policy's
 // metadata.atespace is always empty, whatever its scope, and its name is
 // always "default"; omitted metadata is filled in.
-func loadAccessPolicyManifest(in io.Reader, filename string) (*ateapipb.AccessPolicy, error) {
+func loadAccessPolicyManifest(in io.Reader, filename string) (*ateapi.AccessPolicy, error) {
 	data, err := readFileOrStdin(in, filename)
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func loadAccessPolicyManifest(in io.Reader, filename string) (*ateapipb.AccessPo
 		return nil, fmt.Errorf("failed to parse access policy manifest %q: %w", filename, err)
 	}
 	if policy.Metadata == nil {
-		policy.Metadata = &ateapipb.ResourceMetadata{}
+		policy.Metadata = &ateapi.ResourceMetadata{}
 	}
 	if policy.Metadata.Name == "" {
 		policy.Metadata.Name = resources.SingletonName
@@ -164,7 +164,7 @@ func loadAccessPolicyManifest(in io.Reader, filename string) (*ateapipb.AccessPo
 // atespaceGetter abstracts the atespace read that tells a missing atespace
 // from a missing access policy.
 type atespaceGetter interface {
-	GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error)
+	GetAtespace(ctx context.Context, req *ateapi.GetAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error)
 }
 
 // requireScope settles a NotFound from an access policy RPC. For an atespace
@@ -175,7 +175,7 @@ func requireScope(ctx context.Context, getter atespaceGetter, scope accessPolicy
 	if scope.global() {
 		return nil
 	}
-	if _, err := getter.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: scope.ref()}); err != nil {
+	if _, err := getter.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: scope.ref()}); err != nil {
 		if status.Code(err) == codes.NotFound {
 			return fmt.Errorf("atespace %q not found", scope.atespace)
 		}
@@ -187,13 +187,13 @@ func requireScope(ctx context.Context, getter atespaceGetter, scope accessPolicy
 // accessPolicyClient is the subset of the Control API the access policy
 // commands call.
 type accessPolicyClient interface {
-	GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
-	CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
-	UpdateGlobalAccessPolicy(ctx context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
-	GetAtespaceAccessPolicy(ctx context.Context, req *ateapipb.GetAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
-	CreateAtespaceAccessPolicy(ctx context.Context, req *ateapipb.CreateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
-	UpdateAtespaceAccessPolicy(ctx context.Context, req *ateapipb.UpdateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
-	DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapipb.DeleteAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapipb.AccessPolicy, error)
+	GetGlobalAccessPolicy(ctx context.Context, req *ateapi.GetGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	CreateGlobalAccessPolicy(ctx context.Context, req *ateapi.CreateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	UpdateGlobalAccessPolicy(ctx context.Context, req *ateapi.UpdateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	GetAtespaceAccessPolicy(ctx context.Context, req *ateapi.GetAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	CreateAtespaceAccessPolicy(ctx context.Context, req *ateapi.CreateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	UpdateAtespaceAccessPolicy(ctx context.Context, req *ateapi.UpdateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapi.DeleteAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
 	atespaceGetter
 }
 
@@ -207,12 +207,12 @@ type accessPolicyRunner struct {
 }
 
 func (r *accessPolicyRunner) get(ctx context.Context) error {
-	var policy *ateapipb.AccessPolicy
+	var policy *ateapi.AccessPolicy
 	var err error
 	if r.scope.global() {
-		policy, err = r.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
+		policy, err = r.client.GetGlobalAccessPolicy(ctx, &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
 	} else {
-		policy, err = r.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), Name: resources.SingletonName})
+		policy, err = r.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), Name: resources.SingletonName})
 	}
 	if status.Code(err) == codes.NotFound {
 		if err := requireScope(ctx, r.client, r.scope); err != nil {
@@ -228,13 +228,13 @@ func (r *accessPolicyRunner) get(ctx context.Context) error {
 	return printer.PrintAccessPolicyTo(r.stdout, r.scope.atespace, policy, r.outputFmt)
 }
 
-func (r *accessPolicyRunner) create(ctx context.Context, policy *ateapipb.AccessPolicy) error {
-	var created *ateapipb.AccessPolicy
+func (r *accessPolicyRunner) create(ctx context.Context, policy *ateapi.AccessPolicy) error {
+	var created *ateapi.AccessPolicy
 	var err error
 	if r.scope.global() {
-		created, err = r.client.CreateGlobalAccessPolicy(ctx, &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: policy})
+		created, err = r.client.CreateGlobalAccessPolicy(ctx, &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: policy})
 	} else {
-		created, err = r.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
+		created, err = r.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
 	}
 	if status.Code(err) == codes.AlreadyExists {
 		return fmt.Errorf(`%s already has an access policy; change it with "kubectl ate update access-policy": %w`, r.scope, err)
@@ -245,13 +245,13 @@ func (r *accessPolicyRunner) create(ctx context.Context, policy *ateapipb.Access
 	return printer.PrintAccessPolicyTo(r.stdout, r.scope.atespace, created, r.outputFmt)
 }
 
-func (r *accessPolicyRunner) update(ctx context.Context, policy *ateapipb.AccessPolicy) error {
-	var updated *ateapipb.AccessPolicy
+func (r *accessPolicyRunner) update(ctx context.Context, policy *ateapi.AccessPolicy) error {
+	var updated *ateapi.AccessPolicy
 	var err error
 	if r.scope.global() {
-		updated, err = r.client.UpdateGlobalAccessPolicy(ctx, &ateapipb.UpdateGlobalAccessPolicyRequest{AccessPolicy: policy})
+		updated, err = r.client.UpdateGlobalAccessPolicy(ctx, &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: policy})
 	} else {
-		updated, err = r.client.UpdateAtespaceAccessPolicy(ctx, &ateapipb.UpdateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
+		updated, err = r.client.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
 	}
 	if status.Code(err) == codes.NotFound {
 		if err := requireScope(ctx, r.client, r.scope); err != nil {
@@ -268,8 +268,8 @@ func (r *accessPolicyRunner) update(ctx context.Context, policy *ateapipb.Access
 	return printer.PrintAccessPolicyTo(r.stdout, r.scope.atespace, updated, r.outputFmt)
 }
 
-func (r *accessPolicyRunner) delete(ctx context.Context, options *ateapipb.DeleteOptions) error {
-	_, err := r.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), Name: resources.SingletonName, Options: options})
+func (r *accessPolicyRunner) delete(ctx context.Context, options *ateapi.DeleteOptions) error {
+	_, err := r.client.DeleteAtespaceAccessPolicy(ctx, &ateapi.DeleteAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), Name: resources.SingletonName, Options: options})
 	if status.Code(err) == codes.NotFound {
 		if err := requireScope(ctx, r.client, r.scope); err != nil {
 			return err

@@ -20,9 +20,9 @@ import (
 	"io"
 	"strings"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/pkg/assetfetch"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -38,7 +38,7 @@ import (
 // check out (see assetfetch.Stager). The caller can therefore never read bytes
 // it did not pin, such as a snapshot's.
 type AssetPlugin struct {
-	objectstorev1.UnimplementedAssetProviderServer
+	objectstore.UnimplementedAssetProviderServer
 
 	client objectstorage.ObjectStorage
 	scheme string
@@ -63,7 +63,7 @@ func NewAssetPlugin(client objectstorage.ObjectStorage, scheme, root, stagingDir
 // FetchAsset downloads the object at asset_uri into the staging directory and,
 // if it is at most max_bytes long and hashes to sha256, copies it into the
 // existing file at write_path (see assetfetch.Stager.Fetch).
-func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAssetRequest) (*objectstorev1.FetchAssetResponse, error) {
+func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstore.FetchAssetRequest) (*objectstore.FetchAssetResponse, error) {
 	bucket, object, err := parseAssetURI(req.GetAssetUri(), p.scheme)
 	if err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAs
 	if err := p.stager.Fetch(ctx, req, req.GetAssetUri(), open, toStatus); err != nil {
 		return nil, err
 	}
-	return &objectstorev1.FetchAssetResponse{}, nil
+	return &objectstore.FetchAssetResponse{}, nil
 }
 
 // parseAssetURI accepts <scheme>://<bucket>/<object> whose object name is in

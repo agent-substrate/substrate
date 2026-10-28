@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
@@ -37,7 +38,6 @@ import (
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -252,10 +252,10 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 		u := val.(*gluttonUser)
 		for _, a := range u.actors {
 			if a.actorRunning {
-				if dynconfig.Get[gluttonKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
-					_ = a.pause(ctx)
-				} else {
+				if dynconfig.Get[gluttonKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
 					_ = a.suspend(ctx)
+				} else {
+					_ = a.pause(ctx)
 				}
 			}
 			a.delete(ctx)
@@ -340,7 +340,7 @@ type gluttonActor struct {
 	// ACTOR_STATE_CRASHED (codes.Aborted with "crashed" in the message).
 	// ateapi never rehabilitates one, so iterate() replaces it.
 	crashed bool
-	// hibernatePending is set by a failed Pause/Suspend: the actor is
+	// hibernatePending is set by a failed SuspendActor: the actor is
 	// stranded RUNNING or SUSPENDING, which resume has no edge out of.
 	hibernatePending bool
 	// deleted is set once replaceActor has issued this actor's DeleteActor,
@@ -377,8 +377,8 @@ func (u *gluttonActor) noteSuccess() {
 	u.consecutiveFailures = 0
 }
 
-func (u *gluttonActor) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
+func (u *gluttonActor) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 // ensureAtespace creates the configured atespace, swallowing AlreadyExists
@@ -387,9 +387,9 @@ func (u *gluttonActor) ref() *ateapipb.ObjectRef {
 // other API call.
 func (u *gluttonActor) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: u.cfg.Atespace,
 				},
 			},
@@ -406,10 +406,10 @@ func (u *gluttonActor) ensureAtespace(ctx context.Context) error {
 
 func (u *gluttonActor) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -428,7 +428,7 @@ func (u *gluttonActor) resume(ctx context.Context) error {
 		// reported latency spans every attempt and the span carries the
 		// last attempt's server trailer, same as any other single-shot RPC.
 		return boomerutil.RetryOnConflict(callCtx, func() error {
-			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 				Actor: u.ref(),
 			}, grpc.Trailer(tr))
 			return err
@@ -461,18 +461,18 @@ func (u *gluttonActor) hibernate(ctx context.Context) error {
 	switch dynconfig.Get[gluttonKnobs](u.cfg.Dyn).LifecycleMode {
 	case dynconfig.LifecycleModeNone:
 		return nil
-	case dynconfig.LifecycleModePause:
-		return u.pause(ctx)
-	default:
+	case dynconfig.LifecycleModeSync:
 		return u.suspend(ctx)
+	default:
+		return u.pause(ctx)
 	}
 }
 
 func (u *gluttonActor) pause(ctx context.Context) error {
-	err := u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+	err := u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -486,8 +486,9 @@ func (u *gluttonActor) pause(ctx context.Context) error {
 
 func (u *gluttonActor) suspend(ctx context.Context) error {
 	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			Actor: u.ref(),
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
+			Actor:   u.ref(),
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -501,9 +502,8 @@ func (u *gluttonActor) suspend(ctx context.Context) error {
 
 func (u *gluttonActor) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			Actor:    u.ref(),
-			AnyState: true,
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapi.DeleteActorRequest{
+			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})

@@ -1,31 +1,18 @@
 # Substrate Threat Model
 
-[Michael Taufen](mailto:mtaufen@google.com), [Vikas Kumar](mailto:skvikas@google.com), [Oleg Mitrofanov](mailto:gooleg@google.com)
-
-Last updated: Jun 25, 2026
+Last updated: Oct 14, 2026
 
 
 # Overview
 
-Substrate is an early, fast moving product. It is full of debate and subject to change, including major architectural changes. It also has little to no security hardening at this time. Therefore, this threat model is focused on how to achieve security with respect to the general problem Substrate is trying to solve: Fast orchestration of a stateful AI agents. The threat model uses Substrate's current implementation and roadmap as a reference point, but focuses on threats that emerge from this overall class of system, rather than threats specific to the current implementation.
+Agent Substrate orchestrates stateful AI agents at high scale and density on Kubernetes, multiplexing untrusted, mutually hostile actors across a shared pool of worker Pods while maintaining sub-second cold-start and snapshot resume latency. Because actors execute untrusted code and migrate across physical infrastructure, Substrate enforces VM-grade sandboxing (`gVisor` and `Cloud Hypervisor` microVMs), per-actor cryptographic identity (`SPIFFE` X.509 certificates and JWTs), zero ambient credentials inside sandboxes, default-deny networking with authenticated ingress and egress proxies, and relationship-based access control (`OpenFGA`).
 
-# Intended Outcome
+This threat model catalogs the security threats inherent to high-density stateful agent orchestration and defines the mitigating invariants and suggested mechanisms required to neutralize each threat. See the [Security Guide](security.md) for the high-level security architecture, principles, and implementation status.
 
-* The suggestions from this threat model should be added to Substrate's official roadmap after review and agreement with the community.   
-* Security review SKILLs for AI-assisted security review should be extracted from this threat model and used for continuous review on the upstream [agent-substrate/substrate](https://github.com/agent-substrate/substrate) repository.
+# Scope
 
-# Goals
-
-* Identify threats relevant to any system trying to achieve the same goal, with roughly the same basic building blocks as Substrate (Kubernetes, containers, sandboxes, snapshots, and lightweight "actors" dynamically scheduled to reusable "worker" Pods).   
-* Identify general "mitigating invariants" which, if implemented, eliminate or significantly decrease the severity of the threat.  
-* Suggest *possible* implementation approaches, which may change if Substrate changes.  
-* Prioritize the threats, so that resources can be spent of reducing the biggest risks first.
-
-# Non-Goals
-
-* This threat model does not attempt to predict Substrate's future architectural decisions.  
-* This threat model does not demand any particular approach to mitigation.  
-* While shown in diagrams for reference, this threat model does not focus on AI frameworks that may be used on top of Substrate. 
+* While shown in diagrams for reference, this threat model does not cover application-layer agent frameworks or harnesses running inside Substrate actors.
+* This threat model does not cover vulnerabilities contained entirely within the underlying cloud provider, host Linux kernel, Kubernetes control plane, or upstream sandbox runtimes (`gVisor`, `Cloud Hypervisor`).
 
 # Architecture of Substrate
 
@@ -33,28 +20,33 @@ Substrate is an early, fast moving product. It is full of debate and subject to 
 
 # Key Components
 
-* **ate-api-server:** Actor creation and scheduling and credential issuance.  
-* **atelet:** Per-node daemon, performs snapshot/resume.  
-* **ateworker:** Per-worker Pod sidecar, running inside the worker Pod. It sets up "interior" sandboxes in the worker Pod and manages sandbox lifecycle, including image pulls. It currently uses gvisor but Substrate will support multiple microvm solutions.  
-* **Worker:** Preprovisioned Pods that actors get scheduled to.  
-* **Actor:** The core compute primitive, gets scheduled to/from worker via Run for cold start and Resume for snapshot resume.  
-* **Actor Network:** `ateworker` creates a private point-to-point veth network for the active Actor inside a worker Pod. The Actor is not served directly from the worker Pod's port 80; ingress enters through `atunnel`'s authenticated listeners: mTLS `CONNECT` on port 8443, which the router uses by default, and HTTPS on port 443.
-* **Actor Routing:** Requests sent to `atenet-router` identify the target Actor with `ate-target-actor: <atespace>/<actor>`. Host and authority values are application metadata and do not select the Actor.
-* **atenet-router:** Substrate runs Envoy with an `ext_proc` external processor to handle Actor ingress. With `--ingress-auth-mode=static-mtls`, Envoy accepts connections only on its TLS listeners and only from clients presenting a certificate that chains to the configured client CA bundle and carries one of a static list of SPIFFE IDs; any listed client may reach any Actor. The default, `deprecated-insecure`, rejects a TLS client whose certificate fails those checks but accepts one that presents none, and also serves plaintext listeners that accept any client. The ext_proc reads and validates `ate-target-actor`, calls the Substrate API to resume the Actor and obtain its current worker assignment, and selects that worker as a dynamic backend. It overwrites the routing header before forwarding. The router then connects with mTLS to `atunnel` and accepts it only with the SPIFFE ID of the assigned worker pod's namespace and ServiceAccount, so another pod running as that ServiceAccount in that namespace can still pose as the worker; `atunnel` validates the router identity and authorizes the header against the Actor currently assigned to that worker.
-* **Object Storage:** Used to store actor snapshots.  
-* **Filesystem support:** Container local filesystem is saved in snapshots, future integrations likely to include networked storage.  
-* **Substrate Database:** PostgreSQL. On GCP, PostgreSQL may be Cloud SQL reached through the Cloud SQL Auth Proxy sidecar (see [tools/setup-gcp/cloud-sql.md](../tools/setup-gcp/cloud-sql.md)); that path adds two egress flows from ate-api-server: HTTPS to `sqladmin.googleapis.com:443` and the proxy tunnel to the instance IP on port 3307, both authenticated via IAM and encrypted.  
-* **Kubernetes:** The underlying infrastructure that Substrate runs on is expected to be Kubernetes.
+* **ate-api-server:** Control plane server managing actor lifecycle, scheduling, OpenFGA authorization, and credential issuance.
+* **ate-controller:** Kubernetes controller managing worker pool deployments and network policies.
+* **podcertcontroller:** Kubernetes controller issuing short-lived mTLS certificates for pod identity, service DNS, and database access.
+* **atelet:** Per-node supervisor daemon coordinating sandbox lifecycle, checkpoint/restore, and node-attested credentials.
+* **ateworker:** Per-worker Pod runtime daemon managing interior sandboxes (`gVisor` or `Cloud Hypervisor` microVMs).
+* **Worker:** Pre-provisioned Pods that host active actors.
+* **Actor:** The core stateful compute primitive, grouped into atespaces and scheduled onto workers via Run or Resume.
+* **Actor Network:** Private per-actor network namespace and point-to-point veth link behind `atunnel`'s authenticated listener on port 443.
+* **Actor Routing:** Ingress requests identify the target actor via `ate-target-actor: <atespace>/<actor>`.
+* **atenet-router:** Envoy ingress proxy with an `ext_proc` processor that authenticates callers over mTLS, resolves worker assignments, and routes to `atunnel`.
+* **atenet-egress:** Multi-tenant Envoy egress forward proxy that enforces declarative egress policies and injects credentials.
+* **Object Storage:** Stores partitioned actor snapshots, accessed through the out-of-process `objectstore-plugin`.
+* **Filesystem Support:** Container rootfs overlays and working directories captured in snapshots and wiped on actor teardown.
+* **Substrate Database:** PostgreSQL (or Cloud SQL on GCP), accessed over TLS by `ate-api-server`.
+* **Kubernetes:** The underlying cluster infrastructure providing node isolation and network policies.
 
 # Threats and Mitigations
 
 **Table Schema:**
 
-* **Priority:** Critical, High, Medium, Low  
-* **Threats:** Expected risks in a naïve implementation of Substrate.  
-* **Mitigating Invariants:** High level properties which, if true, mitigate the threat.  
-* **Suggested Concrete Mitigations:** Specific options for implementing the mitigating invariants, based on current understanding of Substrate.  
-* **Notes:** Additional relevant information.
+* **Priority:** Critical, High, Medium, Low
+* **Threats:** Expected risks in a naïve implementation of Substrate.
+* **Mitigating Invariants:** High-level properties which, if true, mitigate the threat.
+* **Suggested Concrete Mitigations:** Specific options and architectural mechanisms for implementing the mitigating invariants.
+* **Notes:** Contextual notes, edge cases, and design considerations.
+
+Implementation status is intentionally not tracked in this table. High-level principle status is maintained in the [Security Guide](security.md), while threat-by-threat mitigation quality is dynamically evaluated against the codebase by automated security review agents in CI (see `.agents/skills/security-status-report/`). Recording static status claims in this reference catalog would risk biasing automated evaluators away from independently verifying the code.
 
 ## Attacks from External Networks
 
@@ -74,7 +66,7 @@ While it's probably unlikely that Substrate, which is expected to be an internal
 | T-05 | High | Privilege escalation via access to sensitive labels. | If Substrate offers its own resource labeling mechanism, it must also offer a way to authorize label updates on a per-label basis. | Substrate authorization system requires explicit authorization to update metadata, separate from updating resource body. Substrate authorization system supports per-label authorization rules. | Plenty of attacks in K8s were possible because labels had semantic meaning, but the permission model could implicitly granted access to modify labels, even if it was inappropriate. For example, /status subresource allows label updates. Substrate shouldn't repeat this mistake.  |
 | T-06 | High | Attacker gains control of the Substrate API server or an ingress/egress gateway. | Isolate the control plane from the data plane, and isolate data plane ingress from sandboxes. | Don't co-locate ate-apiserver or other control-plane components on the same machines as the untrusted sandboxes. This also supports control-plane / data-plane isolation from a reliability and performance perspective. Consider running any gateway that enables direct interaction with sandboxes on a separate VM from the sandboxes. Consider using a zero-trust architecture where traffic is encrypted and authenticated end-to-end and routed via a mesh. | While the sandbox is trusted as an isolation layer, the residual risk is typically not worth the marginal cost savings of colocating, and isolation is recommend to avoid noisy neighbor problems or other reliability issues that stem from mixing the control-plane and data-plane, especially for large scale deployments of Substrate.  |
 | T-07 | High | Attacker who can create ActorTemplates specifies malicious runtime. | Ensure available runtime can only be configured by administrators. | Consider a mechanism like RuntimeClass to decouple configuration of available runtimes from consumption of available runtimes. |  |
-| T-08 | High | Attacker who can create ActorTemplates can read or write any storage buckets atelet has access to. | Ensure that bucket access is least-privilege. | Use credentials derived from actor identity to read snapshots. Configure permissions to prevent atelet or nodes from having access to sensitive buckets. Don't support arbitrary URLs in APIs, instead design a standard approach for accessing the correct resource given the ActorTemplate name and compute the mapping internally, subject to scheduling-aware authorization checks. | For example: Attacker creates an ActorTemplate with the runsc URL or golden snapshot URL pointing to an arbitrary bucket in the same project/resource scope as the cluster. If atelet has project-wide access to buckets, this could cause the state to be pulled into the worker pod or malicious actor. Similarly, an attacker could set the snapshots URL to point to an internal infrastructure bucket, causing data to be written to that bucket. Current state for sandbox asset URLs (SandboxConfig): atelet holds no storage credentials. It fetches every asset through the node's object-store plugin, which refuses any URL under a snapshot location before reading it, and returns an object only if its content matches the sha256 the SandboxConfig pins, staging the download where atelet cannot read it until it is verified. Only when the plugin cannot serve a `gs://` URL (no such object, a URL it rejects, no `AssetProvider`, unreachable, or an error it does not recognize) does atelet read it anonymously, which returns only publicly readable objects; any other refusal by the plugin is final. A SandboxConfig author therefore cannot use an asset URL to pull another actor's snapshot onto a node, even when assets share a bucket with snapshots, and a modified asset fails the digest check in the plugin and again in atelet. These checks do not protect against a compromised node: root on the node can use the plugin's identity directly, which already reads and writes snapshots. Closing that needs storage-level scoping such as per-actor snapshot credentials: [https://github.com/agent-substrate/substrate/issues/777](https://github.com/agent-substrate/substrate/issues/777) |
+| T-08 | High | Attacker who can create ActorTemplates can read or write any storage buckets atelet has access to. | Ensure that bucket access is least-privilege. | Use credentials derived from actor identity to read snapshots. Configure permissions to prevent atelet or nodes from having access to sensitive buckets. Don't support arbitrary URLs in APIs, instead design a standard approach for accessing the correct resource given the ActorTemplate name and compute the mapping internally, subject to scheduling-aware authorization checks. | For example: Attacker creates an ActorTemplate with the runsc URL or golden snapshot URL pointing to an arbitrary bucket in the same project/resource scope as the cluster. If atelet has project-wide access to buckets, this could cause the state to be pulled into the worker pod or malicious actor. Similarly, an attacker could set the snapshots URL to point to an internal infrastructure bucket, causing data to be written to that bucket. Current state for sandbox asset URLs (SandboxConfig): atelet holds no storage credentials. It fetches every asset through the node's object-store plugin, which refuses any URL under a snapshot location before reading it, and returns an object only if its content matches the sha256 the SandboxConfig pins, staging the download where atelet cannot read it until it is verified. Only when the plugin cannot serve a `gs://` URL (no such object, a URL it rejects, no `AssetProvider`, unreachable, or an error it does not recognize) does atelet read it anonymously, which returns only publicly readable objects; any other refusal by the plugin is final. A SandboxConfig author therefore cannot use an asset URL to pull another actor's snapshot onto a node, even when assets share a bucket with snapshots, and a modified asset fails the digest check in the plugin and again in atelet. Current state for snapshot locations on GCS: snapshot transfers run on per-actor tokens from the credential exchange. The tokens are downscoped from ate-api-server's identity, so a template can reach only buckets that identity can access. setup-gcp gives the plugin's own identity read access to the asset bucket only, and no storage role on the snapshot bucket or the project. |
 | T-09 | Medium | DoS attack against API, gateway, or available cluster resources. | Minimize exposure and ensure APIs and proxies implement appropriately scoped quotas and rate limiting. | Don't co-locate ate-apiserver or other control-plane components on the same machines as the untrusted sandboxes. Don't expose ate-apiserver directly to the internet. Consider an identity-aware WAF (likely up to providers) if external access is required. Use network policy to block direct interaction between untrusted sandboxes and the ate-apiserver. Implement quotas and rate limiting in the API and in proxies. This includes quotas for the number of actors a user can allocate. Use a zero-trust architecture that prevents identity spoofing or intentional misrouting to get around limits.  | The gateway calls ate-apiserver to resolve Actor assignments and uses a short-lived cache. A flood of Actor traffic could still create high API load; cache invalidation during Actor rescheduling must avoid stale routing.  |
 | T-10 | Medium | Internal network traffic is intercepted or spoofed | Encrypt all traffic by default | Use mTLS between all system components, including the gateway-to-worker `atunnel` connection. | It may be desirable to rely on cloud providers to transparently encrypt traffic between VMs on their internal network. Worth discussing what makes the most sense. |
 
@@ -117,7 +109,7 @@ While it's probably unlikely that Substrate, which is expected to be an internal
 
 | Threat ID | Priority | Threat | Mitigating Invariants | Suggested Concrete Mitigations | Notes |
 | :---- | :---- | :---- | :---- | :---- | :---- |
-| T-36 | High | A compromised node accesses all snapshots for the cluster. | Node access to snapshots must be scoped to actors actively scheduled to the node. | Issue special per-actor JWT, only for atelet, not in sandbox, that has claims available in conditional IAM. Use CredentialAccessBoundary (GCP only) Perform data wipeout on previous actor “tenants” of the node on actor suspension. Snapshots should be write-once per version, to prevent malicious actors from overwriting “golden” snapshots and compromising other actors that use that snapshot.  | Detection rules to determine whether a given actor is running on the node and correlate it to a node requesting a snapshot for the actor could be valuable defense in depth. |
+| T-36 | High | A compromised node accesses all snapshots for the cluster. | Node access to snapshots must be scoped to actors actively scheduled to the node. | Issue special per-actor JWT, only for atelet, not in sandbox, that has claims available in conditional IAM. Use CredentialAccessBoundary (GCP only) Perform data wipeout on previous actor “tenants” of the node on actor suspension. Snapshots should be write-once per version, to prevent malicious actors from overwriting “golden” snapshots and compromising other actors that use that snapshot.  | Detection rules to determine whether a given actor is running on the node and correlate it to a node requesting a snapshot for the actor could be valuable defense in depth. Current state on GCS: each snapshot transfer runs on a token downscoped to one actor's prefixes, which the credential exchange issues only while the actor is still assigned to the node that minted its JWT. setup-gcp gives atelet no storage role on snapshots. Still open: S3 installs transfer with the plugin's own credentials. |
 | T-37 | High | Compromised node accesses filesystem storage for actors on other nodes. | Node access to network filesystems must be scoped to actors actively scheduled to the node.  | TBD \- depends on network filesystem implementation and what it supports. |  |
 | T-38 | High | Compromised node can escalate to other nodes or control plane via Substrate or Kubernetes. | Node access to Substrate or Kubernetes APIs must be scoped to operations relevant to actors actively scheduled to the node, and to the node itself.  | Disable network communications for actors by default Tightly scoped Ingress/Egress network policies for every pod Default deny Actor to Actor communication Any allowed Actor to Actor communication should be over TLS and have authentication/authorization Limit total number of child actors under a given parent (and limit depth of actor create calls) Limit network access between data plane components, and ensure control plane components have minimal ingress from actors/workloads. |  |
 

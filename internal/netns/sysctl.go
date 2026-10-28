@@ -19,6 +19,7 @@ package netns
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -26,14 +27,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// AllowUnprivilegedPorts lets this namespace bind ports below 1024 without
-// CAP_NET_BIND_SERVICE, which is how atunnel answers a sandbox's DNS on 53.
-// The sysctl is per-namespace and grants nothing outside it.
-func AllowUnprivilegedPorts() error {
-	return setSysctl("net/ipv4/ip_unprivileged_port_start", "0")
+// Sysctl is a key-value sysctl setting.
+type Sysctl struct {
+	Key   string
+	Value string
 }
 
-// procSysMu serializes setSysctl. Sandboxes are set up concurrently and share
+// SetSysctls writes each sysctl, in order, in the current network namespace,
+// under a single lock hold and at most one /proc/sys read-write remount.
+// Every key is written even if it already reads that way, because writing one
+// key can change another: turning net/ipv4/conf/all/forwarding off sets
+// net/ipv4/conf/all/accept_redirects. Missing net/ipv6/ keys are skipped.
+func SetSysctls(sysctls ...Sysctl) error {
+	return hostProcSys.set(sysctls)
+}
+
+// procSysMu serializes SetSysctls. Sandboxes are set up concurrently and share
 // one /proc/sys mount, so otherwise one caller's read-only restore can land
 // between another's remount and write, failing that write with EROFS.
 var procSysMu sync.Mutex
@@ -41,13 +50,11 @@ var procSysMu sync.Mutex
 // procSys wraps the /proc/sys file and mount operations so that unit tests can
 // substitute a fake mount. Production code uses hostProcSys.
 type procSys struct {
-	readFile  func(path string) ([]byte, error)
 	writeFile func(path string, data []byte) error
 	remount   func(readOnly bool) error
 }
 
 var hostProcSys = procSys{
-	readFile: os.ReadFile,
 	writeFile: func(path string, data []byte) error {
 		return os.WriteFile(path, data, 0o644)
 	},
@@ -60,36 +67,34 @@ var hostProcSys = procSys{
 	},
 }
 
-// setSysctl writes value to the named sysctl in the current network
-// namespace, remounting /proc/sys read-write when the runtime bind-mounted it
-// read-only. A no-op when it already reads that way.
-func setSysctl(key, value string) error {
-	return hostProcSys.set(key, value)
-}
-
-func (p procSys) set(key, value string) error {
+func (p procSys) set(sysctls []Sysctl) error {
 	procSysMu.Lock()
 	defer procSysMu.Unlock()
 
-	path := "/proc/sys/" + key
-	if b, err := p.readFile(path); err == nil && strings.TrimSpace(string(b)) == value {
-		return nil
-	}
-	// Only EROFS is worth remounting for; any other error is returned as is.
-	if err := p.writeFile(path, []byte(value+"\n")); !errors.Is(err, unix.EROFS) {
-		if err != nil {
-			return fmt.Errorf("while setting %s in the current netns: %w", key, err)
+	writeAll := func() error {
+		for _, s := range sysctls {
+			err := p.writeFile("/proc/sys/"+s.Key, []byte(s.Value+"\n"))
+			if errors.Is(err, fs.ErrNotExist) && strings.HasPrefix(s.Key, "net/ipv6/") {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
+			}
 		}
 		return nil
 	}
+
+	// Only EROFS is worth remounting for; any other error is returned as is.
+	err := writeAll()
+	if err == nil || !errors.Is(err, unix.EROFS) {
+		return err
+	}
+
 	if err := p.remount(false); err != nil {
-		return fmt.Errorf("while remounting /proc/sys read-write to set %s: %w", key, err)
+		return fmt.Errorf("while remounting /proc/sys read-write: %w", err)
 	}
 	defer func() {
 		_ = p.remount(true)
 	}()
-	if err := p.writeFile(path, []byte(value+"\n")); err != nil {
-		return fmt.Errorf("while setting %s in the current netns: %w", key, err)
-	}
-	return nil
+	return writeAll()
 }

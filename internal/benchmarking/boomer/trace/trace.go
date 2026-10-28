@@ -30,7 +30,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 )
 
 // UpdatableSampler wraps a TraceIDRatioBased sampler whose probability can
@@ -68,22 +68,9 @@ func Init(ctx context.Context, serviceName string, sampler sdktrace.Sampler) (*s
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	res, err := resource.New(ctx,
-		resource.WithTelemetrySDK(),
-		resource.WithSchemaURL(semconv.SchemaURL),
-		resource.WithAttributes(
-			semconv.ServiceName(serviceName),
-			semconv.ServiceInstanceID(uuid.NewString()),
-		),
-		resource.WithFromEnv(),
-	)
-	// Partial-resource warnings come back as errors; tolerate them the way
-	// serverboot.InitTracing does so a missing OTEL_* env var doesn't fail
-	// the whole worker.
-	if errors.Is(err, resource.ErrPartialResource) || errors.Is(err, resource.ErrSchemaURLConflict) {
-		slog.WarnContext(ctx, "partial telemetry resource", slog.Any("err", err))
-	} else if err != nil {
-		return nil, fmt.Errorf("create resource: %w", err)
+	res, err := newResource(ctx, serviceName)
+	if err != nil {
+		return nil, err
 	}
 
 	exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithInsecure())
@@ -107,4 +94,28 @@ func Init(ctx context.Context, serviceName string, sampler sdktrace.Sampler) (*s
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	return tp, nil
+}
+
+// newResource builds the TracerProvider's resource. semconv must track the
+// schema version the SDK's own detector emits, else the merge drops the schema
+// URL with ErrSchemaURLConflict (tolerated below).
+func newResource(ctx context.Context, serviceName string) (*resource.Resource, error) {
+	res, err := resource.New(ctx,
+		resource.WithTelemetrySDK(),
+		resource.WithSchemaURL(semconv.SchemaURL),
+		resource.WithAttributes(
+			semconv.ServiceName(serviceName),
+			semconv.ServiceInstanceID(uuid.NewString()),
+		),
+		resource.WithFromEnv(),
+	)
+	// Partial-resource warnings come back as errors; tolerate them the way
+	// serverboot.InitTracing does so a missing OTEL_* env var doesn't fail
+	// the whole worker.
+	if errors.Is(err, resource.ErrPartialResource) || errors.Is(err, resource.ErrSchemaURLConflict) {
+		slog.WarnContext(ctx, "partial telemetry resource", slog.Any("err", err))
+	} else if err != nil {
+		return nil, fmt.Errorf("create resource: %w", err)
+	}
+	return res, nil
 }

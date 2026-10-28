@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
@@ -31,6 +32,9 @@ func TestValidateIamFlags(t *testing.T) {
 			ProjectId: "test-project",
 		}, nil
 	}
+
+	tooLong := strings.Repeat("b", 57)
+	tooLongErr := `bucket name "` + tooLong + `" is too long: the asset bucket "` + tooLong + `-assets" would have 64 characters, and GCS allows 63`
 
 	tests := []struct {
 		name           string
@@ -61,6 +65,12 @@ func TestValidateIamFlags(t *testing.T) {
 			cfg:            Config{ProjectID: "test-project", ProjectNumber: "123"},
 			bucketBindings: true,
 			want:           "--bucket is required for bucket bindings",
+		},
+		{
+			name:           "bucket name too long for the asset bucket",
+			cfg:            Config{ProjectID: "test-project", BucketName: tooLong},
+			bucketBindings: true,
+			want:           tooLongErr,
 		},
 		{
 			name:           "bucket not required when bucket bindings are disabled",

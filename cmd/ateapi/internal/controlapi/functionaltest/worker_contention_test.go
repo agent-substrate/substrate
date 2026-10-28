@@ -23,9 +23,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/hardware"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestResumeActor_ConcurrentOntoOneWorker is the regression test for a refusal
@@ -57,9 +58,9 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 	setWorkerActorCapacity(t, tc, "pool1", actors)
 
 	for i := range actors {
-		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("id%d", i)},
-			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		if _, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("id%d", i)},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		}}); err != nil {
 			t.Fatalf("CreateActor %d: %v", i, err)
 		}
@@ -75,8 +76,8 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 	for i := range actors {
 		wg.Go(func() {
 			start.Wait()
-			_, errs[i] = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: fmt.Sprintf("id%d", i)},
+			_, errs[i] = tc.client.ResumeActor(context.Background(), &ateapi.ResumeActorRequest{
+				Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: fmt.Sprintf("id%d", i)},
 			})
 		})
 	}
@@ -101,11 +102,11 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 	// reported as won would show up here rather than as an error above. Found by
 	// pod rather than by taking the only worker in the list -- the list is
 	// process-wide, so a -count>1 run sees the workers earlier iterations made.
-	listed, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	listed, err := tc.client.ListWorkers(context.Background(), &ateapi.ListWorkersRequest{})
 	if err != nil {
 		t.Fatalf("ListWorkers: %v", err)
 	}
-	var worker *ateapipb.Worker
+	var worker *ateapi.Worker
 	for _, candidate := range listed.GetWorkers() {
 		if candidate.GetWorkerNamespace() == ns && candidate.GetWorkerPod() == "worker-1" {
 			worker = candidate
@@ -153,10 +154,47 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 	}
 }
 
-// reportWorkerCapacity stands in for the worker's capacity report, which atelet
-// forwards to WorkerService in a real cluster, with compute for actors of the
-// size test templates declare. It waits for the worker cache, which placement
-// reads, to catch up.
+// reportedEpoch is the epoch reportWorkerCapacity registers, and the one the
+// fake atelet reports its workloads ran under.
+const reportedEpoch = 1
+
+// defaultWorkerRuntime returns the default ActorSandboxRuntime that
+// reportWorkerCapacity records on a test worker of the given sandbox class.
+func defaultWorkerRuntime(class string) *ateapi.ActorSandboxRuntime {
+	if class == "" {
+		class = "gvisor"
+	}
+	return &ateapi.ActorSandboxRuntime{
+		SandboxClass: class,
+		Version: &ateapi.VersionedSandboxCompat{
+			SchemaVersion: hardware.SchemaVersionV1,
+			Attributes: []*ateapi.AttributeEntry{
+				{Key: hardware.AttrArchitecture, Value: "amd64"},
+				{Key: hardware.AttrSandboxBundleHash, Value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+			},
+		},
+	}
+}
+
+// workerSandboxClasses is the sandbox_classes a worker reports to run def as
+// its default runtime and restore restorable beyond it, all of def's class.
+// The arguments are the ActorSandboxRuntimes a test also expects on snapshots and
+// assignments, so both sides of a match derive from one value; the compats
+// are copied so the stored row never aliases them.
+func workerSandboxClasses(def *ateapi.ActorSandboxRuntime, restorable ...*ateapi.ActorSandboxRuntime) []*ateapi.WorkerSandboxClass {
+	class := &ateapi.WorkerSandboxClass{SandboxClass: def.GetSandboxClass(), DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: proto.CloneOf(def.GetVersion())}}
+	for _, r := range restorable {
+		class.RestorableRuntimes = append(class.RestorableRuntimes, &ateapi.WorkerSandboxRuntime{Version: proto.CloneOf(r.GetVersion())})
+	}
+	return []*ateapi.WorkerSandboxClass{class}
+}
+
+// reportWorkerCapacity stands in for the worker process's registration and
+// runtimes report, which atelet forwards to WorkerService in a real cluster,
+// with compute for actors of the size test templates declare. A Worker not yet
+// registered gets reportedEpoch, an IP and a default runtime; one already
+// registered keeps them. It waits for the worker cache, which placement reads,
+// to catch up.
 func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int32) {
 	t.Helper()
 	ctx := context.Background()
@@ -164,10 +202,17 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 	if err != nil {
 		t.Fatalf("getting worker %s: %v", name, err)
 	}
-	if _, err := tc.persistence.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Status.Capacity = &ateapipb.WorkerResources{
-			Actors:    actors,
-			Resources: resources.CPUMemory(int64(actors)*1000, int64(actors)*512<<20),
+	if _, err := tc.persistence.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapi.Worker) error {
+		if toUpdate.Status.RegisteredEpoch == 0 {
+			toUpdate.Status.RegisteredEpoch = reportedEpoch
+			toUpdate.Status.Ips = []string{"127.0.0.1"}
+		}
+		toUpdate.Status.Capacity = &ateapi.WorkerResources{
+			Actors:        actors,
+			CpuMillicores: int64(actors) * 1000, MemoryBytes: int64(actors) * 512 << 20,
+		}
+		if len(toUpdate.Status.SandboxClasses) == 0 {
+			toUpdate.Status.SandboxClasses = workerSandboxClasses(defaultWorkerRuntime("gvisor"))
 		}
 		return nil
 	}); err != nil {

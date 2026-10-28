@@ -32,7 +32,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/credprovider/v1"
 )
 
 // /healthz passes regardless of readiness; /readyz follows the ready flag.
@@ -135,16 +135,16 @@ func TestBuildVersionPrefersExplicitVersion(t *testing.T) {
 // blockingProvider blocks FetchSecret until release is closed or the call is
 // canceled, closing entered once the call starts.
 type blockingProvider struct {
-	credproviderpb.UnimplementedCredentialProviderServer
+	credprovider.UnimplementedCredentialProviderServer
 	entered chan struct{}
 	release chan struct{}
 }
 
-func (p *blockingProvider) FetchSecret(ctx context.Context, _ *credproviderpb.FetchSecretRequest) (*credproviderpb.FetchSecretResponse, error) {
+func (p *blockingProvider) FetchSecret(ctx context.Context, _ *credprovider.FetchSecretRequest) (*credprovider.FetchSecretResponse, error) {
 	close(p.entered)
 	select {
 	case <-p.release:
-		return &credproviderpb.FetchSecretResponse{}, nil
+		return &credprovider.FetchSecretResponse{}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -156,7 +156,7 @@ func startBlockingServer(t *testing.T, p *blockingProvider) (*grpc.Server, <-cha
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
-	credproviderpb.RegisterCredentialProviderServer(srv, p)
+	credprovider.RegisterCredentialProviderServer(srv, p)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -170,7 +170,7 @@ func startBlockingServer(t *testing.T, p *blockingProvider) (*grpc.Server, <-cha
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := credproviderpb.NewCredentialProviderClient(conn).FetchSecret(context.Background(), &credproviderpb.FetchSecretRequest{})
+		_, err := credprovider.NewCredentialProviderClient(conn).FetchSecret(context.Background(), &credprovider.FetchSecretRequest{})
 		result <- err
 	}()
 	select {

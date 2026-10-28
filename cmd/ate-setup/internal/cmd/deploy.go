@@ -60,7 +60,7 @@ ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_*
 select an external database.
 
 Shape the install with the global --atenet-dataplane, --cluster-size,
---cordon-control-plane, --fake-data-plane, and --ingress-auth-mode flags.`,
+--cordon-system-infra-components, and --fake-data-plane flags.`,
 	// Args runs before the root command loads the configuration, so only the
 	// flag is readable here. Checking it keeps an unusable value from costing
 	// a credential fetch, which is the common case; a value arriving from the
@@ -100,7 +100,7 @@ var deployAteletCmd = &cobra.Command{
 var deployAPIServerCmd = &cobra.Command{
 	Use:     "apiserver",
 	Aliases: []string{"ate-apiserver"},
-	Short:   "Deploy ate-api-server only",
+	Short:   "Deploy ate-api-server and ate-idp-server",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployAteAPIServer(cmd.Context())

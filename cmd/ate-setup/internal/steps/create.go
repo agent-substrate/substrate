@@ -63,10 +63,12 @@ func (e *Env) CreateJWTAuthorityPoolSecret(ctx context.Context) error {
 	return e.createJWTPool(ctx, e.Namespace(), SecretActorIDJWTPool)
 }
 
-// CreateActorIDCAPoolSecret generates the actor-identity CA pool.
+// CreateActorIDCAPoolSecret generates the actor-identity CA pool. External
+// relying parties trust this root, so it uses ECDSA P-256, which is more
+// broadly accepted than Ed25519.
 func (e *Env) CreateActorIDCAPoolSecret(ctx context.Context) error {
 	log.Step("create_actor_id_ca_pool_secret")
-	return e.createCAPool(ctx, e.Namespace(), SecretActorIDCAPool)
+	return e.createCAPool(ctx, e.Namespace(), SecretActorIDCAPool, localca.KeyTypeECDSAP256)
 }
 
 // CreateEgressMITMCAPoolSecret generates the egress MITM CA pool.
@@ -102,13 +104,13 @@ func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 	if err := e.Kube.EnsureNamespace(ctx, NamespacePodCert); err != nil {
 		return err
 	}
-	if err := e.createCAPool(ctx, NamespacePodCert, SecretServiceDNSCA); err != nil {
+	if err := e.createCAPool(ctx, NamespacePodCert, SecretServiceDNSCA, localca.KeyTypeED25519); err != nil {
 		return err
 	}
-	if err := e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA); err != nil {
+	if err := e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA, localca.KeyTypeED25519); err != nil {
 		return err
 	}
-	return e.createCAPool(ctx, NamespacePodCert, SecretPostgresCA)
+	return e.createCAPool(ctx, NamespacePodCert, SecretPostgresCA, localca.KeyTypeED25519)
 }
 
 // CreateActorIDCACertsSecret derives a certificate-only trust bundle from the
@@ -220,7 +222,7 @@ const inClusterIssuer = "https://kubernetes.default.svc"
 // OIDC discovery handshake. A GKE or otherwise external issuer needs neither.
 func buildAuthenticationConfig(issuer string) string {
 	config := fmt.Sprintf(
-		"actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
+		"jwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
 		issuer)
 	switch issuer {
 	case inClusterIssuer, inClusterIssuer + ".cluster.local":
@@ -238,7 +240,7 @@ func buildAuthenticationConfig(issuer string) string {
 // An existing pool is left alone. Regenerating it would rotate the root out
 // from under every certificate already issued from it, and the callers in the
 // shell script all guarded these calls with an existence check for that reason.
-func (e *Env) createCAPool(ctx context.Context, namespace, name string) error {
+func (e *Env) createCAPool(ctx context.Context, namespace, name string, keyType localca.KeyType) error {
 	exists, err := e.Kube.SecretExists(ctx, namespace, name)
 	if err != nil {
 		return err
@@ -248,7 +250,7 @@ func (e *Env) createCAPool(ctx context.Context, namespace, name string) error {
 		return nil
 	}
 
-	data, err := newCAPoolSecretData(poolKeyID, localca.KeyTypeED25519)
+	data, err := newCAPoolSecretData(poolKeyID, keyType)
 	if err != nil {
 		return fmt.Errorf("while generating the CA pool for %s/%s: %w", namespace, name, err)
 	}

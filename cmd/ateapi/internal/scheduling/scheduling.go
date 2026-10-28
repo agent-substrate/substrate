@@ -19,12 +19,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"math/rand"
 	"slices"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -44,6 +46,12 @@ type Constraints struct {
 	// asks it of every candidate.
 	RequiredRuntime hardware.Requirement
 
+	// SnapshotRuntime is the runtime of the snapshot the actor restores from,
+	// or the zero Requirement when it starts on a worker's default runtime.
+	// Unlike RequiredRuntime it is never relaxed: it picks the worker runtime
+	// the actor runs under, and so the overhead it is booked with.
+	SnapshotRuntime hardware.Requirement
+
 	// TemplateSelector and ActorSelector must both match the worker's labels.
 	TemplateSelector labels.Selector
 	ActorSelector    labels.Selector
@@ -53,9 +61,9 @@ type Constraints struct {
 	// to specific node VMs.
 	RequiredNodes []string
 
-	// Limits are the actor's declared resource limits, named as a Worker names
-	// the capacity it reports, so the two subtract.
-	Limits *ateapipb.Resources
+	// Limits are the actor's declared resource limits, in the units a Worker
+	// reports its capacity in, so the two subtract.
+	Limits *ateapi.Resources
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -67,20 +75,20 @@ var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 type Scheduler interface {
 	// Schedule returns a worker that meets constraints and has room.
 	// Returns ErrNoCapacity when no worker that meets constraints has room.
-	Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error)
+	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
 
 	// Applies reports whether worker satisfies non-capacity constraints. Capacity
 	// is excluded so an existing assignment does not make its Worker ineligible.
-	Applies(worker *ateapipb.Worker, constraints Constraints) bool
+	Applies(worker *ateapi.Worker, constraints Constraints) bool
 
 	// HasRoom reports whether worker's remaining capacity admits one more actor
 	// of this size, in every dimension. Independent of Applies.
-	HasRoom(worker *ateapipb.Worker, constraints Constraints) bool
+	HasRoom(worker *ateapi.Worker, constraints Constraints) bool
 }
 
 // WorkerSource provides the whole fleet of workers.
 type WorkerSource interface {
-	Workers() ([]*ateapipb.Worker, error)
+	Workers() ([]*ateapi.Worker, error)
 }
 
 type scheduler struct {
@@ -112,15 +120,10 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 // random (power of two choices), and returns the less-loaded one, where load is
 // the higher of actor-slot and compute-resource utilization. Spreading across
 // the warm pool avoids hotspots until autoscaling reclaims idle workers.
-func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error) {
+func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers: %w", err)
-	}
-
-	want, err := resources.ParseQuantities(constraints.Limits)
-	if err != nil {
-		return nil, fmt.Errorf("while parsing actor resource limits: %w", err)
 	}
 
 	var candidates []candidate
@@ -128,7 +131,11 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		if !s.Applies(worker, constraints) {
 			continue
 		}
-		if cand, ok := checkRoom(worker, want); ok {
+		booking, ok := Booking(worker, constraints)
+		if !ok {
+			continue
+		}
+		if cand, ok := checkRoom(worker, booking); ok {
 			candidates = append(candidates, cand)
 		}
 	}
@@ -153,7 +160,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 // candidate pairs an eligible worker with its cached compute utilization.
 type candidate struct {
-	worker *ateapipb.Worker
+	worker *ateapi.Worker
 	// resUtil is the worker's dominant compute-resource utilization in [0,1],
 	// or -1 if not yet computed.
 	resUtil float64
@@ -192,30 +199,23 @@ func lessLoaded(a, b *candidate) bool {
 }
 
 // workerResourceUtilization returns the highest allocated/capacity ratio across
-// compute dimensions, or 1 when capacity is unreported or quantities fail to parse.
-func workerResourceUtilization(w *ateapipb.Worker) float64 {
-	capQ, err := resources.ParseQuantities(w.GetStatus().GetCapacity().GetResources())
-	if err != nil || len(capQ) == 0 {
-		return 1
-	}
-	usedQ, err := resources.ParseQuantities(w.GetStatus().GetAllocated().GetResources())
-	if err != nil {
-		return 1
-	}
-	return quantitiesUtilization(capQ, usedQ)
+// compute dimensions, or 1 when capacity is unreported.
+func workerResourceUtilization(w *ateapi.Worker) float64 {
+	return utilization(w.GetStatus().GetCapacity(), w.GetStatus().GetAllocated())
 }
 
-func quantitiesUtilization(capQ, usedQ resources.Quantities) float64 {
+func utilization(capacity, used *ateapi.WorkerResources) float64 {
 	var (
 		maxRatio    float64
 		hasPositive bool
 	)
-	for name, capVal := range capQ {
-		if capFloat := capVal.AsApproximateFloat64(); capFloat > 0 {
+	for _, d := range [][2]int64{
+		{capacity.GetCpuMillicores(), used.GetCpuMillicores()},
+		{capacity.GetMemoryBytes(), used.GetMemoryBytes()},
+	} {
+		if d[0] > 0 {
 			hasPositive = true
-			if usedVal, ok := usedQ[name]; ok {
-				maxRatio = max(maxRatio, usedVal.AsApproximateFloat64()/capFloat)
-			}
+			maxRatio = max(maxRatio, float64(d[1])/float64(d[0]))
 		}
 	}
 	if !hasPositive {
@@ -224,15 +224,24 @@ func quantitiesUtilization(capQ, usedQ resources.Quantities) float64 {
 	return maxRatio
 }
 
-func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
-	if worker.GetSandboxClass() == "" {
+// Registered reports whether worker's current worker process has registered
+// and reported its sandbox class and runtimes. The assignment records the
+// runtime and atelet requires it on Run/Restore, so a worker without one
+// cannot host anything yet.
+func Registered(worker *ateapi.Worker) bool {
+	return worker.GetStatus().GetRegisteredEpoch() != 0 && hardware.SandboxClass(worker.GetStatus()) != ""
+}
+
+func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool {
+	if !Registered(worker) {
 		return false
 	}
-	if constraints.SandboxClass != "" && worker.GetSandboxClass() != constraints.SandboxClass {
+	workerClass := hardware.SandboxClass(worker.GetStatus())
+	if constraints.SandboxClass != "" && workerClass != constraints.SandboxClass {
 		return false
 	}
 
-	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+	if worker.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
 		return false
 	}
 
@@ -254,20 +263,62 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 // HasRoom reports whether what the worker has left admits one more actor of
 // this size. A dimension the worker does not report is unconstrained, so
 // placement is never blocked by missing data.
-//
-// A worker whose recorded capacity or allocation will not parse is treated as
-// having no room: it is the only answer that cannot overcommit a worker whose
-// true occupancy is unreadable.
-func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bool {
-	want, err := resources.ParseQuantities(constraints.Limits)
-	if err != nil {
+func (s *scheduler) HasRoom(worker *ateapi.Worker, constraints Constraints) bool {
+	booking, ok := Booking(worker, constraints)
+	if !ok {
 		return false
 	}
-	_, ok := checkRoom(worker, want)
+	_, ok = checkRoom(worker, booking)
 	return ok
 }
 
-func checkRoom(worker *ateapipb.Worker, want resources.Quantities) (candidate, bool) {
+// Booking is what an actor takes from the worker's capacity: its limits plus
+// the overhead of the worker runtime it would run under there. It reports
+// false when that doesn't fit in an int64, and the actor doesn't fit on the worker.
+func Booking(worker *ateapi.Worker, constraints Constraints) (*ateapi.Resources, bool) {
+	overhead := constraints.SnapshotRuntime.WorkerRuntimeFor(worker.GetStatus()).GetActorOverhead()
+	if overhead == nil {
+		return constraints.Limits, true
+	}
+	limit := constraints.Limits.GetMemoryBytes()
+	scaled, ok := perGiB(limit, overhead.GetMemoryBytesPerGib())
+	if !ok {
+		return nil, false
+	}
+	memory, ok := sum(limit, overhead.GetMemoryBytes(), scaled)
+	if !ok {
+		return nil, false
+	}
+	return &ateapi.Resources{CpuMillicores: constraints.Limits.GetCpuMillicores(), MemoryBytes: memory}, true
+}
+
+// perGiB scales rate bytes per GiB to n bytes, and reports false on overflow.
+func perGiB(n, rate int64) (int64, bool) {
+	if n < 0 || rate < 0 {
+		return 0, false
+	}
+	hi, lo := bits.Mul64(uint64(n), uint64(rate))
+	// divide the 128-bit product by 1<<30
+	if hi>>30 != 0 {
+		return 0, false
+	}
+	v := hi<<34 | lo>>30
+	return int64(v), v <= math.MaxInt64
+}
+
+// sum adds non-negative values, and reports false on overflow.
+func sum(vs ...int64) (int64, bool) {
+	var total int64
+	for _, v := range vs {
+		if v < 0 || v > math.MaxInt64-total {
+			return 0, false
+		}
+		total += v
+	}
+	return total, true
+}
+
+func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 
@@ -277,24 +328,12 @@ func checkRoom(worker *ateapipb.Worker, want resources.Quantities) (candidate, b
 		return candidate{}, false
 	}
 
-	if len(want) == 0 {
+	if want.GetCpuMillicores() == 0 && want.GetMemoryBytes() == 0 {
 		return candidate{worker: worker, resUtil: -1}, true
 	}
-	free, err := resources.ParseQuantities(capacity.GetResources())
-	if err != nil {
+	if !resources.Covers(resources.Free(capacity, used), want) {
 		return candidate{}, false
 	}
-	if free == nil {
-		free = resources.Quantities{}
-	}
-	allocated, err := resources.ParseQuantities(used.GetResources())
-	if err != nil {
-		return candidate{}, false
-	}
-	resUtil := quantitiesUtilization(free, allocated)
-	free.Sub(allocated)
-	if !free.Covers(want) {
-		return candidate{}, false
-	}
+	resUtil := utilization(capacity, used)
 	return candidate{worker: worker, resUtil: resUtil}, true
 }

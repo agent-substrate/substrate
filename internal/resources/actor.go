@@ -18,7 +18,4 @@ const (
 	// ResourceNameRegexPattern is the regular expression pattern for a valid
 	// Substrate resource name.
 	ResourceNameRegexPattern = `[a-z0-9]([-a-z0-9]*[a-z0-9])?`
-	// GoldenActorAtespace is the reserved system atespace that per-template golden
-	// actors live in.
-	GoldenActorAtespace = "ate-golden"
 )

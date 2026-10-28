@@ -20,22 +20,20 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection/grpc_reflection_v1"
+	"google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
 )
 
 // UnaryServerInterceptor returns a gRPC unary interceptor that enforces per-RPC
-// permissions registered in defaultRPCPermissions using authorizer. When
-// enforce is false, only rules marked alwaysEnforce are checked. When enforce
-// is true, an RPC with no rule is denied.
-func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServerInterceptor {
+// permissions registered in defaultRPCPermissions using authorizer. An RPC
+// with no rule is denied.
+func UnaryServerInterceptor(authorizer *Authorizer) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if IsBypassed(ctx) {
 			return handler(ctx, req)
 		}
 		rule, registered := defaultRPCPermissions[info.FullMethod]
 		if registered && rule.authorizedInHandler != "" {
-			return handler(ctx, req)
-		}
-		if !enforce && !rule.alwaysEnforce {
 			return handler(ctx, req)
 		}
 		if !registered {
@@ -58,5 +56,26 @@ func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServ
 		}
 
 		return handler(ctx, req)
+	}
+}
+
+// streamRules lists the streaming RPCs ate-api-server serves; any other stream
+// is denied. ateapi.proto defines none (see
+// TestDefaultRPCPermissions_CoversEveryServedRPC). gRPC reflection is open to
+// any authenticated caller, like Kubernetes API discovery: it returns only the
+// served API schema, which is public in api/ateapi/v1/ateapi.proto.
+var streamRules = map[string]bool{
+	grpc_reflection_v1.ServerReflection_ServerReflectionInfo_FullMethodName:      true,
+	grpc_reflection_v1alpha.ServerReflection_ServerReflectionInfo_FullMethodName: true,
+}
+
+// StreamServerInterceptor returns a gRPC stream interceptor that denies every
+// streaming RPC not in streamRules.
+func StreamServerInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if !streamRules[info.FullMethod] {
+			return apierror.PermissionDenied("permission denied: no authorization rule for %s", info.FullMethod)
+		}
+		return handler(srv, ss)
 	}
 }

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # The ActorTemplate of the cross-atespace security fixture: a
-# protojson-shaped ateapipb.ActorTemplate created through the ate API by
+# protojson-shaped ateapi.ActorTemplate created through the ate API by
 # e2e.DeploySubstrateFixture.
 #
 # BOTH atespaces deploy this same file. They differ only in the ${FIXTURE_SUFFIX}
@@ -72,9 +72,7 @@ volumes:
   durableDir: {}
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e${FIXTURE_SUFFIX}/

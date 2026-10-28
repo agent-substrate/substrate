@@ -13,7 +13,8 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`).
+- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
+  or [GKE Quickstart](../../README.md#gke-quickstart-development).
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
 
@@ -27,7 +28,7 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 > deployment.
 
 ```bash
-./hack/install-ate.sh --deploy-demo-parking
+go run ./cmd/ate-setup deploy demo parking
 ```
 
 This command will:
@@ -53,37 +54,36 @@ for id in p1 p2 p3 p4; do
 done
 ```
 
-### 3. Port-forward the atenet router
+### 3. Proxy to the actors
 
 ```bash
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+kubectl ate proxy actor p1 8001:80 -a ate-demo-parking &
+kubectl ate proxy actor p2 8002:80 -a ate-demo-parking &
+kubectl ate proxy actor p3 8003:80 -a ate-demo-parking &
 ```
 
 ## How to Use
 
 Parking is **on by default** (`--parked-request-budget=5s`,
 `--parked-request-max=1024`), so the cluster you just deployed already parks.
-Every curl request below selects its Actor with `ate-target-actor`; changing
-the URL or `Host` does not select another Actor.
 
 ### A. Watch a 503 become a served request
 
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "ate-target-actor: ate-demo-parking/p1" http://localhost:8000
-curl -s -H "ate-target-actor: ate-demo-parking/p2" http://localhost:8000
+curl -s http://localhost:8001
+curl -s http://localhost:8002
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
-kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
+kubectl ate get actors -a ate-demo-parking   # p1,p2 RUNNING; p3,p4 SUSPENDED
 ```
 
 Now request **p3** with timing. The pool is full, so this request **parks** —
 the `curl` hangs while the router retries the resume:
 
 ```bash
-curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "ate-target-actor: ate-demo-parking/p3" http://localhost:8000
+curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' http://localhost:8003
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1
@@ -166,5 +166,5 @@ Remove the demo — this deletes the demo's actors (suspending running ones
 first) and then the template, atespace, pool, and namespace:
 
 ```bash
-./hack/install-ate.sh --delete-demo-parking
+go run ./cmd/ate-setup delete demo parking
 ```

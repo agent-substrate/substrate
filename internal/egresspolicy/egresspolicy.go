@@ -33,7 +33,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // Destination is what a request is going to, as far as the leg evaluating it
@@ -61,7 +61,7 @@ type Decision struct {
 	RuleIndex int
 	// Effects are the effects of the deciding rule, when it declares any.
 	// Nil otherwise.
-	Effects *ateapipb.HttpRuleEffects
+	Effects *ateapi.HttpRuleEffects
 }
 
 // Policy is an EgressPolicy with its patterns and ports parsed once, ready to
@@ -84,7 +84,7 @@ type compiledRule struct {
 	// ports the rule names; anyPort when it names all of them.
 	ports   []uint16
 	anyPort bool
-	effects *ateapipb.HttpRuleEffects
+	effects *ateapi.HttpRuleEffects
 }
 
 // Ports read for an http or https rule that names none. ateapi fills these
@@ -99,7 +99,7 @@ const (
 // same way, so nothing should fail here; an entry that does (an older
 // ateapi accepted it) is dropped and reported, which fails closed because it
 // only narrows an allow rule. The Policy is always usable.
-func Compile(policy *ateapipb.EgressPolicy) (*Policy, []error) {
+func Compile(policy *ateapi.EgressPolicy) (*Policy, []error) {
 	var errs []error
 	compiled := &Policy{}
 	for i, rule := range policy.GetRules() {
@@ -107,7 +107,7 @@ func Compile(policy *ateapipb.EgressPolicy) (*Policy, []error) {
 			cr          compiledRule
 			member      string
 			raw         []string
-			ports       *ateapipb.Ports
+			ports       *ateapi.Ports
 			defaultPort uint16
 		)
 		switch {

@@ -134,3 +134,11 @@ func TestImageNamesAreUnique(t *testing.T) {
 		byName[name] = pkg
 	}
 }
+
+// A nested package publishes under its last path element, which is how a
+// build from source names it and how --image-repo has to find it.
+func TestImageNameOfANestedPackage(t *testing.T) {
+	if got := images.ImageName("demos/multi-template/fspersist"); got != "fspersist" {
+		t.Errorf("ImageName() = %q, want fspersist", got)
+	}
+}

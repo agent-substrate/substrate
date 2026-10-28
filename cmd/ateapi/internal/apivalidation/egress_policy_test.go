@@ -20,21 +20,21 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func validEgressPolicy() *ateapipb.EgressPolicy {
-	return &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "default"},
-		Rules: []*ateapipb.EgressRule{{
-			Http: &ateapipb.HttpRule{
+func validEgressPolicy() *ateapi.EgressPolicy {
+	return &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+		Rules: []*ateapi.EgressRule{{
+			Http: &ateapi.HttpRule{
 				Hostnames: []string{"api.example.com"},
-				Effects: &ateapipb.HttpRuleEffects{
-					ReplaceHeaders: []*ateapipb.CredentialHeader{{
+				Effects: &ateapi.HttpRuleEffects{
+					ReplaceHeaders: []*ateapi.CredentialHeader{{
 						Header:        "Authorization",
 						Prefix:        "Bearer ",
 						CredentialUri: "ate-secret://kubernetes.io/provider/ns/name",
@@ -47,32 +47,32 @@ func validEgressPolicy() *ateapipb.EgressPolicy {
 
 // actorJWTHeader is an Authorization header replaced with a 900-second actor
 // JWT for audiences.
-func actorJWTHeader(audiences ...string) *ateapipb.CredentialHeader {
-	return &ateapipb.CredentialHeader{
+func actorJWTHeader(audiences ...string) *ateapi.CredentialHeader {
+	return &ateapi.CredentialHeader{
 		Header:   "Authorization",
 		Prefix:   "Bearer ",
-		ActorJwt: &ateapipb.ActorJwtSource{Audiences: audiences, ExpirationSeconds: 900},
+		ActorJwt: &ateapi.ActorJwtSource{Audiences: audiences, ExpirationSeconds: 900},
 	}
 }
 
 func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
-	validReq := func() *ateapipb.CreateActorEgressPolicyRequest {
-		return &ateapipb.CreateActorEgressPolicyRequest{
-			Actor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+	validReq := func() *ateapi.CreateActorEgressPolicyRequest {
+		return &ateapi.CreateActorEgressPolicyRequest{
+			Actor:        &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor"},
 			EgressPolicy: validEgressPolicy(),
 		}
 	}
 
 	tests := []struct {
 		name string
-		req  *ateapipb.CreateActorEgressPolicyRequest
+		req  *ateapi.CreateActorEgressPolicyRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
 		req:  validReq(),
 	}, {
 		name: "missing actor",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor = nil
 			return r
@@ -82,7 +82,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing actor atespace",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Atespace = ""
 			return r
@@ -92,7 +92,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid actor atespace",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Atespace = "invalid value"
 			return r
@@ -103,7 +103,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing actor name",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Name = ""
 			return r
@@ -113,7 +113,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid actor name",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Name = "invalid value"
 			return r
@@ -123,7 +123,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing policy",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy = nil
 			return r
@@ -133,7 +133,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing metadata",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Metadata = nil
 			return r
@@ -143,7 +143,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing policy atespace",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Metadata.Atespace = ""
 			return r
@@ -153,7 +153,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing default name",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Metadata.Name = ""
 			return r
@@ -163,7 +163,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "wrong policy name",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Metadata.Name = "other"
 			return r
@@ -173,7 +173,7 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "mismatched policy atespace",
-		req: func() *ateapipb.CreateActorEgressPolicyRequest {
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Metadata.Atespace = "other"
 			return r
@@ -190,28 +190,28 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 }
 
 func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
-	validReq := func() *ateapipb.GetActorEgressPolicyRequest {
-		return &ateapipb.GetActorEgressPolicyRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+	validReq := func() *ateapi.GetActorEgressPolicyRequest {
+		return &ateapi.GetActorEgressPolicyRequest{
+			Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor"},
 			Name:  resources.SingletonName,
 		}
 	}
 	tests := []struct {
 		name string
-		req  *ateapipb.GetActorEgressPolicyRequest
+		req  *ateapi.GetActorEgressPolicyRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
 		req:  validReq(),
 	}, {
 		name: "missing actor",
-		req:  &ateapipb.GetActorEgressPolicyRequest{Name: resources.SingletonName},
+		req:  &ateapi.GetActorEgressPolicyRequest{Name: resources.SingletonName},
 		want: field.ErrorList{
 			field.Required(field.NewPath("actor"), ""),
 		},
 	}, {
 		name: "missing atespace",
-		req: func() *ateapipb.GetActorEgressPolicyRequest {
+		req: func() *ateapi.GetActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Atespace = ""
 			return r
@@ -221,7 +221,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid atespace",
-		req: func() *ateapipb.GetActorEgressPolicyRequest {
+		req: func() *ateapi.GetActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Atespace = "invalid value"
 			return r
@@ -231,7 +231,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing name",
-		req: func() *ateapipb.GetActorEgressPolicyRequest {
+		req: func() *ateapi.GetActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Name = ""
 			return r
@@ -241,7 +241,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid name",
-		req: func() *ateapipb.GetActorEgressPolicyRequest {
+		req: func() *ateapi.GetActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Name = "invalid value"
 			return r
@@ -251,7 +251,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing singleton name",
-		req: func() *ateapipb.GetActorEgressPolicyRequest {
+		req: func() *ateapi.GetActorEgressPolicyRequest {
 			r := validReq()
 			r.Name = ""
 			return r
@@ -261,7 +261,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "wrong singleton name",
-		req: func() *ateapipb.GetActorEgressPolicyRequest {
+		req: func() *ateapi.GetActorEgressPolicyRequest {
 			r := validReq()
 			r.Name = "other"
 			return r
@@ -278,22 +278,22 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 }
 
 func TestValidateUpdateActorEgressPolicyRequest(t *testing.T) {
-	validReq := func() *ateapipb.UpdateActorEgressPolicyRequest {
-		return &ateapipb.UpdateActorEgressPolicyRequest{
-			Actor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+	validReq := func() *ateapi.UpdateActorEgressPolicyRequest {
+		return &ateapi.UpdateActorEgressPolicyRequest{
+			Actor:        &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor"},
 			EgressPolicy: validEgressPolicy(),
 		}
 	}
 	tests := []struct {
 		name string
-		req  *ateapipb.UpdateActorEgressPolicyRequest
+		req  *ateapi.UpdateActorEgressPolicyRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
 		req:  validReq(),
 	}, {
 		name: "missing actor",
-		req: func() *ateapipb.UpdateActorEgressPolicyRequest {
+		req: func() *ateapi.UpdateActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor = nil
 			return r
@@ -303,7 +303,7 @@ func TestValidateUpdateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing policy",
-		req: func() *ateapipb.UpdateActorEgressPolicyRequest {
+		req: func() *ateapi.UpdateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy = nil
 			return r
@@ -313,7 +313,7 @@ func TestValidateUpdateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "mismatched atespace",
-		req: func() *ateapipb.UpdateActorEgressPolicyRequest {
+		req: func() *ateapi.UpdateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Metadata.Atespace = "other"
 			return r
@@ -323,7 +323,7 @@ func TestValidateUpdateActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid rule",
-		req: func() *ateapipb.UpdateActorEgressPolicyRequest {
+		req: func() *ateapi.UpdateActorEgressPolicyRequest {
 			r := validReq()
 			r.EgressPolicy.Rules[0].Http.Hostnames = nil
 			return r
@@ -340,28 +340,28 @@ func TestValidateUpdateActorEgressPolicyRequest(t *testing.T) {
 }
 
 func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
-	validReq := func() *ateapipb.DeleteActorEgressPolicyRequest {
-		return &ateapipb.DeleteActorEgressPolicyRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+	validReq := func() *ateapi.DeleteActorEgressPolicyRequest {
+		return &ateapi.DeleteActorEgressPolicyRequest{
+			Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor"},
 			Name:  resources.SingletonName,
 		}
 	}
 	tests := []struct {
 		name string
-		req  *ateapipb.DeleteActorEgressPolicyRequest
+		req  *ateapi.DeleteActorEgressPolicyRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
 		req:  validReq(),
 	}, {
 		name: "missing actor",
-		req:  &ateapipb.DeleteActorEgressPolicyRequest{Name: resources.SingletonName},
+		req:  &ateapi.DeleteActorEgressPolicyRequest{Name: resources.SingletonName},
 		want: field.ErrorList{
 			field.Required(field.NewPath("actor"), ""),
 		},
 	}, {
 		name: "missing atespace",
-		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+		req: func() *ateapi.DeleteActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Atespace = ""
 			return r
@@ -371,7 +371,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid atespace",
-		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+		req: func() *ateapi.DeleteActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Atespace = "invalid value"
 			return r
@@ -381,7 +381,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing name",
-		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+		req: func() *ateapi.DeleteActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Name = ""
 			return r
@@ -391,7 +391,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "invalid name",
-		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+		req: func() *ateapi.DeleteActorEgressPolicyRequest {
 			r := validReq()
 			r.Actor.Name = "invalid value"
 			return r
@@ -401,7 +401,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "missing singleton name",
-		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+		req: func() *ateapi.DeleteActorEgressPolicyRequest {
 			r := validReq()
 			r.Name = ""
 			return r
@@ -411,7 +411,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		},
 	}, {
 		name: "wrong singleton name",
-		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+		req: func() *ateapi.DeleteActorEgressPolicyRequest {
 			r := validReq()
 			r.Name = "other"
 			return r
@@ -436,39 +436,39 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	ports := httpRule.Child("ports")
 	staticHeader := httpRule.Child("effects", "replace_headers").Index(0)
 	const badPattern = `must be a DNS hostname, optionally with a complete leftmost-label wildcard, or "*"`
-	validReq := func() *ateapipb.CreateActorEgressPolicyRequest {
-		return &ateapipb.CreateActorEgressPolicyRequest{
-			Actor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+	validReq := func() *ateapi.CreateActorEgressPolicyRequest {
+		return &ateapi.CreateActorEgressPolicyRequest{
+			Actor:        &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor"},
 			EgressPolicy: validEgressPolicy(),
 		}
 	}
-	withoutEffects := func(p *ateapipb.EgressPolicy) { p.Rules[0].Http.Effects = nil }
-	trivialHTTPRule := func(hostname string) *ateapipb.EgressRule {
-		return &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{hostname}}}
+	withoutEffects := func(p *ateapi.EgressPolicy) { p.Rules[0].Http.Effects = nil }
+	trivialHTTPRule := func(hostname string) *ateapi.EgressRule {
+		return &ateapi.EgressRule{Http: &ateapi.HttpRule{Hostnames: []string{hostname}}}
 	}
-	httpsRule := func(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-		return &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: patterns, Ports: ports}}
+	httpsRule := func(ports *ateapi.Ports, patterns ...string) *ateapi.EgressRule {
+		return &ateapi.EgressRule{Https: &ateapi.HttpsRule{Hostnames: patterns, Ports: ports}}
 	}
-	passthroughRule := func(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-		return &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: patterns, Ports: ports}}
+	passthroughRule := func(ports *ateapi.Ports, patterns ...string) *ateapi.EgressRule {
+		return &ateapi.EgressRule{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: patterns, Ports: ports}}
 	}
-	portNumbers := func(numbers ...int32) *ateapipb.Ports { return &ateapipb.Ports{Numbers: numbers} }
-	allPorts := func() *ateapipb.Ports { return &ateapipb.Ports{All: &ateapipb.AllPorts{}} }
+	portNumbers := func(numbers ...int32) *ateapi.Ports { return &ateapi.Ports{Numbers: numbers} }
+	allPorts := func() *ateapi.Ports { return &ateapi.Ports{All: &ateapi.AllPorts{}} }
 
 	tests := []struct {
 		name   string
-		mutate func(*ateapipb.EgressPolicy)
+		mutate func(*ateapi.EgressPolicy)
 		want   field.ErrorList
 	}{{
 		name: "valid",
 	}, {
 		name: "no rules",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules = nil
 		},
 	}, {
 		name: "many rules",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules = nil
 			for i := range 256 {
 				p.Rules = append(p.Rules, trivialHTTPRule(fmt.Sprintf("api%d.example.com", i)))
@@ -476,7 +476,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "too many rules",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules = nil
 			for i := range 257 {
 				p.Rules = append(p.Rules, trivialHTTPRule(fmt.Sprintf("api%d.example.com", i)))
@@ -487,7 +487,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "nil rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0] = nil
 		},
 		want: field.ErrorList{
@@ -495,33 +495,33 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "no protocol",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0] = &ateapi.EgressRule{}
 		},
 		want: field.ErrorList{
 			field.Invalid(rule, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "two protocols",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Https = &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Https = &ateapi.HttpsRule{Hostnames: []string{"api.example.com"}}
 		},
 		want: field.ErrorList{
 			field.Invalid(rule, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "https rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0] = httpsRule(portNumbers(443, 8443), "api.example.com", "*.example.org")
 		},
 	}, {
 		name: "tls passthrough rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0] = passthroughRule(portNumbers(443), "api.example.com", "*")
 		},
 	}, {
 		name: "tls passthrough rule without ports",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0] = passthroughRule(nil, "api.example.com")
 		},
 		want: field.ErrorList{
@@ -529,7 +529,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "empty pattern list",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames = nil
 			withoutEffects(p)
 		},
@@ -538,7 +538,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "long pattern list",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			var pats []string
 			for i := range 256 {
 				pats = append(pats, fmt.Sprintf("api%d.example.com", i))
@@ -548,7 +548,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "too-long pattern list",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			var pats []string
 			for i := range 257 {
 				pats = append(pats, fmt.Sprintf("api%d.example.com", i))
@@ -561,7 +561,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "missing pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = ""
 			withoutEffects(p)
 		},
@@ -570,7 +570,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "duplicate pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames = append(p.Rules[0].Http.Hostnames, "api.example.com")
 		},
 		want: field.ErrorList{
@@ -578,7 +578,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "invalid pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "https://example.com"
 		},
 		want: field.ErrorList{
@@ -586,7 +586,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "uppercase pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "API.EXAMPLE.COM"
 		},
 		want: field.ErrorList{
@@ -594,7 +594,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "pattern with trailing dot",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "api.example.com."
 		},
 		want: field.ErrorList{
@@ -602,7 +602,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "IP literal pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "192.0.2.1"
 		},
 		want: field.ErrorList{
@@ -610,7 +610,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "pattern with port",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "example.com:443"
 		},
 		want: field.ErrorList{
@@ -618,23 +618,23 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "wildcard without effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "*.example.com"
 			withoutEffects(p)
 		},
 	}, {
 		name: "wildcard with effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "*.example.com"
 		},
 	}, {
 		name: "star pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "*"
 		},
 	}, {
 		name: "invalid wildcard",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Hostnames[0] = "api.*.example.com"
 		},
 		want: field.ErrorList{
@@ -642,7 +642,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "invalid sni pattern",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0] = passthroughRule(portNumbers(443), "*example.com")
 		},
 		want: field.ErrorList{
@@ -650,41 +650,41 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "ports",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Ports = portNumbers(80, 8080)
 		},
 	}, {
 		name: "any port",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Ports = allPorts()
 		},
 	}, {
 		name: "all and numbers together",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Http.Ports = &ateapipb.Ports{All: &ateapipb.AllPorts{}, Numbers: []int32{80}}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Ports = &ateapi.Ports{All: &ateapi.AllPorts{}, Numbers: []int32{80}}
 		},
 		want: field.ErrorList{
 			field.Invalid(ports, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "empty ports",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Http.Ports = &ateapipb.Ports{}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Ports = &ateapi.Ports{}
 		},
 		want: field.ErrorList{
 			field.Invalid(ports, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "empty numbers",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Http.Ports = &ateapipb.Ports{Numbers: []int32{}}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Ports = &ateapi.Ports{Numbers: []int32{}}
 		},
 		want: field.ErrorList{
 			field.Invalid(ports, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "port zero",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Ports = portNumbers(0)
 		},
 		want: field.ErrorList{
@@ -692,7 +692,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "port out of range",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Ports = portNumbers(65536)
 		},
 		want: field.ErrorList{
@@ -700,7 +700,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "duplicate port",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Ports = portNumbers(80, 80)
 		},
 		want: field.ErrorList{
@@ -708,7 +708,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "too many ports",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			var many []int32
 			for i := range 17 {
 				many = append(many, int32(8000+i))
@@ -720,7 +720,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "negative https port",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0] = httpsRule(portNumbers(-1), "api.example.com")
 		},
 		want: field.ErrorList{
@@ -728,20 +728,20 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "tls passthrough with empty ports",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = passthroughRule(&ateapipb.Ports{}, "*")
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0] = passthroughRule(&ateapi.Ports{}, "*")
 		},
 		want: field.ErrorList{
 			field.Invalid(rule.Child("tls_passthrough", "ports"), nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "same pattern on different ports",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules = append(p.Rules, &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}, Ports: portNumbers(8080)}})
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules = append(p.Rules, &ateapi.EgressRule{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}, Ports: portNumbers(8080)}})
 		},
 	}, {
 		name: "same pattern on the default port ties",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules = append(p.Rules, trivialHTTPRule("api.example.com"))
 		},
 		want: field.ErrorList{
@@ -749,12 +749,12 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "http and https on their default ports do not tie",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules = append(p.Rules, httpsRule(nil, "api.example.com"))
 		},
 	}, {
 		name: "http and https on any port tie",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Ports = allPorts()
 			p.Rules = append(p.Rules, httpsRule(allPorts(), "api.example.com"))
 		},
@@ -763,9 +763,9 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "http and tls passthrough on every port tie",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules = []*ateapipb.EgressRule{
-				{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}, Ports: allPorts()}},
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules = []*ateapi.EgressRule{
+				{Http: &ateapi.HttpRule{Hostnames: []string{"*"}, Ports: allPorts()}},
 				passthroughRule(allPorts(), "*"),
 			}
 		},
@@ -774,12 +774,12 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "http on its default port and tls passthrough on every port",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules = []*ateapipb.EgressRule{trivialHTTPRule("*"), passthroughRule(allPorts(), "*")}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules = []*ateapi.EgressRule{trivialHTTPRule("*"), passthroughRule(allPorts(), "*")}
 		},
 	}, {
 		name: "https and tls passthrough on the same port tie",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules = append(p.Rules, httpsRule(nil, "*.example.com"), passthroughRule(portNumbers(443), "*.example.com"))
 		},
 		want: field.ErrorList{
@@ -787,7 +787,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "missing static header",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Header = ""
 		},
 		want: field.ErrorList{
@@ -795,7 +795,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "invalid static header",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Header = "bad header"
 		},
 		want: field.ErrorList{
@@ -803,10 +803,10 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "duplicate header",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders = append(
 				p.Rules[0].Http.Effects.ReplaceHeaders,
-				&ateapipb.CredentialHeader{Header: "authorization", CredentialUri: "ate-secret://example.com/provider/secret"},
+				&ateapi.CredentialHeader{Header: "authorization", CredentialUri: "ate-secret://example.com/provider/secret"},
 			)
 		},
 		want: field.ErrorList{
@@ -814,17 +814,17 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "same header in later rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			later := proto.Clone(p.Rules[0]).(*ateapipb.EgressRule)
+		mutate: func(p *ateapi.EgressPolicy) {
+			later := proto.Clone(p.Rules[0]).(*ateapi.EgressRule)
 			later.Http.Hostnames = []string{"other.example.com"}
 			p.Rules = append(p.Rules, later)
 		},
 	}, {
 		name: "many headers",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			var injections []*ateapipb.CredentialHeader
+		mutate: func(p *ateapi.EgressPolicy) {
+			var injections []*ateapi.CredentialHeader
 			for i := range 16 {
-				injections = append(injections, &ateapipb.CredentialHeader{
+				injections = append(injections, &ateapi.CredentialHeader{
 					Header:        fmt.Sprintf("X-Header-%d", i),
 					CredentialUri: "ate-secret://example.com/provider/secret",
 				})
@@ -833,10 +833,10 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "too many headers",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			var injections []*ateapipb.CredentialHeader
+		mutate: func(p *ateapi.EgressPolicy) {
+			var injections []*ateapi.CredentialHeader
 			for i := range 17 {
-				injections = append(injections, &ateapipb.CredentialHeader{
+				injections = append(injections, &ateapi.CredentialHeader{
 					Header:        fmt.Sprintf("X-Header-%d", i),
 					CredentialUri: "ate-secret://example.com/provider/secret",
 				})
@@ -848,7 +848,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "invalid prefix",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].Prefix = "Bearer\r"
 		},
 		want: field.ErrorList{
@@ -856,7 +856,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "no credential source",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = ""
 		},
 		want: field.ErrorList{
@@ -864,7 +864,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "invalid credential URI",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].CredentialUri = "https://example.com/secret"
 		},
 		want: field.ErrorList{
@@ -872,35 +872,35 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT on an http rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("https://api.example.com")
 		},
 	}, {
 		name: "actor JWT on an https rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0] = &ateapi.EgressRule{Https: &ateapi.HttpsRule{
 				Hostnames: []string{"api.example.com"},
-				Effects:   &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{actorJWTHeader("https://api.example.com")}},
+				Effects:   &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{actorJWTHeader("https://api.example.com")}},
 			}}
 		},
 	}, {
 		name: "actor JWT next to a credential URI",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			jwt := actorJWTHeader("https://api.example.com")
 			jwt.Header = "X-Actor-Token"
 			p.Rules[0].Http.Effects.ReplaceHeaders = append(p.Rules[0].Http.Effects.ReplaceHeaders, jwt)
 		},
 	}, {
 		name: "credential URI and actor JWT in one header",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt = &ateapipb.ActorJwtSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt = &ateapi.ActorJwtSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900}
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader, nil, "one of").WithOrigin("union"),
 		},
 	}, {
 		name: "actor JWT without audiences",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader()
 		},
 		want: field.ErrorList{
@@ -908,7 +908,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT with an empty audience",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("")
 		},
 		want: field.ErrorList{
@@ -916,7 +916,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT with a long audience",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader(strings.Repeat("a", 513))
 		},
 		want: field.ErrorList{
@@ -924,7 +924,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT with a repeated audience",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a", "a")
 		},
 		want: field.ErrorList{
@@ -932,7 +932,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT with too many audiences",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			var audiences []string
 			for i := range 17 {
 				audiences = append(audiences, fmt.Sprintf("aud-%d", i))
@@ -944,7 +944,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT without a lifetime",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a")
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt.ExpirationSeconds = 0
 		},
@@ -953,15 +953,15 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT lifetime at its bounds",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			short, long := actorJWTHeader("a"), actorJWTHeader("a")
 			short.ActorJwt.ExpirationSeconds = 300
 			long.Header, long.ActorJwt.ExpirationSeconds = "X-Actor-Token", 3600
-			p.Rules[0].Http.Effects.ReplaceHeaders = []*ateapipb.CredentialHeader{short, long}
+			p.Rules[0].Http.Effects.ReplaceHeaders = []*ateapi.CredentialHeader{short, long}
 		},
 	}, {
 		name: "actor JWT lifetime too short",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a")
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt.ExpirationSeconds = 299
 		},
@@ -970,7 +970,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "actor JWT lifetime too long",
-		mutate: func(p *ateapipb.EgressPolicy) {
+		mutate: func(p *ateapi.EgressPolicy) {
 			p.Rules[0].Http.Effects.ReplaceHeaders[0] = actorJWTHeader("a")
 			p.Rules[0].Http.Effects.ReplaceHeaders[0].ActorJwt.ExpirationSeconds = 3601
 		},
@@ -979,16 +979,16 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 	}, {
 		name: "empty effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Http.Effects = &ateapipb.HttpRuleEffects{}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0].Http.Effects = &ateapi.HttpRuleEffects{}
 		},
 		want: field.ErrorList{
 			field.Required(httpRule.Child("effects"), "at least one effect must be specified"),
 		},
 	}, {
 		name: "effects on an https rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{}}}
+		mutate: func(p *ateapi.EgressPolicy) {
+			p.Rules[0] = &ateapi.EgressRule{Https: &ateapi.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapi.HttpRuleEffects{}}}
 		},
 		want: field.ErrorList{
 			field.Required(rule.Child("https", "effects"), "at least one effect must be specified"),

@@ -87,21 +87,14 @@ func cpuMax(milliCPU int64) string {
 	return fmt.Sprintf("%d %d", max(milliCPU*cpuPeriodUS/1000, cpuMinQuotaUS), cpuPeriodUS)
 }
 
-// SysProcAttr starts a process directly inside the leaf. A nil leaf starts it
-// where the caller is.
+// SysProcAttr starts a process directly inside the leaf.
 func (l *ActorLeaf) SysProcAttr() *syscall.SysProcAttr {
-	if l == nil {
-		return nil
-	}
 	return &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: int(l.dir.Fd())}
 }
 
 // Close releases the leaf's handle. The leaf itself stays until
 // RemoveActorLeaf.
 func (l *ActorLeaf) Close() error {
-	if l == nil {
-		return nil
-	}
 	return l.dir.Close()
 }
 

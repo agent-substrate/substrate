@@ -20,13 +20,13 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // PrintAccessPolicyTo prints an access policy, one table row per binding.
 // json and yaml emit the bare AccessPolicy. The policy's metadata carries no
 // atespace, so the caller passes it; empty means the global policy.
-func PrintAccessPolicyTo(out io.Writer, atespace string, policy *ateapipb.AccessPolicy, format string) error {
+func PrintAccessPolicyTo(out io.Writer, atespace string, policy *ateapi.AccessPolicy, format string) error {
 	switch format {
 	case "json", "yaml":
 		return printProto(out, policy, format)

@@ -51,14 +51,14 @@ paths resolve in every pod) and a small per-bundle spec file.
 
 Because the consumer mounts the overlay **in its own mount namespace** —
 exactly where the workload resolves it (runsc's gofer for gVisor, virtiofsd
-for the micro-VM) — no Kubernetes mount-propagation configuration is needed
+for the microVM) — no Kubernetes mount-propagation configuration is needed
 anywhere.
 
 ## On-disk layout
 
 ```
 <cache-root>/                        default: /var/lib/ate/image-cache
-  version                            layout version marker ("1")
+  version                            layout version marker ("2")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
@@ -91,10 +91,11 @@ layer diffIDs in order — layers shared by N images exist once.
    present, return with no network I/O. Missing layers (only) are re-pulled.
 3. **Pull** by resolved digest: layers download in parallel (bounded at 4),
    each streamed download → decompress → untar directly into the pool.
-   Concurrent pulls of the same image or layer are collapsed with
-   singleflight, so simultaneous actor starts never duplicate work — and
-   each completed layer lands individually, so an interrupted pull makes
-   incremental progress across retries.
+   Concurrent pulls of the same image share one singleflight, and so do
+   concurrent unpacks of the same layer blob. A layer's flight is keyed by
+   its blob digest and its diffID, so one image's bad blob cannot fail
+   another image's pull of the same diffID. Each completed layer lands on
+   its own, so an interrupted pull makes progress across retries.
 4. **Unpack** (`unpackLayer`) is the repo's hardened untar: `os.Root`
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
@@ -105,7 +106,18 @@ layer diffIDs in order — layers shared by N images exist once.
    into the tree — overlayfs whiteouts are char devices atelet cannot
    create — they are recorded in `whiteouts.json` for the consumer to
    materialize.
-5. **Record**: the image config + diffID list is written under the
+5. **Verify** before the layer enters the pool. Images share layers by
+   diffID, but each image's author chooses the diffIDs in its config. So
+   the uncompressed stream is hashed as it unpacks and must match the
+   claimed diffID. The stream is also read to EOF, because
+   go-containerregistry checks the blob against the manifest digest only
+   at EOF. On a mismatch the `.tmp-*` tree is discarded and the pull fails.
+
+   A layer already in the pool is reused without re-hashing, because it
+   was checked when it was written. The reusing image's own blob is never
+   downloaded, so it is never checked. atelet refuses a layout version 1
+   pool, whose layers may not have been checked.
+6. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
 `prepareOCIDirectory` in atelet then writes `rootfs-overlay.json`
@@ -117,7 +129,7 @@ bundle-local `rootfs/`, `upper/`, and `work/` directories.
 ## Compose path (ateworker: `SetupBundleRootfs`)
 
 Called immediately before `runsc create`/`runsc restore` (gVisor) and before
-staging the virtio-fs lower (micro-VM):
+staging the virtio-fs lower (microVM):
 
 1. **`FinalizeLayer`** for each referenced layer — materializes the recorded
    whiteouts as 0:0 char devices (`mknod`) and opaque dirs as
@@ -133,8 +145,8 @@ staging the virtio-fs lower (micro-VM):
    The mount uses the new mount API (`fsopen` + one `fsconfig` `lowerdir+`
    append per layer) rather than `mount(2)`, whose single-page option-string
    cap the digest-derived layer paths would hit at ~34 layers. **Minimum
-   supported kernel: Linux 6.5** (`lowerdir+`); every current GKE channel
-   ships ≥ 6.6 (Stable: COS 121 LTS).
+   supported kernel: Linux 6.7, or 6.6.23** (`lowerdir+`, backported to
+   6.6.y).
 3. **ExtraDirs** are created through the mount (landing in the upper), again
    under `os.Root` confinement.
 4. **Implicit-parent metadata repair.** A layer tar routinely omits entries
@@ -158,7 +170,7 @@ rootfs with ExtraDirs and no mount.
 Actor semantics are unchanged from the untar era: the upper is wiped by
 atelet's `resetActorDirs` between runs, so every run still starts from a
 bit-exact, pristine image rootfs — it just costs a mount instead of an
-extraction. The micro-VM path is nearly untouched: it bind-mounts the (now
+extraction. The microVM path is nearly untouched: it bind-mounts the (now
 overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
 keeps building its own tmpfs upper, as before.
 
@@ -214,9 +226,10 @@ percentage as `df` reports it.
    (after a freshness re-check under the same lock the cache-hit path
    holds), then retire each layer the removal left unreferenced. If any
    layer must be kept — still referenced by another record, rooted by a
-   spec, younger than min-age, or its retirement failed — the record is
-   restored byte-exact and the image simply is not evicted this pass: a
-   layer is never left on disk without a record explaining it.
+   spec, pinned by an in-flight pull, younger than min-age, or its
+   retirement failed — the record is restored byte-exact and the image
+   simply is not evicted this pass: a layer is never left on disk without
+   a record explaining it.
 
 The pass reaches layers **only through records**: a layer is deleted
 exactly when its last referencing record goes, never by an independent
@@ -229,14 +242,16 @@ refcounts and roots computed from partial data would retire layers that
 unread records still reference or running actors still mount. Dry-run
 mutates nothing at all — not even the lazy size-file backfill.
 
-**In-flight pulls need no separate protection.** `EnsureImage` writes
-the image record **before** unpacking (the way Go allocates black during
-GC and containerd creates its ingest record before the bytes land), so
-every layer a pull produces is referenced — and kept fresh by a
-per-layer progress touch — from before it exists on disk. An interrupted
-pull's record is resumable progress, not garbage: the next pull of that
-digest re-fetches only the missing layers, and a pull that never resumes
-ages out through ordinary LRU.
+**In-flight pulls.** `EnsureImage` writes the image record **before**
+unpacking (the way Go allocates black during GC and containerd creates
+its ingest record before the bytes land), so every layer a pull produces
+is referenced — and kept fresh by a per-layer progress touch — from
+before it exists on disk. The pull also pins each of its layers until it
+returns, and eviction never retires a pinned layer, so a layer the pull
+has unpacked or reused cannot be taken from under it even if its record
+ages out meanwhile. An interrupted pull's record is resumable progress,
+not garbage: the next pull of that digest re-fetches only the missing
+layers, and a pull that never resumes ages out through ordinary LRU.
 
 **Startup recovery.** A layer no record references can only be crash
 debris (eviction interrupted between record-delete and layer-rename) or
@@ -247,15 +262,16 @@ fails to read. There is no online whole-pool scan (ext4's split: bounded
 recovery at mount, fsck offline).
 
 **Deletion is two-phase.** A layer is atomically renamed to `.rm-*`
-inside the layer's singleflight (one `rename(2)` — eviction can never
-stall a pull), then removed asynchronously; a crash in between leaves
-the dir for the startup sweep. This matters because the kernel offers no
-protection here: deleting a directory that is a live overlay lowerdir in
-another mount namespace succeeds silently, leaves the overlay's behavior
-undefined, and doesn't even free the space until the mount goes away.
+under the pin lock, and never while a pull has it pinned (a pull waits
+on eviction for at most one stat and one `rename(2)`), then removed
+asynchronously; a crash in between leaves the dir for the startup sweep.
+This matters because the kernel offers no protection here: deleting a
+directory that is a live overlay lowerdir in another mount namespace
+succeeds silently, leaves the overlay's behavior undefined, and doesn't
+even free the space until the mount goes away.
 
-Deleting the cache root by hand (while no actors are starting) remains
-safe — the store re-pulls whatever is missing.
+Deleting the cache root by hand (while no actors are running on the node)
+remains safe — the store re-pulls whatever is missing.
 
 This is Phase 2 of [#463](https://github.com/agent-substrate/substrate/issues/463);
 the watermark loop, flags, and cache metrics complete it. Phase 3 adds

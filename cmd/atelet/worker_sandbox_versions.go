@@ -18,9 +18,9 @@ package main
 // in the steps syncPod runs:
 //   - resolve: find the SandboxConfig of the pod's WorkerPool
 //   - plan: pick the config's versions this node can run
-//   - build: hash each version's assets and pause image digests into its
-//     sandbox_bundle_hash, and probe what a snapshot taken on the runtime
-//     must find again: the host CPU identity for microVM, the runsc
+//   - build: hash each version's asset digests into its sandbox_bundle_hash,
+//     verify its assets in the cache, and probe what a snapshot taken on the
+//     runtime must find again: the host CPU identity for microVM, the runsc
 //     binary's CPU features for gVisor
 //   - write: replace the file in the worker directory if its content changed
 //
@@ -42,21 +42,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/sandboxruntimes"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 )
 
 // errPermanent marks a failure that retrying cannot fix, so the syncer drops
 // the item instead of backing off until the next event for the pod:
 //   - the pod has no worker pool label
-//   - the config's default version is missing, has no assets for this
-//     node's architecture, or has a pause image not pinned by digest
+//   - the config's default version is missing or has no assets for this
+//     node's architecture
 //   - the default version's runsc runs but fails, prints no features, or
 //     prints one this atelet does not know; the binary is content-addressed,
 //     so running it again gives the same answer
@@ -80,8 +80,8 @@ var errUnresolved = errors.New("unresolved sandbox config")
 // sandboxPlan is what one worker's sandbox runtimes file is built from.
 type sandboxPlan struct {
 	config       string
-	sandboxClass v1alpha1.SandboxClass // the config's; decides which attributes its runtimes report
-	versions     []versionPlan         // the default first
+	sandboxClass atev1.SandboxClass // the config's; decides which attributes its runtimes report
+	versions     []versionPlan      // the default first
 }
 
 // versionPlan is one SandboxConfig version projected onto this node's
@@ -96,27 +96,14 @@ type versionPlan struct {
 // the worker pod's WorkerPool, and the config the atecontroller resolved for
 // the pool's sandbox class into the pool's status.
 type workerSandboxResolver struct {
-	workerPools listersv1alpha1.WorkerPoolLister
-	configs     listersv1alpha1.SandboxConfigLister
-}
-
-// poolConfigName returns the SandboxConfig the atecontroller confirmed for the
-// class the pool's workers run, or "" if it has not resolved one yet. It never
-// returns pendingConfigRef: that config is not confirmed yet.
-func poolConfigName(pool *v1alpha1.WorkerPool) string {
-	class := pool.Spec.DefaultSandboxClass()
-	for _, c := range pool.Status.SandboxClasses {
-		if c.Name == class && c.ConfigRef != nil {
-			return c.ConfigRef.Name
-		}
-	}
-	return ""
+	workerPools atelisters.WorkerPoolLister
+	configs     atelisters.SandboxConfigLister
 }
 
 // resolve returns the SandboxConfig of a worker pod on this node. Apart from
 // a pod in no pool, every failure can succeed once an informer catches up or
 // the atecontroller resolves the pool.
-func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfig, error) {
+func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*atev1.SandboxConfig, error) {
 	pool, err := r.pool(pod)
 	if err != nil {
 		return nil, err
@@ -125,7 +112,7 @@ func (r *workerSandboxResolver) resolve(pod *corev1.Pod) (*v1alpha1.SandboxConfi
 }
 
 // pool returns the WorkerPool a worker pod on this node belongs to.
-func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, error) {
+func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*atev1.WorkerPool, error) {
 	poolName := pod.Labels[workerPoolLabel]
 	if poolName == "" {
 		return nil, fmt.Errorf("%w: worker pod %s/%s has no %s label", errPermanent, pod.Namespace, pod.Name, workerPoolLabel)
@@ -138,8 +125,8 @@ func (r *workerSandboxResolver) pool(pod *corev1.Pod) (*v1alpha1.WorkerPool, err
 }
 
 // config returns the SandboxConfig the workers of pool run.
-func (r *workerSandboxResolver) config(pool *v1alpha1.WorkerPool) (*v1alpha1.SandboxConfig, error) {
-	configName := poolConfigName(pool)
+func (r *workerSandboxResolver) config(pool *atev1.WorkerPool) (*atev1.SandboxConfig, error) {
+	configName := pool.ResolvedSandboxConfig()
 	if configName == "" {
 		return nil, fmt.Errorf("%w: WorkerPool %s/%s has not resolved a SandboxConfig for sandbox class %q", errUnresolved, pool.Namespace, pool.Name, pool.Spec.DefaultSandboxClass())
 	}
@@ -150,22 +137,35 @@ func (r *workerSandboxResolver) config(pool *v1alpha1.WorkerPool) (*v1alpha1.San
 	return cfg, nil
 }
 
-// plan resolves pod's SandboxConfig and the versions of it this node can run.
-func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
+// plan resolves pod's SandboxConfig and the versions of it this node can run,
+// along with the object the sync is acting on (the resolved SandboxConfig, or
+// the WorkerPool when its config has not resolved) for failure Events.
+func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, k8sruntime.Object, error) {
 	pool, err := r.pool(pod)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return r.planPool(pool)
+	cfg, err := r.config(pool)
+	if err != nil {
+		return nil, pool, err
+	}
+	plan, err := planConfig(cfg)
+	return plan, cfg, err
 }
 
 // planPool is plan for a pool already in hand: the config its workers run
 // and the versions of it this node can run.
-func (r *workerSandboxResolver) planPool(pool *v1alpha1.WorkerPool) (*sandboxPlan, error) {
+func (r *workerSandboxResolver) planPool(pool *atev1.WorkerPool) (*sandboxPlan, error) {
 	cfg, err := r.config(pool)
 	if err != nil {
 		return nil, err
 	}
+	return planConfig(cfg)
+}
+
+// planConfig returns the plan for cfg: its class and the versions of it this
+// node can run.
+func planConfig(cfg *atev1.SandboxConfig) (*sandboxPlan, error) {
 	vers, err := planVersions(cfg)
 	if err != nil {
 		return nil, err
@@ -177,7 +177,7 @@ func (r *workerSandboxResolver) planPool(pool *v1alpha1.WorkerPool) (*sandboxPla
 // default version first, then the other Enabled versions in spec order.
 // Versions with no assets for this node's architecture are left out, except
 // the default, which every worker of the pool must be able to start actors on.
-func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
+func planVersions(cfg *atev1.SandboxConfig) ([]versionPlan, error) {
 	def, ok := cfg.Spec.DefaultVersionConfig()
 	if !ok {
 		// The CRD rejects this shape, so this should not be reachable.
@@ -190,7 +190,7 @@ func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
 	vers := []versionPlan{{name: def.Name, isDefault: true, rec: defRec}}
 	for i := range cfg.Spec.Versions {
 		v := &cfg.Spec.Versions[i]
-		if v.Name == def.Name || (v.State != nil && *v.State == v1alpha1.SandboxVersionStateDisabled) {
+		if v.Name == def.Name || (v.State != nil && *v.State == atev1.SandboxVersionStateDisabled) {
 			continue
 		}
 		if rec, ok := recordForArch(cfg, v); ok {
@@ -201,16 +201,15 @@ func planVersions(cfg *v1alpha1.SandboxConfig) ([]versionPlan, error) {
 }
 
 // recordForArch projects the assets of one version of a SandboxConfig onto
-// this node's architecture, mirroring recordFromRequest. It reports false when
-// the version lists no assets for this architecture.
-func recordForArch(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) (*sandboxAssetsRecord, bool) {
+// this node's architecture. It reports false when the version lists no assets
+// for this architecture.
+func recordForArch(cfg *atev1.SandboxConfig, ver *atev1.SandboxVersionConfig) (*sandboxAssetsRecord, bool) {
 	files := ver.Assets[runtime.GOARCH]
 	if len(files) == 0 {
 		return nil, false
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
-		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]assetEntry, len(files)),
 	}
 	for name, f := range files {
@@ -226,24 +225,13 @@ type hashedVersion struct {
 }
 
 // hashVersions hashes each version of plan. The hashes come from the
-// SandboxConfig spec alone, so it does no IO. A version that cannot be
-// hashed is left out, unless it is the default, without which no worker of
-// the pool could start actors on this node.
-func hashVersions(ctx context.Context, plan *sandboxPlan) ([]hashedVersion, error) {
+// SandboxConfig spec alone, so it does no IO.
+func hashVersions(plan *sandboxPlan) []hashedVersion {
 	hashed := make([]hashedVersion, 0, len(plan.versions))
 	for _, v := range plan.versions {
-		h, err := versionBundleHash(v.rec)
-		if err != nil {
-			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
-			if v.isDefault {
-				return nil, fmt.Errorf("%w: %w", errPermanent, err)
-			}
-			slog.WarnContext(ctx, "Leaving a sandbox version out of the worker sandbox runtimes file", slog.Any("err", err))
-			continue
-		}
-		hashed = append(hashed, hashedVersion{versionPlan: v, hash: h})
+		hashed = append(hashed, hashedVersion{versionPlan: v, hash: bundleHash(v.rec)})
 	}
-	return hashed, nil
+	return hashed
 }
 
 // buildFile returns the file content naming the runtimes of the hashed
@@ -257,23 +245,27 @@ func hashVersions(ctx context.Context, plan *sandboxPlan) ([]hashedVersion, erro
 //
 // TODO: write the file as soon as the default version's attributes are known
 // and add restorable runtimes on a later pass. On a fresh node the first
-// worker cannot register until every restorable version's runsc has been
+// worker cannot register until every restorable version's assets have been
 // fetched and probed, serially.
 //
-// Listing a runtime does not promise its assets are on the node: probing
-// fetches a gVisor version's runsc the first time this atelet sees it, but
-// not its pause image, and nothing of a microVM version. The syncer has
-// the default runtime prewarmed once the file is written, and Run/Restore
-// fetch any other version on demand.
+// The first time this atelet process sees a gVisor runsc digest or a
+// restorable microVM bundle hash, buildFile fetches the version's assets into
+// the cache (and runs runsc for gVisor); a microVM default version is staged
+// on every build so promoting an evicted version to default verifies it in the
+// cache before unpinning the previous default. Once the file is written, the
+// syncer links the default runtime under the worker's directory so cache GC
+// never evicts it. Run and Restore fetch any evicted restorable version on
+// demand. A version with a bad sha256 fails verification without being cached
+// or memoized, so retries re-download it until the SandboxConfig is fixed.
 func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, hashed []hashedVersion) (*sandboxruntimes.File, error) {
-	out := &sandboxruntimes.File{}
+	class := sandboxruntimes.Class{SandboxClass: string(plan.sandboxClass)}
 	seen := make(map[string]bool, len(hashed))
 	var incomplete error
 	for _, v := range hashed {
 		if seen[v.hash] {
 			continue
 		}
-		attrs, err := s.versionAttrs(ctx, plan.sandboxClass, v.rec, v.hash)
+		attrs, err := s.versionAttrs(ctx, plan.sandboxClass, v.rec, v.hash, v.isDefault)
 		if err != nil {
 			err = fmt.Errorf("SandboxConfig %q, version %q: %w", plan.config, v.name, err)
 			if v.isDefault {
@@ -291,11 +283,13 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 		}
 		seen[v.hash] = true
 		if v.isDefault {
-			out.DefaultRuntime = attrs
+			class.DefaultRuntime = sandboxruntimes.Runtime{Version: attrs}
 		} else {
-			out.RestorableRuntimes = append(out.RestorableRuntimes, attrs)
+			class.RestorableRuntimes = append(class.RestorableRuntimes, sandboxruntimes.Runtime{Version: attrs})
 		}
 	}
+	// One class per pool today.
+	out := &sandboxruntimes.File{SandboxClasses: []sandboxruntimes.Class{class}}
 	if incomplete != nil {
 		return out, fmt.Errorf("%w: %w", errIncomplete, incomplete)
 	}
@@ -304,21 +298,25 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 
 // versionAttrs returns the attributes of one version's runtime, whose
 // sandbox_bundle_hash is hash: architecture and the hash for every class,
-// the host CPU identity for a microVM runtime, and the runsc binary's
-// cpu_features for a gVisor one.
-func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class v1alpha1.SandboxClass, rec *sandboxAssetsRecord, hash string) (sandboxruntimes.Attributes, error) {
+// the host CPU identity for a microVM runtime (with its assets verified in
+// the local cache), and the runsc binary's cpu_features for a gVisor one.
+// isDefault makes the microVM asset check skip the memo.
+func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string, isDefault bool) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
 		hardware.AttrArchitecture:      runtime.GOARCH,
 		hardware.AttrSandboxBundleHash: hash,
 	}
 	switch class {
-	case v1alpha1.SandboxClassMicroVM:
+	case atev1.SandboxClassMicroVM:
 		vendor, model, err := s.hostCPUIdentity()
 		if err != nil {
 			return nil, fmt.Errorf("while probing host CPU identity: %w", err)
 		}
+		if err := s.ensureMicroVMAssets(ctx, rec, hash, isDefault); err != nil {
+			return nil, err
+		}
 		attrs[hardware.AttrCPUVendor], attrs[hardware.AttrCPUModel] = vendor, model
-	case v1alpha1.SandboxClassGvisor:
+	case atev1.SandboxClassGvisor:
 		mask, err := s.gvisorCPUFeatures(ctx, rec)
 		if err != nil {
 			return nil, err
@@ -349,15 +347,46 @@ func (s *workerSandboxSyncer) hostCPUIdentity() (vendor, model string, err error
 	return s.hostCPU.vendor, s.hostCPU.model, nil
 }
 
+// ensureMicroVMAssets stages a microVM version's assets into a scratch
+// directory so a version whose assets cannot be fetched or fail SHA256
+// verification is not advertised in the worker's sandbox runtimes file.
+// Restorable versions are checked once per atelet process; the default version
+// is checked on every sync (a cache hit once prewarmed) so promoting an
+// evicted version to default verifies it in the cache before unpinning the
+// previous default.
+func (s *workerSandboxSyncer) ensureMicroVMAssets(ctx context.Context, rec *sandboxAssetsRecord, hash string, isDefault bool) error {
+	if !isDefault {
+		s.mu.Lock()
+		ok := s.microvmAssets[hash]
+		s.mu.Unlock()
+		if ok {
+			return nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, probeFetchTimeout)
+	defer cancel()
+	scratch, err := os.MkdirTemp(s.scratchDir, "microvm-assets-")
+	if err != nil {
+		return fmt.Errorf("while creating microvm-assets scratch dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	if _, err := s.assets.ensureSandboxAssets(ctx, rec, scratch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.microvmAssets[hash] = true
+	s.mu.Unlock()
+	return nil
+}
+
 // gvisorCPUFeatures returns the encoded cpu_features of rec's runsc binary.
 // The first time this atelet sees the binary's digest it fetches the binary
 // into the local asset cache and runs `<runsc> cpu-features`.
 func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
-	asset, ok := runscAssetOf(rec)
-	if !ok {
-		return "", fmt.Errorf("%w: gvisor version has no %q or %q asset", errPermanent, gvisorAssetName, runscAssetName)
+	digest := rec.Assets[gvisorAssetName].SHA256
+	if digest == "" {
+		return "", fmt.Errorf("%w: gvisor version has no %q asset", errPermanent, gvisorAssetName)
 	}
-	digest := rec.Assets[asset].SHA256
 	s.mu.Lock()
 	mask, ok := s.cpuFeatures[digest]
 	s.mu.Unlock()
@@ -378,7 +407,7 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	if err != nil {
 		return "", err
 	}
-	names, err := s.runCPUFeatures(ctx, paths[asset])
+	names, err := s.runCPUFeatures(ctx, runscPathFor(paths))
 	if err != nil {
 		return "", err
 	}
@@ -392,25 +421,19 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	return mask, nil
 }
 
-// runscAssetOf returns the name of the asset in rec that carries runsc, the
-// most preferred of runscAssetNames that is present with a digest.
-func runscAssetOf(rec *sandboxAssetsRecord) (string, bool) {
-	for _, name := range runscAssetNames {
-		if a, ok := rec.Assets[name]; ok && a.SHA256 != "" {
-			return name, true
-		}
-	}
-	return "", false
-}
-
-// probeFetchTimeout bounds the fetch of a runsc binary for its probe, from
-// the first cache lookup to the staged link. The asset cache bounds each
-// download with its own fetch timeout, and the exec below has
-// cpuFeaturesTimeout; this is the backstop for everything around them,
-// such as waiting on a download another caller started, so a probe cannot
-// hold one of the syncer's few workers for longer than one download may
-// take.
-const probeFetchTimeout = 5 * time.Minute
+// probeFetchTimeout bounds staging a version's assets during buildFile (a
+// gVisor version's runsc binary for its probe, or a microVM version's kernel,
+// guest image, Cloud Hypervisor and virtiofsd), from the first cache lookup to
+// the staged links. The asset cache bounds each individual download with its
+// own detached --sandbox-asset-fetch-timeout, and the exec below has
+// cpuFeaturesTimeout. This is the backstop for the whole version so a slow
+// bucket or a download another caller started cannot hold one of the syncer's
+// few workers for longer than this before the sync fails and retries. Twice
+// the flag's default: one guest image at the flag's bound, then the three
+// small binaries. Raising the flag past this makes a cold build time out and
+// retry; its downloads continue detached, so the retry finds them cached or
+// joins one still in flight.
+const probeFetchTimeout = 10 * time.Minute
 
 // cpuFeaturesTimeout bounds one `runsc cpu-features` run, which takes
 // milliseconds. A runsc that hangs would hold a sync worker. A var so tests
@@ -449,33 +472,14 @@ func runRunscCPUFeatures(ctx context.Context, runscPath string) ([]string, error
 	return strings.Split(printed, ","), nil
 }
 
-// versionBundleHash returns the bundle hash of one version. The CRD requires
-// every pause image to be pinned by digest, which is the digest the image
-// cache resolves the ref to, so the hash needs no pull. An unpinned one is
-// errPermanent: only a spec change fixes it.
-func versionBundleHash(rec *sandboxAssetsRecord) (string, error) {
-	var pauseDigest string
-	if rec.PauseImage != "" {
-		ref, err := name.NewDigest(rec.PauseImage)
-		if err != nil {
-			return "", fmt.Errorf("%w: pause image %q is not pinned by digest: %w", errPermanent, rec.PauseImage, err)
-		}
-		pauseDigest = ref.DigestStr()
-	}
-	return bundleHash(rec, pauseDigest), nil
-}
-
 // bundleHash is the sandbox_bundle_hash of a version: a sha256 over one
-// sorted "key=value" line per asset digest and pause image digest. Version
-// names and URLs are left out, so the same binaries under another name or in
-// another bucket are the same runtime.
-func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
-	lines := make([]string, 0, len(rec.Assets)+1)
+// sorted "asset/<name>=<sha256>" line per asset. Version names and URLs are
+// left out, so the same binaries under another name or in another bucket are
+// the same runtime.
+func bundleHash(rec *sandboxAssetsRecord) string {
+	lines := make([]string, 0, len(rec.Assets))
 	for name, a := range rec.Assets {
 		lines = append(lines, "asset/"+name+"="+a.SHA256)
-	}
-	if pauseDigest != "" {
-		lines = append(lines, "pause_image="+pauseDigest)
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
@@ -486,64 +490,74 @@ func bundleHash(rec *sandboxAssetsRecord, pauseDigest string) string {
 //   - plan: resolve the pool's config and its versions for this node
 //   - hash: hash each version's runtime, and make each resolvable by its
 //     hash before the file can let the worker register it
-//   - prewarm: have the default runtime's assets fetched, off this
-//     goroutine, so the probe below is its head start and the file never
-//     waits on a download
-//   - build: probe what a snapshot taken on each runtime must find again
+//   - build: verify each version's assets in the cache and probe what a
+//     snapshot taken on the runtime must find again
 //   - write: replace the file if its content changed, then record what
 //     the worker now advertises in the index
+//   - prewarm: make the pod's default-runtime directories match what the
+//     file now advertises, and have each default's assets linked into its
+//     directory, off this goroutine
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
-func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) error {
-	plan, err := s.resolver.plan(pod)
+// The returned k8sruntime.Object is the resolved SandboxConfig (or WorkerPool
+// when its config has not resolved), attached as `related` on failure Events.
+func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) (k8sruntime.Object, error) {
+	plan, related, err := s.resolver.plan(pod)
 	if err != nil {
-		return err
+		return related, err
 	}
-	hashed, err := hashVersions(ctx, plan)
-	if err != nil {
-		return err
-	}
+	hashed := hashVersions(plan)
 	// Resolvable, and on disk, before the file can let the worker register
 	// any of them.
 	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
-		return err
-	}
-	// Queued now rather than after the write: the build fetches and probes
-	// every restorable version serially, longest on a fresh node, and the
-	// file it ends with is what lets the worker take its first actor. The
-	// prewarm gets that whole duration to finish first.
-	if s.prewarm != nil {
-		for _, v := range hashed {
-			if v.isDefault {
-				s.prewarm(v.hash)
-			}
-		}
+		return related, err
 	}
 	want, buildErr := s.buildFile(ctx, plan, hashed)
 	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {
-		return buildErr
+		return related, buildErr
 	}
 	if err := s.write(ctx, string(pod.UID), plan.config, want); err != nil {
-		return err
+		return related, err
 	}
 	// What the worker advertises is what its file now says: a sync that
 	// failed before the write left the previous entry, and one that wrote
 	// a partial file names only the runtimes in it. One class per pool
 	// today; a pool that runs several will yield one plan per class here.
 	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
-		return err
+		return related, err
 	}
-	return buildErr
+	// Only now, with the file naming its defaults: a sync that failed above
+	// left the file, and so the directories, as they were. The build staged
+	// a microVM default just now and fetched a gVisor default the first time
+	// it saw its digest, so the prewarm is links unless an evicted gVisor
+	// version was promoted to default.
+	if s.prewarm != nil {
+		var defaults []string
+		for _, v := range writtenVersions(hashed, want) {
+			if v.isDefault {
+				defaults = append(defaults, v.hash)
+			}
+		}
+		if err := s.syncDefaultRuntimeDirs(string(pod.UID), defaults); err != nil {
+			return related, err
+		}
+		for _, hash := range defaults {
+			s.prewarm.enqueue(hash, s.defaultRuntimeDir(string(pod.UID), hash))
+		}
+	}
+	return related, buildErr
 }
 
 // writtenVersions returns the versions of hashed whose runtime file names,
 // in hashed's order: every version whose attributes were built.
 func writtenVersions(hashed []hashedVersion, file *sandboxruntimes.File) []hashedVersion {
-	written := make(map[string]bool, 1+len(file.RestorableRuntimes))
-	written[file.DefaultRuntime[hardware.AttrSandboxBundleHash]] = true
-	for _, attrs := range file.RestorableRuntimes {
-		written[attrs[hardware.AttrSandboxBundleHash]] = true
+	written := make(map[string]bool, len(hashed))
+	for _, c := range file.SandboxClasses {
+		written[c.DefaultRuntime.Version[hardware.AttrSandboxBundleHash]] = true
+		for _, rt := range c.RestorableRuntimes {
+			written[rt.Version[hardware.AttrSandboxBundleHash]] = true
+		}
 	}
 	out := make([]hashedVersion, 0, len(hashed))
 	for _, v := range hashed {
@@ -563,11 +577,14 @@ func (s *workerSandboxSyncer) write(ctx context.Context, uid, config string, wan
 		return err
 	}
 	if wrote {
-		slog.InfoContext(ctx, "Wrote worker sandbox runtimes",
-			slog.String("pod_uid", uid),
-			slog.String("sandbox_config", config),
-			slog.String("default_bundle_hash", want.DefaultRuntime[hardware.AttrSandboxBundleHash]),
-			slog.Int("restorable_runtimes", len(want.RestorableRuntimes)))
+		for _, c := range want.SandboxClasses {
+			slog.InfoContext(ctx, "Wrote worker sandbox runtimes",
+				slog.String("pod_uid", uid),
+				slog.String("sandbox_config", config),
+				slog.String("sandbox_class", c.SandboxClass),
+				slog.String("default_bundle_hash", c.DefaultRuntime.Version[hardware.AttrSandboxBundleHash]),
+				slog.Int("restorable_runtimes", len(c.RestorableRuntimes)))
+		}
 	}
 	return nil
 }

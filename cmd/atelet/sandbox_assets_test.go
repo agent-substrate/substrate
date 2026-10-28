@@ -26,19 +26,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -186,76 +183,12 @@ func (n nopWriteCloser) Close() error {
 	return nil
 }
 
-func TestRecordFromRequest(t *testing.T) {
-	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	valid := func() *ateletpb.SandboxAssets {
-		return &ateletpb.SandboxAssets{
-			SandboxClass: "gvisor",
-			PauseImage:   testPauseImage,
-			Assets: map[string]*ateletpb.ArchAssets{
-				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-					gvisorAssetName: {Url: "gs://bucket/gvisor.tar.zst", Sha256: sha},
-				}},
-			},
-		}
-	}
-
-	t.Run("valid request projects onto this architecture", func(t *testing.T) {
-		got, err := recordFromRequest(valid())
-		if err != nil {
-			t.Fatalf("recordFromRequest: %v", err)
-		}
-		want := &sandboxAssetsRecord{
-			SandboxClass: "gvisor",
-			PauseImage:   testPauseImage,
-			Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/gvisor.tar.zst", SHA256: sha}},
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("recordFromRequest mismatch (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("microvm needs no pause image", func(t *testing.T) {
-		sa := valid()
-		sa.SandboxClass = "microvm"
-		sa.PauseImage = ""
-		got, err := recordFromRequest(sa)
-		if err != nil {
-			t.Fatalf("recordFromRequest: %v", err)
-		}
-		if got.PauseImage != "" {
-			t.Errorf("PauseImage = %q, want empty", got.PauseImage)
-		}
-	})
-
-	for _, tc := range []struct {
-		name   string
-		mutate func(*ateletpb.SandboxAssets) *ateletpb.SandboxAssets
-	}{
-		{"missing", func(*ateletpb.SandboxAssets) *ateletpb.SandboxAssets { return nil }},
-		{"no assets for this architecture", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
-			sa.Assets = map[string]*ateletpb.ArchAssets{"not-" + runtime.GOARCH: sa.Assets[runtime.GOARCH]}
-			return sa
-		}},
-		{"gvisor without pause image", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
-			sa.PauseImage = ""
-			return sa
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := recordFromRequest(tc.mutate(valid())); err == nil {
-				t.Error("recordFromRequest succeeded, want an error")
-			}
-		})
-	}
-}
-
 // newTestAssetCacheAt opens an asset cache under root/cache. Destinations a
 // test links into should live under the same root, on the cache's
 // filesystem.
-func newTestAssetCacheAt(t *testing.T, root string) *filecache.Store {
+func newTestAssetCacheAt(t *testing.T, root string, opts ...filecache.Option) *filecache.Store {
 	t.Helper()
-	store, err := filecache.New(filepath.Join(root, "cache"))
+	store, err := filecache.New(filepath.Join(root, "cache"), opts...)
 	if err != nil {
 		t.Fatalf("filecache.New: %v", err)
 	}
@@ -279,8 +212,8 @@ func cachedAssets(t *testing.T, root string) int {
 	return len(entries)
 }
 
-// useTempAssetScratch points prewarm's scratch dir at a temp dir. Not
-// parallel-safe: the path is process-global.
+// useTempAssetScratch points the scratch dir of fetches without an actor
+// at a temp dir. Not parallel-safe: the path is process-global.
 func useTempAssetScratch(t *testing.T) {
 	t.Helper()
 	orig := ateletpath.SandboxAssetScratchDir
@@ -312,13 +245,20 @@ func stageTestAsset(t *testing.T, s *Atelet, root string, entry assetEntry) (str
 // next to a gvisor-bin/ helper, as the real release ships them.
 func gvisorReleaseTarball(t *testing.T) []byte {
 	t.Helper()
+	return gvisorReleaseTarballWith(t, "runsc bytes")
+}
+
+// gvisorReleaseTarballWith is gvisorReleaseTarball with the given runsc
+// contents, for releases that must differ in digest.
+func gvisorReleaseTarballWith(t *testing.T, runsc string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, f := range []struct {
 		name, body string
 		mode       int64
 	}{
-		{"runsc", "runsc bytes", 0o755},
+		{"runsc", runsc, 0o755},
 		{"gvisor-bin/containerd-shim", "shim bytes", 0o755},
 	} {
 		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body))}); err != nil {
@@ -332,6 +272,28 @@ func gvisorReleaseTarball(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// gvisorTestRelease is a gVisor release tarball with the asset entry that
+// names it: the one asset a gvisor sandbox record carries.
+type gvisorTestRelease struct {
+	tarball []byte
+	entry   assetEntry
+}
+
+func newGVisorTestRelease(t *testing.T) gvisorTestRelease {
+	t.Helper()
+	tarball := gvisorReleaseTarball(t)
+	return gvisorTestRelease{
+		tarball: tarball,
+		entry:   assetEntry{URL: "gs://test-bucket/gvisor.tar", SHA256: fmt.Sprintf("%x", sha256.Sum256(tarball))},
+	}
+}
+
+// stagedRunsc is where an actor's staged copy of the release's runsc sits
+// under its sandbox assets dir.
+func stagedRunsc(actorUID string) string {
+	return filepath.Join(ateletpath.SandboxAssetsDir(actorUID), gvisorAssetName, "runsc")
 }
 
 // TestStageGVisorRelease stages the release tree through the asset cache:

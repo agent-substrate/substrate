@@ -14,14 +14,12 @@ If an upgrade goes wrong, you can roll back to the release you upgraded from, an
 
 These rules and the step order below come from the [version skew policy](version-skew-policy.md).
 
-<!-- TODO: Link the compatibility policy once it is in the repository. -->
-
 | Step | What changes | What running actors see | How long |
 |---|---|---|---|
 | 1 | podcertificate-controller | Nothing | A minute |
 | 2 | atelet, one node at a time | Nothing | Seconds to about 6 minutes per node |
 | 3 | workers | `SIGTERM`, then a 30-minute window to be suspended before `SIGKILL` | Seconds to hours per pool |
-| 4 | ate-api-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once. See step 4 | A few minutes |
+| 4 | ate-api-server and ate-idp-server, the CRDs and ate-controller, atenet, SandboxConfig, then the rest of the system bundle | API calls, long requests and outbound connections can be cut once. See step 4 | A few minutes |
 
 Rollback is the same list in reverse, from the old release. An actor that crashes along the way goes back to its last snapshot with `kubectl ate revert actor <name> -a <atespace>`.
 
@@ -176,17 +174,18 @@ What to expect:
 
 ### Step 4. Upgrade the Substrate control plane
 
-#### 4a. ate-api-server
+#### 4a. ate-api-server and ate-idp-server
 
 The first new API server pod migrates the database schema, and rolling back does not undo that. Back up the database first: with `pg_dump` for the bundled one, or an on-demand backup for Cloud SQL. With an external database, check that `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING` is set in this shell: without it, `deploy apiserver` points the API server at the bundled database.
 
 ```bash
 go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/new.yaml
 kubectl -n ate-system rollout status deploy/ate-api-server
+kubectl -n ate-system rollout status deploy/ate-idp-server
 kubectl ate get actors -A
 ```
 
-- **Done:** rollout status prints `successfully rolled out` and `kubectl ate get actors -A` lists your actors.
+- **Done:** both print `successfully rolled out` and `kubectl ate get actors -A` lists your actors.
 - **Stuck:** rollout status does not finish, or a new pod keeps restarting. [Roll back step 4](#roll-back-step-4).
 - **API clients:** an API call can fail once with a retriable error while an API server pod restarts. Retry it.
 
@@ -219,12 +218,11 @@ kubectl -n ate-system rollout status deploy/atenet-egress
 go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/new.yaml
 ```
 
-This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers.
-
-<!-- TODO: Today this step overwrites `gvisor-default` in place. Once each release ships its own SandboxConfig, it adds the new one, and WorkerPools without a `configRef` switch to it, so some suspended actors may cold boot. Link the sandbox upgrade guide. -->
+This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers. If the release changes a sandbox version, new actors start on the new version, and actors suspended on the previous one still restore on it.
 
 - **Done:** the command exits 0.
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
+- **Actors:** a suspended actor whose sandbox version the release drops resumes without its memory, keeping its files.
 
 #### 4e. The rest of the system bundle
 
@@ -277,7 +275,9 @@ go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. Fields the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+`deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
+
+Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
 The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 

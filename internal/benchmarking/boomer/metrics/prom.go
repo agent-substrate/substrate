@@ -47,6 +47,15 @@ var (
 		[]string{"method", "name", "status", "user_class"},
 	)
 
+	serverDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "locust_server_duration_milliseconds",
+			Help:    "Server-side latency in milliseconds, read from the response trailer or header, by method/name/user_class.",
+			Buckets: prometheus.ExponentialBuckets(0.1, 2, 20),
+		},
+		[]string{"method", "name", "user_class"},
+	)
+
 	activeUsers = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "locust_users",
@@ -57,7 +66,7 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(requestsTotal, requestDuration, activeUsers)
+	prometheus.MustRegister(requestsTotal, requestDuration, serverDuration, activeUsers)
 }
 
 // Serve starts a /metrics HTTP server on addr. Returns when the server stops
@@ -111,6 +120,12 @@ func RecordPromFailure(method, name, userClass string, latency time.Duration) {
 	ms := float64(latency.Milliseconds())
 	requestsTotal.WithLabelValues(method, name, "failure", userClass).Inc()
 	requestDuration.WithLabelValues(method, name, "failure", userClass).Observe(ms)
+}
+
+// RecordServerLatency reports the server's own elapsed time for a request,
+// to Prometheus only: locust has one latency per request, the client's.
+func RecordServerLatency(method, name, userClass string, latency time.Duration) {
+	serverDuration.WithLabelValues(method, name, userClass).Observe(float64(latency) / float64(time.Millisecond))
 }
 
 // UpdateUsers shifts the active-users gauge for a class by delta (positive on

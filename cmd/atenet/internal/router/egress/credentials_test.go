@@ -29,9 +29,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // credentialInjectionPolicySample injects "authorization: Bearer <secret>" from
@@ -40,23 +40,23 @@ const injectionProviderName = "k8s"
 
 // fakeProvider is a stub CredentialProviderClient recording the last request.
 type fakeProvider struct {
-	resp *credproviderpb.FetchSecretResponse
+	resp *credprovider.FetchSecretResponse
 	err  error
-	got  *credproviderpb.FetchSecretRequest
+	got  *credprovider.FetchSecretRequest
 }
 
-func (f *fakeProvider) FetchSecret(_ context.Context, req *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
+func (f *fakeProvider) FetchSecret(_ context.Context, req *credprovider.FetchSecretRequest, _ ...grpc.CallOption) (*credprovider.FetchSecretResponse, error) {
 	f.got = req
 	return f.resp, f.err
 }
 
 // bearerTokenResponse is a FetchSecretResponse carrying a bearer-token
 // credential as its opaque secret bytes.
-func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
-	return &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte(token)}
+func bearerTokenResponse(token string) *credprovider.FetchSecretResponse {
+	return &credprovider.FetchSecretResponse{OpaqueBytes: []byte(token)}
 }
 
-func injectionHandlerFor(policy *ateapipb.EgressPolicy, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+func injectionHandlerFor(policy *ateapi.EgressPolicy, provider credprovider.CredentialProviderClient, providerName string) *Handler {
 	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
 }
 
@@ -73,7 +73,7 @@ func TestInjectionOnRequestLegs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		leg    string
-		policy *ateapipb.EgressPolicy
+		policy *ateapi.EgressPolicy
 	}{
 		{name: "https", leg: extproc.EgressTLSMITMFilterChainName, policy: credentialInjectionPolicySample("api.example.com")},
 		{name: "http", leg: extproc.EgressCleartextFilterChainName, policy: cleartextInjectionPolicy("api.example.com")},
@@ -116,16 +116,16 @@ func TestInjectionOnRequestLegs(t *testing.T) {
 // A request that does not carry the header a rule replaces goes out unchanged:
 // nothing is fetched, added, or denied, even where injecting would fail.
 func TestInjectionSkippedWithoutHeader(t *testing.T) {
-	jwtPolicy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{
+	jwtPolicy := &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
 		Hostnames: []string{"api.example.com"},
-		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
+		Effects: &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{{
 			Header:   "authorization",
-			ActorJwt: &ateapipb.ActorJwtSource{Audiences: []string{"https://api.example.com"}},
+			ActorJwt: &ateapi.ActorJwtSource{Audiences: []string{"https://api.example.com"}},
 		}}},
 	}}}}
 	for _, tc := range []struct {
 		name     string
-		policy   *ateapipb.EgressPolicy
+		policy   *ateapi.EgressPolicy
 		provider *fakeProvider // nil means no provider configured
 	}{
 		{name: "provider configured", policy: credentialInjectionPolicySample("api.example.com"), provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")}},
@@ -133,7 +133,7 @@ func TestInjectionSkippedWithoutHeader(t *testing.T) {
 		{name: "actor JWT", policy: jwtPolicy, provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var provider credproviderpb.CredentialProviderClient
+			var provider credprovider.CredentialProviderClient
 			if tc.provider != nil {
 				provider = tc.provider
 			}
@@ -156,9 +156,9 @@ func TestInjectionSkippedWithoutHeader(t *testing.T) {
 // Of a rule's replacements, only those whose header the request carries are
 // applied, matching the header name case-insensitively.
 func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
-	policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{
+	policy := &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
 		Hostnames: []string{"api.example.com"},
-		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{
+		Effects: &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{
 			{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"},
 			{Header: "X-Api-Key", CredentialUri: "ate-secret://k8s/default/api-key"},
 		}},
@@ -189,7 +189,7 @@ func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
 func TestInjectionDenials(t *testing.T) {
 	tests := []struct {
 		name         string
-		provider     credproviderpb.CredentialProviderClient
+		provider     credprovider.CredentialProviderClient
 		providerName string
 		want         envoy_type.StatusCode
 	}{
@@ -259,7 +259,7 @@ func TestInjectionDenials(t *testing.T) {
 // blockingProvider never answers, like a provider stuck dialing
 type blockingProvider struct{}
 
-func (blockingProvider) FetchSecret(ctx context.Context, _ *credproviderpb.FetchSecretRequest, _ ...grpc.CallOption) (*credproviderpb.FetchSecretResponse, error) {
+func (blockingProvider) FetchSecret(ctx context.Context, _ *credprovider.FetchSecretRequest, _ ...grpc.CallOption) (*credprovider.FetchSecretResponse, error) {
 	<-ctx.Done()
 	return nil, status.FromContextError(ctx.Err()).Err()
 }
@@ -280,24 +280,24 @@ func TestInjectionProviderHangs(t *testing.T) {
 }
 
 // actorJWTHeader replaces header with an actor JWT bound to api.example.com.
-func actorJWTHeader(header string) *ateapipb.CredentialHeader {
-	return &ateapipb.CredentialHeader{
+func actorJWTHeader(header string) *ateapi.CredentialHeader {
+	return &ateapi.CredentialHeader{
 		Header:   header,
 		Prefix:   "Bearer ",
-		ActorJwt: &ateapipb.ActorJwtSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900},
+		ActorJwt: &ateapi.ActorJwtSource{Audiences: []string{"https://api.example.com"}, ExpirationSeconds: 900},
 	}
 }
 
 // replaceHeadersPolicy is a rule for api.example.com on leg's protocol (https
 // for the MITM leg, http for the cleartext one) that replaces headers with
 // entries.
-func replaceHeadersPolicy(leg string, entries ...*ateapipb.CredentialHeader) *ateapipb.EgressPolicy {
+func replaceHeadersPolicy(leg string, entries ...*ateapi.CredentialHeader) *ateapi.EgressPolicy {
 	hosts := []string{"api.example.com"}
-	effects := &ateapipb.HttpRuleEffects{ReplaceHeaders: entries}
+	effects := &ateapi.HttpRuleEffects{ReplaceHeaders: entries}
 	if leg == extproc.EgressCleartextFilterChainName {
-		return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: hosts, Effects: effects}}}}
+		return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: hosts, Effects: effects}}}}
 	}
-	return &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HttpsRule{Hostnames: hosts, Effects: effects}}}}
+	return &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{Hostnames: hosts, Effects: effects}}}}
 }
 
 var requestLegs = []string{extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName}
@@ -310,7 +310,7 @@ func TestActorJWTInjection(t *testing.T) {
 		t.Run(leg, func(t *testing.T) {
 			client := &egressMockClient{actor: runningActor(), policy: replaceHeadersPolicy(leg,
 				actorJWTHeader("authorization"),
-				&ateapipb.CredentialHeader{Header: "x-api-key", CredentialUri: "ate-secret://k8s/default/token"},
+				&ateapi.CredentialHeader{Header: "x-api-key", CredentialUri: "ate-secret://k8s/default/token"},
 			)}
 			h := New(client, nil, 0, nil, "")
 
@@ -333,8 +333,8 @@ func TestActorJWTInjection(t *testing.T) {
 			if h0.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
 				t.Errorf("append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h0.GetAppendAction())
 			}
-			want := &ateapipb.MintActorJwtRequest{
-				Actor:             &ateapipb.ObjectRef{Atespace: testEgressAtespace, Name: testEgressActor},
+			want := &ateapi.MintActorJwtRequest{
+				Actor:             &ateapi.ObjectRef{Atespace: testEgressAtespace, Name: testEgressActor},
 				Audiences:         []string{"https://api.example.com"},
 				ExpirationSeconds: 900,
 			}

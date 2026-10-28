@@ -23,7 +23,7 @@ import (
 	"github.com/vishvananda/netlink"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
-	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/atunnel/egress"
 	"go.ate.dev/substrate/internal/linuxsys"
 	"go.ate.dev/substrate/internal/netns"
@@ -42,7 +42,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &AteWorkerService{
-		tunnel:    &tunnel.Tunnel{Egress: egressProxy, EgressPort: 15001},
+		tunnel:    &atunnel.Tunnel{Egress: egressProxy, EgressPort: 15001},
 		actors:    map[string]*hostedActor{},
 		maxActors: 1,
 	}

@@ -24,11 +24,10 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
 
 - **SandboxConfig** (Kubernetes CRD): a cluster-scoped resource holding the
   sandbox binaries for one runtime family (the gVisor `runsc` binary, or a
-  micro-VM kernel/firmware/config), plus the pause image for the sandbox's
-  root container. An actor resolves its sandbox at first cold boot from the
-  config its `ActorTemplate` names (naming one is currently required;
-  per-class cluster defaults are planned), so one config pins the runtime
-  version for many templates.
+  microVM kernel/firmware/config). An actor resolves its sandbox at first cold
+  boot from the config its `ActorTemplate` names (naming one is currently
+  required; per-class cluster defaults are planned), so one config pins the
+  runtime version for many templates.
 
 ## Records (dynamic state, in the control-plane store)
 
@@ -83,16 +82,16 @@ for etcd.
 
 ## Lifecycle
 
-- **Suspend**: hibernate a running or paused Actor into a durable snapshot in
-  external storage. A running Actor is checkpointed on its Worker (which is
-  then freed); a paused Actor's node-local snapshot is uploaded — narrowed to
-  the commit scope when the pause captured more — ending its node pinning.
+- **Suspend**: hibernate a running Actor into a snapshot. The Actor is
+  checkpointed on its Worker, which is then freed. Snapshot files remain on the
+  node VM so the following Resume can restore from them locally (until `atelet`
+  or a Resume detaches them), and are also uploaded to external storage: a
+  synchronous suspend uploads the snapshot before it returns, while an
+  asynchronous suspend (the default) returns once the local snapshot is captured
+  and `atelet` uploads it in the background. Suspending an Actor that is already
+  suspended returns it as it is.
 
-- **Pause**: a short-term checkpoint of a running Actor. Snapshot files remain
-  on the node VM, and the following Resume is prioritized onto the node VM
-  where the snapshots are persisted.
-
-- **Resume**: activate a suspended/paused Actor by restoring it onto a Worker. The
+- **Resume**: activate a suspended Actor by restoring it onto a Worker. The
   common path restores from a snapshot rather than cold-booting.
 
 ## Volumes
@@ -104,11 +103,7 @@ for etcd.
   containers, potentially at different paths. This is the per-Actor
   application-data surface.
 
-  How many an `ActorTemplate` may declare depends on the sandbox class of
-  the `WorkerPool` its actors run on: a `microvm` worker supports several
-  (they are subdirectories of one virtio-fs share, so they cost nothing
-  extra per volume), while a `gvisor` worker is limited to one until gVisor
-  can accept more than a single durable mount.
+  An `ActorTemplate` may declare several, on either sandbox class.
 
 ## Snapshots
 
@@ -121,16 +116,14 @@ for etcd.
     afresh from the OCI image with the `DurableDir` contents restored.
   - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
     Process memory is discarded; on Resume the containers cold-boot from the
-    OCI image with their rootfs writes back in place. Served by the micro-VM
-    sandbox class only: gVisor keeps rootfs changes inside its memory
-    checkpoint, so a gVisor template that requests it is rejected.
+    OCI image with their rootfs writes back in place.
   - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
     capture everything needed to resume hot.
 
   Fidelity describes only what a snapshot *holds*. A template sets one
   level, `preferredFidelity`, the ceiling for every snapshot of its actors:
-  the node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
-  snapshot a [Suspend](#lifecycle) uploads to snapshot storage. It is best
+  both the node-local checkpoint a [Suspend](#lifecycle) keeps on the node and
+  the snapshot uploaded to snapshot storage. It is best
   effort: the system never packages more than that level, and may package
   less when a layer cannot be captured or is too expensive to capture at
   the time. A process resumed in place keeps its memory regardless.

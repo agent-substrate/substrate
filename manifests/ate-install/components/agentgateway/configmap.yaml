@@ -22,6 +22,14 @@ data:
     # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     config:
       statsAddr: 0.0.0.0:15020
+      backend:
+        # The dynamic-backend guard checks CONNECT authority before tunneling.
+        # substrateIngress resolves ate-target-actor through ate-api-server to
+        # select the worker's mTLS atunnel endpoint. Atunnel selects that actor's
+        # dialer by ate-target-actor and uses only the authority's port, not its
+        # host, so a loopback authority cannot dial the router's own loopback.
+        # Keep this opt-in ingress-only, with all backends tunneled to atunnel.
+        allowDynamicLoopback: true
 
     frontendPolicies:
       tracing:
@@ -142,7 +150,7 @@ data:
         mode: tunnel
       accessLog:
         add:
-          substrate.connect.authority: source.connectHeaders["host"]
+          substrate.connect.authority: 'destination.address + ":" + string(destination.port)'
       substrateEgressActorResolution:
         host: api.ate-system.svc:443
         policies:
@@ -172,7 +180,7 @@ data:
         tcpRoutes:
         - backends:
           - dynamic:
-              target: source.connectHeaders["host"]
+              target: 'destination.address + ":" + string(destination.port)'
       - protocol: HTTP
         routes:
         - name: reject-websocket-upgrade
@@ -190,7 +198,7 @@ data:
               body: WebSocket egress is not supported
         - backends:
           - dynamic:
-              target: source.connectHeaders["host"]
+              target: 'destination.address + ":" + string(destination.port)'
           policies:
             substrateEgress:
               host: api.ate-system.svc:443

@@ -29,6 +29,7 @@ ATESPACE="nighthawk"
 TEMPLATE_NAME="traffic-driver"
 ACTOR_NAME="tester"
 POOL_MANIFEST="${SCRIPT_DIR}/traffic-driver.yaml.tmpl"
+NAMESPACE_MANIFEST="${SCRIPT_DIR}/namespace.yaml"
 MANIFEST="${SCRIPT_DIR}/traffic-driver-template.yaml.tmpl"
 EGRESS_POLICY_MANIFEST="${SCRIPT_DIR}/egress-policy.yaml"
 KUBECTL_ATE_BIN="kubectl-ate"
@@ -158,6 +159,9 @@ deploy() {
     exit 1
   fi
   export KO_DOCKER_REPO
+
+  echo "Deploying namespace from ${NAMESPACE_MANIFEST}..."
+  run_kubectl apply -f "${NAMESPACE_MANIFEST}"
 
   echo "Deploying worker pool from ${POOL_MANIFEST}..."
   hack/run-tool.sh ko resolve -f "${POOL_MANIFEST}" | run_kubectl apply -f -

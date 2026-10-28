@@ -11,7 +11,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-[Quickstart](#quickstart-development) · [Security](docs/security.md) · [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md) · [Contributing](CONTRIBUTING.md)
+[Quickstart](#quickstart-development) · [Security](docs/security.md) · [Architecture](docs/architecture.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -115,14 +115,15 @@ To quickly set up the complete environment:
 
 2. Run the following steps:
 ```shell
-# create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
+# create cluster and local registry
 hack/create-kind-cluster.sh
 
-# install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+# install Substrate
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
 # install counter demo
-hack/install-ate-kind.sh --deploy-demo-counter
+hack/install-ate-kind.sh deploy demo counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
@@ -131,8 +132,9 @@ go install ./cmd/kubectl-ate
 # actor template, resolved in the actor's atespace)
 kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
-# port-forward the network router to bind to local port `8000`
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+# serve a local proxy on port 8000 that sends requests to the actor through the
+# network router
+kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ```
 
 > [!IMPORTANT]
@@ -143,9 +145,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST \
-   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-   -i http://localhost:8000/
+curl -X POST -i http://localhost:8000/
 ```
 
 ### GKE Quickstart (Development)
@@ -168,17 +168,25 @@ curl -X POST \
    go run ./tools/setup-gcp bootstrap
    ```
 
-   On a fresh project this step also creates the atelet Workload Identity IAM
-   grants that snapshots depend on — see
+   On a fresh project this step also creates the Workload Identity IAM grants
+   that ate-api-server and atelet depend on. See
    [what `create iam` actually grants](tools/setup-gcp/README.md#what-create-iam-actually-grants)
    to audit them or apply them manually. If you bring your own cluster instead,
-   note the required Kubernetes beta APIs can only be enabled **at cluster
-   creation** — see the [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
+   it needs the PodCertificateRequest and ClusterTrustBundle APIs, which GKE
+   1.37 and higher serve by default. On 1.36, enable them as beta APIs, then
+   replace any 1.36 node pools created before that. See the
+   [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
-   ./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+     --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
    ```
+
+   `--ingress-allowed-spiffe-ids` lists the clients the router lets reach
+   actors. The ID above is the one `kubectl ate proxy actor` presents. Without
+   the flag no client reaches actors. See
+   [Ingress to actors](docs/operator-install.md#ingress-to-actors).
 
    `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
    bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only
@@ -193,7 +201,7 @@ curl -X POST \
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
-   ./hack/install-ate.sh --deploy-demo-counter
+   go run ./cmd/ate-setup deploy demo counter
    ```
 
 #### Custom Setup and Deployment
@@ -207,13 +215,14 @@ go run ./tools/setup-gcp create bucket
 To run the PostgreSQL store backend on Cloud SQL — with IAM database
 authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
 
-Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
+Similarly, you can deploy or cleanup specific Agent Substrate components using
+the installation script. See `go run ./cmd/ate-setup` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system
-./hack/install-ate.sh --deploy-ate-apiserver
+go run ./cmd/ate-setup deploy apiserver
 
 # Delete everything (core system and all demos)
-./hack/install-ate.sh --delete-all
+go run ./cmd/ate-setup delete all
 ```
 
 #### Tearing down resources (GCP)
@@ -243,7 +252,6 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 3. **[Claude Code Multiplex](demos/claude-code-multiplex/README.md)**: Demonstrates oversubscribing physical hardware by multiplexing multiple Claude Code agents onto a limited pool of workers.
 4. **[Multi-Template](demos/multi-template/README.md)**: Two `ActorTemplate`s running different binaries share one `WorkerPool`, even though the templates live in different atespaces.
 5. **[Request Parking](demos/parking/README.md)**: An oversubscribed pool where the router holds inbound requests until a worker frees up, instead of returning `503`.
-6. **[Autoscaled WorkerPool](demos/autoscaled-workerpool/README.md)**: Scales a `WorkerPool` on its assigned-worker count with an HPA fed by prometheus-adapter.
 
 ### Documentation & Guides
 * [Architecture](docs/architecture.md): How the control plane, node supervisor, and networking stack fit together.
@@ -256,9 +264,10 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
+* [Sandbox Asset Cache](docs/sandbox-asset-cache.md): How a node caches the sandbox binaries actors run on, decides which runtimes it needs, and evicts to a budget.
 * [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
+* [Node Storage](docs/node-storage.md): How to give snapshot I/O its own disk.
 * [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
-* [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
 
 ## Tour
@@ -271,7 +280,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/ate-idp-server`: Serves the OpenID discovery document and key set that relying parties use to verify actor JWTs.
 * `cmd/atenet`: A combined networking controller providing Envoy routing and proxy sidecars.
 * `cmd/ateworker-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
-* `cmd/ateworker-microvm`: The micro-VM peer of `ateworker-gvisor`, running actors as cloud-hypervisor VMs.
+* `cmd/ateworker-microvm`: The microVM peer of `ateworker-gvisor`, running actors as cloud-hypervisor VMs.
 * `cmd/podcertcontroller`: A "polyfill" that provides Pod Certificate signers that
   will eventually ship in upstream Kubernetes (with different names).
 * `cmd/kubectl-ate`: A CLI tool for managing Agent Substrate resources. See its [README](cmd/kubectl-ate/README.md).

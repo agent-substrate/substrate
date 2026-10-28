@@ -18,9 +18,9 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var revertAtespaceFlag string
@@ -31,7 +31,9 @@ var revertActorCmd = &cobra.Command{
 	Long: `Revert an actor to SUSPENDED, discarding its current execution.
 
 The actor's external snapshot is left untouched, so a later resume restores
-from it. Only crashed, running, or paused actors can be reverted.`,
+from it. Only crashed or running actors, or suspended actors with a node-local
+snapshot, can be reverted. A suspended actor without a node-local snapshot is
+already at its durable snapshot, so there is nothing to revert.`,
 	Args: exactlyOneArg("<actor-name>", "atespace"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -42,7 +44,7 @@ from it. Only crashed, running, or paused actors can be reverted.`,
 		defer apiClient.Close()
 
 		actorRef := resources.ActorRef{Atespace: revertAtespaceFlag, Name: args[0]}
-		resp, err := apiClient.RevertActor(ctx, &ateapipb.RevertActorRequest{
+		resp, err := apiClient.RevertActor(ctx, &ateapi.RevertActorRequest{
 			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {

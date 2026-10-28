@@ -62,13 +62,15 @@ class SubstrateArgsTest(unittest.TestCase):
 
 class DeploySubstrateTest(unittest.TestCase):
     # The runner Job authenticates with its pod certificate, so ate-api-server
-    # denies it unless the install makes it an owner.
+    # denies it unless the install makes it an owner, and the Envoy ingress
+    # router refuses to deploy without an allowed SPIFFE ID.
     @mock.patch("orchestrator.run")
     def test_runner_and_client_are_bootstrap_owners(self, run):
         orchestrator.deploy_substrate(["--credential-provider={}"])
         cmd = run.call_args.args[0]
-        self.assertEqual(cmd, ["hack/install-ate.sh", "--deploy-ate-system", "--credential-provider={}"])
-        owners = run.call_args.kwargs["env"]["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
+        self.assertEqual(cmd, ["hack/install-ate.sh", "deploy", "ate-system", "--credential-provider={}"])
+        env = run.call_args.kwargs["env"]
+        owners = env["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
         self.assertEqual(
             owners,
             [
@@ -76,12 +78,21 @@ class DeploySubstrateTest(unittest.TestCase):
                 "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
             ],
         )
+        self.assertEqual(
+            env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
+            "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
+        )
 
     @mock.patch("orchestrator.run")
     def test_keeps_the_rest_of_the_environment(self, run):
         with mock.patch.dict(os.environ, {"KO_DOCKER_REPO": "example"}):
             orchestrator.deploy_substrate()
         self.assertEqual(run.call_args.kwargs["env"]["KO_DOCKER_REPO"], "example")
+
+    @mock.patch("orchestrator.run_no_check")
+    def test_teardown_substrate(self, run_no_check):
+        orchestrator.teardown_substrate()
+        run_no_check.assert_called_once_with(["hack/install-ate.sh", "delete", "ate-system"])
 
 
 class DeployWorkloadsTest(unittest.TestCase):
@@ -105,6 +116,13 @@ class DeployWorkloadsTest(unittest.TestCase):
         cmd = run.call_args.args[0]
         i = cmd.index("--worker-memory")
         self.assertEqual(cmd[i + 1], "12Gi")
+
+    @mock.patch("orchestrator.run")
+    def test_whole_core_actor_cpu_is_a_string(self, run):
+        orchestrator.deploy_workloads(actor_cpu=1)
+        cmd = run.call_args.args[0]
+        i = cmd.index("--actor-cpu")
+        self.assertEqual(cmd[i + 1], "1")
 
     @mock.patch("orchestrator.run")
     def test_all_options(self, run):

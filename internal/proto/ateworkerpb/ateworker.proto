@@ -108,7 +108,9 @@ service Worker {
 // ActorDirs is the set of per-actor directories atelet prepares on the volume
 // it shares with the worker. The worker takes them from the RPC instead of deriving
 // them from the actor UID.
-// Every directory is under root_dir.
+// Every directory except checkpoint_dir and restore_dir is under root_dir.
+// Those two may be on a different filesystem from root_dir, so the worker must
+// not rename or hard-link files between them and root_dir.
 //
 // +k8s:customValidation # each directory is an absolute, clean path
 message ActorDirs {
@@ -219,20 +221,20 @@ message RunWorkloadRequest {
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (content-addressed, like runsc_path). The names are
-  // the runtime's own: "gvisor" and "runsc" for gVisor, "cloud-hypervisor",
+  // the runtime's own: "gvisor" for gVisor, "cloud-hypervisor",
   // "virtiofsd", "kata-kernel", and "kata-image" for the micro-VM. Empty for
   // the gVisor runtime, which uses runsc_path.
   //
   // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:maxLength=64
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
   map<string, string> runtime_asset_paths = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 10;
+  optional EgressGateway egress_gateway = 9;
 
   // The actor's declared size, from the ActorTemplate's resource limits. The worker
   // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
@@ -240,14 +242,9 @@ message RunWorkloadRequest {
   // runtime default (unlimited for gVisor, the worker's own default for the micro-VM).
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=999999 # matches atelet.RunRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 11; // CPU limit in millicores (1000 = one core).
-  // +k8s:optional
-  // +k8s:minimum=1
-  int64 memory_bytes = 12; // Memory limit in bytes.
+  ResourceRequirements resources = 10;
   // +k8s:required
-  ActorDirs actor_dirs = 13;
+  ActorDirs actor_dirs = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -278,8 +275,8 @@ message WorkloadSpec {
 //
 // +k8s:customValidation # mount paths are unique and do not nest across the four lists
 message Container {
-  // The sandbox's own container, ocispec.PauseContainer, is not a short
-  // name, so the format keeps a workload container from taking its bundle.
+  // The sandbox ID, ocispec.SandboxID, is not a short name, so the format
+  // keeps a workload container from taking its bundle.
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
@@ -349,15 +346,33 @@ message ContainerSpec {
   repeated string capabilities = 3;
 
   // resources are the container's own declared limits, if any.
-  ResourceLimits resources = 4;
+  //
+  // +k8s:optional
+  ResourceRequirements resources = 4;
 }
 
-// ResourceLimits are a container's declared limits.
-message ResourceLimits {
-  // memory_bytes is the memory limit in bytes. 0 means unset.
-  int64 memory_bytes = 1;
-  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
-  int64 cpu_millis = 2;
+// ResourceRequirements mirrors atelet's ResourceRequirements.
+message ResourceRequirements {
+  // limits is the maximum amount of compute resources allowed.
+  //
+  // +k8s:optional
+  Resources limits = 1;
+}
+
+// Resources is an amount of each compute resource.
+message Resources {
+  // cpu_millicores is CPU in millicores (1000 = one core). 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=999999 # less than 1000 cores
+  int64 cpu_millicores = 1;
+
+  // memory_bytes is memory in bytes. 0 means none.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 memory_bytes = 2;
 }
 
 // VolumeMount is one volume mounted into a container.
@@ -409,6 +424,8 @@ message HttpGetAction {
 }
 
 message RunWorkloadResponse {
+  // The epoch this worker process registered with.
+  int64 worker_epoch = 1;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -420,8 +437,7 @@ enum SnapshotFidelity {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. Served by the
-  // micro-VM runtime only; other runtimes reject requests carrying it.
+  // Volumes plus the root filesystem changes made since boot.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Capture process memory plus the full filesystem delta on top of the OCI
   // image (including any attached DurableDir volumes).
@@ -460,9 +476,9 @@ message CheckpointWorkloadRequest {
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 10;
+  SnapshotFidelity fidelity = 8;
   // +k8s:required
-  ActorDirs actor_dirs = 11;
+  ActorDirs actor_dirs = 9;
 }
 
 message CheckpointWorkloadResponse {
@@ -507,22 +523,22 @@ message RestoreWorkloadRequest {
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   //
   // +k8s:optional
-  // +k8s:maxProperties=16 # matches atelet.ArchAssets.files
-  // +k8s:eachKey=+k8s:maxLength=64 # matches atelet.ArchAssets.files
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:maxLength=64
   // +k8s:eachVal=+k8s:maxLength=4096 # PATH_MAX; a host path, not a contract
-  map<string, string> runtime_asset_paths = 9;
+  map<string, string> runtime_asset_paths = 8;
 
   // Fidelity to restore from the snapshot.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 10;
+  SnapshotFidelity fidelity = 9;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
-  optional EgressGateway egress_gateway = 12;
+  optional EgressGateway egress_gateway = 10;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
   // (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
@@ -530,23 +546,20 @@ message RestoreWorkloadRequest {
   // these are ignored. Zero means "unset": keep the runtime default.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=999999 # matches atelet.RestoreRequest.cpu_milli, the control plane caps cpu limits strictly below 1000 cores
-  int64 cpu_milli = 14; // CPU limit in millicores (1000 = one core).
-  // +k8s:optional
-  // +k8s:minimum=1
-  int64 memory_bytes = 15; // Memory limit in bytes.
+  ResourceRequirements resources = 11;
   // +k8s:required
-  ActorDirs actor_dirs = 16;
+  ActorDirs actor_dirs = 13;
 
   // actor_dirs.restore_dir is a preserved local snapshot, not a scratch copy:
   // the worker must not delete or modify files in it.
   //
   // +k8s:optional
-  bool preserve_restore_dir = 17;
+  bool preserve_restore_dir = 14;
 }
 
 message RestoreWorkloadResponse {
+  // The epoch this worker process registered with.
+  int64 worker_epoch = 1;
 }
 
 message GetWorkloadStatsRequest {
@@ -596,7 +609,7 @@ message WorkloadStatsSample {
   string actor_template_name = 5;
 
   // The sandbox runtime family that produced this sample, in the
-  // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
+  // ate.dev/v1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
   // "microvm" (cmd/ateworker-microvm). A worker binary only ever reports its own.
   string sandbox_class = 6;
 

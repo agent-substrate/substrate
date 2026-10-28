@@ -22,8 +22,8 @@ import (
 type CreateVolumeRequest struct {
 	// Name is the name to provision the volume under.
 	Name string
-	// Capacity is the requested size as a Kubernetes resource.Quantity string.
-	Capacity string
+	// CapacityBytes is the requested size in bytes.
+	CapacityBytes int64
 	// Parameters are the driver-specific parameters from the StorageClass.
 	Parameters map[string]string
 }
