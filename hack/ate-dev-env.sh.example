@@ -31,9 +31,9 @@ export CLUSTER_NAME=substrate-poc
 # this pin, pick a current one from:
 #   gcloud container get-server-config --zone ${CLUSTER_LOCATION} --format="value(defaultClusterVersion)"
 # See tools/setup-gcp/README.md ("Create Cluster") for the full constraint.
-export CLUSTER_VERSION=1.36.3-gke.1767000
+export CLUSTER_VERSION=1.37.1-gke.1552000
+export NODE_POOL_VERSION=${CLUSTER_VERSION}
 export NODE_POOL_NAME=gvisor-pool
-export NODE_POOL_VERSION=1.36.3-gke.1767000
 export NODE_MACHINE_TYPE=c3-standard-4
 # Enable nested virtualization (required for microVMs)
 export ENABLE_NESTED_VIRTUALIZATION=true
@@ -60,6 +60,13 @@ export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
 # on the agentgateway dataplane; {"name":"<provider>","address":"<host>:<port>"}
 # uses a provider you deploy yourself. See docs/egress-credential-injection.md.
 export ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}'
+
+# SPIFFE IDs (exact match, comma-separated) of the clients the ingress router
+# lets reach actors over its TLS ports; required when deploying the Envoy
+# router (--atenet-dataplane=envoy). The podidentity signer issues
+# spiffe://cluster.local/ns/<namespace>/sa/<service-account>. The default below
+# allowlists the E2E suite's router client (internal/e2e/ingressauth.go).
+export ATE_INGRESS_ALLOWED_SPIFFE_IDS="spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client"
 
 # Set this if you want to override the default build platforms
 export KO_DEFAULTPLATFORMS=linux/amd64
