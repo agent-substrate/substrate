@@ -51,6 +51,7 @@ var Components = []string{
 	"cmd/benchmarking/isolate/fake-atelet",
 	"cmd/benchmarking/isolate/fake-workersync",
 	"cmd/credential-provider/kubernetes-secrets",
+	"cmd/dockerconfig-credential-provider",
 	"cmd/objectstore-plugin",
 	"cmd/podcertcontroller",
 	"demos/counter",
