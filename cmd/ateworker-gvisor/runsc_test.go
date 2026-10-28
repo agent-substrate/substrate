@@ -19,25 +19,113 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
 
 	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 var testActorDirs = &ateworkerpb.ActorDirs{
 	RootDir:      "/node/actors/test-actor-123",
 	OciBundleDir: "/node/actors/test-actor-123/bundle",
+}
+
+func TestRunscStartupLogAttribution(t *testing.T) {
+	for _, onGCE := range []bool{false, true} {
+		for _, command := range []string{"create", "start", "restore"} {
+			for _, container := range []string{"app", "sidecar"} {
+				t.Run(fmt.Sprintf("gce=%t/%s/%s", onGCE, command, container), func(t *testing.T) {
+					var buf syncLogBuffer
+					logger := actorlog.NewActorLogger(&buf, onGCE)
+					attribution := resources.ActorAttribution{Ref: resources.ActorRef{Atespace: "space", Name: "actor-" + container}, UID: "uid-" + container}
+					var forwarders sync.WaitGroup
+					pipe := func(name string) *os.File {
+						pr, pw, err := os.Pipe()
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { pw.Close() })
+						forwarders.Go(func() {
+							defer pr.Close()
+							logger.WrapContainerLogs(pr, attribution, name)
+						})
+						return pw
+					}
+					appLogs, sandboxLogs := pipe(container), pipe(ocispec.SandboxID)
+					root := t.TempDir()
+					dirs := &ateworkerpb.ActorDirs{RootDir: root, OciBundleDir: filepath.Join(root, "bundle")}
+					if err := os.MkdirAll(ociBundlePath(dirs, container), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					flags, err := newFlagStore(t.Context(), "kodata/internal_flags.json")
+					if err != nil {
+						t.Fatal(err)
+					}
+					r := &runsc{path: "testdata/runsc-logs.sh", actorUID: attribution.UID, actorDirs: dirs, flags: flags, startupLogs: sandboxLogs,
+						containers: []*ateworkerpb.Container{{Name: container, ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}},
+					}
+					switch command {
+					case "create":
+						err = r.cmdCreate(t.Context(), appLogs, container, nil)
+					case "start":
+						err = r.cmdStart(t.Context(), appLogs, container)
+					case "restore":
+						err = r.cmdRestore(t.Context(), appLogs, container, filepath.Join(root, "checkpoint"))
+					}
+					appLogs.Close()
+					sandboxLogs.Close()
+					forwarders.Wait()
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := map[string]string{
+						"runsc diagnostic for " + container:                            ocispec.SandboxID,
+						"stdout from " + container:                                     container,
+						"I1026 19:30:00.000000 123 app.go:1] stderr from " + container: container,
+					}
+					labelKey := "labels"
+					if onGCE {
+						labelKey = "logging.googleapis.com/labels"
+					}
+					for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+						record := decodeRecord(t, []byte(line))
+						message, _ := record["message"].(string)
+						labels, _ := record[labelKey].(map[string]any)
+						if labels[string(ateattr.ActorNameKey)] != attribution.Ref.Name || labels[string(ateattr.AtespaceKey)] != attribution.Ref.Atespace {
+							t.Errorf("wrong actor labels: %v", labels)
+						}
+						containerName, ok := want[message]
+						if !ok {
+							t.Errorf("unexpected log: %s", line)
+							continue
+						}
+						if got := labels[string(ateattr.ActorContainerNameKey)]; got != containerName {
+							t.Errorf("%q container label = %v, want %s", message, got, containerName)
+						}
+						delete(want, message)
+					}
+					if len(want) != 0 {
+						t.Errorf("missing logs: %v", want)
+					}
+				})
+			}
+		}
+	}
 }
 
 // writeSpec builds a workload container's spec from the request, and a

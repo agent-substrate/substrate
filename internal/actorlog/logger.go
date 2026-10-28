@@ -106,7 +106,7 @@ func (al *ActorLogger) EmitLifecycleLog(ctx context.Context, msg string, a resou
 // through the logger. containerName tags every line with the originating container;
 // callers that multiplex multiple containers should give each its own pipe so the
 // tag is meaningful.
-func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerName string) (io.WriteCloser, error) {
+func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerName string) (*os.File, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err

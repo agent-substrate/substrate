@@ -652,6 +652,13 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	attribution := workerstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
+	// Keep runsc startup diagnostics separate from application stdout/stderr.
+	sandboxLogs, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
+	}
+	defer sandboxLogs.Close()
+
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
@@ -674,6 +681,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		startupLogs:    sandboxLogs,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -706,18 +714,12 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	containersToDelete = append(containersToDelete, ocispec.SandboxID)
-	// Attribute the sandbox's runsc CLI output to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
-	if err != nil {
-		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
-	}
-	defer pw.Close()
-	if err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, nil); err != nil {
+	if err := rcmd.cmdCreate(ctx, sandboxLogs, ocispec.SandboxID, nil); err != nil {
 		return nil, fmt.Errorf("while creating the sandbox: %w", err)
 	}
 	s.pinSandbox(ctx, hosted, req.GetActorDirs())
 	s.throttleSandboxMemory(ctx, hosted)
-	if err := rcmd.cmdStart(ctx, pw, ocispec.SandboxID); err != nil {
+	if err := rcmd.cmdStart(ctx, sandboxLogs, ocispec.SandboxID); err != nil {
 		return nil, fmt.Errorf("while starting the sandbox: %w", err)
 	}
 
@@ -1101,6 +1103,13 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
+	// Keep runsc startup diagnostics separate from application stdout/stderr.
+	sandboxLogs, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
+	if err != nil {
+		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
+	}
+	defer sandboxLogs.Close()
+
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
@@ -1125,6 +1134,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		startupLogs:    sandboxLogs,
 	}
 	var containersToDelete []string
 	defer func() {
@@ -1159,24 +1169,18 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, err
 	}
 
-	// Attribute the sandbox's runsc CLI output to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.SandboxID)
-	if err != nil {
-		return nil, fmt.Errorf("while starting sandbox log pipe: %w", err)
-	}
-	defer pw.Close()
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		// Create and start the sandbox (cold boot with filesystem checkpoint bundles restored)
 		containersToDelete = append(containersToDelete, ocispec.SandboxID)
-		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
+		err := rcmd.cmdCreate(ctx, sandboxLogs, ocispec.SandboxID, restoreArgs)
 		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		s.throttleSandboxMemory(ctx, hosted)
-		err = rcmd.cmdStart(ctx, pw, ocispec.SandboxID)
+		err = rcmd.cmdStart(ctx, sandboxLogs, ocispec.SandboxID)
 		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while starting the sandbox: %w", err)
@@ -1184,14 +1188,14 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore the sandbox (restores process state and filesystem checkpoint bundles)
 		containersToDelete = append(containersToDelete, ocispec.SandboxID)
-		err := rcmd.cmdCreate(ctx, pw, ocispec.SandboxID, restoreArgs)
+		err := rcmd.cmdCreate(ctx, sandboxLogs, ocispec.SandboxID, restoreArgs)
 		timing.sandboxCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating the sandbox: %w", err)
 		}
 		s.pinSandbox(ctx, hosted, req.GetActorDirs())
 		s.throttleSandboxMemory(ctx, hosted)
-		err = rcmd.cmdRestore(ctx, pw, ocispec.SandboxID, checkpointDir)
+		err = rcmd.cmdRestore(ctx, sandboxLogs, ocispec.SandboxID, checkpointDir)
 		timing.sandboxRestore = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while restoring the sandbox: %w", err)

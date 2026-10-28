@@ -9,17 +9,26 @@
   "commands": {
     "create": {
       "globalFlags": [
-        "--cpu-num-from-quota"
+        "--cpu-num-from-quota",
+        "-debug-log=/dev/fd/3",
+        "-debug-command=create,start,restore",
+        "-alsologtostderr=false"
       ]
     },
     "start": {
       "globalFlags": [
-        "-allow-connected-on-save"
+        "-allow-connected-on-save",
+        "-debug-log=/dev/fd/3",
+        "-debug-command=create,start,restore",
+        "-alsologtostderr=false"
       ]
     },
     "restore": {
       "globalFlags": [
-        "--cpu-num-from-quota"
+        "--cpu-num-from-quota",
+        "-debug-log=/dev/fd/3",
+        "-debug-command=create,start,restore",
+        "-alsologtostderr=false"
       ],
       "subcommandFlags": [
         "-background",

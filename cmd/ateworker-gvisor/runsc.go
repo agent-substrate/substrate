@@ -46,6 +46,8 @@ type runsc struct {
 	containers []*ateworkerpb.Container
 	// flags holds the configured flags; must not be nil.
 	flags *flagStore
+	// startupLogs is fd 3 for create/start/restore, matching internal_flags.json.
+	startupLogs *os.File
 }
 
 // buildArgs constructs the runsc argument vector for command, appending
@@ -139,6 +141,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 	}
 
 	cmd := exec.CommandContext(ctx, r.path, r.createArgs(containerName, additionalArgs)...)
+	cmd.ExtraFiles = []*os.File{r.startupLogs}
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -154,6 +157,7 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 	slog.InfoContext(ctx, "About to run runsc start", slog.String("container", containerName))
 
 	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("start", containerName)...)
+	cmd.ExtraFiles = []*os.File{r.startupLogs}
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -235,6 +239,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	}
 
 	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)
+	cmd.ExtraFiles = []*os.File{r.startupLogs}
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {
