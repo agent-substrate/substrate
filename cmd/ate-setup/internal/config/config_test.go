@@ -1166,9 +1166,10 @@ func TestCredentialProvidersArray(t *testing.T) {
 	loadEnv(t)
 	k8s := CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}
 	for _, tc := range []struct {
-		name string
-		raw  string
-		want []CredentialProvider
+		name    string
+		raw     string
+		want    []CredentialProvider
+		wantErr string
 	}{
 		{name: "an array of one", raw: `[{"name":"k8s.io"}]`, want: []CredentialProvider{k8s}},
 		{
@@ -1176,9 +1177,17 @@ func TestCredentialProvidersArray(t *testing.T) {
 			raw:  `[{"name":"k8s.io"},{"name":"sts.example.com","address":"sts.ate-system.svc:50051"}]`,
 			want: []CredentialProvider{k8s, {Name: "sts.example.com", Address: "sts.ate-system.svc:50051"}},
 		},
+		{name: "a null entry", raw: `[null]`, wantErr: "array entries must be JSON objects"},
+		{name: "a string entry", raw: `["k8s.io"]`, wantErr: "array entries must be JSON objects"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := Load(Options{CredentialProvider: tc.raw})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}

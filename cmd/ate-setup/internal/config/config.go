@@ -705,9 +705,13 @@ func (c *Config) CredentialProviders() ([]CredentialProvider, error) {
 	}
 	var providers []CredentialProvider
 	for _, elem := range elems {
-		// Re-encoded so each entry gets credentialProvider's strict decoding. A
-		// value json.Unmarshal produced always encodes.
-		obj, _ := json.Marshal(elem)
+		if _, ok := elem.(map[string]any); !ok {
+			return invalid("array entries must be JSON objects; want %s", credentialProviderUsage)
+		}
+		obj, err := json.Marshal(elem)
+		if err != nil {
+			return invalid("%v", err)
+		}
 		p, err := credentialProvider(string(obj))
 		if err != nil {
 			return nil, err
