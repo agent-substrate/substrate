@@ -1596,7 +1596,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 			},
 		},
 		AdditionalAddresses: dualStackAdditionalAddresses(x.httpsPort),
-		// Limit I/O buffer to reduce noisy neighbour effect from chatty clients.
+		// Limit I/O buffer to reduce noisy neighbor effect from chatty clients.
 		PerConnectionBufferLimitBytes: wrapperspb.UInt32(ingressPerConnectionBufferLimitBytes),
 		FilterChains: []*listenerv3.FilterChain{
 			{
