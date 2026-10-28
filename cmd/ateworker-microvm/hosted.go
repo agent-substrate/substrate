@@ -122,23 +122,42 @@ func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID str
 // unhostActor removes an actor, its network, and its cgroup. Repeated calls are
 // safe. The caller must stop the VM first.
 func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) error {
+	hosted := s.detachHostedActor(actorUID)
+	if hosted == nil {
+		return nil
+	}
+	defer s.releaseDraining()
+	return s.finishUnhostActor(ctx, actorUID, hosted)
+}
+
+// detachHostedActor removes an actor from the hosted set and returns it, or nil
+// if it was not hosted. A detached actor still counts against capacity until
+// the caller calls releaseDraining.
+func (s *AteWorkerService) detachHostedActor(actorUID string) *hostedActor {
 	s.actorsMu.Lock()
+	defer s.actorsMu.Unlock()
+	return s.detachHostedActorLocked(actorUID)
+}
+
+// detachHostedActorLocked is detachHostedActor for a caller holding actorsMu.
+func (s *AteWorkerService) detachHostedActorLocked(actorUID string) *hostedActor {
 	hosted, ok := s.actors[actorUID]
 	delete(s.actors, actorUID)
 	if ok {
 		// Retain capacity until network cleanup completes.
 		s.draining++
 	}
-	s.actorsMu.Unlock()
-	if !ok {
-		return nil
-	}
-	defer func() {
-		s.actorsMu.Lock()
-		s.draining--
-		s.actorsMu.Unlock()
-	}()
+	return hosted
+}
 
+func (s *AteWorkerService) releaseDraining() {
+	s.actorsMu.Lock()
+	s.draining--
+	s.actorsMu.Unlock()
+}
+
+// finishUnhostActor removes a detached actor's cgroup and network.
+func (s *AteWorkerService) finishUnhostActor(ctx context.Context, actorUID string, hosted *hostedActor) error {
 	if err := cgroup.RemoveActorLeaf(actorUID); err != nil {
 		slog.WarnContext(ctx, "Failed to remove the actor's cgroup", slog.Any("err", err))
 	}
