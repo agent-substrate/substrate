@@ -63,7 +63,6 @@ Thumbs.db
 # root; tools with their own go.mod land beside their source. Build with
 # `-o bin/<tool>`, which is ignored above.
 /validate-image-cache
-/setup-gcp
 /tools/apitool/apitool
 /tools/junittool/junittool
 

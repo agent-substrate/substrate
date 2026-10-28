@@ -75,8 +75,8 @@ is the build and write access to a registry. Releases ship no `ate-setup`
 binary, so running it from the checkout still needs Go. On non-Kind clusters,
 the default `--sandbox-classes=gvisor,microvm` also downloads the microVM guest
 assets from GitHub and uploads them with `gcloud` to `<BUCKET>-assets` (created
-with `atelet` read access by `go run ./tools/setup-gcp create bucket` and
-`create iam`); pass `--sandbox-classes=gvisor` to install gVisor only without
+with `atelet` read access by `tools/setup-gcp create bucket` and `create iam`
+in [substrate-gke](https://github.com/ai-on-gke/substrate-gke)); pass `--sandbox-classes=gvisor` to install gVisor only without
 `--storage-bucket-name` or `gcloud`.
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including

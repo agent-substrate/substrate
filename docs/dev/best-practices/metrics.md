@@ -471,7 +471,8 @@ a short paragraph below the table rather than growing the row.
 
 ### Dashboards
 
-Cloud Monitoring dashboards live in `tools/setup-gcp/dashboards/`. A new metric
+Cloud Monitoring dashboards live in `tools/setup-gcp/dashboards/` in
+[substrate-gke](https://github.com/ai-on-gke/substrate-gke). A new metric
 does not need a new dashboard in the same PR, but a metric an operator will
 alert on should get a panel in a follow-up, and the PR description should say
 which question the panel answers.
