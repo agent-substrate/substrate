@@ -682,15 +682,19 @@ groups:
                 terminate, a graceful shutdown, a sandbox that dies on its own,
                 or a re-host on ateworker-microvm ends it. When the sandbox is
                 still running, ateworker reads the stats just before the
-                teardown. After a gVisor sandbox dies, it reads the CPU and keeps
-                the newest memory taken while the sandbox ran. When no read runs,
+                teardown. After a gVisor sandbox dies, it reads the CPU and memory
+                peak, and leaves memory usage and working set out. When no read runs,
                 or the read fails or times out, it repeats the newest measured
                 sample, or writes a pending record when there is none.
       - id: ate.stats.memory.usage
         stability: development
         type: int
         brief: The memory in use, in bytes. Absolute, not per activation.
-        note: Logs only. The log field of the instrument ate.actor.stats.memory.usage.
+        note: >
+          Logs only. The log field of the instrument
+          ate.actor.stats.memory.usage. Absent on the final record of a gVisor
+          sandbox that died: its cgroup keeps the CPU, but its memory went with
+          its processes, so no one measured it at the death.
         examples: [41943040]
       - id: ate.stats.memory.peak
         stability: development
@@ -704,7 +708,10 @@ groups:
         stability: development
         type: int
         brief: The memory in use less the reclaimable page cache, in bytes.
-        note: Logs only. The log field of the instrument ate.actor.stats.memory.working_set.
+        note: >
+          Logs only. The log field of the instrument
+          ate.actor.stats.memory.working_set. Absent on the final record of a
+          gVisor sandbox that died, as ate.stats.memory.usage is.
         examples: [33554432]
       - id: ate.stats.cpu.time
         stability: development

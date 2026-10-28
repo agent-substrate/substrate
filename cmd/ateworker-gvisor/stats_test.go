@@ -30,6 +30,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
@@ -132,9 +133,9 @@ func TestGetWorkloadStats(t *testing.T) {
 		ActorTemplateName:     "template-a",
 		SandboxClass:          "gvisor",
 		Source:                ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
-		MemoryCurrentBytes:    157286400,
+		MemoryCurrentBytes:    proto.Uint64(157286400),
 		MemoryPeakBytes:       209715200,
-		MemoryWorkingSetBytes: 136314880,
+		MemoryWorkingSetBytes: proto.Uint64(136314880),
 		CpuUsageUsec:          1234567,
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {

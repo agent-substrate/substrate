@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateworker-gvisor/internal/cgroupstats"
 	"go.ate.dev/substrate/internal/apierror"
@@ -207,20 +209,17 @@ func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 }
 
 // readDeadFinal reads the cgroup of h's sandbox, which has died, for the final
-// record. The cgroup keeps its CPU counter until the teardown removes it, but
-// the memory went with the processes, so memory usage and working set come
-// from the newest sample taken while the sandbox ran, when there is one. A
-// failed read leaves the newest sample to stand in, as in readFinal.
+// record. The cgroup keeps its CPU counter and memory peak until the teardown
+// removes it, but the memory went with the processes, so memory usage and
+// working set are left unset: no one measured them at the death. A failed
+// read leaves the newest sample to stand in, as in readFinal.
 func (s *AteWorkerService) readDeadFinal(ctx context.Context, h *hostedActor) {
-	live := h.usage.Latest()
 	sample, _, err := s.measure(ctx, h)
 	if err != nil {
 		return
 	}
-	if live.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED {
-		sample.MemoryCurrentBytes = live.GetMemoryCurrentBytes()
-		sample.MemoryWorkingSetBytes = live.GetMemoryWorkingSetBytes()
-	}
+	sample.MemoryCurrentBytes = nil
+	sample.MemoryWorkingSetBytes = nil
 	h.usage.Store(sample)
 }
 
@@ -316,9 +315,9 @@ func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*a
 		SandboxClass: string(atev1.SandboxClassGvisor),
 		Source:       ateworkerpb.StatsSource_STATS_SOURCE_CGROUP,
 
-		MemoryCurrentBytes:    sample.MemoryCurrentBytes,
+		MemoryCurrentBytes:    proto.Uint64(sample.MemoryCurrentBytes),
 		MemoryPeakBytes:       sample.MemoryPeakBytes,
-		MemoryWorkingSetBytes: sample.MemoryWorkingSetBytes,
+		MemoryWorkingSetBytes: proto.Uint64(sample.MemoryWorkingSetBytes),
 		CpuUsageUsec:          sample.CPUUsageUsec,
 
 		ObservedAtUnixNano: observedAt.UnixNano(),
