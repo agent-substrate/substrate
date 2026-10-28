@@ -60,7 +60,7 @@ type Epoch struct {
 	v atomic.Int64
 }
 
-// Load returns the registered epoch, or 0 before registration.
+// Load returns the registered epoch, or 0 until sandbox runtimes are reported.
 func (e *Epoch) Load() int64 {
 	return e.v.Load()
 }
@@ -76,18 +76,19 @@ func (e *Epoch) Store(epoch int64) {
 // Deployment does not count a worker with no usable runtime as Ready.
 func (e *Epoch) Registered(context.Context) error {
 	if e.Load() == 0 {
-		return errors.New("worker has not registered yet")
+		return errors.New("worker has not reported its sandbox runtimes yet")
 	}
 	return nil
 }
 
 // Require returns the registered epoch for a workload about to start, or
-// Unavailable before registration, so the caller retries once it has.
+// Unavailable until sandbox runtimes are reported, so the caller retries once
+// they are.
 func (e *Epoch) Require() (int64, error) {
 	if epoch := e.Load(); epoch != 0 {
 		return epoch, nil
 	}
-	return 0, apierror.Unavailable("worker has not registered yet: not accepting workloads")
+	return 0, apierror.Unavailable("worker has not reported its sandbox runtimes yet: not accepting workloads")
 }
 
 // FromFiles combines the downward API compute limits with the worker's own
@@ -292,11 +293,9 @@ func run(ctx context.Context, cfg ReportConfig, capacity *ateletpb.WorkerResourc
 	if err != nil {
 		return err
 	}
-	// The epoch is stored once the control plane holds this process' sandbox
-	// runtimes as well as its capacity: it places nothing here before then,
-	// and Registered keeps the pod not Ready until it could. A workload that
-	// arrives before the response does is refused with Unavailable and
-	// retried, the same as one before registration.
+	// Stored once the control plane holds this process's sandbox runtimes as
+	// well as its capacity. A workload that arrives before the response does is
+	// refused with Unavailable and retried, the same as one before registration.
 	report := func(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 		if err := client.SetWorkerSandboxRuntimes(ctx, req); err != nil {
 			return err
