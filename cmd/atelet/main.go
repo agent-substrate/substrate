@@ -1110,6 +1110,11 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
+		// An exited application cannot produce a restorable MEMORY checkpoint.
+		// Deliberately preserve this contract across our server's error mapping.
+		if status.Code(err) == codes.FailedPrecondition {
+			return nil, apierror.FailedPrecondition("while calling worker CheckpointWorkload: %v", err)
+		}
 		// TODO: Worker should classify checkpoint failures, and set "should-crash"
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling worker CheckpointWorkload: %w", err)

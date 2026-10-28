@@ -896,16 +896,18 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				sandbox = hosted.sandbox
 			}
 			if sandbox == nil {
-				// never pinned: fall back to the pidfile, still better than
-				// cleaning up before the sandbox is reaped
+				// A failed pause may leave runsc metadata unreadable.
 				var err error
 				if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
-					slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
-				} else {
-					defer sandbox.Close()
+					if hosted != nil {
+						hosted.stopping.Store(false)
+					}
+					timing.checkpoint = lap(&tLast)
+					return fmt.Errorf("while pinning sandbox before checkpoint: %w", err)
 				}
+				defer sandbox.Close()
 			}
-			err := rcmd.cmdCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
+			err := rcmd.checkpointRunningWorkload(ctx, req.GetSpec().GetContainers(), checkpointPath, fsPaths, sandbox, terminate)
 			if err != nil {
 				// the actor may stay RUNNING, so its sandbox dying is a crash
 				// again, including if this checkpoint stopped it
@@ -916,10 +918,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
 			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
-			if sandbox != nil {
-				if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
-					slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
-				}
+			if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
+				slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
 			}
 			timing.checkpoint = lap(&tLast)
 			return nil
