@@ -34,6 +34,9 @@ type AtenetDataplane interface {
 	NewParkingObserver(context.Context) (ParkingObserver, error)
 	IsRetryableParkingBudgetExhaustion(status int, body string) bool
 	ParkingBudgetStatus() int
+	// CrashedActorFailsFast reports whether a routed request to an actor in
+	// ACTOR_STATE_CRASHED comes back without parking.
+	CrashedActorFailsFast() bool
 	IsEgressPolicyDenied(status int, body string) bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
@@ -75,6 +78,9 @@ func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body 
 }
 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
+
+// Envoy's router answers 503 at once.
+func (envoyAtenetDataplane) CrashedActorFailsFast() bool { return true }
 
 func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return isEgressPolicyDenied(status, body)
@@ -144,6 +150,10 @@ func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int
 }
 
 func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
+
+// AgentGateway resumes through ate-api-server itself, parks for its budget,
+// and answers 503.
+func (agentGatewayAtenetDataplane) CrashedActorFailsFast() bool { return false }
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return isEgressPolicyDenied(status, body)
