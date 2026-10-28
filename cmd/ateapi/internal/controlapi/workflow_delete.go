@@ -407,7 +407,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 // wrote anything.
 func actorSnapshotStoragePrefix(actor *ateapi.Actor) (resources.StoragePrefix, error) {
 	actorOwner := actorSnapshotOwner(actor)
-	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
+	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED); snap != nil {
 		snapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 		uri, err := resources.ParseSnapshotURI(snapshotURI)
 		if err != nil {
@@ -423,7 +423,7 @@ func actorSnapshotStoragePrefix(actor *ateapi.Actor) (resources.StoragePrefix, e
 	// Nothing of the actor's own is recorded. Unless a suspend died partway,
 	// nothing was ever written under its prefix: the in-progress URI is
 	// recorded before atelet uploads the first object.
-	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
 	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	if inProgress == "" {
 		return resources.StoragePrefix{}, nil

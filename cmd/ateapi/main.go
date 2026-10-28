@@ -399,6 +399,7 @@ func main() {
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
+			authz.StreamServerInterceptor(),
 			preview.StreamServerInterceptor,
 		),
 	)

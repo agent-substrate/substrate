@@ -92,6 +92,13 @@ var (
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 )
 
+// memoryReservedBytes is how much of the worker pod's memory limit we keep from
+// actors: the worker process itself, and the page cache of checkpoints in
+// flight, which leaves the actor's own cgroup with its sentry (see
+// isolateCheckpointCache). Otherwise an actor's sentry and gofers are charged
+// to its own cgroup, so gVisor reports no actor overhead.
+const memoryReservedBytes = 64 << 20
+
 // minUsageSampleInterval is the floor of --usage-sample-interval, the same as
 // atelet's poll interval floor.
 const minUsageSampleInterval = 50 * time.Second
@@ -293,6 +300,7 @@ func do(ctx context.Context) error {
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
 		PodIPs:               register.ParsePodIPs(*podIPs),
+		MemoryReservedBytes:  memoryReservedBytes,
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
@@ -779,7 +787,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
 	// Not cancelable: a checkpoint is saving the actor's state.
 	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()

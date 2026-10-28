@@ -43,6 +43,7 @@ Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each w
 
 - Worker capacity is a shared budget: each actor placed on a worker subtracts its declared limits from what is left. Size a pool's `limits` for the actors it should host together.
 - A worker also has an actor limit, set by the ateworker's `--max-actors` flag (default 1000). Placement stops at whichever runs out first.
+- A worker keeps some of its memory limit for itself and reports the rest as capacity. Each actor can also use memory on its worker outside its own limits, e.g. for the microVM's VMM. The worker reports this overhead with each runtime, placement counts it against capacity, and it shows in the worker's allocated resources.
 - Capacity is advisory for placement only: a worker that declares no CPU/memory limit reports zero capacity for that dimension, which the scheduler treats as **unconstrained** (placement is never blocked by missing data). The actual sandbox size still comes from the `ActorTemplate`.
 
 ### Example
@@ -86,7 +87,7 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 | :--- | :--- | :--- |
 | `replicas` | `int32` | Total number of worker pods, mirrored from the managed Deployment. |
 | `selector` | `string` | Label selector for the worker pods. |
-| `sandboxClasses` | `[]WorkerPoolSandboxClassStatus` | One entry per sandbox class, with `name`, `configRef.name` (the `SandboxConfig` in use), `pendingConfigRef.name` (transient, the config the class is switching to; see [Deletion protection](#deletion-protection)), and `conditions`. The `Resolved` condition is `True` (reason `Resolved`) when the class's spec resolves. Otherwise it is `False` with reason `SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, or `DefaultConfigNotFound`, the controller emits a Warning event, and `configRef` keeps the last resolved config. `configRef` is omitted if the class has never resolved. Each time `configRef` changes, the controller emits a Normal `SandboxConfigSwitched` event naming the old and new config, so `kubectl events --for workerpool/NAME` shows the configs the pool used recently. The API server keeps an event for one hour by default, so the full history is only in a logging backend that stores events. The controller creates the worker Deployment only once every class has a config, and keeps updating an existing Deployment while a class does not resolve. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClassStatus` | One entry per sandbox class, with `name`, `configRef.name` (the `SandboxConfig` in use), `pendingConfigRef.name` (transient, the config the class is switching to; see [Deletion protection](#deletion-protection)), and `conditions`. The `Resolved` condition is `True` (reason `Resolved`) when the class's spec resolves. Otherwise it is `False` with reason `SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, or `DefaultConfigNotFound`, the controller emits a Warning event, and `configRef` keeps the last resolved config. `configRef` is omitted if the class has never resolved. Each time `configRef` changes, the controller emits a Normal `SandboxConfigSwitched` event naming the old and new config, so `kubectl events --for workerpool/NAME` shows the configs the pool used recently. Node-side failures to sync a resolved config's runtimes (for example, an unreachable asset URL or SHA256 mismatch) are emitted by atelet as Warning `SandboxRuntimeSyncFailed` events on the worker pod (`kubectl events --for pod/POD_NAME`). The API server keeps an event for one hour by default, so the full history is only in a logging backend that stores events. The controller creates the worker Deployment only once every class has a config, and keeps updating an existing Deployment while a class does not resolve. |
 
 ---
 
@@ -160,8 +161,8 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 
 1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateworker):
    - **gVisor (`ateworker-gvisor`)** — applied to the container OCI spec: `limits.cpuMillicores` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memoryBytes` caps the sandbox's memory and bounds the virtual total memory it reports (so JVM/Go do not over-allocate from host RAM). When the node's kernel has cgroup memory pressure (PSI) enabled, an actor that stays over its limit is killed and reported crashed, and other actors on its worker keep running.
-   - **microVM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
-2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
+   - **microVM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, all of it. The microVM worker refuses to boot an actor with less than 128 MiB. What the actor costs outside the guest comes out of the worker's capacity instead (see [Worker Capacity](#worker-capacity-spectemplateresources)).
+2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits, plus its runtime's overhead on that worker.
 
 `requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **microVM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
@@ -184,20 +185,36 @@ the lowercase name `ate-target-actor`.
 
 For an HTTP `CONNECT` tunnel to a non-default Actor port, put the routing
 header on the outer `CONNECT` request and keep the target port in its
-authority. With curl, use `--proxy-header` instead of `-H`:
+authority. With curl and the projected volumes from the router's
+[common setups](../cmd/atenet/internal/router/README.md#common-setups), use
+`--proxy-header` instead of `-H`:
 
 ```bash
-curl --proxytunnel --proxy http://localhost:8001 \
+curl --proxytunnel \
+  --proxy https://atenet-router.ate-system.svc:8444 \
+  --proxy-cacert /run/router-client/router-ca.pem \
+  --proxy-cert /run/router-client/credential-bundle.pem \
+  --proxy-key /run/router-client/credential-bundle.pem \
   --proxy-header "ate-target-actor: my-atespace/my-actor" \
   http://actor-upstream:9090/
 ```
 
-Browser navigation cannot add custom request headers. Browser-based and other
-fixed clients must therefore connect through a user-controlled reverse proxy or
-policy enforcement point that overwrites the routing header before forwarding
-to `atenet-router`. The [Jupyter demo](../demos/jupyter/README.md) shows this
-pattern with NGINX. The proxy must derive the value from trusted configuration
-or authenticated request context rather than forwarding values supplied by an
+From outside the cluster, `kubectl ate proxy actor` opens this mTLS `CONNECT`
+tunnel automatically:
+
+```bash
+kubectl ate proxy actor my-actor 9090:9090 -a my-atespace
+curl http://localhost:9090/
+```
+
+Browser navigation cannot add custom request headers or present the router's
+client certificate. For local development and demos (such as the
+[Jupyter demo](../demos/jupyter/README.md)), `kubectl ate proxy actor` serves a
+local port that forwards browser traffic and WebSockets through `atenet-router`.
+In production, browser-based and other fixed clients connect through a
+user-controlled reverse proxy or policy enforcement point that authenticates to
+`atenet-router` and sets `ate-target-actor` from trusted configuration or
+authenticated request context rather than forwarding values supplied by an
 untrusted caller.
 
 ### SystemInfo Volumes
@@ -303,6 +320,8 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 
 - **`ALL` in `add` is rejected.** Kubernetes accepts it in the API and relies on PodSecurity admission to deny it; Substrate has no equivalent policy layer yet, so it is refused at admission instead. Name the capabilities the container needs.
 - **Ambient capabilities are not supported** ([gvisor#3166](https://github.com/google/gvisor/issues/3166)).
+- **Low ports.** A container may bind a port below 1024 without `NET_BIND_SERVICE` on both runtimes: gVisor's network stack has no privileged-port limit, and the micro-VM guest sets `net.ipv4.ip_unprivileged_port_start=0` to match.
+- **Setuid binaries work.** Neither runtime sets `no_new_privileges`, as for a Kubernetes container with `allowPrivilegeEscalation: true`; gVisor runs with `--allow-suid`.
 
 The sandbox — gVisor or microVM — remains the isolation boundary; capabilities constrain the workload *inside* it.
 
@@ -324,7 +343,7 @@ A container that exceeds its memory limit is OOM-killed on its own; the actor's 
 
 Per-container limits are microVM only today. gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). On a gVisor worker the per-container limits are accepted but not enforced; only the sandbox-level size applies.
 
-These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A microVM guest's memory is `resources.limits.memoryBytes` minus the VMM reserve, and its vCPU count is `resources.limits.cpuMillicores` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
+These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A microVM guest's memory is `resources.limits.memoryBytes`, and its vCPU count is `resources.limits.cpuMillicores` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
 
@@ -542,19 +561,19 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v5
+  defaultVersion: v6
   versions:
-  - name: v5
+  - name: v6
     state: Enabled
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/release/20261019.0/x86_64/gvisor.tar.zstd"
-          sha256: "8637abfb50f81552af25ca08f7172589c09292a7c881efe8d9e09a9f3b6bec7b"
+          url: "gs://gvisor/releases/release/20261026.0/x86_64/gvisor.tar.zstd"
+          sha256: "708afc62f2ee82d19930c703e85f9dab4f27a78c0aec40c0f55eb1040107f1a7"
       arm64:
         gvisor:
-          url: "gs://gvisor/releases/release/20261019.0/aarch64/gvisor.tar.zstd"
-          sha256: "88556c21468a066d872a055425958c83fcbafc79c6477a195b18070c77f856d0"
+          url: "gs://gvisor/releases/release/20261026.0/aarch64/gvisor.tar.zstd"
+          sha256: "6257e49955f13e6caceb2c4181c5dc5406c460e805940c944e67ad65553f5b02"
 ```
 
 ### MicroVM SandboxConfig

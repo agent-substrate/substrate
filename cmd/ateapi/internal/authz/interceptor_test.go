@@ -23,6 +23,8 @@ import (
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/reflection/grpc_reflection_v1"
+	"google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
 )
 
 func setupTestAuthorizer(t *testing.T) *Authorizer {
@@ -224,6 +226,37 @@ func TestUnaryServerInterceptor_UnregisteredAndHandlerAuthorizedRPCs(t *testing.
 			_, err := interceptor(tc.ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: tc.fullMethod}, func(context.Context, any) (any, error) {
 				handlerCalled = true
 				return "ok", nil
+			})
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
+			}
+			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
+			}
+		})
+	}
+}
+
+// Reflection streams pass through; any other stream is denied before its
+// handler runs.
+func TestStreamServerInterceptor(t *testing.T) {
+	tests := []struct {
+		name       string
+		fullMethod string
+		wantCode   codes.Code
+	}{
+		{"reflection v1 passes", grpc_reflection_v1.ServerReflection_ServerReflectionInfo_FullMethodName, codes.OK},
+		{"reflection v1alpha passes", grpc_reflection_v1alpha.ServerReflection_ServerReflectionInfo_FullMethodName, codes.OK},
+		{"unregistered stream is denied", "/substrate.ateapi.v1.Control/NotARealMethod", codes.PermissionDenied},
+		{"unary RPC called as a stream is denied", ateapi.Control_ListAtespaces_FullMethodName, codes.PermissionDenied},
+		{"handler-authorized RPC called as a stream is denied", ateapi.WorkerService_RegisterWorker_FullMethodName, codes.PermissionDenied},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handlerCalled := false
+			err := StreamServerInterceptor()(nil, nil, &grpc.StreamServerInfo{FullMethod: tc.fullMethod}, func(any, grpc.ServerStream) error {
+				handlerCalled = true
+				return nil
 			})
 			if apierror.Code(err) != tc.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)

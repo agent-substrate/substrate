@@ -216,7 +216,8 @@ Right now the only "authorization" policy is to check the client's SPIFFE ID
 against a static allowlist.  Any ID on the allowlist may use the ingress router
 to contact any actor.  Richer authorization policies may be added post-GA.  Use
 the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
-list).
+list). With an empty allowlist, the Envoy router serves no listener, so no
+traffic reaches actors through it.
 
 ### Common setups
 
@@ -257,15 +258,22 @@ volumes:
 
 Add the pod's SPIFFE ID to `--ingress-allowed-spiffe-ids`.
 
-**Client outside the cluster, pod identity CA.** A demo on your machine can
-follow the e2e tests in `internal/e2e/ingressauth.go`. It creates a
-PodCertificateRequest for the podidentity signer that names a pod, node and
-ServiceAccount that don't exist. kube-apiserver checks those only for requests
-from a kubelet, and the signer issues the SPIFFE ID of the named namespace and
-ServiceAccount. The client keeps the private key, reads the chain from the
-request's status, and reads the servicedns ClusterTrustBundle to verify the
-router. Creating PodCertificateRequests needs RBAC for that resource in the
-namespace.
+**Client outside the cluster, pod identity CA.** `kubectl ate proxy actor`
+forwards local TCP ports to an actor through the router's CONNECT listener. It
+presents a certificate for
+`spiffe://cluster.local/ns/ate-system/sa/atenet-client`, so that ID must be in
+`--ingress-allowed-spiffe-ids`. It requests the certificate the way
+`internal/podidentity` does: a PodCertificateRequest for the podidentity
+signer that names a pod, node and ServiceAccount that don't exist.
+kube-apiserver checks those only for requests from a kubelet, and the signer
+issues the SPIFFE ID of the named namespace and ServiceAccount. The client
+keeps the private key, reads the chain from the request's status, and reads
+the servicedns ClusterTrustBundle to verify the router.
+
+Creating PodCertificateRequests needs RBAC for that resource in `ate-system`.
+That RBAC can request a certificate for any SPIFFE ID in `ate-system`,
+including those of atelet, ate-controller and ate-api-server, so grant it only
+to users you would trust with those components.
 
 ## status page
 

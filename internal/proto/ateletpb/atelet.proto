@@ -158,6 +158,31 @@ message WorkerSandboxRuntime {
   //
   // +k8s:required
   VersionedSandboxCompat version = 1;
+
+  // The resource overhead incurred by the worker for each actor running under
+  // this runtime, on top of the actor's stated limits.
+  //
+  // +k8s:optional
+  RuntimeOverhead actor_overhead = 2;
+}
+
+// RuntimeOverhead is the memory an actor uses on its worker outside its own
+// limits. It mirrors the control plane's RuntimeOverhead.
+message RuntimeOverhead {
+  // memory_bytes is a fixed amount of memory for each actor.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1099511627776 # 1TiB
+  int64 memory_bytes = 1;
+
+  // memory_bytes_per_gib is memory per GiB of the actor's memory limit, in
+  // proportion and rounded down to a byte.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1073741824 # 1GiB
+  int64 memory_bytes_per_gib = 2;
 }
 
 // ActorSandboxRuntime is the runtime an actor runs under, as named on Run and

@@ -54,7 +54,7 @@ const (
 	maxWebSocketMessageSize   = 64 << 10
 	maxWebSocketHandshakeBody = 4 << 10
 	maxConnectAnswerBody      = 4 << 10
-	muxRequestCount           = 250
+	muxRequestCount           = 10
 	muxBodySize               = 64
 	// Keep connection around longer than ext_proc cache freshness (10s)
 	postBodyDelay   = 15 * time.Second

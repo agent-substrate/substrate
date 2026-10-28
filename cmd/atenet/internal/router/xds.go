@@ -385,8 +385,8 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 // SetDownstreamClientAuth makes every TLS ingress listener require a client
 // certificate signed by a CA in caPath whose URI SAN exactly matches one of
 // allowedSPIFFEIDs. Envoy enforces this during the handshake, so a rejected
-// client never reaches ext_proc. UpdateSnapshot fails if a TLS listener is
-// enabled without it.
+// client never reaches ext_proc. UpdateSnapshot serves no TLS listener when
+// allowedSPIFFEIDs is empty, and fails if one is enabled without caPath.
 func (x *XdsServer) SetDownstreamClientAuth(caPath string, allowedSPIFFEIDs []string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -520,12 +520,15 @@ func (x *XdsServer) UpdateSnapshot() error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 
-	httpsEnabled := x.httpsPort > 0 && x.certPath != ""
+	// Without an allowlist no client may reach actors, so the TLS listeners
+	// are not served. Envoy skips the SAN check when there are no matchers.
+	clientsAllowed := len(x.downstreamAllowedSPIFFEIDs) > 0
+	httpsEnabled := x.httpsPort > 0 && x.certPath != "" && clientsAllowed
 	// The main_internal cluster and listener only exist to serve the CONNECT
 	// listener.
-	connectEnabled := x.connectTLSPort > 0 && x.certPath != ""
-	if (httpsEnabled || connectEnabled) && (x.downstreamClientCAPath == "" || len(x.downstreamAllowedSPIFFEIDs) == 0) {
-		return fmt.Errorf("TLS ingress listeners need client authentication: call SetDownstreamClientAuth")
+	connectEnabled := x.connectTLSPort > 0 && x.certPath != "" && clientsAllowed
+	if (httpsEnabled || connectEnabled) && x.downstreamClientCAPath == "" {
+		return fmt.Errorf("TLS ingress listeners need a client CA: call SetDownstreamClientAuth")
 	}
 
 	x.versionCount++
@@ -551,9 +554,10 @@ func (x *XdsServer) UpdateSnapshot() error {
 		clusters = append(clusters, x.buildOtlpCollectorCluster())
 	}
 
-	// Routes
-	routes := []types.Resource{
-		x.buildRoutes(),
+	// Routes. Only the HTTPS and main_internal listeners reference them.
+	var routes []types.Resource
+	if httpsEnabled || connectEnabled {
+		routes = append(routes, x.buildRoutes())
 	}
 
 	// Listeners

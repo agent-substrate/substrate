@@ -451,8 +451,8 @@ def deploy_workloads(
         "--sandbox-class",
         sandbox_class,
     ]
-    # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm
-    # minimum); RAM-consuming suites set actorMemory in tests.yaml.
+    # Empty keeps the default in workloads/deploy.sh (256Mi); RAM-consuming
+    # suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
     # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler

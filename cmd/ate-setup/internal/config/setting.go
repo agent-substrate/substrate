@@ -270,6 +270,11 @@ var Registry = []Setting{
 		Usage: "Worker goroutines per signer in podcertificate-controller",
 	},
 	{
+		Key: "e2e.tuning", Env: "ATE_INSTALL_E2E_TUNING", Flag: "e2e-tuning",
+		Kind: KindBool, Default: "false",
+		Usage: "Apply the e2e test component (short atelet snapshot delays for end-to-end test runs)",
+	},
+	{
 		Key: "e2e.envoyConcurrency", Env: "E2E_ATE_ENVOY_CONCURRENCY",
 		Flag: "e2e-envoy-concurrency", Kind: KindInt, Default: "0",
 		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",
@@ -286,10 +291,10 @@ var Registry = []Setting{
 		Usage:   "Coarse-grained sizing of Substrate: size0 or size10",
 	},
 	{
-		Key: "cordonControlPlane", Env: "ATE_INSTALL_CORDON_CONTROL_PLANE", Flag: "cordon-control-plane",
+		Key: "cordonSystemInfraComponents", Env: "ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS", Flag: "cordon-system-infra-components",
 		Kind: KindBool, Default: "false",
-		Usage: "Keep the control plane off the worker nodes. Assumes a small shared pool labeled " +
-			"and tainted ate.dev/workloadType=ate-control-plane:NoSchedule, and a one-node pool " +
+		Usage: "Keep the system infra components off the worker nodes. Assumes a small shared pool labeled " +
+			"and tainted ate.dev/workloadType=ate-system-infra:NoSchedule, and a one-node pool " +
 			"labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone",
 	},
 	{
@@ -306,8 +311,8 @@ var Registry = []Setting{
 		Key: "ingressAllowedSPIFFEIDs", Env: "ATE_INGRESS_ALLOWED_SPIFFE_IDS", Flag: "ingress-allowed-spiffe-ids",
 		Kind: KindString,
 		Usage: "SPIFFE IDs (exact match, comma-separated) of the clients the ingress router lets reach actors; " +
-			"any listed client may reach any actor. Required to deploy the router with " +
-			"--atenet-dataplane=envoy. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
+			"any listed client may reach any actor. Unset, no client may reach actors through the router. " +
+			"The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
 	},
 	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,

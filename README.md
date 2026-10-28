@@ -115,14 +115,15 @@ To quickly set up the complete environment:
 
 2. Run the following steps:
 ```shell
-# create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
+# create cluster and local registry
 hack/create-kind-cluster.sh
 
-# install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+# install Substrate
+hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
 # install counter demo
-hack/install-ate-kind.sh deploy demo-counter
+hack/install-ate-kind.sh deploy demo counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
@@ -131,8 +132,9 @@ go install ./cmd/kubectl-ate
 # actor template, resolved in the actor's atespace)
 kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
-# port-forward the network router to bind to local port `8000`
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+# serve a local proxy on port 8000 that sends requests to the actor through the
+# network router
+kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ```
 
 > [!IMPORTANT]
@@ -143,9 +145,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST \
-   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-   -i http://localhost:8000/
+curl -X POST -i http://localhost:8000/
 ```
 
 ### GKE Quickstart (Development)
@@ -172,13 +172,21 @@ curl -X POST \
    that ate-api-server and atelet depend on. See
    [what `create iam` actually grants](tools/setup-gcp/README.md#what-create-iam-actually-grants)
    to audit them or apply them manually. If you bring your own cluster instead,
-   note the required Kubernetes beta APIs can only be enabled **at cluster
-   creation** — see the [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
+   it needs the PodCertificateRequest and ClusterTrustBundle APIs, which GKE
+   1.37 and higher serve by default. On 1.36, enable them as beta APIs, then
+   replace any 1.36 node pools created before that. See the
+   [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
-   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}'
+   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+     --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
    ```
+
+   `--ingress-allowed-spiffe-ids` lists the clients the router lets reach
+   actors. The ID above is the one `kubectl ate proxy actor` presents. Without
+   the flag no client reaches actors. See
+   [Ingress to actors](docs/operator-install.md#ingress-to-actors).
 
    `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
    bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only
@@ -193,7 +201,7 @@ curl -X POST \
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
-   go run ./cmd/ate-setup deploy demo demo-counter
+   go run ./cmd/ate-setup deploy demo counter
    ```
 
 #### Custom Setup and Deployment
@@ -222,8 +230,11 @@ go run ./cmd/ate-setup delete all
 If you need to delete the resources created by the setup script, you can use the provided script `hack/teardown.sh`. This script will delete resources in the reverse order of creation and handles partial failures gracefully.
 
 ```bash
-./hack/teardown.sh --all
+./hack/teardown.sh [--all|--cluster-scoped]
 ```
+
+* `--all` deletes everything, including the dashboards, the snapshot transfer service account and the project-level IAM bindings, which every Substrate cluster in the project shares.
+* `--cluster-scoped` deletes only this cluster, its buckets and the bindings on them. Use it while other Substrate clusters still use the project.
 
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 

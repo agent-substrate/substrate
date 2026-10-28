@@ -29,9 +29,9 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--cluster-size size0\|size10` | `--cluster-size size0\|size10` | Footprint profile (default `size0`). `size10` assumes a dedicated PostgreSQL node: it resizes the bundled StatefulSet and its `postgresql.conf`, pins the apiserver's connection pool, and raises the podcertificate-controller's API rate limits. `ATE_INSTALL_CLUSTER_SIZE` when the flag is absent |
 | `--ateapi-postgres-storage-class NAME` | `ATE_API_POSTGRES_STORAGE_CLASS=NAME` | StorageClass for the bundled PostgreSQL volume instead of the cluster default, such as `dynamic-rwo` on GKE so C4 and N4 nodes can attach it. An existing install must delete the postgres StatefulSet and its claim first |
-| `--cordon-control-plane` | `--cordon-control-plane` | Keep the control plane off the worker nodes. Assumes a small shared pool labeled and tainted `ate.dev/workloadType=ate-control-plane:NoSchedule`, across which each workload's replicas are spread, and a one-node pool labeled and tainted `ate.dev/workloadType=ate-postgres:NoSchedule` for postgres alone. `ATE_INSTALL_CORDON_CONTROL_PLANE=true` when the flag is absent |
+| `--cordon-system-infra-components` | `--cordon-system-infra-components` | Keep the system infra components, such as ate-api-server, atenet-router, atenet-egress and postgres, off the worker nodes. Assumes a small shared pool labeled and tainted `ate.dev/workloadType=ate-system-infra:NoSchedule`, across which each workload's replicas are spread, and a one-node pool labeled and tainted `ate.dev/workloadType=ate-postgres:NoSchedule` for postgres alone. `ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS=true` when the flag is absent |
 | `--fake-data-plane` | `--fake-data-plane` | Install the fake data plane for control-plane benchmarks: fake-atelet takes atelet's place in its DaemonSet, taking its objectstore-plugin's storage settings, ate-controller is scaled to zero, and fake-workersync honors every WorkerPool with fake Workers on the fake-atelet nodes. Reaches `deploy ate-system`, `deploy atelet`, and `deploy ate-controller`; only `deploy ate-system` switches a cluster between the real and fake data planes, and the other two refuse a data plane other than the installed one. `deploy ate-system --fake-data-plane` refuses a cluster whose WorkerPools have worker pods. fake-atelet runs with its defaults; a benchmark tunes it through the optional `fake-atelet-tuning` ConfigMap, whose `FAKE_ATELET_*` variables set its flags, and which no install creates or resets. Actors do not exist; never use it on a cluster that serves real actors. `ATE_INSTALL_FAKE_DATA_PLANE=true` when the flag is absent |
-| `--ingress-allowed-spiffe-ids IDS` | `--ingress-allowed-spiffe-ids IDS`, or `ATE_INGRESS_ALLOWED_SPIFFE_IDS=IDS` | Required by `deploy ate-system` and `deploy atenet` with `--atenet-dataplane=envoy`. Comma-separated SPIFFE IDs (exact match) of the clients the ingress router lets reach actors over its TLS ports; any listed client may reach any actor. Appended to the router as its `--ingress-allowed-spiffe-ids`. The podidentity signer issues `spiffe://cluster.local/ns/<namespace>/sa/<service-account>` |
+| `--ingress-allowed-spiffe-ids IDS` | `--ingress-allowed-spiffe-ids IDS`, or `ATE_INGRESS_ALLOWED_SPIFFE_IDS=IDS` | Comma-separated SPIFFE IDs (exact match) of the clients the ingress router lets reach actors; any listed client may reach any actor. Unset, no client may reach actors through the router. Both dataplanes require a Pod Identity CA client certificate on HTTPS and TLS CONNECT. The SPIFFE URI SAN allowlist may be checked during or after TLS, including after CONNECT acceptance, but unlisted clients must be denied before actor routing. The podidentity signer issues `spiffe://cluster.local/ns/<namespace>/sa/<service-account>` |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
 | `--credential-provider JSON` | `--credential-provider JSON`, or `ATE_CREDENTIAL_PROVIDER` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/egress-credential-injection.md`](../../docs/egress-credential-injection.md) |
 | `--ateapi-log-level LEVEL` | `--ateapi-log-level LEVEL`, or `ATE_API_LOG_LEVEL=LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). The server picks up a change without restarting |
@@ -69,13 +69,15 @@ unchanged.
 ```
 ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=IDS \
   --image-repo REPO \
   --image-tag TAG
 ```
 
 installs images already published to `REPO` instead, and never invokes `ko`.
 The manifests still come from the checkout, so this needs one; what it removes
-is the build, the Go toolchain, and write access to a registry.
+is the build and write access to a registry. Releases ship no `ate-setup`
+binary, so running it from the checkout still needs Go.
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including
 `envoy-dataplane`, which a build from source builds from a Dockerfile with
@@ -83,7 +85,7 @@ is the build, the Go toolchain, and write access to a registry.
 needs an image `REPO` lacks fails naming it.
 
 The images a release publishes to `ghcr.io/agent-substrate/substrate`, with
-`publish release-images`, are not a complete install; see
+`publish release-images`, leave out the demos and the benchmarking fakes; see
 [`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images). When an
 image releases do not publish is missing from `REPO`, the error says so.
 

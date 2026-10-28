@@ -1,6 +1,6 @@
 # Network Egress Contract
 
-Last updated: 10/09/2026
+Last updated: 10/20/2026
 
 ## Overview
 
@@ -8,9 +8,38 @@ Agent Substrate enforces that all outbound traffic from an actor, except traffic
 
 ## Transport
 
-At present, actor TCP traffic exits the sandbox through [`atunnel`](./glossary.md#components) and is forwarded on to the PEP. The exception is DNS: TCP and UDP traffic to port 53 on the sandbox's gateway bypasses the PEP and is answered by the sandbox's DNS relay, which forwards a query to the worker pod's resolvers only when the queried hostname matches a host or host wildcard in the actor's egress policy; queries from an actor without a policy, or for a hostname not matched by any rule, are answered `NXDOMAIN`. All other protocols are blocked. `atunnel` is configured with the PEP's network address and port at startup and uses that address to open an mTLS HTTP/1.1 CONNECT tunnel to the PEP. The CONNECT request target and `Host` header are both set to the original destination IP and port that `atunnel` derived from the actor's TCP connection. Actor networking is currently IPv4-only.
+At present, actor TCP traffic exits the sandbox through [`atunnel`](./glossary.md#components) and is forwarded on to the PEP. The exception is DNS: TCP and UDP traffic to port 53 on the sandbox's gateway bypasses the PEP and is answered by the sandbox's DNS relay, which forwards a query to the worker pod's resolvers only when the queried hostname matches a host or host wildcard in the actor's egress policy; queries from an actor without a policy, or for a hostname not matched by any rule, are answered `NXDOMAIN`. All other protocols are blocked. `atunnel` is configured with the PEP's network address and port at startup and uses that address to open an mTLS HTTP/1.1 or HTTP/2 CONNECT tunnel to the PEP, as negotiated by ALPN. The CONNECT request target and HTTP/1.1 `Host` header (HTTP/2 `:authority`) are set to the original destination IP and port that `atunnel` derived from the actor's TCP connection. Actor networking is currently IPv4-only.
 
 Before traffic reaches the egress PEP, ateworker rejects packets destined for the IPv4 link-local range `169.254.0.0/16` or the IPv6 link-local range `fe80::/10`. The internal actor network `169.254.17.0/30` is exempt because it carries traffic for the actor gateway, DNS relay, ingress, and wakeup probes. Localhost traffic remains inside the actor sandbox and does not traverse the PEP. Access to non-link-local destinations remains controlled by substrate egress policy and, at the `WorkerPool` boundary, Kubernetes NetworkPolicy.
+
+## Refusal responses and policy changes
+
+The [supported traffic table](egress-traffic.md) defines the permitted protocols.
+For cleartext HTTP requests and HTTP requests on an authorized intercepted TLS
+connection, a request denied by policy MUST receive HTTP 403. WebSocket upgrades,
+other HTTP upgrades, and actor-originated CONNECT requests inside the tunnel MUST
+also receive HTTP 403, regardless of whether the destination is otherwise allowed.
+This applies to cleartext HTTP and intercepted HTTPS, including mixed-case HTTP
+upgrade tokens, and does not affect atunnel's outer CONNECT. The PEP MUST NOT open an upstream connection
+or apply credential effects for these refused requests. Response bodies are
+implementation-specific.
+
+A TLS passthrough authorization lasts for that connection. A policy update MUST
+apply to new connections after cached policy decisions expire; it need not
+terminate an already authorized connection. If a new ClientHello no longer
+matches a passthrough rule, the PEP MUST NOT pass the TLS connection through.
+If an HTTPS rule matches the SNI and original destination port, the PEP MAY
+intercept the connection and authorize each HTTP request under that rule.
+Otherwise, the PEP MUST close the connection at ClientHello, without completing
+the TLS handshake, returning an HTTP response, or opening an upstream connection.
+An HTTP rule alone MUST NOT authorize TLS.
+Missing or invalid SNI MUST also close the connection without completing TLS.
+Unsupported protocols MAY close the connection without an HTTP response.
+
+DNS authorization happens before the PEP and is independent of the protocol and
+port being dialed. Removing every rule for a hostname can prevent resolution
+before the connection reaches the PEP; that refusal does not promise an HTTP
+status or a particular resolver error string.
 
 ## Trust Boundary
 
@@ -19,8 +48,6 @@ In substrate, we consider everything originating from the actor to be untrusted.
 ## Server-side TLS
 
 The egress PEP MUST serve TLS using a certificate that is valid for the configured PEP hostname and chains to a CA trusted by `atunnel`. `atunnel` uses the configured PEP hostname as the TLS server name and MUST reject the connection if it cannot verify the PEP's certificate.
-
-In the default Kubernetes deployment, the PEP obtains its certificate and private key through a projected `podCertificate` volume using substrate's Service DNS signer (`servicedns.podcert.ate.dev/identity`). The signer derives the certificate's DNS SANs from the Services that select the PEP Pod, so the PEP MUST be selected by a Service and the hostname configured in `atunnel` MUST match one of those Service DNS names. For the default PEP, that name is `atenet-egress.ate-system.svc`. The projected `credential-bundle.pem` contains the serving certificate chain and private key, while the `ClusterTrustBundle` for the same signer supplies `atunnel` with the corresponding trust anchors.
 
 ## Client Authorization
 

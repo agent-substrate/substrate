@@ -147,14 +147,25 @@ if ! notes="$(api "generating notes" "repos/${REPO}/releases/generate-notes" \
 fi
 
 # Only the upstream release workflow publishes images (see
-# .github/workflows/release.yaml), so only its notes say where they are. The
-# notes give no install command because the release images are not a complete
-# install; docs/dev/releasing.md lists what they cover.
+# .github/workflows/release.yaml), so only its notes say where they are.
+# docs/dev/releasing.md lists what they cover.
 if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+=$'\n\n## Images\n\n'
   notes+="Container images for this release are published as \`${RELEASE_IMAGE_REPO}/<image>:${tag}\`"
   notes+=" for \`linux/amd64\` and \`linux/arm64\`. The images a release publishes are listed in"
   notes+=" [Release images](https://github.com/${REPO}/blob/${tag}/docs/dev/releasing.md#release-images)."
+  notes+=$'\n\n## Install\n\n'
+  notes+="From a checkout of \`${tag}\`, with Go, install the release images into the current kubectl context."
+  notes+=" Add \`--kind\` for a kind cluster."
+  notes+=$'\n\n```sh\n'
+  notes+="git clone --depth 1 --branch ${tag} https://github.com/${REPO}.git"$'\n'
+  notes+=$'cd substrate\n'
+  notes+=$'go run ./cmd/ate-setup deploy ate-system \\\n'
+  notes+="  --image-repo ${RELEASE_IMAGE_REPO} --image-tag ${tag} \\"$'\n'
+  notes+=$'  --credential-provider=\'{"name":"k8s.io"}\' \\\n'
+  notes+=$'  --ingress-allowed-spiffe-ids=<SPIFFE IDs of your ingress clients>\n'
+  notes+='```'
+  notes+=$'\n\n'"See [Installing pre-built images](https://github.com/${REPO}/blob/${tag}/cmd/ate-setup/commands.md#installing-pre-built-images) for the flags."
   # The workflow attaches these after creating the draft; see the
   # "Attach kubectl-ate" step in .github/workflows/release.yaml.
   notes+=$'\n\n## kubectl-ate\n\n'

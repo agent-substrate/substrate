@@ -168,7 +168,7 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 		if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 			t.Fatalf("fetch of %s, outside the policy, returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
 		}
-		// Envoy denies by closing the connection, which the actor reports as
+		// Denied TLS closes at ClientHello, which the actor reports as
 		// the same 502 as any failed fetch; a certificate error in it means the
 		// handshake reached the origin.
 		if got := decodeEgressFetch(t, body); strings.Contains(got.Error, "x509") || strings.Contains(got.Error, "certificate") {
@@ -183,7 +183,7 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	ctx := t.Context()
 	dataplane := e2e.CurrentAtenetDataplane()
-	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+	origin, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
 		Name:       "passthrough-origin",
 		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 		Args:       []string{"http"},
@@ -220,7 +220,8 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	// Allow connection to be fully established before changing the policy.
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, "443")
 
-	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowPassthrough("foo.bar.baz"))
+	// Keep DNS authorized so the second connection tests the PEP, not the DNS relay.
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowHTTP(origin.SvcName()+".cluster.local"))
 	// Wait for the policy cached in ext_proc server to expire, so it will fetch the new one.
 	// ext_proc cache freshness interval is 10 seconds.
 	time.Sleep(11 * time.Second)

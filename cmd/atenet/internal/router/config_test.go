@@ -219,9 +219,8 @@ func TestRouterConfigValidateIngressAuth(t *testing.T) {
 			wantErr: "--ingress-client-ca-file is required",
 		},
 		{
-			name:    "empty allowlist rejected",
-			mutate:  func(c *routerConfig) { c.IngressAuth.AllowedSPIFFEIDs = nil },
-			wantErr: "at least one --ingress-allowed-spiffe-ids entry is required",
+			name:   "empty allowlist accepted",
+			mutate: func(c *routerConfig) { c.IngressAuth.AllowedSPIFFEIDs = nil },
 		},
 		{
 			name: "non-SPIFFE ID rejected",

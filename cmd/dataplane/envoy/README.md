@@ -21,9 +21,9 @@ cmd/dataplane/envoy/
 
 During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the router and egress manifests (`manifests/ate-install/atenet-router.yaml`, `manifests/ate-install/atenet-egress.yaml`).
 
-A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so `REPO` has to hold it. Releases do not publish it; see [`docs/dev/releasing.md`](../../../docs/dev/releasing.md#release-images).
+A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so `REPO` has to hold it. Releases publish it there with the other images; see [`docs/dev/releasing.md`](../../../docs/dev/releasing.md#release-images).
 
-The image targets the same platforms as the ko images: `KO_DEFAULTPLATFORMS`, else `defaultPlatforms` in `.ko.yaml` (linux/amd64 and linux/arm64), else `linux/amd64`. Building another architecture compiles Rust under QEMU, which must be registered with binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install arm64`).
+The image targets the same platforms as the ko images: `KO_DEFAULTPLATFORMS`, else `defaultPlatforms` in `.ko.yaml` (linux/amd64 and linux/arm64), else `linux/amd64`. The builder stage runs on the build machine's platform and cross-compiles the Rust module, so building another architecture needs no QEMU.
 
 To build the image locally without pushing it:
 

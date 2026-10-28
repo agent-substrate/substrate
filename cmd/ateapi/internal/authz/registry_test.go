@@ -692,9 +692,9 @@ func TestDefaultRPCPermissions_CoversEveryServedRPC(t *testing.T) {
 			m := methods.Get(j)
 			fullMethod := "/" + string(sd.FullName()) + "/" + string(m.Name())
 			if m.IsStreamingClient() || m.IsStreamingServer() {
-				// The authz interceptor is unary-only, so a streaming RPC would go
-				// unchecked.
-				t.Errorf("%s is a streaming RPC, which the authz interceptor does not check", fullMethod)
+				// StreamServerInterceptor denies any stream not in streamRules,
+				// and has no per-request checks like defaultRPCPermissions.
+				t.Errorf("%s is a streaming RPC, which StreamServerInterceptor denies", fullMethod)
 			}
 			served[fullMethod] = true
 		}

@@ -296,7 +296,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `atenet.egress.credentialProvider`           | `ATE_CREDENTIAL_PROVIDER`                       | `--credential-provider`                            | —                     | (global)                                 |
 | `clusterSize`                                | `ATE_INSTALL_CLUSTER_SIZE`                      | `--cluster-size`                                   | `size0`               | (global)                                 |
 | `context`                                    | `KUBECTL_CONTEXT`                               | `--context`                                        | —                     | (global)                                 |
-| `cordonControlPlane`                         | `ATE_INSTALL_CORDON_CONTROL_PLANE`              | `--cordon-control-plane`                           | `false`               | (global)                                 |
+| `cordonSystemInfraComponents`                | `ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS`    | `--cordon-system-infra-components`                 | `false`               | (global)                                 |
 | `csi.setup`                                  | `SETUP_CSI`                                     | `--setup-csi`                                      | `none`                | `deploy ate-system`                      |
 | `docker.buildFlags`                          | `DOCKER_BUILD_FLAGS`                            | `--docker-build-flags`                             | —                     | (global)                                 |
 | `fakeDataPlane.enabled`                      | `ATE_INSTALL_FAKE_DATA_PLANE`                   | `--fake-data-plane`                                | `false`               | (global)                                 |
@@ -369,6 +369,19 @@ and the snapshot transfer service account object admin and bucket viewer on
 any other bucket a template names, as setup-gcp does on the snapshot bucket. Without the gate,
 ate-api-server ignores `snapshotConfig.storageLocation`. See
 [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
+
+## Ingress to actors
+
+> [!IMPORTANT]
+> atenet-router lets a client reach actors only if the client's SPIFFE ID is
+> in `ingressAllowedSPIFFEIDs` (`--ingress-allowed-spiffe-ids`). The setting
+> has no default, so an install that leaves it unset accepts no ingress
+> traffic.
+
+List every client that calls atenet-router. If all traffic reaches actors
+through one frontend or gateway, list that gateway's identity. If several
+services call the router, list each of them. Any listed client may reach any
+actor.
 
 ## Secrets
 

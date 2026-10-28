@@ -93,10 +93,9 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 	}
 
 	// Memory: the sandbox must be bounded by the declared limit. Both runtimes
-	// report under it — gVisor by its reserved overhead, the micro-VM by the
-	// 128MiB VMM reserve held back from the guest plus what the guest kernel
-	// takes — but neither may see more; a value near the node's full RAM means
-	// the limit was not applied. Allow 10% headroom above the limit for
+	// report under it — gVisor by its reserved overhead, the microVM by what
+	// the guest kernel takes — but neither may see more; a value near the
+	// node's full RAM means the limit was not applied. Allow 10% headroom above the limit for
 	// accounting differences, and half the limit below it for those overheads.
 	if got.MemTotalError != "" {
 		t.Errorf("probe could not read MemTotal: %s", got.MemTotalError)

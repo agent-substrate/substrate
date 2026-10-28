@@ -14,7 +14,7 @@
 
 # The capabilities fixture's ActorTemplates: protojson-shaped
 # ateapi.ActorTemplate documents (NOT the ate.dev/v1 CRD), created
-# through the ate API by e2e.DeploySubstrateFixture. Two templates run the
+# through the ate API by e2e.DeploySubstrateFixture. Three templates run the
 # same probe image and differ only in securityContext.capabilities, so the
 # suite can compare what the kernel reports inside the sandbox against what
 # the template asked for.
@@ -45,9 +45,8 @@ snapshotConfig:
 
 ---
 
-# drop ALL + add: the resulting set is exact rather than relative, so asserting
-# it proves both halves at once — everything default was dropped, and only the
-# named capability was granted back.
+# The set is exact rather than relative, so asserting it proves the drop and
+# the add at once.
 metadata:
   atespace: ate-e2e${FIXTURE_SUFFIX}
   name: caps-exact
@@ -58,9 +57,6 @@ containers:
 - name: probe
   image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
-  # The probe binds :80, which is exactly what NET_BIND_SERVICE permits, so
-  # this template also proves the granted capability is usable and not merely
-  # present in the mask: without it the container could not become ready.
   securityContext:
     capabilities:
       drop: ["ALL"]
@@ -76,3 +72,31 @@ resources:
     memoryBytes: 536870912 # 512Mi
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/
+---
+
+# No capabilities at all, and the probe still binds :80: both runtimes lift
+# the privileged-port limit, so the golden bake fails if that regresses.
+metadata:
+  atespace: ate-e2e${FIXTURE_SUFFIX}
+  name: caps-none
+workerSelector:
+  matchLabels:
+    workload: caps
+containers:
+- name: probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
+  command: ["/ko-app/probe"]
+  securityContext:
+    capabilities:
+      drop: ["ALL"]
+  wakeupProbe:
+    httpGet:
+      path: /healthz
+      port: 80
+    timeoutSeconds: 60
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
+snapshotConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-none${FIXTURE_SUFFIX}/
