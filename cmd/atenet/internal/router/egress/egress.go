@@ -85,13 +85,8 @@ type Handler struct {
 	policies *policyCache
 	// actorJWTs mints the actor JWTs that credential injections ask for.
 	actorJWTs *actorjwt.Minter
-	// provider resolves an egress policy's credential_uri injections. Nil
-	// means none are configured, and a request that needs one is denied.
-	provider credprovider.CredentialProviderClient
-	// providerName, when set, is the provider this gateway serves (the host of
-	// its ate-secret:// credential URIs); a credential URI naming another
-	// provider is refused.
-	providerName string
+	// providers resolve credential_uri injections by provider name; see New.
+	providers map[string]credprovider.CredentialProviderClient
 }
 
 // New builds the egress handler. loadActorIdentityRoots yields the egress
@@ -100,12 +95,12 @@ type Handler struct {
 // the next tunnel. A nil loadActorIdentityRoots fails every CONNECT with 503.
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
-// provider resolves an allowed rule's credential_uri injections on the
-// TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
-// denied. Actor JWT injections need no provider. providerName, when set, is
-// the provider this gateway serves; a credential URI naming another provider
-// is refused.
-func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, provider credprovider.CredentialProviderClient, providerName string) *Handler {
+// providers resolve an allowed rule's credential_uri injections on the
+// TLS-terminated MITM leg, keyed by provider name. A credential URI goes to the
+// provider its host names, and one naming no provider is refused; a lone ""
+// key serves every URI. No providers leaves injections off, so a request that
+// needs one is denied. Actor JWT injections need no provider.
+func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, providers map[string]credprovider.CredentialProviderClient) *Handler {
 	if loadActorIdentityRoots == nil {
 		loadActorIdentityRoots = func() (*x509.CertPool, error) {
 			return nil, errors.New("no actor-identity CA configured")
@@ -116,8 +111,7 @@ func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.Ce
 		loadActorIdentityRoots: loadActorIdentityRoots,
 		policies:               newPolicyCache(apiClient, policyCacheTTL),
 		actorJWTs:              actorjwt.New(apiClient),
-		provider:               provider,
-		providerName:           providerName,
+		providers:              providers,
 	}
 }
 

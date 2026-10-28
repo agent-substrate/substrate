@@ -48,6 +48,38 @@ func TestRouterConfigValidate(t *testing.T) {
 			wantErr: "--atenet-dataplane must be",
 		},
 		{
+			name: "credential providers paired by position are valid",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"k8s.io", "sts.example.com"}, Addresses: []string{"a:1", "b:1"}, ServerNames: []string{"a", "b"},
+			}},
+		},
+		{
+			name:    "credential provider name without an address rejected",
+			cfg:     routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{Names: []string{"k8s.io"}}},
+			wantErr: "want one per address",
+		},
+		{
+			name: "credential provider server names not paired rejected",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"k8s.io", "sts.example.com"}, Addresses: []string{"a:1", "b:1"}, ServerNames: []string{"a"},
+			}},
+			wantErr: "want one per address or none",
+		},
+		{
+			name: "repeated credential provider name rejected",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"k8s.io", "k8s.io"}, Addresses: []string{"a:1", "b:1"},
+			}},
+			wantErr: `"k8s.io" repeats`,
+		},
+		{
+			name: "empty credential provider name next to another rejected",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"", "k8s.io"}, Addresses: []string{"a:1", "b:1"},
+			}},
+			wantErr: "must be the only provider",
+		},
+		{
 			name:    "negative extproc-max-requests rejected",
 			cfg:     routerConfig{Mode: ModeIngress, ExtProcMaxRequests: -1, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
 			wantErr: "must not be negative",
