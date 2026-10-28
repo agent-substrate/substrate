@@ -183,7 +183,7 @@ viewer, and a global role holds the same role in every atespace. So
 | `GetActorTemplate` | `can_get`, the template | Viewer of its atespace |
 | `DeleteActorTemplate` | `can_delete`, the template | Editor of its atespace |
 | `ListActorTemplates` | `can_list_actor_templates`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
-| `CreateActor` | 1. `can_create_actor`, the actor's atespace<br>2. `can_use_template`, the actor template<br>3. `can_use_tag`, the `sourceTag`, if one is given | 1. Atespace editor<br>2. Viewer of the template's atespace, which may be another one<br>3. Editor of the tag's atespace. Golden tags skip this check: the handler only accepts one built from the actor's own template. |
+| `CreateActor` | 1. `can_create_actor`, the actor's atespace<br>2. `can_use_template`, the actor template<br>3. `can_use_tag`, the `sourceTag`, if one is given | 1. Atespace editor<br>2. Viewer of the template's atespace, which may be another one<br>3. Editor of the tag's atespace. When `sourceTag` is omitted, the handler resolves the template's golden tag without checking `can_use_tag`. |
 | `UpdateActor` | 1. `can_update`, the actor<br>2. `can_use_template`, the template in the request | 1. Editor of its atespace<br>2. Viewer of the template's atespace, so an actor can't be switched to a template its editor can't use |
 | `GetActor` | `can_get`, the actor | Viewer of its atespace; `atenet-egress`; the objectstore control plugin |
 | `DeleteActor` | `can_delete`, the actor | Editor of its atespace |

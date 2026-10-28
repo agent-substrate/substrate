@@ -58,18 +58,24 @@ for etcd.
 - **Atespace**: the isolation boundary an Actor belongs to, and the first half
   of its identity: an Actor is addressed by `(atespace, name)`, so the same
   name can exist in two atespaces. Atespaces are global-scoped, not Kubernetes
-  namespaces — an `ActorTemplate` also lives in an atespace, while
+  namespaces. `ActorTemplate`s and `Tag`s also live in an atespace, while
   `WorkerPool`s live in Kubernetes namespaces. One must exist before any
-  Actor can be created in it, and it can only be deleted once empty.
+  resource can be created in it, and it can only be deleted once its actors,
+  actor templates, and tags are gone.
 
 - **Actor**: a single instance derived from an `ActorTemplate`, identified by a
   DNS-1123 name. It is the unit that is suspended and resumed, and it moves
   between workers over its lifetime. An Actor record tracks its lifecycle
   status and snapshot references.
 
+- **Tag**: a durable, atespace-scoped snapshot record created from a suspended
+  Actor (or by `ate-api-server` for a template's golden snapshot). Each Tag
+  holds its own copy of the snapshot in object storage and can be scoped to its
+  own atespace or published across atespaces.
+
 - **Worker**: a record representing one worker pod in a `WorkerPool`. A Worker
   hosts several Actors at once, each in its own sandbox, up to its actor limit
-  and its compute capacity; many more are multiplexed across a pool over time.
+  and its compute capacity. Many more are multiplexed across a pool over time.
 
 ## Components
 

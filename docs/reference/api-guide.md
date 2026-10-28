@@ -467,7 +467,7 @@ a `Snapshot` with the following fields:
 - `locality`: The node holding the snapshot's local files. For attachment rules,
   see `ActorStatus.assigned_node` in the [API schema](../../api/ateapi/v1/ateapi.proto).
 - `durableSnapshot`: The copy in object storage, with its URI in
-  `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
+  `object.snapshotUri` and a `state` that is `PENDING` while the copy is being
   written and `COMPLETED` once it can be restored from. A synchronous suspend
   uploads the copy before returning (`COMPLETED`); an asynchronous suspend
   records the copy as `PENDING`, and atelet uploads it in the background. A
@@ -692,7 +692,7 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
-    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, must not be marked for deletion, and must be either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
     *   `actor.worker_selector`: (Optional) Per-actor `WorkerSelector` merged with the template's `worker_selector` at resume time (actor keys override template keys).
 *   **Response:** the initialized `Actor`.
 
@@ -704,7 +704,7 @@ Replaces the mutable fields of an existing actor with the ones in the request (`
     *   `worker_selector` may be updated or cleared (`nil`) in any state, but not while another operation is changing the actor. The updated selector takes effect on the next `ResumeActor`.
     *   A suspended actor with a local snapshot is initially pinned to its node (see `locality` in [Snapshot Storage Layout](#snapshot-storage-layout)). `ResumeActor` first looks for a worker there matching the template and actor selectors. If none is available but a worker satisfies the remaining constraints without node or runtime restrictions, resume detaches the checkpoint and retries placement. If no eligible worker has room, it returns `RESOURCE_EXHAUSTED`.
 *   **Response:** the updated `Actor`.
-*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource, or while another operation is changing the actor (retry the same request).
+*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field (including by leaving one unset). `FAILED_PRECONDITION` if the actor is marked for deletion or if a change to `actor_template` breaks one of the rules above. `ABORTED` if either guard no longer matches the stored resource, or while another operation is changing the actor (retry the same request).
 
 Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](../api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
@@ -761,10 +761,10 @@ Query the state of logical actors.
 *   **GetActor:** Retrieves a single actor by ID.
 *   **ListActors:** Lists all actors currently tracked in the database.
 
-#### `ListWorkers`
+#### `GetWorker` / `ListWorkers` / `ListWorkerActorAssignments`
 Query the physical resource pool.
-*   **Request:** `ListWorkersRequest`
-*   **Response:** `ListWorkersResponse` containing a list of `Worker` objects (Pods) and their current assignment status.
+*   **GetWorker / ListWorkers:** Retrieve one or more `Worker` records, including each worker's `status.state`, `status.capacity`, `status.allocated`, and `status.sandbox_classes`.
+*   **ListWorkerActorAssignments:** Lists the `ActorAssignment` subresources for the actors currently hosted on a worker.
 
 ---
 

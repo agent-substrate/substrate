@@ -59,6 +59,7 @@ These flags can be appended to any command:
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
 | `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
+| `--preview` | | Allow the use of preview features enabled on the server | `false` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
 | `--verbose` | `-v` | Increase output verbosity; may be repeated or stacked (e.g., `-v`, `-vv`, `-vvvvv`) | `0` |
 
@@ -82,14 +83,19 @@ kubectl ate get actors -A
 # Get a specific actor by name and output as raw YAML
 kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 
-# List all physical workers and see which actors are assigned to them
+# List all physical workers or get specific workers by name
 kubectl ate get workers
+kubectl ate get worker <worker-name>
 
-# Filter workers by Kubernetes namespace, assigned-actor atespace, or
-# worker pool labels (same flags as `top workers`)
+# Filter workers by Kubernetes namespace, assigned-actor atespace,
+# worker pool labels, or sandbox class (same flags as `top workers`)
 kubectl ate get workers -n <namespace>
 kubectl ate get workers -a <atespace>
 kubectl ate get workers -l <label-selector>
+kubectl ate get workers --sandbox-class <gvisor|microvm>
+
+# Show live CPU and memory usage of worker pods
+kubectl ate top workers
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
@@ -104,8 +110,8 @@ kubectl ate get workers -l <label-selector>
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises while building its golden tag. |
 | `TEMPLATE` | The `ActorTemplate` the actor references, displayed as `<atespace>/<name>`. |
 | `STATE` | Current lifecycle state (`ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`, `ACTOR_STATE_REVERTING`). |
-| `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
-| `WORKER IP` | The pod IP of that worker. Empty while suspended. |
+| `WORKER POD` | The worker pod (`<namespace>/<name>`) currently hosting the actor, or `<none>` while suspended. |
+| `WORKER IPS` | Comma-separated pod IPs of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
 | `AGE` | Time elapsed since the actor was created. |
 
@@ -113,11 +119,14 @@ kubectl ate get workers -l <label-selector>
 
 | Column | Meaning |
 |---|---|
-| `NAMESPACE` | The `WorkerPool` namespace. |
+| `NAME` | The worker's name. The control plane assigns it. Treat it as opaque. |
 | `POOL` | The `WorkerPool` name. |
-| `POD` | The worker pod name. |
-| `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
-| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-name>`. |
+| `STATE` | Current worker state. `WORKER_STATE_ACTIVE` when schedulable. `WORKER_STATE_UNAVAILABLE` while the worker is not ready or is restarting. `WORKER_STATE_DRAINING` once the pod is terminating. |
+| `ACTORS` | Actors assigned to the worker vs. the worker's actor limit (`<allocated>/<capacity>`). |
+| `CPU(MILLICORES)` | Allocated vs. capacity CPU in millicores (`<allocated>/<capacity>`). Allocated includes each runtime's per-actor overhead. `-` if the worker reports no CPU capacity. |
+| `MEMORY` | Allocated vs. capacity memory with binary suffixes, such as `0/960Mi`. Allocated includes each runtime's per-actor overhead. `-` if the worker reports no memory capacity. |
+| `POD` | The worker pod (`<namespace>/<name>`). |
+| `AGE` | Time elapsed since `ate-controller` created the Worker for its pod. |
 
 ### Atespaces
 
@@ -133,11 +142,11 @@ kubectl ate get atespaces
 # Get an atespace
 kubectl ate get atespace <atespace>
 
-# Delete an atespace (must be empty — fails if any actors remain)
+# Delete an atespace (must be empty: fails if any actors, templates, or tags remain)
 kubectl ate delete atespace <atespace>
 ```
 
-> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors and tags first (cascade delete is not yet supported).
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace. Delete its actors, actor templates, and tags first (cascade delete is not yet supported).
 
 #### `kubectl ate get atespace` output columns
 
@@ -242,7 +251,7 @@ kubectl ate get tags -A
 kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 
 # Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
-# Tagging fails until the snapshot is in storage: suspend with --mode=sync to tag right away.
+# After an asynchronous suspend, create tag uploads the local snapshot first if needed.
 kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
 kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
