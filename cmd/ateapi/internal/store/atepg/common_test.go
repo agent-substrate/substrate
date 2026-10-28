@@ -21,6 +21,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 // clearAll truncates every table so the next test starts from an empty store
@@ -61,7 +62,7 @@ func setTestPolicyManager(t *testing.T, p *Persistence) {
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
 		AteletSPIFFEID:           installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 		APIServerSidecarSPIFFEID: installdefaults.APIServerSPIFFEID(installdefaults.SystemNamespace),
-	})
+	}, noop.Meter{})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

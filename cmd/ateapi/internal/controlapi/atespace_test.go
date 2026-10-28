@@ -26,6 +26,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
+	"go.opentelemetry.io/otel/metric/noop"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -58,7 +59,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil, storetest.DefaultSystemPrincipals())
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil, storetest.DefaultSystemPrincipals(), noop.Meter{})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

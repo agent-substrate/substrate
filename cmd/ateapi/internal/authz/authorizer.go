@@ -17,6 +17,7 @@ package authz
 import (
 	"context"
 	"strings"
+	"time"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
@@ -49,6 +50,8 @@ type Authorizer struct {
 	// tuple can't match a JWT subject, and AccessPolicy reconciliation
 	// limited to its own relations, so it doesn't delete them.
 	systemPrincipals map[string][]string
+
+	instruments *instruments
 }
 
 // Check verifies that the principal in ctx has relation on object.
@@ -57,6 +60,7 @@ type Authorizer struct {
 // templates and tags) and
 // the caller's bootstrap owner and system role grants, if any, are injected as OpenFGA
 // ContextualTuples at evaluation time rather than persisted in the tuple table.
+// Each OpenFGA evaluation is recorded on ate.authz.check.duration.
 func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	if IsBypassed(ctx) {
 		return nil
@@ -79,7 +83,9 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 			})
 		}
 	}
+	start := time.Now()
 	allowed, err := a.checkRaw(ctx, user, relation, object, grants...)
+	a.instruments.recordCheck(ctx, time.Since(start), relation, object, p.Kind, allowed, err)
 	if err != nil {
 		return err
 	}

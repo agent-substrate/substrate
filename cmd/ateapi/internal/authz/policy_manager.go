@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -33,9 +34,10 @@ var ErrNilTransaction = errors.New("authz: policy tuple writes require a non-nil
 // PolicyManager writes OpenFGA tuples for access policy and atespace
 // mutations within the caller's PostgreSQL transaction.
 type PolicyManager struct {
-	fgaServer *server.Server
-	storeID   string
-	modelID   string
+	fgaServer   *server.Server
+	storeID     string
+	modelID     string
+	instruments *instruments
 }
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
@@ -114,11 +116,14 @@ func (m *PolicyManager) readObjectTuples(ctx context.Context, obj string) ([]*op
 
 // reconcileBindings diffs the existing OpenFGA tuples on obj against
 // desiredBindings and writes only the net additions and deletions in batches
-// within tx, leaving unchanged (relation, user) tuples untouched.
-func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj string, desiredBindings []*ateapi.Binding) error {
+// within tx, leaving unchanged (relation, user) tuples untouched. Each call
+// with a tx is recorded on ate.authz.write.duration.
+func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj string, desiredBindings []*ateapi.Binding) (err error) {
 	if tx == nil {
 		return ErrNilTransaction
 	}
+	start := time.Now()
+	defer func() { m.instruments.recordWrite(ctx, time.Since(start), obj, err) }()
 	// The OpenFGA server API only carries ctx, so the transactional datastore
 	// reads tx back out of it.
 	ctx = ContextWithTx(ctx, tx)

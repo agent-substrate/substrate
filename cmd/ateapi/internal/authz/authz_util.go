@@ -29,6 +29,7 @@ import (
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -243,13 +244,18 @@ type SystemPrincipals struct {
 // EnsureStoreAndModel and returns the read-path Authorizer and write-path
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
-// check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals) (*Authorizer, *PolicyManager, error) {
+// check, independent of any stored AccessPolicy. Both record their metrics on
+// meter.
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals, meter metric.Meter) (*Authorizer, *PolicyManager, error) {
 	owners, err := parseBootstrapOwners(bootstrapOwners)
 	if err != nil {
 		return nil, nil, err
 	}
 	systemPrincipals, err := parseSystemPrincipals(system)
+	if err != nil {
+		return nil, nil, err
+	}
+	inst, err := newInstruments(meter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -263,11 +269,13 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 		modelID:          modelID,
 		bootstrapOwners:  owners,
 		systemPrincipals: systemPrincipals,
+		instruments:      inst,
 	}
 	policyManager := &PolicyManager{
-		fgaServer: fgaServer,
-		storeID:   storeID,
-		modelID:   modelID,
+		fgaServer:   fgaServer,
+		storeID:     storeID,
+		modelID:     modelID,
+		instruments: inst,
 	}
 	return authorizer, policyManager, nil
 }

@@ -261,7 +261,7 @@ func main() {
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
 		AteletSPIFFEID:           ateletSPIFFEID,
 		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
-	})
+	}, otel.Meter("ateapi"))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}

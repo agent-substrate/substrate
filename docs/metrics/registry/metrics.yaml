@@ -440,6 +440,82 @@ groups:
               value: error
               brief: The attempt failed. Only this outcome has an error.type key.
 
+  - id: registry.ate.authz
+    type: attribute_group
+    brief: The labels of an authorization check or policy write in ateapi.
+    attributes:
+      - id: ate.authz.relation
+        stability: development
+        type: string
+        brief: The OpenFGA relation that the check evaluated.
+        note: >
+          The values are the relations in cmd/ateapi/internal/authz/model.fga.
+          ateapi takes them from its own rules and never from a request, thus
+          the model bounds the set.
+        examples: [can_get, can_resume, can_create_actor]
+      - id: ate.authz.object.type
+        stability: development
+        brief: The OpenFGA type of the object. The ID of the object is never a label.
+        type:
+          members:
+            - id: global
+              stability: development
+              value: global
+              brief: The global:root object.
+            - id: atespace
+              stability: development
+              value: atespace
+              brief: An atespace.
+            - id: worker
+              stability: development
+              value: worker
+              brief: A worker.
+            - id: actor
+              stability: development
+              value: actor
+              brief: An actor.
+            - id: actor_template
+              stability: development
+              value: actor_template
+              brief: An actor template.
+            - id: tag
+              stability: development
+              value: tag
+              brief: A tag.
+      - id: ate.authz.decision
+        stability: development
+        brief: The decision of OpenFGA on the check.
+        type:
+          members:
+            - id: allowed
+              stability: development
+              value: allowed
+              brief: The principal has the relation on the object.
+            - id: denied
+              stability: development
+              value: denied
+              brief: >
+                The principal does not have the relation. It is a policy
+                decision, thus it has no error.type key.
+
+  - id: registry.ate.principal
+    type: attribute_group
+    brief: The labels of the authenticated caller.
+    attributes:
+      - id: ate.principal.kind
+        stability: development
+        brief: How ateapi authenticated the caller.
+        type:
+          members:
+            - id: mtls
+              stability: development
+              value: mtls
+              brief: A SPIFFE client certificate over mTLS.
+            - id: jwt
+              stability: development
+              value: jwt
+              brief: A JWT from a configured provider.
+
   - id: registry.ate.router
     type: attribute_group
     brief: The labels of the atenet router.
@@ -975,6 +1051,70 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: The outcome is error.
+
+  - id: metric.ate.authz.check.duration
+    type: metric
+    metric_name: ate.authz.check.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one OpenFGA check by the ateapi authorizer, and its decision.
+    note: >
+      ateapi records each check that the RPC interceptor sends to OpenFGA. One
+      RPC can make more than one check. A request without a principal, a
+      bypassed check, and an RPC that its handler authorizes, such as the
+      WorkerService RPCs of atelet, are not recorded. rpc.server.call.duration
+      has the rate of PermissionDenied for each RPC method. This histogram
+      shows which relation denied it, and how much of the time of the RPC the
+      check took.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [latency, traffic, errors]
+        code_anchor: cmd/ateapi/internal/authz/metrics.go
+        buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+        cuj: Are authorization checks slow, and which permission is denied?
+    attributes:
+      - ref: ate.authz.relation
+        requirement_level: required
+      - ref: ate.authz.object.type
+        requirement_level: required
+      - ref: ate.principal.kind
+        requirement_level: required
+      - ref: ate.authz.decision
+        requirement_level:
+          conditionally_required: OpenFGA gave a decision. If the check failed, error.type is set in its place.
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The check failed, such as a Postgres error. If this key is absent, the check gave a decision.
+
+  - id: metric.ate.authz.write.duration
+    type: metric
+    metric_name: ate.authz.write.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one reconcile of the OpenFGA role binding tuples on an object.
+    note: >
+      ateapi records one reconcile for each create and update of an
+      AccessPolicy, each delete of an atespace AccessPolicy, and each delete of
+      an atespace. The time includes the read of the old tuples and every Write
+      to OpenFGA. The reconcile runs in the transaction of its caller. Thus a
+      reconcile can succeed here and still roll back later with that
+      transaction.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [latency, traffic, errors]
+        code_anchor: cmd/ateapi/internal/authz/metrics.go
+        buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+        cuj: Are access policy changes slow, or do they fail?
+    attributes:
+      - ref: ate.authz.object.type
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The reconcile failed. If this key is absent, the reconcile succeeded.
 
   # ---------------------------------------------------------------------------
   # Metrics. atelet

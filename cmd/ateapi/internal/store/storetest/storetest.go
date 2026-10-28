@@ -37,6 +37,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 var (
@@ -88,7 +89,7 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 		t.Fatalf("creating OpenFGA server: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals())
+	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals(), noop.Meter{})
 	if err != nil {
 		t.Fatalf("initializing OpenFGA authz: %v", err)
 	}

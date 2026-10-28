@@ -31,6 +31,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.opentelemetry.io/otel/metric/noop"
 	"google.golang.org/grpc/codes"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
@@ -446,7 +447,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	}
 	t.Cleanup(fgaSrv.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil, testSystemPrincipals(), noop.Meter{})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

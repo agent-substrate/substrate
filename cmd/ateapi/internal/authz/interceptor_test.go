@@ -21,6 +21,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	"go.opentelemetry.io/otel/metric/noop"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection/grpc_reflection_v1"
@@ -38,7 +39,7 @@ func setupTestAuthorizer(t *testing.T) *Authorizer {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil, testSystemPrincipals(), noop.Meter{})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -278,7 +279,7 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	t.Cleanup(fgaServer.Close)
 	// bootstrap-owner is a global owner through configuration only; it has no
 	// stored tuples.
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals(), noop.Meter{})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -426,7 +427,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	t.Cleanup(fgaServer.Close)
 	// bootstrap-owner is a global owner through configuration only; it has no
 	// stored tuples.
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals(), noop.Meter{})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -630,7 +631,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		IngressRouterSPIFFEID:    routerID,
 		AteletSPIFFEID:           ateletID,
 		APIServerSidecarSPIFFEID: pluginID,
-	})
+	}, noop.Meter{})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}

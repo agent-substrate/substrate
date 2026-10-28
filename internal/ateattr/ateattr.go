@@ -169,6 +169,35 @@ const (
 	StatsSourceKey         = attribute.Key("ate.stats.source")
 )
 
+// Metric-label keys of the ateapi authorizer. AuthzRelationKey is a relation
+// from cmd/ateapi/internal/authz/model.fga, and AuthzObjectTypeKey is the
+// OpenFGA type of the object, never its ID. PrincipalKindKey holds
+// principal.KindMTLS or principal.KindJWT.
+const (
+	AuthzRelationKey   = attribute.Key("ate.authz.relation")
+	AuthzObjectTypeKey = attribute.Key("ate.authz.object.type")
+	AuthzDecisionKey   = attribute.Key("ate.authz.decision")
+	PrincipalKindKey   = attribute.Key("ate.principal.kind")
+)
+
+// Values for AuthzObjectTypeKey: the types in model.fga that ateapi checks or
+// writes tuples on.
+const (
+	AuthzObjectTypeGlobal        = "global"
+	AuthzObjectTypeAtespace      = "atespace"
+	AuthzObjectTypeWorker        = "worker"
+	AuthzObjectTypeActor         = "actor"
+	AuthzObjectTypeActorTemplate = "actor_template"
+	AuthzObjectTypeTag           = "tag"
+)
+
+// Values for AuthzDecisionKey. A denial is a policy decision, so it carries no
+// error.type.
+const (
+	AuthzDecisionAllowed = "allowed"
+	AuthzDecisionDenied  = "denied"
+)
+
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
 // the epoch is per activation. The measurement names follow the
 // ate.actor.stats.* instruments and share their units, so a query works the
