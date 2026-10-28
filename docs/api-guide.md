@@ -454,8 +454,8 @@ a `Snapshot` with the following fields:
   `COMPLETED`.
 - `sandboxRuntime`: The sandbox runtime and hardware compatibility attributes the
   guest state was captured under, copied from `status.workerAssignment.sandboxRuntime`
-  when the checkpoint is taken. A resume that restores memory state
-  (`SNAPSHOT_FIDELITY_MEMORY`) first schedules onto
+  when the checkpoint is taken. A resume that restores memory or rootfs state
+  (`SNAPSHOT_FIDELITY_MEMORY` or `SNAPSHOT_FIDELITY_ROOTFS`) first schedules onto
   an eligible worker whose `status.sandboxClasses` entry for the snapshot's
   `sandboxClass` has a `defaultRuntime` or `restorableRuntimes` entry whose
   `version` is compatible with `sandboxRuntime.version` (same schema version, and every
@@ -466,9 +466,13 @@ a `Snapshot` with the following fields:
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
     template's golden snapshot a new actor starts from — falls back to any eligible
-    worker and downgrades the restore to `SNAPSHOT_FIDELITY_ROOTFS`, preserving
-    the snapshot's rootfs and volume data while booting the guest fresh under the
-    `defaultRuntime` of that class on the new worker.
+    worker, picked by load, and boots the guest fresh under the `defaultRuntime`
+    of that class on the new worker. On a worker of the snapshot's CPU
+    `architecture` the restore downgrades to `SNAPSHOT_FIDELITY_ROOTFS`, keeping
+    the snapshot's rootfs and volume data. On a worker of another `architecture`
+    it downgrades to `SNAPSHOT_FIDELITY_VOLUMES`, because the rootfs upper layer
+    holds binaries for the architecture it was written on. Pools selected by one
+    `ActorTemplate` should therefore share a CPU architecture.
   - A local checkpoint first tries compatible workers on its attached node.
     If that fails, `ResumeActor` checks capacity without the node and runtime
     restrictions. When that capacity exists, it detaches the checkpoint and
@@ -478,10 +482,8 @@ a `Snapshot` with the following fields:
     unless its node was deleted. See [`ResumeActor`](#resumeactor) for that
     case.
 
-  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
-  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
-  `ROOTFS` restore reuses the container's rootfs upper layer over the template's
-  image, pools selected by an `ActorTemplate` must share a CPU architecture.
+  A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_VOLUMES` imposes
+  no runtime placement constraint.
 
 An `ActorTemplate` references its golden tag with the `ObjectRef` in
 `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
