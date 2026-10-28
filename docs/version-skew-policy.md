@@ -82,7 +82,7 @@ Each release creates its own SandboxConfig per sandbox class, such as `substrate
 
 A kept version's assets must stay fetchable, so a release does not overwrite them. The microVM assets live at fixed paths in the cluster's bucket, so a microVM release that changes them replaces the version instead. Moving a pool to a new config does not change the pod template, so workers do not roll.
 
-An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets a version with the same assets as the one its snapshot was taken on, and stays on it until it next starts without memory state. If the pool's config has no such version, the actor cold boots, keeping its files and losing its memory. Rollback removes the class-default annotation from the N+1 config, so the previous default config before N+1 rollout is the class default again. That config does not list the sandbox versions new in N+1. An actor suspended on one of them resumes without its memory, unless you first add that version to the config.
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets a version with the same assets as the one its snapshot was taken on, and stays on it until it next starts without memory state. If the pool's config has no such version, the actor cold boots, keeping its files and losing its memory. Rollback deletes the N+1 config, so the newest other config with the class-default annotation, usually N's, is the class default again. That config does not list the sandbox versions new in N+1. An actor suspended on one of them resumes without its memory.
 
 The [SandboxConfig upgrade guide](sandboxconfig-upgrade.md) covers the details.
 
@@ -124,7 +124,7 @@ To move from N to N+1, in this order, waiting for each step to finish:
 8. The rest of the substrate system bundle: what no step above deploys.
 9. Clients.
 
-Rollback from N+1 to N is the same list in reverse, with release N, except that the schema migration and step 8 are not undone. Clients stop sending N+1 fields before `ate-api-server` goes back, and `atelet` goes back only after every worker is back at N. Rolling back further than N is not supported.
+Rollback from N+1 to N is the same list in reverse, with release N, except that the schema migration and step 8 are not undone. Step 7 deletes the N+1 SandboxConfigs before step 5, and restores the N admission policy after the deletes finish. See [Roll back](sandboxconfig-upgrade.md#roll-back) in the SandboxConfig upgrade guide. Clients stop sending N+1 fields before `ate-api-server` goes back, and `atelet` goes back only after every worker is back at N. Rolling back further than N is not supported.
 
 ### Skipping releases
 

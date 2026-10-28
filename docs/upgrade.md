@@ -224,7 +224,7 @@ To control which pools move and when, and for what happens to suspended actors, 
 
 - **Done:** the commands exit 0.
 - **Stuck:** a command fails. [Roll back step 4](#roll-back-step-4).
-- **Actors:** a suspended actor whose sandbox version the new config does not list resumes without its memory, keeping its files.
+- **Actors:** if the new config does not list the sandbox version an actor was suspended on, the actor resumes without its memory, keeping its files.
 
 #### 4e. The rest of the system bundle
 
@@ -240,7 +240,7 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 
 Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
 
-The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
+The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Then delete the SandboxConfigs of earlier releases that no pool uses, as in [Delete earlier configs](sandboxconfig-upgrade.md#delete-earlier-configs). Keep `~/ate-upgrade` while you might still roll back, then delete it.
 
 ## Something's wrong, or I need to roll back
 
@@ -267,7 +267,7 @@ cd ~/ate-upgrade/old
 
 #### Roll back step 4
 
-Tell actor owners to stop using API fields new in this release, because the old API server rejects them. Roll back the SandboxConfigs as in [Roll back](sandboxconfig-upgrade.md#roll-back) in the SandboxConfig upgrade guide. Then:
+Tell actor owners to stop using API fields new in this release, because the old API server rejects them. Follow [Move pools off the new configs](sandboxconfig-upgrade.md#move-pools-off-the-new-configs) in the SandboxConfig upgrade guide. Then:
 
 ```bash
 go run ./cmd/ate-setup deploy atenet --config ~/ate-upgrade/old.yaml
@@ -275,6 +275,8 @@ go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/old.yaml
 go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
+
+Then follow [Restore the old admission policy](sandboxconfig-upgrade.md#restore-the-old-admission-policy).
 
 `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
 
