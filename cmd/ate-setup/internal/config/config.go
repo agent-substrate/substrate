@@ -625,16 +625,8 @@ func (p CredentialProvider) ServerName() string {
 
 // credentialProvider parses a --credential-provider JSON object that either
 // turns injection off with enabled false or names a provider and its address.
-// Only the bundled provider has a default address. A missing value is reported here rather than in validate
-// because only the deploys that render the egress gateway need it.
+// Only the bundled provider has a default address.
 func credentialProvider(raw string) (CredentialProvider, error) {
-	if raw == "" {
-		// Every channel is named, not just the flag: a provider set in the
-		// configuration document is the documented way to do it, and a reader
-		// told only about the flag goes looking in the wrong place.
-		return CredentialProvider{}, fmt.Errorf("a credential provider is required; set one of %s: %s",
-			channelsFor(credentialProviderKey), credentialProviderUsage)
-	}
 	invalid := func(format string, args ...any) (CredentialProvider, error) {
 		return CredentialProvider{}, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
 	}
@@ -673,31 +665,53 @@ func credentialProvider(raw string) (CredentialProvider, error) {
 	return CredentialProvider{Name: spec.Name, Address: spec.Address}, nil
 }
 
-// CredentialProviders parses --credential-provider: one provider object, which
-// credentialProvider reads, or a JSON array of them. None means injection is
-// off.
+// CredentialProviders parses --credential-provider, which is one of:
+//
+//	{"name":"k8s.io"}                                       one provider
+//	[{"name":"k8s.io"},{"name":"<name>","address":"<addr>"}]  several providers
+//	{"enabled":false}                                       none: injection off
+//
+// credentialProvider checks each provider object. A missing value is reported
+// here rather than in validate because only the deploys that render the egress
+// gateway need it.
 func (c *Config) CredentialProviders() ([]CredentialProvider, error) {
 	raw := c.CredentialProviderJSON
-	if !strings.HasPrefix(strings.TrimSpace(raw), "[") {
+	if raw == "" {
+		// Every channel is named, not just the flag: a provider set in the
+		// configuration document is the documented way to do it, and a reader
+		// told only about the flag goes looking in the wrong place.
+		return nil, fmt.Errorf("a credential provider is required; set one of %s: %s",
+			channelsFor(credentialProviderKey), credentialProviderUsage)
+	}
+	invalid := func(format string, args ...any) ([]CredentialProvider, error) {
+		return nil, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return invalid("%v; want %s", err, credentialProviderUsage)
+	}
+	var elems []any
+	switch v := value.(type) {
+	case map[string]any:
 		p, err := credentialProvider(raw)
 		if err != nil || !p.Enabled() {
 			return nil, err
 		}
 		return []CredentialProvider{p}, nil
-	}
-	invalid := func(format string, args ...any) ([]CredentialProvider, error) {
-		return nil, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
-	}
-	var elems []json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &elems); err != nil {
-		return invalid("%v; want %s", err, credentialProviderUsage)
+	case []any:
+		elems = v
+	default:
+		return invalid("want a JSON object or an array of them: %s", credentialProviderUsage)
 	}
 	if len(elems) == 0 {
 		return invalid(`the array names no provider; {"enabled":false} turns injection off`)
 	}
 	var providers []CredentialProvider
 	for _, elem := range elems {
-		p, err := credentialProvider(string(elem))
+		// Re-encoded so each entry gets credentialProvider's strict decoding. A
+		// value json.Unmarshal produced always encodes.
+		obj, _ := json.Marshal(elem)
+		p, err := credentialProvider(string(obj))
 		if err != nil {
 			return nil, err
 		}
