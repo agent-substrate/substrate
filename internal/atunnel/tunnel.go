@@ -29,6 +29,8 @@ import (
 	"net/url"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/atunnel/dns"
 	"go.ate.dev/substrate/internal/atunnel/egress"
@@ -112,8 +114,8 @@ type Tunnel struct {
 
 // Start builds the DNS relay and starts serving actor ingress, which proxies
 // to upstream inside each sandbox. Egress binds only in sandbox namespaces, so
-// nothing listens for it here.
-func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
+// nothing listens for it here. The DNS relay reports its metrics on meter.
+func Start(ctx context.Context, cfg Config, upstream string, meter metric.Meter) (*Tunnel, error) {
 	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
 		return nil, err
 	}
@@ -122,7 +124,7 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 		return nil, fmt.Errorf("while parsing atunnel upstream: %w", err)
 	}
 
-	dnsRelay, err := dns.NewRelay(resolvConfPath)
+	dnsRelay, err := dns.NewRelay(resolvConfPath, meter)
 	if err != nil {
 		return nil, fmt.Errorf("configuring DNS relay: %w", err)
 	}

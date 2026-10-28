@@ -634,6 +634,39 @@ groups:
               value: skipped
               brief: The pass could not size the cache and removed nothing. It retries on the next tick.
 
+  - id: registry.ate.dns
+    type: attribute_group
+    brief: >
+      The labels of the DNS relay of the sandbox. The relay checks each DNS
+      query of the actor against the egress policy of the actor.
+    attributes:
+      - id: ate.dns.decision
+        stability: development
+        brief: The decision of the egress policy on one DNS query.
+        type:
+          members:
+            - id: allowed
+              stability: development
+              value: allowed
+              brief: A rule of the policy allows the name. The relay sends the query to the resolvers of the worker pod.
+            - id: denied
+              stability: development
+              value: denied
+              brief: >
+                No rule allows the name, or the relay could not fetch the
+                policy and holds no earlier copy. The relay answers NXDOMAIN.
+                Thus the actor sees the same error as for a name that does not
+                exist.
+            - id: denied_search_domain
+              stability: development
+              value: denied_search_domain
+              brief: >
+                The same as denied, for a name under one of the search domains
+                of the worker pod. The sandbox keeps those search domains and
+                ndots:5. Thus a stub resolver tries them before most names, and
+                most lookups cause these denials. A denied cluster name, such as
+                a service in another namespace, is also counted here.
+
   - id: registry.ate.stats
     type: attribute_group
     brief: The labels of the resource measurements of the actors.
@@ -1594,6 +1627,32 @@ groups:
         requirement_level: required
 
   # ---------------------------------------------------------------------------
+  # Metrics. ateworker
+  # ---------------------------------------------------------------------------
+
+  - id: metric.ate.dns.queries
+    type: metric
+    metric_name: ate.dns.queries
+    instrument: counter
+    unit: "{query}"
+    stability: development
+    brief: The number of actor DNS queries that the DNS relay of the sandbox checked against the egress policy, by decision.
+    note: >
+      A denied rate above zero means that egress policies block external names
+      that actors look up. The actor sees only "bad address" or "could not
+      resolve host". The relay does not count a query that it drops or rejects
+      before the policy check, such as a malformed query.
+    annotations:
+      substrate:
+        emitted_by: [ateworker-gvisor, ateworker-microvm]
+        golden_signals: [traffic, errors]
+        code_anchor: internal/atunnel/dns/metrics.go
+        cuj: Actors cannot resolve external names. Does an egress policy deny them?
+    attributes:
+      - ref: ate.dns.decision
+        requirement_level: required
+
+  # ---------------------------------------------------------------------------
   # Metrics. Upstream instrumentation
   # ---------------------------------------------------------------------------
 
@@ -1606,9 +1665,8 @@ groups:
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
-      not make it. This instrument is the only metric of ateworker. ateworker has it on
-      the gRPC interface that atelet calls. credprovider is the
-      kubernetes-secrets credential provider in
+      not make it. ateworker has it on the gRPC interface that atelet calls.
+      credprovider is the kubernetes-secrets credential provider in
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:

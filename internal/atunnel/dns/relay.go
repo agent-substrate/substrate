@@ -21,6 +21,8 @@ import (
 	"net"
 	"net/netip"
 	"time"
+
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -39,15 +41,25 @@ type Relay struct {
 
 	// dialer reaches upstream resolvers from the worker namespace.
 	dialer *net.Dialer
+
+	instruments *instruments
 }
 
 // NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
-func NewRelay(resolvConfPath string) (*Relay, error) {
-	upstreams, err := resolvConfNameservers(resolvConfPath)
+// It reports its metrics on meter.
+func NewRelay(resolvConfPath string, meter metric.Meter) (*Relay, error) {
+	upstreams, search, err := readResolvConf(resolvConfPath)
 	if err != nil {
 		return nil, err
 	}
-	return NewRelayForUpstreams(upstreams)
+	r, err := NewRelayForUpstreams(upstreams)
+	if err != nil {
+		return nil, err
+	}
+	if r.instruments, err = newInstruments(meter, search); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func normalizeAddr(addr net.Addr) string {
@@ -98,5 +110,5 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
 // and dials upstreams with netC's dialer.
 func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
-	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy}, netC)
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy, instruments: r.instruments}, netC)
 }

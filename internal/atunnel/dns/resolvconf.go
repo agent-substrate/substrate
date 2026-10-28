@@ -23,20 +23,24 @@ import (
 	"strings"
 )
 
-// resolvConfNameservers reads nameservers from resolv.conf as "host:53".
-func resolvConfNameservers(path string) ([]string, error) {
+// readResolvConf reads nameservers from resolv.conf as "host:53", and the
+// search domains of its last search line.
+func readResolvConf(path string) (nameservers, search []string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("dns: reading resolv.conf: %w", err)
+		return nil, nil, fmt.Errorf("dns: reading resolv.conf: %w", err)
 	}
 	defer f.Close()
 
-	var out []string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if i := strings.IndexAny(line, "#;"); i >= 0 {
 			line = strings.TrimSpace(line[:i])
+		}
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "search" {
+			search = fields[1:]
+			continue
 		}
 		rest, ok := strings.CutPrefix(line, "nameserver")
 		if !ok {
@@ -46,13 +50,13 @@ func resolvConfNameservers(path string) ([]string, error) {
 		if address == "" || net.ParseIP(address) == nil {
 			continue
 		}
-		out = append(out, net.JoinHostPort(address, "53"))
+		nameservers = append(nameservers, net.JoinHostPort(address, "53"))
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("dns: reading resolv.conf: %w", err)
+		return nil, nil, fmt.Errorf("dns: reading resolv.conf: %w", err)
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("dns: %s names no usable nameserver", path)
+	if len(nameservers) == 0 {
+		return nil, nil, fmt.Errorf("dns: %s names no usable nameserver", path)
 	}
-	return out, nil
+	return nameservers, search, nil
 }

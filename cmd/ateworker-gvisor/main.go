@@ -240,7 +240,7 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream, mp.Meter(serviceName))
 	if err != nil {
 		return err
 	}

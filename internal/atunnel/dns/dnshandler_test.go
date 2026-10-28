@@ -76,7 +76,7 @@ func TestDNSHandlerOnRequestDrop(t *testing.T) {
 		connections: &limiterSlots{max: 1},
 	}
 	pending := newPendingRequests(lim)
-	h := newDNSHandler(pending, lim, nil)
+	h := newDNSHandler(pending, lim, nil, nil)
 	upstreams := []string{"10.96.0.10:53"}
 
 	// 1. Short packet (< 12 bytes).
@@ -110,7 +110,7 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 	allow := func(q dnsmessage.Question) bool {
 		return q.Name.String() != "blocked.example.com." && q.Type != dnsmessage.TypeTXT
 	}
-	h := newDNSHandler(pending, lim, allow)
+	h := newDNSHandler(pending, lim, allow, nil)
 	upstreams := []string{"10.96.0.10:53"}
 
 	qExample := dnsmessage.Question{
@@ -246,7 +246,7 @@ func TestDNSHandlerOnRequestSynthesizedReplies(t *testing.T) {
 func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 	lim := newLimiter()
 	pending := newPendingRequests(lim)
-	h := newDNSHandler(pending, lim, nil)
+	h := newDNSHandler(pending, lim, nil, nil)
 
 	upstream1 := &net.UDPAddr{IP: net.ParseIP("10.96.0.10"), Port: 53}
 	upstream2 := &net.UDPAddr{IP: net.ParseIP("10.96.0.11"), Port: 53}
@@ -358,7 +358,7 @@ func TestDNSHandlerUDPForwardAndResponseValidation(t *testing.T) {
 func TestDNSHandlerTCPForwardAndResponseValidation(t *testing.T) {
 	lim := newLimiter()
 	pending := newPendingRequests(lim)
-	h := newDNSHandler(pending, lim, nil)
+	h := newDNSHandler(pending, lim, nil, nil)
 
 	query := dnsQuery(0xbeef)
 	act := h.onTCPRequest(bytes.Clone(query))

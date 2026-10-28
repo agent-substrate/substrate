@@ -299,6 +299,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.filecache.size` | atelet | up/down counter | bytes of disk a node-local file cache occupies, by `ate.filecache.name`, read on each collection; compare with `--sandbox-asset-cache-max-bytes` |
 | `ate.filecache.evictions` | atelet | counter | entries the eviction passes removed from a node-local file cache, by `ate.filecache.name`; a steady rate at the budget means the cache thrashes and actors pay for downloads again |
 | `ate.filecache.gc.passes` | atelet | counter | eviction passes over a node-local file cache, by `ate.filecache.name`, that had work to do, by outcome (`ate.filecache.gc.outcome`: `complete`, `shortfall`, `skipped`); a pass within budget is not counted |
+| `ate.dns.queries` | ateworker-gvisor & ateworker-microvm | counter | actor DNS queries the sandbox DNS relay checked against the actor's egress policy, by `ate.dns.decision`: `allowed`, `denied` (answered `NXDOMAIN`), or `denied_search_domain` (a denied name under the worker pod's search domains, which resolvers try before most names) |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 
