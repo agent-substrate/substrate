@@ -161,6 +161,9 @@ type routerConfig struct {
 	// that requires an injection is skipped and the request passes through
 	// without the credential. See egress.Handler.
 	CredentialProvider credentialProviderConfig
+	// TokenExchangeCAFile holds PEM certificates the egress gateway trusts for
+	// token exchange endpoints, in addition to the system roots.
+	TokenExchangeCAFile string
 
 	LogLevel    string
 	MetricsAddr string
