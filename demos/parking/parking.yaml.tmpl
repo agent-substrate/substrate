@@ -46,3 +46,14 @@ spec:
   workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
+  template:
+    # Each worker advertises its container limits as capacity. Sizing CPU to
+    # one actor's limit in parking-template.yaml.tmpl caps each worker at one
+    # running actor.
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 1Gi
