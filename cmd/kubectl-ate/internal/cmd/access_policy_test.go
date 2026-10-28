@@ -253,7 +253,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{err: status.Error(codes.AlreadyExists, "exists")},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.create(ctx, edit) },
 			wantMethod: "CreateAtespaceAccessPolicy",
-			wantErr:    "kubectl ate update access-policy",
+			wantErr:    `"kubectl ate update access-policy -a team-a"`,
 		},
 		{
 			name:       "update global",
@@ -269,7 +269,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{err: status.Error(codes.Aborted, "version mismatch")},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.update(ctx, edit) },
 			wantMethod: "UpdateAtespaceAccessPolicy",
-			wantErr:    "re-run",
+			wantErr:    `re-run "kubectl ate get access-policy -a team-a -o yaml"`,
 		},
 		{
 			name:       "update without a policy",
@@ -277,7 +277,15 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{err: notFound},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.update(ctx, edit) },
 			wantMethod: "UpdateAtespaceAccessPolicy",
-			wantErr:    "kubectl ate create access-policy",
+			wantErr:    `"kubectl ate create access-policy -a team-a"`,
+		},
+		{
+			name:       "update global without a policy",
+			scope:      global,
+			client:     &fakeAccessPolicyClient{err: notFound},
+			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.update(ctx, edit) },
+			wantMethod: "UpdateGlobalAccessPolicy",
+			wantErr:    `"kubectl ate create access-policy --global"`,
 		},
 		{
 			name:   "delete",

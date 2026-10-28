@@ -267,7 +267,8 @@ kubectl ate --token-file me.token delete access-policy -a team-a
 - `update` replaces the whole policy and needs the `uid` and `version` from
   `get -o yaml`. It fails if the policy changed, or was deleted and recreated,
   since.
-- The global policy can't be deleted; update it with no bindings instead.
+- The global policy doesn't exist until `create access-policy --global` runs.
+  It can't be deleted; update it with no bindings instead.
 - Deleting an atespace deletes its policy, so a recreated atespace starts
   with none.
 - Changes take effect on the next call.

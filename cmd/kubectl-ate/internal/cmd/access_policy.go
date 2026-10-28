@@ -103,6 +103,14 @@ func (s accessPolicyScope) String() string {
 	return fmt.Sprintf("atespace %q", s.atespace)
 }
 
+// flag returns the command-line flag that selects s, for use in hints.
+func (s accessPolicyScope) flag() string {
+	if s.global() {
+		return "--global"
+	}
+	return "-a " + s.atespace
+}
+
 func (s accessPolicyScope) ref() *ateapi.ObjectRef {
 	return &ateapi.ObjectRef{Name: s.atespace}
 }
@@ -237,7 +245,7 @@ func (r *accessPolicyRunner) create(ctx context.Context, policy *ateapi.AccessPo
 		created, err = r.client.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: r.scope.ref(), AccessPolicy: policy})
 	}
 	if status.Code(err) == codes.AlreadyExists {
-		return fmt.Errorf(`%s already has an access policy; change it with "kubectl ate update access-policy": %w`, r.scope, err)
+		return fmt.Errorf(`%s already has an access policy; change it with "kubectl ate update access-policy %s": %w`, r.scope, r.scope.flag(), err)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to create %s access policy: %w", r.scope, err)
@@ -257,10 +265,10 @@ func (r *accessPolicyRunner) update(ctx context.Context, policy *ateapi.AccessPo
 		if err := requireScope(ctx, r.client, r.scope); err != nil {
 			return err
 		}
-		return fmt.Errorf(`%s has no access policy to update; create it with "kubectl ate create access-policy"`, r.scope)
+		return fmt.Errorf(`%s has no access policy to update; create it with "kubectl ate create access-policy %s"`, r.scope, r.scope.flag())
 	}
 	if status.Code(err) == codes.Aborted {
-		return fmt.Errorf(`manifest's uid and version preconditions do not match those of the stored %s access policy (changed since it was read, or read from another scope); re-run "get access-policy -o yaml" and reapply the edit: %w`, r.scope, err)
+		return fmt.Errorf(`manifest's uid and version preconditions do not match those of the stored %s access policy (changed since it was read, or read from another scope); re-run "kubectl ate get access-policy %s -o yaml" and reapply the edit: %w`, r.scope, r.scope.flag(), err)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to update %s access policy: %w", r.scope, err)
@@ -340,7 +348,7 @@ func runUpdateAccessPolicy(cmd *cobra.Command, _ []string) error {
 	}
 	// Checked before dialing, so an unusable manifest costs no connection.
 	if policy.GetMetadata().GetUid() == "" || policy.GetMetadata().GetVersion() == 0 {
-		return fmt.Errorf(`manifest for the %s access policy lacks the metadata.uid and metadata.version preconditions that "get access-policy -o yaml" prints`, scope)
+		return fmt.Errorf(`manifest for the %s access policy lacks the metadata.uid and metadata.version preconditions that "kubectl ate get access-policy %s -o yaml" prints`, scope, scope.flag())
 	}
 	runner, closeFn, err := newAccessPolicyRunner(cmd, scope)
 	if err != nil {
