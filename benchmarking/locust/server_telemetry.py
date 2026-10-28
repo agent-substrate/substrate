@@ -35,7 +35,7 @@ def query_prometheus_instant(
     base_url: str,
     query: str,
     time_ts: float | int | None = None,
-    timeout_s: float = 5.0,
+    timeout_s: float = 30.0,
 ) -> list[dict[str, Any]]:
     """Executes an instant query against Prometheus /api/v1/query."""
     params = {"query": query}
@@ -61,7 +61,7 @@ def query_prometheus_range(
     start_ts: int,
     end_ts: int,
     step: str = "5s",
-    timeout_s: float = 8.0,
+    timeout_s: float = 60.0,
 ) -> list[dict[str, Any]]:
     """Executes a range query against Prometheus /api/v1/query_range."""
     # Guard against Prometheus 400 Bad Request: end must be greater than start
@@ -239,10 +239,12 @@ def _psi_query(
     exports `_stalled_`, PSI "full" (all tasks stalled). "some" is the earlier
     warning signal and the CPU full-stall series carries none, so one series
     keeps the three comparable. Both are scraped, so "full" stays available.
+    Uses a 2m rate window because cAdvisor's housekeep interval can exceed 30s
+    on busy nodes, leaving fewer than two samples inside a 1m window.
     """
     return (
         f'sum by ({by}) (rate(container_pressure_{resource}_waiting_seconds_total'
-        f'{{{selector}}}[1m])) * 100'
+        f'{{{selector}}}[2m])) * 100'
     )
 
 
@@ -751,6 +753,133 @@ def _count_oom_events(prom_url: str, start_ts: int, end_ts: int) -> dict[str, An
     return out
 
 
+CHECKPOINT_PHASES = (
+    "sandbox_assets",
+    "worker_checkpoint",
+    "persist",
+    "cleanup",
+)
+RESTORE_PHASES = (
+    "manifest_fetch",
+    "sandbox_assets",
+    "download",
+    "oci_unpack",
+    "volume_mount",
+    "worker_restore",
+)
+
+
+def _harvest_extended_telemetry(
+    prom_url: str,
+    steady_start_ts: int,
+    steady_end_ts: int,
+    lag_s: int = 0,
+) -> dict[str, Any]:
+    """Harvests extended control-plane lifecycle, scheduler, snapshot-phase, and image-cache metrics."""
+    shift = lag_s // 2
+    start_at, end_at = steady_start_ts + shift, steady_end_ts + shift
+
+    def q_delta(selector: str, shifted: bool = True) -> float | None:
+        s, e = (start_at, end_at) if shifted else (steady_start_ts, steady_end_ts)
+        return _window_delta(prom_url, selector, s, e)[0]
+
+    def q_quantiles(
+        buckets: str, shifted: bool = True, scale: float = 1.0
+    ) -> dict[str, float | None]:
+        s, e = (start_at, end_at) if shifted else (steady_start_ts, steady_end_ts)
+        return {
+            f"p{int(q * 100)}": _query_window_quantile(
+                prom_url, q, buckets, s, e, unit_scale=scale
+            )
+            for q in (0.50, 0.90, 0.95, 0.99)
+        }
+
+    ext: dict[str, Any] = {}
+
+    # 1. Control-plane actor lifecycle operations (scraped directly from ateapi)
+    for op in ("create", "resume", "suspend", "delete", "revert"):
+        ok_d = q_delta(
+            f'ate_actor_lifecycle_operation_duration_seconds_count{{ate_actor_operation_name="{op}", error_type=""}}',
+            shifted=False,
+        )
+        err_d = q_delta(
+            f'ate_actor_lifecycle_operation_duration_seconds_count{{ate_actor_operation_name="{op}", error_type!=""}}',
+            shifted=False,
+        )
+        ext[f"ate_api_{op}_ok_delta"] = ok_d
+        ext[f"ate_api_{op}_err_delta"] = err_d
+        if ok_d is not None or err_d is not None:
+            qs = q_quantiles(
+                f'ate_actor_lifecycle_operation_duration_seconds_bucket{{ate_actor_operation_name="{op}"}}',
+                shifted=False,
+                scale=0.001,
+            )
+            for pk, pv in qs.items():
+                ext[f"ate_api_{op}_{pk}_ms"] = pv
+
+    # 2. Sub-phase checkpoint & restore breakdown (exported by atelet via OTLP)
+    for op, phases in (
+        ("checkpoint", CHECKPOINT_PHASES),
+        ("restore", RESTORE_PHASES),
+    ):
+        for phase in phases:
+            c = q_delta(
+                f'ate_actor_{op}_duration_seconds_count{{ate_snapshot_phase="{phase}"}}'
+            )
+            if c is not None:
+                qs = q_quantiles(
+                    f'ate_actor_{op}_duration_seconds_bucket{{ate_snapshot_phase="{phase}"}}',
+                    scale=0.001,
+                )
+                for pk, pv in qs.items():
+                    ext[f"{op}_phase_{phase}_{pk}_ms"] = pv
+                s = q_delta(
+                    f'ate_actor_{op}_duration_seconds_sum{{ate_snapshot_phase="{phase}"}}'
+                )
+                ext[f"{op}_phase_{phase}_mean_ms"] = _ratio(s, c, scale=0.001)
+
+    # 3. Restore breakdown by ate_snapshot_kind ("latest" durable vs "local" node-local)
+    for kind in ("latest", "local"):
+        cnt = q_delta(
+            f'ate_actor_restore_duration_seconds_count{{ate_snapshot_phase="total", ate_snapshot_kind="{kind}"}}'
+        )
+        ext[f"restore_{kind}_count"] = cnt
+        if cnt is not None:
+            qs = q_quantiles(
+                f'ate_actor_restore_duration_seconds_bucket{{ate_snapshot_phase="total", ate_snapshot_kind="{kind}"}}',
+                scale=0.001,
+            )
+            for pk, pv in qs.items():
+                ext[f"restore_{kind}_{pk}_ms"] = pv
+
+    # 4. Scheduler assignment outcomes & latency (scraped directly from ateapi)
+    for outcome in ("assigned", "no_capacity", "error"):
+        ext[f"scheduler_{outcome}_delta"] = q_delta(
+            f'ate_scheduler_assignment_duration_seconds_count{{ate_scheduler_outcome="{outcome}"}}',
+            shifted=False,
+        )
+    if ext.get("scheduler_assigned_delta") is not None:
+        qs = q_quantiles(
+            'ate_scheduler_assignment_duration_seconds_bucket{ate_scheduler_outcome="assigned"}',
+            shifted=False,
+            scale=0.001,
+        )
+        for pk, pv in qs.items():
+            ext[f"scheduler_assigned_{pk}_ms"] = pv
+
+    # 5. Atelet image-cache hit/miss counters (exported by atelet via OTLP)
+    ext["imagecache_hits_delta"] = q_delta(
+        'ate_imagecache_requests_total{ate_imagecache_outcome="hit"}'
+    )
+    ext["imagecache_misses_delta"] = q_delta(
+        'ate_imagecache_requests_total{ate_imagecache_outcome="miss"}'
+    )
+
+    # Keep only populated entries so empty mocks or absent optional series do not
+    # clutter server_summary.json or stats.jsonl with null blocks.
+    return {k: v for k, v in ext.items() if v is not None}
+
+
 def harvest_server_telemetry(
     prom_url: str,
     start_ts: int,
@@ -766,7 +895,7 @@ def harvest_server_telemetry(
     set and OOM counts aren't shifted and are read over the run window as is.
     """
     steady_end = end_ts if steady_end_ts is None else steady_end_ts
-    return {
+    res: dict[str, Any] = {
         "cluster_packing": _harvest_cluster_packing(
             prom_url, start_ts, end_ts, steady_start_ts, steady_end
         ),
@@ -787,6 +916,10 @@ def harvest_server_telemetry(
         ),
         "oom_events": _count_oom_events(prom_url, start_ts, end_ts),
     }
+    ext = _harvest_extended_telemetry(prom_url, steady_start_ts, steady_end, lag_s)
+    if ext:
+        res["extended"] = ext
+    return res
 
 
 def extract_and_record_server_telemetry(
@@ -895,6 +1028,10 @@ def extract_and_record_server_telemetry(
     oom = telemetry.get("oom_events", {})
     for key in ("node", "pod", *WORKER_POD_FIELDS):
         measurements[f"oom_events_{key}"] = oom.get(key)
+
+    for k, v in telemetry.get("extended", {}).items():
+        if v is not None:
+            measurements[f"ext_{k}"] = v
 
     jsonl_row = {
         "timestamp": data_ts,

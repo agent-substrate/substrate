@@ -94,6 +94,139 @@ class DeploySubstrateTest(unittest.TestCase):
         orchestrator.teardown_substrate()
         run_no_check.assert_called_once_with(["hack/install-ate.sh", "delete", "ate-system"])
 
+    @mock.patch("orchestrator.time.sleep")
+    @mock.patch("orchestrator.run")
+    def test_retries_on_transient_install_failure(self, run, sleep):
+        err = orchestrator.subprocess.CalledProcessError(1, ["hack/install-ate.sh"])
+        run.side_effect = [err, err, None]
+        orchestrator.deploy_substrate()
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+
+class ValidateLocustCpuFlagsTest(unittest.TestCase):
+    def _base_locust_test(self, **overrides):
+        base = {
+            "name": "glutton_test",
+            "type": "locust",
+            "targetCluster": "dev",
+            "file": "/app/tests/glutton.py",
+            "duration": "1m",
+            "users": 10,
+        }
+        base.update(overrides)
+        return base
+
+    def test_locust_cpu_cores_and_duty_cycle(self):
+        t = self._base_locust_test(
+            cpuCores=2,
+            cpuDutyCycle=0.5,
+            flags=["--min-wait-time", "1.0"],
+        )
+        orchestrator.validate_and_normalize_tests([t])
+        self.assertEqual(
+            t["flags"],
+            [
+                "--min-wait-time",
+                "1.0",
+                "--cpu-cores",
+                "2",
+                "--cpu-duty-cycle",
+                "0.5",
+            ],
+        )
+
+    def test_locust_cpu_flags_zero_allowed(self):
+        t = self._base_locust_test(cpuCores=0, cpuDutyCycle=0.0)
+        orchestrator.validate_and_normalize_tests([t])
+        self.assertIn("--cpu-cores", t["flags"])
+        self.assertIn("0", t["flags"])
+        self.assertIn("--cpu-duty-cycle", t["flags"])
+        self.assertIn("0.0", t["flags"])
+
+        t_max = self._base_locust_test(cpuCores=1, cpuDutyCycle=1)
+        orchestrator.validate_and_normalize_tests([t_max])
+        self.assertIn("1.0", t_max["flags"])
+
+    def test_locust_invalid_cpu_cores(self):
+        for bad_cores in (-1, 1.5, "2", True, False):
+            with self.subTest(cpuCores=bad_cores):
+                with self.assertRaisesRegex(ValueError, "cpuCores"):
+                    orchestrator.validate_and_normalize_tests(
+                        [self._base_locust_test(cpuCores=bad_cores)]
+                    )
+
+    def test_locust_invalid_cpu_duty_cycle(self):
+        for bad_duty in (-0.1, 1.1, "0.5", True, False):
+            with self.subTest(cpuDutyCycle=bad_duty):
+                with self.assertRaisesRegex(ValueError, "cpuDutyCycle"):
+                    orchestrator.validate_and_normalize_tests(
+                        [self._base_locust_test(cpuDutyCycle=bad_duty)]
+                    )
+
+
+class GcloudSetupRetryTest(unittest.TestCase):
+    @mock.patch("orchestrator.time.sleep")
+    @mock.patch("orchestrator.subprocess.run")
+    @mock.patch("orchestrator.run")
+    def test_retries_get_credentials_on_transient_failure(
+        self, run_mock, subproc_mock, sleep_mock
+    ):
+        subproc_mock.side_effect = [
+            mock.Mock(returncode=1),
+            mock.Mock(returncode=0),
+        ]
+        env = {
+            "KO_DOCKER_REPO": "us-central1-docker.pkg.dev/p/r",
+            "CLUSTER_NAME": "c",
+            "CLUSTER_LOCATION": "l",
+            "PROJECT_ID": "p",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            orchestrator.gcloud_setup_for_target_cluster()
+        run_mock.assert_called_once()
+        self.assertEqual(subproc_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(5)
+
+
+class RunTestApplyRetryTest(unittest.TestCase):
+    @mock.patch("orchestrator.run_no_check")
+    @mock.patch("orchestrator.wait_for_job", return_value="complete")
+    @mock.patch("orchestrator.wait_for_no_active_runners")
+    @mock.patch("orchestrator.render_template", return_value="apiVersion: v1")
+    @mock.patch("orchestrator.time.sleep")
+    @mock.patch("orchestrator.subprocess.run")
+    def test_retries_kubectl_apply_and_raises_after_five_failures(
+        self, subproc_mock, sleep_mock, _render, _wait_active, _wait_job, _no_check
+    ):
+        fake = mock.Mock(
+            job_tmpl=mock.Mock(return_value="t"),
+            job_subs=mock.Mock(return_value={}),
+        )
+        test = {"name": "n", "type": "locust", "duration": "1m", "flags": []}
+        subproc_mock.side_effect = [
+            mock.Mock(returncode=1, args=["kubectl", "apply"]),
+            mock.Mock(returncode=0, args=["kubectl", "apply"]),
+        ]
+        with mock.patch.dict(orchestrator.TYPES, {"locust": fake}), \
+             mock.patch.dict(os.environ, CLUSTER_ENV, clear=True):
+            res = orchestrator.run_test(test, "img", "dest", "abcdef0123")
+        self.assertEqual(res, "complete")
+        self.assertEqual(subproc_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(5)
+
+        subproc_mock.reset_mock()
+        sleep_mock.reset_mock()
+        subproc_mock.side_effect = [
+            mock.Mock(returncode=1, args=["kubectl", "apply"]) for _ in range(5)
+        ]
+        with mock.patch.dict(orchestrator.TYPES, {"locust": fake}), \
+             mock.patch.dict(os.environ, CLUSTER_ENV, clear=True), \
+             self.assertRaises(orchestrator.subprocess.CalledProcessError):
+            orchestrator.run_test(test, "img", "dest", "abcdef0123")
+        self.assertEqual(subproc_mock.call_count, 5)
+        self.assertEqual(sleep_mock.call_count, 4)
+
 
 class DeployWorkloadsTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
