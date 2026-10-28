@@ -222,14 +222,11 @@ go run ./cmd/ate-setup delete all
 If you need to delete the resources created by the setup script, you can use the provided script `hack/teardown.sh`. This script will delete resources in the reverse order of creation and handles partial failures gracefully.
 
 ```bash
-./hack/teardown.sh --all
+./hack/teardown.sh [--all|--cluster-scoped]
 ```
 
-`--all` also deletes the dashboards, the snapshot transfer service account and the project-level IAM bindings, which every Substrate cluster in the project shares. While other Substrate clusters still use the project, delete only this cluster, its buckets and the bindings on them:
-
-```bash
-./hack/teardown.sh --cluster-scoped
-```
+* `--all` deletes everything, including the dashboards, the snapshot transfer service account and the project-level IAM bindings, which every Substrate cluster in the project shares.
+* `--cluster-scoped` deletes only this cluster, its buckets and the bindings on them. Use it while other Substrate clusters still use the project.
 
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 
