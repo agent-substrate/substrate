@@ -267,6 +267,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
+* [Kernel Socket Memory](docs/network-socket-memory.md): How atunnel, the router and the egress gateway bound the kernel socket queues a slow reader fills, and what it costs.
 * [Sandbox Asset Cache](docs/sandbox-asset-cache.md): How a node caches the sandbox binaries actors run on, decides which runtimes it needs, and evicts to a budget.
 * [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
 * [Node Storage](docs/node-storage.md): How to give snapshot I/O its own disk.

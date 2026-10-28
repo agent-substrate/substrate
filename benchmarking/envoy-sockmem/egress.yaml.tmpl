@@ -1,0 +1,93 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# The egress Envoy: the egress gateway's front door as atunnel sees it, from
+# manifests/ate-install/atenet-egress.yaml: the egress listener's mTLS,
+# per-connection buffer limit, and HTTP/2 settings, terminating CONNECT. The
+# real gateway hands each tunnel to an internal listener and a dynamic
+# forward proxy; here it goes straight to a static cluster, which opens the
+# same one upstream socket per tunnel.
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 15000 } }
+static_resources:
+  listeners:
+  - name: egress
+    address: { socket_address: { address: "::", ipv4_compat: true, port_value: 443 } }
+    per_connection_buffer_limit_bytes: 65535
+{{- with .SocketOptions }}
+    socket_options:
+{{- range . }}
+    - { description: {{ .Description }}, level: {{ .Level }}, name: {{ .Name }}, int_value: {{ .Value }}, state: STATE_PREBIND }
+{{- end }}
+{{- end }}
+    filter_chains:
+    - transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+          require_client_certificate: true
+          common_tls_context:
+            alpn_protocols: ["h2", "http/1.1"]
+            tls_certificates:
+            - certificate_chain: { filename: /pki/envoy-cert.pem }
+              private_key: { filename: /pki/envoy-key.pem }
+            validation_context:
+              trusted_ca: { filename: /pki/ca.pem }
+      filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: egress_connect
+          common_http_protocol_options: { idle_timeout: 30s }
+          http2_protocol_options:
+            max_concurrent_streams: 100
+            initial_stream_window_size: 1048576
+            initial_connection_window_size: 1048576
+          upgrade_configs: [{ upgrade_type: CONNECT }]
+          route_config:
+            virtual_hosts:
+            - name: connect
+              domains: ["*"]
+              routes:
+{{- range .Origins }}
+              - match:
+                  connect_matcher: {}
+                  headers: [{ name: ":authority", string_match: { exact: "192.0.2.10:{{ .Port }}" } }]
+                route:
+                  cluster: {{ .Name }}
+                  timeout: 0s
+                  upgrade_configs: [{ upgrade_type: CONNECT, connect_config: {} }]
+{{- end }}
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config: { "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router }
+  clusters:
+{{- range .Origins }}
+  - name: {{ .Name }}
+    type: STRICT_DNS
+    connect_timeout: 5s
+{{- with $.SocketOptions }}
+    upstream_bind_config:
+      socket_options:
+{{- range . }}
+      - { description: {{ .Description }}, level: {{ .Level }}, name: {{ .Name }}, int_value: {{ .Value }}, state: STATE_PREBIND }
+{{- end }}
+{{- end }}
+    load_assignment:
+      cluster_name: {{ .Name }}
+      endpoints:
+      - lb_endpoints:
+        - endpoint: { address: { socket_address: { address: origin, port_value: {{ .Port }} } } }
+{{- end }}

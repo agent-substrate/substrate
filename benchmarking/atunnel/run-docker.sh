@@ -31,6 +31,13 @@
 #   --actors N          actors atunnel hosts (default 10)
 #   --cpuset-worker S   pin the worker container to these CPUs, e.g. 0-3
 #   --cpuset-rig S      pin the generator and sink to these CPUs, e.g. 4-9
+#   --network-delay D   delay what the sink and the generator send by D, adding
+#                       D to the round trip of atunnel's router- and
+#                       gateway-facing connections, e.g. 2ms; its actor-facing
+#                       ones stay local, as on a worker
+#   --tunnel-flag F     pass flag F to atunnel, e.g.
+#                       --tunnel-flag=--atunnel-tcp-notsent-lowat=-1;
+#                       repeatable
 #
 # Results land in benchmarking/atunnel/runs/<timestamp>/: results.txt,
 # results.json, profiles/, and logs/.
@@ -42,6 +49,8 @@ tunnel_memory=1g
 actors=10
 cpuset_worker=""
 cpuset_rig=""
+tunnel_flags=()
+network_delay=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tunnel-cpus) tunnel_cpus="$2"; shift 2 ;;
@@ -49,6 +58,9 @@ while [[ $# -gt 0 ]]; do
     --actors) actors="$2"; shift 2 ;;
     --cpuset-worker) cpuset_worker="$2"; shift 2 ;;
     --cpuset-rig) cpuset_rig="$2"; shift 2 ;;
+    --network-delay) network_delay="$2"; shift 2 ;;
+    --tunnel-flag) tunnel_flags+=("$2"); shift 2 ;;
+    --tunnel-flag=*) tunnel_flags+=("${1#--tunnel-flag=}"); shift ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -105,6 +117,11 @@ cleanup() {
 }
 trap cleanup EXIT
 remove_all
+
+# A GKE node's TCP buffer limits, which Docker Desktop sets higher. They are
+# per network namespace, so each container gets its own, and the worker copies
+# its into the sandboxes.
+node_tcp_opts=(--sysctl "net.ipv4.tcp_rmem=4096 87380 6291456" --sysctl "net.ipv4.tcp_wmem=4096 16384 4194304")
 docker network create "${network}" >/dev/null
 docker volume create "${shared}" >/dev/null
 
@@ -115,7 +132,8 @@ docker run --rm --user 65532 -v "${pki}:/pki" "${image}" \
 
 # The generator and atunnel open many short connections; without these a run
 # runs out of ephemeral ports to sockets in TIME_WAIT.
-port_opts=(--sysctl "net.ipv4.ip_local_port_range=1024 65535" --sysctl net.ipv4.tcp_tw_reuse=1)
+port_opts=(--sysctl "net.ipv4.ip_local_port_range=1024 65535" --sysctl net.ipv4.tcp_tw_reuse=1
+  ${node_tcp_opts[@]+"${node_tcp_opts[@]}"})
 rig_opts=()
 if [[ -n "${cpuset_rig}" ]]; then
   rig_opts+=(--cpuset-cpus "${cpuset_rig}")
@@ -125,7 +143,7 @@ if [[ -n "${cpuset_worker}" ]]; then
   worker_opts+=(--cpuset-cpus "${cpuset_worker}")
 fi
 
-docker run --detach --network "${network}" ${rig_opts[@]+"${rig_opts[@]}"} --name atunnel-sink \
+docker run --detach --network "${network}" ${node_tcp_opts[@]+"${node_tcp_opts[@]}"} ${rig_opts[@]+"${rig_opts[@]}"} --name atunnel-sink \
   -v "${pki}:/pki:ro" "${image}" \
   atunnel-bench sink --pki-dir /pki >/dev/null
 
@@ -141,9 +159,28 @@ docker run --detach --network "${network}" --privileged --user 0 --cgroupns priv
   "${image}" \
   atunnel-bench worker --pki-dir /pki --shared-dir /shared \
   --tunnel-cpus "${tunnel_cpus}" --tunnel-memory "${tunnel_memory}" -- \
-  --actors "${actors}" --gateway atunnel-sink:9443 --dns-egress-policy enforce-in-atunnel >/dev/null
+  --actors "${actors}" --gateway atunnel-sink:9443 --dns-egress-policy enforce-in-atunnel \
+  ${tunnel_flags[@]+"${tunnel_flags[@]}"} >/dev/null
 
 # The generator runs in the foreground; Ctrl-C stops it and the trap cleans up.
+# With --network-delay it starts detached, so its interface can be delayed
+# while it waits for atunnel to be ready, and is then followed.
+load_cmd=(atunnel-bench load --pki-dir /pki --shared-dir /shared
+  --results-json /out/results.json --profile-dir /out/profiles "$@")
+if [[ -n "${network_delay}" ]]; then
+  netem() {
+    docker run --rm --network "container:$1" --user 0 --cap-add NET_ADMIN "${image}" \
+      atunnel-bench netem --dev eth0 --delay "${network_delay}"
+  }
+  netem atunnel-sink
+  docker create --network "${network}" "${port_opts[@]}" ${rig_opts[@]+"${rig_opts[@]}"} --name atunnel-load \
+    -v "${pki}:/pki:ro" -v "${shared}:/shared" -v "${out}:/out" "${image}" "${load_cmd[@]}" >/dev/null
+  docker start atunnel-load >/dev/null
+  netem atunnel-load
+  echo "network delay ${network_delay} on the sink's and the generator's sends" | tee -a "${out}/results.txt"
+  docker logs --follow atunnel-load | tee -a "${out}/results.txt"
+  exit "$(docker wait atunnel-load)"
+fi
 docker run --network "${network}" "${port_opts[@]}" ${rig_opts[@]+"${rig_opts[@]}"} --name atunnel-load \
   -v "${pki}:/pki:ro" -v "${shared}:/shared" -v "${out}:/out" "${image}" \
   atunnel-bench load --pki-dir /pki --shared-dir /shared \

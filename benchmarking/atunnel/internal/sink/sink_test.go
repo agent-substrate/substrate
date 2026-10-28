@@ -212,3 +212,43 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestGatewaySourceAndStallPorts(t *testing.T) {
+	gateway, dir := startGateway(t)
+	client := egressClient(t, gateway, dir)
+
+	source, err := client.DialContext(context.Background(), net.JoinHostPort("192.0.2.10", SourcePort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	_ = source.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.CopyN(io.Discard, source, 1<<20); err != nil {
+		t.Fatalf("reading 1 MiB from the source port: %v", err)
+	}
+
+	gateway.g.SetStall(time.Now().Add(time.Hour), 4<<20)
+	stalled, err := client.DialContext(context.Background(), net.JoinHostPort("192.0.2.10", StallPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Close()
+	_ = stalled.SetDeadline(time.Now().Add(5 * time.Second))
+	const drain = 4 << 20
+	if _, err := io.ReadFull(stalled, make([]byte, 1)); err != nil {
+		t.Fatalf("reading the stall answer: %v", err)
+	}
+	go func() {
+		chunk := make([]byte, 64<<10)
+		for {
+			if _, err := stalled.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+	waitFor(t, func() bool { return gateway.g.Stats().BytesIn >= drain })
+	// The writer keeps writing, but the gateway reads no more than drain.
+	if in := gateway.g.Stats().BytesIn; in != drain {
+		t.Errorf("gateway read %d bytes, want exactly the %d drain", in, drain)
+	}
+}
