@@ -129,6 +129,9 @@ which directories exist. Nothing counts references and nothing prunes.
   restart the directories of pods still on the node keep protecting their
   defaults with no wait on the syncer, and the startup sweep removes the
   directories of pods that are gone.
+- Cache writes aren't synced, so after a node reboot atelet empties the cache
+  and removes every worker's `default-runtime/` directory at startup. The
+  syncer and the prewarmer then rebuild them as on a new node.
 
 The old default's directory is removed as soon as the file names the new
 default: by then the worker has registered the new default (and unless an

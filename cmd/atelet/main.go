@@ -254,6 +254,19 @@ func main() {
 		imageCredsKeychain = kc
 	}
 
+	bootID, err := bootid.Read(bootid.Path)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
+	}
+	cleared, err := clearCachesAfterReboot(bootID, ateletpath.CacheBootIDFile, nodepath.ActorsDir, nodepath.WorkersDir(),
+		*imageCacheDir, *sandboxAssetCacheDir, *snapshotCacheDir)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to clear the caches after a reboot", err)
+	}
+	if cleared {
+		slog.InfoContext(ctx, "Cleared the node-local caches after a node reboot")
+	}
+
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
@@ -385,10 +398,6 @@ func main() {
 	defer ateapiConn.Close()
 	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 
-	bootID, err := bootid.Read(bootid.Path)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
-	}
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
