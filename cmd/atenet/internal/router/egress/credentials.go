@@ -147,8 +147,9 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
 	}
 
-	// If the only provider is keyed "", it serves every URI. Otherwise find the
-	// provider the URI's host names; a URI naming none fails closed.
+	// When h.providers has exactly one entry and its key is "", that provider
+	// serves every URI. Otherwise look up the provider named by the URI's host,
+	// and fail closed if none matches.
 	var provider credprovider.CredentialProviderClient
 	if p, ok := h.providers[""]; ok && len(h.providers) == 1 {
 		provider = p
