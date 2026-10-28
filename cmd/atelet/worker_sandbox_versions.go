@@ -248,10 +248,10 @@ func hashVersions(plan *sandboxPlan) []hashedVersion {
 // worker cannot register until every restorable version's assets have been
 // fetched and probed, serially.
 //
-// The first time this atelet process sees a gVisor runsc digest or a
-// restorable microVM bundle hash, buildFile fetches the version's assets into
-// the cache (and runs runsc for gVisor); a microVM default version is staged
-// on every build so promoting an evicted version to default verifies it in the
+// The first time this atelet process sees a restorable version's gVisor runsc
+// digest or microVM bundle hash, buildFile fetches the version's assets into
+// the cache (and runs runsc for gVisor); the default version is staged on
+// every build so promoting an evicted version to default verifies it in the
 // cache before unpinning the previous default. Once the file is written, the
 // syncer links the default runtime under the worker's directory so cache GC
 // never evicts it. Run and Restore fetch any evicted restorable version on
@@ -300,7 +300,7 @@ func (s *workerSandboxSyncer) buildFile(ctx context.Context, plan *sandboxPlan, 
 // sandbox_bundle_hash is hash: architecture and the hash for every class,
 // the host CPU identity for a microVM runtime (with its assets verified in
 // the local cache), and the runsc binary's cpu_features for a gVisor one.
-// isDefault makes the microVM asset check skip the memo.
+// isDefault makes the asset check skip the memo.
 func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.SandboxClass, rec *sandboxAssetsRecord, hash string, isDefault bool) (sandboxruntimes.Attributes, error) {
 	attrs := sandboxruntimes.Attributes{
 		hardware.AttrArchitecture:      runtime.GOARCH,
@@ -317,7 +317,7 @@ func (s *workerSandboxSyncer) versionAttrs(ctx context.Context, class atev1.Sand
 		}
 		attrs[hardware.AttrCPUVendor], attrs[hardware.AttrCPUModel] = vendor, model
 	case atev1.SandboxClassGvisor:
-		mask, err := s.gvisorCPUFeatures(ctx, rec)
+		mask, err := s.gvisorCPUFeatures(ctx, rec, isDefault)
 		if err != nil {
 			return nil, err
 		}
@@ -381,8 +381,10 @@ func (s *workerSandboxSyncer) ensureMicroVMAssets(ctx context.Context, rec *sand
 
 // gvisorCPUFeatures returns the encoded cpu_features of rec's runsc binary.
 // The first time this atelet sees the binary's digest it fetches the binary
-// into the local asset cache and runs `<runsc> cpu-features`.
-func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
+// into the local asset cache and runs `<runsc> cpu-features`. The default
+// version is staged on every sync so promoting an evicted version to default
+// verifies it in the cache before unpinning the previous default.
+func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandboxAssetsRecord, isDefault bool) (string, error) {
 	digest := rec.Assets[gvisorAssetName].SHA256
 	if digest == "" {
 		return "", fmt.Errorf("%w: gvisor version has no %q asset", errPermanent, gvisorAssetName)
@@ -390,7 +392,7 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	s.mu.Lock()
 	mask, ok := s.cpuFeatures[digest]
 	s.mu.Unlock()
-	if ok {
+	if ok && !isDefault {
 		return mask, nil
 	}
 	// Backstop for the sync worker this runs on; see probeFetchTimeout.
@@ -406,6 +408,9 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	paths, err := s.assets.ensureSandboxAssets(ctx, rec, scratch)
 	if err != nil {
 		return "", err
+	}
+	if ok {
+		return mask, nil
 	}
 	names, err := s.runCPUFeatures(ctx, runscPathFor(paths))
 	if err != nil {
@@ -529,9 +534,7 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) (k8s
 	}
 	// Only now, with the file naming its defaults: a sync that failed above
 	// left the file, and so the directories, as they were. The build staged
-	// a microVM default just now and fetched a gVisor default the first time
-	// it saw its digest, so the prewarm is links unless an evicted gVisor
-	// version was promoted to default.
+	// the default just now, so the prewarm is links.
 	if s.prewarm != nil {
 		var defaults []string
 		for _, v := range writtenVersions(hashed, want) {

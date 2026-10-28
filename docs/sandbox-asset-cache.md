@@ -67,12 +67,12 @@ pool runs, hashes every enabled version, and:
 - **registers** every hash in the runtime index, with its record, and writes
   the index file durably, *before* anything else, so a hash is resolvable
   before the worker can register it with the control plane;
-- fetches each version's assets into the cache (every sync for a microVM
-  default, and once per `atelet` process for restorable microVM versions and
-  gVisor `runsc` digests), probes what a snapshot taken on the runtime must
-  find again (CPU features for gVisor, host CPU identity for microVM), and
-  writes the worker's `sandbox-runtimes.json`, from which the worker
-  registers;
+- fetches each version's assets into the cache (every sync for the default
+  version, and once per `atelet` process for restorable microVM versions and
+  restorable gVisor `runsc` digests), probes what a snapshot taken on the
+  runtime must find again (CPU features for gVisor, host CPU identity for
+  microVM), and writes the worker's `sandbox-runtimes.json`, from which the
+  worker registers;
 - records what the worker now advertises, which is what the written file
   says;
 - makes the worker's `default-runtime/` directory match the file's
@@ -112,9 +112,8 @@ which directories exist. Nothing counts references and nothing prunes.
 - The hand-over comes after the build on purpose. A build that fails, as a
   permanent `runsc` probe failure does, leaves the file and so the
   directories as they were, with the previous default still linked and still
-  advertised. Unless an evicted gVisor version was promoted to default, the
-  build has already fetched the default's assets into the cache, so the
-  prewarm is just hard links.
+  advertised. The build has already fetched the default's assets into the
+  cache, so the prewarm is just hard links.
 - The prewarm fills what exists and creates nothing. It checks that its
   directory is there, stages into it, and on an error checks again: a
   directory gone, after a later sync or the pod's removal, means the item
@@ -131,9 +130,8 @@ which directories exist. Nothing counts references and nothing prunes.
   directories of pods that are gone.
 
 The old default's directory is removed as soon as the file names the new
-default: by then the worker has registered the new default (and unless an
-evicted gVisor version was promoted to default, the build has already fetched
-it into the cache), so nothing new is placed on the old one. Actors already
+default: by then the build has fetched the new default into the cache and the
+worker has registered it, so nothing new is placed on the old one. Actors already
 running on it hold their own links, and restores of snapshots taken on it go
 through the on-demand path like every non-default version. Several pods of
 one pool each hold their own links to the same entries; the entry becomes
