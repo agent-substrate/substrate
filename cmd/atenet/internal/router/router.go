@@ -29,6 +29,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
@@ -139,9 +140,13 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// below, because otelgrpc.NewClientHandler captures the global
 	// TracerProvider at construction time. Resolved once so the router's SDK
 	// sampler and Envoy's RandomSampling percent cannot drift.
+	serviceName := "atenet-router"
+	if s.cfg.Mode == ModeEgress {
+		serviceName = "atenet-egress"
+	}
 	sampling := serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(dataPlaneTraceRatio))
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: extproc.ServiceName,
+		ServiceName: serviceName,
 		Sampling:    sampling,
 	})
 	if err != nil {
@@ -149,7 +154,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, extproc.ServiceName)
+	mp, err := serverboot.InitMetrics(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}
@@ -252,7 +257,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 
 	if s.extprocSrv == nil {
-		routeDuration, err := extproc.NewRouteDurationHistogram()
+		routeDuration, err := extproc.NewRouteDurationHistogram(otel.Meter(serviceName))
 		if err != nil {
 			return fmt.Errorf("failed to create route-duration histogram: %w", err)
 		}

@@ -1523,7 +1523,7 @@ groups:
       an activation time nor a warm route.
     annotations:
       substrate:
-        emitted_by: [atenet-router]
+        emitted_by: [atenet-router, atenet-egress]
         golden_signals: [latency, traffic, errors]
         code_anchor: cmd/atenet/internal/router/extproc/metrics.go
         buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
@@ -1617,7 +1617,7 @@ groups:
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm, credprovider]
+        emitted_by: [ateapi, atelet, atenet-router, atenet-egress, ateworker-gvisor, ateworker-microvm, credprovider]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
@@ -1648,7 +1648,7 @@ groups:
       pod.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atecontroller, atenet-router]
+        emitted_by: [ateapi, atelet, atecontroller, atenet-router, atenet-egress]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc

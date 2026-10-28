@@ -37,6 +37,7 @@ type AtenetDataplane interface {
 	IsEgressPolicyDenied(status int, body string) bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
+	EgressCollectorTelemetrySeen(string) bool
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
 }
@@ -89,6 +90,10 @@ func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
+}
+
+func (envoyAtenetDataplane) EgressCollectorTelemetrySeen(collectorScrape string) bool {
+	return CollectorHasService(collectorScrape, "atenet-egress")
 }
 
 func (envoyAtenetDataplane) ScrapeMetrics(ctx context.Context) (string, error) {
@@ -165,6 +170,11 @@ func (agentGatewayAtenetDataplane) RouteDurationSeen(ctx context.Context, _ stri
 		return false, err
 	}
 	return len(MissingPlatformMetrics(scrape, []string{"agentgateway_atenet_router_route_duration_seconds"})) == 0, nil
+}
+
+// AgentGateway egress does not run the ext-proc container and does not push metrics to the OTLP collector.
+func (agentGatewayAtenetDataplane) EgressCollectorTelemetrySeen(_ string) bool {
+	return true
 }
 
 func (agentGatewayAtenetDataplane) ScrapeMetrics(ctx context.Context) (string, error) {

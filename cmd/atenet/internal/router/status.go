@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
-	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
@@ -94,10 +93,7 @@ func (s *RouterServer) getRouterIP(ctx context.Context) string {
 }
 
 func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(req.Context(), "handleStatusz")
-	defer span.End()
-
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
 	defer cancel()
 
 	routerIP := s.getRouterIP(ctx)

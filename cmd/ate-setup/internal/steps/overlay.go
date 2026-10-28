@@ -612,7 +612,7 @@ const otelEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
 // otelOverrideDeployments are the control plane Deployments that read
 // ate-otel-config. ate-controller additionally copies the values onto the
 // worker pods it creates, so one patch reaches the whole system.
-var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router"}
+var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router", "atenet-egress"}
 
 // applyOtelEndpointOverride points all control plane telemetry at a different
 // collector for the duration of a measurement. See
