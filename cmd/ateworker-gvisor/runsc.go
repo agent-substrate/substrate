@@ -17,9 +17,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -272,23 +270,6 @@ func (r *runsc) cmdDelete(ctx context.Context, containerNames ...string) error {
 	return nil
 }
 
-func (r *runsc) checkRunning(ctx context.Context, containerName string) error {
-	cmd := r.command(ctx, r.buildArgs("state", containerName))
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("while running `runsc state`: %w", err)
-	}
-	var state specs.State
-	if err := json.Unmarshal(out.Bytes(), &state); err != nil {
-		return fmt.Errorf("while parsing `runsc state` output: %w", err)
-	}
-	if state.Status != specs.StateRunning {
-		return fmt.Errorf("container %q status is %q, want %q", containerName, state.Status, specs.StateRunning)
-	}
-	return nil
-}
 // cmdKill sends signal to the given container's process(es) inside the gVisor
 // sandbox. Used during graceful shutdown to propagate SIGTERM to the actor.
 func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
