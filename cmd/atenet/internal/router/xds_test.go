@@ -35,6 +35,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	"sigs.k8s.io/yaml"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -1363,7 +1364,7 @@ func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
 	for _, ingressCache := range []bool{false, true} {
 		t.Run("ingressCache="+strconv.FormatBool(ingressCache), func(t *testing.T) {
 			x := NewXdsServer(18000)
-			x.SetIngressCache(ingressCache)
+			x.SetIngressCache(ingressCache, defaultIngressCacheConfig)
 			routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
 			want := 1
 			if ingressCache {
@@ -1398,7 +1399,7 @@ func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
 // disables ext_proc via per-route config.
 func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 	x := NewXdsServer(18000)
-	x.SetIngressCache(true)
+	x.SetIngressCache(true, defaultIngressCacheConfig)
 	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
 	if len(routes) != 2 {
 		t.Fatalf("buildRoutes() = %d routes, want 2", len(routes))
@@ -1449,7 +1450,7 @@ func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 // ext_proc in HCM.
 func TestXdsServer_BuildHcm_IngressCacheFilter(t *testing.T) {
 	x := NewXdsServer(18000)
-	x.SetIngressCache(true)
+	x.SetIngressCache(true, IngressCacheConfig{TTL: 30 * time.Second, MaxCachedActors: 500})
 	hcmAny := x.buildHcm("test_prefix", false)
 	hcm := &hcmv3.HttpConnectionManager{}
 	if err := hcmAny.UnmarshalTo(hcm); err != nil {
@@ -1490,7 +1491,43 @@ func TestXdsServer_BuildHcm_IngressCacheFilter(t *testing.T) {
 	if dmConfig.GetFilterName() != ingressCacheDynamicModuleName {
 		t.Errorf("filter name = %q, want %q", dmConfig.GetFilterName(), ingressCacheDynamicModuleName)
 	}
+	filterConfig := &wrapperspb.StringValue{}
+	if err := dmConfig.GetFilterConfig().UnmarshalTo(filterConfig); err != nil {
+		t.Fatalf("failed to unmarshal filter config: %v", err)
+	}
+	if got, want := filterConfig.GetValue(), `{"cache_ttl_seconds":30,"max_cached_actors":500}`; got != want {
+		t.Errorf("filter config = %s, want %s", got, want)
+	}
 }
+
+func TestIngressCacheConfigValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     IngressCacheConfig
+		wantErr string // substring; empty means valid
+	}{
+		{name: "defaults", cfg: defaultIngressCacheConfig},
+		{name: "zero TTL", cfg: IngressCacheConfig{TTL: 0, MaxCachedActors: 1}, wantErr: "--ingress-cache-ttl"},
+		{name: "fractional TTL", cfg: IngressCacheConfig{TTL: 1500 * time.Millisecond, MaxCachedActors: 1}, wantErr: "--ingress-cache-ttl"},
+		{name: "zero max cached actors", cfg: IngressCacheConfig{TTL: time.Second, MaxCachedActors: 0}, wantErr: "--ingress-cache-max-cached-actors"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("validate() = %v, want an error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+var defaultIngressCacheConfig = IngressCacheConfig{TTL: DefaultIngressCacheTTL, MaxCachedActors: DefaultIngressCacheMaxCachedActors}
 
 // TestXdsServer_IngressCacheDisabledByDefault verifies that without the
 // IngressCache preview gate the router installs neither the ingress-cache

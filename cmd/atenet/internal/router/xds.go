@@ -17,6 +17,7 @@ package router
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -146,6 +147,11 @@ const (
 	// off mid-request. It must load from the same library as the HTTP filter,
 	// which shares its per-thread cache.
 	ingressCacheTunnelWatcherFilterName = "tunnel_watcher"
+
+	// DefaultIngressCacheTTL is --ingress-cache-ttl's default.
+	DefaultIngressCacheTTL = 5 * time.Second
+	// DefaultIngressCacheMaxCachedActors is --ingress-cache-max-cached-actors's default.
+	DefaultIngressCacheMaxCachedActors = 10000
 
 	// endpointCachedHeader is set by the ingress-cache dynamic module on a cache
 	// hit so route selection picks the route that disables ext_proc.
@@ -278,8 +284,9 @@ type XdsServer struct {
 	upstreamTrustBundlePath      string
 	// upstreamConnect: see SetUpstreamConnect.
 	upstreamConnect bool
-	// ingressCache: see SetIngressCache.
-	ingressCache bool
+	// ingressCache, ingressCacheConfig: see SetIngressCache.
+	ingressCache       bool
+	ingressCacheConfig IngressCacheConfig
 
 	// Downstream (client-facing) mTLS. Every TLS ingress listener requires a
 	// client certificate that chains to downstreamClientCAPath and carries
@@ -452,15 +459,54 @@ func (x *XdsServer) SetUpstreamConnect(enabled bool) {
 	x.upstreamConnect = enabled
 }
 
-// SetIngressCache installs the ingress-cache filter and, for each workload
-// route, a copy that matches endpointCachedHeader and skips ext_proc. With
-// upstream CONNECT it also installs the tunnel_watcher network filter
-// on actor_connect. When disabled, none of these exist, so every request is
-// resolved by ext_proc.
-func (x *XdsServer) SetIngressCache(enabled bool) {
+// IngressCacheConfig is the ingress-cache filter's configuration.
+type IngressCacheConfig struct {
+	// TTL is how long a binding is served from the cache. It's a whole number
+	// of seconds.
+	TTL time.Duration
+	// MaxCachedActors is the most actors cached per Envoy worker thread. Each
+	// thread has its own cache.
+	MaxCachedActors int
+}
+
+// validate checks the flags cfg comes from.
+func (cfg IngressCacheConfig) validate() error {
+	if cfg.TTL < time.Second || cfg.TTL%time.Second != 0 {
+		return fmt.Errorf("--ingress-cache-ttl must be a whole number of seconds, at least 1s, got %s", cfg.TTL)
+	}
+	if cfg.MaxCachedActors < 1 {
+		return fmt.Errorf("--ingress-cache-max-cached-actors must be at least 1, got %d", cfg.MaxCachedActors)
+	}
+	return nil
+}
+
+// SetIngressCache installs the ingress-cache filter, configured by cfg, and,
+// for each workload route, a copy that matches endpointCachedHeader and skips
+// ext_proc. With upstream CONNECT it also installs the tunnel_watcher network
+// filter on actor_connect. When disabled, none of these exist, so every
+// request is resolved by ext_proc.
+func (x *XdsServer) SetIngressCache(enabled bool, cfg IngressCacheConfig) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.ingressCache = enabled
+	x.ingressCacheConfig = cfg
+}
+
+// ingressCacheFilterConfig is the ingress-cache module's JSON filter config
+// (Config in cmd/dataplane/envoy/dynamic-modules/ingress-cache/src/config.rs).
+// Envoy passes a StringValue to the module without the wrapper.
+func (x *XdsServer) ingressCacheFilterConfig() *anypb.Any {
+	cfg, err := json.Marshal(struct {
+		CacheTTLSeconds int64 `json:"cache_ttl_seconds"`
+		MaxCachedActors int   `json:"max_cached_actors"`
+	}{
+		CacheTTLSeconds: int64(x.ingressCacheConfig.TTL / time.Second),
+		MaxCachedActors: x.ingressCacheConfig.MaxCachedActors,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshaling the ingress-cache filter config: %v", err))
+	}
+	return newAny(wrapperspb.String(string(cfg)))
 }
 
 // SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
@@ -1508,7 +1554,8 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 					DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
 						Name: ingressCacheDynamicModuleName,
 					},
-					FilterName: ingressCacheDynamicModuleName,
+					FilterName:   ingressCacheDynamicModuleName,
+					FilterConfig: x.ingressCacheFilterConfig(),
 				}),
 			},
 		})

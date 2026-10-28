@@ -120,8 +120,15 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
 	ingressCache := preview.IsEnabled(preview.GateIngressCache)
-	xdsSrv.SetIngressCache(ingressCache)
-	slog.InfoContext(ctx, "Ingress cache", slog.Bool("enabled", ingressCache))
+	if ingressCache {
+		if err := s.cfg.IngressCache.validate(); err != nil {
+			return nil, err
+		}
+	}
+	xdsSrv.SetIngressCache(ingressCache, s.cfg.IngressCache)
+	slog.InfoContext(ctx, "Ingress cache", slog.Bool("enabled", ingressCache),
+		slog.Duration("ttl", s.cfg.IngressCache.TTL),
+		slog.Int("max_cached_actors", s.cfg.IngressCache.MaxCachedActors))
 
 	// The snapshot is a pure function of the configuration applied above, so it
 	// is built exactly once; an Envoy that connects later is served from the

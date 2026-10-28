@@ -29,6 +29,10 @@ or pass `--preview=IngressCache` to the `atenet-router` container directly.
 With the gate off, the router installs neither these filters nor the cached
 routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
 
+`atenet-router` sets the filter config from `--ingress-cache-ttl` (default 5s)
+and `--ingress-cache-max-cached-actors` (default 10,000 per Envoy worker
+thread).
+
 ## Caveats
 
 - **Stale routing for up to the TTL.** A cache hit skips `ext_proc` and so does
@@ -54,7 +58,7 @@ routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
   can then be replayed although the actor ran the request, if another request's
   refusal marked the entry stale. A 1xx followed by a drop isn't replayed: the
   router reports it as `upstream_reset_after_response_started`.
-- **Each thread caches at most `max_actors_per_thread` actors** (10,000 by
+- **Each thread caches at most `max_cached_actors` actors** (10,000 by
   default). A full thread cache drops expired bindings before it caches another
   actor. If none had expired, the new actor isn't cached and its requests keep
   going through `ext_proc`.
@@ -134,7 +138,7 @@ The filter accepts an optional JSON configuration object in `filter_config`
 | `cache_ttl_seconds` | `u64` | `5` | Time-to-live in seconds for cached actor -> worker bindings |
 | `atunnel_port` | `u16` | `443` | Port `atunnel` listens on at the worker |
 | `target_port_header` | `String` | `"x-ate-target-port"` | Request header carrying the actor's target port to `atunnel` |
-| `max_actors_per_thread` | `usize` | `10000` | Most actors one Envoy worker thread's cache binds |
+| `max_cached_actors` | `usize` | `10000` | Most actors cached per Envoy worker thread |
 
 ## Metrics
 

@@ -258,7 +258,7 @@ func TestActorTunnelFilterStateFilter(t *testing.T) {
 func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 	x := NewXdsServer(0)
 	x.SetUpstreamConnect(true)
-	x.SetIngressCache(true)
+	x.SetIngressCache(true, defaultIngressCacheConfig)
 	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
 	if len(routes) != 4 {
 		t.Fatalf("got %d routes, want 4", len(routes))

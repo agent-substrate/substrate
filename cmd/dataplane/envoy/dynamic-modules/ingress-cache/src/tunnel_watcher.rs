@@ -237,7 +237,7 @@ mod tests {
       worker_ip.to_string(),
       None,
       Duration::from_secs(5),
-      crate::config::DEFAULT_MAX_ACTORS_PER_THREAD,
+      crate::config::DEFAULT_MAX_CACHED_ACTORS,
     )
   }
 
