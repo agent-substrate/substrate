@@ -217,10 +217,6 @@ const upstreamSANsFilterStateKey = "envoy.network.upstream_subject_alt_names"
 // domain.
 const trustDomainSPIFFEPrefix = "spiffe://" + installdefaults.AteletTrustDomain + "/"
 
-// tunnelCircuitBreakerLimit lifts Envoy's default of 1024 on the actor_tunnel
-// clusters.
-const tunnelCircuitBreakerLimit = 1048576
-
 // actorConnectCircuitBreakerLimit lifts Envoy's default of 1024 on
 // actor_connect.
 const actorConnectCircuitBreakerLimit = 1048576
@@ -929,8 +925,14 @@ func buildActorTunnelCluster(name string, http2 bool) *clusterv3.Cluster {
 		},
 	}
 	if http2 {
+		// Configure H/2 options to prevent hotspotting atunnel therads and preventing
+		// gateway from overbuffering without affecting throughput.
 		explicit.ProtocolConfig = &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
-			Http2ProtocolOptions: &corev3.Http2ProtocolOptions{},
+			Http2ProtocolOptions: &corev3.Http2ProtocolOptions{
+				MaxConcurrentStreams:        wrapperspb.UInt32(100),
+				InitialStreamWindowSize:     wrapperspb.UInt32(1048576),
+				InitialConnectionWindowSize: wrapperspb.UInt32(1048576),
+			},
 		}
 	}
 	return &clusterv3.Cluster{
@@ -946,14 +948,6 @@ func buildActorTunnelCluster(name string, http2 bool) *clusterv3.Cluster {
 					TransportSocket: rawBuffer(),
 				}),
 			},
-		},
-		CircuitBreakers: &clusterv3.CircuitBreakers{
-			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
-				Priority:           corev3.RoutingPriority_DEFAULT,
-				MaxConnections:     wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-				MaxPendingRequests: wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-				MaxRequests:        wrapperspb.UInt32(tunnelCircuitBreakerLimit),
-			}},
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
