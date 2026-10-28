@@ -111,7 +111,22 @@ for i in "${!ACTORS[@]}"; do
   kubectl ate proxy actor "${a}" "${port}:80" --atespace "${ATESPACE}" >"${TMP}/${a}.proxy.log" 2>&1 &
   proxy_pids+=($!)
 done
-sleep 3
+# Wait for each proxy to print its "Proxying ..." ready line before sending load.
+for a in "${ACTORS[@]}"; do
+  found=0
+  for _ in $(seq 1 60); do
+    if grep -q "^Proxying " "${TMP}/${a}.proxy.log" 2>/dev/null; then
+      found=1
+      break
+    fi
+    sleep 0.2
+  done
+  if [[ "${found}" -eq 0 ]]; then
+    echo "    proxy for ${a} failed to start:" >&2
+    cat "${TMP}/${a}.proxy.log" >&2 || true
+    exit 1
+  fi
+done
 
 # One worker per actor: hammer it with request->suspend until the deadline.
 worker() {
@@ -138,7 +153,9 @@ wait "${pids[@]}"
 # ---- aggregate -------------------------------------------------------------
 echo
 echo "==> results"
-cat "${TMP}"/*.log 2>/dev/null >"${TMP}/all" || true
+for a in "${ACTORS[@]}"; do
+  cat "${TMP}/${a}.log" 2>/dev/null || true
+done >"${TMP}/all"
 total=$(wc -l <"${TMP}/all" | tr -d ' ')
 if [[ "${total}" -eq 0 ]]; then
   echo "    no responses recorded -- check proxy logs"
@@ -157,6 +174,14 @@ printf "    503 unavailable: %s\n" "${busy}"
 printf "    other          : %s\n" "${other}"
 printf "    200 latency    : avg %ss, slowest %ss  <- parked requests sit here\n" "${avg_ok}" "${slowest_ok:-n/a}"
 echo
+if [[ "${other}" -gt 0 ]]; then
+  echo "    => ${other} requests failed with a non-200/503 status."
+  exit 1
+fi
+if [[ "${ok}" -eq 0 ]]; then
+  echo "    => 0 requests succeeded (${busy} shed with 503)."
+  exit 1
+fi
 if [[ "${busy}" -eq 0 ]]; then
   echo "    => 0 failures under saturation: parking absorbed the contention."
   echo "       Re-run with the router started --parked-request-max=0 to see 503s."
