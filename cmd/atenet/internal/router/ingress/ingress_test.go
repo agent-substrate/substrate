@@ -35,6 +35,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/atenet"
 	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
@@ -303,6 +304,14 @@ func TestHandleRequestHeaders(t *testing.T) {
 			resumeErr:      status.Error(codes.FailedPrecondition, "no worker has room for the actor"),
 			expectErr:      true,
 			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 unavailable: no worker has room for the actor`,
+			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
+		},
+		{
+			name:           "FailedPrecondition with a transient reason and parking disabled maps to 503 at once",
+			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			resumeErr:      transientPrecondition(t, apierror.ReasonActorSuspending, "actor is ACTOR_STATE_SUSPENDING"),
+			expectErr:      true,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 unavailable: actor is ACTOR_STATE_SUSPENDING`,
 			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
 		},
 		{
@@ -809,7 +818,7 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 		},
 		{
 			name:        "FailedPrecondition is dropped",
-			resumeErr:   status.Error(codes.FailedPrecondition, "actor is suspending"),
+			resumeErr:   transientPrecondition(t, apierror.ReasonActorSuspending, "actor is suspending"),
 			wantCode:    codes.Unknown,
 			wantOutcome: ateattr.RouterOutcomeUnavailable,
 		},

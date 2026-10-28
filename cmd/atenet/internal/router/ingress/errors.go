@@ -20,10 +20,12 @@ import (
 	"fmt"
 
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -44,6 +46,28 @@ func statusDescription(err error) string {
 		return gs.GRPCStatus().Message()
 	}
 	return status.Convert(err).Message()
+}
+
+// isTransientResumeErr returns true if the error names an actor state a
+// concurrent operation moves the actor out of (SUSPENDING, REVERTING), so the
+// request may be parked and retried.
+func isTransientResumeErr(err error) bool {
+	type grpcStatus interface{ GRPCStatus() *status.Status }
+	var gs grpcStatus
+	if !errors.As(err, &gs) {
+		return false
+	}
+	for _, d := range gs.GRPCStatus().Details() {
+		info, ok := d.(*errdetails.ErrorInfo)
+		if !ok || info.GetDomain() != apierror.ErrorInfoDomain {
+			continue
+		}
+		switch apierror.Reason(info.GetReason()) {
+		case apierror.ReasonActorSuspending, apierror.ReasonActorReverting:
+			return true
+		}
+	}
+	return false
 }
 
 // shedOutcome returns the route outcome of a request that is shed while its

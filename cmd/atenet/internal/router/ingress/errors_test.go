@@ -17,15 +17,67 @@ package ingress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
 )
+
+// transientPrecondition builds the FailedPrecondition ateapi returns for an
+// actor in a state a concurrent operation moves it out of: desc with an
+// ErrorInfo detail carrying reason in apierror's domain.
+func transientPrecondition(t *testing.T, reason apierror.Reason, desc string) error {
+	t.Helper()
+	st, err := status.New(codes.FailedPrecondition, desc).WithDetails(&errdetails.ErrorInfo{Domain: apierror.ErrorInfoDomain, Reason: string(reason)})
+	if err != nil {
+		t.Fatalf("WithDetails: %v", err)
+	}
+	return st.Err()
+}
+
+// isTransientResumeErr is true only for apierror's two transient reasons in
+// its own domain; any other detail, a status with none, or a non-status error
+// fails fast.
+func TestIsTransientResumeErr(t *testing.T) {
+	t.Parallel()
+
+	withDetail := func(domain, reason string) error {
+		t.Helper()
+		st, err := status.New(codes.FailedPrecondition, "actor is "+reason).WithDetails(&errdetails.ErrorInfo{Domain: domain, Reason: reason})
+		if err != nil {
+			t.Fatalf("WithDetails: %v", err)
+		}
+		return st.Err()
+	}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"plain FailedPrecondition", status.Error(codes.FailedPrecondition, "actor is ACTOR_STATE_CRASHED"), false},
+		{"ACTOR_SUSPENDING in the ate.dev domain", transientPrecondition(t, apierror.ReasonActorSuspending, "actor is ACTOR_STATE_SUSPENDING"), true},
+		{"ACTOR_REVERTING in the ate.dev domain", transientPrecondition(t, apierror.ReasonActorReverting, "actor is ACTOR_STATE_REVERTING"), true},
+		{"matching reason in another domain", withDetail("example.com", string(apierror.ReasonActorSuspending)), false},
+		{"unknown reason in the ate.dev domain", withDetail(apierror.ErrorInfoDomain, "ACTOR_CRASHED"), false},
+		{"wrapped transient status", fmt.Errorf("while resuming: %w", transientPrecondition(t, apierror.ReasonActorSuspending, "actor is ACTOR_STATE_SUSPENDING")), true},
+		{"non-status error", errors.New("resume failed"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isTransientResumeErr(tt.err); got != tt.want {
+				t.Errorf("isTransientResumeErr(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestActorNotFoundErr(t *testing.T) {
 	t.Parallel()
@@ -84,6 +136,18 @@ func TestMapResumeError(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "ctr6"}
 
+	// otherDomainPrecondition carries an ErrorInfo whose reason matches but
+	// whose domain is not apierror's; the router maps it like any other
+	// FailedPrecondition.
+	otherDomainPrecondition := func(t *testing.T) error {
+		t.Helper()
+		st, err := status.New(codes.FailedPrecondition, "actor is ACTOR_STATE_SUSPENDING").WithDetails(&errdetails.ErrorInfo{Domain: "example.com", Reason: string(apierror.ReasonActorSuspending)})
+		if err != nil {
+			t.Fatalf("WithDetails: %v", err)
+		}
+		return st.Err()
+	}
+
 	tests := []struct {
 		name     string
 		err      error
@@ -101,6 +165,24 @@ func TestMapResumeError(t *testing.T) {
 			err:      status.Error(codes.FailedPrecondition, "no worker has room for the actor"),
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
 			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
+		},
+		{
+			name:     "FailedPrecondition with the ACTOR_SUSPENDING reason after the budget maps to 503 and preserves desc",
+			err:      &budgetExhaustedError{lastErr: transientPrecondition(t, apierror.ReasonActorSuspending, "actor team-a/ctr6 is ACTOR_STATE_SUSPENDING")},
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: actor team-a/ctr6 is ACTOR_STATE_SUSPENDING`,
+		},
+		{
+			name:     "FailedPrecondition with the ACTOR_REVERTING reason maps to 503",
+			err:      transientPrecondition(t, apierror.ReasonActorReverting, "actor team-a/ctr6 is ACTOR_STATE_REVERTING"),
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: actor team-a/ctr6 is ACTOR_STATE_REVERTING`,
+		},
+		{
+			name:     "FailedPrecondition with a reason from another domain maps to 503",
+			err:      otherDomainPrecondition(t),
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: actor is ACTOR_STATE_SUSPENDING`,
 		},
 		{
 			name:     "Unavailable maps to 503",

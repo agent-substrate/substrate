@@ -27,6 +27,7 @@ import (
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/trace"
@@ -328,7 +329,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Unlock()
 					if n < 3 {
 						// Worker pool momentarily saturated.
-						return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 					}
 					return &ateapi.ResumeActorResponse{
 						Actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: testActorName}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
@@ -361,7 +362,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
@@ -371,8 +372,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 			// The client must see the meaningful capacity error, not a generic
 			// timeout: status.Code must unwrap through the budget-exhaustion marker.
-			if got := status.Code(err); got != codes.FailedPrecondition {
-				t.Errorf("expected FailedPrecondition after park budget elapsed, got %v (err=%v)", got, err)
+			if got := status.Code(err); got != codes.ResourceExhausted {
+				t.Errorf("expected ResourceExhausted after park budget elapsed, got %v (err=%v)", got, err)
 			}
 			var budget *budgetExhaustedError
 			if !errors.As(err, &budget) {
@@ -382,6 +383,64 @@ func TestActorResumer_Parking(t *testing.T) {
 			defer mu.Unlock()
 			if calls < 2 {
 				t.Errorf("expected the resume to be retried at least twice while parked, got %d", calls)
+			}
+		})
+	})
+
+	t.Run("PlainPreconditionFailsFast", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var calls atomic.Int32
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					calls.Add(1)
+					// No ErrorInfo reason: a CRASHED actor, which only RevertActor moves on.
+					return nil, status.Error(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: team-a/ctr6 (got: ACTOR_STATE_CRASHED, want ACTOR_STATE_SUSPENDED)")
+				},
+			}
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
+			start := time.Now()
+			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			if got := status.Code(err); got != codes.FailedPrecondition {
+				t.Errorf("code = %v, want FailedPrecondition (err=%v)", got, err)
+			}
+			var budget *budgetExhaustedError
+			if errors.As(err, &budget) {
+				t.Errorf("plain precondition was treated as budget exhaustion: %v", err)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("resume attempts = %d, want 1", got)
+			}
+			if waited := time.Since(start); waited != 0 {
+				t.Errorf("waited %v, want no retry delay", waited)
+			}
+		})
+	})
+
+	t.Run("ParksOnTransientPrecondition", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var calls atomic.Int32
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					if calls.Add(1) < 3 {
+						// A suspend still in flight; ateapi marks it transient.
+						return nil, transientPrecondition(t, apierror.ReasonActorSuspending, "actor is ACTOR_STATE_SUSPENDING")
+					}
+					return &ateapi.ResumeActorResponse{
+						Actor:   &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: testActorName}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
+						Resumed: true,
+					}, nil
+				},
+			}
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
+			actor, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			if err != nil {
+				t.Fatalf("a transient precondition must be parked and retried, got: %v", err)
+			}
+			if got := calls.Load(); got != 3 {
+				t.Errorf("resume attempts = %d, want 3", got)
+			}
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
 			}
 		})
 	})
@@ -589,15 +648,15 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
 			// Default constructor => parking disabled => fail-fast.
 			resumer := NewActorResumer(mock)
 			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
-			if got := status.Code(err); got != codes.FailedPrecondition {
-				t.Errorf("expected FailedPrecondition, got %v (err=%v)", got, err)
+			if got := status.Code(err); got != codes.ResourceExhausted {
+				t.Errorf("expected ResourceExhausted, got %v (err=%v)", got, err)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -753,6 +812,44 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			}
 			if got := lot.activeCount(); got != 1 {
 				t.Errorf("fast path must not take a slot; active = %d, want 1 (the priming entry)", got)
+			}
+		})
+	})
+
+	t.Run("PlainPreconditionNeverEntersLot", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			// A full lot sheds any caller that tries to park, so a plain
+			// FailedPrecondition must come back as itself, not as the shed.
+			cfg := ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}
+			lot := newParkingLot(cfg, nil)
+			release, ok := lot.enter(context.Background(), ateattr.RouterOutcomeUnavailable)
+			if !ok {
+				t.Fatal("priming enter should be admitted")
+			}
+			defer release(parkOutcomeServed)
+
+			var calls atomic.Int32
+			mock := &resumerMockClient{
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapi.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapi.ResumeActorResponse, error) {
+					calls.Add(1)
+					return nil, status.Error(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: team-a/ctr6 (got: ACTOR_STATE_CRASHED, want ACTOR_STATE_SUSPENDED)")
+				},
+			}
+			resumer := NewActorResumer(mock, withParking(cfg), withParkingLot(lot))
+			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			var reqErr *extproc.ReqError
+			if errors.As(err, &reqErr) {
+				t.Fatalf("a plain precondition was shed by the full lot, so it tried to park: %v", err)
+			}
+			if got := status.Code(err); got != codes.FailedPrecondition {
+				t.Errorf("code = %v, want FailedPrecondition (err=%v)", got, err)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("resume attempts = %d, want 1", got)
 			}
 		})
 	})

@@ -38,18 +38,28 @@ user-visible error.
 
 ## Behavior
 
-With parking enabled (the default), the router treats `ResourceExhausted`,
-`FailedPrecondition` and `Unavailable` from `ResumeActor` as **retryable**
-conditions (alongside the existing `Aborted` concurrent-resume conflict) — a
-parked request rides out transient pool saturation and control-plane blips
-(e.g. an ateapi rolling restart) alike. The request is *parked*: the resumer
-keeps retrying with exponential backoff until either
+With parking enabled (the default), the router treats `ResourceExhausted` and
+`Unavailable` from `ResumeActor` as **retryable** conditions (alongside the
+existing `Aborted` concurrent-resume conflict). `FailedPrecondition` covers
+several cases and only two of them are retryable: a suspend or a revert still
+in flight, which ateapi marks with the `ErrorInfo` reason `ACTOR_SUSPENDING` or
+`ACTOR_REVERTING`; every other `FailedPrecondition` fails fast (see below). A
+parked request rides out transient pool saturation, control-plane blips (e.g.
+an ateapi rolling restart) and a suspend or revert still in flight alike. The
+request is *parked*: the resumer keeps retrying with exponential backoff until
+either
 
 - the resume succeeds (the actor is `RUNNING` and has a worker IP) — the request
   is then routed normally; or
 - the **park budget** (`--parked-request-budget`, default `5s`) elapses — the
   underlying capacity error is returned, surfacing as `503 "actor <id>
   unavailable: no worker has room for the actor"`.
+
+Every other `FailedPrecondition` is not parked. Without one of those two
+reasons (domain `ate.dev`) the actor's state does not clear on its own, for
+example `ACTOR_STATE_CRASHED`, which only `RevertActor` moves on. The request
+fails at once with `503` and the description from ateapi, and no parking slot
+is taken.
 
 **The budget bounds retries, not a committed resume.** When the budget elapses
 the router stops starting new resume attempts, but an attempt already in
@@ -112,16 +122,18 @@ expected under sustained saturation.)
 ### What is *not* parked
 
 Only transient conditions — capacity (`ResourceExhausted`), transient actor
-state (`FailedPrecondition`), concurrency (`Aborted`), and control-plane
-unavailability (`Unavailable`) — are parked. Errors that will not resolve by
-waiting are returned immediately (fail fast):
+state (`FailedPrecondition` with reason `ACTOR_SUSPENDING` or
+`ACTOR_REVERTING`), concurrency (`Aborted`), and control-plane unavailability
+(`Unavailable`) — are parked. Errors that will not resolve by waiting are
+returned immediately (fail fast):
 
 | Resume result                          | Behavior                          |
 | -------------------------------------- | --------------------------------- |
 | `OK`                                   | Route to worker                   |
 | `Aborted` (concurrent resume)          | Retry (always)                    |
 | `ResourceExhausted` (no room)          | **Park & retry** (when enabled)   |
-| `FailedPrecondition` (transient state) | **Park & retry** (when enabled)   |
+| `FailedPrecondition` with reason `ACTOR_SUSPENDING` or `ACTOR_REVERTING` | **Park & retry** (when enabled) |
+| `FailedPrecondition` otherwise (e.g. `ACTOR_STATE_CRASHED`) | Fail fast → `503` |
 | `Unavailable` (control-plane blip)     | **Park & retry** (when enabled)   |
 | `NotFound`                             | Fail fast → `404`                 |
 | `DeadlineExceeded`                     | Fail fast → `504`                 |
