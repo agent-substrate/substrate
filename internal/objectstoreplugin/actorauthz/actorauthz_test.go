@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,7 +73,10 @@ func newSigner(t *testing.T) (*signer, *oidcjwt.Verifier) {
 	if err := os.WriteFile(path, jwks, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	v := oidcjwt.NewVerifier(issuer, []string{audience}, oidcjwt.FileKeySource(path), oidcjwt.WithSubstrateClaims())
+	v, err := NewVerifier(t.Context(), issuer, path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &signer{pool: pool, now: time.Now(), node: "node-1"}, v
 }
 
@@ -321,6 +325,22 @@ func TestAuthorize_Refusals(t *testing.T) {
 			}
 			if wantCalls := map[bool]int{true: 1, false: 0}[tc.lookedUp]; lookup.calls != wantCalls {
 				t.Errorf("lookup was called %d times, want %d", lookup.calls, wantCalls)
+			}
+		})
+	}
+}
+
+func TestNewVerifier_BadKeySet(t *testing.T) {
+	dir := t.TempDir()
+	notJSON := filepath.Join(dir, "not-json")
+	if err := os.WriteFile(notJSON, []byte("not a key set"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(dir, "absent.json"), notJSON} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			_, err := NewVerifier(t.Context(), issuer, path)
+			if err == nil || !strings.HasPrefix(err.Error(), "while reading the actor JWT key set: ") {
+				t.Errorf("error = %v, want one about reading the key set", err)
 			}
 		})
 	}
