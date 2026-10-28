@@ -88,15 +88,6 @@ func TestAPIServerSPIFFEID(t *testing.T) {
 	}
 }
 
-func TestCredentialMinterSPIFFEID(t *testing.T) {
-	// Matches the --credential-minter-spiffe-ids default ate-api-server ships
-	// with. Out-of-tree credential plugins run as this ServiceAccount.
-	const want = "spiffe://cluster.local/ns/ate-system/sa/credential-minter"
-	if got := CredentialMinterSPIFFEID(SystemNamespace); got != want {
-		t.Errorf("CredentialMinterSPIFFEID(%q) = %q, want %q", SystemNamespace, got, want)
-	}
-}
-
 func TestAPIServiceHost(t *testing.T) {
 	for _, tt := range []struct{ namespace, want string }{
 		{"ate-system", "api.ate-system.svc"},

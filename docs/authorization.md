@@ -128,26 +128,20 @@ one **atespace**.
 
 Substrate's components hold roles that access policies cannot grant, and only
 through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
-`--egress-gateway-spiffe-id`, `--ingress-router-spiffe-id`,
-`--api-server-sidecar-spiffe-id` and `--credential-minter-spiffe-ids` flags bind
-them, defaulting to the install's; `atelet`'s comes from
-`--atelet-service-account`.
+`--egress-gateway-spiffe-id`, `--ingress-router-spiffe-id` and
+`--api-server-sidecar-spiffe-id` flags bind them, defaulting to the install's;
+`atelet`'s comes from `--atelet-service-account`.
 
 | Role | Held by | Allows |
 |---|---|---|
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
-| `egress_gateway` | `atenet-egress` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
+| `egress_gateway` | `atenet-egress`, and any other SPIFFE IDs listed in `--egress-gateway-spiffe-id` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
 | `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
-| `credential_minter` | out-of-tree credential plugins, by default one running as the `credential-minter` ServiceAccount in the install's namespace. Substrate deploys none. | Mint actor JWTs, for example to exchange them for a cloud access token |
 
-Only `egress_gateway` can mint actor certificates, and only `egress_gateway`
-and `credential_minter` can mint actor JWTs: not even a global owner can, since
-a credential lets its holder act as the actor. Anyone who can run a pod as an
-arbitrary ServiceAccount in the install's namespace can already run one as
-`atenet-egress`, so the default `credential_minter` binding grants no one new
-authority. Set `--credential-minter-spiffe-ids=""` to grant it to no one.
+Only `egress_gateway` can mint actor credentials: not even a global owner can,
+since a credential lets its holder act as the actor.
 
 ## Checks per RPC
 

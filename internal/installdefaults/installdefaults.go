@@ -52,12 +52,6 @@ const (
 	ControllerServiceAccount = "ate-controller"
 	APIServerServiceAccount  = "ate-api-server"
 
-	// CredentialMinterServiceAccount is the ServiceAccount an out-of-tree
-	// credential plugin runs as to mint actor JWTs. Substrate creates no
-	// ServiceAccount or Pod with this name; an operator who deploys such a
-	// plugin in the system namespace opts in by using it.
-	CredentialMinterServiceAccount = "credential-minter"
-
 	// TransferServiceAccountName is the default name of the Google service
 	// account snapshot transfers run as on GCS, which tools/setup-gcp creates.
 	TransferServiceAccountName = "ate-snapshot-transfer"
@@ -133,12 +127,6 @@ func EgressSPIFFEID(namespace string) string {
 // ControllerSPIFFEID returns the SPIFFE ID ate-controller presents when it runs in namespace.
 func ControllerSPIFFEID(namespace string) string {
 	return SPIFFEID(namespace, ControllerServiceAccount)
-}
-
-// CredentialMinterSPIFFEID returns the SPIFFE ID a credential plugin running
-// as CredentialMinterServiceAccount in namespace presents.
-func CredentialMinterSPIFFEID(namespace string) string {
-	return SPIFFEID(namespace, CredentialMinterServiceAccount)
 }
 
 // APIServerSPIFFEID returns the SPIFFE ID the ate-api-server pod presents when
