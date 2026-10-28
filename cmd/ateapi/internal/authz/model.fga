@@ -52,10 +52,6 @@ type global
     define ingress_router: [user]
     define atelet: [user]
     define api_server_sidecar: [user]
-    # An out-of-tree credential plugin that turns actor JWTs into other
-    # credentials, such as an RFC 8693 token exchange. It may mint actor JWTs
-    # and nothing else.
-    define credential_minter: [user]
 
     define can_create_atespace: owner
     define can_list_atespaces: viewer
@@ -89,7 +85,6 @@ type atespace
     define ingress_router: ingress_router from parent_global
     define atelet: atelet from parent_global
     define api_server_sidecar: api_server_sidecar from parent_global
-    define credential_minter: credential_minter from parent_global
 
     # --- 2. Policy Governance ---
     define can_create_access_policy: owner
@@ -172,9 +167,8 @@ type actor
     define can_mint_worker_actor_credential: host_node
 
     # Credentials asserting the actor's own identity. Only the egress gateway
-    # mints them, plus a credential plugin for actor JWTs; an editor holding
-    # one could impersonate the actor.
-    define can_mint_actor_jwt: egress_gateway from parent_atespace or credential_minter from parent_atespace
+    # mints them; an editor holding one could impersonate the actor.
+    define can_mint_actor_jwt: egress_gateway from parent_atespace
     define can_mint_actor_certificate: egress_gateway from parent_atespace
 
     # Data Plane Ingress: Routers (or editors) can resume

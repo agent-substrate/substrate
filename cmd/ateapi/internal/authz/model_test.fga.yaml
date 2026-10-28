@@ -93,9 +93,6 @@ tuples:
   - user: user:sys-api-server-sidecar
     relation: api_server_sidecar
     object: global:root
-  - user: user:sys-credential-minter
-    relation: credential_minter
-    object: global:root
 
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
@@ -564,7 +561,7 @@ tests:
           can_create_tag: false
           can_list_tags: false
 
-  - name: 9. Actor Credentials (Egress Gateway, and Credential Minter for JWTs)
+  - name: 9. Actor Credentials (Egress Gateway Only)
     check:
       - user: user:carol # Global owner
         object: actor:runner-1
@@ -581,31 +578,3 @@ tests:
         assertions:
           can_mint_actor_jwt: false
           can_mint_actor_certificate: false
-      - user: user:sys-credential-minter # mints actor JWTs and nothing else
-        object: actor:runner-1
-        assertions:
-          can_mint_actor_jwt: true
-          can_mint_actor_certificate: false
-          can_get: false
-          can_update: false
-          can_delete: false
-          can_get_egress_policy: false
-          can_update_egress_policy: false
-          can_resume: false
-          can_suspend: false
-      - user: user:sys-credential-minter
-        object: atespace:space-1
-        assertions:
-          viewer: false
-          can_get: false
-          can_list_actors: false
-          can_create_actor: false
-          can_create_tag: false
-      - user: user:sys-credential-minter
-        object: global:root
-        assertions:
-          can_list_actors: false
-          can_list_workers: false
-          can_create_worker: false
-          can_create_atespace: false
-          can_get_access_policy: false

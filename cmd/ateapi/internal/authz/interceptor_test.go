@@ -626,7 +626,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	)
 	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
 		ControllerSPIFFEID:       controllerID,
-		EgressGatewaySPIFFEID:    egressID,
+		EgressGatewaySPIFFEIDs:   []string{egressID},
 		IngressRouterSPIFFEID:    routerID,
 		AteletSPIFFEID:           ateletID,
 		APIServerSidecarSPIFFEID: pluginID,
