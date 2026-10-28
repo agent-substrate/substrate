@@ -185,9 +185,10 @@ func TestMissingCRDsLeavesPresentOnesAlone(t *testing.T) {
 	}
 }
 
-// A single-component redeploy has to apply what deploy ate-system does. On
-// kind the bundle points the object-store plugins at rustfs, and a redeploy
-// from a base file would fall back to GCS and never start.
+// A single-component redeploy has to apply what deploy ate-system does: the
+// same workloads, with the kind patches on kind, and the same storage settings
+// from storageConfigPath. Applying the base storage settings on kind would
+// point the object-store plugins at GCS.
 func TestComponentManifestsMatchSystemBundle(t *testing.T) {
 	for _, tc := range []struct {
 		router string
@@ -225,6 +226,21 @@ func TestComponentManifestsMatchSystemBundle(t *testing.T) {
 			}
 			if diff := cmp.Diff(want.Object, got.Object); diff != "" {
 				t.Errorf("router=%s kind=%v: %s renders a different %s/%s than the system bundle (-bundle +standalone):\n%s", tc.router, tc.kind, component.path, component.kind, component.name, diff)
+			}
+		}
+		storage, err := kube.LoadPath(e.storageConfigPath())
+		if err != nil {
+			t.Fatalf("LoadPath(%s): %v", e.storageConfigPath(), err)
+		}
+		if len(storage) == 0 {
+			t.Fatalf("%s holds no objects", e.storageConfigPath())
+		}
+		for _, got := range storage {
+			want := findObject(bundle, got.GetKind(), got.GetName())
+			if want == nil {
+				t.Errorf("router=%s kind=%v: the system bundle has no %s", tc.router, tc.kind, kube.Describe(got))
+			} else if diff := cmp.Diff(want.Object, got.Object); diff != "" {
+				t.Errorf("router=%s kind=%v: %s holds a different %s than the system bundle (-bundle +standalone):\n%s", tc.router, tc.kind, e.storageConfigPath(), kube.Describe(got), diff)
 			}
 		}
 	}

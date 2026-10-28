@@ -593,6 +593,22 @@ func (e *Env) applyOtelConfig(ctx context.Context) error {
 	return e.Kube.ApplyPath(ctx, e.otelConfigPath())
 }
 
+// storageConfigPath returns the environment's ate-storage-config ConfigMap,
+// with the ate-storage-credentials Secret on kind. The objectstore-plugin
+// sidecars of ate-api-server and atelet read both via envFrom. As with
+// otelConfigPath, the base file on a kind cluster would point them at GCS.
+func (e *Env) storageConfigPath() string {
+	if e.Cfg.Kind {
+		return e.Cfg.Manifest("kind", "ate-storage-config.yaml")
+	}
+	return e.Cfg.Manifest("ate-storage-config.yaml")
+}
+
+// applyStorageConfig applies the environment's storage settings.
+func (e *Env) applyStorageConfig(ctx context.Context) error {
+	return e.Kube.ApplyPath(ctx, e.storageConfigPath())
+}
+
 // otelConfigMap is the ConfigMap every control plane component reads its
 // telemetry settings from through envFrom.
 const otelConfigMap = "ate-otel-config"

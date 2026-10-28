@@ -29,8 +29,8 @@ patches:
   # fake-atelet runs in atelet's DaemonSet, so it keeps atelet's name, labels,
   # service account (whose pod certificate carries atelet's SPIFFE ID), and
   # node selector. It writes snapshot placeholders itself, in place of the
-  # objectstore-plugin sidecar, so it takes that sidecar's env, the storage
-  # settings each overlay gives it, and the placeholders land where atelet's
+  # objectstore-plugin sidecar, so it takes that sidecar's env and envFrom,
+  # including ate-storage-config, and the placeholders land where atelet's
   # snapshots would. Everything atelet needs from the host goes, and so do its
   # scrape annotations, since fake-atelet serves no metrics.
   # ate.dev/fake-atelet is how fake-workersync finds the pods.
@@ -52,6 +52,9 @@ patches:
       - op: copy
         from: /spec/template/spec/initContainers/0/env
         path: /spec/template/spec/containers/0/env
+      - op: copy
+        from: /spec/template/spec/initContainers/0/envFrom
+        path: /spec/template/spec/containers/0/envFrom
       - op: remove
         path: /spec/template/spec/initContainers
       - op: replace

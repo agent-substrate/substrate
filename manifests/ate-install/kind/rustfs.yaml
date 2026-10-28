@@ -103,6 +103,9 @@ spec:
       containers:
       - name: create-bucket
         image: amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
+        # Same values as ate-storage-config.yaml. A Job's pod template is
+        # immutable, so reading them from there would fail the next
+        # `deploy ate-system` on a cluster that already ran this Job.
         env:
         - name: AWS_ACCESS_KEY_ID
           value: rustfsadmin
@@ -133,7 +136,7 @@ spec:
           exit 1
 ---
 # ../ate-system-networkpolicies.yaml denies ingress to every ate-system pod by
-# default. rustfs's S3 API is reached by the snapshot-plugin sidecars of
+# default. rustfs's S3 API is reached by the objectstore-plugin sidecars of
 # ate-api-server and atelet and by the bucket-init Job; its console is not
 # admitted (use a port-forward).
 apiVersion: networking.k8s.io/v1

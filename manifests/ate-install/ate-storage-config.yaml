@@ -1,0 +1,37 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Object storage settings for the objectstore-plugin sidecars of ate-api-server
+# and atelet, which read them via envFrom. Both must use the same store:
+# ate-api-server's sidecar copies and deletes the snapshots atelet's uploads.
+# ATE_STORAGE_BACKEND "s3" with the AWS_* variables selects S3. Any other value
+# selects GCS.
+#
+# This file holds the GCS settings. The kind overlay supplies a ConfigMap of the
+# same name for rustfs, plus the optional ate-storage-credentials Secret; see
+# manifests/ate-install/kind/ate-storage-config.yaml.
+#
+# NOTE: change these settings in this file, or in the kind copy, not on the
+# cluster. ate-setup applies the file on every `deploy ate-system`, `deploy
+# apiserver` and `deploy atelet`, overwriting live edits to its keys, and
+# restarts nothing. Follow a change with `kubectl rollout restart` on
+# deployment/ate-api-server and daemonset/atelet, so both sidecars use the same
+# settings.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-storage-config
+  namespace: ate-system
+data:
+  ATE_STORAGE_BACKEND: gcs

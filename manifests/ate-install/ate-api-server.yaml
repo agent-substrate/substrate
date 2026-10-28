@@ -128,15 +128,6 @@ spec:
             drop:
             - ALL
         env:
-        # The sidecar, not ate-api-server, holds the object storage settings:
-        # it copies external snapshots for tags and deletes the ones nothing
-        # refers to any more, so it needs the same backend atelet's sidecar
-        # reads and writes them through. Unset or "gcs" selects GCS with
-        # ambient credentials; "s3" with the AWS_* variables selects S3 (see
-        # the kind overlay). ate-api-server exits if ATE_STORAGE_BACKEND is
-        # set on it.
-        - name: ATE_STORAGE_BACKEND
-          value: "gcs"
         - name: ATE_API_ACTOR_JWT_ISSUER
           valueFrom:
             configMapKeyRef:
@@ -153,9 +144,17 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        # Object storage settings; see
+        # manifests/ate-install/ate-storage-config.yaml. ate-api-server exits if
+        # ATE_STORAGE_BACKEND is set on it.
         envFrom:
         - configMapRef:
             name: ate-otel-config
+        - configMapRef:
+            name: ate-storage-config
+        - secretRef:
+            name: ate-storage-credentials
+            optional: true
         volumeMounts:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin

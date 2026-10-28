@@ -17,10 +17,12 @@ kind: Kustomization
 
 # ate-otel-config.yaml replaces the base ../ate-otel-config.yaml (same ConfigMap
 # name) so every component's `envFrom` resolves to the in-cluster collector
-# instead of the GKE one. It is listed here rather than in ./atelet or
-# ./ate-api-server because those overlays are also built standalone; listing it
-# in the bundle and an overlay would be a duplicate resource. ate-setup applies
-# the ConfigMap directly for the single-component redeploys.
+# instead of the GKE one. ate-storage-config.yaml likewise replaces the base
+# copy and points the objectstore-plugin sidecars at rustfs. Both are listed
+# here rather than in ./atelet or ./ate-api-server because those overlays are
+# also built standalone; listing them in the bundle and an overlay would be a
+# duplicate resource. ate-setup applies them directly for the single-component
+# redeploys.
 #
 # pod-certificate-controller.yaml is deliberately absent, as in ../base: the
 # installers (hack/install-ate.sh and cmd/ate-setup) apply and delete it on
@@ -34,6 +36,7 @@ resources:
   - ../atenet-router.yaml
   - ../ate-system-networkpolicies.yaml
   - ate-otel-config.yaml
+  - ate-storage-config.yaml
   - rustfs.yaml
   - ./otel-collector.yaml
   - ./prometheus.yaml

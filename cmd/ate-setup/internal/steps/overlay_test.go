@@ -17,6 +17,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -29,6 +30,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -594,9 +596,8 @@ func dataPlaneWorkloads(t *testing.T, manifest []byte) (daemonSets map[string]ap
 
 // Under --fake-data-plane every path that applies atelet or ate-controller
 // carries the fake data plane: fake-atelet in atelet's DaemonSet, with the
-// storage settings the overlay gives atelet's objectstore-plugin, whose
-// writes it takes over, ate-controller at zero replicas, and fake-workersync
-// beside them.
+// storage settings of atelet's objectstore-plugin, whose writes it takes
+// over, ate-controller at zero replicas, and fake-workersync beside them.
 func TestRenderFakeDataPlane(t *testing.T) {
 	root := repoRoot(t)
 	const ateletDS = "atelet"
@@ -606,8 +607,8 @@ func TestRenderFakeDataPlane(t *testing.T) {
 		path           func(e *Env) string
 		wantAtelet     bool
 		wantController bool
-		// wantStorage is the ATE_STORAGE_BACKEND the overlay gives
-		// atelet's objectstore-plugin.
+		// wantStorage is the ATE_STORAGE_BACKEND atelet's
+		// objectstore-plugin reads.
 		wantStorage string
 	}{
 		{
@@ -702,7 +703,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 					t.Errorf("atelet container image = %q, want %q", c.Image, want)
 				}
 				// fake-atelet runs with its defaults, tuned only through the
-				// ConfigMap a benchmark writes, beside atelet's own envFrom.
+				// ConfigMap a benchmark writes, beside the sidecar's envFrom.
 				if len(c.Args) != 0 {
 					t.Errorf("fake-atelet args = %v, want none", c.Args)
 				}
@@ -718,7 +719,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 				if !slices.ContainsFunc(c.EnvFrom, func(src corev1.EnvFromSource) bool {
 					return src.ConfigMapRef != nil && src.ConfigMapRef.Name == otelConfigMap
 				}) {
-					t.Errorf("fake-atelet envFrom = %+v, lost atelet's %s", c.EnvFrom, otelConfigMap)
+					t.Errorf("fake-atelet envFrom = %+v, lost %s", c.EnvFrom, otelConfigMap)
 				}
 				for _, p := range c.Ports {
 					if p.HostPort != 0 {
@@ -735,10 +736,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 						t.Errorf("fake-atelet probe %s targets port %q, which the container does not declare", probe.HTTPGet.Path, probe.HTTPGet.Port.StrVal)
 					}
 				}
-				env := map[string]string{}
-				for _, v := range c.Env {
-					env[v.Name] = v.Value
-				}
+				env := storageEnv(storageSettings(t, e), c)
 				if env["ATE_STORAGE_BACKEND"] != tc.wantStorage {
 					t.Errorf("fake-atelet ATE_STORAGE_BACKEND = %q, want objectstore-plugin's %q", env["ATE_STORAGE_BACKEND"], tc.wantStorage)
 				}
@@ -1801,5 +1799,149 @@ func TestRemoveFakeWorkersync(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// storageSettings returns the keys of each ConfigMap and Secret in e's
+// storage settings, by kind and name.
+func storageSettings(t *testing.T, e *Env) map[string]map[string]string {
+	t.Helper()
+	objs, err := kube.LoadPath(e.storageConfigPath())
+	if err != nil {
+		t.Fatalf("LoadPath(%s): %v", e.storageConfigPath(), err)
+	}
+	settings := map[string]map[string]string{}
+	for _, obj := range objs {
+		field := "data"
+		if obj.GetKind() == "Secret" {
+			field = "stringData"
+		}
+		data, _, err := unstructured.NestedStringMap(obj.Object, field)
+		if err != nil {
+			t.Fatalf("%s: %v", kube.Describe(obj), err)
+		}
+		settings[obj.GetKind()+"/"+obj.GetName()] = data
+	}
+	return settings
+}
+
+// storageEnv returns the storage settings c runs with: its envFrom sources
+// resolved from settings, then its env, which overrides them.
+func storageEnv(settings map[string]map[string]string, c corev1.Container) map[string]string {
+	env := map[string]string{}
+	for _, src := range c.EnvFrom {
+		switch {
+		case src.ConfigMapRef != nil:
+			maps.Copy(env, settings["ConfigMap/"+src.ConfigMapRef.Name])
+		case src.SecretRef != nil:
+			maps.Copy(env, settings["Secret/"+src.SecretRef.Name])
+		}
+	}
+	for _, v := range c.Env {
+		env[v.Name] = v.Value
+	}
+	maps.DeleteFunc(env, func(k, _ string) bool { return !isStorageEnv(k) })
+	return env
+}
+
+func isStorageEnv(name string) bool {
+	return name == "ATE_STORAGE_BACKEND" || strings.HasPrefix(name, "AWS_")
+}
+
+// The objectstore-plugin sidecars read their storage settings from
+// ate-storage-config, which an inline copy would override. ATE_STORAGE_BACKEND
+// must not reach the main containers: ate-api-server and atelet exit if it is
+// set.
+func TestObjectstorePluginsReadStorageConfig(t *testing.T) {
+	for _, tc := range []struct {
+		kind        bool
+		wantBackend string
+	}{
+		{false, "gcs"},
+		{true, "s3"},
+	} {
+		e := &Env{Cfg: &config.Config{Root: repoRoot(t), Kind: tc.kind}}
+		manifest, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+		if err != nil {
+			t.Fatalf("kind=%v: render: %v", tc.kind, err)
+		}
+		settings := storageSettings(t, e)
+		daemonSets, deployments := dataPlaneWorkloads(t, manifest)
+		for name, pod := range map[string]corev1.PodSpec{
+			"ate-api-server": deployments["ate-api-server"].Spec.Template.Spec,
+			"atelet":         daemonSets["atelet"].Spec.Template.Spec,
+		} {
+			if len(pod.InitContainers) == 0 || pod.InitContainers[0].Name != "objectstore-plugin" {
+				t.Fatalf("kind=%v: %s has no objectstore-plugin sidecar", tc.kind, name)
+			}
+			sidecar := pod.InitContainers[0]
+			for _, v := range sidecar.Env {
+				if isStorageEnv(v.Name) {
+					t.Errorf("kind=%v: %s objectstore-plugin sets %s inline", tc.kind, name, v.Name)
+				}
+			}
+			// Only kind ships the Secret.
+			if !slices.ContainsFunc(sidecar.EnvFrom, func(src corev1.EnvFromSource) bool {
+				ref := src.SecretRef
+				return ref != nil && ref.Name == "ate-storage-credentials" && ref.Optional != nil && *ref.Optional
+			}) {
+				t.Errorf("kind=%v: %s objectstore-plugin envFrom = %+v, want the optional ate-storage-credentials Secret", tc.kind, name, sidecar.EnvFrom)
+			}
+			if got := storageEnv(settings, sidecar)["ATE_STORAGE_BACKEND"]; got != tc.wantBackend {
+				t.Errorf("kind=%v: %s objectstore-plugin ATE_STORAGE_BACKEND = %q, want %q", tc.kind, name, got, tc.wantBackend)
+			}
+			for _, c := range pod.Containers {
+				if _, ok := storageEnv(settings, c)["ATE_STORAGE_BACKEND"]; ok {
+					t.Errorf("kind=%v: %s container %s gets ATE_STORAGE_BACKEND", tc.kind, name, c.Name)
+				}
+			}
+		}
+	}
+}
+
+// kind's rustfs and its bucket-init Job set the same keys inline, so they have
+// to match what the sidecars read.
+func TestRustfsMatchesKindStorageConfig(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), Kind: true}}
+	settings := storageSettings(t, e)
+	want := map[string]string{}
+	maps.Copy(want, settings["ConfigMap/ate-storage-config"])
+	maps.Copy(want, settings["Secret/ate-storage-credentials"])
+
+	objs, err := kube.LoadPath(e.Cfg.Manifest("kind", "rustfs.yaml"))
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+	env := func(kind, name string) map[string]string {
+		obj := findObject(objs, kind, name)
+		if obj == nil {
+			t.Fatalf("rustfs.yaml has no %s/%s", kind, name)
+		}
+		var workload struct {
+			Spec struct {
+				Template corev1.PodTemplateSpec `json:"template"`
+			} `json:"spec"`
+		}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &workload); err != nil {
+			t.Fatalf("%s: %v", kube.Describe(obj), err)
+		}
+		got := map[string]string{}
+		for _, c := range workload.Spec.Template.Spec.Containers {
+			for _, v := range c.Env {
+				got[v.Name] = v.Value
+			}
+		}
+		return got
+	}
+
+	job := env("Job", "rustfs-bucket-init")
+	for _, k := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL"} {
+		if job[k] != want[k] {
+			t.Errorf("rustfs-bucket-init %s = %q, want %q", k, job[k], want[k])
+		}
+	}
+	server := env("Deployment", "rustfs")
+	if server["RUSTFS_ACCESS_KEY"] != want["AWS_ACCESS_KEY_ID"] || server["RUSTFS_SECRET_KEY"] != want["AWS_SECRET_ACCESS_KEY"] {
+		t.Errorf("rustfs keys = %q/%q, want the ate-storage-credentials keys", server["RUSTFS_ACCESS_KEY"], server["RUSTFS_SECRET_KEY"])
 	}
 }

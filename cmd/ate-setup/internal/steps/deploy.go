@@ -116,10 +116,13 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	// Ahead of the bundle below, for the same reason as the namespace: every
-	// workload pulls this ConfigMap in via envFrom, and a container whose
+	// Ahead of the bundle below, for the same reason as the namespace: the
+	// workloads pull these ConfigMaps in via envFrom, and a container whose
 	// envFrom target is missing will not start.
 	if err := e.applyOtelConfig(ctx); err != nil {
+		return err
+	}
+	if err := e.applyStorageConfig(ctx); err != nil {
 		return err
 	}
 
@@ -315,6 +318,9 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
 	}
+	if err := e.applyStorageConfig(ctx); err != nil {
+		return err
+	}
 	postgres, err := e.planPostgres(ctx)
 	if err != nil {
 		return err
@@ -498,6 +504,9 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		return err
 	}
 	if err := e.applyOtelEndpointOverride(ctx); err != nil {
+		return err
+	}
+	if err := e.applyStorageConfig(ctx); err != nil {
 		return err
 	}
 
