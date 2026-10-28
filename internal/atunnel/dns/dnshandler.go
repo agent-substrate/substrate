@@ -58,19 +58,21 @@ type queryPolicy func(q dnsmessage.Question) bool
 // dnsHandler inspects DNS requests and responses and returns transport-agnostic
 // routing decisions.
 type dnsHandler struct {
-	pending *pendingRequests
-	limiter *limiter
-	allow   queryPolicy
+	pending     *pendingRequests
+	limiter     *limiter
+	allow       queryPolicy
+	instruments *instruments
 }
 
-func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy) *dnsHandler {
+func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, instruments *instruments) *dnsHandler {
 	if allow == nil {
 		allow = func(dnsmessage.Question) bool { return true }
 	}
 	return &dnsHandler{
-		pending: pending,
-		limiter: lim,
-		allow:   allow,
+		pending:     pending,
+		limiter:     lim,
+		allow:       allow,
+		instruments: instruments,
 	}
 }
 
@@ -122,7 +124,9 @@ func (h *dnsHandler) onRequestCommon(raw []byte) (dnsmessage.Header, dnsmessage.
 	// Note: NXDOMAIN seems to interact better with application stacks than other
 	// error codes such as REFUSED.
 	cq := canonicalizeQuestion(q)
-	if !h.allow(cq) {
+	allowed := h.allow(cq)
+	h.instruments.recordQuery(cq, allowed)
+	if !allowed {
 		return hdr, dnsmessage.Question{}, action{
 			kind:    actionReply,
 			payload: protocol.NXDomainPacket(hdr, q),

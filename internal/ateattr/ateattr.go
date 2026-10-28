@@ -167,6 +167,7 @@ const (
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
 	StatsSourceKey         = attribute.Key("ate.stats.source")
+	DNSDecisionKey         = attribute.Key("ate.dns.decision")
 )
 
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
@@ -237,6 +238,14 @@ const (
 	ImageCacheOutcomeError     = "error"
 	ImageCacheOutcomeCancelled = "cancelled"
 	ImageCacheOutcomeTimeout   = "timeout"
+)
+
+// Values for DNSDecisionKey: whether the actor's egress policy let the sandbox
+// DNS relay forward a query. The relay answers a denied query with NXDOMAIN.
+const (
+	DNSDecisionAllowed            = "allowed"
+	DNSDecisionDenied             = "denied"
+	DNSDecisionDeniedSearchDomain = "denied_search_domain"
 )
 
 // Values for FileCacheNameKey.

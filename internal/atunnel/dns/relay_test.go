@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.opentelemetry.io/otel/metric/noop"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -124,7 +125,7 @@ func TestNewRelayRejects(t *testing.T) {
 	if err := os.WriteFile(empty, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewRelay(empty); err == nil {
+	if _, err := NewRelay(empty, noop.Meter{}); err == nil {
 		t.Error("NewRelay succeeded with an empty resolv.conf")
 	}
 	if _, err := NewRelayForUpstreams(nil); err == nil {
