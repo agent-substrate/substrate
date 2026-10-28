@@ -147,17 +147,19 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
 	}
 
-	// Send the URI to the provider its host names. A URI naming no configured
-	// provider fails closed rather than going to the wrong one.
-	provider, ok := h.providers[""]
-	if !ok {
+	// If the only provider is keyed "", it serves every URI. Otherwise find the
+	// provider the URI's host names; a URI naming none fails closed.
+	var provider credprovider.CredentialProviderClient
+	if p, ok := h.providers[""]; ok && len(h.providers) == 1 {
+		provider = p
+	} else {
 		name, err := providerNameFromURI(uri)
 		if err != nil {
 			slog.ErrorContext(ctx, "egress denied: policy names an unparseable credential URI",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", uri), slog.Any("err", err))
 			return nil, extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
 		}
-		if provider, ok = h.providers[name]; !ok {
+		if provider = h.providers[name]; provider == nil {
 			slog.ErrorContext(ctx, "egress denied: credential URI names a provider this gateway does not serve",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", uri),
 				slog.String("provider", name), slog.Any("serves", slices.Sorted(maps.Keys(h.providers))))

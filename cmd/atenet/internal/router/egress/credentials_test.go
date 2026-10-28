@@ -153,6 +153,34 @@ func TestInjectionPicksProviderByName(t *testing.T) {
 	}
 }
 
+func TestInjectionCatchAllProvider(t *testing.T) {
+	policy := credentialInjectionPolicySample("api.example.com")
+	md := func() *extproc.RequestMetadata {
+		return withAuthorization(innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	}
+
+	catchAll := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	h := New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0,
+		map[string]credprovider.CredentialProviderClient{"": catchAll})
+	if _, err := h.HandleRequestHeaders(context.Background(), md()); err != nil {
+		t.Fatalf("HandleRequestHeaders with a lone \"\" provider: %v", err)
+	}
+	if catchAll.got == nil {
+		t.Error("a lone \"\" provider was not asked for the credential")
+	}
+
+	catchAll = &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	k8s := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	h = New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0,
+		map[string]credprovider.CredentialProviderClient{"": catchAll, injectionProviderName: k8s})
+	if _, err := h.HandleRequestHeaders(context.Background(), md()); err != nil {
+		t.Fatalf("HandleRequestHeaders with a \"\" provider next to another: %v", err)
+	}
+	if catchAll.got != nil || k8s.got == nil {
+		t.Errorf("next to another provider, the \"\" entry was asked (%v) and %s was asked (%v); want only %s", catchAll.got != nil, injectionProviderName, k8s.got != nil, injectionProviderName)
+	}
+}
+
 // A request that does not carry the header a rule replaces goes out unchanged:
 // nothing is fetched, added, or denied, even where injecting would fail.
 func TestInjectionSkippedWithoutHeader(t *testing.T) {

@@ -85,7 +85,11 @@ type Handler struct {
 	policies *policyCache
 	// actorJWTs mints the actor JWTs that credential injections ask for.
 	actorJWTs *actorjwt.Minter
-	// providers resolve credential_uri injections by provider name; see New.
+	// providers is a map of provider name (from the URI) to the credential
+	// provider.
+	//
+	// A special case of a map consisting of a single entry with empty string
+	// ("") key will match all provider URIs.
 	providers map[string]credprovider.CredentialProviderClient
 }
 
@@ -96,10 +100,9 @@ type Handler struct {
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
 // providers resolve an allowed rule's credential_uri injections on the
-// TLS-terminated MITM leg, keyed by provider name. A credential URI goes to the
-// provider its host names, and one naming no provider is refused; a lone ""
-// key serves every URI. No providers leaves injections off, so a request that
-// needs one is denied. Actor JWT injections need no provider.
+// TLS-terminated MITM leg; none leaves them off, so a request that needs one is
+// denied. Actor JWT injections need no provider. See Handler.providers for the
+// map definition.
 func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, providers map[string]credprovider.CredentialProviderClient) *Handler {
 	if loadActorIdentityRoots == nil {
 		loadActorIdentityRoots = func() (*x509.CertPool, error) {
