@@ -54,12 +54,13 @@ function usage() {
   echo "  --delete-snapshot-bucket              Delete snapshot bucket"
   echo "  --delete-gvisor-node-pool             Delete gVisor node pool"
   echo "  --delete-cluster                      Delete GKE cluster"
-  echo "  --all                                 Run the steps above (reverse order of setup)"
-  echo "Project-wide options. These affect every Substrate cluster in the project, so --all skips them:"
+  echo "  --cluster-scoped                      Run the steps above (reverse order of setup)"
+  echo "Project-wide options. These affect every Substrate cluster in the project:"
   echo "  --delete-dashboards                   Delete the Substrate monitoring dashboards"
   echo "  --delete-transfer-service-account     Delete the snapshot transfer service account"
   echo "  --revoke-atelet-permissions           Revoke atelet's project-level IAM bindings"
   echo "  --revoke-gke-node-permissions         Revoke GKE nodes permission to pull images, on every cluster that uses the default compute service account"
+  echo "  --all                                 Run every step above (reverse order of setup)"
   exit 1
 }
 
@@ -190,6 +191,19 @@ delete_cluster() {
     --quiet || true
 }
 
+# delete_buckets_and_cluster deletes the buckets, the node pool and the cluster.
+delete_buckets_and_cluster() {
+  delete_snapshot_bucket
+  # Deleting the cluster removes its node pools, so this does not insist on a
+  # pool name a caller (e.g. an installer) may not track.
+  if [ -n "${NODE_POOL_NAME:-}" ]; then
+    delete_gvisor_node_pool
+  else
+    echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
+  fi
+  delete_cluster
+}
+
 # --- Main Logic ---
 if [ "$#" -eq 0 ]; then
   usage
@@ -205,21 +219,17 @@ while [[ "$#" -gt 0 ]]; do
     --delete-gvisor-node-pool) delete_gvisor_node_pool ;;
     --delete-cluster) delete_cluster ;;
     --delete-dashboards) delete_dashboards ;;
-    --all)
+    --cluster-scoped)
       delete_iam_policy_bindings
-      delete_snapshot_bucket
-      # Deleting the cluster removes its node pools, so --all does not insist
-      # on a pool name a caller (e.g. an installer) may not track.
-      if [ -n "${NODE_POOL_NAME:-}" ]; then
-        delete_gvisor_node_pool
-      else
-        echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
-      fi
-      delete_cluster
-      echo "Kept the dashboards, the transfer service account and the project-level IAM bindings, which every Substrate cluster in ${PROJECT_ID} shares."
-      echo "Once no cluster uses them, remove them with:"
-      echo "  $0 --delete-dashboards --delete-transfer-service-account --revoke-atelet-permissions"
-      echo "--revoke-gke-node-permissions also removes the default compute service account's image pull grants, which other workloads in the project may use."
+      delete_buckets_and_cluster
+      ;;
+    --all)
+      delete_dashboards
+      delete_iam_policy_bindings
+      delete_transfer_service_account
+      revoke_atelet_permissions
+      revoke_gke_node_permissions
+      delete_buckets_and_cluster
       ;;
     *) usage ;;
   esac
