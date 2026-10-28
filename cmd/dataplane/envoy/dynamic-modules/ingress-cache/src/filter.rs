@@ -75,6 +75,10 @@ pub const UPSTREAM_FAILURE_RESPONSE_FLAGS: i64 =
 /// making replay safe for bodiless requests.
 pub const ZERO_BYTE_FAILURE_RESPONSE_FLAGS: i64 = RESPONSE_FLAG_UF | RESPONSE_FLAG_UH;
 
+/// Prefix of the response code details Envoy's router sets when the upstream reset before
+/// any response. After a 1xx it uses `upstream_reset_after_response_started`.
+pub const EARLY_UPSTREAM_RESET_DETAILS: &str = "upstream_reset_before_response_started";
+
 
 
 /// Creates a new HTTP filter configuration for the `ingress-cache` dynamic module.
@@ -210,12 +214,18 @@ fn is_stale_rejection<EHF: EnvoyHttpFilter>(
 ///    bodies in Envoy, so replaying a request with a body would drop or corrupt the payload.
 ///    Requests with a body skip the cache, so this is a defensive check.
 /// 2. For 503 errors, response flags guarantee zero bytes reached the upstream worker (`UF` or `UH`),
-///    or the connection ended before a response (`UC`) and the entry the request was
-///    routed from is stale and not spoiled. Stale means a tunnel for the binding was refused;
-///    not spoiled means no request on it was cut off after reaching the actor.
+///    or the connection ended before any response (`UC`, with early-reset details) and the
+///    entry the request was routed from is stale and not spoiled. Stale means a tunnel for the
+///    binding was refused; not spoiled means no request on it was cut off after reaching the
+///    actor. A 1xx counts as a response: the actor got the request.
 /// 3. For 421 errors (with stale header), atunnel rejected the request before forwarding to
 ///    the actor, so bodiless requests are safe to replay.
-fn is_replay_safe(filter: &CacheFilter, status: Option<&str>, response_flags: i64) -> bool {
+fn is_replay_safe<EHF: EnvoyHttpFilter>(
+  envoy_filter: &EHF,
+  filter: &CacheFilter,
+  status: Option<&str>,
+  response_flags: i64,
+) -> bool {
   if filter.has_request_body {
     return false;
   }
@@ -226,7 +236,10 @@ fn is_replay_safe(filter: &CacheFilter, status: Option<&str>, response_flags: i6
         // termination (`UC`), like a tunnel cut off mid-request. The network filter's
         // marks tell them apart.
         || ((response_flags & RESPONSE_FLAG_UC) != 0
-          && filter.entry.as_ref().is_some_and(|e| e.refused_and_unspoiled()))
+          && filter.entry.as_ref().is_some_and(|e| e.refused_and_unspoiled())
+          && envoy_filter
+            .get_attribute_string(envoy_dynamic_module_type_attribute_id::ResponseCodeDetails)
+            .is_some_and(|d| d.as_slice().starts_with(EARLY_UPSTREAM_RESET_DETAILS.as_bytes())))
     }
     Some("421") => true,
     _ => false,
@@ -392,7 +405,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     if stale_rejection || grpc_unavailable {
       let should_replay = self.was_cache_hit
         && stale_rejection
-        && is_replay_safe(self, status_str.as_deref(), response_flags);
+        && is_replay_safe(envoy_filter, self, status_str.as_deref(), response_flags);
 
       self.handle_eviction(envoy_filter);
 
@@ -1079,6 +1092,13 @@ mod tests {
     mock
   }
 
+  fn expect_code_details(mock: &mut MockEnvoyHttpFilter, details: &'static [u8]) {
+    mock
+      .expect_get_attribute_string()
+      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::ResponseCodeDetails)
+      .returning(move |_| Some(EnvoyBuffer::new(details)));
+  }
+
   #[test]
   fn test_upstream_503_uc_replays_when_entry_is_stale_and_unspoiled() {
     let (mut filter, entry) = hit_with_503("team-k/actor-1", "10.244.7.1");
@@ -1086,6 +1106,10 @@ mod tests {
     assert_eq!(cache::mark_stale("team-k/actor-1", "10.244.7.1"), 1);
 
     let mut mock = mock_503(RESPONSE_FLAG_UC);
+    expect_code_details(
+      &mut mock,
+      b"upstream_reset_before_response_started{connection_termination}",
+    );
     mock
       .expect_set_request_header()
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-k/actor-1")
@@ -1103,6 +1127,24 @@ mod tests {
     );
     assert!(entry.is_stale());
     assert!(cache::current("team-k/actor-1").is_none());
+  }
+
+  #[test]
+  fn test_upstream_503_uc_does_not_replay_after_a_1xx() {
+    // The actor sent a 1xx, so it got the request, but its connection doesn't spoil the entry.
+    let (mut filter, _entry) = hit_with_503("team-k/actor-6", "10.244.7.6");
+    cache::mark_stale("team-k/actor-6", "10.244.7.6");
+
+    let mut mock = mock_503(RESPONSE_FLAG_UC);
+    expect_code_details(
+      &mut mock,
+      b"upstream_reset_after_response_started{connection_termination}",
+    );
+    let status = filter.on_response_headers(&mut mock, false);
+    assert_eq!(
+      status,
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
   }
 
   #[test]

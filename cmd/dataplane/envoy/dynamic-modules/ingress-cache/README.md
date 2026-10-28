@@ -49,10 +49,11 @@ routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
   the same moment. Suspends follow an idle signal, so this is rare, and those
   clients get a `503` rather than risk running a request twice.
 - **Partial response headers.** If an actor writes only part of its response
-  headers and then dies, the network filter treats the request as answered and
-  doesn't spoil the entry. The router returns `503 UC`, which can then be
-  replayed although the actor ran the request. This needs a crash in the middle
-  of writing headers.
+  headers and then dies or is suspended, the network filter treats the request
+  as answered and doesn't spoil the entry. The router returns `503 UC`, which
+  can then be replayed although the actor ran the request, if another request's
+  refusal marked the entry stale. A 1xx followed by a drop isn't replayed: the
+  router reports it as `upstream_reset_after_response_started`.
 - **The cached route header is reserved.** A request that arrives with
   `ate-endpoint-cached` set and isn't served from the cache (a miss, or any
   request with a body) is rejected with `400 Bad Request`.
@@ -108,10 +109,12 @@ routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
     `UF` (upstream connection failure / connection refused before connection
     establishment) or `UH` (no healthy upstream host in cluster).
   - `503 Service Unavailable` with `UC` (upstream connection termination) when
-    the entry the request was routed from is stale and not spoiled. On the
-    CONNECT path a refused tunnel reaches the router as `503 UC`, and
+    the entry the request was routed from is stale and not spoiled, and the
+    response code details start with `upstream_reset_before_response_started`.
+    On the CONNECT path a refused tunnel reaches the router as `503 UC`, and
     stale-but-not-spoiled means no request on the entry was cut off after
-    reaching the actor.
+    reaching the actor. The details rule out a 1xx, which the router doesn't
+    forward and the network filter counts as an answer.
   Other `503 UC` and `503 UR` responses evict the entry but are not replayed,
   leaving retries to the client. Eviction removes the binding only if it is
   still the one the request used, so a newer binding learned by another request
