@@ -52,9 +52,10 @@ const (
 	resyncInterval       = 5 * time.Minute
 )
 
-// Epoch is the epoch this worker process registered with. A worker process
-// takes no workloads until it has registered, and reports this epoch with each
-// one it starts, so the control plane can tell which process ran it.
+// Epoch is the epoch this worker process registered with, set once the control
+// plane holds its capacity and its sandbox runtimes. A worker process takes no
+// workloads until then, and reports this epoch with each one it starts, so the
+// control plane can tell which process ran it.
 type Epoch struct {
 	v atomic.Int64
 }
@@ -70,8 +71,9 @@ func (e *Epoch) Store(epoch int64) {
 }
 
 // Registered is a readiness check that fails until this worker process has
-// registered. The pod is then not Ready, so the Worker takes no placements
-// while a restarted worker process has yet to register.
+// registered and reported its sandbox runtimes, which is when the control
+// plane can first place on it. The pod is not Ready before then, so the
+// Deployment does not count a worker with no usable runtime as Ready.
 func (e *Epoch) Registered(context.Context) error {
 	if e.Load() == 0 {
 		return errors.New("worker has not registered yet")
@@ -244,10 +246,10 @@ type supportClient interface {
 	SetWorkerSandboxRuntimes(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error
 }
 
-// Report registers this worker process with the node-local atelet, stores the
-// epoch it registered with in epoch, then keeps its sandbox runtimes reported
-// until ctx ends: it reads its sandbox runtimes file at startup and again
-// whenever atelet rewrites it.
+// Report registers this worker process with the node-local atelet, then keeps
+// its sandbox runtimes reported until ctx ends: it reads its sandbox runtimes
+// file at startup and again whenever atelet rewrites it. It stores the epoch it
+// registered with in epoch once the first report is accepted.
 //
 // It returns early on a configuration error, which no retry would fix, and
 // when the control plane refuses this process's epoch, which means another
@@ -290,12 +292,23 @@ func run(ctx context.Context, cfg ReportConfig, capacity *ateletpb.WorkerResourc
 	if err != nil {
 		return err
 	}
-	epoch.Store(registered)
+	// The epoch is stored once the control plane holds this process' sandbox
+	// runtimes as well as its capacity: it places nothing here before then,
+	// and Registered keeps the pod not Ready until it could. A workload that
+	// arrives before the response does is refused with Unavailable and
+	// retried, the same as one before registration.
+	report := func(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+		if err := client.SetWorkerSandboxRuntimes(ctx, req); err != nil {
+			return err
+		}
+		epoch.Store(registered)
+		return nil
+	}
 	r := newReconciler(
 		cfg,
 		registered,
 		func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(cfg.RuntimesFile) },
-		client.SetWorkerSandboxRuntimes,
+		report,
 	)
 	return r.run(ctx, changes)
 }
