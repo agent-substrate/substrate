@@ -121,6 +121,9 @@ func (p credentialProviderConfig) validate() error {
 		return fmt.Errorf("got %d --credential-provider-server-name for %d --credential-provider-address, want one per address or none", len(p.ServerNames), len(p.Addresses))
 	}
 	for i, name := range p.Names {
+		if p.Addresses[i] == "" {
+			return fmt.Errorf("--credential-provider-address must not be empty")
+		}
 		if name == "" && len(p.Names) > 1 {
 			return fmt.Errorf("an empty --credential-provider-name serves every credential URI, so it must be the only provider")
 		}
@@ -177,10 +180,9 @@ type routerConfig struct {
 	EgressPolicyCacheTTL time.Duration
 
 	// CredentialProvider configures egress credential injection on the MITM leg.
-	// Only the egress gateway sets it, and only when injection is enabled: an
-	// CredentialProvider with no Addresses leaves the injector disabled, so a rule
-	// that requires an injection is skipped and the request passes through
-	// without the credential. See egress.Handler.
+	// Only the egress gateway sets it, and only when injection is enabled: a
+	// CredentialProvider with no Addresses leaves the injector disabled, so a
+	// request that needs an injection is denied. See egress.Handler.
 	CredentialProvider credentialProviderConfig
 
 	LogLevel    string

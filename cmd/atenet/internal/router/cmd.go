@@ -83,7 +83,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
 
 	// Egress credential injection (MITM leg). Only the egress gateway sets these,
-	// and only when injection is enabled: with an empty
+	// and only when injection is enabled: with no
 	// --credential-provider-address, a request matching an EgressPolicy rule
 	// that requires injection is denied.
 	fs.StringArrayVar(&cfg.CredentialProvider.Names, "credential-provider-name", nil, "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io). Repeat once per --credential-provider-address, in the same order; a policy credential URI naming no configured provider is refused. A single empty name disables the check (dev only)")

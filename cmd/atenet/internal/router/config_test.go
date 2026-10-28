@@ -54,6 +54,11 @@ func TestRouterConfigValidate(t *testing.T) {
 			}},
 		},
 		{
+			name:    "empty credential provider address rejected",
+			cfg:     routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{Names: []string{"k8s.io"}, Addresses: []string{""}}},
+			wantErr: "--credential-provider-address must not be empty",
+		},
+		{
 			name:    "credential provider name without an address rejected",
 			cfg:     routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{Names: []string{"k8s.io"}}},
 			wantErr: "want one per address",
