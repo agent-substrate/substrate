@@ -54,6 +54,9 @@ routes that skip `ext_proc`, so every request is resolved through `ext_proc`.
   can then be replayed although the actor ran the request, if another request's
   refusal marked the entry stale. A 1xx followed by a drop isn't replayed: the
   router reports it as `upstream_reset_after_response_started`.
+- **Each thread caches at most 10,000 actors.** A full thread cache drops
+  expired bindings before it caches another actor. If none had expired, the new
+  actor isn't cached and its requests keep going through `ext_proc`.
 - **The cached route header is reserved.** A request that arrives with
   `ate-endpoint-cached` set and isn't served from the cache (a miss, or any
   request with a body) is rejected with `400 Bad Request`.

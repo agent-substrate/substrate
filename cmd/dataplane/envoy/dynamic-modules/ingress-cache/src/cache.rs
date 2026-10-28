@@ -73,13 +73,39 @@ pub enum Lookup {
   Miss,
 }
 
+/// Most actors one thread's cache binds. A full cache drops expired bindings
+/// before it binds another actor, and doesn't cache it if none had expired.
+pub const MAX_BINDINGS: usize = 10_000;
+
+/// How often a full cache may scan for expired bindings, so a cache full of
+/// unexpired bindings doesn't rescan on every miss.
+const FULL_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
+
 #[derive(Default)]
 struct Cache {
   bindings: HashMap<String, Rc<Entry>>,
   live: HashMap<(String, String), Vec<Weak<Entry>>>,
+  last_full_sweep: Option<Instant>,
 }
 
 impl Cache {
+  /// Reports whether `key` can be bound: it already is, or there's room,
+  /// possibly after dropping expired bindings.
+  fn has_room_for(&mut self, key: &str, now: Instant) -> bool {
+    if self.bindings.len() < MAX_BINDINGS || self.bindings.contains_key(key) {
+      return true;
+    }
+    if self
+      .last_full_sweep
+      .is_some_and(|last| now < last + FULL_SWEEP_INTERVAL)
+    {
+      return false;
+    }
+    self.last_full_sweep = Some(now);
+    self.bindings.retain(|_, entry| entry.expires_at > now);
+    self.bindings.len() < MAX_BINDINGS
+  }
+
   /// Drops live-entry slots whose entries have been freed. Runs a full sweep
   /// only when dead slots may outnumber live bindings, so the cost is amortized.
   fn maybe_sweep(&mut self) {
@@ -133,20 +159,25 @@ pub fn current(key: &str) -> Option<Rc<Entry>> {
 }
 
 /// Makes a new binding for `key` current, replacing any previous one, and returns it.
+/// If the cache is full of unexpired bindings, the entry isn't cached.
 pub fn insert(
   key: String,
   worker_ip: String,
   worker_spiffe_id: Option<String>,
   ttl: Duration,
 ) -> Rc<Entry> {
+  let now = Instant::now();
   let entry = Rc::new(Entry {
     worker_ip,
     worker_spiffe_id,
-    expires_at: Instant::now() + ttl,
+    expires_at: now + ttl,
     stale: Cell::new(false),
     spoiled: Cell::new(false),
   });
   CACHE.with_borrow_mut(|cache| {
+    if !cache.has_room_for(&key, now) {
+      return;
+    }
     let slot = cache
       .live
       .entry((key.clone(), entry.worker_ip.clone()))
@@ -301,5 +332,29 @@ mod tests {
     }
     let live = CACHE.with_borrow(|cache| cache.live.len());
     assert!(live <= 65, "dead live slots were not swept: {live}");
+  }
+
+  fn fill(ttl: Duration) {
+    for i in 0..MAX_BINDINGS {
+      insert(format!("ns/actor-{i}"), "10.0.0.1".to_string(), None, ttl);
+    }
+  }
+
+  #[test]
+  fn test_full_cache_skips_new_actor_but_rebinds_known_ones() {
+    fill(Duration::from_secs(5));
+    insert("ns/new".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    assert!(current("ns/new").is_none());
+    let rebound = insert("ns/actor-0".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    assert!(Rc::ptr_eq(&current("ns/actor-0").unwrap(), &rebound));
+    assert_eq!(CACHE.with_borrow(|cache| cache.bindings.len()), MAX_BINDINGS);
+  }
+
+  #[test]
+  fn test_full_cache_drops_expired_bindings_to_make_room() {
+    fill(Duration::ZERO);
+    let entry = insert("ns/new".to_string(), "10.0.0.2".to_string(), None, Duration::from_secs(5));
+    assert!(Rc::ptr_eq(&current("ns/new").unwrap(), &entry));
+    assert_eq!(CACHE.with_borrow(|cache| cache.bindings.len()), 1);
   }
 }
