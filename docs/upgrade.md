@@ -232,7 +232,7 @@ To control which pools move and when, and for what happens to suspended actors, 
 go run ./cmd/ate-setup deploy ate-system --config ~/ate-upgrade/new.yaml --setup-csi=none
 ```
 
-This applies what the steps above do not, such as the ate-system NetworkPolicies and the bundled PostgreSQL. The components above are already on the new release and do not roll again. `--setup-csi=none` leaves the CSI drivers as they are. Rerunning is safe. If you passed `--add-default-annotation=false` in step 4d, add it here too, or this step annotates `substrate-$NEW_RELEASE-gvisor` and moves the gVisor pools.
+This applies what the steps above do not, such as the ate-system NetworkPolicies and the bundled PostgreSQL. The components above are already on the new release and do not roll again. `--setup-csi=none` leaves the CSI drivers as they are. Rerunning is safe.
 
 - **Done:** the command exits 0.
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).

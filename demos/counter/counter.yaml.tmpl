@@ -40,7 +40,7 @@ spec:
   workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   # No configRef: the pool follows the class default, the newest SandboxConfig
   # of the class annotated sandboxconfig.ate.dev/is-class-default=true
-  # (substrate-<release>-gvisor as installed), and moves to a new default when
+  # (the one ate-setup installs), and moves to a new default when
   # one appears.
   sandboxClasses:
   - name: gvisor

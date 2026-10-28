@@ -43,9 +43,9 @@ type DeployOptions struct {
 	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
 	// Kind only. The hostpath driver is Kind only.
 	SetupCSI string
-	// AddSandboxConfigDefaultAnnotation adds the class-default annotation to
-	// the release's gVisor SandboxConfig. See DeploySandboxConfig.
-	AddSandboxConfigDefaultAnnotation bool
+	// CreateSandboxConfigWithDefaultAnnotation adds the class-default
+	// annotation to this build's gVisor SandboxConfig if the deploy creates it.
+	CreateSandboxConfigWithDefaultAnnotation bool
 }
 
 // Validate checks the options that can be checked without configuration or a
@@ -89,9 +89,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
 	}
-	// DeploySandboxConfig checks the config again partway through. Checking
-	// here keeps a refusal from leaving a half-upgraded system.
-	if _, err := e.checkSandboxConfig(ctx); err != nil {
+	// Checked here so a refusal does not leave a half-upgraded system.
+	sc, err := e.checkSandboxConfig(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -120,7 +120,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	if err := e.DeploySandboxConfig(ctx, opts.AddSandboxConfigDefaultAnnotation); err != nil {
+	if err := e.deploySandboxConfig(ctx, sc, opts.CreateSandboxConfigWithDefaultAnnotation); err != nil {
 		return err
 	}
 

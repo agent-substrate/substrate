@@ -26,20 +26,25 @@ import (
 
 func TestSandboxConfigName(t *testing.T) {
 	tests := []struct {
-		name    string
-		version string
-		want    string
-		wantErr bool
+		name     string
+		version  string
+		manifest string
+		want     string
+		wantErr  bool
 	}{
-		{name: "release tag", version: "v0.4.2", want: "substrate-v0.4.2-gvisor"},
-		{name: "git describe of a dirty checkout", version: "v0.4.2-12-gabc1234-dirty", want: "substrate-v0.4.2-12-gabc1234-dirty-gvisor"},
-		{name: "upper case and build metadata", version: "V1.0.0+Build", want: "substrate-v1.0.0-build-gvisor"},
-		{name: "no git", version: "dev", want: "substrate-dev-gvisor"},
-		{name: "dot next to a dash", version: "v1.", wantErr: true},
+		{name: "release tag", version: "v0.4.2", manifest: "spec: a\n", want: "substrate-v0.4.2-gvisor"},
+		{name: "release candidate in upper case", version: "v1.0.0-RC.1", manifest: "spec: a\n", want: "substrate-v1.0.0-rc.1-gvisor"},
+		{name: "git describe of a dirty checkout", version: "v0.4.2-12-gabc1234-dirty", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
+		{name: "comment lines do not count", version: "v0.4.2-12-gabc1234-dirty", manifest: "# a\n  # b\nspec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
+		{name: "another spec", version: "v0.4.2-12-gabc1234-dirty", manifest: "spec: b\n", want: "substrate-dev-22e34e826a-gvisor"},
+		{name: "git describe of a release tag", version: "v0.4.2-3-gabc1234", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
+		{name: "dirty checkout of a release tag", version: "v0.4.2-dirty", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
+		{name: "moving image tag", version: "main", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
+		{name: "release candidate with an empty label", version: "v1.0.0-rc..1", manifest: "spec: a\n", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sandboxConfigName(tt.version, atev1.SandboxClassGvisor)
+			got, err := sandboxConfigName(tt.version, atev1.SandboxClassGvisor, []byte(tt.manifest))
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("sandboxConfigName(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
 			}
@@ -50,7 +55,7 @@ func TestSandboxConfigName(t *testing.T) {
 	}
 }
 
-func TestCheckClassDefault(t *testing.T) {
+func TestClassDefaultWarning(t *testing.T) {
 	const name = "substrate-v2-gvisor"
 	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	config := func(name string, class atev1.SandboxClass, created time.Time, isDefault, deleting bool) atev1.SandboxConfig {
@@ -73,7 +78,6 @@ func TestCheckClassDefault(t *testing.T) {
 		configs []atev1.SandboxConfig
 		// wantWarning is a substring of the warning, empty for none.
 		wantWarning string
-		wantErr     bool
 	}{
 		{
 			name:        "fresh cluster",
@@ -156,28 +160,47 @@ func TestCheckClassDefault(t *testing.T) {
 				config("substrate-v3-microvm", microvm, t0.Add(time.Hour), true, false),
 			},
 		},
-		{
-			name:    "being deleted, annotated",
-			configs: []atev1.SandboxConfig{config(name, gvisor, t0, true, true)},
-			wantErr: true,
-		},
-		{
-			name: "being deleted, not annotated",
-			configs: []atev1.SandboxConfig{
-				config("substrate-v1-gvisor", gvisor, t0, true, false),
-				config(name, gvisor, t0.Add(time.Hour), false, true),
-			},
-			wantErr: true,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			warning, err := checkClassDefault(tt.configs, name, gvisor)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("checkClassDefault() error = %v, wantErr %v", err, tt.wantErr)
-			}
+			warning := classDefaultWarning(tt.configs, name, gvisor)
 			if (warning == "") != (tt.wantWarning == "") || !strings.Contains(warning, tt.wantWarning) {
-				t.Errorf("checkClassDefault() warning = %q, want it to contain %q", warning, tt.wantWarning)
+				t.Errorf("classDefaultWarning() = %q, want it to contain %q", warning, tt.wantWarning)
+			}
+		})
+	}
+}
+
+func TestSandboxConfigExists(t *testing.T) {
+	const name = "substrate-v2-gvisor"
+	config := func(name string, deleting bool) atev1.SandboxConfig {
+		sc := atev1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		if deleting {
+			sc.DeletionTimestamp = &metav1.Time{Time: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+		}
+		return sc
+	}
+
+	tests := []struct {
+		name       string
+		configs    []atev1.SandboxConfig
+		wantExists bool
+		wantErr    bool
+	}{
+		{name: "fresh cluster"},
+		{name: "only other configs", configs: []atev1.SandboxConfig{config("substrate-v1-gvisor", false)}},
+		{name: "exists", configs: []atev1.SandboxConfig{config(name, false)}, wantExists: true},
+		{name: "being deleted", configs: []atev1.SandboxConfig{config(name, true)}, wantErr: true},
+		{name: "another config being deleted", configs: []atev1.SandboxConfig{config("substrate-v1-gvisor", true)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exists, err := sandboxConfigExists(tt.configs, name)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("sandboxConfigExists() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if exists != tt.wantExists {
+				t.Errorf("sandboxConfigExists() = %v, want %v", exists, tt.wantExists)
 			}
 		})
 	}

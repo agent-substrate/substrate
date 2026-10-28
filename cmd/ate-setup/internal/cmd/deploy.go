@@ -84,7 +84,7 @@ Shape the install with the global --atenet-dataplane, --cluster-size,
 		if err != nil {
 			return err
 		}
-		if opts.AddSandboxConfigDefaultAnnotation, err = cmd.Flags().GetBool(addDefaultAnnotationFlag); err != nil {
+		if opts.CreateSandboxConfigWithDefaultAnnotation, err = cmd.Flags().GetBool(createWithDefaultAnnotationFlag); err != nil {
 			return err
 		}
 		return env.DeployAteSystem(cmd.Context(), opts)
@@ -139,31 +139,36 @@ var deployPodCertControllerCmd = &cobra.Command{
 	},
 }
 
-// addDefaultAnnotationFlag names the flag that adds the class-default
-// annotation to the release's gVisor SandboxConfig. It is a plain flag rather
-// than a recorded setting: each run decides it anew.
-const addDefaultAnnotationFlag = "add-default-annotation"
+// createWithDefaultAnnotationFlag names the flag that leaves the
+// class-default annotation off this build's gVisor SandboxConfig when false.
+// It is a plain flag rather than a recorded setting, because it applies only
+// to the run that creates the config.
+const createWithDefaultAnnotationFlag = "create-with-default-annotation"
 
-const addDefaultAnnotationUsage = "Add the sandboxconfig.ate.dev/is-class-default annotation to this release's gVisor SandboxConfig"
+const createWithDefaultAnnotationUsage = "Add the sandboxconfig.ate.dev/is-class-default annotation to this build's gVisor SandboxConfig if this run creates it. An existing config is left as it is"
 
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
-	Short: "Deploy the SandboxConfig admission policy and this release's gVisor SandboxConfig only",
-	Long: `Deploy the SandboxConfig admission policy and this release's gVisor
-SandboxConfig, substrate-<version>-gvisor, rendered from
-manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl.
+	Short: "Deploy the SandboxConfig admission policy and this build's gVisor SandboxConfig only",
+	Long: `Deploy the SandboxConfig admission policy and create this build's gVisor
+SandboxConfig from manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl. A
+release names it substrate-<version>-gvisor. Any other build names it
+substrate-dev-<hash>-gvisor, hashed from the rendered config, so builds with
+the same config share one.
 
-With --add-default-annotation (the default) the config gets the
-sandboxconfig.ate.dev/is-class-default annotation. Every gVisor WorkerPool
-without a configRef follows the newest config with the annotation, so a
-warning names a newer one if it exists.`,
+When this run creates the config, it gets the
+sandboxconfig.ate.dev/is-class-default annotation, unless
+--create-with-default-annotation=false. An existing config is left as it is,
+annotations included. Change its annotation with kubectl annotate. Every
+gVisor WorkerPool without a configRef follows the newest config with the
+annotation, so a warning names a newer one if it exists.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		addDefaultAnnotation, err := cmd.Flags().GetBool(addDefaultAnnotationFlag)
+		create, err := cmd.Flags().GetBool(createWithDefaultAnnotationFlag)
 		if err != nil {
 			return err
 		}
-		return env.DeploySandboxConfig(cmd.Context(), addDefaultAnnotation)
+		return env.DeploySandboxConfig(cmd.Context(), create)
 	},
 }
 
@@ -203,6 +208,6 @@ func init() {
 	})
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
-	deployAteSystemCmd.Flags().Bool(addDefaultAnnotationFlag, true, addDefaultAnnotationUsage)
-	deploySandboxConfigCmd.Flags().Bool(addDefaultAnnotationFlag, true, addDefaultAnnotationUsage)
+	deployAteSystemCmd.Flags().Bool(createWithDefaultAnnotationFlag, true, createWithDefaultAnnotationUsage)
+	deploySandboxConfigCmd.Flags().Bool(createWithDefaultAnnotationFlag, true, createWithDefaultAnnotationUsage)
 }

@@ -366,7 +366,7 @@ func TestShippedSandboxConfigManifests(t *testing.T) {
 			if err := yaml.UnmarshalStrict(raw, sc); err != nil {
 				t.Fatalf("decode manifest: %v", err)
 			}
-			// The installers add the annotation only with --add-default-annotation.
+			// The installers add the annotation when they create the config.
 			if _, ok := sc.Annotations[SandboxConfigClassDefaultAnnotation]; ok {
 				t.Errorf("template sets %s; the installers add it", SandboxConfigClassDefaultAnnotation)
 			}

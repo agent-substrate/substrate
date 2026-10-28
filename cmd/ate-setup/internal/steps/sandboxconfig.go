@@ -16,8 +16,12 @@ package steps
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,16 +32,29 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
 )
 
-// DeploySandboxConfig applies the SandboxConfig admission policy, then this
-// release's gVisor SandboxConfig, substrate-<version>-gvisor, rendered from
-// sandboxconfig-gvisor.yaml.tmpl. With addDefaultAnnotation it also adds the
-// class-default annotation to the config.
-func (e *Env) DeploySandboxConfig(ctx context.Context, addDefaultAnnotation bool) error {
+// DeploySandboxConfig applies the SandboxConfig admission policy, then
+// creates this build's gVisor SandboxConfig from sandboxconfig-gvisor.yaml.tmpl
+// unless it exists. sandboxConfigName says how the config is named. A config
+// it creates gets the class-default annotation when
+// createWithDefaultAnnotation is true. An existing config, annotations
+// included, is left as it is.
+func (e *Env) DeploySandboxConfig(ctx context.Context, createWithDefaultAnnotation bool) error {
+	sc, err := e.checkSandboxConfig(ctx)
+	if err != nil {
+		return err
+	}
+	return e.deploySandboxConfig(ctx, sc, createWithDefaultAnnotation)
+}
+
+// deploySandboxConfig is DeploySandboxConfig for the config that
+// checkSandboxConfig returned.
+func (e *Env) deploySandboxConfig(ctx context.Context, sc sandboxConfig, createWithDefaultAnnotation bool) error {
 	log.Step("deploy_sandboxconfig")
 
 	if err := e.EnsureCRDs(ctx); err != nil {
@@ -50,64 +67,81 @@ func (e *Env) DeploySandboxConfig(ctx context.Context, addDefaultAnnotation bool
 		return err
 	}
 
-	name, err := e.checkSandboxConfig(ctx)
-	if err != nil {
-		return err
-	}
-
-	manifest, err := render.Template(e.Cfg.Manifest("sandboxconfig-gvisor.yaml.tmpl"), map[string]string{"SANDBOXCONFIG_NAME": name}, nil)
-	if err != nil {
-		return err
-	}
-	if err := e.Kube.ApplyBytes(ctx, manifest); err != nil {
-		return err
-	}
-	log.Infof("applied SandboxConfig %s", name)
-	if addDefaultAnnotation {
-		// A merge patch rather than part of the apply above. The apply then
-		// never owns the annotation, so a later run without
-		// --add-default-annotation leaves it in place.
-		patch, err := json.Marshal(map[string]any{
-			"metadata": map[string]any{"annotations": map[string]any{atev1.SandboxConfigClassDefaultAnnotation: "true"}},
-		})
-		if err != nil {
-			return fmt.Errorf("while building the patch for SandboxConfig %s: %w", name, err)
+	if sc.exists {
+		// An existing config may have been edited since, so it is left as it
+		// is.
+		log.Infof("SandboxConfig %s exists; leaving it and its annotations as they are", sc.name)
+	} else {
+		if err := e.Kube.ApplyBytes(ctx, sc.manifest); err != nil {
+			return err
 		}
-		if _, err := e.sandboxConfigs().Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: kube.FieldManager}); err != nil {
-			return fmt.Errorf("while annotating SandboxConfig %s: %w", name, err)
+		log.Infof("created SandboxConfig %s", sc.name)
+		if createWithDefaultAnnotation {
+			patch, err := json.Marshal(map[string]any{
+				"metadata": map[string]any{"annotations": map[string]any{atev1.SandboxConfigClassDefaultAnnotation: "true"}},
+			})
+			if err != nil {
+				return fmt.Errorf("while building the patch for SandboxConfig %s: %w", sc.name, err)
+			}
+			if _, err := e.sandboxConfigs().Patch(ctx, sc.name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: kube.FieldManager}); err != nil {
+				return fmt.Errorf("while annotating SandboxConfig %s: %w", sc.name, err)
+			}
+			log.Infof("annotated SandboxConfig %s %s=true", sc.name, atev1.SandboxConfigClassDefaultAnnotation)
 		}
-		log.Infof("annotated SandboxConfig %s %s=true", name, atev1.SandboxConfigClassDefaultAnnotation)
 	}
-	// Checked after the apply, against the config's real creation time and
+	// Checked after the create, against the config's real creation time and
 	// annotations.
 	configs, err := e.listSandboxConfigs(ctx)
 	if err != nil {
 		return err
 	}
-	warning, err := checkClassDefault(configs, name, atev1.SandboxClassGvisor)
-	if warning != "" {
+	if warning := classDefaultWarning(configs, sc.name, atev1.SandboxClassGvisor); warning != "" {
 		log.Warnf("%s", warning)
 	}
-	return err
+	return nil
 }
 
-// checkSandboxConfig returns the name of this release's gVisor SandboxConfig.
-// It fails when checkClassDefault does.
-func (e *Env) checkSandboxConfig(ctx context.Context) (string, error) {
-	class := atev1.SandboxClassGvisor
-	name, err := sandboxConfigName(e.SubstrateVersion(), class)
+// sandboxConfig is this build's gVisor SandboxConfig.
+type sandboxConfig struct {
+	name string
+	// manifest is the config rendered with name.
+	manifest []byte
+	exists   bool
+}
+
+// checkSandboxConfig returns this build's gVisor SandboxConfig. It fails when
+// sandboxConfigExists does.
+func (e *Env) checkSandboxConfig(ctx context.Context) (sandboxConfig, error) {
+	tmpl := e.Cfg.Manifest("sandboxconfig-gvisor.yaml.tmpl")
+	unnamed, err := render.Template(tmpl, nil, nil)
 	if err != nil {
-		return "", err
+		return sandboxConfig{}, err
+	}
+	name, err := sandboxConfigName(e.SubstrateVersion(), atev1.SandboxClassGvisor, unnamed)
+	if err != nil {
+		return sandboxConfig{}, err
 	}
 	configs, err := e.listSandboxConfigs(ctx)
 	if err != nil {
-		return "", err
+		return sandboxConfig{}, err
 	}
-	// The warning is about the cluster before the apply.
-	if _, err := checkClassDefault(configs, name, class); err != nil {
-		return "", err
+	exists, err := sandboxConfigExists(configs, name)
+	if err != nil {
+		return sandboxConfig{}, err
 	}
-	return name, nil
+	manifest := render.Expand(string(unnamed), map[string]string{"SANDBOXCONFIG_NAME": name}, nil)
+	return sandboxConfig{name: name, manifest: manifest, exists: exists}, nil
+}
+
+// sandboxConfigExists reports whether configs hold the SandboxConfig named
+// name. It fails when that config is being deleted, because applying it would
+// only update the terminating object.
+func sandboxConfigExists(configs []atev1.SandboxConfig, name string) (bool, error) {
+	i := slices.IndexFunc(configs, func(sc atev1.SandboxConfig) bool { return sc.Name == name })
+	if i >= 0 && !configs[i].DeletionTimestamp.IsZero() {
+		return false, fmt.Errorf("SandboxConfig %s is being deleted; wait until it is gone, then run this again", name)
+	}
+	return i >= 0, nil
 }
 
 // listSandboxConfigs returns the SandboxConfigs in the cluster. A cluster
@@ -133,53 +167,59 @@ func (e *Env) sandboxConfigs() dynamic.ResourceInterface {
 }
 
 // sandboxConfigName returns the name of the SandboxConfig of class that
-// Substrate version installs: substrate-<version>-<class>, with the version
-// lower-cased and every character a name cannot hold replaced by '-'.
-func sandboxConfigName(version string, class atev1.SandboxClass) (string, error) {
-	v := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r - 'A' + 'a'
+// Substrate version installs. unnamed is the config's manifest rendered
+// without its name.
+//
+//   - A release's config is substrate-<version>-<class>, with the version
+//     lower-cased. version is a release when it is a release tag without what
+//     `git describe` appends to one.
+//   - Any other build's is substrate-dev-<hash>-<class>. hash is the first
+//     10 hex digits of the SHA-256 of unnamed without its comment lines, so
+//     builds that render the same config share it.
+func sandboxConfigName(version string, class atev1.SandboxClass, unnamed []byte) (string, error) {
+	var id string
+	if images.CheckReleaseVersion(version) == nil && !gitDescribeSuffix.MatchString(version) {
+		id = strings.ToLower(version)
+	} else {
+		h := sha256.New()
+		for _, line := range strings.SplitAfter(string(unnamed), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+				h.Write([]byte(line))
+			}
 		}
-		return '-'
-	}, version)
-	name := fmt.Sprintf("substrate-%s-%s", v, class)
+		id = "dev-" + hex.EncodeToString(h.Sum(nil))[:10]
+	}
+	name := fmt.Sprintf("substrate-%s-%s", id, class)
 	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
 		return "", fmt.Errorf("version %q gives the invalid SandboxConfig name %q: %s", version, name, strings.Join(errs, "; "))
 	}
 	return name, nil
 }
 
-// checkClassDefault checks the SandboxConfig named name, of class. configs
-// are the SandboxConfigs in the cluster.
+// gitDescribeSuffix matches what `git describe --dirty` appends to a tag: the
+// number of commits since it and the commit, and -dirty. A release tag
+// allows both as a prerelease.
+var gitDescribeSuffix = regexp.MustCompile(`(-[0-9]+-g[0-9a-f]+)(-dirty)?$|-dirty$`)
+
+// classDefaultWarning returns a warning about the class default of class, or
+// "" for none. configs are the SandboxConfigs in the cluster, and name is
+// this build's config.
 //
-//   - It returns an error when the config is being deleted. Applying it would
-//     only update the terminating object.
 //   - It warns when the config has the class-default annotation but is not
 //     the class default, because a newer default exists. That happens when an
-//     older release's config is applied again.
+//     earlier build's config is deployed again.
 //   - It warns when the class has no default, so pools of the class without a
 //     configRef resolve none.
-func checkClassDefault(configs []atev1.SandboxConfig, name string, class atev1.SandboxClass) (string, error) {
-	var existing *atev1.SandboxConfig
-	for i := range configs {
-		if configs[i].Name == name {
-			existing = &configs[i]
-		}
-	}
-	newest := atev1.ClassDefaultSandboxConfig(configs, class)
-	if existing != nil && !existing.DeletionTimestamp.IsZero() {
-		return "", fmt.Errorf("SandboxConfig %s is being deleted; wait until it is gone, then run this again", name)
-	}
-	if newest == nil {
+func classDefaultWarning(configs []atev1.SandboxConfig, name string, class atev1.SandboxClass) string {
+	def := atev1.ClassDefaultSandboxConfig(configs, class)
+	if def == nil {
 		return fmt.Sprintf("no SandboxConfig of sandbox class %q has the %s annotation, so WorkerPools of the class without a configRef resolve no config",
-			class, atev1.SandboxConfigClassDefaultAnnotation), nil
+			class, atev1.SandboxConfigClassDefaultAnnotation)
 	}
-	if existing != nil && existing.Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true" && newest.Name != name {
+	i := slices.IndexFunc(configs, func(sc atev1.SandboxConfig) bool { return sc.Name == name })
+	if i >= 0 && configs[i].Annotations[atev1.SandboxConfigClassDefaultAnnotation] == "true" && def.Name != name {
 		return fmt.Sprintf("SandboxConfig %s has the %s annotation but is not the %s class default, because %s is newer",
-			name, atev1.SandboxConfigClassDefaultAnnotation, class, newest.Name), nil
+			name, atev1.SandboxConfigClassDefaultAnnotation, class, def.Name)
 	}
-	return "", nil
+	return ""
 }

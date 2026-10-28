@@ -14,9 +14,10 @@
 
 # Template for the gVisor (runsc) SandboxConfig each Substrate release
 # installs. `ate-setup deploy sandboxconfig` and `deploy ate-system` create
-# substrate-<release>-gvisor from it, and by default annotate it as the class
-# default. Editing this file changes only the configs that later releases
-# create, and a rerun of the same release updates its own config.
+# substrate-<release>-gvisor from it, or substrate-dev-<hash>-gvisor for a
+# build that is not a release, and by default annotate it as the class
+# default. They leave an existing config as it is, so editing this file
+# changes only the configs that later builds create.
 #
 # atelet fetches the gVisor release tarball (gvisor.tar.zstd: runsc plus the
 # gvisor-bin/ helpers runsc requires next to it) matching the worker node's
@@ -34,7 +35,7 @@ metadata:
   name: ${SANDBOXCONFIG_NAME}
 spec:
   sandboxClass: gvisor
-  defaultVersion: gvisor-6
+  defaultVersion: v6
   versions:
   # gVisor release 20261026.0. ateworker-gvisor saves container rootfs overlays
   # (rootfs/) and durable-dir volumes (fs/) as separate checkpoint bundles. That
@@ -42,7 +43,7 @@ spec:
   # ateworker-gvisor also runs the sandbox with no root container
   # (google/gvisor#15551). This release's restore picks each container's init
   # process correctly in such a sandbox (google/gvisor@29b97c66d945).
-  - name: gvisor-6
+  - name: v6
     state: Enabled
     assets:
       amd64:

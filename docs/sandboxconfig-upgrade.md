@@ -24,11 +24,11 @@ If the cluster runs microVM pools, also run this from the new checkout:
 BUCKET_NAME=$(sed -n 's/^ *bucketName: //p' ~/ate-upgrade/new.yaml) VERSION=$NEW_RELEASE hack/install-microvm-deps.sh --install
 ```
 
-The script reads neither `new.yaml` nor the image tag, so the variables give it the bucket and the release. It creates `substrate-$NEW_RELEASE-microvm` the same way as the gVisor config. It first stages the assets at fixed paths in the bucket. If the release changes them, earlier microVM configs no longer match the bucket, and atelet cannot fetch their assets on nodes that have not cached them. MicroVM pools pinned to an earlier config, or left on one by `--add-default-annotation=false`, then need to move to the new config.
+The script reads neither `new.yaml` nor the image tag, so the variables give it the bucket and the release. It creates `substrate-$NEW_RELEASE-microvm` the same way as the gVisor config. It first stages the assets at fixed paths in the bucket. If the release changes them, earlier microVM configs no longer match the bucket, and atelet cannot fetch their assets on nodes that have not cached them. MicroVM pools pinned to an earlier config, or left on one by `--create-with-default-annotation=false`, then need to move to the new config.
 
 ### Create the configs without moving pools
 
-Add `--add-default-annotation=false` to both commands above. Pass it to `deploy ate-system` in step 4e of the runbook too, or that step adds the annotation and moves the gVisor pools. Later, make each config the class default:
+Add `--create-with-default-annotation=false` to both commands above. Later runs leave the configs as they are, including `deploy ate-system` in step 4e of the runbook. Later, make each config the class default:
 
 ```bash
 kubectl annotate sandboxconfig substrate-$NEW_RELEASE-gvisor sandboxconfig.ate.dev/is-class-default=true

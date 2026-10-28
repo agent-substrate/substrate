@@ -48,7 +48,8 @@ const RevisionLabel = "org.opencontainers.image.revision"
 const VersionLabel = "org.opencontainers.image.version"
 
 // releaseTag matches a release tag, vMAJOR.MINOR.PATCH, or a release candidate,
-// vMAJOR.MINOR.PATCH-PRERELEASE. hack/release/draft-release.sh accepts the same.
+// vMAJOR.MINOR.PATCH-PRERELEASE. hack/release/draft-release.sh and
+// hack/install-microvm-deps.sh accept the same.
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
 
 // CheckReleaseVersion returns an error unless version is a release tag.
