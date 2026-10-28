@@ -25,12 +25,13 @@ export NETWORK=default
 export SUBNETWORK=default
 
 export CLUSTER_NAME=substrate-poc
-# Supported: 1.36 with the v1beta1 PodCertificate APIs enabled, which setup-gcp
-# does, or 1.37+, which serves them under v1. Anything below 1.36 does not
+# Supported: 1.36 with the v1beta1 PodCertificate APIs enabled, which
+# substrate-gke's setup-gcp does, or 1.37+, which serves them under v1. Anything below 1.36 does not
 # work. GKE retires patch versions over time — if cluster creation rejects
 # this pin, pick a current one from:
 #   gcloud container get-server-config --zone ${CLUSTER_LOCATION} --format="value(defaultClusterVersion)"
-# See tools/setup-gcp/README.md ("Create Cluster") for the full constraint.
+# See tools/setup-gcp/README.md ("Create Cluster") in
+# https://github.com/ai-on-gke/substrate-gke for the full constraint.
 export CLUSTER_VERSION=1.36.3-gke.1767000
 export NODE_POOL_NAME=gvisor-pool
 export NODE_POOL_VERSION=1.36.3-gke.1767000
@@ -47,8 +48,8 @@ export KUBECTL_CONTEXT=
 export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
 # Cluster-wide location ate-api-server stores snapshots under.
 export SNAPSHOT_LOCATION="gs://${BUCKET_NAME}/"
-# Google service account snapshot transfers run as on GCS. setup-gcp creates
-# it, and ate-setup and hack/teardown.sh read the same name.
+# Google service account snapshot transfers run as on GCS. substrate-gke's
+# setup-gcp creates it, and ate-setup reads the same name.
 export SNAPSHOT_TRANSFER_GSA_NAME=ate-snapshot-transfer
 
 export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"

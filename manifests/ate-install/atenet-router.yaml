@@ -97,8 +97,8 @@ data:
 
     static_resources:
       # envoy_metrics is the only pod-IP-reachable view of the admin API: it
-      # proxies GET /stats/prometheus (the PodMonitoring in
-      # atenet-router-monitoring.yaml) and GET /ready (the envoy container's
+      # proxies GET /stats/prometheus (for a provider's metrics scrape, such as
+      # substrate-gke's PodMonitoring) and GET /ready (the envoy container's
       # readiness probe) to the loopback-only admin listener and 404s
       # everything else. The stat prefixes contain "admin" so
       # envoyDrainer.activeConnections excludes probes and scrapes from the

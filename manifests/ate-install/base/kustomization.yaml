@@ -15,6 +15,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# This bundle carries nothing provider-specific. ate-setup renders it for every
+# cluster that is not kind; a provider such as substrate-gke
+# (https://github.com/ai-on-gke/substrate-gke) adds its own resources and
+# components here before running ate-setup.
+#
 # ate-otel-config.yaml carries the OTLP settings every component above consumes
 # via envFrom. The kind overlay lists its own copy of the same ConfigMap name
 # instead of building on this directory, so the two never collide.
@@ -33,6 +38,5 @@ resources:
   - ../ate-controller.yaml
   - ../atelet.yaml
   - ../atenet-router.yaml
-  - ../atenet-router-monitoring.yaml
   - ../ate-otel-config.yaml
   - ../ate-system-networkpolicies.yaml

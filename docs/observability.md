@@ -488,7 +488,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 
 > In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, and `atenet-egress` are pointed at the in-cluster collector, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally. The Kubernetes credential provider is the exception: it does not read the endpoint (see the [note on the Kind Prometheus](#2-metrics)).
 >
-> Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
+> Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), which sets no endpoint; on GKE, [substrate-gke](https://github.com/ai-on-gke/substrate-gke) sets the managed collector's, and there is a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > Workers don't read the ConfigMap at all. They normally export through the [`atelet` relay](#the-ateworker-otlp-relay), which forwards to `atelet`'s own endpoint, so restarting `atelet` moves the relayed workers to a new endpoint. `ate-controller` also copies the value into each worker pod at creation, for the direct fallback. That copy changes only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
 
@@ -554,8 +554,4 @@ Substrate puts no OTLP configuration into an actor container. Set `OTEL_EXPORTER
 
 > **GCP-specific.** These are **Google Cloud Monitoring** dashboards; they apply only to a GKE / Google Cloud deployment. There is no dashboard support on Kind — use the Prometheus UI in [Metrics](#2-metrics) for local development.
 
-Dashboard definitions live in [`tools/setup-gcp/dashboards/`](../tools/setup-gcp/dashboards/) (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.
-
-```sh
-go run ./tools/setup-gcp create dashboards   # also part of: bootstrap
-```
+Dashboard definitions live in [`tools/setup-gcp/dashboards/`](https://github.com/ai-on-gke/substrate-gke/tree/main/tools/setup-gcp/dashboards) in the [substrate-gke](https://github.com/ai-on-gke/substrate-gke) repository (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: substrate-gke's `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.

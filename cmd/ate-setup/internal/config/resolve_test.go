@@ -118,8 +118,7 @@ func TestResolvePrecedence(t *testing.T) {
 	}
 }
 
-// An empty value a channel supplied is not the same as one nobody set. The
-// Cloud SQL instance setting depends on the distinction.
+// An empty value a channel supplied is not the same as one nobody set.
 func TestResolveSuppliedDistinguishesEmptyFromAbsent(t *testing.T) {
 	useFixtures(t)
 	const key, env = "fixture.name", "FIXTURE_NAME"

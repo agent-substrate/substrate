@@ -1,7 +1,7 @@
 # Scaling the Cloud SQL store
 
 Sizing guidance for running the ateapi PostgreSQL store
-([tools/setup-gcp/cloud-sql.md](../../tools/setup-gcp/cloud-sql.md)) at large
+([tools/setup-gcp/cloud-sql.md](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/cloud-sql.md) in substrate-gke) at large
 actor counts and high request rates.
 
 The provisioning defaults (`db-custom-2-8192`, 10 GB disk) suit development
@@ -71,8 +71,8 @@ number rather than maximizing.
 
 The proxy imposes no connection limit and adds
 sub-millisecond latency, but it encrypts all database traffic, so its CPU
-use scales with throughput. The patch
-(`manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml`) requests `100m` — sized
+use scales with throughput. The sidecar, which
+[substrate-gke](https://github.com/ai-on-gke/substrate-gke) adds, requests `100m` — sized
 for control-plane traffic. For sustained thousands of ops/s, raise the
 sidecar's CPU request so node pressure cannot throttle it into becoming the
 bottleneck. Connection *churn* has a separate ceiling: IAM database logins

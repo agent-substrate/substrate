@@ -531,9 +531,6 @@ func TestLoadPostgresIdentityOverrides(t *testing.T) {
 	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" || cfg.PostgresReadWriteRole != "tenant_readwrite" || cfg.PostgresOwnerRole != "tenant_owner" {
 		t.Fatalf("PostgreSQL identity overrides not loaded: %+v", cfg)
 	}
-	if !cfg.PostgresReadWriteRoleSet || !cfg.PostgresOwnerRoleSet {
-		t.Fatalf("PostgreSQL role overrides not marked as explicit: %+v", cfg)
-	}
 }
 
 // ATE_API_POSTGRES_SCHEMA defaults to substrate, as in the apiserver, and
@@ -577,63 +574,26 @@ func TestLoadPostgresTuning(t *testing.T) {
 	}
 }
 
-// ATE_API_POSTGRES_CLOUDSQL_INSTANCE is three-way, and Load is where the
-// distinction is made: everything downstream sees only Instance and
-// InstanceSet.
-func TestLoadCloudSQL(t *testing.T) {
-	t.Run("unset", func(t *testing.T) {
-		loadEnv(t)
-		cfg, err := Load(Options{})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if cfg.CloudSQL.InstanceSet {
-			t.Errorf("CloudSQL = %+v, want InstanceSet false so the cluster's record is adopted", cfg.CloudSQL)
-		}
-	})
+// The Cloud SQL settings were removed. Their environment variables must fail
+// the load rather than be ignored, or an install that sets them would quietly
+// get the bundled PostgreSQL instead.
+func TestLoadRejectsRemovedCloudSQLEnv(t *testing.T) {
+	for _, name := range removedCloudSQLEnv {
+		t.Run(name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv(name, "p:r:i")
+			_, err := Load(Options{})
+			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "substrate-gke") {
+				t.Fatalf("Load() error = %v, want it to name %s and point to substrate-gke", err, name)
+			}
+		})
+	}
 
-	t.Run("exported but empty removes Cloud SQL", func(t *testing.T) {
+	t.Run("exported but empty", func(t *testing.T) {
 		loadEnv(t)
 		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "")
-		cfg, err := Load(Options{})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if !cfg.CloudSQL.InstanceSet || cfg.CloudSQL.Instance != "" {
-			t.Errorf("CloudSQL = %+v, want an explicitly empty instance", cfg.CloudSQL)
-		}
-	})
-
-	t.Run("fully specified", func(t *testing.T) {
-		loadEnv(t)
-		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "p:r:i")
-		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_GSA", "ate@p.iam.gserviceaccount.com")
-		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH", "false")
-		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE", CloudSQLIPTypePSC)
-
-		cfg, err := Load(Options{})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		want := CloudSQLConfig{
-			Instance:    "p:r:i",
-			InstanceSet: true,
-			GSA:         "ate@p.iam.gserviceaccount.com",
-			IAMAuth:     "false",
-			IPType:      CloudSQLIPTypePSC,
-		}
-		if cfg.CloudSQL != want {
-			t.Errorf("CloudSQL = %+v, want %+v", cfg.CloudSQL, want)
-		}
-	})
-
-	// An unrecognized IP type reaches the proxy as an unset flag, which silently
-	// dials the public address instead of the private one that was meant.
-	t.Run("rejects an unknown IP type", func(t *testing.T) {
-		loadEnv(t)
-		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE", "internal")
-		if _, err := Load(Options{}); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_CLOUDSQL_IP_TYPE") {
-			t.Fatalf("Load() error = %v, want it to name the invalid IP type", err)
+		if _, err := Load(Options{}); err != nil {
+			t.Fatalf("Load() error = %v, want an empty value accepted", err)
 		}
 	})
 }

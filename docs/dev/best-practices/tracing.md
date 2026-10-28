@@ -96,7 +96,8 @@ address for whichever environment it is deployed to:
 
 The ConfigMap is defined in
 [`manifests/ate-install/ate-otel-config.yaml`](../../../manifests/ate-install/ate-otel-config.yaml)
-for GKE, with a kind replacement of the same name in
+without an endpoint; substrate-gke
+([ai-on-gke/substrate-gke](https://github.com/ai-on-gke/substrate-gke)) sets GKE's, and a kind replacement of the same name in
 [`manifests/ate-install/kind/ate-otel-config.yaml`](../../../manifests/ate-install/kind/ate-otel-config.yaml)
 that points at the in-cluster collector. Editing either one does not restart the
 pods that consume it; follow a change with `kubectl rollout restart`.

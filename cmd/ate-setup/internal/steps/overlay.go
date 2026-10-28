@@ -25,8 +25,11 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
@@ -78,9 +81,11 @@ func (e *Env) components() []string {
 
 // SystemOverlay picks the kustomization for a full control plane install.
 //
-// The choice is a product of two switches: kind vs GKE, and the atenet router
-// dataplane. The plain GKE envoy install renders the base kustomization rather
-// than the raw manifests/ate-install directory: the directory would also
+// The choice is a product of two switches: kind or not, and the atenet router
+// dataplane. Every cluster that is not kind renders the provider-neutral base
+// kustomization, which a provider such as substrate-gke extends in place, and
+// the agentgateway overlay builds on it. The plain envoy install renders base
+// rather than the raw manifests/ate-install directory: the directory would also
 // re-apply pod-certificate-controller.yaml (reverting the size10 flags and the
 // WORKERS_PER_SIGNER value set earlier in the install), both atenet-egress
 // variants, and the sandboxconfig files, all of which have their own apply
@@ -574,23 +579,43 @@ func (e *Env) applyAtenetEgress(ctx context.Context, provider config.CredentialP
 	return nil
 }
 
-// otelConfigPath returns the environment's ate-otel-config ConfigMap.
+// otelConfigObject returns the ate-otel-config ConfigMap that a full install
+// of this environment applies.
 //
 // Every control plane component pulls this ConfigMap in via envFrom. A full
 // install gets it as part of the rendered bundle, but the single-component
-// redeploys apply raw manifests with no kustomize, so they have to select the
-// right copy themselves: applying the base file on a kind cluster would
-// overwrite it with the GKE endpoint and break telemetry everywhere at once.
-func (e *Env) otelConfigPath() string {
-	if e.Cfg.Kind {
-		return e.Cfg.Manifest("kind", "ate-otel-config.yaml")
+// redeploys apply only their own manifests, so they take the ConfigMap from
+// the same render: applying the raw manifests/ate-install/ate-otel-config.yaml,
+// which sets no endpoint, would drop the endpoint the kind overlay or a
+// provider's component sets and break telemetry everywhere at once. The render
+// includes the components render adds, some of which add workloads, so only
+// the ConfigMap is taken from it.
+func (e *Env) otelConfigObject() (*unstructured.Unstructured, error) {
+	overlay := SystemOverlay(e.Cfg)
+	manifest, err := e.render(e.Cfg.Path(overlay))
+	if err != nil {
+		return nil, err
 	}
-	return e.Cfg.Manifest("ate-otel-config.yaml")
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("while decoding %s: %w", overlay, err)
+	}
+	for _, obj := range objs {
+		if obj.GetAPIVersion() == "v1" && obj.GetKind() == "ConfigMap" &&
+			obj.GetNamespace() == NamespaceAteSystem && obj.GetName() == otelConfigMap {
+			return obj, nil
+		}
+	}
+	return nil, fmt.Errorf("%s renders no ConfigMap %s/%s", overlay, NamespaceAteSystem, otelConfigMap)
 }
 
 // applyOtelConfig applies the environment's ate-otel-config ConfigMap.
 func (e *Env) applyOtelConfig(ctx context.Context) error {
-	return e.Kube.ApplyPath(ctx, e.otelConfigPath())
+	obj, err := e.otelConfigObject()
+	if err != nil {
+		return err
+	}
+	return e.Kube.Apply(ctx, []*unstructured.Unstructured{obj})
 }
 
 // otelConfigMap is the ConfigMap every control plane component reads its

@@ -122,20 +122,12 @@ type postgresPlan struct {
 }
 
 // planPostgres decides between the bundled database and an external one,
-// configured either as an explicit DSN or as a Cloud SQL instance — the
-// latter possibly adopted from the cluster.
-func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
+// configured as an explicit DSN.
+func (e *Env) planPostgres() postgresPlan {
 	if e.Cfg.PostgresReadWriteConnectionString != "" {
-		return postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}, nil
+		return postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}
 	}
-	instance, err := e.resolveCloudSQLInstance(ctx)
-	if err != nil {
-		return postgresPlan{}, err
-	}
-	if instance != "" {
-		return postgresPlan{external: "Cloud SQL instance " + instance}, nil
-	}
-	return postgresPlan{bundled: true}, nil
+	return postgresPlan{bundled: true}
 }
 
 // deployPostgres applies, waits for, and sets up bundled PostgreSQL, or logs

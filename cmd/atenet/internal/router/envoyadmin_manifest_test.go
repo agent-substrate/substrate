@@ -26,7 +26,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-const routerMonitoringManifestPath = "../../../../manifests/ate-install/atenet-router-monitoring.yaml"
+// routerMetricsPort is the envoy container port a provider's metrics scrape
+// targets for GET /stats/prometheus. substrate-gke's PodMonitoring
+// (https://github.com/ai-on-gke/substrate-gke) names it, so renaming it breaks
+// that scrape.
+const routerMetricsPort = "envoy-metrics"
 
 // envoyAdminProxyPaths is everything the pod-IP-reachable envoy_metrics
 // listener may forward to the admin API: read-only, no topology, no secrets.
@@ -37,7 +41,7 @@ var envoyAdminProxyPaths = map[string]bool{"/ready": true, "/stats/prometheus": 
 var envoyAdminManifests = []struct {
 	path, configMap, deployment, requiredPath string
 }{
-	{routerManifestPath, "atenet-router-envoy-config", "atenet-router", "/stats/prometheus"}, // PodMonitoring
+	{routerManifestPath, "atenet-router-envoy-config", "atenet-router", "/stats/prometheus"}, // provider metrics scrape
 	{egressManifest, "atenet-egress", "atenet-egress", "/ready"},                             // kubelet probes
 }
 
@@ -304,46 +308,36 @@ func checkEnvoyAdminRoute(t *testing.T, listener string, r envoyAdminRoute) {
 	t.Errorf("listener %q forwards %q to the admin API without restricting :method to GET", listener, m.Path)
 }
 
-// TestRouterPodMonitoringAvoidsEnvoyAdmin checks that Managed Prometheus
-// scrapes a port the router's envoy container actually declares, and that the
-// port is not the (loopback-only, so unscrapeable) admin port.
-func TestRouterPodMonitoringAvoidsEnvoyAdmin(t *testing.T) {
-	admin := parseEnvoyAdminBootstrap(t, envoyConfigFrom(t, routerManifestPath, "atenet-router-envoy-config")).Admin.Address.SocketAddress
-	named := map[string]int32{}
+// TestRouterMetricsPortServesEnvoyStats checks the port a provider's metrics
+// scrape targets: the router's envoy container declares it, it is not the
+// (loopback-only, so unscrapeable) admin port, and a listener reachable on the
+// pod IP at that port forwards GET /stats/prometheus to the admin API.
+func TestRouterMetricsPortServesEnvoyStats(t *testing.T) {
+	b := parseEnvoyAdminBootstrap(t, envoyConfigFrom(t, routerManifestPath, "atenet-router-envoy-config"))
+	admin := b.Admin.Address.SocketAddress
+	var port int32
 	for _, c := range findDeployment(t, routerManifestPath, "atenet-router").Spec.Template.Spec.Containers {
-		if c.Name == "envoy" {
-			for _, p := range c.Ports {
-				named[p.Name] = p.ContainerPort
+		if c.Name != "envoy" {
+			continue
+		}
+		for _, p := range c.Ports {
+			if p.Name == routerMetricsPort {
+				port = p.ContainerPort
 			}
 		}
 	}
-
-	raw, err := os.ReadFile(routerMonitoringManifestPath)
-	if err != nil {
-		t.Fatalf("reading %s: %v", routerMonitoringManifestPath, err)
+	switch {
+	case port == 0:
+		t.Fatalf("the router's envoy container does not declare port %q", routerMetricsPort)
+	case port == admin.PortValue:
+		t.Fatalf("port %q is the loopback-only admin port %d", routerMetricsPort, port)
 	}
-	var mon struct {
-		Spec struct {
-			Endpoints []struct {
-				Port string `json:"port"`
-			} `json:"endpoints"`
-		} `json:"spec"`
-	}
-	if err := yaml.Unmarshal(raw, &mon); err != nil {
-		t.Fatalf("parsing %s: %v", routerMonitoringManifestPath, err)
-	}
-	if len(mon.Spec.Endpoints) == 0 {
-		t.Fatalf("%s has no endpoints; the manifest changed shape and this test is checking nothing", routerMonitoringManifestPath)
-	}
-	for _, ep := range mon.Spec.Endpoints {
-		n, ok := named[ep.Port]
-		switch {
-		case !ok:
-			t.Errorf("PodMonitoring scrapes port %q, which the router's envoy container does not declare", ep.Port)
-		case n == admin.PortValue:
-			t.Errorf("PodMonitoring scrapes port %q, the loopback-only admin port %d", ep.Port, n)
+	for _, r := range envoyAdminProxyRoutes(b) {
+		if r.route.Match.Path == "/stats/prometheus" && r.address.PortValue == port && reachableOnPodIP(r.address) {
+			return
 		}
 	}
+	t.Errorf("no listener reachable on the pod IP at port %q (%d) forwards /stats/prometheus to the admin API", routerMetricsPort, port)
 }
 
 func parseEnvoyAdminBootstrap(t *testing.T, raw string) envoyAdminBootstrap {

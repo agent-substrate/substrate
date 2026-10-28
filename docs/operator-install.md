@@ -279,10 +279,6 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `ateapi.authz.bootstrapOwners`               | `ATE_API_AUTHZ_BOOTSTRAP_OWNERS`                | `--ateapi-authz-bootstrap-owners`                  | `system:serviceaccount:<namespace>:ate-client` | (global)                                 |
 | `ateapi.expectedJWTIssuer`                   | `EXPECTED_JWT_ISSUER`                           | `--ateapi-expected-jwt-issuer`                     | —                     | (global)                                 |
 | `ateapi.logLevel`                            | `ATE_API_LOG_LEVEL`                             | `--ateapi-log-level`                               | —                     | (global)                                 |
-| `ateapi.postgres.cloudsql.gsa`               | `ATE_API_POSTGRES_CLOUDSQL_GSA`                 | `--ateapi-postgres-cloudsql-gsa`                   | —                     | (global)                                 |
-| `ateapi.postgres.cloudsql.iamAuth`           | `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH`            | `--ateapi-postgres-cloudsql-iam-auth`              | —                     | (global)                                 |
-| `ateapi.postgres.cloudsql.instance`          | `ATE_API_POSTGRES_CLOUDSQL_INSTANCE`            | `--ateapi-postgres-cloudsql-instance`              | —                     | (global)                                 |
-| `ateapi.postgres.cloudsql.ipType`            | `ATE_API_POSTGRES_CLOUDSQL_IP_TYPE`             | `--ateapi-postgres-cloudsql-ip-type`               | —                     | (global)                                 |
 | `ateapi.postgres.owner.connectionString`     | `ATE_API_POSTGRES_OWNER_CONNECTION_STRING`      | — (no flag)                                        | — (secret)            | (global)                                 |
 | `ateapi.postgres.owner.role`                 | `ATE_API_POSTGRES_OWNER_ROLE`                   | `--ateapi-postgres-owner-role`                     | `substrate_owner`     | (global)                                 |
 | `ateapi.postgres.poolMaxConns`               | `ATE_API_POSTGRES_POOL_MAX_CONNS`               | `--ateapi-postgres-pool-max-conns`                 | —                     | (global)                                 |
@@ -341,32 +337,31 @@ its name with `SNAPSHOT_TRANSFER_GSA_NAME` (or ate-setup's
 one. The exchange impersonates the account, so
 ate-api-server's identity needs `roles/iam.serviceAccountTokenCreator` on it,
 and the account needs object admin and bucket viewer on every snapshot bucket.
-`go run ./tools/setup-gcp create iam` creates it under that name,
+`tools/setup-gcp create iam` in [substrate-gke](https://github.com/ai-on-gke/substrate-gke) creates it under that name,
 `ate-snapshot-transfer` by default, with both grants.
 kind does not use it.
 
 With `--kind`, ate-setup defaults `storage.snapshotLocation` to
 `gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster
 rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`. On GKE, ate-setup
-does not create the bucket or grant access to it: run
-`go run ./tools/setup-gcp create bucket` and
-`go run ./tools/setup-gcp create iam` first, or `bootstrap` for both (see
-[tools/setup-gcp](../tools/setup-gcp/README.md)).
+does not create the bucket or grant access to it: run substrate-gke's
+`tools/setup-gcp create bucket` and `create iam` first, or `bootstrap` for both
+(see [tools/setup-gcp](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md) in substrate-gke).
 
-setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
+substrate-gke's setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
 `hack/install-microvm-deps.sh` stages microVM sandbox assets, and gives atelet
 read access to it. atelet gets no access to the snapshot bucket: every snapshot
 transfer runs on a token scoped to its actor, issued by ate-api-server's
 credential exchange. A GCP project set up before the asset bucket existed
-keeps atelet's old grants, since setup-gcp only adds bindings. Remove them as
-[tools/setup-gcp](../tools/setup-gcp/README.md#upgrading-an-existing-install)
+keeps atelet's old grants, since substrate-gke's setup-gcp only adds bindings. Remove them as
+[tools/setup-gcp](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#moving-to-per-actor-snapshot-credentials) in substrate-gke
 shows, which also covers recreating a cluster with microVM workers.
 
 With the `PerTemplateSnapshotLocation` preview gate, an ActorTemplate may set
 `snapshotConfig.storageLocation` to store its snapshots elsewhere; templates
 that leave it empty use `--snapshot-location`. Grant ate-api-server's identity
 and the snapshot transfer service account object admin and bucket viewer on
-any other bucket a template names, as setup-gcp does on the snapshot bucket. Without the gate,
+any other bucket a template names, as substrate-gke's setup-gcp does on the snapshot bucket. Without the gate,
 ate-api-server ignores `snapshotConfig.storageLocation`. See
 [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 

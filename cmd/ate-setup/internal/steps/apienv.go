@@ -40,7 +40,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 
 // CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
-// stable roles and Cloud SQL settings into the ConfigMap,
+// stable roles into the ConfigMap,
 // and an external server CA into postgres-server-ca. The ConfigMap also
 // carries the actor JWT issuer and the snapshot location.
 //
@@ -71,33 +71,12 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	ownerRole := e.Cfg.PostgresOwnerRole
 	poolMaxConns := e.Cfg.PostgresPoolMaxConns
 
-	cloudsql, err := e.resolveCloudSQL(ctx)
-	if err != nil {
-		return err
-	}
-	if readWriteDSN == "" && cloudsql.Adopted {
-		// Fill missing credentials from the adopted Cloud SQL configuration.
-		recordedReadWriteDSN, recordedOwnerDSN, err := e.recordedConnectionStrings(ctx)
-		if err != nil {
+	if readWriteDSN == "" {
+		if err := e.refuseBundledOverExternal(ctx); err != nil {
 			return err
 		}
-		readWriteDSN = recordedReadWriteDSN
-		if ownerDSN == "" {
-			ownerDSN = recordedOwnerDSN
-		}
-	}
-	if readWriteDSN == "" {
-		if cloudsql.Instance != "" {
-			if readWriteDSN, err = cloudSQLDSN(cloudsql); err != nil {
-				return err
-			}
-		} else {
-			if err := e.refuseBundledOverExternal(ctx); err != nil {
-				return err
-			}
-			if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(); err != nil {
-				return err
-			}
+		if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(); err != nil {
+			return err
 		}
 	}
 	if ownerDSN == "" {
@@ -107,33 +86,10 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		ownerDSN = readWriteDSN
 	}
 	schema := e.Cfg.PostgresSchemaName()
-	if cloudsql.Adopted {
-		recorded, err := e.recordedAPIServerEnvVars(ctx)
-		if err != nil {
-			return err
-		}
-		if !e.Cfg.PostgresReadWriteRoleSet && recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "" {
-			readWriteRole = recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"]
-		}
-		if !e.Cfg.PostgresOwnerRoleSet && recorded["ATE_API_POSTGRES_OWNER_ROLE"] != "" {
-			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
-		}
-		if poolMaxConns == "" {
-			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
-		}
-		if e.Cfg.PostgresSchema == "" {
-			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
-			if err != nil {
-				return err
-			}
-			if secret != nil && len(secret.Data["ATE_API_POSTGRES_SCHEMA"]) != 0 {
-				schema = string(secret.Data["ATE_API_POSTGRES_SCHEMA"])
-			}
-		}
+	configVars := map[string]string{
+		"ATE_API_POSTGRES_READ_WRITE_ROLE": readWriteRole,
+		"ATE_API_POSTGRES_OWNER_ROLE":      ownerRole,
 	}
-	configVars := cloudSQLEnvVars(cloudsql)
-	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
-	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	if poolMaxConns != "" {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
@@ -225,10 +181,6 @@ func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]str
 // refuseBundledOverExternal stops a run that names no database from moving an
 // install off its external PostgreSQL, since records hold no connection strings.
 func (e *Env) refuseBundledOverExternal(ctx context.Context) error {
-	// An explicitly empty Cloud SQL instance asks for the bundled database.
-	if e.Cfg.CloudSQL.InstanceSet {
-		return nil
-	}
 	recorded, _, err := e.recordedConnectionStrings(ctx)
 	if err != nil {
 		return err

@@ -17,7 +17,7 @@ kind: Kustomization
 
 # ate-otel-config.yaml replaces the base ../ate-otel-config.yaml (same ConfigMap
 # name) so every component's `envFrom` resolves to the in-cluster collector
-# instead of the GKE one. It is listed here rather than in ./atelet or
+# instead of the base file's empty endpoint. It is listed here rather than in ./atelet or
 # ./ate-api-server because those overlays are also built standalone; listing it
 # in the bundle and an overlay would be a duplicate resource. ate-setup applies
 # the ConfigMap directly for the single-component redeploys.
