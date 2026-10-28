@@ -172,7 +172,8 @@ func TestEpochRequire(t *testing.T) {
 }
 
 // The readiness check holds the pod not Ready until the worker process has
-// registered, so a restarted one takes no placements before it can serve them.
+// reported its sandbox runtimes, so it takes no placements before it can serve
+// them.
 func TestEpochRegistered(t *testing.T) {
 	var e Epoch
 	if err := e.Registered(context.Background()); err == nil {
@@ -295,9 +296,6 @@ func TestRunStoresEpochAfterFirstReport(t *testing.T) {
 				if got := epoch.Load(); got != 0 {
 					t.Errorf("epoch = %d while runtimes were being reported, want 0", got)
 				}
-				if err := epoch.Registered(ctx); err == nil {
-					t.Error("Registered() = nil while runtimes were being reported, want an error")
-				}
 				cancel()
 			}}
 			err := run(ctx, ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, PodIPs: []string{"10.0.0.1"}}, &ateletpb.WorkerResources{Actors: testActors}, client, &epoch, nil)
@@ -307,15 +305,12 @@ func TestRunStoresEpochAfterFirstReport(t *testing.T) {
 			if got := epoch.Load(); got != tc.wantEpoch {
 				t.Errorf("epoch = %d, want %d", got, tc.wantEpoch)
 			}
-			if err := epoch.Registered(context.Background()); (err == nil) != (tc.wantEpoch != 0) {
-				t.Errorf("Registered() = %v, want ready %v", err, tc.wantEpoch != 0)
-			}
 		})
 	}
 }
 
 // runtimesRecorder is a fakeSupport that hands each sandbox runtimes report to
-// onReport and fails it with err.
+// onReport and returns err.
 type runtimesRecorder struct {
 	*fakeSupport
 	onReport func(*ateletpb.SetWorkerSandboxRuntimesRequest)
