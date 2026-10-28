@@ -228,6 +228,11 @@ const actorConnectCircuitBreakerLimit = 1048576
 // tunnelIdleTimeout closes unused tunnels, which hold actor connections.
 const tunnelIdleTimeout = 60 * time.Second
 
+const (
+	ingressPerConnectionBufferLimitBytes = 32768
+	ingressTransportSocketConnectTimeout = 10 * time.Second
+)
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -1432,6 +1437,13 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 	hcm := newAny(&hcmv3.HttpConnectionManager{
 		StatPrefix:        statPrefix,
 		GenerateRequestId: &wrapperspb.BoolValue{Value: true},
+		// Connections to actors without active requests will be disconnected
+		// after 5 minutes.
+		CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
+			IdleTimeout: durationpb.New(5 * time.Minute),
+		},
+		// Prevent clents from creating hanging requests with incomplete headers.
+		RequestHeadersTimeout: durationpb.New(10 * time.Second),
 		UpgradeConfigs: []*hcmv3.HttpConnectionManager_UpgradeConfig{
 			{UpgradeType: "websocket"},
 		},
@@ -1584,6 +1596,8 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 			},
 		},
 		AdditionalAddresses: dualStackAdditionalAddresses(x.httpsPort),
+		// Limit I/O buffer to reduce noisy neighbour effect from chatty clients.
+		PerConnectionBufferLimitBytes: wrapperspb.UInt32(ingressPerConnectionBufferLimitBytes),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1594,7 +1608,8 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 						},
 					},
 				},
-				TransportSocket: x.buildDownstreamTlsTransportSocket(alpn),
+				TransportSocket:               x.buildDownstreamTlsTransportSocket(alpn),
+				TransportSocketConnectTimeout: durationpb.New(ingressTransportSocketConnectTimeout),
 			},
 		},
 	}
@@ -1618,7 +1633,8 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 				},
 			},
 		},
-		AdditionalAddresses: dualStackAdditionalAddresses(x.connectTLSPort),
+		AdditionalAddresses:           dualStackAdditionalAddresses(x.connectTLSPort),
+		PerConnectionBufferLimitBytes: wrapperspb.UInt32(ingressPerConnectionBufferLimitBytes),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1632,7 +1648,8 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 				// No ALPN: CONNECT-TLS clients speak HTTP/1.1 CONNECT
 				// today, and the HTTPS listener's h2 offer deliberately
 				// leaves this listener alone.
-				TransportSocket: x.buildDownstreamTlsTransportSocket(nil),
+				TransportSocket:               x.buildDownstreamTlsTransportSocket(nil),
+				TransportSocketConnectTimeout: durationpb.New(ingressTransportSocketConnectTimeout),
 			},
 		},
 	}
