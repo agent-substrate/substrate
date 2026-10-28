@@ -369,7 +369,7 @@ type AteWorkerService struct {
 	shuttingDown atomic.Bool
 
 	// epoch is the epoch this process registered with. It starts no workload
-	// before registering.
+	// before reporting its sandbox runtimes.
 	epoch register.Epoch
 
 	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
