@@ -254,6 +254,17 @@ func main() {
 		imageCredsKeychain = kc
 	}
 
+	// Validated before the caches are cleared, so a directory the flags
+	// reject is never emptied.
+	if err := validateImageCacheGCFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
+	}
+	if err := validateSandboxAssetCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
+	}
+	if err := validateSnapshotCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
+	}
 	bootID, err := bootid.Read(bootid.Path)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
@@ -267,9 +278,6 @@ func main() {
 		slog.InfoContext(ctx, "Cleared the node-local caches after a node reboot")
 	}
 
-	if err := validateImageCacheGCFlags(); err != nil {
-		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
-	}
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithKeychain(imageCredsKeychain),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
@@ -284,9 +292,6 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
-	if err := validateSandboxAssetCacheFlags(); err != nil {
-		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
-	}
 	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
@@ -298,9 +303,6 @@ func main() {
 	}
 	if err := filecachegc.Start(ctx, ateattr.FileCacheSandboxAsset, sandboxAssetCache, sandboxAssetCacheGCFlags, fileCacheInstruments); err != nil {
 		serverboot.Fatal(ctx, "Failed to start the sandbox asset cache GC", err)
-	}
-	if err := validateSnapshotCacheFlags(); err != nil {
-		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
 	}
 	snapshotCache, err := openSnapshotCache(ctx, *snapshotCacheDir, *snapshotCacheMinAge, *snapshotCacheFetchTimeout)
 	if err != nil {
