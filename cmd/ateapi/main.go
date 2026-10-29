@@ -633,10 +633,12 @@ func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath strin
 	// ateapiauth interceptor.
 	const clientAuth = tls.VerifyClientCertIfGiven
 
+	// Without a CA pool, don't request client certs. Go would verify them
+	// against the system roots.
 	if caCertsPath == "" {
 		return &tls.Config{
 			GetCertificate: serverCert,
-			ClientAuth:     clientAuth,
+			ClientAuth:     tls.NoClientCert,
 		}, nil
 	}
 
