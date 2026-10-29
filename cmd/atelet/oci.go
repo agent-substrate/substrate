@@ -103,8 +103,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// the workload runs: the cached image layers are the read-only lowerdirs,
 	// and the bundle-local upper/work hold this actor's private writes (wiped
 	// between runs, preserving the pristine-rootfs-per-run contract the old
-	// full re-untar provided). atelet only prepares the (empty) directories —
-	// it deliberately runs with no capabilities, so it cannot mount.
+	// full re-untar provided). atelet only prepares the (empty) directories:
+	// it has no CAP_SYS_ADMIN, so it cannot mount.
 	for _, d := range []string{"rootfs", "upper", "work"} {
 		if err := os.MkdirAll(path.Join(bundlePath, d), 0o700); err != nil {
 			return nil, "", fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)

@@ -39,11 +39,11 @@ type statResponse struct {
 }
 
 // layerOwners are paths whose owner and mode the probe image's layers record.
-// The probe is built on the repo's default ko base image (.ko.yaml), a
-// distroless static image whose base layer has /home/nonroot as drwx------
-// owned by 65532:65532 (distroless's nonroot user), /var/tmp as root-owned
-// 1777, and root-owned system files. /var/tmp, not /tmp, checks the sticky
-// bit: gVisor mounts its own 1777 tmpfs over an empty /tmp.
+// .ko.yaml builds the probe on the root distroless static base, whose base
+// layer has /home/nonroot as drwx------ owned by 65532:65532 (distroless's
+// nonroot user), /var/tmp as root-owned 1777, and root-owned system files.
+// /var/tmp, not /tmp, checks the sticky bit: gVisor mounts its own 1777 tmpfs
+// over an empty /tmp.
 var layerOwners = []statResponse{
 	{Path: "/home/nonroot", UID: 65532, GID: 65532, Mode: "drwx------"},
 	{Path: "/var/tmp", UID: 0, GID: 0, Mode: "dtrwxrwxrwx"},
