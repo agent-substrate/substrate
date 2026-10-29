@@ -1070,6 +1070,47 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 	}
 }
 
+func TestResolveTagSource_TemplateMismatch(t *testing.T) {
+	ctx := t.Context()
+	persistence := newTestPersistence(t)
+	tagRef := &ateapi.ObjectRef{Atespace: "team-a", Name: "tag"}
+	if _, err := persistence.CreateTag(ctx, &ateapi.Tag{
+		Metadata: &ateapi.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
+		Scope:    ateapi.TagScope_TAG_SCOPE_PUBLISHED,
+		Status: &ateapi.TagStatus{
+			ActorTemplateUid: "uid-a",
+			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "uid-a", "snap", "gs://bucket/atespaces/team-a/tags/snap", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := newServiceImpl(persistence, nil)
+
+	tests := []struct {
+		name        string
+		templateUID string
+		wantCode    codes.Code
+		wantInMsg   []string
+	}{
+		{name: "same template", templateUID: "uid-a", wantCode: codes.OK},
+		{name: "other template", templateUID: "uid-b", wantCode: codes.FailedPrecondition, wantInMsg: []string{`"uid-b"`, `"uid-a"`}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			template := &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Uid: tc.templateUID}}
+			_, err := svc.resolveTagSource(ctx, "team-a", tagRef, template)
+			if got := apierror.Code(err); got != tc.wantCode {
+				t.Fatalf("resolveTagSource = %v, want code %v", err, tc.wantCode)
+			}
+			for _, want := range tc.wantInMsg {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %s", err, want)
+				}
+			}
+		})
+	}
+}
+
 type fakeActorServiceStore struct {
 	serviceStore
 	actors map[resources.ActorRef]*ateapi.Actor
