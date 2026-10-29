@@ -83,8 +83,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAME   TEMPLATE             STATE                 WORKER POD        WORKER IPS        VERSION   AGE
-team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4,fd00::1   2         5m
+	expected := `ATESPACE   NAME   TEMPLATE             STATE                 WORKER POD        WORKER IPS        VERSION   ERROR   AGE
+team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4,fd00::1   2                 5m
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -156,7 +156,12 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
 			},
 			ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-1"},
-			Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+			Status: &ateapi.ActorStatus{
+				State: ateapi.ActorState_ACTOR_STATE_CRASHED,
+				Crash: &ateapi.ActorCrash{
+					Message: "resume failed: killed",
+				},
+			},
 		},
 		{
 			Metadata: &ateapi.ResourceMetadata{
@@ -183,10 +188,11 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, name.
-	expected := `ATESPACE   NAME    TEMPLATE             STATE                   WORKER POD   WORKER IPS   VERSION   AGE
-team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                    0         5m
-team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                    0         5h
-team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                    0         3d
+	// The ERROR column flags that status.crash is set; full details are in json/yaml.
+	expected := `ATESPACE   NAME    TEMPLATE             STATE                   WORKER POD   WORKER IPS   VERSION   ERROR   AGE
+team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                    0                 5m
+team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                    0                 5h
+team-b     zebra   default/template-1   ACTOR_STATE_CRASHED     <none>                    0         ERROR   3d
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -217,8 +223,8 @@ func TestPrintActorsTo_Table_TemplateRef(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   WORKER POD   WORKER IPS   VERSION   AGE
-team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                    0         5m
+	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   WORKER POD   WORKER IPS   VERSION   ERROR   AGE
+team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                    0                 5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -839,6 +845,7 @@ func TestPrintWorkerTopTo_Table(t *testing.T) {
 	var buf bytes.Buffer
 	items := []*WorkerTopItem{
 		{
+			Name:      "counter-worker-uid-x123",
 			Pod:       "counter-worker-pool-7b9f8-x123",
 			Pool:      "counter",
 			Class:     "gvisor",
@@ -848,6 +855,7 @@ func TestPrintWorkerTopTo_Table(t *testing.T) {
 			Namespace: "ate-demo-counter",
 		},
 		{
+			Name:      "counter-worker-uid-y456",
 			Pod:       "counter-worker-pool-7b9f8-y456",
 			Pool:      "counter",
 			Class:     "microvm",
@@ -863,9 +871,9 @@ func TestPrintWorkerTopTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAME                             POOL      CLASS     STATUS     CPU(CORES)   MEMORY(bytes)
-counter-worker-pool-7b9f8-x123   counter   gvisor    ASSIGNED   342m         412Mi
-counter-worker-pool-7b9f8-y456   counter   microvm   FREE       2m           64Mi
+	expected := `NAME                      POOL      CLASS     STATUS     CPU(MILLICORES)   MEMORY(bytes)
+counter-worker-uid-x123   counter   gvisor    ASSIGNED   342m              412Mi
+counter-worker-uid-y456   counter   microvm   FREE       2m                64Mi
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -876,6 +884,7 @@ func TestPrintWorkerTopTo_JSON(t *testing.T) {
 	var buf bytes.Buffer
 	items := []*WorkerTopItem{
 		{
+			Name:   "worker-uid-1",
 			Pod:    "worker-1",
 			Pool:   "pool-1",
 			Status: "ASSIGNED",
@@ -892,6 +901,7 @@ func TestPrintWorkerTopTo_JSON(t *testing.T) {
 	expected := `{
   "workers": [
     {
+      "name": "worker-uid-1",
       "pod": "worker-1",
       "pool": "pool-1",
       "status": "ASSIGNED",
@@ -910,6 +920,7 @@ func TestPrintWorkerTopTo_YAML(t *testing.T) {
 	var buf bytes.Buffer
 	items := []*WorkerTopItem{
 		{
+			Name:   "worker-uid-1",
 			Pod:    "worker-1",
 			Pool:   "pool-1",
 			Status: "ASSIGNED",
@@ -926,6 +937,7 @@ func TestPrintWorkerTopTo_YAML(t *testing.T) {
 	expected := `workers:
 - cpu: 100m
   memory: 128Mi
+  name: worker-uid-1
   pod: worker-1
   pool: pool-1
   status: ASSIGNED

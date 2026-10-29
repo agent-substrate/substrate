@@ -45,10 +45,10 @@ For how the pieces fit together, see the [Architecture](../concepts/architecture
 
 - **SandboxConfig** (Kubernetes CRD): a cluster-scoped resource holding the
   sandbox binaries for one runtime family (the gVisor `runsc` binary, or a
-  microVM kernel/firmware/config). An actor resolves its sandbox at first cold
-  boot from the config its `ActorTemplate` names (naming one is currently
-  required; per-class cluster defaults are planned), so one config pins the
-  runtime version for many templates.
+  microVM kernel/firmware/config). A `WorkerPool`'s `sandboxClasses` entry
+  resolves its `SandboxConfig` (either by explicit `configRef` or via the
+  per-class cluster default), decoupling the sandbox runtime version from the
+  workload definition in the `ActorTemplate`.
 
 ## Records (dynamic state, in the control-plane store)
 
@@ -153,8 +153,8 @@ for etcd.
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
   Templates with golden snapshot creation disabled do not create one. By
   default an Actor of that template is first restored from this shared
-  snapshot when it is available; otherwise it cold-boots. It is always a
-  `MEMORY` capture.
+  snapshot when it is available; otherwise it cold-boots. Golden capture follows
+  `preferredFidelity`.
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.
