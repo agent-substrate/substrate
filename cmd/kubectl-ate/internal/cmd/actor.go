@@ -864,7 +864,7 @@ func init() {
 	resumeCmd.AddCommand(resumeActorCmd)
 
 	suspendActorCmd.Flags().StringVarP(&suspendActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
-	suspendActorCmd.Flags().StringVar(&suspendActorModeFlag, "mode", suspendModeAsync, "how the snapshot is made durable: async (return once the snapshot is on the worker's node, and upload it in the background) or sync (return once the snapshot is in object storage)")
+	suspendActorCmd.Flags().StringVar(&suspendActorModeFlag, "mode", suspendModeAsync, "how a running actor's snapshot is made durable: async (return once the snapshot is on the worker's node, and upload it in the background) or sync (return once the snapshot is in object storage); an already suspended actor returns unchanged without waiting for upload in either mode")
 	suspendCmd.AddCommand(suspendActorCmd)
 
 	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "stream logs continuously")
