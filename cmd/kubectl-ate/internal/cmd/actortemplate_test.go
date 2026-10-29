@@ -120,7 +120,7 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	}{
 		{name: "empty", manifest: ""},
 		{name: "JSON null", manifest: " \nnull\n ", wantErrContains: "manifest is empty"},
-		{name: "multiple documents", manifest: "metadata: {name: n}\n---\nmetadata: {name: m}\n", wantErrContains: "more than one document"},
+		{name: "multiple documents", manifest: "metadata: {name: first}\n---\nmetadata: {name: second}\n", wantErrContains: "more than one document"},
 		{
 			name:            "JSON resources limits list",
 			manifest:        "{\n  \"resources\": {\n    \"limits\": [{\"name\": \"cpu\", \"quantity\": \"1\"}]\n  }\n}\n",
