@@ -331,6 +331,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		}
 
 		items = append(items, &printer.WorkerTopItem{
+			Name:      w.GetMetadata().GetName(),
 			Pod:       podName,
 			Pool:      pool,
 			Class:     hardware.SandboxClass(w.GetStatus()),

@@ -45,7 +45,7 @@ The kind overlay installed by `ate-setup --kind deploy ate-system` already provi
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
 kubectl port-forward -n otel-system svc/jaeger 16686:16686 &
-kubectl ate get actor my-counter-1 --trace
+kubectl ate get actor my-counter-1 -a ate-demo-counter --trace
 # open http://localhost:16686 and search for the most recent trace
 ```
 
@@ -107,17 +107,21 @@ kubectl ate get workers -l <label-selector>
 | `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `WORKER IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
+| `ERROR` | Flags whether the actor has crashed (`ERROR`). The full crash reason is available via `-o yaml` or `-o json`. |
 | `AGE` | Time elapsed since the actor was created. |
 
 #### `kubectl ate get worker` output columns
 
 | Column | Meaning |
 |---|---|
-| `NAMESPACE` | The `WorkerPool` namespace. |
+| `NAME` | The worker record name (Pod UID). |
 | `POOL` | The `WorkerPool` name. |
-| `POD` | The worker pod name. |
-| `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
-| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-name>`. |
+| `STATE` | Current worker lifecycle state (`WORKER_STATE_ACTIVE`, etc.). |
+| `ACTORS` | Hosted actors vs capacity (allocated/capacity, e.g. `0/1000`). |
+| `CPU(MILLICORES)` | Allocated vs capacity CPU in millicores (e.g. `0/1000`). |
+| `MEMORY` | Allocated vs capacity memory (e.g. `0/1Gi`). |
+| `POD` | The worker pod (`<namespace>/<pod-name>`). |
+| `AGE` | Time elapsed since the worker was created. |
 
 ### Atespaces
 

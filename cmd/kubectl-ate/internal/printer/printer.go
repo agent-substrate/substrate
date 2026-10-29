@@ -72,7 +72,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapi.Actor, format string) error {
 		return printProto(out, &ateapi.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATE\tWORKER POD\tWORKER IPS\tVERSION\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATE\tWORKER POD\tWORKER IPS\tVERSION\tERROR\tAGE")
 		for _, actor := range actors {
 			atespace := actor.GetMetadata().GetAtespace()
 			name := actor.GetMetadata().GetName()
@@ -86,8 +86,13 @@ func PrintActorsTo(out io.Writer, actors []*ateapi.Actor, format string) error {
 			}
 
 			version := actor.GetMetadata().GetVersion()
+			// Crash messages are too long for a table cell.
+			errFlag := ""
+			if actor.GetStatus().GetCrash() != nil {
+				errFlag = "ERROR"
+			}
 			age := formatAge(actor.GetMetadata().GetCreateTime())
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, state, worker, strings.Join(assignment.GetWorkerPodIps(), ","), version, age)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", atespace, name, template, state, worker, strings.Join(assignment.GetWorkerPodIps(), ","), version, errFlag, age)
 		}
 		return w.Flush()
 	default:
@@ -183,6 +188,7 @@ func PrintWorkerTo(out io.Writer, worker *ateapi.Worker, format string) error {
 
 // WorkerTopItem represents real-time hardware resource utilization for a worker pod.
 type WorkerTopItem struct {
+	Name      string `json:"name" yaml:"name"`
 	Pod       string `json:"pod" yaml:"pod"`
 	Pool      string `json:"pool" yaml:"pool"`
 	Class     string `json:"class,omitempty" yaml:"class,omitempty"`
@@ -227,10 +233,10 @@ func PrintWorkerTopTo(out io.Writer, items []*WorkerTopItem, format string) erro
 // PrintWorkerTopTable prints worker top items as a formatted table.
 func PrintWorkerTopTable(out io.Writer, items []*WorkerTopItem) error {
 	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tPOOL\tCLASS\tSTATUS\tCPU(CORES)\tMEMORY(bytes)")
+	fmt.Fprintln(w, "NAME\tPOOL\tCLASS\tSTATUS\tCPU(MILLICORES)\tMEMORY(bytes)")
 	for _, item := range items {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			item.Pod, item.Pool, item.Class, item.Status, item.CPU, item.Memory)
+			item.Name, item.Pool, item.Class, item.Status, item.CPU, item.Memory)
 	}
 	return w.Flush()
 }
