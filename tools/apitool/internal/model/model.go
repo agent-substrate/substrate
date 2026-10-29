@@ -26,7 +26,7 @@ import (
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 )
@@ -223,6 +223,11 @@ type Field struct {
 	// declares no `optional` field today, so this is always false for
 	// every field this model currently produces.
 	Proto3Optional bool
+
+	// Redacted is true for a field with the debug_redact option, which holds
+	// a secret. For example, true for EnvVar.value
+	// (`string value = 2 [ debug_redact = true ];`).
+	Redacted bool
 }
 
 // Enum is one enum declared in the file, top-level or nested.
@@ -273,10 +278,9 @@ type EnumValue struct {
 }
 
 // Build compiles source - a single, self-contained proto3 file's raw text -
-// with source info retained, and walks the result into an API. Annotations
-// are read from the generated descriptors compiled into this binary (see
-// generatedOptions), so a message or method that has none, such as one in a
-// test fixture, comes back unannotated.
+// with source info retained, and walks the result into an API. source may be
+// any release's ateapi.proto: annotations are read from source itself (see
+// sourceOptions).
 func Build(ctx context.Context, source string) (*API, error) {
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
@@ -291,22 +295,28 @@ func Build(ctx context.Context, source string) (*API, error) {
 	if len(files) != 1 {
 		return nil, fmt.Errorf("expected exactly one compiled file, got %d", len(files))
 	}
-	return fromDescriptor(files[0]), nil
+	return fromDescriptor(files[0])
 }
 
 // fromDescriptor walks fd into an API.
-func fromDescriptor(fd protoreflect.FileDescriptor) *API {
+func fromDescriptor(fd protoreflect.FileDescriptor) (*API, error) {
 	api := &API{}
 
 	services := fd.Services()
 	for i := range services.Len() {
-		api.Services = append(api.Services, buildService(fd, services.Get(i)))
+		svc, err := buildService(fd, services.Get(i))
+		if err != nil {
+			return nil, err
+		}
+		api.Services = append(api.Services, svc)
 	}
 
-	collectMessages(fd, fd.Messages(), api)
+	if err := collectMessages(fd, fd.Messages(), api); err != nil {
+		return nil, err
+	}
 	collectEnums(fd, fd.Enums(), api)
 
-	return api
+	return api, nil
 }
 
 // ScopeToService returns a copy of api with only the service named
@@ -389,16 +399,23 @@ func ScopeToService(api *API, serviceName protoreflect.Name) *API {
 	return out
 }
 
-func collectMessages(fd protoreflect.FileDescriptor, mds protoreflect.MessageDescriptors, api *API) {
+func collectMessages(fd protoreflect.FileDescriptor, mds protoreflect.MessageDescriptors, api *API) error {
 	for i := range mds.Len() {
 		md := mds.Get(i)
 		if md.IsMapEntry() {
 			continue // synthetic per-map-field type, never a documented message.
 		}
-		api.Messages = append(api.Messages, buildMessage(fd, md))
-		collectMessages(fd, md.Messages(), api)
+		m, err := buildMessage(fd, md)
+		if err != nil {
+			return err
+		}
+		api.Messages = append(api.Messages, m)
+		if err := collectMessages(fd, md.Messages(), api); err != nil {
+			return err
+		}
 		collectEnums(fd, md.Enums(), api)
 	}
+	return nil
 }
 
 func collectEnums(fd protoreflect.FileDescriptor, eds protoreflect.EnumDescriptors, api *API) {
@@ -407,7 +424,7 @@ func collectEnums(fd protoreflect.FileDescriptor, eds protoreflect.EnumDescripto
 	}
 }
 
-func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescriptor) Service {
+func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescriptor) (Service, error) {
 	svc := Service{
 		FullName: sd.FullName(),
 		Name:     sd.Name(),
@@ -416,67 +433,95 @@ func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescrip
 	methods := sd.Methods()
 	for i := range methods.Len() {
 		md := methods.Get(i)
+		resource, err := methodResource(md)
+		if err != nil {
+			return Service{}, err
+		}
 		svc.Methods = append(svc.Methods, Method{
 			Name:            md.Name(),
 			Comment:         comment(fd, md),
 			InputName:       md.Input().FullName(),
 			OutputName:      md.Output().FullName(),
-			Resource:        methodResource(md),
+			Resource:        resource,
 			ServiceFullName: svc.FullName,
 			ServiceName:     svc.Name,
 		})
 	}
-	return svc
+	return svc, nil
 }
 
-func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescriptor) Message {
+func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescriptor) (Message, error) {
+	annotation, err := resourceAnnotation(md)
+	if err != nil {
+		return Message{}, err
+	}
 	m := Message{
 		FullName:           md.FullName(),
 		Name:               shortName(fd, md.FullName()),
 		ParentFullName:     parentFullName(md),
 		Comment:            comment(fd, md),
-		ResourceAnnotation: resourceAnnotation(md),
+		ResourceAnnotation: annotation,
 	}
 	fields := md.Fields()
 	for i := range fields.Len() {
 		m.Fields = append(m.Fields, buildField(fd, fields.Get(i)))
 	}
-	return m
+	return m, nil
 }
 
-// generatedOptions returns the options of the generated descriptor compiled
-// into this binary under d's full name, or nil if there's none. Build reads
-// annotations from there rather than from d: protocompile, compiling the
-// annotations' own definitions from source, fills them in as dynamic
-// messages that the generated ateapi extension types can't read.
-func generatedOptions(d protoreflect.Descriptor) proto.Message {
-	g, err := protoregistry.GlobalFiles.FindDescriptorByName(d.FullName())
+// sourceOptions returns d's options decoded again with the generated types
+// in this binary. protocompile, compiling the annotations' own definitions
+// from source, fills them in as dynamic messages that the generated ateapi
+// extension types can't read. Decoding again resolves the extensions by field
+// number, so they read the same whatever package the source declares. An
+// option this binary doesn't know, such as an annotation a release declared
+// under another number, is an error rather than a missing annotation.
+func sourceOptions(d protoreflect.Descriptor) (proto.Message, error) {
+	src := d.Options()
+	b, err := proto.Marshal(src)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("while encoding options of %s: %w", d.FullName(), err)
 	}
-	return g.Options()
+	opts := src.ProtoReflect().Type().New().Interface()
+	if err := proto.Unmarshal(b, opts); err != nil {
+		return nil, fmt.Errorf("while decoding options of %s: %w", d.FullName(), err)
+	}
+	if len(opts.ProtoReflect().GetUnknown()) > 0 {
+		return nil, fmt.Errorf("%s has options this apitool doesn't know", d.FullName())
+	}
+	return opts, nil
 }
 
-func methodResource(md protoreflect.MethodDescriptor) string {
-	opts := generatedOptions(md)
-	if opts == nil {
-		return ""
+func methodResource(md protoreflect.MethodDescriptor) (string, error) {
+	opts, err := sourceOptions(md)
+	if err != nil {
+		return "", err
 	}
-	return proto.GetExtension(opts, ateapi.E_Method).(*ateapi.MethodAnnotation).GetResource()
+	a := proto.GetExtension(opts, ateapi.E_Method).(*ateapi.MethodAnnotation)
+	if len(a.ProtoReflect().GetUnknown()) > 0 {
+		return "", fmt.Errorf("%s has a method annotation with fields this apitool doesn't know", md.FullName())
+	}
+	return a.GetResource(), nil
 }
 
-func resourceAnnotation(md protoreflect.MessageDescriptor) *ResourceAnnotation {
-	opts := generatedOptions(md)
-	if opts == nil || !proto.HasExtension(opts, ateapi.E_Resource) {
-		return nil
+func resourceAnnotation(md protoreflect.MessageDescriptor) (*ResourceAnnotation, error) {
+	opts, err := sourceOptions(md)
+	if err != nil {
+		return nil, err
+	}
+	if !proto.HasExtension(opts, ateapi.E_Resource) {
+		return nil, nil
 	}
 	a := proto.GetExtension(opts, ateapi.E_Resource).(*ateapi.ResourceAnnotation)
+	if len(a.ProtoReflect().GetUnknown()) > 0 {
+		return nil, fmt.Errorf("%s has a resource annotation with fields this apitool doesn't know", md.FullName())
+	}
 	return &ResourceAnnotation{
 		Parents:   a.GetParents(),
 		Singleton: a.GetSingleton(),
 		Scope:     a.GetScope(),
 		Plural:    a.GetPlural(),
-	}
+	}, nil
 }
 
 func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescriptor) Field {
@@ -486,6 +531,7 @@ func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescript
 		Comment:  comment(fd, field),
 		Repeated: field.IsList(),
 		Kind:     field.Kind(),
+		Redacted: field.Options().(*descriptorpb.FieldOptions).GetDebugRedact(),
 	}
 
 	switch {
@@ -594,6 +640,16 @@ func PublicDoc(comment string) string {
 // internalNote matches an internal note in a doc comment, which may span
 // lines. For example, "(-- The bound is a guardrail. --)".
 var internalNote = regexp.MustCompile(`(?s)\(--.*?--\)`)
+
+// Summary returns the first paragraph of comment's PublicDoc: the short
+// description shown where the whole doc doesn't fit, such as a table.
+func Summary(comment string) string {
+	lines := strings.Split(PublicDoc(comment), "\n")
+	if i := slices.IndexFunc(lines, isBlank); i >= 0 {
+		lines = lines[:i]
+	}
+	return strings.Join(lines, "\n")
+}
 
 // isDirective reports whether line is a validation-gen directive, e.g.
 // "+k8s:required", or one of our own metadata tags, e.g. "+ate:preview".

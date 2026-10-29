@@ -35,3 +35,20 @@ A unit test enforces this same strict matching as a presubmit gate.
 ```bash
 go test ./internal/validate/... -run TestExemptions
 ```
+
+## `generate-docs`
+
+Generates the website's API reference. `hack/site.sh content` runs it before
+each site build, writing to `site/assets/api-reference/`:
+
+- `latest/`, from this checkout's `ateapi.proto`, and with `--releases-since`
+  a directory per release tagged since, read from git. Each holds
+  `reference.html`, the page body, and `nav.json`, the resource tree the
+  site's sidebar lists.
+- `versions.json`, the version names, newest first.
+- `style.css` and `search.js`, which every version's page loads. The site's
+  theme sets the colors (see `site/README.md`).
+
+```bash
+go run . generate-docs --out-dir ../../site/assets/api-reference --releases-since v1.0.0
+```
