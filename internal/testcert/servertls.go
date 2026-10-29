@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // ServerTLS holds an origin key pair and the public CA trusted by its client.

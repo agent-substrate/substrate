@@ -30,11 +30,10 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - serviceaccounts
   verbs:
-  - get
-  - list
-  - watch
+  - create
+  - patch
 - apiGroups:
   - apps
   resources:
@@ -47,6 +46,12 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
 - apiGroups:
   - ate.dev
   resources:
@@ -128,6 +133,16 @@ metadata:
   name: ate-controller
   namespace: ate-system
 rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - egress-mitm-ca-pool
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - discovery.k8s.io
   resources:

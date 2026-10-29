@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/internal/ateclient"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -75,6 +75,7 @@ func loadKubeConfig(errOut io.Writer, kubeconfigPath, contextName string) (*rest
 func newAPIClient(cmd *cobra.Command) (*ateclient.Client, error) {
 	ctx := cmd.Context()
 	errOut := cmd.ErrOrStderr()
+	warnSharedIdentity(errOut, tokenFile)
 
 	if verbosity >= vFlow {
 		vlogf(errOut, vFlow, "Connecting to ate-api-server (endpoint=%q, kubeconfig=%q, context=%q, token-file=%q, trace=%t)",
@@ -103,6 +104,18 @@ func newAPIClient(cmd *cobra.Command) (*ateclient.Client, error) {
 	}
 
 	return cli, nil
+}
+
+// warnSharedIdentity warns on errOut when the command will act as the shared
+// fallback ServiceAccount rather than as the user. Everyone relying on the
+// fallback is the same principal, holding whatever that principal is granted:
+// global owner wherever the install names it a bootstrap owner.
+func warnSharedIdentity(errOut io.Writer, tokenFile string) {
+	if tokenFile != "" {
+		return
+	}
+	fmt.Fprintf(errOut, "Warning: no --token-file given; acting as the shared identity %s rather than as yourself. Pass --token-file to act as yourself.\n",
+		ateclient.FallbackPrincipal())
 }
 
 func formatProtoCompact(v any) string {

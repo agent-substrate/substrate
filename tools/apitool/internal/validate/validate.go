@@ -25,10 +25,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/exemption"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/tools/apitool/internal/exemption"
+	"go.ate.dev/substrate/tools/apitool/internal/lint"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // serviceName is the RPC service apitool validates: ateapi.proto's public,
@@ -40,7 +40,7 @@ const serviceName = "Control"
 // from, so which service and proto file that is stays this package's own
 // concern.
 func API(ctx context.Context) (*model.API, error) {
-	api, err := model.Build(ctx, ateapipb.Source)
+	api, err := model.Build(ctx, ateapi.Source)
 	if err != nil {
 		return nil, fmt.Errorf("while building API model: %w", err)
 	}
@@ -90,7 +90,7 @@ func DefaultExemptionsPath() (string, error) {
 	return root + "/tools/apitool/exemptions.json", nil
 }
 
-const rootModule = "module github.com/agent-substrate/substrate"
+const rootModule = "module go.ate.dev/substrate"
 
 // repoRoot walks up from the working directory to find the repo root, i.e.
 // the directory containing the go.mod declaring rootModule.

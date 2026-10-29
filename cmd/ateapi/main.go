@@ -21,42 +21,46 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
-	"github.com/agent-substrate/substrate/internal/oidcjwt"
-	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/internal/volume"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apiauthn"
+	"go.ate.dev/substrate/cmd/ateapi/internal/apiconfig"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
+	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/oidcjwt"
+	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/internal/volume"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -69,6 +73,8 @@ const maxRPCDeadline = 10 * time.Minute
 const minResyncInterval = 250 * time.Millisecond
 
 var (
+	configFile = pflag.String("config-file", "", "API server config file")
+
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	healthListenAddr     = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
@@ -81,16 +87,16 @@ var (
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner, watch, or readiness probe pools. The DSN or pgx default is used when unset.")
-	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
 	// TODO: Move the authz settings into the hot-reloadable config proto
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
 	// changes take effect without a restart.
-	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
+	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. Required: at least one.")
 	// These SPIFFE IDs hold the matching system component role when they call
 	// over mTLS.
-	controllerSPIFFEID    = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
-	egressGatewaySPIFFEID = pflag.String("egress-gateway-spiffe-id", installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-egress. Holds the egress_gateway authz role, which reads and lists actors and reads their egress policies.")
-	ingressRouterSPIFFEID = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
+	controllerSPIFFEID       = pflag.String("controller-spiffe-id", installdefaults.ControllerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of ate-controller. Holds the controller authz role, which manages workers.")
+	egressGatewaySPIFFEIDs   = pflag.StringArray("egress-gateway-spiffe-id", []string{installdefaults.EgressSPIFFEID(installdefaults.NamespaceFromPodEnv())}, "mTLS SPIFFE IDs of atenet-egress and any other client that holds the egress_gateway authz role, which reads and lists actors and reads their egress policies. Repeat the flag for each ID.")
+	ingressRouterSPIFFEID    = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
+	apiServerSidecarSPIFFEID = pflag.String("api-server-sidecar-spiffe-id", installdefaults.APIServerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of the ate-api-server pod, which its sidecars share. Holds the api_server_sidecar role, which reads actors so the objectstore control plugin can scope their storage credentials.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
@@ -105,30 +111,52 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
+	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the PerTemplateSnapshotLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
 	pflag.Parse()
+
 	if *showVersion {
 		fmt.Println(version.String())
 		return
 	}
+
 	ctx := context.Background()
+
 	serverboot.InitLogger()
-	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
-		serverboot.Fatal(ctx, "Invalid --log-level", err)
+
+	// Load unified config.
+	if *configFile == "" {
+		serverboot.Fatal(ctx, "--config-file must be specified", nil)
 	}
+
+	config, err := apiconfig.LoadConfig(*configFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "Error while loading config file", err)
+	}
+
+	if err := serverboot.SetLogLevel(config.GetLogging().GetLevel()); err != nil {
+		serverboot.Fatal(ctx, "Invalid log level in config file", err)
+	}
+
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
+
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
+	}
+
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Storage settings moved to the objectstore-plugin sidecar", err)
 	}
+
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
@@ -140,6 +168,13 @@ func main() {
 	// Restore; a value it would refuse must fail the rollout, not the actors.
 	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
 		serverboot.Fatal(ctx, "Invalid --default-egress-gateway-address", errs.ToAggregate())
+	}
+	if *snapshotLocation != "" {
+		if err := resources.ValidateSnapshotLocation(*snapshotLocation); err != nil {
+			serverboot.Fatal(ctx, "Invalid --snapshot-location", err)
+		}
+	} else if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		serverboot.Fatal(ctx, "Missing --snapshot-location", fmt.Errorf("required unless the %s preview gate is enabled", preview.GatePerTemplateSnapshotLocation))
 	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
@@ -198,23 +233,34 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	// The authz stack is always wired so policy tuples stay in sync with the
-	// store; --experimental-enable-authz only controls enforcement in the
-	// interceptor.
-	if *experimentalEnableAuthz && len(*authzBootstrapOwners) == 0 {
+	if len(*authzBootstrapOwners) == 0 {
 		// Without a bootstrap owner, nobody could create the global
-		// AccessPolicy, so the enforced API would be unusable.
-		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
+		// AccessPolicy, so the API would be unusable.
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal"))
 	}
+	// atelet shares ateapi's namespace in every supported deployment topology,
+	// so we read it from Kubernetes' downward API rather than expose a flag.
+	ateletNamespace := installdefaults.NamespaceFromPodEnv()
+	// An empty ServiceAccount would not fail here: path.Join drops the empty
+	// segment, yielding an identity that parses but matches nothing, so every
+	// atelet dial would be rejected with no hint at the cause.
+	if *ateletServiceAccount == "" {
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--atelet-service-account must not be empty"))
+	}
+	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
+	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
+
 	fgaServer, err := authz.NewOpenFGAServer(pool)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
 	defer fgaServer.Close()
 	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners, authz.SystemPrincipals{
-		ControllerSPIFFEID:    *controllerSPIFFEID,
-		EgressGatewaySPIFFEID: *egressGatewaySPIFFEID,
-		IngressRouterSPIFFEID: *ingressRouterSPIFFEID,
+		ControllerSPIFFEID:       *controllerSPIFFEID,
+		EgressGatewaySPIFFEIDs:   *egressGatewaySPIFFEIDs,
+		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
+		AteletSPIFFEID:           ateletSPIFFEID,
+		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
@@ -237,21 +283,8 @@ func main() {
 	}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
-	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
-	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
-
-	// atelet shares ateapi's namespace in every supported deployment topology,
-	// so we read it from Kubernetes' downward API rather than expose a flag.
-	ateletNamespace := installdefaults.NamespaceFromPodEnv()
-	// An empty ServiceAccount would not fail here: path.Join drops the empty
-	// segment, yielding an identity that parses but matches nothing, so every
-	// atelet dial would be rejected with no hint at the cause.
-	if *ateletServiceAccount == "" {
-		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--atelet-service-account must not be empty"))
-	}
-	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
-	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
+	workerPoolLister := ateFactory.Ate().V1().WorkerPools().Lister()
+	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
@@ -294,7 +327,11 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), ateletSPIFFEID, *ateletClientCredBundle, *podIdentityCACerts)
+	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), ateletSPIFFEID, *ateletClientCredBundle, *podIdentityCACerts,
+		controlapi.WithNodeGetter(func(ctx context.Context, nodeName string) error {
+			_, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+			return err
+		}))
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
@@ -309,24 +346,23 @@ func main() {
 	controlSrv := controlapi.NewRPCService(
 		persistence,
 		workerCache,
-		sandboxConfigLister,
 		csiDriverConfigLister,
 		storageClassLister,
 		ateletDialer,
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectstorev1.NewControlProviderClient(objectStorePluginConn),
+		objectstore.NewControlProviderClient(objectStorePluginConn),
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
-		actorIDCAPool,
+		*snapshotLocation,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
-	// Crash the Actors lost when a Worker's ateom restarts.
+	// Crash the Actors lost when a Worker's worker restarts.
 	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
 	workerAssignmentReconciler.Start(shutdownCtx)
 
@@ -344,8 +380,9 @@ func main() {
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
-		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
+		authz.UnaryServerInterceptor(authorizer),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+		preview.UnaryServerInterceptor,
 	}
 
 	mux := grpc.NewServer(
@@ -361,11 +398,13 @@ func main() {
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
+			authz.StreamServerInterceptor(),
+			preview.StreamServerInterceptor,
 		),
 	)
 	reflection.Register(mux)
-	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool, *actorJWTIssuer, actorIDJWTAuthorityPool))
+	ateapi.RegisterControlServer(mux, controlSrv)
+	ateapi.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool, *actorJWTIssuer, actorIDJWTAuthorityPool))
 
 	// Every RPC needs the store, so a replica that cannot reach it leaves the
 	// Service until it can. Liveness stays green: the pool reconnects on its own.
@@ -424,6 +463,7 @@ func loadFlagsFromEnv() error {
 		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 		{actorJWTIssuer, "ATE_API_ACTOR_JWT_ISSUER"},
+		{snapshotLocation, "ATE_API_SNAPSHOT_LOCATION"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -438,9 +478,6 @@ func loadFlagsFromEnv() error {
 			}
 			*postgresPoolMaxConns = int32(value)
 		}
-	}
-	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
-		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
 	return nil
 }
@@ -469,7 +506,6 @@ func logFlagValues(ctx context.Context) {
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
-		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
@@ -478,6 +514,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
+		slog.String("snapshot-location", *snapshotLocation),
+		slog.Any("preview", *previewFlags),
 	)
 }
 
@@ -633,7 +671,7 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 		if err != nil {
 			return apiauthn.ServerConfig{}, fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
-		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
+		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, oidcjwt.HTTPKeySource(providerCfg.Issuer, httpClient))
 		serverCfg.JWTProviders = append(serverCfg.JWTProviders, apiauthn.JWTProvider{
 			Name:   providerCfg.Name,
 			Issuer: providerCfg.Issuer,
@@ -650,9 +688,28 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 	return serverCfg, nil
 }
 
+// validateActorJWTIssuer checks that issuer is an OpenID issuer identifier: an
+// https URL with a host and no user info, query, or fragment. A path is
+// allowed.
 func validateActorJWTIssuer(issuer string) error {
 	if issuer == "" {
 		return errors.New("required")
 	}
-	return oidcdiscovery.ValidateIssuer(issuer)
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("invalid issuer: %w", err)
+	}
+	switch {
+	case u.Scheme != "https":
+		return fmt.Errorf("issuer %q must use the https scheme", issuer)
+	case u.Hostname() == "":
+		return fmt.Errorf("issuer %q has no host", issuer)
+	case u.User != nil:
+		return fmt.Errorf("issuer %q must not contain user info", issuer)
+	case strings.Contains(issuer, "?"):
+		return fmt.Errorf("issuer %q must not contain a query", issuer)
+	case strings.Contains(issuer, "#"):
+		return fmt.Errorf("issuer %q must not contain a fragment", issuer)
+	}
+	return nil
 }

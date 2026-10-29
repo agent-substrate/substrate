@@ -33,9 +33,24 @@ import (
 // wrapped with %w, so errors.Is classification sees through the store.
 type FileFetcher func(ctx context.Context, dstPath string) error
 
+// fetchFunc is the shape shared by FileFetcher and DirFetcher once the
+// store has decided what it is fetching: fill in dataPath.
+type fetchFunc func(ctx context.Context, dataPath string) error
+
+// entryKind is what an entry's data is: one regular file, or a directory
+// tree. The kind is fixed by the method that fetched the entry; serving it
+// through a method of the other kind is an error, not a miss.
+type entryKind int
+
+const (
+	kindFile entryKind = iota
+	kindTree
+)
+
 // serveHit materializes a published cache entry at the caller's destination:
-// (*Store).linkOut serves a hard link, (*Store).copyOut a private copy. It
-// reports false, with no error, on a cache miss.
+// (*Store).linkOut serves a hard link, (*Store).copyOut a private copy,
+// (*Store).linkTreeOut a directory of hard links. It reports false, with no
+// error, on a cache miss.
 type serveHit func(key Key, dst string) (bool, error)
 
 // linkRetries bounds the fetch-then-serve loop. An entry can be evicted
@@ -49,29 +64,30 @@ const linkRetries = 3
 // exist yet and lives on the cache's filesystem (the same mount, not just
 // the same disk): on success it is a hard link to the read-only cache
 // copy, so the caller keeps a valid file regardless of later eviction, and
-// the entry is published mode 0444 so an in-place write fails loudly rather
-// than corrupting the shared bytes.
+// the entry is published read-only (mode 0444, keeping any execute bits the
+// fetcher set) so an in-place write fails loudly rather than corrupting the
+// shared bytes.
 //
 // Concurrent calls for one key share a single fetch. A caller whose ctx is
 // canceled returns early with ctx.Err() while the fetch keeps running for
 // the others; there is no negative caching, so after a failed fetch the
 // next call starts fresh.
 func (s *Store) GetFileTo(ctx context.Context, key Key, dst string, fetch FileFetcher) error {
-	return s.getTo(ctx, key, dst, fetch, s.linkOut)
+	if fetch == nil {
+		return errors.New("filecache: nil FileFetcher")
+	}
+	return s.getTo(ctx, key, dst, fetchFunc(fetch), kindFile, s.linkOut)
 }
 
-// getTo is the read-through loop shared by GetFileTo and GetFileCopyTo:
-// serve a hit, else run the singleflight fetch and retry. serve is the only
-// difference between the two public methods.
-func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch FileFetcher, serve serveHit) error {
+// getTo is the read-through loop shared by the public Get methods: serve a
+// hit, else run the singleflight fetch and retry. kind decides how a fetch
+// is published and serve how a hit is materialized; nothing else differs.
+func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch fetchFunc, kind entryKind, serve serveHit) error {
 	if key.isZero() {
 		return errors.New("filecache: zero Key (use a Key constructor)")
 	}
 	if !filepath.IsAbs(dst) {
 		return fmt.Errorf("filecache: destination %q is not an absolute path", dst)
-	}
-	if fetch == nil {
-		return errors.New("filecache: nil FileFetcher")
 	}
 	for attempt := 0; ; attempt++ {
 		served, err := serve(key, dst)
@@ -88,7 +104,7 @@ func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch FileFetche
 		if attempt >= linkRetries {
 			return fmt.Errorf("entry for %v vanished after %d fetches; is something else deleting under the store root?", key, attempt)
 		}
-		if err := s.fetchFlight(ctx, key, fetch); err != nil {
+		if err := s.fetchFlight(ctx, key, fetch, kind); err != nil {
 			return err
 		}
 	}
@@ -102,11 +118,15 @@ func (s *Store) linkOut(key Key, dst string) (bool, error) {
 	s.hitMu.RLock()
 	defer s.hitMu.RUnlock()
 
-	if _, err := os.Stat(s.dataPath(key)); err != nil {
+	fi, err := os.Stat(s.dataPath(key))
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return false, nil
 		}
 		return false, fmt.Errorf("while checking cache for %v: %w", key, err)
+	}
+	if fi.IsDir() {
+		return false, fmt.Errorf("entry for %v is a directory tree, not a file (use GetDirTo)", key)
 	}
 	if err := os.Link(s.dataPath(key), dst); err != nil {
 		if errors.Is(err, fs.ErrExist) {
@@ -128,9 +148,9 @@ func (s *Store) linkOut(key Key, dst string) (bool, error) {
 // it or for ctx. The flight itself runs on a context detached from the
 // callers' — bounded only by the store's fetch timeout — so one canceled
 // caller never aborts a download other callers are waiting on.
-func (s *Store) fetchFlight(ctx context.Context, key Key, fetch FileFetcher) error {
+func (s *Store) fetchFlight(ctx context.Context, key Key, fetch fetchFunc, kind entryKind) error {
 	ch := s.sf.DoChan(key.dir, func() (any, error) {
-		return nil, s.fetchAndPublish(context.WithoutCancel(ctx), key, fetch)
+		return nil, s.fetchAndPublish(context.WithoutCancel(ctx), key, fetch, kind)
 	})
 	select {
 	case res := <-ch:
@@ -147,7 +167,7 @@ func (s *Store) fetchFlight(ctx context.Context, key Key, fetch FileFetcher) err
 // result under entries/. On any failure the temp dir is removed, so a bad
 // fetch is never visible in the cache; a crash instead leaves it for
 // SweepDebris.
-func (s *Store) fetchAndPublish(ctx context.Context, key Key, fetch FileFetcher) error {
+func (s *Store) fetchAndPublish(ctx context.Context, key Key, fetch fetchFunc, kind entryKind) error {
 	ctx, cancel := context.WithTimeout(ctx, s.fetchTimeout)
 	defer cancel()
 
@@ -169,22 +189,24 @@ func (s *Store) fetchAndPublish(ctx context.Context, key Key, fetch FileFetcher)
 	}()
 
 	dataPath := filepath.Join(tmpDir, dataName)
+	if kind == kindTree {
+		// A tree fetcher fills a directory the store made; a file fetcher
+		// creates its file itself (see FileFetcher).
+		if err := os.Mkdir(dataPath, 0o700); err != nil {
+			return fmt.Errorf("while creating fetch tree dir: %w", err)
+		}
+	}
 	if err := fetch(ctx, dataPath); err != nil {
 		return err
 	}
-	fi, err := os.Stat(dataPath)
+	switch kind {
+	case kindFile:
+		err = protectFile(dataPath)
+	case kindTree:
+		err = protectTree(dataPath)
+	}
 	if err != nil {
-		return fmt.Errorf("fetcher succeeded but produced no file: %w", err)
-	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("fetcher produced %v, want a regular file", fi.Mode())
-	}
-
-	// Read-only before publication: cached bytes are shared through hard
-	// links, so an in-place write by any consumer must fail rather than
-	// poison the copy every later caller links.
-	if err := os.Chmod(dataPath, 0o444); err != nil {
-		return fmt.Errorf("while making fetched file read-only: %w", err)
+		return err
 	}
 	if err := writeEntryMeta(tmpDir, key, time.Now()); err != nil {
 		return err
@@ -202,5 +224,30 @@ func (s *Store) fetchAndPublish(ctx context.Context, key Key, fetch FileFetcher)
 		return fmt.Errorf("while publishing entry: %w", err)
 	}
 	published = true
+	return nil
+}
+
+// readOnlyMode is the mode a fetched regular file is published with:
+// read-only for everyone, keeping whatever execute bits the fetcher set so
+// a cached binary stays runnable.
+func readOnlyMode(perm fs.FileMode) fs.FileMode {
+	return 0o444 | perm&0o111
+}
+
+// protectFile checks that a file fetcher produced one regular file at
+// dataPath and makes it read-only before publication: cached bytes are
+// shared through hard links, so an in-place write by any consumer must fail
+// rather than poison the copy every later caller links.
+func protectFile(dataPath string) error {
+	fi, err := os.Lstat(dataPath)
+	if err != nil {
+		return fmt.Errorf("fetcher succeeded but produced no file: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("fetcher produced %v, want a regular file", fi.Mode())
+	}
+	if err := os.Chmod(dataPath, readOnlyMode(fi.Mode().Perm())); err != nil {
+		return fmt.Errorf("while making fetched file read-only: %w", err)
+	}
 	return nil
 }

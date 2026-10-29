@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -36,14 +35,16 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/credprovider/v1"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // dataPlaneTraceRatio is the default root sampling fraction for parentless
@@ -56,7 +57,7 @@ type RouterServer struct {
 
 	Cmd       *cobra.Command
 	clientset kubernetes.Interface
-	apiClient ateapipb.ControlClient
+	apiClient ateapi.ControlClient
 	// extprocSrv is the ext_proc mux. Which handler it carries, ingress or
 	// egress, follows cfg.Mode.
 	extprocSrv *extproc.Server
@@ -171,6 +172,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return fmt.Errorf("building ateapi dial options: %w", err)
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	// atenet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
 	conn, err := grpc.NewClient(
 		s.cfg.AteapiAddr,
 		dialOpts...,
@@ -179,7 +183,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
 	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr))
-	s.apiClient = ateapipb.NewControlClient(conn)
+	s.apiClient = ateapi.NewControlClient(conn)
 
 	slog.InfoContext(ctx, "Starting substrate router subsystem",
 		slog.String("mode", string(s.cfg.Mode)),
@@ -202,48 +206,48 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if s.cfg.Mode.ServesEgress() {
 		// Load the actor-identity CA up front so a missing or unusable bundle
 		// fails startup, rather than turning into a 503 on the first actor
-		// egress attempt. An unset flag leaves the handler with no roots, which
-		// denies every CONNECT — see egress.New.
-		var actorIdentityRoots *x509.CertPool
+		// egress attempt. The handler reloads it when the file changes. An
+		// unset flag leaves the handler with no roots, which denies every
+		// CONNECT — see egress.New.
+		var loadActorIdentityRoots func() (*x509.CertPool, error)
 		if s.cfg.ActorIdentityCAFile != "" {
-			pemBytes, err := os.ReadFile(s.cfg.ActorIdentityCAFile)
-			if err != nil {
-				return fmt.Errorf("reading --actor-identity-ca-file: %w", err)
-			}
-			actorIdentityRoots, err = egress.LoadActorIdentityRoots(pemBytes)
-			if err != nil {
-				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
+			loadActorIdentityRoots = credbundle.PoolLoader(s.cfg.ActorIdentityCAFile)
+			if _, err := loadActorIdentityRoots(); err != nil {
+				return fmt.Errorf("loading --actor-identity-ca-file: %w", err)
 			}
 		}
 		// Enable egress credential injection when a credential provider address
 		// is set: dial the provider over mTLS and hand the client to the handler.
 		// With no address the handler gets no provider, and a request matching
 		// an injection-requiring rule is denied (see egress.applyEffects).
-		var provider credproviderpb.CredentialProviderClient
-		var providerName string
-		if s.cfg.CredentialProvider.Address != "" {
-			providerName, err = egress.ProviderName(s.cfg.CredentialProvider.Name)
+		providers := map[string]credprovider.CredentialProviderClient{}
+		for i, address := range s.cfg.CredentialProvider.Addresses {
+			providerName, err := egress.ProviderName(s.cfg.CredentialProvider.Names[i])
 			if err != nil {
 				return fmt.Errorf("--credential-provider-name: %w", err)
 			}
+			var serverName string
+			if len(s.cfg.CredentialProvider.ServerNames) > 0 {
+				serverName = s.cfg.CredentialProvider.ServerNames[i]
+			}
 			providerConn, err := egress.DialProvider(ctx, egress.ProviderDialConfig{
-				Address:    s.cfg.CredentialProvider.Address,
+				Address:    address,
 				CAFile:     s.cfg.CredentialProvider.CAFile,
 				ClientCert: s.cfg.CredentialProvider.ClientCert,
-				ServerName: s.cfg.CredentialProvider.ServerName,
+				ServerName: serverName,
 				Insecure:   s.cfg.CredentialProvider.Insecure,
 			})
 			if err != nil {
 				return fmt.Errorf("dial credential provider: %w", err)
 			}
 			defer providerConn.Close()
-			provider = credproviderpb.NewCredentialProviderClient(providerConn)
+			providers[providerName] = credprovider.NewCredentialProviderClient(providerConn)
 			slog.InfoContext(ctx, "egress credential injection enabled",
-				slog.String("provider", s.cfg.CredentialProvider.Address),
-				slog.String("provider_name", s.cfg.CredentialProvider.Name))
+				slog.String("provider", address),
+				slog.String("provider_name", providerName))
 		}
 
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
+		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

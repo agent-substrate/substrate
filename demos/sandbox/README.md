@@ -1,3 +1,13 @@
+---
+title: "Interactive Sandbox"
+linkTitle: "Interactive Sandbox"
+weight: 2
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-terminal"
+description: >
+  Execute interactive shell commands inside an isolated Alpine container with stateful snapshots.
+---
+
 # Sandbox Demo
 
 This directory contains a demo of a stateful sandbox execution environment running on Agent Substrate.
@@ -14,22 +24,19 @@ It allows you to run arbitrary commands in an sandboxed, isolated container (run
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed.
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured in `demos/sandbox/sandbox-template.yaml.tmpl`).
+- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 - `kubectl-ate` CLI installed (can be installed via `go install ./cmd/kubectl-ate`).
 
 ## How to Run on Agent Substrate
 
 ### 1. Build and Deploy
 
-> [!NOTE]
-> Do not manually edit the `demos/sandbox/*.yaml.tmpl` manifests. The installation script automatically injects your `${BUCKET_NAME}` environment variable during deployment.
-
-Use the core installation script to build the image and deploy the demo to your cluster:
+Use `ate-setup` to build the image and deploy the demo to your cluster:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-sandbox
+go run ./cmd/ate-setup deploy demo sandbox
 ```
 
 This command will:
@@ -56,16 +63,12 @@ go install ./cmd/kubectl-ate
 kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template sandbox-template
 ```
 
-### 3. Port-Forward Services
+### 3. Proxy to the Actor
 
-If running clients locally, port-forward the API and router in separate terminals:
+Start a local proxy to the actor in a separate terminal:
 
 ```bash
-# Terminal 1: API Server
-kubectl port-forward -n ate-system svc/api 8080:443
-
-# Terminal 2: Router
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+kubectl ate proxy actor my-sandbox-1 -a ate-demo-sandbox
 ```
 
 ## How to Use the Client
@@ -75,18 +78,8 @@ Build and run the client REPL:
 ```bash
 go build -o bin/sandbox-client ./demos/sandbox/client
 
-./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
+./bin/sandbox-client --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
-
-The client sends each `/process` request to the router and automatically sets
-the routing header from `--name` and `--atespace`:
-
-```go
-req.Header.Set(atenet.TargetActorHeader, actorRef.String())
-```
-
-Any replacement HTTP client must send an equivalent `ate-target-actor` header;
-the URL and `Host` header do not select the Actor.
 
 Once in the `sandbox>` prompt, you can run commands:
 
@@ -109,5 +102,5 @@ kubectl ate delete actor my-sandbox-1 -a ate-demo-sandbox
 To remove the sandbox demo resources (actors, template, atespace, workerpool, and namespace) from your cluster, run:
 
 ```bash
-./hack/install-ate.sh --delete-demo-sandbox
+go run ./cmd/ate-setup delete demo sandbox
 ```

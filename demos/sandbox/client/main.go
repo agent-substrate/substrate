@@ -17,7 +17,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,12 +27,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 type ProcessRequest struct {
@@ -49,22 +47,13 @@ type ProcessResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, error) {
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ateapipb.NewControlClient(conn), conn, nil
-}
-
 func main() {
 	actorName := pflag.String("name", "", "Name of the sandbox actor (required)")
 	atespace := pflag.String("atespace", "", "Atespace the actor lives in (required)")
-	ateapiAddr := pflag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
-	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
+	ateapiAddr := pflag.String("ateapi", "", "Address of the ateapi gRPC server (defaults to port-forwarding svc/api)")
+	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the local actor proxy")
+	kubeconfig := pflag.String("kubeconfig", "", "Path to the kubeconfig file")
+	k8sContext := pflag.String("context", "", "The name of the kubeconfig context to use")
 	pflag.Parse()
 
 	if *actorName == "" {
@@ -88,15 +77,15 @@ func main() {
 	}()
 
 	// 1. Connect to ateapi and Resume Actor
-	log.Printf("Connecting to ateapi at %s...", *ateapiAddr)
-	cli, conn, err := dialAteAPI(*ateapiAddr)
+	log.Println("Connecting to ateapi...")
+	cli, err := ateclient.NewClient(ctx, *kubeconfig, *k8sContext, *ateapiAddr, "", false)
 	if err != nil {
 		log.Fatalf("Failed to dial ateapi: %v", err)
 	}
-	defer conn.Close()
+	defer cli.Close()
 
 	log.Printf("Resuming actor %s...", actorRef.Name)
-	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
+	_, err = cli.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
 	if err != nil {
 		log.Fatalf("Failed to resume actor: %v", err)
 	}
@@ -106,7 +95,7 @@ func main() {
 	defer func() {
 		log.Printf("Suspending actor %s...", actorRef.Name)
 		suspendCtx := context.Background()
-		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
+		_, err := cli.SuspendActor(suspendCtx, &ateapi.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
 		if err != nil {
 			log.Printf("Failed to suspend actor: %v", err)
 		} else {

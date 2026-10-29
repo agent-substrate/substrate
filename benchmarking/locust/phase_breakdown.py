@@ -14,7 +14,7 @@
 
 """Suspend/resume phase percentiles for stats.jsonl, read from the node logs.
 
-atelet and ateom-microvm write one `Checkpoint timing breakdown` / `Restore
+atelet and ateworker-microvm write one `Checkpoint timing breakdown` / `Restore
 timing breakdown` record per operation (see benchmarking/analysis/README.md).
 The orchestrator deletes the worker and ate-system pods right after a test,
 so the runner reads those pod logs itself, through the Kubernetes API it

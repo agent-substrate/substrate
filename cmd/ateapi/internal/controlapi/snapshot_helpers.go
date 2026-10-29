@@ -15,12 +15,14 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // findSnapshotByGeneration returns the Snapshot in snapshots with the given
 // generation, or nil if none exists.
-func findSnapshotByGeneration(snapshots []*ateapipb.Snapshot, gen int32) *ateapipb.Snapshot {
+func findSnapshotByGeneration(snapshots []*ateapi.Snapshot, gen int32) *ateapi.Snapshot {
 	for _, snap := range snapshots {
 		if snap.GetGeneration() == gen {
 			return snap
@@ -31,7 +33,7 @@ func findSnapshotByGeneration(snapshots []*ateapipb.Snapshot, gen int32) *ateapi
 
 // snapshotAtLatestGeneration returns the Snapshot at status.last_assigned_generation, or
 // nil if none exists.
-func snapshotAtLatestGeneration(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+func snapshotAtLatestGeneration(status *ateapi.ActorStatus) *ateapi.Snapshot {
 	if status == nil {
 		return nil
 	}
@@ -40,8 +42,8 @@ func snapshotAtLatestGeneration(status *ateapipb.ActorStatus) *ateapipb.Snapshot
 
 // latestSnapshot returns the highest-generation Snapshot on status that
 // matches, or nil if none does.
-func latestSnapshot(status *ateapipb.ActorStatus, matches func(*ateapipb.Snapshot) bool) *ateapipb.Snapshot {
-	var latest *ateapipb.Snapshot
+func latestSnapshot(status *ateapi.ActorStatus, matches func(*ateapi.Snapshot) bool) *ateapi.Snapshot {
+	var latest *ateapi.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		if matches(snap) && (latest == nil || snap.GetGeneration() >= latest.GetGeneration()) {
 			latest = snap
@@ -51,48 +53,29 @@ func latestSnapshot(status *ateapipb.ActorStatus, matches func(*ateapipb.Snapsho
 }
 
 // findLatestDurableSnapshot returns the highest-generation Snapshot on status
-// whose DurableSnapshot matches storageStatus, or nil if none exists.
-func findLatestDurableSnapshot(status *ateapipb.ActorStatus, storageStatus ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
-	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
-		return snap.GetDurableSnapshot().GetStatus() == storageStatus
+// whose DurableSnapshot matches storageState, or nil if none exists.
+func findLatestDurableSnapshot(status *ateapi.ActorStatus, storageState ateapi.SnapshotStorageState) *ateapi.Snapshot {
+	return latestSnapshot(status, func(snap *ateapi.Snapshot) bool {
+		return snap.GetDurableSnapshot().GetState() == storageState
 	})
 }
 
-// findLatestLocalSnapshot returns the highest-generation Snapshot on status
-// that holds a completed local checkpoint (Locality != ""), or nil if none
-// exists.
-func findLatestLocalSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
-	return latestSnapshot(status, func(snap *ateapipb.Snapshot) bool {
+// findLatestLocalSnapshot returns the highest-generation snapshot with a local copy.
+func findLatestLocalSnapshot(status *ateapi.ActorStatus) *ateapi.Snapshot {
+	return latestSnapshot(status, func(snap *ateapi.Snapshot) bool {
 		return snap.GetLocality() != ""
 	})
 }
 
-// latestSnapshotIsLocalOnly reports whether the snapshot at the actor's latest
-// generation is node-local with no durable copy: the shape a pause leaves
-// behind. A paused actor is SUSPENDED with this shape, and resumes only on the
-// node named by Locality; a suspend of such an actor uploads that snapshot
-// instead of checkpointing a workload. A RUNNING actor resumed from pause
-// keeps the local snapshot too, so callers that need "at rest" check the state
-// as well.
-func latestSnapshotIsLocalOnly(status *ateapipb.ActorStatus) bool {
-	snap := snapshotAtLatestGeneration(status)
-	return snap.GetLocality() != "" && snap.GetDurableSnapshot() == nil
-}
-
-// latestSnapshotIsPendingLocal reports whether the snapshot at the actor's
-// latest generation is node-local but not yet captured: it has no locality and
-// no durable copy. This is the shape a pause in progress has, and what tells a
-// SUSPENDING pause from a SUSPENDING suspend, whose latest snapshot has a
-// pending durable copy.
-func latestSnapshotIsPendingLocal(status *ateapipb.ActorStatus) bool {
-	snap := snapshotAtLatestGeneration(status)
-	return snap != nil && snap.GetLocality() == "" && snap.GetDurableSnapshot() == nil
+// latestSnapshotIsLocal reports whether the latest generation has a local copy.
+func latestSnapshotIsLocal(status *ateapi.ActorStatus) bool {
+	return snapshotAtLatestGeneration(status).GetLocality() != ""
 }
 
 // clearLocalSnapshots clears Locality across all Snapshots in status.Snapshots
 // without dropping PENDING durable snapshots (so DeleteActor can still collect
 // an in-flight durable snapshot after releasing the worker).
-func clearLocalSnapshots(status *ateapipb.ActorStatus) {
+func clearLocalSnapshots(status *ateapi.ActorStatus) {
 	for _, snap := range status.GetSnapshots() {
 		snap.Locality = ""
 	}
@@ -108,22 +91,23 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // beforehand.
 //
 // Dropping PENDING durable snapshots is safe because:
-//   - On pause finalization, pause is only reachable from RUNNING (a failed
-//     suspend cannot resume without reverting first, which discards any
-//     in-flight upload), so no uncleaned PENDING durable snapshot exists.
+//   - On asynchronous suspend finalization, the new snapshot is kept with its
+//     PENDING copy. An earlier asynchronous suspend's PENDING copy is dropped:
+//     whatever atelet uploaded of it stays under the actor's prefix until
+//     DeleteActor collects it.
 //   - On revert finalization, ensureInProgressSnapshotDiscarded has already
-//     deleted any in-flight durable snapshot objects.
-//   - On suspend finalization, the latest snapshot has already been marked
-//     COMPLETED.
+//     deleted the objects of every PENDING durable snapshot.
+//   - On synchronous suspend finalization, the latest snapshot has already been
+//     marked COMPLETED.
 //
 // status.LastAssignedGeneration is not decreased so that we can keep track of
 // stale snapshots that need to be cleaned up and discarded generation numbers
 // are never reused.
-func pruneSnapshots(status *ateapipb.ActorStatus, local *ateapipb.Snapshot) {
+func pruneSnapshots(status *ateapi.ActorStatus, local *ateapi.Snapshot) {
 	if status == nil {
 		return
 	}
-	latestDurable := findLatestDurableSnapshot(status, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	latestDurable := findLatestDurableSnapshot(status, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	kept := status.Snapshots[:0]
 	for _, snap := range status.Snapshots {
 		if snap != local {
@@ -137,40 +121,49 @@ func pruneSnapshots(status *ateapipb.ActorStatus, local *ateapipb.Snapshot) {
 }
 
 // newDurableSnapshot constructs a Snapshot with DurableSnapshot populated.
-func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, uri string, storageStatus ateapipb.SnapshotStorageStatus) *ateapipb.Snapshot {
-	return &ateapipb.Snapshot{
+func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.SnapshotFidelity, templateUID, uuid, uri string, storageState ateapi.SnapshotStorageState) *ateapi.Snapshot {
+	return &ateapi.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            owner,
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
-		DurableSnapshot: &ateapipb.SnapshotStorage{
-			Status: storageStatus,
-			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+		DurableSnapshot: &ateapi.SnapshotStorage{
+			State:  storageState,
+			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
 }
 
-// newLocalSnapshot constructs an actor Snapshot for a local pause checkpoint
-// with Uuid, Fidelity, and Locality.
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
-	return &ateapipb.Snapshot{
-		Uuid:             uuid,
-		Generation:       gen,
-		Owner:            ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-		Fidelity:         fidelity,
-		ActorTemplateUid: templateUID,
-		Locality:         locality,
-	}
-}
-
 // tagDurableSnapshotURI returns the durable snapshot URI on tag matching
-// storageStatus (or any status if storageStatus is UNSPECIFIED), or "" if none
+// storageState (or any state if storageState is UNSPECIFIED), or "" if none
 // exists.
-func tagDurableSnapshotURI(tag *ateapipb.Tag, storageStatus ateapipb.SnapshotStorageStatus) string {
+func tagDurableSnapshotURI(tag *ateapi.Tag, storageState ateapi.SnapshotStorageState) string {
 	st := tag.GetStatus().GetSnapshot().GetDurableSnapshot()
-	if storageStatus != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED && st.GetStatus() != storageStatus {
+	if storageState != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED && st.GetState() != storageState {
 		return ""
 	}
 	return st.GetObject().GetSnapshotUri()
+}
+
+// resolveSnapshotLocation returns the base object-storage URI actorTemplate's
+// snapshots are stored under: its snapshotConfig.storage_location when the
+// PerTemplateSnapshotLocation preview gate is enabled and the field is set,
+// otherwise snapshotLocation, ate-api-server's cluster-wide
+// --snapshot-location. It fails with FailedPrecondition when neither is set.
+//
+// It reads the process-wide gate rather than preview.IsEnabledFor, so a
+// request's preview opt-out cannot move where an actor's snapshots live.
+func resolveSnapshotLocation(snapshotLocation string, actorTemplate *ateapi.ActorTemplate) (string, error) {
+	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		if location := actorTemplate.GetSnapshotConfig().GetStorageLocation(); location != "" {
+			return location, nil
+		}
+	}
+	if snapshotLocation != "" {
+		return snapshotLocation, nil
+	}
+	return "", apierror.FailedPrecondition(
+		"actor template %s/%s has no snapshot storage location: set snapshotConfig.storageLocation, or set ate-api-server's --snapshot-location",
+		actorTemplate.GetMetadata().GetAtespace(), actorTemplate.GetMetadata().GetName())
 }

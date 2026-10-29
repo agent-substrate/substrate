@@ -35,6 +35,7 @@ func TestGetScopeBeforeConnecting(t *testing.T) {
 	}{
 		{"actors", getActorsCmd, &getActorAtespaceFlag, &getActorAllAtespacesFlag},
 		{"actor templates", getActorTemplatesCmd, &getActorTemplateAtespaceFlag, &getActorTemplateAllAtespacesFlag},
+		{"tags", getTagsCmd, &getTagAtespaceFlag, &getTagAllAtespacesFlag},
 	} {
 		t.Run(resource.name, func(t *testing.T) {
 			previousAtespace, previousAll := *resource.atespace, *resource.all
@@ -54,7 +55,7 @@ func TestGetScopeBeforeConnecting(t *testing.T) {
 			}{
 				{
 					name: "get without atespace", args: []string{"counter"},
-					wantErr: "--atespace is required when getting",
+					wantErr: "-a/--atespace is required when getting",
 				},
 				{
 					name: "get with all atespaces", args: []string{"counter"}, all: true,
@@ -66,11 +67,11 @@ func TestGetScopeBeforeConnecting(t *testing.T) {
 				},
 				{
 					name:    "list without scope",
-					wantErr: "specify --atespace <name> to list one atespace, or -A/--all-atespaces for all",
+					wantErr: "-a/--atespace <name> or -A/--all-atespaces is required",
 				},
 				{
 					name: "list with both scopes", atespace: "demo", all: true,
-					wantErr: "--atespace and -A/--all-atespaces are mutually exclusive",
+					wantErr: "-a/--atespace and -A/--all-atespaces are mutually exclusive",
 				},
 				// Valid scopes reach client initialization, where the missing kubeconfig fails.
 				{

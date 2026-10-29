@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // CheckEnv checks the list of env vars exist and returns their value.
@@ -36,8 +36,8 @@ func CheckEnv(keys ...string) (map[string]string, error) {
 }
 
 // SystemNamespaceEnv names the namespace the substrate control plane under test
-// was installed into. It mirrors the ATE_NAMESPACE hack/install-ate.sh
-// installed with, and the namespace the deployment was installed into.
+// was installed into. It mirrors the ate-setup --namespace (ATE_NAMESPACE)
+// the control plane was installed with.
 const SystemNamespaceEnv = "E2E_SYSTEM_NAMESPACE"
 
 // SystemNamespace returns the namespace the control plane under test runs in,

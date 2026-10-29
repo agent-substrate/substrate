@@ -47,7 +47,7 @@ type envoyDrainer struct {
 func newEnvoyDrainer(adminAddr string) *envoyDrainer {
 	return &envoyDrainer{
 		adminAddr:    adminAddr,
-		client:       &http.Client{Timeout: 2 * time.Second},
+		client:       &http.Client{Transport: newLoopbackTransport(), Timeout: 2 * time.Second},
 		pollInterval: envoyDrainPollInterval,
 	}
 }

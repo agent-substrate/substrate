@@ -18,20 +18,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // HostingNode is the node that holds the actor, and "" when no node does. The
 // actor's state decides which status field to trust, since both can outlive
-// the hosting they record: pause, suspend, crash and revert release the
+// the hosting they record: suspend, crash and revert release the
 // worker (delete its row in the store's worker assignments) before they clear
 // status.worker_assignment, and a crash keeps status.assigned_node as a record
 // of the last node. The rules:
-//   - SUSPENDED or SUSPENDING with no worker and a local-only latest
-//     snapshot, the shape of a paused actor: assigned_node, the node holding
-//     that snapshot.
+//   - SUSPENDED with no worker: assigned_node. It is set only while a
+//     snapshot whose locality is that node still holds files there, uploaded
+//     or not, and cleared once none does.
 //   - RESUMING, RUNNING and SUSPENDING with status.worker_assignment set: the
 //     worker's node, but only while the store's worker assignment row binds
 //     that worker to this actor's UID; "" once it is released or the worker
@@ -40,21 +42,23 @@ import (
 //
 // WorkerService uses it to refuse a node that asks for credentials for an
 // actor it does not hold.
-func HostingNode(ctx context.Context, st store.Interface, actor *ateapipb.Actor) (string, error) {
+func HostingNode(ctx context.Context, st store.Interface, actor *ateapi.Actor) (string, error) {
 	status := actor.GetStatus()
-	assignment := status.GetWorkerAssignment()
-	if assignment == nil {
-		switch status.GetState() {
-		case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
-			if latestSnapshotIsLocalOnly(status) {
-				return status.GetAssignedNode(), nil
-			}
-		}
+	// The branches below pick the field to trust within the states a node
+	// transfers in.
+	if !slices.Contains(resources.TransferStates, status.GetState()) {
 		return "", nil
 	}
+	assignment := status.GetWorkerAssignment()
+	if assignment == nil {
+		if status.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+			return "", nil
+		}
+		return status.GetAssignedNode(), nil
+	}
 	switch status.GetState() {
-	case ateapipb.ActorState_ACTOR_STATE_RESUMING, ateapipb.ActorState_ACTOR_STATE_RUNNING,
-		ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+	case ateapi.ActorState_ACTOR_STATE_RESUMING, ateapi.ActorState_ACTOR_STATE_RUNNING,
+		ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 	default:
 		return "", nil
 	}

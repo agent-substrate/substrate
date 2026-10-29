@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package ocispec builds the runtime-neutral OCI spec for actor bundles, which
-// each ateom shapes for its runtime.
+// each worker shapes for its runtime.
 package ocispec
 
 import (
@@ -23,17 +23,17 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // specFile is the OCI spec file name within a bundle.
 const specFile = "config.json"
 
-// hostname is the UTS hostname for actor containers.
-const hostname = "actor"
+// Hostname is the UTS hostname for actor containers.
+const Hostname = "actor"
 
 // Options describes one actor container.
 type Options struct {
@@ -41,9 +41,9 @@ type Options struct {
 	ActorUID string
 	// ActorDirs are the actor's directories the bind mount sources are joined
 	// from, one subdirectory per volume name.
-	ActorDirs *ateompb.ActorDirs
+	ActorDirs *ateworkerpb.ActorDirs
 	// Container carries the process and its volume mounts.
-	Container *ateompb.Container
+	Container *ateworkerpb.Container
 }
 
 const (
@@ -60,20 +60,42 @@ const (
 // ociResources maps the resolved limits onto the OCI spec's linux.resources.
 // Returns nil when nothing is set, so the spec carries no linux.resources at
 // all for a container that declares no limits.
-func ociResources(r *ateompb.ResourceLimits) *specs.LinuxResources {
-	if r == nil || (r.GetMemoryBytes() <= 0 && r.GetCpuMillis() <= 0) {
+func ociResources(r *ateworkerpb.ResourceRequirements) *specs.LinuxResources {
+	l := r.GetLimits()
+	if l.GetMemoryBytes() <= 0 && l.GetCpuMillicores() <= 0 {
 		return nil
 	}
 	out := &specs.LinuxResources{}
-	if b := r.GetMemoryBytes(); b > 0 {
+	if b := l.GetMemoryBytes(); b > 0 {
 		out.Memory = &specs.LinuxMemory{Limit: &b}
 	}
-	if m := r.GetCpuMillis(); m > 0 {
+	if m := l.GetCpuMillicores(); m > 0 {
 		quota := max(m*cpuQuotaPeriodUS/1000, cpuQuotaMinUS)
 		period := uint64(cpuQuotaPeriodUS)
 		out.CPU = &specs.LinuxCPU{Quota: &quota, Period: &period}
 	}
 	return out
+}
+
+// BuildSandbox returns the OCI spec of a sandbox with no root container: the
+// hostname and namespaces, and no process, rootfs, or mounts.
+func BuildSandbox(actorUID string) *specs.Spec {
+	return &specs.Spec{
+		Hostname: Hostname,
+		Linux:    &specs.Linux{Namespaces: namespaces(actorUID)},
+	}
+}
+
+// namespaces returns the namespaces of an actor's sandbox and containers. The
+// network namespace is the actor's.
+func namespaces(actorUID string) []specs.LinuxNamespace {
+	return []specs.LinuxNamespace{
+		{Type: "pid"},
+		{Type: "network", Path: nodepath.ActorNetNSPath(actorUID)},
+		{Type: "ipc"},
+		{Type: "uts"},
+		{Type: "mount"},
+	}
 }
 
 // Build returns a runtime-neutral OCI spec for an actor container.
@@ -112,7 +134,7 @@ func Build(o Options) *specs.Spec {
 			Path:     "rootfs",
 			Readonly: false,
 		},
-		Hostname: hostname,
+		Hostname: Hostname,
 		Mounts: []specs.Mount{
 			{
 				Destination: "/proc",
@@ -137,25 +159,8 @@ func Build(o Options) *specs.Spec {
 			},
 		},
 		Linux: &specs.Linux{
-			Namespaces: []specs.LinuxNamespace{
-				{
-					Type: "pid",
-				},
-				{
-					Type: "network",
-					Path: nodepath.ActorNetNSPath(o.ActorUID),
-				},
-				{
-					Type: "ipc",
-				},
-				{
-					Type: "uts",
-				},
-				{
-					Type: "mount",
-				},
-			},
-			Resources: ociResources(containerSpec.GetResources()),
+			Namespaces: namespaces(o.ActorUID),
+			Resources:  ociResources(containerSpec.GetResources()),
 		},
 	}
 
@@ -171,17 +176,17 @@ func Build(o Options) *specs.Spec {
 	}
 	actorDirs := o.ActorDirs
 	for _, m := range container.GetDurableDirVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetDurableDirVolumeMountsDir(), m.GetVolumeName()), "rw")
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetDurableDirVolumeMountsDir(), m.GetName()), "rw")
 	}
-	for _, m := range container.GetCsiVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetVolumesDir(), m.GetVolumeName()), "rw")
+	for _, m := range container.GetExternalVolumeMounts() {
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetExternalVolumeMountsDir(), m.GetName()), "rw")
 	}
 	for _, m := range container.GetSystemInfoVolumeMounts() {
-		bind(m.GetMountPath(), filepath.Join(actorDirs.GetSystemInfoVolumeRootsDir(), m.GetVolumeName()), "ro")
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetSystemInfoVolumeRootsDir(), m.GetName()), "ro")
 	}
 	bundlePath := filepath.Join(actorDirs.GetOciBundleDir(), container.GetName())
 	for _, m := range container.GetImageVolumeMounts() {
-		bind(m.GetMountPath(), imagecache.ImageVolumeMountPath(bundlePath, m.GetVolumeName()), "ro")
+		bind(m.GetMountPath(), imagecache.ImageVolumeMountPath(bundlePath, m.GetName()), "ro")
 	}
 
 	return spec

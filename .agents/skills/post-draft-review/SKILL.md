@@ -142,7 +142,7 @@ mutation($review: ID!, $path: String!, $line: Int!, $body: String!) {
     path: $path, line: $line, side: RIGHT, body: $body
   }) { thread { id } }
 }' -f review="PRR_kwDO..." \
-   -f path="cmd/ateom-microvm/restore.go" -F line=214 \
+   -f path="cmd/ateworker-microvm/restore.go" -F line=214 \
    -F body=@c1.md
 ```
 

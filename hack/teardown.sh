@@ -41,17 +41,26 @@ require() {
 }
 
 # --- Helper Functions ---
+
+# transfer_service_account prints the snapshot transfer service account's
+# email, from SNAPSHOT_TRANSFER_GSA_NAME as setup-gcp and ate-setup build it.
+transfer_service_account() {
+  echo "${SNAPSHOT_TRANSFER_GSA_NAME:-ate-snapshot-transfer}@${PROJECT_ID}.iam.gserviceaccount.com"
+}
 function usage() {
   echo "Usage: $0 [options]"
   echo "Options:"
-  echo "  --revoke-gke-node-permissions         Revoke GKE nodes permission to pull images"
-  echo "  --revoke-atelet-permissions           Revoke atelet's project-level IAM bindings"
-  echo "  --delete-iam-policy-bindings          Delete bucket IAM policy bindings for atelet and ate-api-server"
+  echo "  --delete-iam-policy-bindings          Delete bucket IAM policy bindings for atelet, ate-api-server and the transfer account"
   echo "  --delete-snapshot-bucket              Delete snapshot bucket"
   echo "  --delete-gvisor-node-pool             Delete gVisor node pool"
   echo "  --delete-cluster                      Delete GKE cluster"
+  echo "  --cluster-scoped                      Run the steps above (reverse order of setup)"
+  echo "Project-wide options. These affect every Substrate cluster in the project:"
   echo "  --delete-dashboards                   Delete the Substrate monitoring dashboards"
-  echo "  --all                                 Run all teardown steps (reverse order of setup)"
+  echo "  --delete-transfer-service-account     Delete the snapshot transfer service account"
+  echo "  --revoke-atelet-permissions           Revoke atelet's project-level IAM bindings"
+  echo "  --revoke-gke-node-permissions         Revoke GKE nodes permission to pull images, on every cluster that uses the default compute service account"
+  echo "  --all                                 Run every step above (reverse order of setup)"
   exit 1
 }
 
@@ -117,6 +126,7 @@ delete_iam_policy_bindings() {
   require PROJECT_ID PROJECT_NUMBER BUCKET_NAME
   echo "Deleting IAM policy bindings for bucket..."
   local wi="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa"
+  local asset_bucket="${BUCKET_NAME}-assets"
   local subject role
   for subject in atelet ate-api-server; do
     for role in roles/storage.objectAdmin roles/storage.bucketViewer; do
@@ -126,14 +136,38 @@ delete_iam_policy_bindings() {
         --quiet || true
     done
   done
+  local transfer
+  transfer="serviceAccount:$(transfer_service_account)"
+  for role in roles/storage.objectAdmin roles/storage.bucketViewer; do
+    gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET_NAME}" \
+      --member="${transfer}" \
+      --role="${role}" \
+      --quiet || true
+  done
+  gcloud storage buckets remove-iam-policy-binding "gs://${asset_bucket}" \
+    --member="${wi}/atelet" \
+    --role=roles/storage.objectViewer \
+    --quiet || true
+}
+
+# Delete the snapshot transfer service account. Deleting it drops the token
+# creator grants on it.
+delete_transfer_service_account() {
+  require PROJECT_ID
+  echo "Deleting the snapshot transfer service account..."
+  gcloud iam service-accounts delete "$(transfer_service_account)" \
+    --project="${PROJECT_ID}" --quiet || true
 }
 
 # Delete Snapshot Bucket (Reverse of create_snapshot_bucket)
 delete_snapshot_bucket() {
   require PROJECT_ID BUCKET_NAME
-  echo "Deleting snapshot bucket..."
-  gcloud storage rm --recursive "gs://${BUCKET_NAME}/**" --project="${PROJECT_ID}" --quiet || true
-  gcloud storage buckets delete "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" --quiet || true
+  echo "Deleting snapshot and asset buckets..."
+  local bucket asset_bucket="${BUCKET_NAME}-assets"
+  for bucket in "${BUCKET_NAME}" "${asset_bucket}"; do
+    gcloud storage rm --recursive "gs://${bucket}/**" --project="${PROJECT_ID}" --quiet || true
+    gcloud storage buckets delete "gs://${bucket}" --project="${PROJECT_ID}" --quiet || true
+  done
 }
 
 # Delete gVisor Node Pool (Reverse of create_gvisor_node_pool)
@@ -157,6 +191,19 @@ delete_cluster() {
     --quiet || true
 }
 
+# delete_buckets_and_cluster deletes the buckets, the node pool and the cluster.
+delete_buckets_and_cluster() {
+  delete_snapshot_bucket
+  # Deleting the cluster removes its node pools, so this does not insist on a
+  # pool name a caller (e.g. an installer) may not track.
+  if [ -n "${NODE_POOL_NAME:-}" ]; then
+    delete_gvisor_node_pool
+  else
+    echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
+  fi
+  delete_cluster
+}
+
 # --- Main Logic ---
 if [ "$#" -eq 0 ]; then
   usage
@@ -167,24 +214,22 @@ while [[ "$#" -gt 0 ]]; do
     --revoke-gke-node-permissions) revoke_gke_node_permissions ;;
     --revoke-atelet-permissions) revoke_atelet_permissions ;;
     --delete-iam-policy-bindings) delete_iam_policy_bindings ;;
+    --delete-transfer-service-account) delete_transfer_service_account ;;
     --delete-snapshot-bucket) delete_snapshot_bucket ;;
     --delete-gvisor-node-pool) delete_gvisor_node_pool ;;
     --delete-cluster) delete_cluster ;;
     --delete-dashboards) delete_dashboards ;;
+    --cluster-scoped)
+      delete_iam_policy_bindings
+      delete_buckets_and_cluster
+      ;;
     --all)
       delete_dashboards
       delete_iam_policy_bindings
+      delete_transfer_service_account
       revoke_atelet_permissions
       revoke_gke_node_permissions
-      delete_snapshot_bucket
-      # Deleting the cluster removes its node pools, so --all does not insist
-      # on a pool name a caller (e.g. an installer) may not track.
-      if [ -n "${NODE_POOL_NAME:-}" ]; then
-        delete_gvisor_node_pool
-      else
-        echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
-      fi
-      delete_cluster
+      delete_buckets_and_cluster
       ;;
     *) usage ;;
   esac

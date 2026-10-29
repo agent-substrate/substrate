@@ -95,7 +95,7 @@ func TestExpand(t *testing.T) {
 	}
 
 	t.Run("directory expands to its xml, sorted", func(t *testing.T) {
-		got, err := expand([]string{dir})
+		got, err := expand([]string{dir}, ".xml")
 		if err != nil {
 			t.Fatalf("expand() error = %v", err)
 		}
@@ -105,7 +105,7 @@ func TestExpand(t *testing.T) {
 	})
 
 	t.Run("non-xml files are not picked up", func(t *testing.T) {
-		got, _ := expand([]string{dir})
+		got, _ := expand([]string{dir}, ".xml")
 		for _, p := range got {
 			if filepath.Ext(p) != ".xml" {
 				t.Errorf("expand() included %s, want only .xml", p)
@@ -114,7 +114,7 @@ func TestExpand(t *testing.T) {
 	})
 
 	t.Run("empty directory contributes nothing", func(t *testing.T) {
-		got, err := expand([]string{empty})
+		got, err := expand([]string{empty}, ".xml")
 		if err != nil || len(got) != 0 {
 			t.Errorf("expand(empty dir) = %v, %v; want no paths and no error", got, err)
 		}
@@ -123,7 +123,7 @@ func TestExpand(t *testing.T) {
 	// Passed through, not dropped, so evaluate() reports it missing.
 	t.Run("missing path passes through literally", func(t *testing.T) {
 		missing := filepath.Join(dir, "absent.xml")
-		got, err := expand([]string{missing})
+		got, err := expand([]string{missing}, ".xml")
 		if err != nil || len(got) != 1 || got[0] != missing {
 			t.Errorf("expand(missing) = %v, %v; want [%s]", got, err, missing)
 		}

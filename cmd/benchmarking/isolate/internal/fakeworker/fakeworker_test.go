@@ -27,7 +27,7 @@ import (
 // Names are pinned: a change renames every fake Worker's pod, which strands
 // the Workers a previous fake-workersync registered.
 func TestNamePinned(t *testing.T) {
-	if got, want := Name("r1", "benchmark-workloads", "benchmark-ateom", 0), "fake-r1-c52b9bd3-0"; got != want {
+	if got, want := Name("r1", "benchmark-workloads", "benchmark-worker", 0), "fake-r1-4ce21861-0"; got != want {
 		t.Errorf("Name = %q, want %q", got, want)
 	}
 }
@@ -63,7 +63,7 @@ func TestIndexRoundTrips(t *testing.T) {
 		Name("r2", "ns", "pool", 3),                                 // another run
 		Name("r1", "ns", "pool", 3) + "x",                           // not a number
 		strings.TrimSuffix(Name("r1", "ns", "pool", 0), "0") + "01", // not canonical
-		"benchmark-ateom-5d8f-xyz",
+		"benchmark-worker-5d8f-xyz",
 	} {
 		if _, ok := Index("r1", "ns", "pool", name); ok {
 			t.Errorf("Index(%q) matched the pool", name)

@@ -18,11 +18,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // MicroVMGoldenTimeout is the golden-snapshot budget the micro-VM demos set as
@@ -68,10 +68,10 @@ type Substrate struct {
 	// is a cloud-hypervisor cold boot plus a checkpoint, on nested KVM in CI.
 	GoldenTimeout time.Duration
 
-	// RenderValues optionally supplies extra placeholder values at deploy
-	// time, for demos whose manifests need more than ${BUCKET_NAME} (e.g. a
-	// freshly built image digest). Delete renders only the pool manifest, so
-	// deploy-only values may live solely here.
+	// RenderValues optionally supplies placeholder values at deploy time, for
+	// demos whose manifests need them (e.g. a freshly built image digest).
+	// Delete renders only the pool manifest, so deploy-only values may live
+	// solely here.
 	RenderValues func(ctx context.Context, e *steps.Env) (map[string]string, error)
 }
 

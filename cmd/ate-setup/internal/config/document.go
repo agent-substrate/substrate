@@ -22,7 +22,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // Outcome is how the run that produced a document ended.

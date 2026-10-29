@@ -30,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // errHostNotAllowed is returned when a requested hostname will not be minted.

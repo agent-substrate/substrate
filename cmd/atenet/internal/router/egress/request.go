@@ -19,17 +19,21 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/resources"
 )
 
-const websocketDeniedBody = "WebSocket egress is not supported"
+const (
+	websocketDeniedBody = "WebSocket egress is not supported"
+	connectDeniedBody   = "CONNECT egress is not supported"
+)
 
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
 // or HTTPS the gateway terminated. It runs per request, because the
@@ -44,6 +48,11 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	if isWebSocketUpgrade(md) {
 		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
+	}
+	// We don't support Actor making a CONNECT (inside the tunnel).
+	if strings.EqualFold(md.Method, http.MethodConnect) {
+		slog.WarnContext(ctx, "egress denied: CONNECT inside the egress tunnel is not supported", slog.String("leg", leg), slog.String("authority", md.Host))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, connectDeniedBody)
 	}
 
 	ref, err := actorFromFilterState(md)
@@ -197,5 +206,5 @@ func actorFromFilterState(md *extproc.RequestMetadata) (resources.ActorRef, erro
 	if id == "" {
 		return resources.ActorRef{}, errors.New("no actor identity in filter state")
 	}
-	return resources.ActorRefFromAteomForActorSPIFFEID(id)
+	return resources.ActorRefFromWorkerForActorSPIFFEID(id)
 }

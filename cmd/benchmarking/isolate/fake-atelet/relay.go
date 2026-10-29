@@ -19,19 +19,21 @@ import (
 	"crypto/tls"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"google.golang.org/grpc"
 )
 
-// capacityClient is the part of ateapipb.WorkerServiceClient the relay uses.
+// capacityClient is the part of ateapi.WorkerServiceClient the relay uses.
 type capacityClient interface {
-	RegisterWorker(ctx context.Context, in *ateapipb.RegisterWorkerRequest, opts ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error)
+	AcquireWorkerEpoch(ctx context.Context, in *ateapi.AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*ateapi.AcquireWorkerEpochResponse, error)
+	RegisterWorker(ctx context.Context, in *ateapi.RegisterWorkerRequest, opts ...grpc.CallOption) (*ateapi.RegisterWorkerResponse, error)
+	SetWorkerSandboxRuntimes(ctx context.Context, in *ateapi.SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*ateapi.SetWorkerSandboxRuntimesResponse, error)
 }
 
 // relay forwards fake-workersync's capacity reports to ate-api-server under
-// this pod's atelet identity. It stands where atelet's AteomSupport stands in
-// production: ateom knows its capacity and atelet relays it, because
+// this pod's atelet identity. It stands where atelet's WorkerSupport stands in
+// production: worker knows its capacity and atelet relays it, because
 // ate-api-server accepts a report only from the atelet on the Worker's node.
 // The relay decides nothing; fake-workersync names the Worker and its
 // capacity, and ate-api-server checks the Worker is on this node.
@@ -39,18 +41,41 @@ type capacityClient interface {
 // It serves WorkerService so the request and ate-api-server's status pass
 // through unchanged; every other WorkerService call is Unimplemented.
 type relay struct {
-	ateapipb.UnimplementedWorkerServiceServer
+	ateapi.UnimplementedWorkerServiceServer
 
 	client capacityClient
+	// epochs records the epoch of each registration ate-api-server accepts.
+	epochs *workerEpochs
 }
 
-func (r *relay) RegisterWorker(ctx context.Context, in *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
+func (r *relay) AcquireWorkerEpoch(ctx context.Context, in *ateapi.AcquireWorkerEpochRequest) (*ateapi.AcquireWorkerEpochResponse, error) {
+	resp, err := r.client.AcquireWorkerEpoch(ctx, in)
+	if err != nil {
+		slog.WarnContext(ctx, "Epoch acquire rejected",
+			slog.String("worker", in.GetWorker().GetName()), slog.Any("err", err))
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (r *relay) SetWorkerSandboxRuntimes(ctx context.Context, in *ateapi.SetWorkerSandboxRuntimesRequest) (*ateapi.SetWorkerSandboxRuntimesResponse, error) {
+	resp, err := r.client.SetWorkerSandboxRuntimes(ctx, in)
+	if err != nil {
+		slog.WarnContext(ctx, "Sandbox runtimes report rejected",
+			slog.String("worker", in.GetWorker().GetName()), slog.Any("err", err))
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (r *relay) RegisterWorker(ctx context.Context, in *ateapi.RegisterWorkerRequest) (*ateapi.RegisterWorkerResponse, error) {
 	resp, err := r.client.RegisterWorker(ctx, in)
 	if err != nil {
 		slog.WarnContext(ctx, "Capacity report rejected",
 			slog.String("worker", in.GetWorker().GetName()), slog.Any("err", err))
 		return nil, err
 	}
+	r.epochs.set(in.GetWorker().GetName(), in.GetEpoch())
 	slog.DebugContext(ctx, "Relayed capacity report",
 		slog.String("worker", in.GetWorker().GetName()), slog.Any("capacity", in.GetCapacity()))
 	return resp, nil

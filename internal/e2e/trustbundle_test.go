@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/pemutil"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/pemutil"
 )
 
 // TestAddCA pins what lets the identity suite run alongside the suites doing

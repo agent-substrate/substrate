@@ -31,10 +31,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/trustbundle"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -108,16 +108,16 @@ func (s *ctbStore) remove(t *testing.T) {
 	}
 }
 
-func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolume {
-	return &ateletpb.SystemInfoVolume{
+func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolumeSource {
+	return &ateletpb.SystemInfoVolumeSource{
 		DataSources: []*ateletpb.SystemInfoDataSource{
 			{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{trustbundle.EgressName}, Path: relPath}},
 		},
 	}
 }
 
-func metadataVolumeSpec() *ateletpb.SystemInfoVolume {
-	return &ateletpb.SystemInfoVolume{
+func metadataVolumeSpec() *ateletpb.SystemInfoVolumeSource {
+	return &ateletpb.SystemInfoVolumeSource{
 		DataSources: []*ateletpb.SystemInfoDataSource{
 			{ActorMetadata: &ateletpb.ActorMetadataDataSource{
 				Items: []*ateletpb.ActorMetadataItem{
@@ -395,7 +395,7 @@ func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.
 	store.set(t, certA)
 	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
-	spec := &ateletpb.SystemInfoVolume{
+	spec := &ateletpb.SystemInfoVolumeSource{
 		DataSources: append(metadataVolumeSpec().GetDataSources(), trustVolumeSpec("trust/ca.pem").GetDataSources()...),
 	}
 	if _, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, []*systemInfoVolume{{Name: "vol1", Root: root, Spec: spec}}); err != nil {
@@ -683,7 +683,7 @@ func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing
 
 func TestSystemInfoVolumesFor(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{
-		{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+		{Name: "data", DurableDir: &ateletpb.DurableDirVolumeSource{}},
 		{Name: "trust", SystemInfo: trustVolumeSpec("ca.pem")},
 		{Name: "meta", SystemInfo: metadataVolumeSpec()},
 	}}

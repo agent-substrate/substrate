@@ -13,23 +13,23 @@
 // limitations under the License.
 
 // Package sandboxclass names the sandbox runtime families: the values a
-// WorkerPool, a SandboxConfig, and an ActorTemplate can select. It imports
+// WorkerPool and a SandboxConfig can select. It imports
 // nothing from Kubernetes, so any package can name a class without pulling in
-// the ate.dev/v1alpha1 API types.
+// the ate.dev/v1 API types.
 package sandboxclass
 
 import "slices"
 
 const (
-	// GVisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
+	// GVisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
 	GVisor = "gvisor"
-	// MicroVM is the micro-VM runtime (cmd/ateom-microvm). It needs /dev/kvm
+	// MicroVM is the micro-VM runtime (cmd/ateworker-microvm). It needs /dev/kvm
 	// and vhost devices.
 	MicroVM = "microvm"
 )
 
 // All returns every sandbox class. Keep it in sync with the
-// +kubebuilder:validation:Enum markers in pkg/api/v1alpha1.
+// +kubebuilder:validation:Enum markers in api/infra/k8s/ate/v1.
 func All() []string {
 	return []string{GVisor, MicroVM}
 }

@@ -28,12 +28,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/cmd"
 )
 
-// Each invocation gets its own command tree and flags, including invocations
-// made by the real shell shims. The test executable runs the installer without
-// rebuilding it or contacting a real cluster.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Each invocation gets its own command tree and flags. The test executable runs
+// the installer without rebuilding it or contacting a real cluster.
 func TestInstallerPreflightProcess(t *testing.T) {
 	if os.Getenv("ATE_SETUP_PREFLIGHT_TEST") != "1" {
 		return
@@ -48,7 +56,7 @@ func TestInstallerPreflightProcess(t *testing.T) {
 	t.Fatal("missing installer arguments")
 }
 
-func runPreflightInstaller(t *testing.T, kubeconfig, dockerStatus string, shim bool, args ...string) (string, int) {
+func runPreflightInstaller(t *testing.T, kubeconfig, dockerStatus string, args ...string) (string, int) {
 	t.Helper()
 	bin := t.TempDir()
 	executable, err := os.Executable()
@@ -57,17 +65,6 @@ func runPreflightInstaller(t *testing.T, kubeconfig, dockerStatus string, shim b
 	}
 	for name, source := range map[string]string{
 		"docker": "#!/bin/sh\necho called >> \"$PREFLIGHT_DOCKER_LOG\"\nexit \"$PREFLIGHT_DOCKER_STATUS\"\n",
-		"go": `#!/bin/sh
-if [ "$*" = "env GOARCH" ]; then
-  echo amd64
-elif [ "$1" = run ] && [ "$2" = ./cmd/ate-setup ]; then
-  shift 2
-  exec "$PREFLIGHT_EXECUTABLE" -test.run='^TestInstallerPreflightProcess$' -- "$@"
-else
-  echo "unexpected go invocation: $*" >&2
-  exit 1
-fi
-`,
 	} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(source), 0o755); err != nil {
 			t.Fatal(err)
@@ -76,9 +73,6 @@ fi
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	process := exec.CommandContext(ctx, executable, append([]string{"-test.run=^TestInstallerPreflightProcess$", "--"}, args...)...)
-	if shim {
-		process = exec.CommandContext(ctx, "bash", append([]string{"hack/install-ate-kind.sh"}, args...)...)
-	}
 	process.Dir = repoRoot(t)
 	process.Env = []string{
 		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
@@ -87,7 +81,6 @@ fi
 		"NO_DEV_ENV=true",
 		"ATE_NO_REPORT_DEFAULTS=1",
 		"ATE_SETUP_PREFLIGHT_TEST=1",
-		"PREFLIGHT_EXECUTABLE=" + executable,
 		"PREFLIGHT_DOCKER_STATUS=" + dockerStatus,
 		"PREFLIGHT_DOCKER_LOG=" + filepath.Join(bin, "docker.log"),
 	}
@@ -134,22 +127,15 @@ current-context: kind-kind
 }
 
 func TestKindInstallerMissingContext(t *testing.T) {
-	for _, shim := range []bool{false, true} {
-		t.Run(fmt.Sprintf("shim=%t", shim), func(t *testing.T) {
-			args := []string{"--kind", "deploy", "demo", "counter"}
-			if shim {
-				args = []string{"--deploy-demo-counter"}
-			}
-			out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "0", shim, args...)
-			if code == 0 || !strings.Contains(out, "create-kind-cluster.sh") || !strings.Contains(out, "export kubeconfig") {
-				t.Fatalf("exit=%d, want missing-context recovery guidance\n%s", code, out)
-			}
-		})
+	args := []string{"--kind", "deploy", "demo", "counter"}
+	out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "0", args...)
+	if code == 0 || !strings.Contains(out, "create-kind-cluster.sh") || !strings.Contains(out, "export kubeconfig") {
+		t.Fatalf("exit=%d, want missing-context recovery guidance\n%s", code, out)
 	}
 }
 
 func TestKindInstallerDockerUnavailable(t *testing.T) {
-	out, code := runPreflightInstaller(t, preflightKubeconfig(t, "http://127.0.0.1:1"), "1", false,
+	out, code := runPreflightInstaller(t, preflightKubeconfig(t, "http://127.0.0.1:1"), "1",
 		"--kind", "deploy", "demo", "counter")
 	if code == 0 || !strings.Contains(out, "Docker") || !strings.Contains(out, "docker info") {
 		t.Fatalf("exit=%d, want Docker readiness guidance\n%s", code, out)
@@ -159,14 +145,10 @@ func TestKindInstallerDockerUnavailable(t *testing.T) {
 func TestInstallerRequiresControlPlaneBeforeDemoOrBenchmark(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		shim bool
 		args []string
 	}{
-		{"native demo", false, []string{"deploy", "demo", "counter"}},
-		{"native benchmark", false, []string{"deploy", "benchmarks"}},
-		{"kind demo", true, []string{"--deploy-demo-autoscaled-workerpool"}},
-		{"kind benchmark", true, []string{"--deploy-benchmarks"}},
-		{"demo before system", true, []string{"--deploy-demo-counter", "--deploy-ate-system"}},
+		{"native demo", []string{"deploy", "demo", "counter"}},
+		{"native benchmark", []string{"deploy", "benchmarks"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -180,7 +162,7 @@ func TestInstallerRequiresControlPlaneBeforeDemoOrBenchmark(t *testing.T) {
 				_, _ = fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"deployments.apps ate-controller not found"}`)
 			}))
 			defer server.Close()
-			out, code := runPreflightInstaller(t, preflightKubeconfig(t, server.URL), "0", tc.shim, tc.args...)
+			out, code := runPreflightInstaller(t, preflightKubeconfig(t, server.URL), "0", tc.args...)
 			if code == 0 || !strings.Contains(out, "deploy ate-system") || !strings.Contains(out, "credential-provider") {
 				t.Errorf("exit=%d, want control-plane install guidance\n%s", code, out)
 			}
@@ -195,14 +177,24 @@ func TestInstallerRequiresControlPlaneBeforeDemoOrBenchmark(t *testing.T) {
 }
 
 func TestKindInstallerHelpNeedsNoCluster(t *testing.T) {
-	for _, shim := range []bool{false, true} {
-		args := []string{"--kind", "deploy", "demo", "counter", "--help"}
-		if shim {
-			args = []string{"--help"}
-		}
-		out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "1", shim, args...)
-		if code != 0 || !strings.Contains(out, "Usage:") {
-			t.Fatalf("shim=%t exit=%d, want help without prerequisites\n%s", shim, code, out)
+	args := []string{"--kind", "deploy", "demo", "counter", "--help"}
+	out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "1", args...)
+	if code != 0 || !strings.Contains(out, "Usage:") {
+		t.Fatalf("exit=%d, want help without prerequisites\n%s", code, out)
+	}
+}
+
+// Cobra rejects an unknown command only at the root, so a typo one level down
+// used to print help and exit 0 having installed nothing.
+func TestInstallerRejectsUnknownSubcommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"deploy", "demo-counter"},
+		{"deploy", "demo", "demo-counter"},
+	} {
+		out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "0", args...)
+		want := `unknown command "demo-counter"`
+		if code == 0 || !strings.Contains(out, want) {
+			t.Errorf("%v: exit=%d, want an error containing %q\n%s", args, code, want, out)
 		}
 	}
 }
@@ -225,7 +217,7 @@ func TestInstallerControlPlaneCheckPreservesErrorsAndAllowsInstalledSystem(t *te
 				_, _ = fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403,"message":"fixture access denied"}`)
 			}))
 			defer server.Close()
-			out, code := runPreflightInstaller(t, preflightKubeconfig(t, server.URL), "0", false, "deploy", "demo", "counter")
+			out, code := runPreflightInstaller(t, preflightKubeconfig(t, server.URL), "0", "deploy", "demo", "counter")
 			want := "fixture access denied"
 			if installed {
 				want = "demo-counter_deploy"
@@ -258,7 +250,7 @@ func TestKindInstallerUsesResolvedContextAndClusterName(t *testing.T) {
 	if err := os.WriteFile(document, []byte("apiVersion: install.ate.dev/v1alpha1\nkind: SubstrateInstall\ncontext: selected-by-config\nkindCluster:\n  name: local-dev\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, code := runPreflightInstaller(t, preflightKubeconfig(t, "http://127.0.0.1:1"), "0", false,
+	out, code := runPreflightInstaller(t, preflightKubeconfig(t, "http://127.0.0.1:1"), "0",
 		"--kind", "--config", document, "deploy", "demo", "counter")
 	for _, want := range []string{`context "selected-by-config"`, `export kubeconfig --name="local-dev"`, `KIND_CLUSTER_NAME="local-dev"`, "replaces an existing cluster"} {
 		if code == 0 || !strings.Contains(out, want) {
@@ -277,7 +269,7 @@ func TestKindInstallerMissingOrMalformedKubeconfig(t *testing.T) {
 			}
 			want = "while reading kubeconfig"
 		}
-		out, code := runPreflightInstaller(t, path, "0", false, "--kind", "deploy", "demo", "counter")
+		out, code := runPreflightInstaller(t, path, "0", "--kind", "deploy", "demo", "counter")
 		if code == 0 || !strings.Contains(out, want) {
 			t.Errorf("malformed=%t exit=%d, want %q\n%s", malformed, code, want, out)
 		}

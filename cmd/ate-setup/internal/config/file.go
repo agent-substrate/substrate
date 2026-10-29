@@ -61,8 +61,7 @@ func ParseFile(path string) (*File, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		// Name the absolute path: a relative one means different files from
-		// different working directories, and the shell installer changes to
-		// the repository root before running.
+		// different working directories.
 		abs, absErr := filepath.Abs(path)
 		if absErr != nil {
 			abs = path

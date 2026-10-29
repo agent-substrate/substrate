@@ -16,11 +16,12 @@ package router
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 type atenetRouter string
@@ -63,49 +64,21 @@ func (m Mode) ServesIngress() bool { return m == ModeIngress }
 // ServesEgress reports whether this mode answers egress CONNECTs.
 func (m Mode) ServesEgress() bool { return m == ModeEgress }
 
-// IngressAuthMode selects how the ingress dataplane authenticates and
-// authorizes the clients that connect to it.
-type IngressAuthMode string
-
-const (
-	// IngressAuthDeprecatedInsecure serves the plaintext ingress listeners,
-	// which accept every client and let any of them reach any actor,
-	// alongside the TLS listeners, which authenticate clients exactly as in
-	// IngressAuthStaticMTLS. It exists so clients can move to mTLS one at a
-	// time, and will be removed once they have.
-	IngressAuthDeprecatedInsecure IngressAuthMode = "deprecated-insecure"
-	// IngressAuthStaticMTLS requires every client to present a certificate
-	// that chains to the configured client CA bundle and carries one of the
-	// allowed SPIFFE IDs as a URI SAN. Envoy enforces both during the TLS
-	// handshake, so only the TLS listeners may be enabled.
-	IngressAuthStaticMTLS IngressAuthMode = "static-mtls"
-)
-
 // ingressAuthConfig holds the client authentication settings for the ingress
-// dataplane's listeners.
+// dataplane's listeners. Every client must present a certificate that chains
+// to ClientCAFile and carries one of AllowedSPIFFEIDs as a URI SAN. Envoy
+// enforces both during the TLS handshake.
 type ingressAuthConfig struct {
-	// Mode is the authentication mode. Empty means
-	// IngressAuthDeprecatedInsecure.
-	Mode IngressAuthMode
 	// ClientCAFile is the PEM bundle of CAs allowed to sign client
 	// certificates. Envoy reads it, so it must be mounted in the Envoy
-	// container at the same path. Required whenever a TLS listener is
-	// enabled.
+	// container at the same path.
 	ClientCAFile string
 	// AllowedSPIFFEIDs is the exact set of SPIFFE IDs allowed to connect to
-	// actors through the TLS listeners. Required whenever a TLS listener is
-	// enabled.
+	// actors. When it is empty, the dataplane serves no traffic.
 	//
 	// Entries are complete SPIFFE IDs, like
 	// `spiffe://mytrustdomain.com/foo/bar/baz`.
 	AllowedSPIFFEIDs []string
-}
-
-func (c ingressAuthConfig) mode() IngressAuthMode {
-	if c.Mode == "" {
-		return IngressAuthDeprecatedInsecure
-	}
-	return c.Mode
 }
 
 // authConfig holds the router's mTLS settings for dialing ateapi.
@@ -115,27 +88,50 @@ type authConfig struct {
 	AteapiServerName     string
 }
 
-// credentialProviderConfig holds the egress gateway's connection to the
-// credential provider the MITM-leg injection resolves secrets through. A
-// non-empty Address enables injection; the rest configures the mTLS the gateway
-// dials the provider with. See cmd/atenet/internal/router/egress.
+// credentialProviderConfig holds the egress gateway's connections to the
+// credential providers the MITM-leg injection resolves secrets through. Names,
+// Addresses and ServerNames pair up by position; the rest configures the mTLS
+// the gateway dials every provider with. See cmd/atenet/internal/router/egress.
 type credentialProviderConfig struct {
-	// Name is the provider this gateway serves, as a ate-secret://
-	// prefix; a policy credential URI naming any other provider is refused.
-	// Empty disables the check (dev only).
-	Name string
-	// Address is the provider's gRPC dial target. Empty disables injection.
-	Address string
+	// Names are the providers this gateway serves, as ate-secret://
+	// prefixes; a policy credential URI naming any other provider is refused.
+	// A lone empty name disables the check (dev only).
+	Names []string
+	// Addresses are the providers' gRPC dial targets. None disables injection.
+	Addresses []string
 	// CAFile is the CA the provider's serving certificate must chain to.
 	// Required unless Insecure is set.
 	CAFile string
 	// ClientCert is the credential bundle presented to the provider as the
 	// client certificate. Required unless Insecure is set.
 	ClientCert string
-	// ServerName is the SAN/SNI expected on the provider's serving certificate.
-	ServerName string
+	// ServerNames are the SAN/SNI expected on each provider's serving
+	// certificate. Empty leaves them all unset.
+	ServerNames []string
 	// Insecure dials the provider without TLS; explicit development-only opt-in.
 	Insecure bool
+}
+
+// validate checks that the repeated provider flags pair up.
+func (p credentialProviderConfig) validate() error {
+	if len(p.Names) != len(p.Addresses) {
+		return fmt.Errorf("got %d --credential-provider-name for %d --credential-provider-address, want one per address", len(p.Names), len(p.Addresses))
+	}
+	if len(p.ServerNames) != 0 && len(p.ServerNames) != len(p.Addresses) {
+		return fmt.Errorf("got %d --credential-provider-server-name for %d --credential-provider-address, want one per address or none", len(p.ServerNames), len(p.Addresses))
+	}
+	for i, name := range p.Names {
+		if p.Addresses[i] == "" {
+			return fmt.Errorf("--credential-provider-address must not be empty")
+		}
+		if name == "" && len(p.Names) > 1 {
+			return fmt.Errorf("an empty --credential-provider-name serves every credential URI, so it must be the only provider")
+		}
+		if slices.Contains(p.Names[:i], name) {
+			return fmt.Errorf("--credential-provider-name %q repeats", name)
+		}
+	}
+	return nil
 }
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.
@@ -150,7 +146,6 @@ type routerConfig struct {
 	RouterServiceName string
 	Kubeconfig        string
 	AteapiAddr        string
-	HttpPort          int
 	XdsPort           int
 	ExtprocPort       int
 	ExtprocAddr       string
@@ -158,12 +153,10 @@ type routerConfig struct {
 	StatusAddr        string
 	HealthInterval    time.Duration
 	HttpsPort         int
-	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
-	// listener ports for CONNECT-tunneled traffic. Non-positive disables the
-	// corresponding listener.
-	ConnectPlainTextPort int
-	ConnectTLSPort       int
-	EnvoyCertPath        string
+	// ConnectTLSPort is the listener port for CONNECT-tunneled traffic.
+	// Non-positive disables the listener.
+	ConnectTLSPort int
+	EnvoyCertPath  string
 
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
 	// (cert+key) presented as the client cert when dialing the actor's atunnel
@@ -171,9 +164,6 @@ type routerConfig struct {
 	// validate that server. Empty UpstreamCredentialBundlePath disables upstream mTLS.
 	UpstreamCredentialBundlePath string
 	UpstreamTrustBundlePath      string
-	// UpstreamSpiffePrefix validates the actor's atunnel server cert by its
-	// SPIFFE URI SAN prefix (trust domain) instead of the dialed pod IP.
-	UpstreamSpiffePrefix string
 	// UpstreamConnect tunnels actor traffic to atunnel's CONNECT listener.
 	UpstreamConnect bool
 
@@ -190,10 +180,9 @@ type routerConfig struct {
 	EgressPolicyCacheTTL time.Duration
 
 	// CredentialProvider configures egress credential injection on the MITM leg.
-	// Only the egress gateway sets it, and only when injection is enabled: an
-	// empty CredentialProvider.Address leaves the injector disabled, so a rule
-	// that requires an injection is skipped and the request passes through
-	// without the credential. See egress.Handler.
+	// Only the egress gateway sets it, and only when injection is enabled: a
+	// CredentialProvider with no Addresses leaves the injector disabled, so a
+	// request that needs an injection is denied. See egress.Handler.
 	CredentialProvider credentialProviderConfig
 
 	LogLevel    string
@@ -315,6 +304,9 @@ func (c routerConfig) validate() error {
 	if err := c.validateIngressAuth(); err != nil {
 		return err
 	}
+	if err := c.CredentialProvider.validate(); err != nil {
+		return err
+	}
 
 	if c.ExtProcMaxRequests < 0 {
 		return fmt.Errorf("--extproc-max-requests must not be negative, got %d (0 derives it from --parked-request-max)", c.ExtProcMaxRequests)
@@ -343,60 +335,22 @@ func (c routerConfig) validate() error {
 	return nil
 }
 
-// tlsIngressEnabled reports whether the Envoy dataplane builds at least one
-// TLS ingress listener.
-func (c routerConfig) tlsIngressEnabled() bool {
-	return c.EnvoyCertPath != "" && (c.HttpsPort > 0 || c.ConnectTLSPort > 0)
-}
-
-// validateIngressAuth rejects a configuration that would leave a TLS listener
-// without client authentication, a static-mtls configuration that would leave
-// any path to an actor unauthenticated, and one the dataplane cannot enforce.
+// validateIngressAuth rejects an Envoy ingress configuration with no TLS
+// listener, or one whose clients cannot be authenticated. Agentgateway's
+// listeners come from its static configuration, so the router has none to
+// check.
 func (c routerConfig) validateIngressAuth() error {
-	mode := c.IngressAuth.mode()
-	switch mode {
-	case IngressAuthDeprecatedInsecure, IngressAuthStaticMTLS:
-	default:
-		return fmt.Errorf("--ingress-auth-mode must be %q or %q, got %q", IngressAuthDeprecatedInsecure, IngressAuthStaticMTLS, c.IngressAuth.Mode)
-	}
-	// The egress gateway never builds the ingress listeners.
-	if !c.Mode.ServesIngress() {
+	if !c.Mode.ServesIngress() || c.atenetRouter() != atenetRouterEnvoy {
 		return nil
 	}
-	if mode == IngressAuthDeprecatedInsecure {
-		// Agentgateway's listeners come from its static configuration, so
-		// the router has none to authenticate.
-		if c.atenetRouter() != atenetRouterEnvoy || !c.tlsIngressEnabled() {
-			return nil
-		}
-		return c.validateIngressClientAuth()
-	}
-	if c.atenetRouter() != atenetRouterEnvoy {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --atenet-dataplane=%s: the %s dataplane is configured statically, not by the router", IngressAuthStaticMTLS, atenetRouterEnvoy, c.atenetRouter())
-	}
-	if c.HttpPort > 0 {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --port-http=0: the plaintext listener cannot authenticate clients", IngressAuthStaticMTLS)
-	}
-	if c.ConnectPlainTextPort > 0 {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --port-connect=0: the plaintext listener cannot authenticate clients", IngressAuthStaticMTLS)
-	}
 	if c.EnvoyCertPath == "" {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --envoy-cert-path: without a serving certificate there is no TLS listener", IngressAuthStaticMTLS)
+		return fmt.Errorf("--envoy-cert-path is required: without a serving certificate there is no TLS listener")
 	}
 	if c.HttpsPort <= 0 && c.ConnectTLSPort <= 0 {
-		return fmt.Errorf("--ingress-auth-mode=%s requires --port-https or --port-connect-tls: there is no TLS listener", IngressAuthStaticMTLS)
+		return fmt.Errorf("--port-https or --port-connect-tls is required: there is no TLS listener")
 	}
-	return c.validateIngressClientAuth()
-}
-
-// validateIngressClientAuth checks the settings the TLS listeners authenticate
-// clients with.
-func (c routerConfig) validateIngressClientAuth() error {
 	if c.IngressAuth.ClientCAFile == "" {
-		return fmt.Errorf("TLS ingress listeners (--port-https, --port-connect-tls) require --ingress-client-ca-file")
-	}
-	if len(c.IngressAuth.AllowedSPIFFEIDs) == 0 {
-		return fmt.Errorf("TLS ingress listeners (--port-https, --port-connect-tls) require at least one --ingress-allowed-spiffe-ids entry")
+		return fmt.Errorf("--ingress-client-ca-file is required")
 	}
 	for _, id := range c.IngressAuth.AllowedSPIFFEIDs {
 		if _, err := spiffeid.FromString(id); err != nil {

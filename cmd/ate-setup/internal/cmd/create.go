@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 var createCmd = &cobra.Command{
@@ -81,6 +81,11 @@ func init() {
 			use:   "api-authentication-config",
 			short: "Create the default ate-api-server authentication config",
 			run:   (*steps.Env).CreateAPIAuthenticationConfig,
+		},
+		{
+			use:   "api-config",
+			short: "Create the ate-api-server config file, including its log level",
+			run:   (*steps.Env).CreateAPIConfig,
 		},
 	} {
 		run := sub.run

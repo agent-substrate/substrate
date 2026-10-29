@@ -53,7 +53,7 @@ func createFifo(root *os.Root, name string, mode os.FileMode) error {
 // Device nodes matter here because overlayfs records a deleted lower-layer
 // file as a 0:0 character device ("whiteout") in the upper — dropping one at
 // extraction would resurrect the deleted file on restore. mknod requires
-// privilege; extraction runs as root in ateom, and the tests gate on it.
+// privilege; extraction runs as root in worker, and the tests gate on it.
 func createDevice(root *os.Root, name string, hdr *tar.Header, mode os.FileMode) error {
 	dir, base := filepath.Split(name)
 	if dir == "" {

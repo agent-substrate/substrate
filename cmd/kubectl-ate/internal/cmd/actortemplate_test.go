@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -41,7 +41,7 @@ workerSelector:
     workload: counter
 containers:
 - name: counter
-  image: ko://github.com/agent-substrate/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter
   command: ["/ko-app/counter", "--extra-port=9090"]
   wakeupProbe:
     httpGet:
@@ -52,16 +52,11 @@ containers:
     mountPath: /home/counter
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
+    cpuMillicores: 1000
+    memoryBytes: 536870912
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
-sandboxConfig:
-  sandboxClass: gvisor
-  configName: gvisor-default
 volumes:
 - name: data
   durableDir: {}
@@ -73,33 +68,26 @@ func TestActorTemplateFromManifest(t *testing.T) {
 		t.Fatalf("actorTemplateFromManifest: %v", err)
 	}
 
-	want := &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ate-demo-counter", Name: "counter"},
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "counter"}},
-		Containers: []*ateapipb.Container{{
+	want := &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: "ate-demo-counter", Name: "counter"},
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"workload": "counter"}},
+		Containers: []*ateapi.Container{{
 			Name:    "counter",
-			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
+			Image:   "ko://go.ate.dev/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
-			WakeupProbe: &ateapipb.WakeupProbe{
-				HttpGet: &ateapipb.HttpGetAction{Path: "/readyz", Port: 80},
+			WakeupProbe: &ateapi.WakeupProbe{
+				HttpGet: &ateapi.HttpGetAction{Path: "/readyz", Port: 80},
 			},
-			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
+			VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
 		}},
-		Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "512Mi"},
-		}},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Resources: &ateapi.ResourceRequirements{Limits: &ateapi.Resources{CpuMillicores: 1000, MemoryBytes: 512 << 20}},
+		SnapshotConfig: &ateapi.SnapshotConfig{
+			PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: "gvisor",
-			ConfigName:   "gvisor-default",
-		},
-		Volumes: []*ateapipb.Volume{{
+		Volumes: []*ateapi.Volume{{
 			Name:       "data",
-			DurableDir: &ateapipb.DurableDirVolumeSource{},
+			DurableDir: &ateapi.DurableDirVolumeSource{},
 		}},
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
@@ -114,9 +102,6 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
   name: counter
 snapshot_config:
   storage_location: gs://ate-snapshots/ate-demo-counter/
-sandbox_config:
-  sandbox_class: microvm
-  config_name: microvm
 `
 	got, err := actorTemplateFromManifest([]byte(manifest))
 	if err != nil {
@@ -124,9 +109,6 @@ sandbox_config:
 	}
 	if got.GetSnapshotConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
 		t.Errorf("storage_location = %q", got.GetSnapshotConfig().GetStorageLocation())
-	}
-	if got.GetSandboxConfig().GetSandboxClass() != "microvm" {
-		t.Errorf("sandbox_class = %v", got.GetSandboxConfig().GetSandboxClass())
 	}
 }
 
@@ -138,7 +120,8 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 		{name: "empty", manifest: ""},
 		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
 		{name: "bad enum", manifest: "snapshotConfig: {preferredFidelity: memory}\n"},
-		{name: "crd shape", manifest: "apiVersion: ate.dev/v1alpha1\nkind: ActorTemplate\nmetadata: {name: counter}\n"},
+		{name: "resources limits list", manifest: "resources: {limits: [{name: cpu, quantity: \"1\"}]}\n"},
+		{name: "crd shape", manifest: "apiVersion: ate.dev/v1\nkind: ActorTemplate\nmetadata: {name: counter}\n"},
 		{name: "not yaml", manifest: "\t{"},
 	}
 	for _, test := range tests {
@@ -157,19 +140,16 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 		manifest string
 		atespace string
 		name     string
-		class    string
 	}{
 		{
 			manifest: "counter-template.yaml.tmpl",
 			atespace: "ate-demo-counter",
 			name:     "counter",
-			class:    "gvisor",
 		},
 		{
 			manifest: "counter-microvm-template.yaml.tmpl",
 			atespace: "ate-demo-counter-microvm",
 			name:     "counter-microvm",
-			class:    "microvm",
 		},
 	}
 	for _, test := range tests {
@@ -178,17 +158,16 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading demo manifest: %v", err)
 			}
-			// The install scripts substitute the bucket and drop the unused
-			// optional placeholder lines before applying.
-			rendered := strings.ReplaceAll(string(data), "${BUCKET_NAME}", "ate-snapshots")
+			// ate-setup drops the unused optional placeholder lines before
+			// applying.
 			var kept []string
-			for _, line := range strings.Split(rendered, "\n") {
+			for _, line := range strings.Split(string(data), "\n") {
 				if strings.Contains(line, "${") {
 					continue
 				}
 				kept = append(kept, line)
 			}
-			rendered = strings.Join(kept, "\n")
+			rendered := strings.Join(kept, "\n")
 
 			got, err := actorTemplateFromManifest([]byte(rendered))
 			if err != nil {
@@ -198,11 +177,12 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
 			}
-			if got.GetSandboxConfig().GetSandboxClass() != test.class {
-				t.Errorf("sandbox class = %v, want %v", got.GetSandboxConfig().GetSandboxClass(), test.class)
+			if len(got.GetContainers()) == 0 {
+				t.Errorf("manifest has no containers: %v", got)
 			}
-			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetStorageLocation() == "" {
-				t.Errorf("missing required fields: %v", got)
+			// The API rejects storageLocation without its preview gate.
+			if location := got.GetSnapshotConfig().GetStorageLocation(); location != "" {
+				t.Errorf("manifest sets storageLocation %q, want none", location)
 			}
 		})
 	}

@@ -57,12 +57,14 @@ Samplers are resolved with `serverboot.ResolveTraceSampling`, which applies the 
 
 | Component | Default |
 |---|---|
-| ateapi, atelet, ateom-gvisor, ateom-microvm | `parentbased_traceidratio` 0.1 |
+| ateapi, atelet, ateworker-gvisor, ateworker-microvm | `parentbased_traceidratio` 0.1 |
 | atenet router (data plane root) | `parentbased_traceidratio` 0.01, mirrored into Envoy's `RandomSampling` |
 | glutton (benchmarking) | `parentbased_always_off` |
 | boomer (benchmarking) | runtime-controlled via dynconfig, ignores the env vars |
 
 All defaults are `ParentBased`, so a request that arrives already sampled stays sampled on every hop, and one that arrives explicitly unsampled stays unsampled. Only parentless requests are subject to the ratio, at whichever component roots the trace.
+
+The `ateapi` store follows the same rule and has no switch of its own. Its pgx tracer opens one client span per PostgreSQL statement, `begin` and `commit` included, only when the request is already sampled. `always_off` on `ateapi` therefore silences store spans together with everything else, and statements from background work never produce any.
 
 An invalid sampler name, or a missing or unparsable ratio arg, keeps the component default and logs a warning. This deliberately diverges from the OTel SDK's own env handling, which falls back to 100% sampling on invalid input and reads a missing arg as ratio 1.0.
 
@@ -72,7 +74,7 @@ These are head sampling ratios that bound what leaves the process. Keep decision
 
 ### Disabling tracing (perf/load tests)
 
-Set `OTEL_TRACES_SAMPLER=always_off` on the components under test (for ateom workers, via the controller's `--otel-traces-sampler` flag). `parentbased_always_off` is not enough under a load generator: boomer and locust send ratio-sampled trace context, and parent based samplers honor it. Alternatively set the generator's `trace_probability` to 0 and leave the servers alone. On kind, also override ateapi's `parentbased_always_on` pin.
+Set `OTEL_TRACES_SAMPLER=always_off` on the components under test (for workers, via the controller's `--otel-traces-sampler` flag). `parentbased_always_off` is not enough under a load generator: boomer and locust send ratio-sampled trace context, and parent based samplers honor it. Alternatively set the generator's `trace_probability` to 0 and leave the servers alone. On kind, also override ateapi's `parentbased_always_on` pin.
 
 The YAML manifest for your server needs `OTEL_EXPORTER_OTLP_ENDPOINT` set so the
 exporter knows where to push spans. Do not hardcode it — consume the shared
@@ -82,7 +84,7 @@ address for whichever environment it is deployed to:
 ```yaml
       containers:
         - name: ateapi
-          image: ko://github.com/agent-substrate/substrate/cmd/ateapi
+          image: ko://go.ate.dev/substrate/cmd/ateapi
           ports:
             - containerPort: 443
           # Supplies OTEL_EXPORTER_OTLP_ENDPOINT (and, on kind, the metric

@@ -23,16 +23,20 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"go.ate.dev/substrate/internal/actoridjwt"
 )
 
 // KeyAndID wraps a crypto.PublicKey and its JWK key ID.
@@ -60,6 +64,12 @@ type parseClaims struct {
 	// Kubernetes bound token claims.
 	BoundClaims parseBoundClaims `json:"kubernetes.io,omitempty"`
 
+	// Substrate's own claims, under the claim name for the token's kind. Kept
+	// raw until the signature is verified, so an unverified payload shapes no
+	// parsing beyond this struct.
+	Actor          json.RawMessage `json:"actor.ate.dev,omitempty"`
+	WorkerForActor json.RawMessage `json:"worker-for-actor.ate.dev,omitempty"`
+
 	// Kubernetes legacy token claims.
 	LegacyNamespace          string `json:"kubernetes.io/serviceaccount/namespace,omitempty"`
 	LegacySecretName         string `json:"kubernetes.io/serviceaccount/secret.name,omitempty"`
@@ -82,7 +92,7 @@ type parseBoundObjectReference struct {
 }
 
 // Claims contains standard JWT claims and, when present, Kubernetes
-// ServiceAccount claims.
+// ServiceAccount claims and Substrate's own claims.
 type Claims struct {
 	// Claims from RFC7519
 	Issuer     string
@@ -94,6 +104,21 @@ type Claims struct {
 	JTI        string
 
 	KubernetesClaims
+	SubstrateClaims
+}
+
+// SubstrateClaims are the claims the actor-id JWT issuer adds to the tokens it
+// mints. Kind says which claim the token carried, KindActor for the actor's
+// own token or KindWorkerForActor for a Substrate component acting on the
+// actor's behalf, and Substrate holds it. A token carrying neither has
+// KindUnspecified and a nil Substrate. A token carrying both is refused.
+//
+// Only a Verifier built with WithSubstrateClaims fills these in. Any issuer can
+// put the claim names in a token, so a verifier for another issuer leaves them
+// alone, whatever they hold.
+type SubstrateClaims struct {
+	Kind      actoridjwt.Kind
+	Substrate *actoridjwt.WireSubstrateClaims
 }
 
 // KubernetesClaims contains claims added to Kubernetes ServiceAccount tokens.
@@ -119,13 +144,38 @@ var (
 	defaultHTTPClient        = &http.Client{Timeout: 10 * time.Second}
 )
 
+// KeySource supplies the public keys a Verifier checks signatures with. The
+// Verifier calls Keys on first use, every jwksRefreshInterval, and once per
+// jwksRefreshRetryInterval when a token names a key ID it does not have, so a
+// source may read its backing store on every call.
+type KeySource interface {
+	Keys(ctx context.Context) ([]*KeyAndID, error)
+}
+
+type httpKeySource struct {
+	issuer string
+	client *http.Client
+}
+
+func (s httpKeySource) Keys(ctx context.Context) ([]*KeyAndID, error) {
+	return discoverKeysForIssuer(ctx, s.client, s.issuer)
+}
+
+// HTTPKeySource fetches the issuer's keys through OpenID Connect Discovery:
+// <issuer>/.well-known/openid-configuration, then its jwks_uri.
+func HTTPKeySource(issuer string, client *http.Client) KeySource {
+	return httpKeySource{issuer: issuer, client: client}
+}
+
 // Verifier verifies JWTs from one trusted OIDC issuer and caches its signing
 // keys. Keys are refreshed periodically and, at a bounded rate, when a token
 // names an unknown key ID.
 type Verifier struct {
-	issuer     string
-	audiences  []string
-	httpClient *http.Client
+	issuer    string
+	audiences []string
+	source    KeySource
+	// substrate says whether Verify decodes Substrate's claims.
+	substrate bool
 
 	mu                    sync.RWMutex
 	keys                  []*KeyAndID
@@ -134,10 +184,50 @@ type Verifier struct {
 	lastUnknownKeyRefresh time.Time
 }
 
+type fileKeySource struct {
+	path string
+}
+
+func (s fileKeySource) Keys(ctx context.Context) ([]*KeyAndID, error) {
+	b, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("while reading JWKS file: %w", err)
+	}
+	var set jwkSetT
+	if err := json.Unmarshal(b, &set); err != nil {
+		return nil, fmt.Errorf("while parsing JWKS file %s: %w", s.path, err)
+	}
+	return keysFromJWKSet(ctx, set, "file "+s.path)
+}
+
+// FileKeySource reads a JWK set from a file, for a verifier that is handed the
+// issuer's public keys directly rather than fetching them over discovery. The
+// file is re-read on every call, so a rotated set is picked up on the
+// verifier's next refresh. For that to work the file must be replaced
+// atomically, as a projected volume mounted without subPath is: an in-place
+// rewrite can be read half-written, and a subPath mount never sees the
+// rotation. The file holds public keys only.
+func FileKeySource(path string) KeySource {
+	return fileKeySource{path: path}
+}
+
+// Option configures a Verifier.
+type Option func(*Verifier)
+
+// WithSubstrateClaims makes Verify decode Substrate's claims into
+// Claims.SubstrateClaims and refuse a token that carries both or a malformed
+// one. It is for the verifier of the actor-id JWT issuer, whose tokens are the
+// only ones those claims mean anything on.
+func WithSubstrateClaims() Option { return func(v *Verifier) { v.substrate = true } }
+
 // NewVerifier returns a verifier for issuer. A token is accepted when at least
 // one of its audiences matches audiences.
-func NewVerifier(issuer string, audiences []string, httpClient *http.Client) *Verifier {
-	return &Verifier{issuer: issuer, audiences: slices.Clone(audiences), httpClient: httpClient}
+func NewVerifier(issuer string, audiences []string, source KeySource, opts ...Option) *Verifier {
+	v := &Verifier{issuer: issuer, audiences: slices.Clone(audiences), source: source}
+	for _, o := range opts {
+		o(v)
+	}
+	return v
 }
 
 // Verify verifies and extracts claims from a JWT.
@@ -246,14 +336,22 @@ func (v *Verifier) Verify(ctx context.Context, jwt string, now time.Time) (*Clai
 		return nil, fmt.Errorf("jwt claims to have been issued in the future")
 	}
 
+	var substrate SubstrateClaims
+	if v.substrate {
+		if substrate, err = decodeSubstrateClaims(rawClaims); err != nil {
+			return nil, err
+		}
+	}
+
 	return &Claims{
-		Issuer:     rawClaims.Issuer,
-		Audiences:  audiences,
-		Subject:    rawClaims.Subject,
-		Expiration: expiration,
-		NotBefore:  notBefore,
-		IssuedAt:   issuedAt,
-		JTI:        rawClaims.JTI,
+		Issuer:          rawClaims.Issuer,
+		Audiences:       audiences,
+		Subject:         rawClaims.Subject,
+		Expiration:      expiration,
+		NotBefore:       notBefore,
+		IssuedAt:        issuedAt,
+		JTI:             rawClaims.JTI,
+		SubstrateClaims: substrate,
 		KubernetesClaims: KubernetesClaims{
 			Namespace:          rawClaims.BoundClaims.Namespace,
 			ServiceAccountName: rawClaims.BoundClaims.ServiceAccount.Name,
@@ -267,6 +365,41 @@ func (v *Verifier) Verify(ctx context.Context, jwt string, now time.Time) (*Clai
 			WarnAfter:          time.Unix(int64(rawClaims.BoundClaims.WarnAfter), 0),
 		},
 	}, nil
+}
+
+// decodeSubstrateClaims parses Substrate's claims from a verified payload and
+// applies actoridjwt's rule that a token carries one of them or neither.
+func decodeSubstrateClaims(raw parseClaims) (SubstrateClaims, error) {
+	wire := actoridjwt.WireClaims{}
+	var err error
+	if wire.Actor, err = decodeSubstrateClaim("actor.ate.dev", raw.Actor); err != nil {
+		return SubstrateClaims{}, err
+	}
+	if wire.WorkerForActor, err = decodeSubstrateClaim("worker-for-actor.ate.dev", raw.WorkerForActor); err != nil {
+		return SubstrateClaims{}, err
+	}
+	if wire.Actor == nil && wire.WorkerForActor == nil {
+		return SubstrateClaims{}, nil
+	}
+	kind, claims, ok := wire.Substrate()
+	if !ok {
+		return SubstrateClaims{}, errors.New("token carries both actor.ate.dev and worker-for-actor.ate.dev")
+	}
+	return SubstrateClaims{Kind: kind, Substrate: claims}, nil
+}
+
+// decodeSubstrateClaim parses one of Substrate's claims. An absent or null
+// claim is nil. A present claim that is not an object is an error, since a
+// trusted issuer never emits one.
+func decodeSubstrateClaim(name string, raw json.RawMessage) (*actoridjwt.WireSubstrateClaims, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var claim actoridjwt.WireSubstrateClaims
+	if err := json.Unmarshal(raw, &claim); err != nil {
+		return nil, fmt.Errorf("while parsing the %s claim: %w", name, err)
+	}
+	return &claim, nil
 }
 
 func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto.PublicKey, error) {
@@ -308,14 +441,14 @@ func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto
 	if key == nil && len(v.keys) > 0 {
 		v.lastUnknownKeyRefresh = now
 	}
-	keys, err := discoverKeysForIssuer(ctx, v.httpClient, v.issuer)
+	keys, err := v.source.Keys(ctx)
 	if err != nil {
 		v.lastFailedRefresh = now
 		if key != nil {
-			slog.WarnContext(ctx, "Could not refresh OIDC signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
+			slog.WarnContext(ctx, "Could not refresh JWT signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
 			return key.PublicKey, nil
 		}
-		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
+		return nil, fmt.Errorf("while loading signing keys for issuer: %w", err)
 	}
 	v.keys = keys
 	v.lastRefresh = now
@@ -480,17 +613,24 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 
 	slog.InfoContext(ctx, "Fetched JWK set", slog.Any("jwkSet", jwkSet))
 
+	return keysFromJWKSet(ctx, jwkSet, "issuer "+issuer)
+}
+
+// keysFromJWKSet converts a JWK set into verification keys. origin names where
+// the set came from, for errors and logs.
+func keysFromJWKSet(ctx context.Context, jwkSet jwkSetT, origin string) ([]*KeyAndID, error) {
 	var ret []*KeyAndID
 	skipped := 0
 	for _, jwk := range jwkSet.Keys {
 		key, err := parseJWK(jwk)
 		if err != nil {
-			// Skip an unusable key instead of failing the whole issuer; it's safe because
-			// keys are selected by kid and the signature is still verified, so a skipped
-			// key can't be abused. Debug, not Warn: unsupported key types are a normal
-			// issuer configuration and periodic refreshes would otherwise spam warnings.
-			slog.DebugContext(ctx, "Skipping unusable JWK from issuer",
-				slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
+			// Skip an unusable key instead of failing the whole set. That is safe
+			// because keys are selected by kid and the signature is still verified,
+			// so a skipped key can't be abused. Debug, not Warn: unsupported key
+			// types are a normal issuer configuration and periodic refreshes would
+			// otherwise spam warnings.
+			slog.DebugContext(ctx, "Skipping unusable JWK",
+				slog.String("origin", origin), slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
 			skipped++
 			continue
 		}
@@ -501,14 +641,14 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 	// that fails later as a vaguer "unknown key ID".
 	if len(ret) == 0 {
 		if len(jwkSet.Keys) == 0 {
-			return nil, fmt.Errorf("issuer %q published an empty JWKS", issuer)
+			return nil, fmt.Errorf("%s published an empty JWKS", origin)
 		}
-		return nil, fmt.Errorf("no usable keys in JWKS for issuer %q (%d skipped)", issuer, skipped)
+		return nil, fmt.Errorf("no usable keys in JWKS from %s (%d skipped)", origin, skipped)
 	}
 
 	if skipped > 0 {
-		slog.DebugContext(ctx, "Skipped unusable JWKs from issuer",
-			slog.String("issuer", issuer), slog.Int("skipped", skipped), slog.Int("usable", len(ret)))
+		slog.DebugContext(ctx, "Skipped unusable JWKs",
+			slog.String("origin", origin), slog.Int("skipped", skipped), slog.Int("usable", len(ret)))
 	}
 
 	return ret, nil

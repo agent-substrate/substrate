@@ -23,7 +23,7 @@ metadata:
 
 ---
 
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: counter-microvm-csi
@@ -34,4 +34,4 @@ spec:
   replicas: 1
   sandboxClasses:
   - name: microvm
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-microvm

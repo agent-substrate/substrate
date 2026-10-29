@@ -67,7 +67,7 @@ func setOwner(hdr *tar.Header, info os.FileInfo) {
 
 // lchownEntry restores an entry's ownership without following symlinks.
 //
-// Changing a file's owner requires privilege. The production caller (ateom) is
+// Changing a file's owner requires privilege. The production caller (worker) is
 // root in its worker pod, so ownership is restored faithfully and any EPERM
 // there signals a real problem worth failing on. An unprivileged process cannot
 // chown at all, so rather than making the package unusable outside a root

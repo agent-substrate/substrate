@@ -21,9 +21,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 )
 
 // runRoot executes the command tree with args, quietly.
@@ -81,7 +81,7 @@ func TestAnUnknownCSIDriverIsRejectedBeforeAnythingRuns(t *testing.T) {
 // The accepted spellings have to make it past the same check, including the
 // bare `setup csi` that takes the default.
 func TestAcceptedCSIDriversPassArgumentValidation(t *testing.T) {
-	accepted := []string{"nfs", "hostpath", "both", "none", "true", "false", ""}
+	accepted := []string{"nfs", "hostpath", "both", "none"}
 
 	t.Run("setup csi", func(t *testing.T) {
 		for _, driver := range accepted {

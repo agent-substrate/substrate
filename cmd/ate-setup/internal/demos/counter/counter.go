@@ -20,10 +20,10 @@ package counter
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -40,9 +40,10 @@ func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
 		"EXTERNAL_VOLUME_MOUNTS": "  - name: external-data\n" +
 			"    mountPath: /external-data",
 		"EXTERNAL_VOLUMES": "- name: external-data\n" +
-			"  externalVolumeTemplate:\n" +
-			"    capacity: 1Gi\n" +
-			"    storageClassName: " + sc,
+			"  external:\n" +
+			"    template:\n" +
+			"      capacityBytes: 1073741824 # 1Gi\n" +
+			"      storageClassName: " + sc,
 	}
 }
 

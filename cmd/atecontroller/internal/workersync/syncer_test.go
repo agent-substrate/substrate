@@ -19,16 +19,16 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"testing"
 	"time"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -39,6 +39,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
 )
 
 // testPodUID is the pod UID most syncer tests give their single worker pod.
@@ -49,8 +50,9 @@ const (
 	otherPodUID = "22222222-2222-2222-2222-222222222222"
 )
 
-// workerPod builds a pod the informer's label selector matches. An empty ip
-// leaves the pod unregistrable, the shape a pod has before its sandbox is up.
+// workerPod builds a pod the informer's label selector matches, scheduled to a
+// node. An empty ip leaves the pod with no status, so not Ready, the shape a
+// pod has before its sandbox is up.
 func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -70,7 +72,7 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 			PodIP:  ip,
 			PodIPs: []corev1.PodIP{{IP: ip}},
 			// Availability requires Ready in addition to an IP: readiness is
-			// what says ateom is actually serving, not just that the sandbox
+			// what says worker is actually serving, not just that the sandbox
 			// got an address.
 			Conditions: []corev1.PodCondition{{
 				Type:   corev1.PodReady,
@@ -81,75 +83,82 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 	return pod
 }
 
-func workerPool(ns, name, sandboxClass string, labels map[string]string) *atev1alpha1.WorkerPool {
-	return &atev1alpha1.WorkerPool{
+func workerPool(ns, name string, labels map[string]string) *atev1.WorkerPool {
+	return &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClass(sandboxClass)}}},
+		Spec:       atev1.WorkerPoolSpec{SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}}},
 	}
 }
 
 // registeredWorker is a Worker in the shape the syncer would have registered
 // for the given pod, for seeding the fake API before a test runs.
-func registeredWorker(ns, poolName, podName, uid, ip string) *ateapipb.Worker {
-	return &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: uid},
+func registeredWorker(ns, poolName, podName, uid string) *ateapi.Worker {
+	return &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: uid},
 		WorkerNamespace: ns,
 		WorkerPool:      poolName,
 		WorkerPod:       podName,
 		WorkerPodUid:    uid,
-		Ips:             []string{ip},
 		NodeName:        "node1",
 	}
 }
 
-// newWorkerPoolInformer builds the WorkerPool informer the syncer reads, and
-// returns its indexer so a test can seed and mutate pools synchronously rather
-// than starting a factory and waiting for a watch to deliver them.
-func newWorkerPoolInformer(t *testing.T, initPools ...*atev1alpha1.WorkerPool) (cache.SharedIndexInformer, cache.Indexer) {
-	t.Helper()
-	//nolint:staticcheck // NewSimpleClientset is the only available fake clientset for versioned CRDs.
-	pools := externalversions.NewSharedInformerFactory(atefake.NewSimpleClientset(), 0).Api().V1alpha1().WorkerPools()
-	indexer := pools.Informer().GetIndexer()
+// newWorkerPoolInformer builds the WorkerPool informer the syncer reads, backed
+// by a fake clientset that holds initPools. Nothing is cached until the factory
+// starts.
+func newWorkerPoolInformer(initPools ...*atev1.WorkerPool) (*atefake.Clientset, externalversions.SharedInformerFactory, cache.SharedIndexInformer) {
+	objs := make([]runtime.Object, 0, len(initPools))
 	for _, pool := range initPools {
-		if err := indexer.Add(pool); err != nil {
-			t.Fatalf("seeding WorkerPool %s/%s: %v", pool.Namespace, pool.Name, err)
-		}
+		objs = append(objs, pool)
 	}
-	return pools.Informer(), indexer
+	//nolint:staticcheck // NewSimpleClientset is the only available fake clientset for versioned CRDs.
+	client := atefake.NewSimpleClientset(objs...)
+	factory := externalversions.NewSharedInformerFactory(client, 0)
+	return client, factory, factory.Ate().V1().WorkerPools().Informer()
 }
 
 // setupSyncerTest wires a running syncer to a fake Control API and a fake
-// Kubernetes, driving it end to end through pod events and the queue.
-func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) *fake.Clientset {
+// Kubernetes, driving it end to end through pod and pool events and the queue.
+// It returns the fake Kubernetes and the fake clientset the pools live in.
+func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPools ...*atev1.WorkerPool) (*fake.Clientset, *atefake.Clientset) {
 	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
-	workerPoolInformer, _ := newWorkerPoolInformer(t, initPools...)
+	poolClient, poolFactory, workerPoolInformer := newWorkerPoolInformer(initPools...)
 
-	// Start before the factory: the informer's initial list is what seeds the
+	// Start before the factories: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
 	workerFactory.Start(ctx.Done())
+	poolFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
+	poolFactory.WaitForCacheSync(ctx.Done())
 
-	return fakeK8s
+	return fakeK8s, poolClient
 }
 
 // setupReconcileTest builds a syncer whose pod and pool caches can be seeded
 // directly, for tests that drive reconcile synchronously without starting
 // factories or worker goroutines. It returns those caches alongside the syncer.
-// The syncer's pod client is a fake clientset that the caches do not watch.
-func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
+// The syncer's pod and apps clients are a fake clientset that the caches do not
+// watch.
+func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
 	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
 	_, workerInformer := WorkerPodInformer(fakeK8s)
-	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
+	_, _, workerPoolInformer := newWorkerPoolInformer()
+	poolIndexer := workerPoolInformer.GetIndexer()
+	for _, pool := range initPools {
+		if err := poolIndexer.Add(pool); err != nil {
+			t.Fatalf("seeding WorkerPool %s/%s: %v", pool.Namespace, pool.Name, err)
+		}
+	}
 
-	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer, 2), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -171,9 +180,9 @@ func mustReconcile(t *testing.T, ctx context.Context, s *WorkerPoolSyncer, key w
 }
 
 // waitForWorker polls the registry until the named worker satisfies cond.
-func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name string, cond func(*ateapipb.Worker) bool) *ateapipb.Worker {
+func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name string, cond func(*ateapi.Worker) bool) *ateapi.Worker {
 	t.Helper()
-	var got *ateapipb.Worker
+	var got *ateapi.Worker
 	err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
 		got = api.get(name)
 		return cond(got), nil
@@ -184,6 +193,13 @@ func waitForWorker(t *testing.T, ctx context.Context, api *fakeControl, name str
 	return got
 }
 
+// workerActive reports whether w is registered and ACTIVE. The syncer registers
+// a Worker UNAVAILABLE and marks it available in a later call, so a Worker that
+// exists is not yet one that takes Actors.
+func workerActive(w *ateapi.Worker) bool {
+	return w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE
+}
+
 func TestSyncer_Lifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -191,10 +207,11 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-lifecycle", "worker-unit-1", "pool1"
 
 	api := newFakeControl()
-	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", map[string]string{"foo": "bar"}))
+	fakeK8s, _ := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, map[string]string{"foo": "bar"}))
 
-	// A pod with no IP is not registered: there is nothing to route to yet.
+	// A pod not yet scheduled is not registered: node_name is required.
 	pod := workerPod(ns, podName, poolName, testPodUID, "")
+	pod.Spec.NodeName = ""
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
@@ -202,42 +219,33 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	// wrong in: the poll only ends early if a worker shows up.
 	err := wait.PollUntilContextTimeout(ctx, 20*time.Millisecond, 300*time.Millisecond, true, func(context.Context) (bool, error) {
 		if got := api.names(); len(got) != 0 {
-			return false, fmt.Errorf("registry holds %v for a pod with no IP, want it empty", got)
+			return false, fmt.Errorf("registry holds %v for a pod with no node, want it empty", got)
 		}
 		return false, nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("while checking a pod with no IP stays unregistered: %v", err)
+		t.Fatalf("while checking a pod with no node stays unregistered: %v", err)
 	}
 
-	// Once the pod reports an IP it is registered, with the fields the syncer
-	// copies off its pool.
+	// Once the pod is scheduled and Ready it is registered, with the fields the
+	// syncer copies off its pool.
 	if _, err := fakeK8s.CoreV1().Pods(ns).Update(ctx, workerPod(ns, podName, poolName, testPodUID, "127.0.0.1"), metav1.UpdateOptions{}); err != nil {
 		t.Fatalf("update pod: %v", err)
 	}
 
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
-	if want := []string{"127.0.0.1"}; !slices.Equal(got.GetIps(), want) {
-		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
-	}
-	if got.GetSandboxClass() != "gvisor" {
-		t.Errorf("worker sandbox class = %q, want gvisor", got.GetSandboxClass())
-	}
+	got := waitForWorker(t, ctx, api, testPodUID, workerActive)
 	if !maps.Equal(got.GetLabels(), map[string]string{"foo": "bar"}) {
 		t.Errorf("worker labels = %v, want map[foo:bar]", got.GetLabels())
-	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("worker state = %v, want ACTIVE", got.GetStatus().GetState())
 	}
 
 	if err := fakeK8s.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w == nil })
 }
 
-// A pool that sets neither a sandbox class nor labels registers a worker
-// carrying neither, rather than one carrying some default.
+// A pool that sets no labels registers a worker carrying none, rather than one
+// carrying some default.
 func TestSyncer_OmittedFields(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -245,26 +253,23 @@ func TestSyncer_OmittedFields(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-omitted", "worker-unit-1", "pool1"
 
 	api := newFakeControl()
-	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "", nil))
+	fakeK8s, _ := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, nil))
 
 	pod := workerPod(ns, podName, poolName, testPodUID, "127.0.0.1")
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
 
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
-	if got.GetSandboxClass() != "" {
-		t.Errorf("worker sandbox class = %q, want it empty", got.GetSandboxClass())
-	}
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w != nil })
 	if len(got.GetLabels()) != 0 {
 		t.Errorf("worker labels = %v, want none", got.GetLabels())
 	}
 }
 
 // Capacity belongs to the Worker, which sets it over WorkerService. The
-// syncer must not infer one from the pod, even when the ateom container spells
-// its limits out: the pod's limits bound the sandbox, but what the ateom can
-// actually supply to Actors is the ateom's to say.
+// syncer must not infer one from the pod, even when the worker container spells
+// its limits out: the pod's limits bound the sandbox, but what the worker can
+// actually supply to Actors is the worker's to say.
 func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -272,12 +277,12 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-capacity", "worker-unit-1", "pool1"
 
 	api := newFakeControl()
-	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", nil))
+	fakeK8s, _ := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, nil))
 
 	pod := workerPod(ns, podName, poolName, testPodUID, "127.0.0.1")
 	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
-		Name:  "ateom",
-		Image: "ateom",
+		Name:  "worker",
+		Image: "worker",
 		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("8Gi"),
@@ -289,8 +294,8 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 
 	// The registry here is a fake, so what it holds is exactly what the syncer
 	// sent. The syncer writes no capacity: it comes from the Worker's own
-	// report, which is the ateom's to make.
-	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
+	// report, which is the worker's to make.
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w != nil })
 	if got.GetStatus().GetCapacity() != nil {
 		t.Errorf("worker capacity = %v, want none", got.GetStatus().GetCapacity())
 	}
@@ -304,7 +309,7 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	ns, poolName, podName, ip := "ns-drain", "pool1", "worker-drain", "10.0.0.2"
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 	s, pods, _ := setupReconcileTest(t, api)
 
 	pod := workerPod(ns, podName, poolName, testPodUID, ip)
@@ -315,7 +320,7 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	if w == nil {
 		t.Fatal("worker should still exist while draining")
 	}
-	if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if w.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want DRAINING", w.GetStatus().GetState())
 	}
 }
@@ -327,7 +332,7 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 	ns, poolName, podName := "ns-drain-noip", "pool1", "worker-drain-noip"
 
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.3"))
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
 	s, pods, _ := setupReconcileTest(t, api)
 
 	// Same pod as the draining test above, minus the pod IP.
@@ -335,7 +340,7 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 	pod.DeletionTimestamp = &metav1.Time{Time: time.Unix(1, 0)}
 	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
 
-	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want DRAINING", got)
 	}
 }
@@ -357,8 +362,8 @@ func TestMarkWorkerDraining(t *testing.T) {
 
 	t.Run("already draining returns nil without a write", func(t *testing.T) {
 		api := newFakeControl()
-		w := registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.4")
-		w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
+		w := registeredWorker(ns, poolName, podName, testPodUID)
+		w.Status = &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING}
 		seeded := api.put(w)
 
 		s := &WorkerPoolSyncer{client: api}
@@ -374,13 +379,13 @@ func TestMarkWorkerDraining(t *testing.T) {
 
 	t.Run("active worker marked draining", func(t *testing.T) {
 		api := newFakeControl()
-		api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.4"))
+		api.put(registeredWorker(ns, poolName, podName, testPodUID))
 
 		s := &WorkerPoolSyncer{client: api}
 		if err := s.markWorkerDraining(ctx, key); err != nil {
 			t.Fatalf("markWorkerDraining = %v, want nil", err)
 		}
-		if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 			t.Errorf("worker state = %v, want DRAINING", got)
 		}
 	})
@@ -396,7 +401,7 @@ func TestReconcileDeadWorker(t *testing.T) {
 
 	t.Run("registered worker is removed", func(t *testing.T) {
 		api := newFakeControl()
-		api.put(registeredWorker(ns, poolName, podName, testPodUID, "10.0.0.5"))
+		api.put(registeredWorker(ns, poolName, podName, testPodUID))
 
 		s := &WorkerPoolSyncer{client: api}
 		if err := s.reconcileDeadWorker(ctx, key); err != nil {
@@ -425,10 +430,10 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 
 	ns, poolName := "ns-recon", "pool1"
 	api := newFakeControl()
-	api.put(registeredWorker(ns, poolName, "worker-live", testPodUID, "10.0.0.9"))
-	api.put(registeredWorker(ns, poolName, "worker-orphan", otherPodUID, "10.0.0.10"))
+	api.put(registeredWorker(ns, poolName, "worker-live", testPodUID))
+	api.put(registeredWorker(ns, poolName, "worker-orphan", otherPodUID))
 
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	// The cache holds only the live pod, so it is an authoritative snapshot.
 	seedPod(t, pods, workerPod(ns, "worker-live", poolName, testPodUID, "10.0.0.9"))
 
@@ -456,10 +461,10 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 	defer cancel()
 
 	api := newFakeControl()
-	api.put(registeredWorker("ns-enq-retry", "pool1", "worker-1", testPodUID, "10.0.0.10"))
+	api.put(registeredWorker("ns-enq-retry", "pool1", "worker-1", testPodUID))
 
 	failsLeft := 1
-	api.setListHook(func(*ateapipb.ListWorkersRequest) error {
+	api.setListHook(func(*ateapi.ListWorkersRequest) error {
 		if failsLeft > 0 {
 			failsLeft--
 			return status.Error(codes.Unavailable, "transient failure")
@@ -484,7 +489,7 @@ func TestSyncer_EnqueueRegisteredWorkers_RetriesTransientListError(t *testing.T)
 // cancelled, rather than spinning forever, when the API stays unavailable.
 func TestSyncer_ListWorkersPageWithRetry_StopsOnContextCancel(t *testing.T) {
 	api := newFakeControl()
-	api.setListHook(func(*ateapipb.ListWorkersRequest) error {
+	api.setListHook(func(*ateapi.ListWorkersRequest) error {
 		return status.Error(codes.Unavailable, "still down")
 	})
 	s, _, _ := setupReconcileTest(t, api)
@@ -512,12 +517,12 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 		"bbbbbbbb-0000-0000-0000-000000000000",
 		"cccccccc-0000-0000-0000-000000000000",
 	} {
-		api.put(registeredWorker("ns", "p", fmt.Sprintf("w%d", i), uid, "10.0.0.1"))
+		api.put(registeredWorker("ns", "p", fmt.Sprintf("w%d", i), uid))
 	}
 
 	// The second page fails once before serving.
 	failed := false
-	api.setListHook(func(req *ateapipb.ListWorkersRequest) error {
+	api.setListHook(func(req *ateapi.ListWorkersRequest) error {
 		if req.GetOptions().GetPageToken() == "1" && !failed {
 			failed = true
 			return status.Error(codes.Unavailable, "transient failure on page")
@@ -537,21 +542,49 @@ func TestSyncer_EnqueueRegisteredWorkers_StreamsPagesAndRetriesLatePage(t *testi
 	}
 }
 
-// A dual-stack pod registers every IP Kubernetes reports, in order.
-func TestSyncer_CreateWorker_DualStack(t *testing.T) {
+// A scheduled pod is registered before it has an IP, and unavailable: its IPs
+// are the worker process's to report when it registers, not the syncer's to
+// copy off the pod.
+func TestSyncer_CreateWorker_BeforePodIP(t *testing.T) {
 	ctx := context.Background()
 
-	ns, podName, poolName := "ns-syncer-dual-stack", "worker-unit-dual-stack", "pool-dual-stack"
+	ns, podName, poolName := "ns-syncer-no-ip", "worker-unit-no-ip", "pool-no-ip"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
-	pod := workerPod(ns, podName, poolName, testPodUID, "fd00::1")
-	pod.Status.PodIPs = append(pod.Status.PodIPs, corev1.PodIP{IP: "10.0.0.1"})
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
+	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, ""))
+
+	mustReconcile(t, ctx, s, key)
+	got := api.get(testPodUID)
+	if got == nil {
+		t.Fatal("no worker registered for a scheduled pod with no IP")
+	}
+	if got.GetNodeName() != "node1" {
+		t.Errorf("worker node = %q, want node1", got.GetNodeName())
+	}
+	if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("worker state = %v, want %v", state, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
+	}
+	if ips := got.GetStatus().GetIps(); len(ips) != 0 {
+		t.Errorf("worker ips = %q, want none until its worker process registers", ips)
+	}
+}
+
+// atenet-router requires atunnel's certificate to carry the SPIFFE ID the
+// worker registers with.
+func TestSyncer_CreateWorker_SPIFFEID(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-sa", "worker-unit-sa", "pool-sa"
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
+	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.1")
+	pod.Spec.ServiceAccountName = "substrate-worker"
 	key := seedPod(t, pods, pod)
 
 	mustReconcile(t, ctx, s, key)
-	if got, want := api.get(testPodUID).GetIps(), []string{"fd00::1", "10.0.0.1"}; !slices.Equal(got, want) {
-		t.Fatalf("worker ips = %q, want %q", got, want)
+	want := "spiffe://cluster.local/ns/ns-syncer-sa/sa/substrate-worker"
+	if got := api.get(testPodUID).GetWorkerSpiffeId(); got != want {
+		t.Fatalf("worker SPIFFE ID = %q, want %q", got, want)
 	}
 }
 
@@ -565,17 +598,17 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-conflict", "worker-unit-conflict", "pool-conflict"
 
 	api := newFakeControl()
-	s, pods, poolIndexer := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", map[string]string{"foo": "bar"}))
+	s, pods, poolIndexer := setupReconcileTest(t, api, workerPool(ns, poolName, map[string]string{"foo": "bar"}))
 	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"))
 
 	mustReconcile(t, ctx, s, key)
-	if got, want := api.get(testPodUID).GetIps(), []string{"10.0.0.1"}; !slices.Equal(got, want) {
-		t.Fatalf("worker ips = %q, want %q", got, want)
+	if api.get(testPodUID) == nil {
+		t.Fatal("worker not registered")
 	}
 
 	// Change a mutable worker field on the pool, so the next reconcile has an
 	// update to make.
-	if err := poolIndexer.Update(workerPool(ns, poolName, "gvisor", map[string]string{"foo": "baz"})); err != nil {
+	if err := poolIndexer.Update(workerPool(ns, poolName, map[string]string{"foo": "baz"})); err != nil {
 		t.Fatalf("updating pool: %v", err)
 	}
 
@@ -586,7 +619,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	conflicted := false
 	api.setUpdateHookOnce(func(name string) {
 		conflicted = true
-		if _, err := api.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{Name: name}}); err != nil {
+		if _, err := api.DrainWorker(ctx, &ateapi.DrainWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}}); err != nil {
 			t.Errorf("injecting conflict: drain worker: %v", err)
 		}
 	})
@@ -608,69 +641,327 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	if got.GetLabels()["foo"] != "baz" {
 		t.Errorf("worker labels = %v, want foo=baz", got.GetLabels())
 	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want the concurrently injected DRAINING to survive the retry", got.GetStatus().GetState())
 	}
 }
 
-// Editing a pool's sandboxClass rolls its pods rather than reclassifying them,
-// so a pod that outlives the edit keeps the class it was built with. Writing the
-// pool's new value back would be rejected as an immutable-field change, and
-// would misreport this pod's shape to the scheduler if it were not.
-func TestSyncer_SandboxClassDriftLeavesWorkerAlone(t *testing.T) {
+// TestSyncer_MissingWorkerPool verifies that a pod whose WorkerPool is not in
+// the lister gets no Worker, and that the Worker comes once the pool does.
+func TestSyncer_MissingWorkerPool(t *testing.T) {
 	ctx := context.Background()
 
-	ns, podName, poolName := "ns-syncer-class", "worker-unit-class", "pool-class"
-
-	api := newFakeControl()
-	s, pods, poolIndexer := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
-	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"))
-
-	mustReconcile(t, ctx, s, key)
-	registered := api.get(testPodUID)
-
-	if err := poolIndexer.Update(workerPool(ns, poolName, "microvm", nil)); err != nil {
-		t.Fatalf("updating pool: %v", err)
-	}
-	mustReconcile(t, ctx, s, key)
-
-	got := api.get(testPodUID)
-	if got.GetSandboxClass() != "gvisor" {
-		t.Errorf("worker sandbox class = %q, want it left at gvisor", got.GetSandboxClass())
-	}
-	if got.GetMetadata().GetVersion() != registered.GetMetadata().GetVersion() {
-		t.Errorf("worker version = %d, want %d: the drift must not provoke a write",
-			got.GetMetadata().GetVersion(), registered.GetMetadata().GetVersion())
-	}
-}
-
-// TestSyncer_RequeueOnMissingWorkerPool verifies that a pod whose WorkerPool is
-// not yet in the lister is requeued rather than dropped, and converges once the
-// pool appears.
-func TestSyncer_RequeueOnMissingWorkerPool(t *testing.T) {
-	ctx := context.Background()
-
-	ns, podName, poolName := "ns-syncer-latepool", "worker-late-1", "pool-late"
+	ns, podName, poolName := "ns-syncer-missingpool", "worker-orphan-1", "pool-orphan"
+	pool := workerPool(ns, poolName, map[string]string{"foo": "bar"})
 
 	api := newFakeControl()
 	// The pod is there; its pool is not yet.
 	s, pods, poolIndexer := setupReconcileTest(t, api)
 	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.5"))
 
-	if err := s.reconcile(ctx, key); err == nil {
-		t.Fatal("reconcile succeeded with no WorkerPool, want an error so the key requeues")
-	}
+	mustReconcile(t, ctx, s, key)
 	if got := api.names(); len(got) != 0 {
 		t.Errorf("registry holds %v, want nothing written before the pool exists", got)
 	}
 
-	if err := poolIndexer.Add(workerPool(ns, poolName, "gvisor", nil)); err != nil {
+	// The pool appears and enqueues its pods, which then register.
+	if err := poolIndexer.Add(pool); err != nil {
 		t.Fatalf("adding pool: %v", err)
 	}
+	s.enqueueWorkerPool(pool)
+	if got := s.queue.Len(); got != 1 {
+		t.Fatalf("queued workers = %d after the pool appeared, want 1", got)
+	}
 	mustReconcile(t, ctx, s, key)
+	if got := api.get(testPodUID).GetLabels(); !maps.Equal(got, map[string]string{"foo": "bar"}) {
+		t.Errorf("worker labels = %v, want map[foo:bar]", got)
+	}
+}
 
-	if got := api.get(testPodUID).GetSandboxClass(); got != "gvisor" {
-		t.Errorf("worker sandbox class = %q, want gvisor", got)
+// owned sets owner as the controller of obj.
+func owned(obj, owner metav1.Object, kind string) {
+	obj.SetOwnerReferences([]metav1.OwnerReference{{
+		Kind: kind, Name: owner.GetName(), UID: owner.GetUID(), Controller: ptr.To(true),
+	}})
+}
+
+// poolChain returns the Deployment and ReplicaSet that own pod, linked as the
+// WorkerPool controller links them, ending at a WorkerPool of the given name.
+func poolChain(pod *corev1.Pod, poolName string) (*appsv1.Deployment, *appsv1.ReplicaSet) {
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: poolName, Namespace: pod.Namespace, UID: "dep-uid"}}
+	owned(dep, &metav1.ObjectMeta{Name: poolName, UID: "pool-uid"}, "WorkerPool")
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: poolName + "-abc", Namespace: pod.Namespace, UID: "rs-uid"}}
+	owned(rs, dep, "Deployment")
+	owned(pod, rs, "ReplicaSet")
+	return dep, rs
+}
+
+// TestSyncer_DeletedWorkerPool verifies what happens to a registered Worker
+// whose pod is live but whose WorkerPool is gone. The Worker is never deleted
+// outright, which would crash its Actors: a pod the garbage collector is still
+// removing is left alone, and one that outlives its pool is deleted gracefully.
+func TestSyncer_DeletedWorkerPool(t *testing.T) {
+	ns, poolName, podName, ip := "ns-deleted-pool", "pool1", "worker-1", "10.0.0.5"
+
+	for _, tc := range []struct {
+		name string
+		// shape edits the chain, which starts intact, before it is stored.
+		shape func(pod *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) (store []runtime.Object)
+		// deleted is whether the pod is expected to be deleted.
+		deleted bool
+	}{
+		{
+			name: "background cascade",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name: "background cascade, deployment collected",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, _ *appsv1.Deployment) []runtime.Object {
+				return []runtime.Object{rs}
+			},
+		},
+		{
+			name: "background cascade, replicaset collected",
+			shape: func(*corev1.Pod, *appsv1.ReplicaSet, *appsv1.Deployment) []runtime.Object {
+				return nil
+			},
+		},
+		{
+			name: "replicaset replaced under its name",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				rs.UID = "new-uid"
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name: "deployment deleting, no longer owned by the pool",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				dep.OwnerReferences = nil
+				dep.DeletionTimestamp = ptr.To(metav1.Now())
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name: "replicaset deleting, deployment orphaned",
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				dep.OwnerReferences = nil
+				rs.DeletionTimestamp = ptr.To(metav1.Now())
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name:    "orphaned deployment",
+			deleted: true,
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				dep.OwnerReferences = nil
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name:    "orphaned replicaset",
+			deleted: true,
+			shape: func(_ *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				rs.OwnerReferences = nil
+				return []runtime.Object{rs, dep}
+			},
+		},
+		{
+			name:    "orphaned pod",
+			deleted: true,
+			shape: func(pod *corev1.Pod, rs *appsv1.ReplicaSet, dep *appsv1.Deployment) []runtime.Object {
+				pod.OwnerReferences = nil
+				return []runtime.Object{rs, dep}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			api := newFakeControl()
+			api.put(registeredWorker(ns, poolName, podName, testPodUID))
+			s, pods, _ := setupReconcileTest(t, api)
+
+			pod := workerPod(ns, podName, poolName, testPodUID, ip)
+			dep, rs := poolChain(pod, poolName)
+			objs := tc.shape(pod, rs, dep)
+			//nolint:staticcheck // NewSimpleClientset is the fake the syncer's clients take.
+			fakeK8s := fake.NewSimpleClientset(append(objs, pod.DeepCopy())...)
+			s.pods, s.apps = fakeK8s.CoreV1(), fakeK8s.AppsV1()
+			mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+			got := api.get(testPodUID)
+			if got == nil {
+				t.Fatal("worker deleted outright, want it left to the pod's own deletion")
+			}
+			_, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+			if gone := apierrors.IsNotFound(err); gone != tc.deleted {
+				t.Errorf("pod deleted = %v, want %v", gone, tc.deleted)
+			}
+			wantState := ateapi.WorkerState_WORKER_STATE_ACTIVE
+			if tc.deleted {
+				wantState = ateapi.WorkerState_WORKER_STATE_DRAINING
+			}
+			if state := got.GetStatus().GetState(); state != wantState {
+				t.Errorf("worker state = %v, want %v", state, wantState)
+			}
+		})
+	}
+}
+
+// TestSyncer_DeletedWorkerPool_NotReadyPod verifies that an orphaned pod that is
+// not Ready is still cleaned up.
+func TestSyncer_DeletedWorkerPool_NotReadyPod(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-deleted-pool-notready", "pool1", "worker-1", "10.0.0.5"
+
+	api := newFakeControl()
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
+	s, pods, _ := setupReconcileTest(t, api)
+
+	pod := workerPod(ns, podName, poolName, testPodUID, ip)
+	pod.Status.Conditions = nil
+	//nolint:staticcheck // NewSimpleClientset is the fake the syncer's clients take.
+	fakeK8s := fake.NewSimpleClientset(pod.DeepCopy())
+	s.pods, s.apps = fakeK8s.CoreV1(), fakeK8s.AppsV1()
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("get pod = %v, want NotFound", err)
+	}
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING", got)
+	}
+}
+
+// TestSyncer_DeletedWorkerPool_Errors verifies that a failed read of the pod's
+// owners requeues the key and deletes nothing, rather than guessing the pod was
+// orphaned.
+func TestSyncer_DeletedWorkerPool_Errors(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-deleted-pool-err", "pool1", "worker-1", "10.0.0.5"
+
+	api := newFakeControl()
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
+	s, pods, _ := setupReconcileTest(t, api)
+
+	pod := workerPod(ns, podName, poolName, testPodUID, ip)
+	poolChain(pod, poolName)
+	//nolint:staticcheck // NewSimpleClientset is the fake the syncer's clients take.
+	fakeK8s := fake.NewSimpleClientset(pod.DeepCopy())
+	fakeK8s.PrependReactor("get", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unavailable")
+	})
+	s.pods, s.apps = fakeK8s.CoreV1(), fakeK8s.AppsV1()
+
+	if err := s.reconcile(ctx, seedPod(t, pods, pod)); err == nil {
+		t.Fatal("reconcile succeeded despite failing to read the pod's owners, want an error so the key requeues")
+	}
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
+		t.Errorf("get pod: %v, want it left alone", err)
+	}
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("worker state = %v, want ACTIVE", got)
+	}
+}
+
+// TestSyncer_DeletedWorkerPool_ReplacementPod verifies that the pod a surviving
+// ReplicaSet starts in place of an orphaned one is left alone: it has no Worker,
+// so deleting it would only make the ReplicaSet start another.
+func TestSyncer_DeletedWorkerPool_ReplacementPod(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName := "ns-deleted-pool-repl", "pool1", "worker-2"
+
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api)
+
+	pod := workerPod(ns, podName, poolName, otherPodUID, "10.0.0.6")
+	//nolint:staticcheck // NewSimpleClientset is the fake the syncer's clients take.
+	fakeK8s := fake.NewSimpleClientset(pod.DeepCopy())
+	s.pods, s.apps = fakeK8s.CoreV1(), fakeK8s.AppsV1()
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
+		t.Errorf("get pod: %v, want it left alone", err)
+	}
+	if got := api.names(); len(got) != 0 {
+		t.Errorf("registry holds %v, want nothing written", got)
+	}
+}
+
+// TestSyncer_OrphanedPodsOfDeletedPool_ViaInformer verifies that deleting a
+// WorkerPool without deleting its pods, as kubectl delete --cascade=orphan
+// does, shuts their Workers down through the pods' own deletion without waiting
+// for a pod event.
+func TestSyncer_OrphanedPodsOfDeletedPool_ViaInformer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ns, podName, poolName := "ns-syncer-orphaned", "worker-orphaned-1", "pool1"
+
+	api := newFakeControl()
+	fakeK8s, poolClient := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, nil))
+
+	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.7")
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool {
+		return w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE
+	})
+
+	if err := poolClient.AteV1().WorkerPools(ns).Delete(ctx, poolName, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete pool: %v", err)
+	}
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w == nil })
+
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("get pod = %v, want NotFound", err)
+	}
+}
+
+// TestSyncer_StartWaitsForWorkerPoolCache verifies that no pod is reconciled
+// before the WorkerPool cache has synced: against an empty cache every pool
+// reads as missing, which would shut down every live Worker at startup.
+func TestSyncer_StartWaitsForWorkerPoolCache(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ns, podName, poolName := "ns-syncer-poolsync", "worker-poolsync-1", "pool1"
+	poolLabels := map[string]string{"foo": "bar"}
+
+	api := newFakeControl()
+	api.put(registeredWorker(ns, poolName, podName, testPodUID))
+
+	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
+	fakeK8s := fake.NewSimpleClientset(workerPod(ns, podName, poolName, testPodUID, "10.0.0.8"))
+	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
+	_, poolFactory, workerPoolInformer := newWorkerPoolInformer(workerPool(ns, poolName, poolLabels))
+
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
+	workerFactory.Start(ctx.Done())
+	workerFactory.WaitForCacheSync(ctx.Done())
+
+	// The pod cache is warm and the pool cache is not. There is no state to wait
+	// for, so this gives the syncer a window to get it wrong in.
+	err := wait.PollUntilContextTimeout(ctx, 20*time.Millisecond, 300*time.Millisecond, true, func(context.Context) (bool, error) {
+		if api.get(testPodUID).GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+			return false, errors.New("worker shut down before the WorkerPool cache synced")
+		}
+		return false, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("while the WorkerPool cache is cold: %v", err)
+	}
+
+	// Once the pool cache syncs, the pod is reconciled against the pool, which
+	// copies the pool's labels onto the surviving Worker.
+	poolFactory.Start(ctx.Done())
+	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool {
+		return w != nil && maps.Equal(w.GetLabels(), poolLabels)
+	})
+	if got == nil {
+		t.Fatal("worker gone after the WorkerPool cache synced")
 	}
 }
 
@@ -679,7 +970,7 @@ func TestSyncer_RequeueOnMissingWorkerPool(t *testing.T) {
 func TestEnqueueWorkerPool(t *testing.T) {
 	api := newFakeControl()
 	s, pods, _ := setupReconcileTest(t, api)
-	pool := workerPool("ns-pool-update", "pool-a", "gvisor", nil)
+	pool := workerPool("ns-pool-update", "pool-a", nil)
 
 	first := seedPod(t, pods, workerPod(pool.Namespace, "worker-1", pool.Name, testPodUID, "10.0.0.1"))
 	second := seedPod(t, pods, workerPod(pool.Namespace, "worker-2", pool.Name, otherPodUID, "10.0.0.2"))
@@ -704,6 +995,25 @@ func TestEnqueueWorkerPool(t *testing.T) {
 	}
 }
 
+// TestEnqueueWorkerPool_DeletedFinalStateUnknown verifies that a pool delete the
+// informer missed, delivered as a tombstone, still requeues the pool's pods.
+func TestEnqueueWorkerPool_DeletedFinalStateUnknown(t *testing.T) {
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api)
+	pool := workerPool("ns-pool-tombstone", "pool-a", nil)
+	seedPod(t, pods, workerPod(pool.Namespace, "worker-1", pool.Name, testPodUID, "10.0.0.1"))
+
+	s.enqueueWorkerPool(cache.DeletedFinalStateUnknown{Key: pool.Namespace + "/" + pool.Name, Obj: pool})
+	if got := s.queue.Len(); got != 1 {
+		t.Errorf("queued workers = %d, want 1", got)
+	}
+
+	s.enqueueWorkerPool(cache.DeletedFinalStateUnknown{Key: "ns/other", Obj: &corev1.Pod{}})
+	if got := s.queue.Len(); got != 1 {
+		t.Errorf("queued workers = %d after a tombstone of the wrong type, want it unchanged at 1", got)
+	}
+}
+
 // TestSyncer_SoftDelete_ViaInformer walks the whole transition through the
 // informer rather than seeding an already-registered worker: a pod is
 // registered ACTIVE, then enters graceful termination and flips to DRAINING
@@ -715,15 +1025,13 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-softdelete", "worker-soft-1", "pool1"
 
 	api := newFakeControl()
-	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", nil))
+	fakeK8s, _ := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, nil))
 
 	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.6")
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
-	})
+	waitForWorker(t, ctx, api, testPodUID, workerActive)
 
 	// The fake clientset stores updates verbatim, so setting DeletionTimestamp
 	// simulates a pod in graceful termination that is still in the cache.
@@ -734,8 +1042,8 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 		t.Fatalf("update pod: %v", err)
 	}
 
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool {
+		return w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_DRAINING
 	})
 }
 
@@ -749,8 +1057,8 @@ func TestSyncer_TerminalPod_DeletesPod(t *testing.T) {
 		t.Run(string(phase), func(t *testing.T) {
 			ctx := context.Background()
 			api := newFakeControl()
-			api.put(registeredWorker(ns, poolName, podName, testPodUID, ip))
-			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			api.put(registeredWorker(ns, poolName, podName, testPodUID))
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 
 			pod := workerPod(ns, podName, poolName, testPodUID, ip)
 			pod.Status.Phase = phase
@@ -774,7 +1082,7 @@ func TestSyncer_TerminalPod_DeletesPod(t *testing.T) {
 			if got := deletes[0].GetDeleteOptions().Preconditions; got == nil || got.UID == nil || *got.UID != testPodUID {
 				t.Errorf("delete preconditions = %+v, want UID %s", got, testPodUID)
 			}
-			if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			if got := api.get(testPodUID).GetStatus().GetState(); got != ateapi.WorkerState_WORKER_STATE_DRAINING {
 				t.Errorf("worker state = %v, want DRAINING", got)
 			}
 		})
@@ -822,15 +1130,13 @@ func TestSyncer_TerminalPod_ViaInformer(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-terminal", "worker-terminal-1", "pool1"
 
 	api := newFakeControl()
-	fakeK8s := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, "gvisor", nil))
+	fakeK8s, _ := setupSyncerTest(t, ctx, api, workerPool(ns, poolName, nil))
 
 	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.21")
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool {
-		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE
-	})
+	waitForWorker(t, ctx, api, testPodUID, workerActive)
 
 	failed := pod.DeepCopy()
 	failed.Status.Phase = corev1.PodFailed
@@ -839,15 +1145,15 @@ func TestSyncer_TerminalPod_ViaInformer(t *testing.T) {
 		t.Fatalf("update pod status: %v", err)
 	}
 
-	waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w == nil })
+	waitForWorker(t, ctx, api, testPodUID, func(w *ateapi.Worker) bool { return w == nil })
 	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("get pod = %v, want NotFound", err)
 	}
 }
 
 // TestSyncer_PodRecreatedWithNewUID verifies that when a pod is deleted and
-// recreated under the same name, the registry converges to the new pod's UID
-// and IP. A coalesced Delete+Create surfaces as a single update event, which
+// recreated under the same name, the registry converges to the new pod's UID.
+// A coalesced Delete+Create surfaces as a single update event, which
 // enqueues both incarnations' keys, so both are reconciled here.
 func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	ctx := context.Background()
@@ -855,7 +1161,7 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-recreate", "worker-recreate-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	oldKey := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.7"))
 
 	mustReconcile(t, ctx, s, oldKey)
@@ -878,9 +1184,6 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	if got == nil {
 		t.Fatal("the recreated pod's worker was not registered")
 	}
-	if want := []string{"10.0.0.8"}; !slices.Equal(got.GetIps(), want) {
-		t.Errorf("worker ips = %q, want %q", got.GetIps(), want)
-	}
 	if got.GetWorkerPodUid() != otherPodUID {
 		t.Errorf("worker pod uid = %q, want %q", got.GetWorkerPodUid(), otherPodUID)
 	}
@@ -890,26 +1193,30 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	}
 }
 
-// TestSyncer_DeletePodWithoutIP verifies that deleting a pod that never got an
-// IP (and so was never registered) is a no-op rather than an error, which is
-// what keeps it from error-looping.
-func TestSyncer_DeletePodWithoutIP(t *testing.T) {
+// TestSyncer_DeleteUnscheduledPod verifies that deleting a pod that was never
+// scheduled (and so was never registered) is a no-op rather than an error,
+// which is what keeps it from error-looping.
+func TestSyncer_DeleteUnscheduledPod(t *testing.T) {
 	ctx := context.Background()
 
-	ns, podName, poolName := "ns-syncer-neverip", "worker-noip-1", "pool1"
+	ns, podName, poolName := "ns-syncer-unscheduled", "worker-unscheduled-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	pod := workerPod(ns, podName, poolName, testPodUID, "")
+	pod.Spec.NodeName = ""
 	key := seedPod(t, pods, pod)
 
 	mustReconcile(t, ctx, s, key)
+	if got := api.names(); len(got) != 0 {
+		t.Fatalf("registry holds %v for an unscheduled pod, want it empty", got)
+	}
 	if err := pods.Delete(pod); err != nil {
 		t.Fatalf("deleting pod: %v", err)
 	}
 
-	// The pod never had an IP so nothing was registered, and the delete path is
-	// an idempotent no-op: no error, so nothing requeues.
+	// The pod was never scheduled so nothing was registered, and the delete
+	// path is an idempotent no-op: no error, so nothing requeues.
 	mustReconcile(t, ctx, s, key)
 	if got := api.names(); len(got) != 0 {
 		t.Errorf("registry holds %v, want it empty", got)
@@ -918,7 +1225,7 @@ func TestSyncer_DeletePodWithoutIP(t *testing.T) {
 
 // TestSyncer_PodWithIPButNotReadyIsUnavailable pins that an IP alone registers
 // a worker that takes no Actors, because the sandbox having an address says
-// nothing about ateom serving yet. Both not-Ready shapes are covered —
+// nothing about worker serving yet. Both not-Ready shapes are covered —
 // condition absent (kubelet hasn't probed yet) and condition explicitly False
 // (probe failing).
 func TestSyncer_PodWithIPButNotReadyIsUnavailable(t *testing.T) {
@@ -938,7 +1245,7 @@ func TestSyncer_PodWithIPButNotReadyIsUnavailable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeControl()
-			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 			pod := workerPod(ns, "worker-notready-1", poolName, testPodUID, "10.0.0.9")
 			tc.mutate(pod)
 			key := seedPod(t, pods, pod)
@@ -948,8 +1255,8 @@ func TestSyncer_PodWithIPButNotReadyIsUnavailable(t *testing.T) {
 			if got == nil {
 				t.Fatalf("worker not registered for a not-Ready pod with an IP; registry holds %v", api.names())
 			}
-			if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-				t.Errorf("state = %v, want %v", state, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+			if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+				t.Errorf("state = %v, want %v", state, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 			}
 		})
 	}
@@ -962,14 +1269,14 @@ func TestSyncer_DeleteNeverReadyPod(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-neverready", "worker-neverready-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.9")
 	pod.Status.Conditions = nil
 	key := seedPod(t, pods, pod)
 
 	mustReconcile(t, ctx, s, key)
-	if got := api.get(testPodUID); got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Fatalf("worker = %v, want it registered %v", got, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if got := api.get(testPodUID); got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Fatalf("worker = %v, want it registered %v", got, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 	if err := pods.Delete(pod); err != nil {
 		t.Fatalf("deleting pod: %v", err)
@@ -987,23 +1294,17 @@ func TestSyncer_RegisteredPodWithoutIPIsUnavailable(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-lostip", "worker-lostip-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
-	key := seedPod(t, pods, withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"), 0))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
+	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"))
 	mustReconcile(t, ctx, s, key)
 
-	if err := pods.Update(withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, ""), 1)); err != nil {
+	if err := pods.Update(workerPod(ns, podName, poolName, testPodUID, "")); err != nil {
 		t.Fatalf("updating pod: %v", err)
 	}
 	mustReconcile(t, ctx, s, key)
 	got := api.get(testPodUID)
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
-	}
-	if got.GetEpoch() != 2 {
-		t.Errorf("epoch = %d, want 2", got.GetEpoch())
-	}
-	if want := []string{"10.0.0.9"}; !slices.Equal(got.GetIps(), want) {
-		t.Errorf("ips = %v, want the registered %v kept", got.GetIps(), want)
+	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 }
 
@@ -1016,7 +1317,7 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 	ns, podName, poolName := "ns-syncer-flap", "worker-flap-1", "pool1"
 
 	api := newFakeControl()
-	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.9")
 	key := seedPod(t, pods, pod)
 
@@ -1036,8 +1337,8 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 	if got == nil {
 		t.Fatalf("worker deregistered on a readiness flap; registry holds %v", api.names())
 	}
-	if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE {
-		t.Errorf("state = %v on a readiness flap, want %v", state, ateapipb.WorkerState_WORKER_STATE_UNAVAILABLE)
+	if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_UNAVAILABLE {
+		t.Errorf("state = %v on a readiness flap, want %v", state, ateapi.WorkerState_WORKER_STATE_UNAVAILABLE)
 	}
 
 	if err := pods.Update(pod); err != nil {
@@ -1045,8 +1346,8 @@ func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
 	}
 	mustReconcile(t, ctx, s, key)
 	got = api.get(testPodUID)
-	if state := got.GetStatus().GetState(); state != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("state = %v once Ready again, want %v", state, ateapipb.WorkerState_WORKER_STATE_ACTIVE)
+	if state := got.GetStatus().GetState(); state != ateapi.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("state = %v once Ready again, want %v", state, ateapi.WorkerState_WORKER_STATE_ACTIVE)
 	}
 }
 
@@ -1069,10 +1370,10 @@ func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeControl()
-			api.setCreateHook(func(*ateapipb.Worker) error {
+			api.setCreateHook(func(*ateapi.Worker) error {
 				return status.Error(tc.code, "rejected")
 			})
-			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, nil))
 			key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.9"))
 
 			s.queue.Add(key)

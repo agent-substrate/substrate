@@ -22,8 +22,7 @@ Each module implements the TestType hooks, called in lifecycle order:
   build_image(commit)   builds + pushes the runner image; called lazily,
                         once per (target cluster, type).
   pre_test(test)        after deploy_substrate, before deploy_workloads —
-                        the type's chance to shape the cluster (nighthawk-ingress
-                        pins the router; locust needs nothing).
+                        the type's chance to shape the cluster.
   job_tmpl(manifests_dir)
                         path of the type's own Job template.
   job_subs(test)        the type's ${...} substitutions for it. The test

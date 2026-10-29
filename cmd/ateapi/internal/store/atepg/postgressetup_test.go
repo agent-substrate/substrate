@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 func TestPostgresSetupScript(t *testing.T) {

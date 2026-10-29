@@ -21,9 +21,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -62,19 +62,18 @@ type resourcesResponse struct {
 // the CPU quota and the cgroup memory limit, while the micro-VM sizes the guest
 // VM itself (see internal/sizing).
 func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	deploySizedProbe(t, ctx, clients, env["BUCKET_NAME"])
+	deploySizedProbe(t, ctx, clients)
 
 	const id = "sized-actor"
 	createAndResumeActor(t, ctx, clients, id)
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
@@ -93,10 +92,9 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 	}
 
 	// Memory: the sandbox must be bounded by the declared limit. Both runtimes
-	// report under it — gVisor by its reserved overhead, the micro-VM by the
-	// 128MiB VMM reserve held back from the guest plus what the guest kernel
-	// takes — but neither may see more; a value near the node's full RAM means
-	// the limit was not applied. Allow 10% headroom above the limit for
+	// report under it — gVisor by its reserved overhead, the microVM by what
+	// the guest kernel takes — but neither may see more; a value near the
+	// node's full RAM means the limit was not applied. Allow 10% headroom above the limit for
 	// accounting differences, and half the limit below it for those overheads.
 	if got.MemTotalError != "" {
 		t.Errorf("probe could not read MemTotal: %s", got.MemTotalError)
@@ -109,30 +107,30 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 
 // deploySizedProbe installs the sized probe fixture for the sandbox class
 // under test and waits for its golden snapshot.
-func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) {
+func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients) {
 	t.Helper()
 	e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
-	}, bucket, "sizing", nil)
+	}, "sizing", nil)
 }
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: sizingNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: sizingNamespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: id}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: id}})
 	})
 
 	// Resume from the golden snapshot (the restore path).
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }

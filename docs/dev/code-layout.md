@@ -8,6 +8,7 @@ file, read this first.
 
 ```
 substrate/
+├── api/          # Public APIs: protos and CRD types, one directory per API and version
 ├── cmd/          # Binary entry points (one subdirectory per binary)
 ├── internal/     # Shared Go packages, not importable outside this module
 ├── pkg/          # Shared Go packages, intentionally importable by external users
@@ -26,15 +27,13 @@ substrate/
 
 **`pkg/`** is for Go packages with an external API contract — code that users or
 third-party tools may import directly from
-`github.com/agent-substrate/substrate/pkg/...`. Putting a package here signals
+`go.ate.dev/substrate/pkg/...`. Putting a package here signals
 a commitment to backwards-compatibility and discoverability.
 
 **`internal/`** is for Go packages that are shared across multiple binaries
 within this module but are not part of any external API. The Go toolchain
-enforces that nothing outside `github.com/agent-substrate/substrate` can import
-these. The exception is [`internal/plugins/`](../../internal/plugins/README.md):
-self-contained plugins, each a Go module of its own, in a temporary location
-that nothing else in the repo should depend on or import.
+enforces that nothing outside `go.ate.dev/substrate` can import
+these.
 
 > **Use `pkg/` sparingly.** Once the project reaches GA, any exported type,
 > function, or field in `pkg/` becomes subject to a compatibility guarantee —
@@ -42,6 +41,38 @@ that nothing else in the repo should depend on or import.
 > keeping new code in `internal/` until its API has stabilized. The bar for
 > adding to `pkg/` is: "I am confident external users need to import this, and I
 > am prepared to maintain its API indefinitely."
+
+### `api/`
+
+Public APIs, one directory per API and version: `api/<name>/<version>`, and
+`api/infra/k8s/<group>/<version>` for CRD types.
+
+| Directory | API |
+|---|---|
+| `api/ateapi/v1` | Control-plane gRPC API |
+| `api/credprovider/v1` | Credential provider plugin gRPC API |
+| `api/objectstore/v1` | Object store plugin gRPC API |
+| `api/infra/k8s/ate/v1` | Kubernetes CRD types, group `ate.dev` |
+
+Each `.proto` sits next to its generated Go. Proto packages are
+`substrate.<name>.<version>`. The Go package is named after the API, as in
+`package ateapi`, so imports need no alias. The CRD types follow the Kubernetes
+convention instead: `package v1`, imported as `atev1`. A new version of an
+API goes in a new directory next to the old one.
+
+### Plugins
+
+Core keeps a reference implementation of each plugin API, such as the
+Kubernetes Secrets credential provider. We use these to develop and test
+substrate on `kind`.
+
+Anyone can implement a plugin API and run their own plugin. We also host
+additional implementations in the
+[agent-substrate-plugins](https://github.com/agent-substrate-plugins)
+organization, subject to approval by the substrate maintainers. These import
+only substrate's public `api/` and `pkg/` packages, and each repository is named
+for the plugin API it implements and then its backend, as in
+[credprovider-gcp-secret-manager](https://github.com/agent-substrate-plugins/credprovider-gcp-secret-manager).
 
 ### `cmd/<binary>/`
 
@@ -53,8 +84,8 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/atecontroller`  | Kubernetes controller for WorkerPools (and network/egress resources) |
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
 | `cmd/atenet`         | Network proxy / Envoy external-processing server      |
-| `cmd/ateom-gvisor`   | In-pod gVisor container image entry point             |
-| `cmd/ateom-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
+| `cmd/ateworker-gvisor`   | In-pod gVisor container image entry point             |
+| `cmd/ateworker-microvm`  | In-pod kata + cloud-hypervisor microVM container image entry point |
 | `cmd/kubectl-ate`    | `kubectl` plugin for interacting with Substrate       |
 | `cmd/podcertcontroller` | Controller that issues pod TLS certificates        |
 
@@ -99,7 +130,8 @@ When adding a new Go package, ask:
 1. **Is it only used by one binary?** → `cmd/<binary>/internal/<pkg>`
 2. **Is it shared by multiple binaries but not meant for external import?** → `internal/<pkg>`
 3. **Is it a deliberately public API for external users?** → `pkg/<pkg>`
-4. **Is it a protobuf-generated package?**
-   - Public gRPC API (control plane) → `pkg/proto/<name>`
-   - Internal gRPC API (atelet, ateom) → `internal/proto/<name>`
+4. **Is it a public API, or a protobuf-generated package?**
+   - Public gRPC API → `api/<name>/<version>`
+   - Kubernetes CRD types → `api/infra/k8s/<group>/<version>`
+   - Internal gRPC API (atelet, ateworker) → `internal/proto/<name>`
 5. **Is it a script or dev tool?** → `hack/` (shell) or `tools/<name>` (Go)

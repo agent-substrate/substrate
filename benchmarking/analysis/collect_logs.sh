@@ -15,7 +15,7 @@
 
 # Dump the node-side logs a benchmark run needs for phase_report.py: every
 # atelet pod (the atelet-side timing breakdowns) and every worker pod
-# (ateom-microvm writes its records to the worker pod's stdout). Point
+# (ateworker-microvm writes its records to the worker pod's stdout). Point
 # --since-time (RFC 3339) or --since at the run's start so the report covers
 # exactly one run.
 #

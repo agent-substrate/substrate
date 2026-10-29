@@ -22,10 +22,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -33,7 +33,7 @@ import (
 
 const (
 	// capabilityAll is the sentinel a template may put in drop to clear the
-	// whole default set. It is rejected in add (see v1alpha1.Capabilities).
+	// whole default set. It is rejected in add (see ateapi.Capabilities).
 	capabilityAll = "ALL"
 )
 
@@ -83,13 +83,14 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 
 	bundlePath := ateletpath.OCIBundlePath(actorUID, containerName)
 
-	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
-	// already wiped the bundle dir on the Run/Restore path).
+	// Clear any previous bundle contents (belt and suspenders:
+	// actordirs.ResetActorDirs already wiped the bundle dir on the Run/Restore
+	// path).
 	if err := imagecache.RemoveAllWritable(bundlePath); err != nil {
 		return nil, fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
 	}
 
-	// The bundle's rootfs is composed by ateom as an overlay mount just before
+	// The bundle's rootfs is composed by worker as an overlay mount just before
 	// the workload runs: the cached image layers are the read-only lowerdirs,
 	// and the bundle-local upper/work hold this actor's private writes (wiped
 	// between runs, preserving the pristine-rootfs-per-run contract the old
@@ -109,7 +110,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	g.Go(func() error {
 		var err error
 		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
-			return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+			return fmt.Errorf("in imageCache.EnsureImage(%q): %w", ref, err)
 		}
 		return nil
 	})
@@ -123,7 +124,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 
 	// Every bind target must exist in the rootfs for the mount to attach;
-	// ateom creates them through the mounted overlay (they land in the
+	// worker creates them through the mounted overlay (they land in the
 	// actor's upper).
 	var extraDirs []string
 	for _, vm := range volumeMounts {
@@ -163,9 +164,10 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 	g, gctx := errgroup.WithContext(ctx)
 	for i, vol := range wanted {
 		g.Go(func() error {
-			img, err := imageCache.EnsureImage(gctx, vol.GetImage().GetReference())
+			volRef := vol.GetImage().GetReference()
+			img, err := imageCache.EnsureImage(gctx, volRef)
 			if err != nil {
-				return fmt.Errorf("in imageCache.EnsureImage for volume %q: %w", vol.GetName(), err)
+				return fmt.Errorf("in imageCache.EnsureImage(%q) for volume %q: %w", volRef, vol.GetName(), err)
 			}
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),

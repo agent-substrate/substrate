@@ -16,8 +16,13 @@ package objectstorage
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 )
 
@@ -46,7 +51,7 @@ func TestPooledClientsAreBuiltLikeTheClientTheyStandIn(t *testing.T) {
 	}
 	defer g.client.Close()
 
-	pooled := g.uploadClient(ctx, 0)
+	pooled := g.uploadClient(0)
 	if pooled == nil {
 		t.Fatal("uploadClient returned nil")
 	}
@@ -58,8 +63,76 @@ func TestPooledClientsAreBuiltLikeTheClientTheyStandIn(t *testing.T) {
 		t.Errorf("pool holds %d clients, want %d", len(g.pool), uploadPoolSize)
 	}
 	for i := range uploadPoolSize {
-		if c := g.uploadClient(ctx, i); c == nil || c == g.client {
+		if c := g.uploadClient(i); c == nil || c == g.client {
 			t.Errorf("uploadClient(%d) did not return a pooled connection", i)
+		}
+	}
+}
+
+// recordingClient is a storage.Client whose every request is counted, standing
+// in for one pooled connection.
+func recordingClient(t *testing.T, hits *atomic.Int32) *storage.Client {
+	t.Helper()
+	client, err := storage.NewClient(t.Context(), option.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hits.Add(1)
+		if req.Method == http.MethodGet {
+			// A whole small object in one range: the reader sees its size and
+			// stays a single request.
+			return &http.Response{
+				StatusCode:    http.StatusPartialContent,
+				Header:        http.Header{"Content-Range": {"bytes 0-6/7"}, "Content-Type": {"application/octet-stream"}},
+				ContentLength: 7,
+				Body:          io.NopCloser(strings.NewReader("payload")),
+			}, nil
+		}
+		_, _ = io.Copy(io.Discard, req.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"name":"object","bucket":"snapshots"}`)),
+		}, nil
+	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+// TestSingleRequestTransfersSpreadOverThePool is the point of the pool for a node
+// turning over actors: a compressed snapshot is usually below the part and range
+// thresholds, so it is one request, and without this every snapshot the node moves
+// at once would multiplex onto the wrapped client's one connection.
+func TestSingleRequestTransfersSpreadOverThePool(t *testing.T) {
+	var wrapped atomic.Int32
+	g := &gcsClient{client: recordingClient(t, &wrapped)}
+	hits := make([]atomic.Int32, 3)
+	for i := range hits {
+		g.pool = append(g.pool, recordingClient(t, &hits[i]))
+	}
+
+	ctx := t.Context()
+	for i := range 2 * len(hits) {
+		if i%2 == 0 {
+			rc, err := g.GetObject(ctx, "snapshots", "object")
+			if err != nil {
+				t.Fatalf("GetObject %d: %v", i, err)
+			}
+			if _, err := io.Copy(io.Discard, rc); err != nil {
+				t.Fatalf("reading object %d: %v", i, err)
+			}
+			rc.Close()
+		} else if err := g.PutObject(ctx, "snapshots", "object", strings.NewReader("payload")); err != nil {
+			t.Fatalf("PutObject %d: %v", i, err)
+		}
+	}
+
+	if n := wrapped.Load(); n != 0 {
+		t.Errorf("the wrapped client served %d requests, want 0: small transfers bypassed the pool", n)
+	}
+	for i := range hits {
+		if n := hits[i].Load(); n != 2 {
+			t.Errorf("pooled client %d served %d requests, want 2: transfers were not spread round-robin", i, n)
 		}
 	}
 }

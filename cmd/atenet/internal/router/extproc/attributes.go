@@ -42,7 +42,7 @@ const (
 	ConnectAuthorityFilterStateAttribute = "filter_state['" + ConnectAuthorityFilterStateKey + "']"
 
 	// ActorIdentityFilterStateKey holds the actor's SPIFFE ID
-	// (resources.ActorSPIFFEID), read from the peer certificate's URI SAN.
+	// (resources.WorkerForActorSPIFFEID), read from the peer certificate's URI SAN.
 	// The outer CONNECT chain sets it from %DOWNSTREAM_PEER_URI_SAN% and
 	// shares it with the inner legs, which have no certificate of their own.
 	ActorIdentityFilterStateKey = "dev.ate.actor.identity"
@@ -58,11 +58,16 @@ const (
 	// actor dialed, set on every allowed CONNECT. The outer chain copies it
 	// into UpstreamDynamicPortFilterStateKey for the passthrough chain.
 	EgressDialedPortKey = "dialed_port"
-	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT.
-	// The outer chain copies it as JSON into filter state of the same name for
-	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
+	// EgressPolicyMetadataNamespace holds the SNI rules returned on CONNECT, as
+	// JSON under EgressPolicyJSONKey: {"rules": [{"pattern": ..., "mode": ...}]},
 	// most specific first.
 	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressPolicyHashFilterStateKey holds the hash the inner listener uses to
+	// find those rules in the egress-policy module's per-thread store.
+	EgressPolicyHashFilterStateKey = "dev.ate.policy.egress.hash"
+	// EgressPolicyJSONKey, under EgressPolicyMetadataNamespace, holds the
+	// JSON-serialized SNI rules.
+	EgressPolicyJSONKey = "policy_json"
 	// EgressSNIRulesKey, under EgressPolicyMetadataNamespace, is the ordered
 	// list of rules; EgressSNIRulePatternKey and EgressSNIRuleModeKey are the
 	// fields of each.
@@ -75,7 +80,7 @@ const (
 	EgressFilterChainFilterStateKey = "dev.ate.egress.filter_chain"
 	// EgressFilterChainMITM: TLS terminated on EgressTLSMITMFilterChainName.
 	EgressFilterChainMITM = "mitm"
-	// EgressFilterChainPassthrough: forwarded unread. Unused for now.
+	// EgressFilterChainPassthrough: forwarded unread to the resolved SNI.
 	EgressFilterChainPassthrough = "passthrough"
 	// EgressFilterChainCleartext: not TLS, EgressCleartextFilterChainName.
 	EgressFilterChainCleartext = "cleartext"
@@ -83,20 +88,15 @@ const (
 	EgressFilterChainDenied = "denied"
 	// EgressDialKey, under EgressMetadataNamespace, is a request leg's answer
 	// for an allowed request: where it goes. The manifests' routes match on
-	// it, one route per value and none without, so a request with no answer
-	// has no route.
+	// it and have no default, so a request with no answer has no route.
 	EgressDialKey = "dial"
-	// EgressDialName: a hostname rule matched, so the forward proxy resolves
-	// EgressDialHostKey and dials it on the port the actor dialed.
+	// EgressDialName: the forward proxy resolves EgressDialHostKey and dials
+	// it on the port the actor dialed.
 	EgressDialName = "name"
-	// EgressDialAddress: an address or all rule matched, so the request goes
-	// to the address the actor dialed, read from the ORIGINAL_DST filter state
-	// the CONNECT leg's answer set.
-	EgressDialAddress = "address"
 	// EgressDialHostKey, under EgressMetadataNamespace, comes with
 	// EgressDialName: the name the request was decided on, without the Host's
 	// port, which was never checked. The request chains copy it into
-	// UpstreamDynamicHostFilterStateKey, and their by-name routes need it.
+	// UpstreamDynamicHostFilterStateKey, and their routes need it.
 	EgressDialHostKey = "host"
 
 	// directionAttribute carries the Direction outright, for dataplanes that
@@ -139,25 +139,14 @@ const EgressDialHostFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":
 // Host wins. The request chains set it from EgressDialHostKey.
 const UpstreamDynamicHostFilterStateKey = "envoy.upstream.dynamic_host"
 
-// EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
-const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
+// EgressPolicyHashFormat is the set_filter_state format string that
+// writes egress policy hash.
+const EgressPolicyHashFormat = "%FILTER_STATE(" + EgressPolicyHashFilterStateKey + ".not_shared:PLAIN)%"
 
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
-// ORIGINAL_DST cluster dials. The ingress router sets it for actor tunnels.
-// The egress gateway never writes it and dials only by name; its request legs
-// read it as an attribute.
+// ORIGINAL_DST cluster dials. The ingress router sets it for actor tunnels;
+// the egress gateway dials only by name and never uses it.
 const OriginalDstFilterStateKey = "envoy.network.transport_socket.original_dst_address"
-
-// OriginalDstIPAttribute and OriginalDstPortAttribute are the CEL expressions
-// that read OriginalDstFilterStateKey, one field each. The object as a whole
-// is not readable: Envoy's CEL presents an object with field support as a
-// map, which ext_proc renders as the literal "CelMap value". The field names
-// are Envoy's (the same ones %FILTER_STATE(key:FIELD:ip)% takes); the port
-// arrives as a number.
-const (
-	OriginalDstIPAttribute   = "filter_state['" + OriginalDstFilterStateKey + "'].ip"
-	OriginalDstPortAttribute = "filter_state['" + OriginalDstFilterStateKey + "'].port"
-)
 
 // RequestedServerNameAttribute is the SNI of the connection a request arrived
 // on. The handler logs it next to the Host it authorized.

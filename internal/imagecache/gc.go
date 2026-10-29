@@ -23,7 +23,7 @@ package imagecache
 // is evictable unless vetoed by, in order:
 //
 //  1. the root set — bundle overlay specs under the actors dir, the same
-//     authority that hands out mounts (atelet cannot see the ateoms' mount
+//     authority that hands out mounts (atelet cannot see the workers' mount
 //     namespaces);
 //  2. min-age — records and layers younger than minAge are never touched,
 //     covering the pull → spec-write → mount window;
@@ -38,7 +38,7 @@ package imagecache
 //
 // Deletion is two-phase: the only steps that contend with the pull path
 // are one os.Remove of a record and one rename of a layer dir to a ".rm-*"
-// name inside the layer's singleflight (see retireLayer); the slow
+// name under the pin lock (see retireLayer); the slow
 // RemoveAll of multi-GB trees happens afterwards, on dirs nothing can
 // reach by diffID. A crash in between leaves a ".rm-*" dir for the
 // startup sweep.
@@ -590,13 +590,14 @@ func (s *Store) sweepOrphanLayers(ctx context.Context, roots RootSet, refcount m
 // Sizing is read-only: even a size-file backfill would break dry-run's
 // mutate-nothing contract.
 func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus) {
-	dir := filepath.Join(s.layersDir(), hex)
-	fi, err := os.Stat(dir)
-	if err != nil {
-		return 0, retireGone
-	}
-	if fi.ModTime().After(cutoff) {
+	// A pinned layer is not reclaimable, landed or not, so a dry run must
+	// not count it.
+	if s.pinned(hex) {
 		return 0, retireVetoed
+	}
+	dir := filepath.Join(s.layersDir(), hex)
+	if st, _, _ := retirable(dir, cutoff); st != retireRetired {
+		return 0, st
 	}
 	size, err := s.layerSizeReadOnly(dir)
 	if err != nil {

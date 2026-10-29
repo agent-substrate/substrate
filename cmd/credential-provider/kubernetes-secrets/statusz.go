@@ -29,7 +29,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // statusContext is the /statusz payload; the JSON form is the contract tests

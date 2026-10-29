@@ -1,6 +1,8 @@
-module github.com/agent-substrate/substrate/hack/tools/protoc-gen-go
+module go.ate.dev/substrate/hack/tools/protoc-gen-go
 
 go 1.27.0
+
+toolchain go1.27.3
 
 require google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 

@@ -32,8 +32,8 @@ import (
 	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 )
 
 var BuildTag = "dev"
@@ -43,7 +43,7 @@ type DashboardContext struct {
 	RouterClusterIP string                `json:"router_cluster_ip"`
 	Namespace       string                `json:"namespace"`
 	Mode            Mode                  `json:"mode"`
-	HttpPort        int                   `json:"port_http"`
+	HttpsPort       int                   `json:"port_https"`
 	XdsPort         int                   `json:"port_xds"`
 	ExtprocPort     int                   `json:"port_extproc"`
 	StatusPort      int                   `json:"status_port"`
@@ -155,7 +155,7 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		RouterClusterIP: routerIP,
 		Namespace:       s.cfg.Namespace,
 		Mode:            s.cfg.Mode,
-		HttpPort:        s.cfg.HttpPort,
+		HttpsPort:       s.cfg.HttpsPort,
 		XdsPort:         s.cfg.XdsPort,
 		ExtprocPort:     s.cfg.ExtprocPort,
 		StatusPort:      s.cfg.StatusPort,

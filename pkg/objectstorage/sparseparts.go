@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -110,6 +111,9 @@ func sparsePartCount(populated int64) int {
 	return min(n, sparseMaxParts)
 }
 
+// sparseCopyPool holds the 1 MiB buffers parts read the source through.
+var sparseCopyPool = sync.Pool{New: func() any { b := make([]byte, 1<<20); return &b }}
+
 // writeSparsePart writes one part's share of the sparse-extent stream: the header and
 // totalSize when it is the first part, its own extents, and the end sentinel when it is
 // the last. Reads use ReadAt so every part can read the same file concurrently.
@@ -122,14 +126,18 @@ func writeSparsePart(dst io.Writer, src *os.File, size int64, ranges []extentRan
 			return err
 		}
 	}
-	zw := newSerialZstd(dst)
+	// Sized frames rather than one streaming frame per part, so a restore can split
+	// the part and decode its frames in parallel.
+	zw := newParZstd(dst, 1)
 	if first {
 		if err := binary.Write(zw, binary.LittleEndian, size); err != nil {
 			zw.Close()
 			return err
 		}
 	}
-	buf := make([]byte, 1<<20)
+	bp := sparseCopyPool.Get().(*[]byte)
+	defer sparseCopyPool.Put(bp)
+	buf := *bp
 	for _, e := range ranges {
 		if err := binary.Write(zw, binary.LittleEndian, e.off); err != nil {
 			zw.Close()

@@ -17,8 +17,8 @@ package atepg
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storecontract"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storecontract"
 )
 
 // setupPostgresStore adapts the concrete setup helper to the interface-typed

@@ -20,7 +20,7 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // CAPoolRootPEM extracts a CA pool Secret's root certificates and returns them

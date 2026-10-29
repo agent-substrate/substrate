@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"go.ate.dev/substrate/internal/clustertrustbundle"
 	certsv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -155,7 +155,7 @@ func TestServerTLSConfig(t *testing.T) {
 			}
 			clientset := fake.NewSimpleClientset(native...)
 			clientset.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/" + version, APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
-			cfg, err := serverTLSConfig(context.Background(), clientset)
+			cfg, err := serverTLSConfig(context.Background(), clientset, apiServerName())
 			if err != nil {
 				t.Fatalf("serverTLSConfig: %v", err)
 			}
@@ -204,8 +204,29 @@ func TestServerTLSConfigErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(tc.objects...)
 			clientset.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/v1", APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
-			if _, err := serverTLSConfig(context.Background(), clientset); err == nil {
+			if _, err := serverTLSConfig(context.Background(), clientset, apiServerName()); err == nil {
 				t.Error("serverTLSConfig: want error, got nil")
+			}
+		})
+	}
+}
+
+func TestFallbackPrincipal(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string
+		sa        string
+		want      string
+	}{
+		{"defaults", "", "", "system:serviceaccount:ate-system:ate-client"},
+		{"overridden", "custom-ns", "custom-client", "system:serviceaccount:custom-ns:custom-client"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(NamespaceEnv, tc.namespace)
+			t.Setenv(ClientServiceAccountEnv, tc.sa)
+			if got := FallbackPrincipal(); got != tc.want {
+				t.Errorf("FallbackPrincipal() = %q, want %q", got, tc.want)
 			}
 		})
 	}

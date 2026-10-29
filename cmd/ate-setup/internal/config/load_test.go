@@ -29,6 +29,7 @@ func TestKindKeepsExplicitValuesButNotAmbientOnes(t *testing.T) {
 	loadEnv(t)
 	t.Setenv("BUCKET_NAME", "ambient-cloud-bucket")
 	t.Setenv("KO_DEFAULTPLATFORMS", "linux/ambient")
+	t.Setenv("SNAPSHOT_LOCATION", "gs://ambient-cloud-bucket/")
 
 	t.Run("ambient environment is discarded", func(t *testing.T) {
 		cfg, err := Load(Options{Kind: true})
@@ -38,6 +39,9 @@ func TestKindKeepsExplicitValuesButNotAmbientOnes(t *testing.T) {
 		if cfg.BucketName != "ate-snapshots" {
 			t.Errorf("BucketName = %q, want ate-snapshots", cfg.BucketName)
 		}
+		if cfg.SnapshotLocation != "gs://ate-snapshots/" {
+			t.Errorf("SnapshotLocation = %q, want gs://ate-snapshots/", cfg.SnapshotLocation)
+		}
 		if want := "linux/" + runtime.GOARCH; cfg.KODefaultPlatforms != want {
 			t.Errorf("KODefaultPlatforms = %q, want %q", cfg.KODefaultPlatforms, want)
 		}
@@ -46,7 +50,7 @@ func TestKindKeepsExplicitValuesButNotAmbientOnes(t *testing.T) {
 	t.Run("a configuration file is kept", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "install.yaml")
 		body := "apiVersion: " + FileAPIVersion + "\nkind: " + FileKind + "\n" +
-			"storage:\n  bucketName: from-file\n" +
+			"storage:\n  bucketName: from-file\n  snapshotLocation: gs://from-file/prefix/\n" +
 			"ko:\n  defaultPlatforms: linux/from-file\n"
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -61,6 +65,9 @@ func TestKindKeepsExplicitValuesButNotAmbientOnes(t *testing.T) {
 		}
 		if cfg.BucketName != "from-file" {
 			t.Errorf("BucketName = %q, want from-file", cfg.BucketName)
+		}
+		if cfg.SnapshotLocation != "gs://from-file/prefix/" {
+			t.Errorf("SnapshotLocation = %q, want gs://from-file/prefix/", cfg.SnapshotLocation)
 		}
 		if cfg.KODefaultPlatforms != "linux/from-file" {
 			t.Errorf("KODefaultPlatforms = %q, want linux/from-file", cfg.KODefaultPlatforms)
@@ -121,9 +128,8 @@ func TestLoadFlagsRejectsBadConfigPath(t *testing.T) {
 	}
 }
 
-// The file channel must cross hack/install-ate.sh, which forwards only a fixed
-// set of flags but passes the whole environment through. ATE_CONFIG is how it
-// gets there without a shim change.
+// ATE_CONFIG names the document when --config is absent, and the flag
+// outranks it.
 func TestConfigPathFromEnvironment(t *testing.T) {
 	loadEnv(t)
 	path := filepath.Join(t.TempDir(), "install.yaml")
@@ -184,9 +190,8 @@ func TestConfigPathFromEnvironment(t *testing.T) {
 	})
 }
 
-// A relative path means different files from different working directories,
-// and the shell installer changes to the repository root. The error names the
-// absolute path so that is visible rather than silent.
+// A relative path means different files from different working directories.
+// The error names the absolute path so that is visible rather than silent.
 func TestMissingConfigErrorNamesAbsolutePath(t *testing.T) {
 	loadEnv(t)
 	t.Setenv(ConfigPathEnv, "no-such-config.yaml")

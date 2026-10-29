@@ -26,11 +26,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // placeholderObject is the one object written under each snapshot URI.
@@ -42,18 +43,18 @@ type objectWriter interface {
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
 }
 
-// actorCertMinter is the part of ateapipb.WorkerServiceClient the herder uses.
+// actorCertMinter is the part of ateapi.WorkerServiceClient the herder uses.
 type actorCertMinter interface {
-	MintAteomActorCertificate(ctx context.Context, in *ateapipb.MintAteomActorCertificateRequest, opts ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error)
+	MintWorkerActorCertificate(ctx context.Context, in *ateapi.MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*ateapi.MintWorkerActorCertificateResponse, error)
 }
 
-// delays is how long each AteomHerder call takes before it succeeds: the
+// delays is how long each Atelet call takes before it succeeds: the
 // data plane's share of it, not counting an actor certificate mint.
 type delays struct {
 	run, restore, checkpoint, promoteSnapshot, terminate time.Duration
 }
 
-// herder answers every AteomHerder call with success after its delay, without
+// herder answers every Atelet call with success after its delay, without
 // running or saving any workload. Actors it "runs" do not exist.
 //
 // The one side effect it keeps is a placeholder object under each snapshot
@@ -61,12 +62,12 @@ type delays struct {
 // snapshot when it creates a tag, golden tags included, and refuses to copy
 // an empty one.
 //
-// The one call back it keeps is the actor certificate mint: before ateom
+// The one call back it keeps is the actor certificate mint: before worker
 // starts a workload with tunneled egress it has atelet mint the actor's
 // certificate from ate-api-server, so in production every Run and Restore
 // that names an egress gateway costs ate-api-server a mint.
 type herder struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	delays  delays
 	storage objectWriter
@@ -74,10 +75,13 @@ type herder struct {
 	// leaves the mint out. csr is sent with every mint.
 	minter actorCertMinter
 	csr    []byte
+	// epochs is where Run and Restore read the epoch they report; the relay
+	// records it when the Worker registers. Workers are named by their pod UID.
+	epochs *workerEpochs
 }
 
 // newActorCSR returns a CSR for a fresh key. ate-api-server takes only the
-// public key from it, so one serves every mint; ateom makes a key per
+// public key from it, so one serves every mint; worker makes a key per
 // activation, but that cost is the data plane's, not ate-api-server's.
 func newActorCSR() ([]byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -92,17 +96,19 @@ func newActorCSR() ([]byte, error) {
 }
 
 // mintActorCertificate mints the actor's certificate when the call names an
-// egress gateway, as ateom does before it starts the workload. Its time is
+// egress gateway, as worker does before it starts the workload. Its time is
 // ate-api-server's, so it adds to the call's delay rather than running inside
-// it; a failure fails the call, as tunneled egress fails closed in ateom.
-func (h *herder) mintActorCertificate(ctx context.Context, atespace, name, uid string, gateway *ateletpb.EgressGateway) error {
+// it; a failure fails the call, as tunneled egress fails closed in worker.
+func (h *herder) mintActorCertificate(ctx context.Context, workerPodUID, atespace, name, uid string, gateway *ateletpb.EgressGateway) error {
 	if h.minter == nil || gateway == nil {
 		return nil
 	}
-	if _, err := h.minter.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
-		Actor:                     &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+	if _, err := h.minter.MintWorkerActorCertificate(ctx, &ateapi.MintWorkerActorCertificateRequest{
+		Actor:                     &ateapi.ObjectRef{Atespace: atespace, Name: name},
 		ActorUid:                  uid,
 		CertificateSigningRequest: h.csr,
+		// Workers are global-scoped and named by their pod UID.
+		Worker: &ateapi.ObjectRef{Name: workerPodUID},
 	}); err != nil {
 		return fmt.Errorf("while minting the certificate of actor %s/%s: %w", atespace, name, err)
 	}
@@ -150,23 +156,23 @@ func (h *herder) writePlaceholder(ctx context.Context, start time.Time, d time.D
 }
 
 func (h *herder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
-	if err := h.mintActorCertificate(ctx, req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
+	if err := h.mintActorCertificate(ctx, req.GetWorkerPodUid(), req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
 		return nil, err
 	}
 	if err := wait(ctx, time.Now(), h.delays.run); err != nil {
 		return nil, err
 	}
-	return &ateletpb.RunResponse{}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
 func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
-	if err := h.mintActorCertificate(ctx, req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
+	if err := h.mintActorCertificate(ctx, req.GetWorkerPodUid(), req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway()); err != nil {
 		return nil, err
 	}
 	if err := wait(ctx, time.Now(), h.delays.restore); err != nil {
 		return nil, err
 	}
-	return &ateletpb.RestoreResponse{}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
 func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
@@ -193,7 +199,12 @@ func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 	if err := wait(ctx, start, h.delays.promoteSnapshot); err != nil {
 		return nil, err
 	}
-	return &ateletpb.PromoteSnapshotResponse{}, nil
+	// Like atelet, report the snapshot durable and still kept on the node.
+	report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
+	return &ateletpb.PromoteSnapshotResponse{State: &ateletpb.ActorSnapshotState{
+		LatestLocal:   report,
+		LatestDurable: proto.CloneOf(report),
+	}}, nil
 }
 
 func (h *herder) Terminate(ctx context.Context, _ *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

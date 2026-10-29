@@ -17,14 +17,7 @@
 # traffic-driver-template.yaml.tmpl and is created through the ate API with
 # `kubectl-ate create actor-template`.
 
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: nighthawk
-
----
-
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: traffic-driver
@@ -33,6 +26,6 @@ metadata:
     workload: traffic-driver
 spec:
   replicas: 1
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor

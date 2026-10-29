@@ -22,9 +22,9 @@ import (
 	sync "sync"
 	time "time"
 
-	versioned "github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	api "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/api"
-	internalinterfaces "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/internalinterfaces"
+	versioned "go.ate.dev/substrate/pkg/client/clientset/versioned"
+	ate "go.ate.dev/substrate/pkg/client/informers/externalversions/ate"
+	internalinterfaces "go.ate.dev/substrate/pkg/client/informers/externalversions/internalinterfaces"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -323,9 +323,9 @@ type SharedInformerFactory interface {
 	// client.
 	InformerFor(obj runtime.Object, newFunc internalinterfaces.NewInformerFunc) cache.SharedIndexInformer
 
-	Api() api.Interface
+	Ate() ate.Interface
 }
 
-func (f *sharedInformerFactory) Api() api.Interface {
-	return api.New(f, f.namespace, f.tweakListOptions)
+func (f *sharedInformerFactory) Ate() ate.Interface {
+	return ate.New(f, f.namespace, f.tweakListOptions)
 }

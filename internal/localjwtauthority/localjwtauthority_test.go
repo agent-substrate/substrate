@@ -29,7 +29,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/actoridjwt"
 )
 
 func TestRefreshingPool(t *testing.T) {

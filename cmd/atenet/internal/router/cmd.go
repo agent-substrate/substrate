@@ -22,9 +22,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 func NewRouterCmd() *cobra.Command {
@@ -60,8 +60,6 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of this atenet-router in the operations namespace. Override when the deployment renames the Service.")
 	fs.StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	fs.StringVar(&cfg.AteapiAddr, "ateapi-address", "k8s:///api.ate-system.svc:443", "gRPC dial target for the cluster ateapi Control instance.")
-	fs.IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")
-	fs.IntVar(&cfg.ConnectPlainTextPort, "port-connect", 8081, "TCP port for CONNECT-tunneled traffic entering through the router dataplane")
 	fs.IntVar(&cfg.ConnectTLSPort, "port-connect-tls", 8444, "TCP port for CONNECT-tunneled traffic entering through the router dataplane over TLS. --port-https also defaults to 8443, and both listeners are commonly enabled at once, so --port-connect-tls defaults to a different port (8444) rather than colliding with it")
 	fs.IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	fs.IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
@@ -73,18 +71,11 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 
 	// Flags for client authentication and authorization in ingress mode.
-	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required whenever a TLS ingress listener is enabled")
-	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required whenever a TLS ingress listener is enabled")
-	fs.StringVar(
-		(*string)(&cfg.IngressAuth.Mode),
-		"ingress-auth-mode",
-		string(IngressAuthDeprecatedInsecure),
-		"Ingress authentication and authorization mode.  `deprecated-insecure` (both http and https served, client certificates optional on https) or `static-mtls` (only https served, client certificates required).",
-	)
+	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required for the Envoy ingress dataplane")
+	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Without any, the Envoy ingress dataplane serves no traffic")
 
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80) and needs --upstream-connect=false.")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
-	fs.StringVar(&cfg.UpstreamSpiffePrefix, "upstream-spiffe-prefix", "spiffe://cluster.local/", "SPIFFE URI SAN prefix (trust domain) the actor's atunnel server cert must match. Empty falls back to default SAN check against the dialed pod IP (which SPIFFE-only certs never match).")
 	fs.BoolVar(&cfg.UpstreamConnect, "upstream-connect", true, "Reach atunnel through mTLS CONNECT tunnels on port 8443; false reaches it over HTTPS on 443 instead (Envoy dataplane only). Requires --upstream-credential-bundle")
 
 	fs.StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
@@ -92,14 +83,14 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
 
 	// Egress credential injection (MITM leg). Only the egress gateway sets these,
-	// and only when injection is enabled: with an empty
+	// and only when injection is enabled: with no
 	// --credential-provider-address, a request matching an EgressPolicy rule
 	// that requires injection is denied.
-	fs.StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
-	fs.StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection, and requests matching a rule that requires it are denied")
+	fs.StringArrayVar(&cfg.CredentialProvider.Names, "credential-provider-name", nil, "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io). Repeat once per --credential-provider-address, in the same order; a policy credential URI naming no configured provider is refused. A single empty name disables the check (dev only)")
+	fs.StringArrayVar(&cfg.CredentialProvider.Addresses, "credential-provider-address", nil, "gRPC dial target of a credential provider the MITM-leg injector resolves secrets through. Repeat once per provider. None (the default) disables egress credential injection, and requests matching a rule that requires it are denied")
 	fs.StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
 	fs.StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
-	fs.StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate")
+	fs.StringArrayVar(&cfg.CredentialProvider.ServerNames, "credential-provider-server-name", nil, "SAN/SNI expected on a credential provider's serving certificate. Repeat once per --credential-provider-address, in the same order, or omit")
 	fs.BoolVar(&cfg.CredentialProvider.Insecure, "credential-provider-insecure", false, "Dial the credential provider WITHOUT TLS. Development only: secrets cross the network in the clear. Without this, a missing --credential-provider-ca-file or --credential-provider-client-cert fails startup instead of silently downgrading")
 
 	// Envoy learns the collector over xDS rather than from its own environment,
@@ -123,6 +114,6 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	// must propagate to the Service endpoints before the drain starts.
 	fs.DurationVar(&cfg.DrainDelay, "drain-delay", 13*time.Second, "How long to keep serving after SIGTERM before starting the drain, covering readiness-probe detection and Service endpoint propagation")
 	fs.DurationVar(&cfg.DrainTimeout, "drain-timeout", 0, "Deadline for the ext_proc drain on shutdown; streams still open past it (parked requests included) are forcefully cancelled. 0 (the default) derives --parked-request-budget + the drain route budget + margin so parked requests always finish normally. It does not follow --route-timeout. Explicit values must be >= --parked-request-budget")
-	fs.StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "localhost:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --atenet-dataplane=agentgateway")
+	fs.StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "localhost:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). A localhost host tries both 127.0.0.1 and ::1, whatever the host's resolver says. Ignored with --atenet-dataplane=agentgateway")
 	fs.StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the dataplane container's preStop hook polls for it so the proxy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
 }

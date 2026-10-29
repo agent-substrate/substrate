@@ -22,10 +22,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/internal/version"
 )
 
 // Inputs that select where configuration comes from, as opposed to the
@@ -59,15 +59,35 @@ var resolved *config.Resolved
 // Commands that install nothing -- delete, publish, setup -- are not marked.
 const recordAnnotation = "record"
 
+// clusterAnnotation says whether a command contacts a cluster: "no" for one
+// that does not. As with recordAnnotation, the nearest annotated command
+// decides. A command marked "no" gets an environment without a Kubernetes
+// client, so it runs on a host with no kubeconfig.
+const clusterAnnotation = "cluster"
+
+// nearestAnnotation returns the value of key on cmd or its nearest ancestor
+// that carries it.
+func nearestAnnotation(cmd *cobra.Command, key string) (string, bool) {
+	for c := cmd; c != nil; c = c.Parent() {
+		if v, ok := c.Annotations[key]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // recordsRun reports whether the nearest annotated command, cmd or an
 // ancestor, opted in.
 func recordsRun(cmd *cobra.Command) bool {
-	for c := cmd; c != nil; c = c.Parent() {
-		if v, ok := c.Annotations[recordAnnotation]; ok {
-			return v == "yes"
-		}
-	}
-	return false
+	v, _ := nearestAnnotation(cmd, recordAnnotation)
+	return v == "yes"
+}
+
+// needsCluster reports whether cmd contacts a cluster. Commands do unless
+// marked otherwise.
+func needsCluster(cmd *cobra.Command) bool {
+	v, _ := nearestAnnotation(cmd, clusterAnnotation)
+	return v != "no"
 }
 
 var rootCmd = &cobra.Command{
@@ -106,6 +126,11 @@ is present (skipped for --kind, and by NO_DEV_ENV=1).`,
 		// Reported before the cluster is touched, so the settings are on
 		// screen even when connecting fails.
 		resolved.Report(log.Writer(), config.ReportOptions{OmitDefaults: noReportDefaults})
+
+		if !needsCluster(cmd) {
+			env = steps.NewLocalEnv(cfg)
+			return nil
+		}
 
 		// Populate the kubeconfig before any client is built, for the
 		// GKE-from-.ate-dev-env.sh flow.
@@ -191,10 +216,7 @@ func recordRun(cmd *cobra.Command, runErr error) {
 	}
 }
 
-// Root is the command tree, for callers that need to inspect it rather than
-// run it. hack/install-ate.sh translates the historical installer flags into
-// ate-setup command lines, and its test resolves each one against this to check
-// it still names a command that exists.
+// Root is the command tree, for tests that run it in-process.
 func Root() *cobra.Command { return rootCmd }
 
 // Execute runs the command tree.
@@ -209,6 +231,11 @@ func Execute() {
 	// ExecuteC reports which command ran, which the failure record needs and
 	// Execute does not return.
 	executed, err := rootCmd.ExecuteC()
+	// Cobra rejects an unknown command only at the root. Below it, a command
+	// that only groups others prints its help for any argument and succeeds.
+	if err == nil && !executed.Runnable() && executed.Flags().NArg() > 0 {
+		err = fmt.Errorf("unknown command %q for %q", executed.Flags().Arg(0), executed.CommandPath())
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		// After the error, so the retry line is the last thing on screen:

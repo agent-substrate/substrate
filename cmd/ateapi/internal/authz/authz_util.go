@@ -44,9 +44,11 @@ const (
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
 
-	RoleController    = "controller"
-	RoleEgressGateway = "egress_gateway"
-	RoleIngressRouter = "ingress_router"
+	RoleController       = "controller"
+	RoleEgressGateway    = "egress_gateway"
+	RoleIngressRouter    = "ingress_router"
+	RoleAtelet           = "atelet"
+	RoleAPIServerSidecar = "api_server_sidecar"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
 	RelationCanListAtespaces        = "can_list_atespaces"
@@ -60,7 +62,6 @@ const (
 	RelationCanUseTemplate          = "can_use_template"
 	RelationCanUpdate               = "can_update"
 	RelationCanDelete               = "can_delete"
-	RelationCanPause                = "can_pause"
 	RelationCanResume               = "can_resume"
 	RelationCanSuspend              = "can_suspend"
 	RelationCanRevert               = "can_revert"
@@ -78,7 +79,6 @@ const (
 	RelationCanListTags             = "can_list_tags"
 	RelationCanUseTag               = "can_use_tag"
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
-	RelationCanMintActorCertificate = "can_mint_actor_certificate"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -231,9 +231,11 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 // The Authorizer grants each one its system component role on global:root on
 // every check, independent of any stored AccessPolicy.
 type SystemPrincipals struct {
-	ControllerSPIFFEID    string
-	EgressGatewaySPIFFEID string
-	IngressRouterSPIFFEID string
+	ControllerSPIFFEID       string
+	EgressGatewaySPIFFEIDs   []string
+	IngressRouterSPIFFEID    string
+	AteletSPIFFEID           string
+	APIServerSidecarSPIFFEID string
 }
 
 // New provisions the default OpenFGA store and authorization model via
@@ -286,13 +288,21 @@ func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
 // parseSystemPrincipals validates system's SPIFFE IDs and maps each OpenFGA
 // user string to the system component roles it holds.
 func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error) {
-	bindings := []struct {
+	if len(system.EgressGatewaySPIFFEIDs) == 0 {
+		return nil, fmt.Errorf("no %s SPIFFE ID", RoleEgressGateway)
+	}
+	type binding struct {
 		role     string
 		spiffeID string
-	}{
+	}
+	bindings := []binding{
 		{role: RoleController, spiffeID: system.ControllerSPIFFEID},
-		{role: RoleEgressGateway, spiffeID: system.EgressGatewaySPIFFEID},
 		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
+		{role: RoleAtelet, spiffeID: system.AteletSPIFFEID},
+		{role: RoleAPIServerSidecar, spiffeID: system.APIServerSidecarSPIFFEID},
+	}
+	for _, id := range system.EgressGatewaySPIFFEIDs {
+		bindings = append(bindings, binding{role: RoleEgressGateway, spiffeID: id})
 	}
 	out := make(map[string][]string, len(bindings))
 	for _, b := range bindings {

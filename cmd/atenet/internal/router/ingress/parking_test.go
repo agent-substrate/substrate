@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 func TestParkingLot_CapacityAndRelease(t *testing.T) {

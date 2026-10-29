@@ -21,8 +21,8 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // The benchmark and micro-VM stacks are still driven by shell. They orchestrate

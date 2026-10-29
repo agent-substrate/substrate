@@ -25,15 +25,15 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // grpcEcho is the origin this test deploys: a cleartext-HTTP/2 gRPC server, in
 // its own namespace, so nothing here depends on the internet.
 var grpcEcho = e2e.ServerPod{
 	Name:       "grpcecho",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
 	Args:       []string{"grpc"},
 	Port:       50051,
 	// A gRPC server answers an HTTP GET with a protocol error, so readiness has

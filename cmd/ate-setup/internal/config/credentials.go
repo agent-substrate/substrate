@@ -21,7 +21,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // EnsureClusterCredentials fetches GKE credentials when the configuration

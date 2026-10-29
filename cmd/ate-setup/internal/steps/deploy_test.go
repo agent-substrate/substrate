@@ -20,12 +20,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 )
 
 // podcertObjects loads the podcertificate-controller manifest as
@@ -236,5 +237,50 @@ func TestMissingCRDsLeavesPresentOnesAlone(t *testing.T) {
 			names = append(names, m.GetName())
 		}
 		t.Errorf("missingCRDs = %v, want only csidriverconfigs.ate.dev", names)
+	}
+}
+
+// A single-component redeploy has to apply what deploy ate-system does. On
+// kind the bundle points the object-store plugins at rustfs, and a redeploy
+// from a base file would fall back to GCS and never start.
+func TestComponentManifestsMatchSystemBundle(t *testing.T) {
+	for _, tc := range []struct {
+		router string
+		kind   bool
+	}{
+		{config.RouterEnvoy, false},
+		{config.RouterEnvoy, true},
+		{config.RouterAgentgateway, false},
+		{config.RouterAgentgateway, true},
+	} {
+		e := &Env{Cfg: &config.Config{Root: repoRoot(t), Router: tc.router, Kind: tc.kind}}
+		render := func(path string) []*unstructured.Unstructured {
+			manifest, err := e.render(path)
+			if err != nil {
+				t.Fatalf("render(%s): %v", path, err)
+			}
+			objs, err := kube.DecodeManifestBytes(manifest)
+			if err != nil {
+				t.Fatalf("decoding %s: %v", path, err)
+			}
+			return objs
+		}
+		bundle := render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+		for _, component := range []struct {
+			kind, name, path string
+		}{
+			{"Deployment", "ate-api-server", e.apiServerManifestPath()},
+			{"Deployment", "ate-idp-server", e.idpServerManifestPath()},
+			{"DaemonSet", "atelet", e.ateletManifestPath()},
+		} {
+			want := findObject(bundle, component.kind, component.name)
+			got := findObject(render(component.path), component.kind, component.name)
+			if want == nil || got == nil {
+				t.Fatalf("router=%s kind=%v: %s/%s missing from the system bundle or %s", tc.router, tc.kind, component.kind, component.name, component.path)
+			}
+			if diff := cmp.Diff(want.Object, got.Object); diff != "" {
+				t.Errorf("router=%s kind=%v: %s renders a different %s/%s than the system bundle (-bundle +standalone):\n%s", tc.router, tc.kind, component.path, component.kind, component.name, diff)
+			}
+		}
 	}
 }

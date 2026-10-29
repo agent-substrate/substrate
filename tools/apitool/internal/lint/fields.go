@@ -21,14 +21,14 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // typeMatcher reports whether a field has the wanted type, including
 // whether it's repeated, and names that type in findings.
 type typeMatcher struct {
 	// label names the type in findings. For example, "string" or
-	// "ateapi.ObjectRef".
+	// "substrate.ateapi.v1.ObjectRef".
 	label   string
 	matches func(model.Field) bool
 }
@@ -147,7 +147,7 @@ func wantStrings(want wantFields) []string {
 }
 
 // typeOf describes f's type in findings. For example, "string",
-// "ateapi.ObjectRef", or "repeated ateapi.Actor".
+// "substrate.ateapi.v1.ObjectRef", or "repeated substrate.ateapi.v1.Actor".
 func typeOf(f model.Field) string {
 	if f.TypeFullName == "" {
 		return f.TypeDisplay

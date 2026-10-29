@@ -37,13 +37,17 @@ Install the meter, then send the control plane to it:
 kubectl apply -f benchmarking/telemetry/meter.yaml
 
 METER=http://telemetry-meter.benchmarking.svc.cluster.local:4317
-./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' --otlp-endpoint "${METER}"
+
+go run ./cmd/ate-setup deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/benchmarking/sa/default \
+  --otlp-endpoint "${METER}"
 ```
 
 `--otlp-endpoint` patches the `ate-otel-config` ConfigMap and restarts the
 workloads that read it. One patch is sufficient for `ateapi`, `ate-controller`,
 `atelet`, and `atenet-router`, because each one reads the ConfigMap through
-`envFrom`. `ate-controller` also copies the values to the ateom worker pods
+`envFrom`. `ate-controller` also copies the values to the worker pods
 that it creates.
 
 The actor containers are different. Substrate puts no OTLP configuration in
@@ -69,7 +73,7 @@ holds the same count connector and gives the same two counts. A meter in front
 of it would add a hop and measure nothing new. The meter exists for GKE only,
 where the managed collector cannot hold a connector.
 
-`hack/install-ate.sh` installs the collector and a Prometheus with it, thus a
+`ate-setup --kind` installs the collector and a Prometheus with it, thus a
 kind cluster needs no other step:
 
 ```bash
@@ -223,7 +227,9 @@ upgrade.
 ## Remove the meter
 
 ```bash
-./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+go run ./cmd/ate-setup deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/benchmarking/sa/default
 ./benchmarking/workloads/deploy.sh --deploy
 kubectl delete -f benchmarking/telemetry/meter.yaml
 ```

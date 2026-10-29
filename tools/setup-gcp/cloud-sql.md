@@ -21,7 +21,7 @@ authentication**](https://docs.cloud.google.com/sql/docs/postgres/iam-authentica
 - **Cloud-agnostic code** — ateapi itself knows nothing about Cloud SQL. The
   sidecar is a deployment-time patch
   (`manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml`) applied by
-  `hack/install-ate.sh` only when a Cloud SQL instance is configured.
+  `ate-setup` only when a Cloud SQL instance is configured.
 
 ## 1. Provision
 
@@ -46,6 +46,7 @@ This idempotently creates:
 | Google service account | `ate-api-server@<project>.iam.gserviceaccount.com` |
 | Project IAM roles | `roles/cloudsql.client`, `roles/cloudsql.instanceUser` on the GSA |
 | Workload Identity binding | `roles/iam.workloadIdentityUser` for `<project>.svc.id.goog[ate-system/ate-api-server]` on the GSA |
+| Token creator binding | `roles/iam.serviceAccountTokenCreator` for the GSA on the snapshot transfer service account, named by `SNAPSHOT_TRANSFER_GSA_NAME` and `ate-snapshot-transfer` by default, created if missing. ate-api-server's pod runs as the GSA, and its credential exchange impersonates the transfer account |
 | IAM database user | the GSA, type `CLOUD_IAM_SERVICE_ACCOUNT` |
 
 > **Note:** The repo otherwise uses WIF-direct
@@ -121,8 +122,8 @@ users need a separate migration of ownership and grants.
 ```sh
 export ATE_API_POSTGRES_CLOUDSQL_INSTANCE=<project>:<region>:<instance>
 export ATE_API_POSTGRES_CLOUDSQL_GSA=ate-api-server@<project>.iam.gserviceaccount.com
-./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
-# Existing installation: --deploy-ate-apiserver instead of --deploy-ate-system
+go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}'
+# Existing installation: deploy apiserver instead of deploy ate-system
 ```
 
 What this does differently from a plain install:
@@ -162,7 +163,7 @@ Optional environment variables:
   (default: `max(4, NumCPU)`). It does not affect the owner and watch pools, which are
   capped at 2 and 3 connections.
 
-Changing the installed configuration rolls ate-api-server: the install script
+Changing the installed configuration rolls ate-api-server: ate-setup
 stamps a hash of the rendered configuration into the pod template
 (`ate.dev/env-hash`).
 
@@ -199,4 +200,4 @@ proxy sidecar resources, and Managed Connection Pooling — see
 [docs/dev/cloud-sql-scaling-guide.md](../../docs/dev/cloud-sql-scaling-guide.md).
 
 For explicit connection strings or a non-Cloud-SQL PostgreSQL database, see
-the [general PostgreSQL configuration guide](../../docs/postgres.md).
+the [general PostgreSQL configuration guide](../../docs/guides/postgres.md).

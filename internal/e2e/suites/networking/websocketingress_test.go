@@ -22,25 +22,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/gorilla/websocket"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // deployWebsocketFixture installs the websocket fixture for the sandbox class
 // under test and waits for its golden snapshot.
 func deployWebsocketFixture(t *testing.T, ctx context.Context) e2e.SubstrateFixture {
 	t.Helper()
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "websocket", nil)
+	}, "websocket", nil)
 
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,
@@ -59,8 +58,10 @@ func TestWebsocketIngressPing(t *testing.T) {
 	rc := mustRouterClient(t, ctx)
 	defer rc.Close()
 
-	// Convert http://127.0.0.1:<port> to ws://127.0.0.1:<port>/ws
-	wsURLStr := strings.Replace(rc.BaseURL(), "http://", "ws://", 1) + "/ws"
+	// Convert http(s)://127.0.0.1:<port> to ws(s)://127.0.0.1:<port>/ws
+	wsURLStr := "ws" + strings.TrimPrefix(rc.BaseURL(), "http") + "/ws"
+	dialer := *websocket.DefaultDialer
+	dialer.TLSClientConfig = rc.TLSConfig()
 	u, err := url.Parse(wsURLStr)
 	if err != nil {
 		t.Fatalf("parse ws URL: %v", err)
@@ -76,7 +77,7 @@ func TestWebsocketIngressPing(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var resp *http.Response
-		c, resp, err = websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+		c, resp, err = dialer.DialContext(ctx, u.String(), header)
 		if err == nil {
 			break
 		}

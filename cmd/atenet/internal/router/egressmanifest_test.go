@@ -15,49 +15,46 @@
 package router
 
 import (
-	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"sigs.k8s.io/yaml"
 )
 
-// egressManifests is the envoy egress gateway ate-setup installs, which
-// terminates and re-originates the tunneled TLS.
-var egressManifests = []string{
-	"../../../../manifests/ate-install/atenet-egress.yaml",
-}
+// egressManifest is the envoy egress gateway ate-setup installs, which
+// terminates and re-originates the tunneled TLS and runs the egress-policy
+// module.
+const egressManifest = "../../../../manifests/ate-install/atenet-egress.yaml"
 
 // TestEgressManifestsDisableTheConnectTimeout is the static-config half of
 // TestBuildConnectRoutes_DisablesTimeout: Envoy applies a route's timeout to a
 // CONNECT tunnel's whole lifetime rather than to its headers, so a route left
 // at Envoy's 15s default caps how long any actor's outbound connection may
 // exist -- streaming responses, long downloads and SSH sessions all die
-// mid-stream at 15s. These manifests are what the gateway actually runs, and
-// nothing else in the tree notices when one of them loses the line.
+// mid-stream at 15s. This manifest is what the gateway actually runs, and
+// nothing else in the tree notices when it loses the line.
 func TestEgressManifestsDisableTheConnectTimeout(t *testing.T) {
-	for _, path := range egressManifests {
-		t.Run(path, func(t *testing.T) {
-			routes := connectRoutes(t, envoyConfig(t, path))
-			if len(routes) == 0 {
-				t.Fatal("found no connect_matcher route; the manifest changed shape and this test is checking nothing")
-			}
-			for _, r := range routes {
-				if r.Route.Timeout == nil {
-					t.Errorf("connect_matcher route to cluster %q sets no timeout, so it falls back to Envoy's 15s default and cuts every tunnel after 15s", r.Route.Cluster)
-					continue
-				}
-				d, err := time.ParseDuration(*r.Route.Timeout)
-				if err != nil {
-					t.Errorf("connect_matcher route to cluster %q has timeout %q, which is not a duration: %v", r.Route.Cluster, *r.Route.Timeout, err)
-					continue
-				}
-				if d != 0 {
-					t.Errorf("connect_matcher route to cluster %q has timeout %s; it must be 0 to disable it", r.Route.Cluster, d)
-				}
-			}
-		})
+	routes := connectRoutes(t, envoyConfig(t))
+	if len(routes) == 0 {
+		t.Fatal("found no connect_matcher route; the manifest changed shape and this test is checking nothing")
+	}
+	for _, r := range routes {
+		if r.Route.Timeout == nil {
+			t.Errorf("connect_matcher route to cluster %q sets no timeout, so it falls back to Envoy's 15s default and cuts every tunnel after 15s", r.Route.Cluster)
+			continue
+		}
+		d, err := time.ParseDuration(*r.Route.Timeout)
+		if err != nil {
+			t.Errorf("connect_matcher route to cluster %q has timeout %q, which is not a duration: %v", r.Route.Cluster, *r.Route.Timeout, err)
+			continue
+		}
+		if d != 0 {
+			t.Errorf("connect_matcher route to cluster %q has timeout %s; it must be 0 to disable it", r.Route.Cluster, d)
+		}
 	}
 }
 
@@ -115,39 +112,153 @@ func connectRoutes(t *testing.T, raw string) []envoyRoute {
 	return out
 }
 
-// envoyConfig is the envoy.yaml the atenet-egress ConfigMap in path ships.
-func envoyConfig(t *testing.T, path string) string {
+// envoyConfig is the envoy.yaml the atenet-egress ConfigMap in egressManifest
+// ships.
+func envoyConfig(t *testing.T) string {
 	t.Helper()
-	return envoyConfigFrom(t, path, "atenet-egress")
+	return envoyConfigFrom(t, egressManifest, "atenet-egress")
 }
 
 // envoyConfigFrom is the envoy.yaml the ConfigMap named configMap in path ships.
 func envoyConfigFrom(t *testing.T, path, configMap string) string {
 	t.Helper()
-	manifest, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
+	var cm struct {
+		Data map[string]string `json:"data"`
 	}
-	for _, doc := range strings.Split(string(manifest), "\n---\n") {
-		var obj struct {
-			Kind     string `json:"kind"`
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Data map[string]string `json:"data"`
-		}
-		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
-			t.Fatalf("parsing a document of %s: %v", path, err)
-		}
-		if obj.Kind != "ConfigMap" || obj.Metadata.Name != configMap {
+	manifestObject(t, path, "ConfigMap", configMap, &cm)
+	envoyYaml, ok := cm.Data["envoy.yaml"]
+	if !ok {
+		t.Fatalf("the %s ConfigMap in %s has no envoy.yaml key", configMap, path)
+	}
+	return envoyYaml
+}
+
+// wantSampledLogFilter is the filter on the access logs of the per-request legs.
+const wantSampledLogFilter = `
+or_filter:
+  filters:
+  - status_code_filter:
+      comparison:
+        op: GE
+        value: {default_value: 400, runtime_key: access_log.min_status}
+  - response_flag_filter: {}
+  - and_filter:
+      filters:
+      - header_filter:
+          header:
+            name: content-type
+            string_match: {prefix: application/grpc}
+      - grpc_status_filter: {exclude: true, statuses: [OK]}
+  - runtime_filter:
+      runtime_key: access_log.sample
+      percent_sampled: {numerator: 1, denominator: HUNDRED}
+      use_independent_randomness: true
+`
+
+// Every actor request lands in the mitm or cleartext access log, so both keep
+// failures and a sample of the rest behind runtime keys an operator can flip.
+// No other filter chain's access log may filter, since each is the only record
+// of its events.
+func TestEgressManifestsSampleThePerRequestAccessLogs(t *testing.T) {
+	t.Parallel()
+	var want node
+	if err := yaml.Unmarshal([]byte(wantSampledLogFilter), &want); err != nil {
+		t.Fatalf("parsing wantSampledLogFilter: %v", err)
+	}
+	logs := chainAccessLogsByLeg(bootstrapTree(t))
+	sampledLegs := []string{"mitm", "cleartext"}
+	for _, leg := range sampledLegs {
+		t.Run(leg, func(t *testing.T) {
+			t.Parallel()
+			if len(logs[leg]) == 0 {
+				t.Fatalf("no access log with leg %q; the manifest changed shape and this test is checking nothing", leg)
+			}
+			for _, al := range logs[leg] {
+				if diff := cmp.Diff(want, child(al, "filter")); diff != "" {
+					t.Errorf("access log %q filter mismatch (-want +got):\n%s", leg, diff)
+				}
+			}
+		})
+	}
+	for leg, als := range logs {
+		if slices.Contains(sampledLegs, leg) {
 			continue
 		}
-		envoyYaml, ok := obj.Data["envoy.yaml"]
-		if !ok {
-			t.Fatalf("the %s ConfigMap in %s has no envoy.yaml key", configMap, path)
+		for _, al := range als {
+			if _, ok := al["filter"]; ok {
+				t.Errorf("access log %q has a filter; only %v may", leg, sampledLegs)
+			}
 		}
-		return envoyYaml
 	}
-	t.Fatalf("%s has no ConfigMap named %s", path, configMap)
-	return ""
+}
+
+// chainAccessLogsByLeg groups the access logs of every network filter in every
+// filter chain by their json_format leg. The CONNECT log has a text format and
+// no leg, so it is grouped as "connect".
+func chainAccessLogsByLeg(tree node) map[string][]node {
+	out := map[string][]node{}
+	for _, lc := range allChains(tree) {
+		for _, f := range list(lc.chain, "filters") {
+			for _, al := range list(child(f, "typed_config"), "access_log") {
+				leg := str(child(child(child(al, "typed_config"), "log_format"), "json_format"), "leg")
+				if leg == "" {
+					leg = "connect"
+				}
+				out[leg] = append(out[leg], al)
+			}
+		}
+	}
+	return out
+}
+
+// queryPathCommand matches an access log command that prints the request path
+// with its query string: %REQ(:PATH)%, %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% and
+// the like, or %PATH% asked to keep the query.
+var queryPathCommand = regexp.MustCompile(`%REQ\([^)]*PATH[^)]*\)%|%PATH\(WQ`)
+
+// The mitm leg logs requests the gateway has decrypted, and actor traffic can
+// carry credentials in the query (API keys, signed URL tokens, OAuth codes).
+// Every access log prints the path with %PATH(NQ:...)%, as the router's does.
+func TestEgressManifestsLogPathsWithoutTheQuery(t *testing.T) {
+	t.Parallel()
+	var formats int
+	var walk func(v any, inFormat bool)
+	walk = func(v any, inFormat bool) {
+		switch v := v.(type) {
+		case node:
+			for k, c := range v {
+				walk(c, inFormat || k == "log_format")
+			}
+		case []any:
+			for _, c := range v {
+				walk(c, inFormat)
+			}
+		case string:
+			if !inFormat {
+				return
+			}
+			formats++
+			if m := queryPathCommand.FindString(v); m != "" {
+				t.Errorf("access log format %q logs the query string with %s; use %%PATH(NQ:ORIG_OR_PATH)%%", v, m)
+			}
+		}
+	}
+	walk(bootstrapTree(t), false)
+	if formats == 0 {
+		t.Fatal("no access log formats found; the manifest changed shape and this test is checking nothing")
+	}
+}
+
+func TestEgressManifestsConnectAccessLogIncludesProtocol(t *testing.T) {
+	t.Parallel()
+	logs := chainAccessLogsByLeg(bootstrapTree(t))["connect"]
+	if len(logs) == 0 {
+		t.Fatal("no connect access log found; the manifest changed shape and this test is checking nothing")
+	}
+	for i, al := range logs {
+		format := str(child(child(child(al, "typed_config"), "log_format"), "text_format_source"), "inline_string")
+		if !strings.Contains(format, "protocol=%PROTOCOL%") {
+			t.Errorf("connect access_log[%d] format %q does not log protocol=%%PROTOCOL%%", i, format)
+		}
+	}
 }

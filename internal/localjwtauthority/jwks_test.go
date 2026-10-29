@@ -144,6 +144,16 @@ func TestJWKSRejects(t *testing.T) {
 	}
 }
 
+func TestToJWKRejectsOtherCurves(t *testing.T) {
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, err := toJWK(&VerificationKey{KeyID: "k", Algorithm: "ES384", PublicKey: &p384.PublicKey}); err == nil {
+		t.Errorf("toJWK(P-384 key) = %+v, want error", j)
+	}
+}
+
 // RFC 7518 section 6.2.1.2 requires each EC coordinate at the full curve size,
 // even when it starts with a zero byte.
 func TestJWKSPadsECCoordinates(t *testing.T) {

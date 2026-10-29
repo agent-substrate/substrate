@@ -189,8 +189,8 @@ func serviceResource(name string) *resourcepb.Resource {
 }
 
 // TestRelayForwardsTracesVerbatim is the property the whole design rests on:
-// what an ateom exports is what the collector sees, including the resource
-// attributes that attribute the spans to that ateom rather than to atelet.
+// what a worker exports is what the collector sees, including the resource
+// attributes that attribute the spans to that worker rather than to atelet.
 func TestRelayForwardsTracesVerbatim(t *testing.T) {
 	sink, collector := startFakeCollector(t)
 	sock := startRelay(t, collector)
@@ -206,7 +206,7 @@ func TestRelayForwardsTracesVerbatim(t *testing.T) {
 
 	req := &coltracepb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{{
-			Resource: serviceResource("ateom-microvm"),
+			Resource: serviceResource("ateworker-microvm"),
 			ScopeSpans: []*tracepb.ScopeSpans{{
 				Spans: []*tracepb.Span{{
 					Name:    "RunWorkload",
@@ -248,9 +248,9 @@ func TestRelayForwardsMetrics(t *testing.T) {
 
 	req := &colmetricspb.ExportMetricsServiceRequest{
 		ResourceMetrics: []*metricspb.ResourceMetrics{{
-			Resource: serviceResource("ateom-microvm"),
+			Resource: serviceResource("ateworker-microvm"),
 			ScopeMetrics: []*metricspb.ScopeMetrics{{
-				Metrics: []*metricspb.Metric{{Name: "ateom.workload.runs"}},
+				Metrics: []*metricspb.Metric{{Name: "worker.workload.runs"}},
 			}},
 		}},
 	}
@@ -274,11 +274,11 @@ func TestRelayForwardsMetrics(t *testing.T) {
 	}
 }
 
-// usageLogs is an ateom log batch.
+// usageLogs is a worker log batch.
 func usageLogs() *collogspb.ExportLogsServiceRequest {
 	return &collogspb.ExportLogsServiceRequest{
 		ResourceLogs: []*logspb.ResourceLogs{{
-			Resource: serviceResource("ateom-gvisor"),
+			Resource: serviceResource("ateworker-gvisor"),
 			ScopeLogs: []*logspb.ScopeLogs{{
 				LogRecords: []*logspb.LogRecord{{EventName: "ate.actor.usage_sampled"}},
 			}},
@@ -319,7 +319,7 @@ func TestRelayForwardsLogsVerbatim(t *testing.T) {
 
 // TestStopRemovesSocket matters for the restart path: a leftover socket makes
 // the next atelet's Listen fail with EADDRINUSE, and in the meantime makes
-// every ateom on the node believe a relay is there.
+// every worker on the node believe a relay is there.
 func TestStopRemovesSocket(t *testing.T) {
 	_, collector := startFakeCollector(t)
 	t.Setenv(endpointEnv, collector)
@@ -425,8 +425,8 @@ func TestSourceGateLogsEachRejectionOnce(t *testing.T) {
 	if err := gate.check(context.Background(), serviceResource("atelet")); err == nil {
 		t.Fatal("gate.check accepted atelet")
 	}
-	if err := gate.check(context.Background(), serviceResource("ateom-gvisor")); err != nil {
-		t.Fatalf("gate.check rejected an ateom: %v", err)
+	if err := gate.check(context.Background(), serviceResource("ateworker-gvisor")); err != nil {
+		t.Fatalf("gate.check rejected a worker: %v", err)
 	}
 
 	if got := strings.Count(buf.String(), "rejected telemetry"); got != 2 {
@@ -438,10 +438,10 @@ func TestSourceGateLogsEachRejectionOnce(t *testing.T) {
 	}
 }
 
-// TestRelayRefusesNonAteomSource is the scoping contract. The empty
+// TestRelayRefusesNonWorkerSource is the scoping contract. The empty
 // service.name case is the one worth keeping: that is the shape telemetry takes
 // when identity has not been injected, which is the actor situation in #761.
-func TestRelayRefusesNonAteomSource(t *testing.T) {
+func TestRelayRefusesNonWorkerSource(t *testing.T) {
 	sink, collector := startFakeCollector(t)
 	sock := startRelay(t, collector)
 
@@ -504,7 +504,7 @@ func TestRelayRefusesMixedBatch(t *testing.T) {
 
 	_, err = coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{
-			{Resource: serviceResource("ateom-gvisor")},
+			{Resource: serviceResource("ateworker-gvisor")},
 			{Resource: serviceResource("actor")},
 		},
 	})
@@ -514,7 +514,7 @@ func TestRelayRefusesMixedBatch(t *testing.T) {
 
 	_, err = collogspb.NewLogsServiceClient(conn).Export(context.Background(), &collogspb.ExportLogsServiceRequest{
 		ResourceLogs: []*logspb.ResourceLogs{
-			{Resource: serviceResource("ateom-gvisor")},
+			{Resource: serviceResource("ateworker-gvisor")},
 			{Resource: serviceResource("actor")},
 		},
 	})
@@ -529,9 +529,9 @@ func TestRelayRefusesMixedBatch(t *testing.T) {
 	}
 }
 
-// TestRelayAcceptsEveryAteomService guards against the allowlist drifting from
+// TestRelayAcceptsEveryWorkerService guards against the allowlist drifting from
 // the binaries in a way that silently drops all of one runtime's telemetry.
-func TestRelayAcceptsEveryAteomService(t *testing.T) {
+func TestRelayAcceptsEveryWorkerService(t *testing.T) {
 	sink, collector := startFakeCollector(t)
 	sock := startRelay(t, collector)
 
@@ -541,7 +541,7 @@ func TestRelayAcceptsEveryAteomService(t *testing.T) {
 	}
 	defer conn.Close()
 
-	for service := range ateomServices {
+	for service := range workerServices {
 		if _, err := coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
 			ResourceSpans: []*tracepb.ResourceSpans{{Resource: serviceResource(service)}},
 		}); err != nil {
@@ -568,33 +568,33 @@ func TestRelayAcceptsEveryAteomService(t *testing.T) {
 	}
 }
 
-// TestAteomServicesMatchTheAteomBinaries keeps the allowlist honest. A typo in
-// it would otherwise be invisible: every real ateom export would be refused
+// TestWorkerServicesMatchTheWorkerBinaries keeps the allowlist honest. A typo in
+// it would otherwise be invisible: every real worker export would be refused
 // while every test here still passed, because they would share the typo.
-func TestAteomServicesMatchTheAteomBinaries(t *testing.T) {
-	// Matches `const serviceName = "..."` in each ateom main package.
+func TestWorkerServicesMatchTheWorkerBinaries(t *testing.T) {
+	// Matches `const serviceName = "..."` in each worker main package.
 	decl := regexp.MustCompile(`(?m)^\s*const\s+serviceName\s*=\s*"([^"]+)"`)
 
 	found := map[string]bool{}
-	for _, main := range []string{"../../cmd/ateom-gvisor/main.go", "../../cmd/ateom-microvm/main.go"} {
+	for _, main := range []string{"../../cmd/ateworker-gvisor/main.go", "../../cmd/ateworker-microvm/main.go"} {
 		src, err := os.ReadFile(main)
 		if err != nil {
 			t.Fatalf("reading %s: %v", main, err)
 		}
 		m := decl.FindSubmatch(src)
 		if m == nil {
-			t.Fatalf("no `const serviceName = \"...\"` found in %s; if it moved, this test and ateomServices both need updating", main)
+			t.Fatalf("no `const serviceName = \"...\"` found in %s; if it moved, this test and workerServices both need updating", main)
 		}
 		name := string(m[1])
 		found[name] = true
-		if !ateomServices[name] {
-			t.Errorf("%s reports service.name %q, which ateomServices does not allow; the relay would refuse all of its telemetry", main, name)
+		if !workerServices[name] {
+			t.Errorf("%s reports service.name %q, which workerServices does not allow; the relay would refuse all of its telemetry", main, name)
 		}
 	}
 
-	for name := range ateomServices {
+	for name := range workerServices {
 		if !found[name] {
-			t.Errorf("ateomServices allows %q, but no ateom binary declares it", name)
+			t.Errorf("workerServices allows %q, but no worker binary declares it", name)
 		}
 	}
 }
@@ -621,7 +621,7 @@ func TestNewServerRejectsRelativeSocketPath(t *testing.T) {
 		relay.Stop()
 	}
 	if err == nil {
-		t.Fatal("NewServer with a relative socket path returned no error; it would listen somewhere no ateom can name")
+		t.Fatal("NewServer with a relative socket path returned no error; it would listen somewhere no worker can name")
 	}
 	if !strings.Contains(err.Error(), "absolute") {
 		t.Errorf("NewServer error = %v, want it to say the path must be absolute", err)
@@ -638,7 +638,7 @@ func TestServeLeavesAPopulatedDirectoryAlone(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	occupant := filepath.Join(dir, "ateom.sock")
+	occupant := filepath.Join(dir, "worker.sock")
 	if err := os.WriteFile(occupant, nil, 0o600); err != nil {
 		t.Fatalf("planting a neighbouring socket: %v", err)
 	}
@@ -832,7 +832,7 @@ func exportAll(t *testing.T, sink *fakeCollector, sock, service string, ctx cont
 }
 
 // The upstream leg is atelet's connection, so its credentials are atelet's. An
-// ateom that sets a header of its own must not get to choose what atelet
+// worker that sets a header of its own must not get to choose what atelet
 // presents to the collector.
 func TestExportDropsClientMetadata(t *testing.T) {
 	sink, collector := startFakeCollector(t)
@@ -842,7 +842,7 @@ func TestExportDropsClientMetadata(t *testing.T) {
 		"authorization", "Bearer client-token",
 		"custom-header", "custom-value",
 	)
-	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateom-gvisor", ctx)
+	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateworker-gvisor", ctx)
 
 	for _, tc := range []struct {
 		signal string
@@ -869,7 +869,7 @@ func TestExportAttachesAteletHeaders(t *testing.T) {
 	// The client sends its own, which must lose to atelet's rather than
 	// appending a second value the collector might pick either way.
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client-token")
-	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateom-gvisor", ctx)
+	traceMD, metricMD, logMD := exportAll(t, sink, sock, "ateworker-gvisor", ctx)
 
 	if got := traceMD.Get("authorization"); len(got) != 1 || got[0] != "Bearer atelet-token" {
 		t.Errorf("trace export authorization = %v, want exactly [Bearer atelet-token]", got)

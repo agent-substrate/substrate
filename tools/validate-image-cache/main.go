@@ -59,10 +59,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/nodepath"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/nodepath"
 	"golang.org/x/sys/unix"
 )
 

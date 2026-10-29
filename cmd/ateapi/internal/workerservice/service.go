@@ -19,24 +19,25 @@ package workerservice
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/resources"
 )
 
-// Server implements ateapipb.WorkerServiceServer.
+// Server implements ateapi.WorkerServiceServer.
 type Server struct {
-	ateapipb.UnimplementedWorkerServiceServer
+	ateapi.UnimplementedWorkerServiceServer
 
 	// store is where a Worker's reports are recorded, and the authoritative
 	// state every request is authorized against.
 	store store.Interface
 
-	// suspender runs the suspend a Worker asks for. It is the same entry point
-	// Control.SuspendActor uses, so a Worker's request is subject to every
+	// control runs the operations a Worker asks for through the same entry
+	// points Control uses, so a Worker's request is subject to every
 	// precondition a client's would be.
-	suspender actorSuspender
+	control actorControl
 
 	// ateletSPIFFEID is the identity the calling atelet must present.
 	ateletSPIFFEID string
@@ -44,24 +45,26 @@ type Server struct {
 	actorIDCAPool localca.Pool
 
 	// actorJWTIssuer is copied verbatim into the iss claim of every
-	// ateom-for-actor JWT, and actorIDJWTPool signs them. Both are the ones
+	// worker-for-actor JWT, and actorIDJWTPool signs them. Both are the ones
 	// Control.MintActorJwt uses.
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
 }
 
-// actorSuspender is the in-process slice of the Control service this package
+// actorControl is the in-process slice of the Control service this package
 // drives. *controlapi.RPCService satisfies it.
-type actorSuspender interface {
-	SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
+type actorControl interface {
+	SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error)
+	ApplyActorSnapshotState(ctx context.Context, actorRef resources.ActorRef, actorUID, node string, state *ateapi.ActorSnapshotState) error
+	CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error)
 }
 
-var _ ateapipb.WorkerServiceServer = (*Server)(nil)
+var _ ateapi.WorkerServiceServer = (*Server)(nil)
 
-func New(store store.Interface, suspender actorSuspender, ateletSPIFFEID string, actorIDCAPool localca.Pool, actorJWTIssuer string, actorIDJWTPool localjwtauthority.Pool) *Server {
+func New(store store.Interface, control actorControl, ateletSPIFFEID string, actorIDCAPool localca.Pool, actorJWTIssuer string, actorIDJWTPool localjwtauthority.Pool) *Server {
 	return &Server{
 		store:          store,
-		suspender:      suspender,
+		control:        control,
 		ateletSPIFFEID: ateletSPIFFEID,
 		actorIDCAPool:  actorIDCAPool,
 		actorJWTIssuer: actorJWTIssuer,

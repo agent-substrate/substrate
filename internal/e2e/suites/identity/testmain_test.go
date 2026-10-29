@@ -18,7 +18,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/e2e"
 )
 
 func TestMain(m *testing.M) { os.Exit(e2e.RunTestMain(m)) }

@@ -24,8 +24,7 @@ import (
 
 // AuthenticationConfig configures JWT authentication for ateapi.
 type AuthenticationConfig struct {
-	ActorIdentityJWTProvider string              `json:"actorIdentityJWTProvider"`
-	JWTProviders             []JWTProviderConfig `json:"jwtProviders"`
+	JWTProviders []JWTProviderConfig `json:"jwtProviders"`
 }
 
 // JWTProviderConfig configures one trusted OIDC issuer.
@@ -89,12 +88,6 @@ func ValidateAuthenticationConfig(cfg *AuthenticationConfig) error {
 				return fmt.Errorf("%s.audiences must not contain an empty audience", field)
 			}
 		}
-	}
-	if cfg.ActorIdentityJWTProvider == "" {
-		return fmt.Errorf("actorIdentityJWTProvider is required")
-	}
-	if !names[cfg.ActorIdentityJWTProvider] {
-		return fmt.Errorf("actorIdentityJWTProvider %q does not name a JWT provider", cfg.ActorIdentityJWTProvider)
 	}
 	return nil
 }
