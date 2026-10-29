@@ -31,10 +31,6 @@ import (
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
-//
-// It exists so the file channel crosses hack/install-ate.sh, which forwards
-// only a fixed set of flags but passes the whole environment to the child
-// process. Every other setting reaches ate-setup that way already.
 const ConfigPathEnv = "ATE_CONFIG"
 
 // LoadOptions carries the inputs that select where configuration comes from,
@@ -85,11 +81,9 @@ func LoadFlags(fs *pflag.FlagSet, o LoadOptions) (*Config, error) {
 
 // configPathFrom picks the configuration document, flag over environment.
 //
-// A relative path resolves against the working directory, which is the
-// repository root when the shell installer invoked this: it does cd "$ROOT"
-// before running the binary. ParseFile reports the absolute path it tried, so
-// a path that meant something else from the caller's directory is visible in
-// the error rather than silently missing.
+// A relative path resolves against the working directory. ParseFile reports
+// the absolute path it tried, so a path that meant something else from the
+// caller's directory is visible in the error rather than silently missing.
 func configPathFrom(o LoadOptions) string {
 	if o.ConfigPath != "" {
 		return o.ConfigPath
@@ -143,9 +137,8 @@ func resolveKind(fs *pflag.FlagSet, file *File, env map[string]string) bool {
 
 // mergeDevEnv layers .ate-dev-env.sh underneath the process environment.
 //
-// Sourcing is skipped for Kind installs the same way the shell kind installer
-// exports NO_DEV_ENV: the GKE-shaped variables in a developer's file would
-// otherwise point a local install at a cloud project.
+// Sourcing is skipped for Kind installs: the GKE-shaped variables in a
+// developer's file would otherwise point a local install at a cloud project.
 func mergeDevEnv(root string, env map[string]string, noDevEnv, kind bool) error {
 	if noDevEnv || kind || os.Getenv("NO_DEV_ENV") != "" {
 		return nil
@@ -230,7 +223,8 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ClusterLocation:   r.String("gcp.clusterLocation"),
 		ExpectedJWTIssuer: r.String("ateapi.expectedJWTIssuer"),
 
-		APIAuthzBootstrapOwners: bootstrapOwners,
+		APIAuthzBootstrapOwners:     bootstrapOwners,
+		EgressGatewayExtraSPIFFEIDs: splitList(r.String("ateapi.authz.egressGatewayExtraSPIFFEIDs")),
 
 		BucketName:         r.String("storage.bucketName"),
 		SnapshotLocation:   r.String("storage.snapshotLocation"),
@@ -273,8 +267,9 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PodcertWorkersPerSigner:        podcertWorkers,
 		EnvoyConcurrency:               envoyConcurrency,
 		ClusterSize:                    r.String("clusterSize"),
-		CordonControlPlane:             r.Bool("cordonControlPlane"),
+		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
+		E2ETuning:                      r.Bool("e2e.tuning"),
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
@@ -412,11 +407,17 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
 	}
 
-	// The router rejects a malformed ID at startup; catch it before the
-	// rollout does.
+	// The router and ate-api-server reject a malformed ID at startup; catch it
+	// before the rollout does.
 	for _, id := range cfg.IngressAllowedSPIFFEIDs {
 		if _, err := spiffeid.FromString(id); err != nil {
 			ids, _ := r.Value("ingressAllowedSPIFFEIDs")
+			return &InvalidError{Value: ids, Want: fmt.Sprintf("a comma-separated list of SPIFFE IDs (%q: %v)", id, err)}
+		}
+	}
+	for _, id := range cfg.EgressGatewayExtraSPIFFEIDs {
+		if _, err := spiffeid.FromString(id); err != nil {
+			ids, _ := r.Value("ateapi.authz.egressGatewayExtraSPIFFEIDs")
 			return &InvalidError{Value: ids, Want: fmt.Sprintf("a comma-separated list of SPIFFE IDs (%q: %v)", id, err)}
 		}
 	}
@@ -458,7 +459,7 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	// configuration rather than part-way through a deploy. Whether one is
 	// required at all is the deploy's question, not this one's.
 	if cfg.CredentialProviderJSON != "" {
-		if _, err := cfg.CredentialProvider(); err != nil {
+		if _, err := cfg.CredentialProviders(); err != nil {
 			// The parser's own message says which part is wrong and what to
 			// write instead; only the channel is added. Replacing it with the
 			// generic "must be <usage>" would drop the reason.

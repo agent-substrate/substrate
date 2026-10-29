@@ -1652,23 +1652,39 @@ func TestXdsServer_UpdateSnapshot_DownstreamClientAuth(t *testing.T) {
 }
 
 // A TLS listener without client authentication would let any client reach any
-// actor, so UpdateSnapshot refuses to build one.
+// actor. With no allowlist UpdateSnapshot serves no TLS listener, and with an
+// allowlist but no CA it refuses to build one.
 func TestXdsServer_UpdateSnapshot_TLSListenerWithoutClientAuth(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		httpsPort      int
 		connectTLSPort int
+		caPath         string
+		allowed        []string
+		wantErr        bool
 	}{
-		{name: "HTTPS", httpsPort: 8443},
-		{name: "CONNECT-TLS", connectTLSPort: 8444},
+		{name: "HTTPS without allowlist", httpsPort: 8443, caPath: "/run/podidentity.podcert.ate.dev/trust-bundle.pem"},
+		{name: "CONNECT-TLS without allowlist", connectTLSPort: 8444, caPath: "/run/podidentity.podcert.ate.dev/trust-bundle.pem"},
+		{name: "HTTPS without CA", httpsPort: 8443, allowed: []string{"spiffe://cluster.local/ns/demo/sa/client"}, wantErr: true},
+		{name: "CONNECT-TLS without CA", connectTLSPort: 8444, allowed: []string{"spiffe://cluster.local/ns/demo/sa/client"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := NewXdsServer(18000)
 			server.SetConfig(50053, "127.0.0.1")
 			server.SetConnectTLSPort(tc.connectTLSPort)
 			server.SetTlsConfig(tc.httpsPort, "/run/servicedns.podcert.ate.dev/credential-bundle.pem")
-			if err := server.UpdateSnapshot(); err == nil {
-				t.Fatal("UpdateSnapshot succeeded, want an error")
+			server.SetDownstreamClientAuth(tc.caPath, tc.allowed)
+			if tc.wantErr {
+				if err := server.UpdateSnapshot(); err == nil {
+					t.Fatal("UpdateSnapshot succeeded, want an error")
+				}
+				return
+			}
+			listeners := snapshotListeners(t, server)
+			for _, name := range []string{IngressHTTPSListener, "connect_terminate_tls"} {
+				if _, exists := listeners[name]; exists {
+					t.Errorf("TLS listener '%s' is served without an allowlist", name)
+				}
 			}
 		})
 	}

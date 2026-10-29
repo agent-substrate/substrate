@@ -43,9 +43,10 @@ var (
 	SandboxAssetCacheDir = filepath.Join(nodepath.BasePath, "sandbox-asset-cache")
 
 	// SandboxAssetScratchDir holds short-lived destination directories for
-	// asset fetches that have no actor, such as prewarming a SandboxConfig's
-	// default version. Wiped at startup. Under BasePath so the links the
-	// cache serves into it are on the cache's mount.
+	// asset fetches that have no actor and no worker directory to link into:
+	// the assets the worker sandbox syncer stages when checking a version.
+	// Wiped at startup. Under BasePath so the links the cache serves into it
+	// are on the cache's mount.
 	SandboxAssetScratchDir = filepath.Join(nodepath.BasePath, "sandbox-asset-scratch")
 
 	// SandboxRuntimeIndexFile holds every sandbox runtime a worker on this
@@ -55,6 +56,11 @@ var (
 	// runtime registered before a restart resolves the moment atelet serves
 	// again.
 	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
+
+	// CacheBootIDFile records the boot ID of the boot that last wrote atelet's
+	// caches. atelet clears them at startup when the node has rebooted since
+	// (see clearCachesAfterReboot in package main).
+	CacheBootIDFile = filepath.Join(nodepath.BasePath, "cache-boot-id")
 
 	// SnapshotCacheDir is the node-local cache of shared snapshot files, the
 	// snapshots many actors are created from (see
@@ -74,8 +80,8 @@ func ActorPath(actorUID string) string {
 }
 
 // ActorSnapshotPath is the actor's snapshot staging directory, which may be on
-// a different filesystem from ActorPath. Checkpoints rename files between its
-// subdirectories, so they must stay on one filesystem.
+// a different filesystem from ActorPath. Checkpoints link and rename files
+// between its subdirectories, so they must stay on one filesystem.
 func ActorSnapshotPath(actorUID string) string {
 	return filepath.Join(
 		nodepath.SnapshotsDir,

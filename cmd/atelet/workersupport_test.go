@@ -326,6 +326,21 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 		req:           &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses()},
 		wantForwarded: forwarded(),
 	}, {
+		name: "forwards the runtimes' actor overhead",
+		req: func() *ateletpb.SetWorkerSandboxRuntimesRequest {
+			classes := reqClasses(reqCompat("d547"))
+			classes[0].DefaultRuntime.ActorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
+			classes[0].RestorableRuntimes[0].ActorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 16 << 20}
+			return &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: classes}
+		}(),
+		wantForwarded: func() []*ateapi.SetWorkerSandboxRuntimesRequest {
+			want := forwarded(wantCompat("d547"))
+			c := want[0].GetSandboxClasses()[0]
+			c.DefaultRuntime.ActorOverhead = &ateapi.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
+			c.RestorableRuntimes[0].ActorOverhead = &ateapi.RuntimeOverhead{MemoryBytes: 16 << 20}
+			return want
+		}(),
+	}, {
 		name:          "forwards restorable runtimes",
 		req:           &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses(reqCompat("d547"))},
 		wantForwarded: forwarded(wantCompat("d547")),

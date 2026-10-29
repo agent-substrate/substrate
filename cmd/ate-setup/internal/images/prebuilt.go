@@ -129,6 +129,13 @@ func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error)
 		}
 		ref, err := p.Pin(ctx, image)
 		if err != nil {
+			// The registry may hold an image releases do not publish, so it is
+			// looked up like any other, and only a failed lookup says why it
+			// might be missing.
+			if pkg := strings.TrimPrefix(string(match), "ko://"+ModulePath+"/"); !IsReleased(pkg) {
+				err = fmt.Errorf("%w; releases do not publish %s, so publish it to %s yourself or build it from source by dropping --image-repo",
+					err, image, p.src.Repo)
+			}
 			unpinned[image] = err
 			return match
 		}

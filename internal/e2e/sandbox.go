@@ -44,7 +44,7 @@ func IsMicroVM() bool { return SandboxClass() == SandboxClassMicroVM }
 type Fixture struct {
 	Namespace string
 	Name      string
-	// DeployWith is the install flag or script that creates the fixture, so a
+	// DeployWith is the ate-setup command that creates the fixture, so a
 	// missing one reports how to fix it rather than just failing.
 	DeployWith string
 }
@@ -61,7 +61,7 @@ type SubstrateFixture struct {
 	// PoolNamespace and PoolName locate the WorkerPool CRD.
 	PoolNamespace string
 	PoolName      string
-	// DeployWith is the install flag or script that creates the fixture, so a
+	// DeployWith is the ate-setup command that creates the fixture, so a
 	// missing one reports how to fix it rather than just failing.
 	DeployWith string
 }
@@ -77,7 +77,7 @@ func SubstrateCounterFixture() SubstrateFixture {
 		Name:          "counter",
 		PoolNamespace: "ate-demo-counter",
 		PoolName:      "counter",
-		DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter",
+		DeployWith:    "go run ./cmd/ate-setup --kind deploy demo counter",
 	}
 	if IsMicroVM() {
 		f = SubstrateFixture{
@@ -85,7 +85,7 @@ func SubstrateCounterFixture() SubstrateFixture {
 			Name:          "counter-microvm",
 			PoolNamespace: "ate-demo-counter-microvm",
 			PoolName:      "counter-microvm",
-			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-microvm",
+			DeployWith:    "go run ./cmd/ate-setup --kind deploy demo counter-microvm",
 		}
 	}
 	if v := os.Getenv("E2E_SUBSTRATE_TEMPLATE_ATESPACE"); v != "" {
@@ -110,13 +110,13 @@ func EgressFixture() Fixture {
 		return Fixture{
 			Namespace:  "ate-demo-egress-microvm",
 			Name:       "egress-microvm",
-			DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress-microvm",
+			DeployWith: "go run ./cmd/ate-setup --kind deploy demo egress-microvm",
 		}
 	}
 	return Fixture{
 		Namespace:  "ate-demo-egress",
 		Name:       "egress",
-		DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress",
+		DeployWith: "go run ./cmd/ate-setup --kind deploy demo egress",
 	}
 }
 
@@ -166,21 +166,20 @@ func TemplateReadyTimeout(t *testing.T) time.Duration {
 // One template serves both sandbox classes so the two variants of a fixture
 // cannot drift apart. See renderManifest for the placeholder kinds a template
 // can carry.
-func RenderFixtureManifest(t *testing.T, relPath, bucket, name string) string {
+func RenderFixtureManifest(t *testing.T, relPath, name string) string {
 	t.Helper()
-	inline, blocks := fixtureSubstitutions(bucket, name)
+	inline, blocks := fixtureSubstitutions(name)
 	return renderManifest(t, relPath, inline, blocks)
 }
 
 // fixtureSubstitutions is the placeholder set the internal/e2e/fixtures
 // manifest templates carry, split into the inline and whole-line-block kinds
 // RenderFixtureManifest treats differently.
-func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string) {
+func fixtureSubstitutions(name string) (inline, blocks map[string]string) {
 	inline = map[string]string{
-		"${BUCKET_NAME}":  bucket,
 		"${WORKER_IMAGE}": "ko://go.ate.dev/substrate/cmd/ateworker-gvisor",
 		// The manifest-side half of FixtureName: it suffixes the fixture's
-		// namespace, and with it the snapshot prefix underneath.
+		// namespace.
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{

@@ -21,7 +21,7 @@ cd "${ROOT}"
 
 # Bring up the counter-microvm demo on a local kind cluster. Wraps
 # hack/run-microvm-demo.sh with the same kind-specific environment that
-# hack/install-ate-kind.sh uses, so the image repo and snapshot bucket match what
+# ate-setup --kind uses, so the image repo and snapshot bucket match what
 # gets installed in the cluster. All arguments are forwarded to run-microvm-demo.sh.
 
 # shellcheck disable=SC2155 # safe initialization
@@ -34,7 +34,7 @@ export NO_DEV_ENV="true"
 export KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
 # build for the host architecture
 export KO_DEFAULTPLATFORMS="linux/${goarch}"
-# use the kind control-plane path (install-ate-kind.sh) + stage assets to rustfs
+# use the kind control-plane path (ate-setup --kind) + stage assets to rustfs
 export ATE_INSTALL_KIND="true"
 # default bucket name for local deployment (served by the in-cluster rustfs)
 export BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"

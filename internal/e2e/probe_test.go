@@ -45,7 +45,7 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 			// Strict decoding is what proves the fragment landed at the right
 			// depth: misindented, it would fail the protojson decode or parse
 			// as some other field.
-			inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", cfg.trustBundles)
+			inline, blocks := substrateTemplateSubstitutions("render", cfg.trustBundles)
 			rendered, err := os.ReadFile(renderManifest(t, probeManifests.Template, inline, blocks))
 			if err != nil {
 				t.Fatalf("reading rendered manifest: %v", err)

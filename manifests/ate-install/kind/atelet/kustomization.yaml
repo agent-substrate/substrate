@@ -40,7 +40,7 @@ patches:
               # The OTLP endpoint comes from the ate-otel-config ConfigMap the
               # atelet DaemonSet consumes via envFrom; the kind copy lives at
               # ../ate-otel-config.yaml and is applied by the parent overlay or
-              # by hack/install-ate.sh for a targeted redeploy.
+              # by ate-setup for a targeted redeploy.
               # kind nodes ship no credential provider plugin (the args above
               # leave the --image-credential-provider-* flags unset), so drop
               # the base manifest's host mounts instead of fabricating empty

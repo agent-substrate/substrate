@@ -48,15 +48,16 @@ spec:
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The micro-VM sandbox itself is
     # sized by the ActorTemplate's resources in counter-microvm-template.yaml.tmpl,
-    # not by these; keep the actor memory below this limit so the VMM reserve
-    # fits (see internal/sizing).
+    # not by these. The worker keeps some of this limit for itself, and each
+    # actor books its limit plus the microVM overhead, so keep this limit
+    # above what the actors need together (see docs/api-guide.md).
     #
     # Capacity comes from the limits (workerCapacity reads limits only), while the
     # kube-scheduler packs nodes by the requests — so the CPU request is set well
     # below the limit to keep the pool placeable on a small node (a single kind
     # node in CI, shared with the gVisor demo pool) without changing what an actor
     # is allowed to use. Memory is not compressible, so its request matches the
-    # limit: the guest RAM plus the VMM reserve has to be really there.
+    # limit: the guest RAM plus its overhead has to be really there.
     resources:
       limits:
         cpu: "1"
