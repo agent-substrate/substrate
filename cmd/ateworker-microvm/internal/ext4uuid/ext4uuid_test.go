@@ -15,31 +15,15 @@
 package ext4uuid
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/e2fsprogsenv"
 )
-
-// e2fsprogsRequired makes missing e2fsprogs a failure instead of a skip
-func e2fsprogsRequired() bool {
-	return os.Getenv("CI") == "true" || os.Getenv("REQUIRE_E2FSPROGS") == "true"
-}
-
-func needTools(t *testing.T) {
-	t.Helper()
-	for _, tool := range []string{"mkfs.ext4", "e2fsck", "dumpe2fs"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			if e2fsprogsRequired() {
-				t.Fatalf("%s not found and required (CI or REQUIRE_E2FSPROGS is set), install e2fsprogs: %v", tool, err)
-			}
-			t.Skipf("%s not found, install e2fsprogs or set REQUIRE_E2FSPROGS=true to fail: %v", tool, err)
-		}
-	}
-}
 
 func run(t *testing.T, name string, args ...string) string {
 	t.Helper()
@@ -51,7 +35,7 @@ func run(t *testing.T, name string, args ...string) string {
 }
 
 func TestSetUUID(t *testing.T) {
-	needTools(t)
+	e2fsprogsenv.Need(t, "mkfs.ext4", "e2fsck", "dumpe2fs")
 	tests := []struct {
 		name    string
 		mkfs    []string
