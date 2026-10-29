@@ -224,6 +224,10 @@ administrative operations and actor environment definitions.
     to receive resumed actor states. Optional `spec.template` fields configure
     worker pod node selection, tolerations, priority class, and node affinity.
 
+  * **SandboxConfig** (Kubernetes CRD): A cluster-scoped resource that lists the
+    sandbox runtime versions and assets for a sandbox class (`gvisor` or
+    `microvm`). Each `WorkerPool` resolves a `SandboxConfig` for its class.
+
   * **ActorTemplate** (ate API resource): An immutable definition of an
     actor-version. It encapsulates the container image, configuration, and
     environment required to generate a "golden" snapshot. ActorTemplates are
@@ -238,12 +242,13 @@ actors and workers. They are stored in a high-performance, low-latency state
 store (PostgreSQL) to support real-time operations.
 
   * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
-    its globally unique identifier, physical location (Worker IP), current
-    state (RUNNING or SUSPENDED), and version-specific state metadata.
+    its globally unique identifier, physical location (Worker IP), lifecycle
+    state (such as `RUNNING` or `SUSPENDED`), and version-specific state metadata.
 
-  * **Worker**: A representation of a worker pod in the WorkerPool. It tracks
-    the worker's unique identifier, current status (IDLE or BUSY), and the
-    Actor it is currently hosting (if any).
+  * **Worker**: A representation of a worker pod in a WorkerPool. It tracks
+    the worker's unique identifier, status (`ACTIVE`, `UNAVAILABLE`, or
+    `DRAINING`), capacity and allocated resources, and the Actors it currently
+    hosts (each represented by an `ActorAssignment` subresource).
 
 ### Architectural Rationale
 
@@ -277,10 +282,12 @@ classDiagram
         class WorkerPool {
             <<CRD>>
         }
+        class SandboxConfig {
+            <<CRD>>
+        }
         class Deployment
         class WorkerPod {
             ateworker
-            runsc
         }
     }
 
@@ -290,21 +297,26 @@ classDiagram
         }
         class Actor {
             <<record>>
-            status
-            snapshotRefs
+            status.state
+            status.snapshots
         }
         class Worker {
             <<record>>
-            actorName
-            podIP
+            status.state
+            status.ips
+        }
+        class ActorAssignment {
+            <<subresource>>
         }
     }
 
     ActorTemplate ..> WorkerPool : worker_selector (labels)
+    WorkerPool ..> SandboxConfig : sandboxClasses
     WorkerPool ..> Deployment : reconciled by atecontroller
     Deployment "1" *-- "*" WorkerPod : manages
     Actor "*" --> "1" ActorTemplate : actor_template
-    Actor "0..1" --> "0..1" Worker : runs on
+    Worker "1" *-- "*" ActorAssignment
+    ActorAssignment "0..1" --> "1" Actor : actor
     Worker "1" --> "1" WorkerPod : maps to
 ```
 
@@ -343,9 +355,9 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](../reference/api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](../reference/api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades. For workload-visible differences between the classes, see [Sandbox Classes](../reference/sandbox-classes.md).
 
-  * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint; `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
+  * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume use gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint. `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
 
   * **microVM** (`ateworker-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices.
 
@@ -418,7 +430,7 @@ sequenceDiagram
     Tunnel-->>Atelet: ready
     Atelet-->>API: worker pod IP
     API-->>Gateway: worker assignment
-    Gateway->>Tunnel: mTLS tunnel to worker port 443
+    Gateway->>Tunnel: mTLS CONNECT tunnel to worker port 8443
     Tunnel->>A: forward request to Actor port
     A-->>Tunnel: response
     Tunnel-->>Gateway: response
@@ -530,21 +542,15 @@ After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage 
 
 ## State Management & Persistence
 
-Agent Substrate distinguishes between two types of state, which are currently
-captured together in a single versioned snapshot:
+A snapshot captures up to three cumulative layers of actor state, controlled by `snapshotConfig.preferredFidelity` on the `ActorTemplate`:
 
-  1.  **Memory Snapshot**: The exact RAM state of the process.
+  1.  **`VOLUMES`**: The contents of `DurableDir` volumes mounted into the actor's containers.
+  2.  **`ROOTFS`**: `VOLUMES` plus files written to each container's writable rootfs overlay since boot.
+  3.  **`MEMORY`**: `ROOTFS` plus the running process tree and RAM state (`MEMORY` is the default).
 
-  2.  **Working Volume (Disk)**: The files written to the container's writable
-      layer (the "working memory").
+`MEMORY` and `ROOTFS` state is tied to the `ActorTemplate` (`actorTemplateUid`). `MEMORY` state is also tied to the `sandboxRuntime` version it was captured under. Changing an actor's template while suspended keeps its `VOLUMES` data, and its next resume cold-boots the containers. Resume falls back to `ROOTFS` and cold-boots under the default runtime if no worker that offers the snapshot's runtime version has room.
 
-In the current implementation, both memory and disk states are tied to the
-specific version of the code (ActorTemplate). This ensures strict consistency
-during resumption.
-
-Snapshots are stored durably in **Google Cloud Storage (GCS)**. This model
-allows the physical compute resources in the `WorkerPool` to be fully reclaimed
-while an actor is idle, without losing any process or filesystem progress.
+Snapshots are stored durably in object storage (GCS or S3) through `objectstore-plugin`. This allows worker capacity in the `WorkerPool` to be reclaimed while an actor is suspended.
 
 ## Security & Isolation
 

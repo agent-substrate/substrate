@@ -66,12 +66,12 @@ data:
   OTEL_METRIC_EXPORT_TIMEOUT: "10000"
   OTEL_LOGS_EXPORTER: otlp
 ---
-# ActorTemplate snapshotConfig rendered for kind (local bucket)
+# ActorTemplate snapshotConfig from the counter demo
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
-  storageLocation: gs://ate-snapshots/ate-demo-counter/
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
 ```
+
+The template sets no `storageLocation`, so its snapshots go under ate-api-server's `--snapshot-location`. The kind profile points that at the local `rustfs` bucket, `gs://ate-snapshots/`.
 
 ## 3. Verify Your Running Actor
 
