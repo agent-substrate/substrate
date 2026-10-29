@@ -206,7 +206,11 @@ viewer, and a global role holds the same role in every atespace. So
 
 ### Workers
 
-Workers have no atespace; their permissions come from the global scope.
+Workers have no atespace; their permissions come from the global scope. Because
+workers are global objects, `kubectl ate get workers` and `kubectl ate top worker`
+require global `viewer` permission. The `-a/--atespace` flag filters the global
+worker list to pods hosting actors in that atespace; it is not a tenant-scoped
+view and cannot be run by atespace-only roles without global `viewer`.
 
 | RPC | Permission, on | Allowed for |
 |---|---|---|

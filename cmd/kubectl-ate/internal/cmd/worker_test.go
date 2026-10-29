@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -563,5 +566,73 @@ func TestTopWorkersRunner_InvalidSelector(t *testing.T) {
 
 	if err := runner.Run(context.Background()); err == nil {
 		t.Errorf("expected error for invalid label selector, got nil")
+	}
+}
+
+func TestWorkersRunner_PermissionDenied(t *testing.T) {
+	deniedErr := status.Error(codes.PermissionDenied, `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`)
+	const clarification = "workers are global objects; -a/--atespace filters the global list and requires global viewer permission"
+
+	tests := []struct {
+		name              string
+		run               func(ctx context.Context) error
+		wantClarification bool
+	}{
+		{
+			name: "get workers with -a",
+			run: (&GetWorkersRunner{
+				workerLister: &mockWorkerLister{err: deniedErr},
+				atespace:     "space-a",
+			}).Run,
+			wantClarification: true,
+		},
+		{
+			name: "get workers without -a",
+			run: (&GetWorkersRunner{
+				workerLister: &mockWorkerLister{err: deniedErr},
+			}).Run,
+			wantClarification: false,
+		},
+		{
+			name: "top worker with -a",
+			run: (&TopWorkersRunner{
+				workerLister: &mockWorkerLister{err: deniedErr},
+				atespace:     "space-a",
+			}).Run,
+			wantClarification: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run(context.Background())
+			if err == nil {
+				t.Fatal("expected PermissionDenied error, got nil")
+			}
+			if !strings.Contains(err.Error(), `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`) {
+				t.Errorf("error %q does not contain underlying gRPC error message", err.Error())
+			}
+			if got := strings.Contains(err.Error(), clarification); got != tc.wantClarification {
+				t.Errorf("error %q contains clarification = %v, want %v", err.Error(), got, tc.wantClarification)
+			}
+		})
+	}
+}
+
+func TestWorkerCmd_AtespaceFlagHelp(t *testing.T) {
+	getFlag := getWorkersCmd.Flags().Lookup("atespace")
+	if getFlag == nil {
+		t.Fatal("atespace flag not found on getWorkersCmd")
+	}
+	if !strings.Contains(getFlag.Usage, "requires global viewer") {
+		t.Errorf("getWorkersCmd atespace flag usage %q does not mention required global viewer", getFlag.Usage)
+	}
+
+	topFlag := topWorkersCmd.Flags().Lookup("atespace")
+	if topFlag == nil {
+		t.Fatal("atespace flag not found on topWorkersCmd")
+	}
+	if !strings.Contains(topFlag.Usage, "requires global viewer") {
+		t.Errorf("topWorkersCmd atespace flag usage %q does not mention required global viewer", topFlag.Usage)
 	}
 }
