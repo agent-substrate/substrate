@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 )
 
 // PreflightChecks checks that the test environment is ready for the test suite.
@@ -61,15 +62,19 @@ func PreflightChecks() error {
 		return fmt.Errorf("ListActors RPC failed: %v", err)
 	}
 
-	// The micro-VM class needs its SandboxConfig registered; without it every
+	// The microVM class needs a class default SandboxConfig; without it every
 	// fixture in the run is misconfigured.
 	// Note: Whether a node can actually host a micro-VM is left to the scheduler
 	// and any issues are to be reported at runtime. Which device a sandbox class
 	// requires should not be checked here to prevent drift between platforms.
 	if IsMicroVM() {
-		if _, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Get(ctx, SandboxClassMicroVM, metav1.GetOptions{}); err != nil {
-			return fmt.Errorf("E2E_SANDBOX_CLASS=%s but SandboxConfig/%s is missing (see docs/dev/microvm-local.md for cluster setup): %w",
-				SandboxClassMicroVM, SandboxClassMicroVM, err)
+		list, err := clients.SubstrateK8s.AteV1().SandboxConfigs().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to list SandboxConfigs: %w", err)
+		}
+		if atev1.ClassDefaultSandboxConfig(list.Items, atev1.SandboxClassMicroVM) == nil {
+			return fmt.Errorf("E2E_SANDBOX_CLASS=%s but no SandboxConfig of the class is annotated %s=true (see docs/dev/microvm-local.md for cluster setup)",
+				SandboxClassMicroVM, atev1.SandboxConfigClassDefaultAnnotation)
 		}
 	}
 

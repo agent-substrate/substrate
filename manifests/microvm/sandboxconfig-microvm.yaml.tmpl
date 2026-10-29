@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Cluster-wide SandboxConfig for the micro-VM (kata + cloud-hypervisor) sandbox
-# class. Unlike sandboxconfig-gvisor.yaml (applied unconditionally by
-# ate-setup deploy ate-system), this is opt-in: apply via
-# hack/install-microvm-deps.sh --install after staging the asset set
-# (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh). A microvm WorkerPool
-# resolves it as its class default (or names it via configRef: microvm), so
-# a missing/stale config shows on the pool's status.
+# Template for the microVM (kata + cloud-hypervisor) SandboxConfig. Unlike
+# sandboxconfig-gvisor.yaml.tmpl, which every install applies, this is opt-in:
+# hack/install-microvm-deps.sh --install stages the asset set (assemble.sh +
+# stage-to-gcs.sh / stage-to-rustfs.sh), then creates
+# substrate-<hash>-microvm from this template, hashed from the rendered
+# config, and by default annotates it as the class default. It leaves an
+# existing config as it is, so editing this file changes only the configs
+# that later builds create.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the asset bucket ${ASSET_BUCKET_NAME} under
@@ -34,13 +35,23 @@
 # hack/microvm-assets/assemble.sh; atelet selects the block matching the node's
 # architecture, and each cluster's bucket holds that arch's binaries at these
 # paths (staged by hack/install-microvm-deps.sh --install).
+#
+# To change the sandbox, add a new version and point defaultVersion at it.
+# Do not edit or remove the versions already listed. An actor restores its
+# memory only on a version with the same assets as the one its snapshot was
+# taken on, so dropping that version makes the actor cold boot and lose its
+# memory. Remove a version only when it has a known vulnerability, or to make
+# room under the limit of 16 versions. One exception remains: the assets live
+# at fixed paths, and staging a new asset set overwrites them. So a bump that
+# changes the assets has to replace the version until the assets move to
+# per-version paths.
 
 apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
-  name: microvm
-  annotations:
-    sandboxconfig.ate.dev/is-class-default: "true"
+  name: ${SANDBOXCONFIG_NAME}
+  labels:
+    sandboxconfig.ate.dev/created-by-version: "${SUBSTRATE_VERSION}"
 spec:
   sandboxClass: microvm
   defaultVersion: v2

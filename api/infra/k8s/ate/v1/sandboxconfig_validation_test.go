@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,136 @@ func applyVAP(t *testing.T, ctx context.Context) {
 	})
 	if err != nil {
 		t.Fatalf("VAP did not become active: %v", err)
+	}
+}
+
+// removeVAPBinding deletes the shipped policy's binding and waits until the
+// apiserver stops enforcing the policy, confirmed by a sentinel that must be
+// admitted.
+func removeVAPBinding(t *testing.T, ctx context.Context) {
+	t.Helper()
+	binding := &unstructured.Unstructured{}
+	binding.SetAPIVersion("admissionregistration.k8s.io/v1")
+	binding.SetKind("ValidatingAdmissionPolicyBinding")
+	binding.SetName("sandboxconfig-assets")
+	if err := client.IgnoreNotFound(k8sClient.Delete(ctx, binding)); err != nil {
+		t.Fatalf("delete binding: %v", err)
+	}
+	i := 0
+	err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		i++
+		sc := sandboxConfig(fmt.Sprintf("vap-cooldown-%d", i), SandboxClassGvisor,
+			map[string]map[string]AssetFile{"amd64": {"other": otherAsset()}})
+		if err := k8sClient.Create(ctx, sc); err != nil {
+			return false, nil
+		}
+		return true, k8sClient.Delete(ctx, sc)
+	})
+	if err != nil {
+		t.Fatalf("VAP did not become inactive: %v", err)
+	}
+}
+
+// A config that an earlier, looser policy admitted can still be updated, as
+// long as the update adds no version and changes no version's assets.
+func TestSandboxConfigUpdateUnderStricterPolicy(t *testing.T) {
+	ctx := t.Context()
+	runscAssets := func() map[string]map[string]AssetFile {
+		return map[string]map[string]AssetFile{"amd64": {"runsc": otherAsset()}}
+	}
+	// The config before the update. Its versions v1 and v0 have a bare runsc
+	// asset, which the current policy rejects.
+	base := func(name string) *SandboxConfig {
+		sc := withVersions(sandboxConfig(name, SandboxClassGvisor, runscAssets()), sandboxVersion("v0", runscAssets()))
+		sc.Finalizers = []string{"test.ate.dev/hold"}
+		sc.Annotations = map[string]string{SandboxConfigClassDefaultAnnotation: "true"}
+		return sc
+	}
+
+	tests := []struct {
+		name   string
+		update func(sc *SandboxConfig)
+		errMsg string // empty when the update is allowed
+	}{{
+		name:   "remove a finalizer",
+		update: func(sc *SandboxConfig) { sc.Finalizers = nil },
+	}, {
+		name:   "remove the class-default annotation",
+		update: func(sc *SandboxConfig) { sc.Annotations = nil },
+	}, {
+		name:   "disable a version",
+		update: func(sc *SandboxConfig) { sc.Spec.Versions[1].State = ptr.To(SandboxVersionStateDisabled) },
+	}, {
+		name:   "delete a version",
+		update: func(sc *SandboxConfig) { sc.Spec.Versions = sc.Spec.Versions[:1] },
+	}, {
+		name:   "change defaultVersion",
+		update: func(sc *SandboxConfig) { withDefaultVersion(sc, "v0") },
+	}, {
+		name:   "add a valid version",
+		update: func(sc *SandboxConfig) { withVersions(sc, sandboxVersion("v2", gvisorAssets())) },
+	}, {
+		name:   "add an invalid version",
+		update: func(sc *SandboxConfig) { withVersions(sc, sandboxVersion("v2", runscAssets())) },
+		errMsg: gvisorAssetMsg,
+	}, {
+		name: "change a version's assets",
+		update: func(sc *SandboxConfig) {
+			sc.Spec.Versions[1].Assets["arm64"] = map[string]AssetFile{"runsc": otherAsset()}
+		},
+		errMsg: gvisorAssetMsg,
+	}, {
+		name:   "change sandboxClass",
+		update: func(sc *SandboxConfig) { sc.Spec.SandboxClass = SandboxClassMicroVM },
+		errMsg: "microvm SandboxConfig must define",
+	}}
+
+	// Create the configs while no policy is enforced, as an earlier release
+	// might have.
+	removeVAPBinding(t, ctx)
+	configs := make([]*SandboxConfig, len(tests))
+	for i := range tests {
+		configs[i] = base(fmt.Sprintf("stricter-policy-%d", i))
+		if err := k8sClient.Create(ctx, configs[i]); err != nil {
+			t.Fatalf("Create() %s: %v", configs[i].Name, err)
+		}
+	}
+	applyVAP(t, ctx)
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := configs[i]
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				latest := &SandboxConfig{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(sc), latest); err != nil {
+					t.Errorf("cleanup: get SandboxConfig %s: %v", sc.Name, err)
+					return
+				}
+				latest.Finalizers = nil
+				if err := k8sClient.Update(ctx, latest); err != nil {
+					t.Errorf("cleanup: remove finalizer from SandboxConfig %s: %v", sc.Name, err)
+				}
+				if err := client.IgnoreNotFound(k8sClient.Delete(ctx, latest)); err != nil {
+					t.Errorf("cleanup: delete SandboxConfig %s: %v", sc.Name, err)
+				}
+			})
+			tt.update(sc)
+			err := k8sClient.Update(ctx, sc)
+			if tt.errMsg == "" {
+				if err != nil {
+					t.Fatalf("Update() unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Update() succeeded, want denied")
+			}
+			if !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("Update() error = %q, want it to contain %q", err.Error(), tt.errMsg)
+			}
+		})
 	}
 }
 
@@ -344,14 +475,15 @@ func TestSandboxConfigUpdateRemovingDefaultVersion(t *testing.T) {
 	}
 }
 
-// TestShippedSandboxConfigManifests guards the SandboxConfigs the install ships
-// against the CRD schema and the shipped ValidatingAdmissionPolicy.
+// TestShippedSandboxConfigManifests guards the SandboxConfig templates the
+// install renders against the CRD schema and the shipped
+// ValidatingAdmissionPolicy.
 func TestShippedSandboxConfigManifests(t *testing.T) {
 	ctx := t.Context()
 	applyVAP(t, ctx)
 
 	for _, path := range []string{
-		"../../../../../manifests/ate-install/sandboxconfig-gvisor.yaml",
+		"../../../../../manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl",
 		"../../../../../manifests/microvm/sandboxconfig-microvm.yaml.tmpl",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -359,13 +491,14 @@ func TestShippedSandboxConfigManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read manifest: %v", err)
 			}
-			raw = []byte(strings.NewReplacer("${BUCKET_SCHEME}", "s3", "${BUCKET_NAME}", "test-bucket", "${ASSET_BUCKET_NAME}", "test-bucket").Replace(string(raw)))
+			raw = []byte(strings.NewReplacer("${SANDBOXCONFIG_NAME}", "test-"+filepath.Base(path), "${SUBSTRATE_VERSION}", "v0.4.2", "${BUCKET_SCHEME}", "s3", "${ASSET_BUCKET_NAME}", "test-bucket").Replace(string(raw)))
 			sc := &SandboxConfig{}
 			if err := yaml.UnmarshalStrict(raw, sc); err != nil {
 				t.Fatalf("decode manifest: %v", err)
 			}
-			if sc.Annotations[SandboxConfigClassDefaultAnnotation] != "true" {
-				t.Errorf("manifest is not annotated %s=true", SandboxConfigClassDefaultAnnotation)
+			// The installers add the annotation when they create the config.
+			if _, ok := sc.Annotations[SandboxConfigClassDefaultAnnotation]; ok {
+				t.Errorf("template sets %s; the installers add it", SandboxConfigClassDefaultAnnotation)
 			}
 			if err := k8sClient.Create(ctx, sc); err != nil {
 				t.Fatalf("Create() unexpected error: %v", err)

@@ -114,6 +114,12 @@ apiserver, the controller, atenet, and atelet. It creates every `create`
 resource below on the way, so those subcommands are only needed to redo one on
 a running cluster.
 
+`deploy ate-system` and `deploy sandboxconfig` create this build's gVisor
+SandboxConfig with the `sandboxconfig.ate.dev/is-class-default` annotation. It
+is named `substrate-<hash>-gvisor`, hashed from the rendered config. Pass
+`--create-with-default-annotation=false` to create it without the annotation.
+An existing config is left as it is, annotations included.
+
 ## Publish
 
 - `publish worker-images`

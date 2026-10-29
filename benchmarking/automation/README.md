@@ -32,7 +32,8 @@ To run the cold resume tests from your workstation instead, see
    Envoy ingress router. For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
-   store bucket and applies the cluster-wide `microvm` SandboxConfig.
+   store bucket and creates this release's microVM SandboxConfig as the
+   class default.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
    is the benchmark's independent variable and the shipped manifest sets
@@ -49,7 +50,8 @@ To run the cold resume tests from your workstation instead, see
      variable (a JSON object) if set. A `--metadata` in the test's own
      `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down workloads + microVM deps (if any) + substrate.
+   - Tears down workloads + substrate. Deleting substrate also removes the
+     microVM SandboxConfigs with their CRD.
    - If not the last test, redeploys them so the next run starts clean.
 
 ## Choosing a sandbox class

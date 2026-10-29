@@ -62,13 +62,22 @@ func TestDeletePathReportsUnparseableManifest(t *testing.T) {
 	}
 }
 
-// stubResource is a dynamicResource whose Apply returns queued results.
+// stubResource is a dynamicResource whose Apply and Create return queued
+// results.
 type stubResource struct {
 	results  []error
 	attempts int
 }
 
 func (s *stubResource) Apply(context.Context, string, *unstructured.Unstructured, metav1.ApplyOptions, ...string) (*unstructured.Unstructured, error) {
+	s.attempts++
+	if s.attempts <= len(s.results) {
+		return nil, s.results[s.attempts-1]
+	}
+	return nil, nil
+}
+
+func (s *stubResource) Create(context.Context, *unstructured.Unstructured, metav1.CreateOptions, ...string) (*unstructured.Unstructured, error) {
 	s.attempts++
 	if s.attempts <= len(s.results) {
 		return nil, s.results[s.attempts-1]
@@ -156,5 +165,53 @@ func TestApplyWithRetryStopsOnCancellation(t *testing.T) {
 	}
 	if ri.attempts != 1 {
 		t.Errorf("apply attempted %d times, want 1", ri.attempts)
+	}
+}
+
+func TestCreateWithRetry(t *testing.T) {
+	shortApplyBackoff(t)
+	alreadyExists := apierrors.NewAlreadyExists(schema.GroupResource{Resource: "configmaps"}, "ate-api-server-envvars")
+	unavailable := apierrors.NewServiceUnavailable("apiserver is starting")
+
+	tests := []struct {
+		name         string
+		results      []error
+		cancelled    bool
+		wantCreated  bool
+		wantErr      bool
+		wantAttempts int
+	}{
+		{name: "created", wantCreated: true, wantAttempts: 1},
+		{name: "exists", results: []error{alreadyExists}, wantAttempts: 1},
+		{name: "created after a transient failure", results: []error{unavailable}, wantCreated: true, wantAttempts: 2},
+		{name: "exists after a transient failure", results: []error{unavailable, alreadyExists}, wantAttempts: 2},
+		{
+			name:         "rejected",
+			results:      []error{apierrors.NewInvalid(schema.GroupKind{Kind: "ConfigMap"}, "ate-api-server-envvars", nil)},
+			wantErr:      true,
+			wantAttempts: 1,
+		},
+		// Retrying past a cancelled context turns ^C into an eight-second wait.
+		{name: "cancelled", results: []error{unavailable, unavailable}, cancelled: true, wantErr: true, wantAttempts: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.cancelled {
+				cancel()
+			}
+			ri := &stubResource{results: tt.results}
+			created, err := createWithRetry(ctx, ri, testConfigMap())
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("createWithRetry() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if created != tt.wantCreated {
+				t.Errorf("createWithRetry() = %v, want %v", created, tt.wantCreated)
+			}
+			if ri.attempts != tt.wantAttempts {
+				t.Errorf("create attempted %d times, want %d", ri.attempts, tt.wantAttempts)
+			}
+		})
 	}
 }

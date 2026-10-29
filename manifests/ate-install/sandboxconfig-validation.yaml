@@ -29,12 +29,24 @@ spec:
       apiVersions: ["v1"]
       operations:  ["CREATE", "UPDATE"]
       resources:   ["sandboxconfigs"]
+  # A later release can tighten this policy, and the configs of earlier
+  # releases stay in the cluster. Check only versions that are new or whose
+  # assets changed, so those configs can still be updated: removing a
+  # finalizer, disabling or deleting a version, or changing defaultVersion.
+  variables:
+  - name: changedVersions
+    expression: >-
+      object.spec.versions.filter(v,
+        oldObject == null ||
+        oldObject.spec.sandboxClass != object.spec.sandboxClass ||
+        !oldObject.spec.versions.exists(o, o.name == v.name &&
+          has(o.assets) == has(v.assets) && (!has(v.assets) || o.assets == v.assets)))
   validations:
   # gVisor needs a "gvisor" release-tarball asset (gvisor.tar.zstd: runsc plus
   # its gvisor-bin/ helpers) for every architecture it advertises.
   - expression: >-
       object.spec.sandboxClass != 'gvisor' ||
-      object.spec.versions.all(v,
+      variables.changedVersions.all(v,
         has(v.assets) && size(v.assets) > 0 &&
         v.assets.all(arch, 'gvisor' in v.assets[arch]))
     message: "a gvisor SandboxConfig must define a 'gvisor' (release tarball) asset for every architecture of every version under spec.versions[].assets"
@@ -42,7 +54,7 @@ spec:
   # architecture it advertises.
   - expression: >-
       object.spec.sandboxClass != 'microvm' ||
-      object.spec.versions.all(v,
+      variables.changedVersions.all(v,
         has(v.assets) && size(v.assets) > 0 &&
         v.assets.all(arch,
           ['cloud-hypervisor', 'virtiofsd', 'kata-kernel', 'kata-image']

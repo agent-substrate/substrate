@@ -218,11 +218,13 @@ kubectl -n ate-system rollout status deploy/atenet-egress
 go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/new.yaml
 ```
 
-This applies the SandboxConfig admission policy and the default SandboxConfig. It does not roll workers. If the release changes a sandbox version, new actors start on the new version, and actors suspended on the previous one still restore on it.
+By default this creates the new release's gVisor SandboxConfig as the gVisor class default, and gVisor pools without a `configRef` move to it without rolling their workers. If the release did not change the config, it exists already and nothing changes. If the cluster runs microVM pools, also follow [microVM](sandboxconfig-upgrade.md#microvm) in the SandboxConfig upgrade guide.
 
-- **Done:** the command exits 0.
-- **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
-- **Actors:** a suspended actor whose sandbox version the release drops resumes without its memory, keeping its files.
+To control which pools move and when, and for what happens to suspended actors, see the [SandboxConfig upgrade guide](sandboxconfig-upgrade.md).
+
+- **Done:** the commands exit 0.
+- **Stuck:** a command fails. [Roll back step 4](#roll-back-step-4).
+- **Actors:** if the new config does not list the sandbox version an actor was suspended on, the actor resumes without its memory, keeping its files.
 
 #### 4e. The rest of the system bundle
 
@@ -238,7 +240,7 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 
 Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
 
-The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
+The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Then delete the earlier SandboxConfigs that no pool uses, as in [Delete earlier configs](sandboxconfig-upgrade.md#delete-earlier-configs). Keep `~/ate-upgrade` while you might still roll back, then delete it.
 
 ## Something's wrong, or I need to roll back
 
@@ -265,17 +267,18 @@ cd ~/ate-upgrade/old
 
 #### Roll back step 4
 
-Tell actor owners to stop using API fields new in this release, because the old API server rejects them. Then:
+Tell actor owners to stop using API fields new in this release, because the old API server rejects them. Follow [Move pools off the new configs](sandboxconfig-upgrade.md#move-pools-off-the-new-configs) in the SandboxConfig upgrade guide. Then:
 
 ```bash
-go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/old.yaml
 go run ./cmd/ate-setup deploy atenet --config ~/ate-upgrade/old.yaml
 go run ./cmd/ate-setup deploy ate-controller --config ~/ate-upgrade/old.yaml
 go run ./cmd/ate-setup deploy apiserver --config ~/ate-upgrade/old.yaml
 go install ./cmd/kubectl-ate
 ```
 
-`deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
+Then follow [Restore the old admission policy](sandboxconfig-upgrade.md#restore-the-old-admission-policy).
+
+`deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
 
 Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 

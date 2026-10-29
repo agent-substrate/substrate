@@ -78,13 +78,13 @@ Between compatible releases, a CRD change only adds optional fields. The CRDs se
 
 ### SandboxConfig
 
-Each sandbox class has a default SandboxConfig, such as `gvisor-default`, that lists the sandbox versions a cluster may run. A release that changes a sandbox version adds the new one, points `defaultVersion` at it, and keeps the previous release's version unless that version has a known vulnerability. 
+Each sandbox class has a SandboxConfig rendered from a template in the repository and named after a hash of the rendered config, such as `substrate-04e4d62011-gvisor`. The config lists the sandbox versions a cluster may run. A release that changes the template creates a new config. By default the upgrade annotates it as the class default, and pools without a `configRef` move to it. The previous release's config stays in the cluster. A release that changes a sandbox version adds the new one to the template, points `defaultVersion` at it, and keeps the previous release's version unless that version has a known vulnerability.
 
-A kept version's assets must stay fetchable, so a release does not overwrite them. The upgrade applies these lists. That does not change the pod template, so workers do not roll.
+A kept version's assets must stay fetchable, so a release does not overwrite them. The microVM assets live at fixed paths in the cluster's bucket, so a microVM release that changes them replaces the version instead. Moving a pool to a new config does not change the pod template, so workers do not roll.
 
-An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets the version its snapshot was taken with, and stays on it until it next starts without memory state. If that version is gone, it cold boots, keeping its files and losing its memory. Rollback applies the N lists again, which removes the N+1 versions.
+An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets a version with the same assets as the one its snapshot was taken on, and stays on it until it next starts without memory state. If the pool's config has no such version, the actor cold boots, keeping its files and losing its memory. Rollback deletes the configs N+1 created, if any, so the newest other config with the class-default annotation, usually N's, is the class default again. That config does not list the sandbox versions new in N+1. An actor suspended on one of them resumes without its memory.
 
-<!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
+The [SandboxConfig upgrade guide](sandboxconfig-upgrade.md) covers the details.
 
 ### Database schema
 
@@ -124,7 +124,7 @@ To move from N to N+1, in this order, waiting for each step to finish:
 8. The rest of the substrate system bundle: what no step above deploys.
 9. Clients.
 
-Rollback from N+1 to N is the same list in reverse, with release N, except that the schema migration and step 8 are not undone. Clients stop sending N+1 fields before `ate-api-server` goes back, and `atelet` goes back only after every worker is back at N. Rolling back further than N is not supported.
+Rollback from N+1 to N is the same list in reverse, with release N, except that the schema migration and step 8 are not undone. Step 7 deletes the N+1 SandboxConfigs before step 5, and restores the N admission policy after the deletes finish. See [Roll back](sandboxconfig-upgrade.md#roll-back) in the SandboxConfig upgrade guide. Clients stop sending N+1 fields before `ate-api-server` goes back, and `atelet` goes back only after every worker is back at N. Rolling back further than N is not supported.
 
 ### Skipping releases
 

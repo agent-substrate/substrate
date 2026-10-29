@@ -70,9 +70,9 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	}
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
 
-	// The microvm SandboxConfig lives outside the default set installed by
-	// `deploy ate-system`, which only installs gvisor-default. The workloads
-	// deploy references it by name and would fail if this were skipped.
+	// `deploy ate-system` installs only the gVisor SandboxConfig. The
+	// microVM workload pool follows the microVM class default and would not
+	// resolve if this were skipped.
 	if opts.SandboxClass == config.SandboxClassMicrovm {
 		if err := e.runScript(ctx, installMicrovmDepScript, "--install"); err != nil {
 			return err
@@ -110,17 +110,9 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	}
 	log.Stepf("delete_benchmarks (sandbox_class=%s)", opts.SandboxClass)
 
-	if err := e.runScript(ctx, deployLocustScript, "--delete"); err != nil {
-		return err
-	}
-	// The microvm SandboxConfig is cluster-wide. It is only torn down when
-	// the caller opted into microvm, and only after the benchmark pool is
-	// gone. The script leaves it in place if another pool still uses it.
-	// `delete all` tries again once every demo is gone.
-	if opts.SandboxClass == config.SandboxClassMicrovm {
-		return e.runScript(ctx, installMicrovmDepScript, "--delete")
-	}
-	return nil
+	// The microVM SandboxConfigs stay. They are cluster-wide and go with the
+	// SandboxConfig CRD when the control plane is deleted.
+	return e.runScript(ctx, deployLocustScript, "--delete")
 }
 
 // runScript executes a repository script from the repository root with the
@@ -128,7 +120,9 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 func (e *Env) runScript(ctx context.Context, relPath string, args ...string) error {
 	cmd := exec.CommandContext(ctx, e.Cfg.Path(relPath), args...)
 	cmd.Dir = e.Cfg.Root
-	cmd.Env = e.Cfg.ScriptEnv()
+	// install-microvm-deps.sh labels its SandboxConfig with VERSION. Set it
+	// so the label matches the gVisor config's, also with prebuilt images.
+	cmd.Env = append(e.Cfg.ScriptEnv(), "VERSION="+e.SubstrateVersion())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
