@@ -618,6 +618,51 @@ func isBlank(line string) bool {
 	return strings.TrimSpace(line) == ""
 }
 
+// Verb is a standard method's verb, which its name starts with (style
+// guide section #3).
+type Verb string
+
+const (
+	VerbGet    Verb = "Get"
+	VerbList   Verb = "List"
+	VerbCreate Verb = "Create"
+	VerbUpdate Verb = "Update"
+	VerbDelete Verb = "Delete"
+)
+
+// StandardVerbs lists every standard verb.
+var StandardVerbs = []Verb{VerbGet, VerbList, VerbCreate, VerbUpdate, VerbDelete}
+
+// ParseStandardMethod parses methodName as a standard method on resource:
+// the verb, then one of resource's parents (none for a top-level
+// resource), then resource as ResourceNameFor names it. It returns the
+// verb and the parent ("" for a top-level resource). ok is false for a
+// custom method, and for a standard method named any other way.
+func ParseStandardMethod(methodName protoreflect.Name, resource Message) (v Verb, parent string, ok bool) {
+	parents := resource.ResourceAnnotation.Parents
+	if len(parents) == 0 {
+		parents = []string{""}
+	}
+	for _, p := range parents {
+		for _, sv := range StandardVerbs {
+			if string(methodName) == string(sv)+p+ResourceNameFor(sv, resource) {
+				return sv, p, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// ResourceNameFor is how a method with verb v names resource: by its
+// plural for List, and by its name otherwise. For example, "Actors" in
+// ListActors, but "Actor" in GetActor.
+func ResourceNameFor(v Verb, resource Message) string {
+	if v == VerbList {
+		return resource.ResourceAnnotation.Plural
+	}
+	return resource.Name
+}
+
 // Resource pairs a resource message with every method (across services)
 // whose annotation names it, in encounter order.
 type Resource struct {
