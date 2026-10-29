@@ -114,7 +114,13 @@ func TestRenderAteSystem(t *testing.T) {
 			},
 		},
 		{
-			name: "no credential provider",
+			name:   "credential provider unset renders the bundled one",
+			edit:   func(c *config.Config) { c.CredentialProviderJSON = "" },
+			files:  allFiles,
+			secret: true,
+		},
+		{
+			name: "credential injection off",
 			edit: func(c *config.Config) { c.CredentialProviderJSON = `{"enabled":false}` },
 			files: []string{
 				"00-namespace.yaml", "01-crds.yaml", "02-podcertificate-controller.yaml", "03-sandboxconfig.yaml",
