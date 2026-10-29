@@ -24,7 +24,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
@@ -161,10 +160,6 @@ func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// pushRetry retries each ko image twice, waiting 10s then 20s. ghcr.io can
-// briefly deny pushes to a package it has just created.
-var pushRetry = ko.Retry{Attempts: 3, Backoff: 10 * time.Second}
-
 // PublishReleaseOptions are the publish release-images settings.
 type PublishReleaseOptions struct {
 	// Overwrite rebuilds and replaces images the registry already holds for
@@ -259,7 +254,7 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts Publis
 		}
 		refs = append(refs, ref)
 	}
-	koRefs, err := runner.BuildEach(ctx, tag, labels, pushRetry, pkgs...)
+	koRefs, err := runner.BuildEach(ctx, tag, labels, pkgs...)
 	if err != nil {
 		return err
 	}

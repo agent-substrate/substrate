@@ -15,7 +15,6 @@
 package ko
 
 import (
-	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -25,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // Without --base-import-paths ko publishes cmd/atelet as "atelet-<md5>", and
@@ -210,27 +211,22 @@ func koRuns(t *testing.T, dir, pkg string) int {
 	return strings.Count(string(raw), "run")
 }
 
-// noWait records each wait instead of sleeping.
-func noWait(t *testing.T) *[]time.Duration {
+// fastBackoff shortens buildBackoff for the test.
+func fastBackoff(t *testing.T) {
 	t.Helper()
-	var waits []time.Duration
-	orig := wait
-	wait = func(_ context.Context, d time.Duration) error {
-		waits = append(waits, d)
-		return nil
-	}
-	t.Cleanup(func() { wait = orig })
-	return &waits
+	original := buildBackoff
+	buildBackoff = wait.Backoff{Steps: original.Steps, Duration: time.Millisecond, Factor: 1}
+	t.Cleanup(func() { buildBackoff = original })
 }
 
 const deniedStderr = "PATCH https://ghcr.io/v2/agent-substrate/substrate/ateapi/blobs/upload/1: DENIED: permission_denied: write_package"
 
 func TestBuildEachRetriesEachImage(t *testing.T) {
-	waits := noWait(t)
+	fastBackoff(t)
 	binary, dir := flakyKo(t, 2, deniedStderr)
 	r := &Runner{Root: t.TempDir(), binary: binary}
 
-	refs, err := r.BuildEach(t.Context(), "v1", nil, Retry{Attempts: 3, Backoff: time.Second}, "./cmd/ateapi", "./cmd/atelet")
+	refs, err := r.BuildEach(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet")
 	if err != nil {
 		t.Fatalf("BuildEach() error = %v", err)
 	}
@@ -242,17 +238,14 @@ func TestBuildEachRetriesEachImage(t *testing.T) {
 			t.Errorf("ko built %s %d times, want 3", pkg, got)
 		}
 	}
-	if want := []time.Duration{time.Second, 2 * time.Second, time.Second, 2 * time.Second}; !slices.Equal(*waits, want) {
-		t.Errorf("waits = %v, want %v", *waits, want)
-	}
 }
 
 func TestBuildEachStopsAfterAttempts(t *testing.T) {
-	noWait(t)
+	fastBackoff(t)
 	binary, dir := flakyKo(t, 100, deniedStderr)
 	r := &Runner{Root: t.TempDir(), binary: binary}
 
-	_, err := r.BuildEach(t.Context(), "v1", nil, Retry{Attempts: 3, Backoff: time.Second}, "./cmd/ateapi", "./cmd/atelet")
+	_, err := r.BuildEach(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet")
 	if err == nil {
 		t.Error("BuildEach() error = nil, want one after 3 failed attempts")
 	}
