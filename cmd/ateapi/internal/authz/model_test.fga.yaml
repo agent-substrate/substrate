@@ -524,7 +524,7 @@ tests:
         object: tag:v1
         assertions:
           can_use_tag: true
-      - user: user:dave # Viewer reads tags only
+      - user: user:dave # Viewer reads and clones tags
         object: atespace:space-1
         assertions:
           can_create_tag: false
@@ -535,13 +535,13 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-          can_use_tag: false
+          can_use_tag: true
       - user: user:frank # Global viewer reads tags in every atespace
         object: tag:v1
         assertions:
           can_get: true
           can_update: false
-          can_use_tag: false
+          can_use_tag: true
       - user: user:alice # Atespace owner cannot list across all atespaces
         object: global:root
         assertions:
