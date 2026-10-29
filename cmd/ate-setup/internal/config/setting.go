@@ -50,6 +50,9 @@ type Setting struct {
 	Flag string
 	// Kind is the value type. Resolve parses raw strings against it.
 	Kind ValueKind
+	// Repeated lets the flag be given more than once. Resolve joins the
+	// values with spaces, so every channel must accept space-separated values.
+	Repeated bool
 	// Default applies when no channel supplies a value.
 	Default string
 	// Secret suppresses the value wherever configuration is displayed.
@@ -195,11 +198,9 @@ var Registry = []Setting{
 			"certificates. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
 	},
 	{
-		// The egress gateway's credential provider, as a JSON object. Upstream
-		// takes it as one value on one flag; it is carried the same way here
-		// so the two channels accept the same text.
+		// The egress gateway's credential providers; see CredentialProviders.
 		Key: "atenet.egress.credentialProvider", Env: "ATE_CREDENTIAL_PROVIDER",
-		Flag: "credential-provider", Kind: KindString,
+		Flag: "credential-provider", Kind: KindString, Repeated: true,
 		Usage: "Credential provider the egress gateway injects credentials from, as JSON; " +
 			"required by deploy ate-system and deploy atenet. " + credentialProviderUsage +
 			". A provider requires --atenet-dataplane=envoy",
@@ -533,12 +534,16 @@ func (s Setting) bindable() bool { return s.Flag != "" && !s.Secret }
 // only from Set, never from registration, and Resolve reads a flag only when
 // Changed reports true.
 //
-// Only bools get a typed flag. Ints and durations register as strings so that
-// Setting.parse is the one thing deciding what they accept: pflag's Int reads
-// base 0, so it takes "0x10" as 16 where parse rejects it, and its errors name
-// no canonical key. One vocabulary across all three channels is worth more
-// than the type shown in help.
+// Only bools and repeated settings get a typed flag. Ints and durations
+// register as strings so that Setting.parse is the one thing deciding what
+// they accept: pflag's Int reads base 0, so it takes "0x10" as 16 where parse
+// rejects it, and its errors name no canonical key. One vocabulary across all
+// three channels is worth more than the type shown in help.
 func bind(fs *pflag.FlagSet, s Setting) {
+	if s.Repeated {
+		fs.StringArray(s.Flag, nil, s.Usage)
+		return
+	}
 	if s.Kind == KindBool {
 		// An empty Default yields nil from parse; the assertion then gives
 		// false, which is right for a bool with no declared default.
