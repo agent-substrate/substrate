@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
@@ -64,15 +65,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 	// Fail fast on an unusable credential provider selection before touching
 	// the cluster.
-	provider, err := e.Cfg.CredentialProvider()
+	providers, err := e.Cfg.CredentialProviders()
 	if err != nil {
 		return err
 	}
-	// Likewise a router that would refuse to start without an allowlist, and
-	// a credential exchange without a transfer service account.
-	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
-		return err
-	}
+	// Likewise a credential exchange without a transfer service account.
 	if err := e.Cfg.RequireTransferServiceAccount(); err != nil {
 		return err
 	}
@@ -163,7 +160,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 	// After the podcertificate controller: the provider serves with a
 	// projected pod certificate.
-	if provider.Kubernetes() {
+	if config.HasKubernetesProvider(providers) {
 		err = e.deployK8sCredentialProvider(ctx)
 	} else {
 		err = e.removeK8sCredentialProvider(ctx)
@@ -171,7 +168,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyAtenetEgress(ctx, provider); err != nil {
+	if err := e.applyAtenetEgress(ctx, providers); err != nil {
 		return err
 	}
 
@@ -186,7 +183,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		rollout{kube.KindDeployment, "atenet-egress"},
 		rollout{kube.KindDaemonSet, "atelet"},
 	)
-	if provider.Kubernetes() {
+	if config.HasKubernetesProvider(providers) {
 		waits = append(waits, rollout{kube.KindDeployment, k8sCredentialProviderDeployment})
 	}
 	for _, w := range waits {
@@ -534,11 +531,8 @@ func (e *Env) ateletManifestPath() string {
 func (e *Env) DeployAtenet(ctx context.Context) error {
 	log.Step("deploy_atenet")
 
-	provider, err := e.Cfg.CredentialProvider()
+	providers, err := e.Cfg.CredentialProviders()
 	if err != nil {
-		return err
-	}
-	if err := e.Cfg.RequireIngressAllowedSPIFFEIDs(); err != nil {
 		return err
 	}
 	if err := e.EnsureCRDs(ctx); err != nil {
@@ -564,7 +558,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err := e.EnsureEgressMITMCAPoolSecret(ctx); err != nil {
 		return err
 	}
-	if provider.Kubernetes() {
+	if config.HasKubernetesProvider(providers) {
 		err = e.deployK8sCredentialProvider(ctx)
 	} else {
 		err = e.removeK8sCredentialProvider(ctx)
@@ -572,12 +566,12 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyAtenetEgress(ctx, provider); err != nil {
+	if err := e.applyAtenetEgress(ctx, providers); err != nil {
 		return err
 	}
 
 	deployments := []string{"atenet-router", "atenet-egress"}
-	if provider.Kubernetes() {
+	if config.HasKubernetesProvider(providers) {
 		deployments = append(deployments, k8sCredentialProviderDeployment)
 	}
 	for _, name := range deployments {

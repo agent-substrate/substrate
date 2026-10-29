@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -481,6 +482,103 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 			}
 			if !foundDisallowedEgress {
 				t.Error("no disallowed-egress chain found in IPv4 table")
+			}
+		})
+	}
+}
+
+// A new namespace copies conf/all and conf/default from the node, and a link
+// copies conf/default when it is created. Both shapes end up with the pinned
+// values on every link they add.
+func TestSandboxNamespacesDoNotInheritNodeSettings(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	ctx := context.Background()
+
+	// Settings the kernel reads from the link's own copy, alone or combined
+	// with conf/all by OR or max, so a link seeded from the node's
+	// conf/default would undo them. rp_filter=2 on a link wins over all=1.
+	perLink := map[string]string{
+		"forwarding":       "0",
+		"accept_redirects": "0",
+		"route_localnet":   "0",
+		"accept_local":     "0",
+		"rp_filter":        "1",
+	}
+	// IPv6 reads these only from the link's own copy.
+	perLinkV6 := map[string]string{
+		"forwarding":       "0",
+		"accept_ra":        "0",
+		"accept_redirects": "0",
+	}
+	for _, tc := range []struct {
+		name string
+		uid  string
+		veth bool
+	}{
+		{"veth", "a0a0a0a0-0000-0000-0000-00000000000a", true},
+		{"tap", "b0b0b0b0-0000-0000-0000-00000000000b", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: tc.uid, Veth: tc.veth, EgressPort: testEgressPort})
+			if err != nil {
+				t.Fatalf("SetupSandboxNetwork: %v", err)
+			}
+			t.Cleanup(func() { CleanupSandboxNetwork(n) })
+
+			// A link added after setup, as the microVM tap is.
+			if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+				if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "late0"}, PeerName: "late1"}); err != nil {
+					return err
+				}
+				for _, name := range []string{"late0", "late1"} {
+					if err := linkUp(name); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("adding a late link: %v", err)
+			}
+
+			for _, ns := range []netns.Handle{n.RuntimeNetNS, n.GatewayNetNS} {
+				if err := netns.Do(ctx, ns, func(context.Context) error {
+					want := map[string]string{}
+					for _, s := range sandboxSysctls {
+						want[s.Key] = s.Value
+					}
+					links, err := netlink.LinkList()
+					if err != nil {
+						return err
+					}
+					for _, l := range links {
+						name := l.Attrs().Name
+						// lo predates the sysctls.
+						if l.Attrs().Flags&net.FlagLoopback != 0 {
+							continue
+						}
+						for key, value := range perLink {
+							want["net/ipv4/conf/"+name+"/"+key] = value
+						}
+						for key, value := range perLinkV6 {
+							want["net/ipv6/conf/"+name+"/"+key] = value
+						}
+					}
+					for key, value := range want {
+						b, err := os.ReadFile("/proc/sys/" + key)
+						if errors.Is(err, fs.ErrNotExist) && strings.HasPrefix(key, "net/ipv6/") {
+							continue
+						}
+						if err != nil {
+							return err
+						}
+						if got := strings.TrimSpace(string(b)); got != value {
+							t.Errorf("%s = %s, want %s", key, got, value)
+						}
+					}
+					return nil
+				}); err != nil {
+					t.Fatalf("reading sysctls: %v", err)
+				}
 			}
 		})
 	}

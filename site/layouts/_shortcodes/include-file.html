@@ -1,0 +1,46 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Renders a Markdown file from the repository inside the current page.
+
+The file is named by its path from the repository root, taken from the
+"file" argument or, failing that, the page's repo_source front matter. It
+must be mounted under assets/repo in hugo.yaml. Its front matter is not
+rendered (page-params.html reads it) and the page title replaces its leading
+H1. Relative links are rewritten by rewrite-repo-links.html.
+
+Callers must use {{% %}} so that Hugo renders the returned Markdown.
+*/ -}}
+
+{{- $file := .Get "file" | default (.Page.Params.repo_source) -}}
+{{- if not $file -}}
+  {{- errorf "include-file: %s: no file argument and no repo_source front matter" .Page.File.Path -}}
+{{- end -}}
+{{- $doc := partialCached "repo-doc.html" $file $file -}}
+{{- if not $doc.found -}}
+  {{- errorf "include-file: %s: %q is not mounted under assets/repo; add it to module.mounts in hugo.yaml" .Page.File.Path $file -}}
+{{- end -}}
+
+{{- $content := $doc.body -}}
+{{- if .Get "shift_headings" -}}
+  {{- $content = replaceRE `(?m)^(#{2,5}) ` "#$1 " $content -}}
+{{- end -}}
+{{- $content = partial "rewrite-repo-links.html" (dict "content" $content "dir" (path.Dir $file)) -}}
+
+{{/* Emit Markdown for the {{% %}} caller to render; rendering it here as
+     well would run Goldmark twice. safeHTML keeps raw HTML in the docs intact. */ -}}
+{{- $content | safeHTML -}}

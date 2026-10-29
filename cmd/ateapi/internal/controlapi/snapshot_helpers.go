@@ -53,10 +53,10 @@ func latestSnapshot(status *ateapi.ActorStatus, matches func(*ateapi.Snapshot) b
 }
 
 // findLatestDurableSnapshot returns the highest-generation Snapshot on status
-// whose DurableSnapshot matches storageStatus, or nil if none exists.
-func findLatestDurableSnapshot(status *ateapi.ActorStatus, storageStatus ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+// whose DurableSnapshot matches storageState, or nil if none exists.
+func findLatestDurableSnapshot(status *ateapi.ActorStatus, storageState ateapi.SnapshotStorageState) *ateapi.Snapshot {
 	return latestSnapshot(status, func(snap *ateapi.Snapshot) bool {
-		return snap.GetDurableSnapshot().GetStatus() == storageStatus
+		return snap.GetDurableSnapshot().GetState() == storageState
 	})
 }
 
@@ -107,7 +107,7 @@ func pruneSnapshots(status *ateapi.ActorStatus, local *ateapi.Snapshot) {
 	if status == nil {
 		return
 	}
-	latestDurable := findLatestDurableSnapshot(status, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	latestDurable := findLatestDurableSnapshot(status, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	kept := status.Snapshots[:0]
 	for _, snap := range status.Snapshots {
 		if snap != local {
@@ -121,7 +121,7 @@ func pruneSnapshots(status *ateapi.ActorStatus, local *ateapi.Snapshot) {
 }
 
 // newDurableSnapshot constructs a Snapshot with DurableSnapshot populated.
-func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.SnapshotFidelity, templateUID, uuid, uri string, storageStatus ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.SnapshotFidelity, templateUID, uuid, uri string, storageState ateapi.SnapshotStorageState) *ateapi.Snapshot {
 	return &ateapi.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
@@ -129,18 +129,18 @@ func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.S
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		DurableSnapshot: &ateapi.SnapshotStorage{
-			Status: storageStatus,
+			State:  storageState,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
 }
 
 // tagDurableSnapshotURI returns the durable snapshot URI on tag matching
-// storageStatus (or any status if storageStatus is UNSPECIFIED), or "" if none
+// storageState (or any state if storageState is UNSPECIFIED), or "" if none
 // exists.
-func tagDurableSnapshotURI(tag *ateapi.Tag, storageStatus ateapi.SnapshotStorageStatus) string {
+func tagDurableSnapshotURI(tag *ateapi.Tag, storageState ateapi.SnapshotStorageState) string {
 	st := tag.GetStatus().GetSnapshot().GetDurableSnapshot()
-	if storageStatus != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED && st.GetStatus() != storageStatus {
+	if storageState != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED && st.GetState() != storageState {
 		return ""
 	}
 	return st.GetObject().GetSnapshotUri()

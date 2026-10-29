@@ -198,7 +198,7 @@ func localElsewhere(snap *ateapi.Snapshot, node string) bool {
 // no completed durable copy.
 func latestLocalNotDurable(actor *ateapi.Actor) bool {
 	local := findLatestLocalSnapshot(actor.GetStatus())
-	return local != nil && local.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	return local != nil && local.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 }
 
 func canDetachWithoutAtelet(ctx context.Context, actor *ateapi.Actor, err error) bool {
@@ -217,7 +217,7 @@ func canDetachWithoutAtelet(ctx context.Context, actor *ateapi.Actor, err error)
 		return false
 	}
 	local := findLatestLocalSnapshot(actor.GetStatus())
-	return local != nil && local.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	return local != nil && local.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 }
 
 // detachActorError maps a DetachActor error to the one the resume fails with.

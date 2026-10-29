@@ -59,12 +59,10 @@ func TestSetupCSIDecidesBeforeTouchingTheCluster(t *testing.T) {
 		error  string
 	}{
 		{name: "none", driver: "none"},
-		{name: "the shell installer's false", driver: "false"},
-		{name: "unset", driver: ""},
 		{name: "hostpath off Kind", driver: "hostpath", error: "only supported for Kind"},
 		{name: "both off Kind", driver: "both", error: "only supported for Kind"},
-		{name: "the shell installer's true off Kind", driver: "true", error: "only supported for Kind"},
 		{name: "unknown driver", driver: "nfsv4", error: `unknown CSI driver "nfsv4"`},
+		{name: "the shell installer's true", driver: "true", error: `unknown CSI driver "true"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{Cfg: &config.Config{Kind: tc.kind}}
@@ -170,9 +168,7 @@ func TestTheNFSSetupsApplyTheSharedStorageClass(t *testing.T) {
 	}
 }
 
-// Both spellings of each driver selection have to keep selecting the same
-// thing: --setup-csi was a boolean in the shell installer, and the scripts and
-// dev-env files that still pass true or false have to keep working.
+// Each --setup-csi value selects the drivers its name says.
 func TestCSIDriverSpellings(t *testing.T) {
 	for _, tc := range []struct {
 		driver string
@@ -181,10 +177,7 @@ func TestCSIDriverSpellings(t *testing.T) {
 		{"nfs", csiDriverSpec{nfs: true}},
 		{"hostpath", csiDriverSpec{hostpath: true}},
 		{"both", csiDriverSpec{hostpath: true, nfs: true}},
-		{"true", csiDriverSpec{hostpath: true, nfs: true}},
 		{"none", csiDriverSpec{}},
-		{"false", csiDriverSpec{}},
-		{"", csiDriverSpec{}},
 	} {
 		t.Run(tc.driver, func(t *testing.T) {
 			got, ok := csiDrivers[tc.driver]

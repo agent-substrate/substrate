@@ -13,7 +13,7 @@ Complete the
 [Quickstart (Development)](../../README.md#quickstart-development) in the
 README first — it covers the base tooling and the default (gVisor) path this
 guide builds on. For background on the runtime, see
-[architecture.md](../architecture.md) and
+[architecture.md](../concepts/architecture.md) and
 [hack/microvm-assets/README.md](../../hack/microvm-assets/README.md).
 
 ## Option A: Linux host with KVM
@@ -40,11 +40,11 @@ instead, or open up the device with `sudo chmod 666 /dev/kvm`.
 
 ```sh
 ./hack/create-kind-cluster.sh
-# Look for: "/dev/kvm found: micro-VM (kata + cloud-hypervisor) support will be enabled."
+# Look for: "/dev/kvm found: microVM (kata + cloud-hypervisor) support will be enabled."
 ```
 
 Once the control plane is up, atelet advertises the device on each KVM-capable
-node, which is what places micro-VM workers:
+node, which is what places microVM workers:
 
 ```sh
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.capacity.ate\.dev/kvm}{"\n"}{end}'
@@ -185,7 +185,7 @@ resume it and confirm the count continues — proving the guest-memory snapshot
 round-tripped. The flow is the same as the
 [README Quickstart](../../README.md#quickstart-development), just with the
 microVM template; see the
-[counter demo's micro-VM variant](../../demos/counter/README.md#micro-vm-variant)
+[counter demo's microVM steps](../../demos/counter/README.md#1-build-and-deploy)
 for background. Note that an actor template showing a GOLDEN SNAPSHOT in the
 verify step already exercises the runtime end-to-end — the golden snapshot
 requires a full guest boot and checkpoint.

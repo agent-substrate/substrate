@@ -33,9 +33,10 @@ const resumeCapacityWait = 90 * time.Second
 // is saturated. The control plane returns ResourceExhausted when no worker
 // is free and expects callers to wait (the router's parking resumer retries
 // the same condition); suites running concurrently against shared pools make
-// that a normal state in e2e, not a failure. Any other error, or saturation
-// outlasting the wait budget, is returned to the caller. Each retry is
-// logged so a pass that had to wait stays visible in the test output.
+// that a normal state in e2e, not a failure. It also retries Aborted, as
+// RetryAborted does. Any other error, or a retried error outlasting the wait
+// budget, is returned to the caller. Each retry is logged so a pass that had
+// to wait stays visible in the test output.
 //
 // TODO: Add runtime diagnostic output for unscheduled pods/actors. a Pending
 // pod's PodScheduled condition names resources the scheduler cannot satisfy.
@@ -50,10 +51,10 @@ func ResumeActorAwaitCapacity(t *testing.T, ctx context.Context, clients *Client
 	deadline := time.Now().Add(resumeCapacityWait)
 	for {
 		resp, err := clients.SubstrateAPI.ResumeActor(ctx, req)
-		if status.Code(err) != codes.ResourceExhausted || time.Now().After(deadline) {
+		if c := status.Code(err); (c != codes.ResourceExhausted && c != codes.Aborted) || time.Now().After(deadline) {
 			return resp, err
 		}
-		t.Logf("ResumeActor %s/%s: pool saturated (%v); retrying", req.GetActor().GetAtespace(), req.GetActor().GetName(), err)
+		t.Logf("ResumeActor %s/%s: %v; retrying", req.GetActor().GetAtespace(), req.GetActor().GetName(), err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

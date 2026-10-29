@@ -1032,49 +1032,6 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	}
 }
 
-func TestValidateMintActorCertificateRequest(t *testing.T) {
-	validUID := "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"
-	tests := []struct {
-		name string
-		req  *ateapi.MintActorCertificateRequest
-		want field.ErrorList
-	}{{
-		"valid",
-		&ateapi.MintActorCertificateRequest{
-			Actor:                     &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid:                  validUID,
-			CertificateSigningRequest: []byte("csr"),
-		},
-		nil,
-	}, {
-		"missing actor",
-		&ateapi.MintActorCertificateRequest{
-			ActorUid:                  validUID,
-			CertificateSigningRequest: []byte("csr"),
-		},
-		field.ErrorList{field.Required(field.NewPath("actor"), "")},
-	}, {
-		"missing actor_uid",
-		&ateapi.MintActorCertificateRequest{
-			Actor:                     &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
-			CertificateSigningRequest: []byte("csr"),
-		},
-		field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
-	}, {
-		"missing csr",
-		&ateapi.MintActorCertificateRequest{
-			Actor:    &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid: validUID,
-		},
-		field.ErrorList{field.Required(field.NewPath("certificate_signing_request"), "")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateMintActorCertificateRequest(context.Background(), tt.req), tt.want)
-		})
-	}
-}
-
 // validActor returns a minimal Actor which should pass input validation.
 func validActor(mods ...func(*ateapi.Actor)) *ateapi.Actor {
 	a := &ateapi.Actor{
