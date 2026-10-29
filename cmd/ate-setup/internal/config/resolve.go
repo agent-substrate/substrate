@@ -17,7 +17,6 @@ package config
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -123,13 +122,6 @@ func Resolve(fs *pflag.FlagSet, opts ResolveOptions) (*Resolved, error) {
 				// Non-string kinds are stored as their own type; read the
 				// flag's printed form, which round-trips for bool and int.
 				raw = fs.Lookup(s.Flag).Value.String()
-			}
-			if s.Repeated {
-				values, err := fs.GetStringArray(s.Flag)
-				if err != nil {
-					return nil, fmt.Errorf("reading --%s: %w", s.Flag, err)
-				}
-				raw = strings.Join(values, " ")
 			}
 			v = Value{Setting: s, Raw: raw, From: OriginFlag, Supplied: true}
 		}

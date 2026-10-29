@@ -1047,7 +1047,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"provider null", Options{CredentialProvider: `null`}},
 		{"provider without a name", Options{CredentialProvider: `{"address":"vault.ate-system.svc:8200"}`}},
 		{"provider with an unknown key", Options{CredentialProvider: `{"name":"k8s.io","adress":"x:1"}`}},
-		{"disabled beside a provider", Options{CredentialProvider: `{"enabled":false} {"name":"k8s.io"}`}},
+		{"provider with trailing data", Options{CredentialProvider: `{"enabled":false} {"name":"k8s.io"}`}},
 		{"provider name with a scheme", Options{CredentialProvider: `{"name":"ate-secret://k8s.io"}`}},
 		{"provider name not lowercase", Options{CredentialProvider: `{"name":"Vault.example.com","address":"vault.ate-system.svc:8200"}`}},
 		{"provider name with a port", Options{CredentialProvider: `{"name":"k8s.io:443"}`}},
@@ -1059,6 +1059,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
+		{"provider array empty", Options{CredentialProvider: `[]`}},
+		{"provider array entry disabled", Options{CredentialProvider: `[{"enabled":false}]`}},
+		{"provider array with a repeated name", Options{CredentialProvider: `[{"name":"k8s.io"},{"name":"k8s.io"}]`}},
+		{"provider array entry without an address", Options{CredentialProvider: `[{"name":"k8s.io"},{"name":"vault.example.com"}]`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {
@@ -1158,58 +1162,34 @@ func TestCredentialProvider(t *testing.T) {
 	}
 }
 
-func TestSeveralCredentialProviders(t *testing.T) {
+func TestCredentialProvidersArray(t *testing.T) {
 	loadEnv(t)
-	const k8sJSON = `{"name":"k8s.io"}`
-	const stsJSON = `{"name":"sts.example.com","address":"sts.ate-system.svc:50051"}`
-	both := []CredentialProvider{
-		{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
-		{Name: "sts.example.com", Address: "sts.ate-system.svc:50051"},
-	}
+	k8s := CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}
 	for _, tc := range []struct {
 		name    string
-		flags   []string
-		env     string
-		file    string
+		raw     string
 		want    []CredentialProvider
 		wantErr string
 	}{
-		{name: "repeated flags", flags: []string{k8sJSON, stsJSON}, want: both},
-		{name: "environment", env: k8sJSON + " " + stsJSON, want: both},
+		{name: "an array of one", raw: `[{"name":"k8s.io"}]`, want: []CredentialProvider{k8s}},
 		{
-			name: "file with one object per line",
-			file: "atenet:\n  egress:\n    credentialProvider: |\n      " + k8sJSON + "\n      " + stsJSON + "\n",
-			want: both,
+			name: "several providers",
+			raw:  `[{"name":"k8s.io"},{"name":"sts.example.com","address":"sts.ate-system.svc:50051"}]`,
+			want: []CredentialProvider{k8s, {Name: "sts.example.com", Address: "sts.ate-system.svc:50051"}},
 		},
-		{name: "a repeated name", flags: []string{k8sJSON, k8sJSON}, wantErr: `provider name "k8s.io" repeats`},
-		{name: "disabled beside a provider", flags: []string{`{"enabled":false}`, k8sJSON}, wantErr: "cannot be combined"},
-		{name: "a JSON array", env: "[" + k8sJSON + "," + stsJSON + "]", wantErr: "cannot unmarshal array"},
-		{name: "only whitespace", env: " \n", wantErr: "a credential provider is required"},
+		{name: "a null entry", raw: `[null]`, wantErr: "array entries must be JSON objects"},
+		{name: "a string entry", raw: `["k8s.io"]`, wantErr: "array entries must be JSON objects"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.env != "" {
-				t.Setenv("ATE_CREDENTIAL_PROVIDER", tc.env)
-			}
-			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-			BindFlags(fs)
-			for _, v := range tc.flags {
-				if err := fs.Set("credential-provider", v); err != nil {
-					t.Fatal(err)
-				}
-			}
-			var lo LoadOptions
-			if tc.file != "" {
-				lo.ConfigPath = writeConfig(t, validHeader+tc.file)
-			}
-			cfg, err := LoadFlags(fs, lo)
+			cfg, err := Load(Options{CredentialProvider: tc.raw})
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("LoadFlags() error = %v, want one containing %q", err, tc.wantErr)
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("LoadFlags() error = %v", err)
+				t.Fatalf("Load() error = %v", err)
 			}
 			got, err := cfg.CredentialProviders()
 			if err != nil {

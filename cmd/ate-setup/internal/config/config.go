@@ -583,7 +583,7 @@ const credentialProviderKey = "atenet.egress.credentialProvider"
 const credentialProviderUsage = `{"name":"k8s.io"} for the bundled Kubernetes Secrets provider, ` +
 	`{"enabled":false} to turn egress credential injection off, ` +
 	`or {"name":"<provider>","address":"<host>:<port>"} for a provider you deploy; ` +
-	`for several providers, repeat the flag or separate the objects with whitespace`
+	`a JSON array of provider objects selects several`
 
 // credentialProviderSpec is the schema of the --credential-provider JSON.
 type credentialProviderSpec struct {
@@ -665,11 +665,10 @@ func credentialProvider(raw string) (CredentialProvider, error) {
 	return CredentialProvider{Name: spec.Name, Address: spec.Address}, nil
 }
 
-// CredentialProviders parses --credential-provider, one JSON object per
-// provider, separated by whitespace:
+// CredentialProviders parses --credential-provider, which is one of:
 //
 //	{"name":"k8s.io"}                                       one provider
-//	{"name":"k8s.io"} {"name":"<name>","address":"<addr>"}  several providers
+//	[{"name":"k8s.io"},{"name":"<name>","address":"<addr>"}]  several providers
 //	{"enabled":false}                                       none: injection off
 //
 // credentialProvider checks each provider object. A missing value is reported
@@ -677,40 +676,53 @@ func credentialProvider(raw string) (CredentialProvider, error) {
 // gateway need it.
 func (c *Config) CredentialProviders() ([]CredentialProvider, error) {
 	raw := c.CredentialProviderJSON
+	if raw == "" {
+		return nil, fmt.Errorf("a credential provider is required; set one of %s: %s",
+			channelsFor(credentialProviderKey), credentialProviderUsage)
+	}
 	invalid := func(format string, args ...any) ([]CredentialProvider, error) {
 		return nil, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
 	}
-	var providers []CredentialProvider
-	disabled := false
-	dec := json.NewDecoder(strings.NewReader(raw))
-	for {
-		var obj json.RawMessage
-		err := dec.Decode(&obj)
-		if err == io.EOF {
-			break
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return invalid("%v; want %s", err, credentialProviderUsage)
+	}
+	var elems []any
+	switch v := value.(type) {
+	case map[string]any:
+		p, err := credentialProvider(raw)
+		if err != nil || !p.Enabled() {
+			return nil, err
 		}
+		return []CredentialProvider{p}, nil
+	case []any:
+		elems = v
+	default:
+		return invalid("want a JSON object or an array of them: %s", credentialProviderUsage)
+	}
+	if len(elems) == 0 {
+		return invalid(`the array names no provider; {"enabled":false} turns injection off`)
+	}
+	var providers []CredentialProvider
+	for _, elem := range elems {
+		if _, ok := elem.(map[string]any); !ok {
+			return invalid("array entries must be JSON objects; want %s", credentialProviderUsage)
+		}
+		obj, err := json.Marshal(elem)
 		if err != nil {
-			return invalid("%v; want %s", err, credentialProviderUsage)
+			return invalid("%v", err)
 		}
 		p, err := credentialProvider(string(obj))
 		if err != nil {
 			return nil, err
 		}
 		if !p.Enabled() {
-			disabled = true
-			continue
+			return invalid("enabled false is not allowed in an array")
 		}
 		if slices.ContainsFunc(providers, func(q CredentialProvider) bool { return q.Name == p.Name }) {
 			return invalid("provider name %q repeats", p.Name)
 		}
 		providers = append(providers, p)
-	}
-	switch {
-	case disabled && len(providers) > 0:
-		return invalid(`{"enabled":false} cannot be combined with a provider`)
-	case !disabled && len(providers) == 0:
-		return nil, fmt.Errorf("a credential provider is required; set one of %s: %s",
-			channelsFor(credentialProviderKey), credentialProviderUsage)
 	}
 	return providers, nil
 }
