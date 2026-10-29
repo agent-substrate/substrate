@@ -37,7 +37,7 @@ Substrate splits its APIs between cluster infrastructure and tenant workloads. I
 {{- else if $section.RegularPages }}
 
 ## {{ $section.LinkTitle | default $section.Title }}
-{{- range $p := $section.RegularPages.ByWeight -}}
+{{- range $p := where $section.RegularPages.ByWeight ".Params.toc_hide" "!=" true -}}
 {{- $params := partialCached "page-params.html" $p $p.Path -}}
 {{- $url := $p.Permalink -}}
 {{- with $p.OutputFormats.Get "markdown" -}}

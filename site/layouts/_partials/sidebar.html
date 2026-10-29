@@ -33,11 +33,17 @@ limitations under the License.
         <svg class="ic as-sb__chevron" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>
       </summary>
       {{- range where .Pages.ByWeight ".Params.toc_hide" "!=" true }}
-      {{- $active := eq $.RelPermalink .RelPermalink -}}
+      {{- $apiref := and (eq .Layout "api-reference") (eq $.Layout "api-reference") -}}
+      {{- $active := or (eq $.RelPermalink .RelPermalink) $apiref -}}
       <a href="{{ .RelPermalink }}" class="as-sb__link{{ if $active }} is-active{{ end }}"{{ if $active }} aria-current="page"{{ end }}>
         <span>{{ .LinkTitle }}</span>
         {{- partial "page-pills.html" (dict "page" . "new" true) }}
       </a>
+      {{- if $apiref }}
+      {{- with resources.Get (path.Join "api-reference" ($.Params.api_version | default "latest") "nav.json") }}
+      {{- partial "api-reference-nav.html" (transform.Unmarshal .) }}
+      {{- end }}
+      {{- end }}
       {{- end }}
     </details>
     {{- end }}
