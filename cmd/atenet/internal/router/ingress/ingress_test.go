@@ -780,6 +780,66 @@ func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 	}
 }
 
+// TestHandleRequestHeaders_FailedPreconditionFailsFast completes the full-lot
+// trio: a FailedPrecondition from ResumeActor neither parks nor is shed. The
+// request fails after its single attempt with the resume error, and the full
+// lot never sees it.
+func TestHandleRequestHeaders_FailedPreconditionFailsFast(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+		authority := testUUID + ".team-a.actors.resources.substrate.ate.dev"
+		const desc = "AssignWorker prerequisite not met for Actor: team-a/" + testUUID + " (got: ACTOR_STATE_CRASHED, want ACTOR_STATE_SUSPENDED)"
+
+		var resumeCalls atomic.Int32
+		clientMock := &mockClient{
+			resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+				resumeCalls.Add(1)
+				return nil, status.Error(codes.FailedPrecondition, desc)
+			},
+		}
+
+		parkMetrics, reader := newTestParkingMetrics(t)
+		h := New(clientMock, ParkedRequestConfig{Budget: 500 * time.Millisecond, Max: 1}, parkMetrics)
+		// With the only slot taken, a request that parked would be shed with
+		// "router at capacity" instead of the resume error.
+		release, ok := h.parking.enter(context.Background(), ateattr.RouterOutcomeUnavailable)
+		if !ok {
+			t.Fatal("priming enter should be admitted")
+		}
+		defer release(parkOutcomeServed)
+
+		md := requestMetadata(testUUID, "team-a",
+			&corev3.HeaderValue{Key: ":authority", Value: authority},
+		)
+
+		start := time.Now()
+		_, err := h.HandleRequestHeaders(context.Background(), md)
+
+		// Never parked: no wait, one attempt, the lot untouched.
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("request waited %v, want no parked wait", elapsed)
+		}
+		if got := resumeCalls.Load(); got != 1 {
+			t.Errorf("resume attempts = %d, want 1", got)
+		}
+		if got := rejectedByOutcome(t, reader); len(got) != 0 {
+			t.Errorf("parking.rejected = %v, want none", got)
+		}
+
+		// The caller gets the resume error, not the shed.
+		var reqErr *extproc.ReqError
+		if !errors.As(err, &reqErr) {
+			t.Fatalf("expected *extproc.ReqError, got %T (%v)", err, err)
+		}
+		if reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+			t.Errorf("status code = %d, want %d (503)", reqErr.StatusCode, envoy_type.StatusCode_ServiceUnavailable)
+		}
+		if want := "actor team-a/" + testUUID + " unavailable: " + desc; reqErr.Error() != want {
+			t.Errorf("error body = %q, want %q", reqErr.Error(), want)
+		}
+	})
+}
+
 // TestHandleRequestHeaders_FullLotShedsParkedRequest verifies the other half
 // of lot admission: when the lot is full, a request whose resume actually
 // parks (first retryable failure) is shed with 503 "router at capacity" — at
@@ -804,12 +864,6 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 		{
 			name:        "Aborted is dropped",
 			resumeErr:   status.Error(codes.Aborted, "another operation is in progress"),
-			wantCode:    codes.Unknown,
-			wantOutcome: ateattr.RouterOutcomeUnavailable,
-		},
-		{
-			name:        "FailedPrecondition is dropped",
-			resumeErr:   status.Error(codes.FailedPrecondition, "actor is suspending"),
 			wantCode:    codes.Unknown,
 			wantOutcome: ateattr.RouterOutcomeUnavailable,
 		},

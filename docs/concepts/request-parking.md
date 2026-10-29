@@ -38,8 +38,8 @@ user-visible error.
 
 ## Behavior
 
-With parking enabled (the default), the router treats `ResourceExhausted`,
-`FailedPrecondition` and `Unavailable` from `ResumeActor` as **retryable**
+With parking enabled (the default), the router treats `ResourceExhausted`
+and `Unavailable` from `ResumeActor` as **retryable**
 conditions (alongside the existing `Aborted` concurrent-resume conflict) — a
 parked request rides out transient pool saturation and control-plane blips
 (e.g. an ateapi rolling restart) alike. The request is *parked*: the resumer
@@ -111,8 +111,8 @@ expected under sustained saturation.)
 
 ### What is *not* parked
 
-Only transient conditions — capacity (`ResourceExhausted`), transient actor
-state (`FailedPrecondition`), concurrency (`Aborted`), and control-plane
+Only transient conditions — capacity (`ResourceExhausted`),
+concurrency (`Aborted`), and control-plane
 unavailability (`Unavailable`) — are parked. Errors that will not resolve by
 waiting are returned immediately (fail fast):
 
@@ -121,14 +121,14 @@ waiting are returned immediately (fail fast):
 | `OK`                                   | Route to worker                   |
 | `Aborted` (concurrent resume)          | Retry (always)                    |
 | `ResourceExhausted` (no room)          | **Park & retry** (when enabled)   |
-| `FailedPrecondition` (transient state) | **Park & retry** (when enabled)   |
+| `FailedPrecondition` (e.g. CRASHED)    | Fail fast → `503`                 |
 | `Unavailable` (control-plane blip)     | **Park & retry** (when enabled)   |
 | `NotFound`                             | Fail fast → `404`                 |
 | `DeadlineExceeded`                     | Fail fast → `504`                 |
 | `PermissionDenied` / `Unauthenticated` | Fail fast → `403` / `401`         |
 
 When parking is **disabled** (`--parked-request-max=0`), the router fails fast:
-`FailedPrecondition` and `Unavailable` are returned immediately, there is no
+`ResourceExhausted` and `Unavailable` are returned immediately, there is no
 admission cap, and only `Aborted` (concurrent-resume) conflicts are retried,
 within a `15s` budget.
 

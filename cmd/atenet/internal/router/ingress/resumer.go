@@ -103,9 +103,9 @@ type ActorResumer struct {
 	// never on the fast path (#1081). A nil lot admits everyone.
 	lot *parkingLot
 
-	// parkEnabled makes transient worker-pool saturation (FailedPrecondition)
-	// retryable, so a request is parked and retried until budget rather than
-	// failing immediately.
+	// parkEnabled makes ResourceExhausted and Unavailable retryable, so a
+	// request is parked and retried until budget rather than failing
+	// immediately.
 	parkEnabled bool
 	// budget bounds the total time a single resume operation retries before the
 	// underlying error is returned.
@@ -164,15 +164,15 @@ func NewActorResumer(apiClient ateapi.ControlClient, opts ...resumerOption) *Act
 // ateapi rolling restart) are retried only when parking is enabled, turning a
 // momentary condition into a bounded wait instead of an immediate failure — a
 // parked request should ride out a blip, not fail on it with budget remaining.
-// FailedPrecondition stays retryable too: it no longer carries saturation, but
-// it does cover states a concurrent operation can move the actor out of.
+// FailedPrecondition is not retried: ateapi refuses the resume for the
+// actor's current state, and the router does not wait for that state to change.
 // All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
 // returned to the caller so the HTTP boundary can map them with full fidelity.
 func (r *ActorResumer) retryable(err error) bool {
 	switch status.Code(err) {
 	case codes.Aborted:
 		return true
-	case codes.ResourceExhausted, codes.FailedPrecondition, codes.Unavailable:
+	case codes.ResourceExhausted, codes.Unavailable:
 		return r.parkEnabled
 	default:
 		return false
