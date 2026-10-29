@@ -42,14 +42,39 @@ const (
 func deployOptions() (steps.DeployOptions, error) {
 	r := env.Cfg.Resolved()
 	opts := steps.DeployOptions{
-		SetupCSI:        r.String("csi.setup"),
-		SkipMicroVMDeps: r.Bool("skipMicroVMDeps"),
+		SetupCSI: r.String("csi.setup"),
 	}
 	if err := steps.ValidateCSIDriver(opts.SetupCSI); err != nil {
 		v, _ := r.Value("csi.setup")
 		return opts, &config.InvalidError{Value: v, Want: "nfs, hostpath, both or none"}
 	}
+	classes, err := sandboxClassesOption()
+	if err != nil {
+		return opts, err
+	}
+	opts.SandboxClasses = classes
 	return opts, nil
+}
+
+func sandboxClassesOption() (string, error) {
+	r := env.Cfg.Resolved()
+	classes := r.String("sandboxClasses")
+	if err := steps.ValidateSandboxClasses(classes); err != nil {
+		v, _ := r.Value("sandboxClasses")
+		return "", &config.InvalidError{Value: v, Want: "gvisor, microvm or gvisor,microvm"}
+	}
+	return classes, nil
+}
+
+func validateSandboxClassesFlag(cmd *cobra.Command) error {
+	if !cmd.Flags().Changed("sandbox-classes") {
+		return nil
+	}
+	classes, err := cmd.Flags().GetString("sandbox-classes")
+	if err != nil {
+		return err
+	}
+	return steps.ValidateSandboxClasses(classes)
 }
 
 var deployAteSystemCmd = &cobra.Command{
@@ -76,6 +101,9 @@ Shape the install with the global --atenet-dataplane, --cluster-size,
 	// the resolved settings exist.
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		if err := validateSandboxClassesFlag(cmd); err != nil {
 			return err
 		}
 		if !cmd.Flags().Changed("setup-csi") {
@@ -147,9 +175,18 @@ var deployPodCertControllerCmd = &cobra.Command{
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
 	Short: "Deploy the SandboxConfig admission policy and the default gVisor and microVM SandboxConfigs only",
-	Args:  cobra.NoArgs,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		return validateSandboxClassesFlag(cmd)
+	},
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeploySandboxConfig(cmd.Context(), env.Cfg.Resolved().Bool("skipMicroVMDeps"))
+		classes, err := sandboxClassesOption()
+		if err != nil {
+			return err
+		}
+		return env.DeploySandboxConfig(cmd.Context(), classes)
 	},
 }
 
@@ -189,10 +226,10 @@ func init() {
 			Usage:    "Also install CSI driver (nfs, hostpath, both, none; default: none)",
 		},
 		config.Setting{
-			Key: "skipMicroVMDeps", Env: "ATE_INSTALL_SKIP_MICROVM_DEPS", Flag: "skip-microvm-deps",
-			Kind: config.KindBool, Default: "false",
+			Key: "sandboxClasses", Env: "ATE_INSTALL_SANDBOX_CLASSES", Flag: "sandbox-classes",
+			Kind: config.KindString, Default: steps.DefaultSandboxClasses,
 			Commands: []string{deployAteSystemPath, deploySandboxConfigPath},
-			Usage:    "Skip staging microVM guest assets and applying the microvm SandboxConfig",
+			Usage:    "Default SandboxConfigs to install (comma-separated: gvisor, microvm; default: gvisor,microvm)",
 		},
 	)
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())

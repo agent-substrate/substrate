@@ -92,10 +92,8 @@ is fronted by `deploy`/`delete benchmarks`.
 
 The microVM asset assembly (`kata-static` `.tar.zst` extraction and
 `cloud-hypervisor` download), object-store staging (`rustfs` on Kind,
-`<BUCKET_NAME>-assets` on GKE), and `microvm` `SandboxConfig` lifecycle now run
-in Go as part of `deploy ate-system` (and `deploy sandboxconfig`), with
-`delete ate-system` removing the `microvm` `SandboxConfig` alongside the rest
-of the control plane.
+`<BUCKET_NAME>-assets` on GKE), and `microvm` `SandboxConfig` apply now run in
+Go as part of `deploy ate-system` (and `deploy sandboxconfig`).
 
 `ko` is no longer asked to apply anything. The scripts ran `run_ko apply`, which
 made ko shell out to kubectl and forced the awkward `-- --context=` special case

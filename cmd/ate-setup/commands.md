@@ -62,6 +62,7 @@ unchanged.
 
 ```
 ate-setup deploy ate-system \
+  --storage-bucket-name=BUCKET \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=IDS \
   --image-repo REPO \
@@ -71,7 +72,11 @@ ate-setup deploy ate-system \
 installs images already published to `REPO` instead, and never invokes `ko`.
 The manifests still come from the checkout, so this needs one; what it removes
 is the build and write access to a registry. Releases ship no `ate-setup`
-binary, so running it from the checkout still needs Go.
+binary, so running it from the checkout still needs Go. On non-Kind clusters,
+the default `--sandbox-classes=gvisor,microvm` also downloads the microVM guest
+assets from GitHub and uploads them to `<BUCKET>-assets` with `gcloud`; pass
+`--sandbox-classes=gvisor` to install gVisor only without `--storage-bucket-name`
+or `gcloud`.
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including
 `envoy-dataplane`, which a build from source builds from a Dockerfile with
@@ -101,22 +106,23 @@ that already names a manifest is used as written, and is not looked up.
 
 - `deploy ate-system`
 - `deploy ate-system --setup-csi=nfs`
-- `deploy ate-system --skip-microvm-deps`
+- `deploy ate-system --sandbox-classes=gvisor`
 - `deploy atelet`
 - `deploy apiserver`
 - `deploy ate-controller`
 - `deploy atenet`
 - `deploy podcertificate-controller`
-- `deploy sandboxconfig [--skip-microvm-deps]`
+- `deploy sandboxconfig [--sandbox-classes=...]`
 - `deploy postgres`
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the
-apiserver, the controller, atenet, and atelet. Unless `--skip-microvm-deps` is
-passed (also accepted by `deploy sandboxconfig`), it also stages the microVM
-guest assets into the asset bucket (`rustfs` on Kind, `<BUCKET_NAME>-assets` on
-GKE) and applies the `microvm` cluster-wide `SandboxConfig` alongside
-`gvisor-default`. It creates every `create` resource below on the way, so those
-subcommands are only needed to redo one on a running cluster.
+apiserver, the controller, atenet, and atelet. By default
+(`--sandbox-classes=gvisor,microvm`, also accepted by `deploy sandboxconfig`),
+it installs the cluster-wide `gvisor-default` and `microvm` `SandboxConfig`
+resources, staging the microVM guest assets into the asset bucket (`rustfs` on
+Kind, `<BUCKET_NAME>-assets` on GKE). It creates every `create` resource below
+on the way, so those subcommands are only needed to redo one on a running
+cluster.
 
 ## Publish
 

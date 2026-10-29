@@ -62,11 +62,14 @@ func resetCommandFlags(t *testing.T, flags *pflag.FlagSet) {
 	t.Cleanup(reset)
 }
 
-func TestDeploySkipMicroVMDepsFlag(t *testing.T) {
+func TestDeploySandboxClassesFlag(t *testing.T) {
 	t.Run("deploy ate-system", func(t *testing.T) {
 		resetCommandFlags(t, deployAteSystemCmd.Flags())
-		if err := deployAteSystemCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
-			t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
+		if err := deployAteSystemCmd.ParseFlags([]string{"--sandbox-classes=gvisor"}); err != nil {
+			t.Fatalf("ParseFlags(--sandbox-classes=gvisor): %v", err)
+		}
+		if err := deployAteSystemCmd.Args(deployAteSystemCmd, nil); err != nil {
+			t.Fatalf("Args(--sandbox-classes=gvisor): %v", err)
 		}
 		r, err := config.Resolve(deployAteSystemCmd.Flags(), config.ResolveOptions{})
 		if err != nil {
@@ -83,25 +86,55 @@ func TestDeploySkipMicroVMDepsFlag(t *testing.T) {
 		if err != nil {
 			t.Fatalf("deployOptions(): %v", err)
 		}
-		if !opts.SkipMicroVMDeps {
-			t.Error("opts.SkipMicroVMDeps = false, want true")
+		if opts.SandboxClasses != "gvisor" {
+			t.Errorf("opts.SandboxClasses = %q, want %q", opts.SandboxClasses, "gvisor")
 		}
 	})
 
 	t.Run("deploy sandboxconfig", func(t *testing.T) {
-		if deploySandboxConfigCmd.Flags().Lookup("skip-microvm-deps") == nil {
-			t.Fatal("deploy sandboxconfig is missing --skip-microvm-deps flag")
+		if deploySandboxConfigCmd.Flags().Lookup("sandbox-classes") == nil {
+			t.Fatal("deploy sandboxconfig is missing --sandbox-classes flag")
 		}
 		resetCommandFlags(t, deploySandboxConfigCmd.Flags())
-		if err := deploySandboxConfigCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
-			t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
+		if err := deploySandboxConfigCmd.ParseFlags([]string{"--sandbox-classes=microvm"}); err != nil {
+			t.Fatalf("ParseFlags(--sandbox-classes=microvm): %v", err)
+		}
+		if err := deploySandboxConfigCmd.Args(deploySandboxConfigCmd, nil); err != nil {
+			t.Fatalf("Args(--sandbox-classes=microvm): %v", err)
 		}
 		r, err := config.Resolve(deploySandboxConfigCmd.Flags(), config.ResolveOptions{})
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		if !r.Bool("skipMicroVMDeps") {
-			t.Error("r.Bool(\"skipMicroVMDeps\") = false, want true")
+		cfg := &config.Config{}
+		cfg.SetResolved(r)
+
+		prev := env
+		env = &steps.Env{Cfg: cfg}
+		t.Cleanup(func() { env = prev })
+
+		got, err := sandboxClassesOption()
+		if err != nil {
+			t.Fatalf("sandboxClassesOption(): %v", err)
+		}
+		if got != "microvm" {
+			t.Errorf("sandboxClassesOption() = %q, want %q", got, "microvm")
+		}
+	})
+
+	t.Run("unknown class is rejected before connecting", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"deploy", "ate-system", "--sandbox-classes=kata"},
+			{"deploy", "sandboxconfig", "--sandbox-classes=kata"},
+		} {
+			resetCommandFlags(t, deployAteSystemCmd.Flags())
+			resetCommandFlags(t, deploySandboxConfigCmd.Flags())
+			if err := runRoot(t, args...); err == nil {
+				t.Errorf("runRoot(%v) = nil, want unknown sandbox class error", args)
+			}
+			if env != nil {
+				t.Errorf("runRoot(%v) connected to a cluster before rejecting unknown sandbox class", args)
+			}
 		}
 	})
 }

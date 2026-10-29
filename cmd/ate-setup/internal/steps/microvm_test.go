@@ -26,15 +26,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -55,64 +56,77 @@ func sha256HexString(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func TestVerifyMicroVMAssetDigests(t *testing.T) {
-	origDigests := microvmAssetDigests["amd64"]
-	microvmAssetDigests["amd64"] = map[string]string{
+func testAssetDigests() map[string]string {
+	return map[string]string{
 		"cloud-hypervisor": sha256HexString("ch-bytes"),
 		"virtiofsd":        sha256HexString("virtiofsd-bytes"),
 		"vmlinux":          sha256HexString("vmlinux-bytes"),
 		"rootfs.img":       sha256HexString("rootfs-bytes"),
 	}
-	t.Cleanup(func() { microvmAssetDigests["amd64"] = origDigests })
+}
 
-	writeValidAssets := func(t *testing.T, dir string) {
-		t.Helper()
-		for name, body := range map[string]string{
-			"cloud-hypervisor": "ch-bytes",
-			"virtiofsd":        "virtiofsd-bytes",
-			"vmlinux":          "vmlinux-bytes",
-			"rootfs.img":       "rootfs-bytes",
-		} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-				t.Fatal(err)
-			}
+func writeValidTestAssets(t *testing.T, dir string) {
+	t.Helper()
+	for name, body := range map[string]string{
+		"cloud-hypervisor": "ch-bytes",
+		"virtiofsd":        "virtiofsd-bytes",
+		"vmlinux":          "vmlinux-bytes",
+		"rootfs.img":       "rootfs-bytes",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
+}
+
+func TestVerifyMicroVMAssetDigests(t *testing.T) {
+	digests := testAssetDigests()
 
 	t.Run("matching digests succeed", func(t *testing.T) {
 		dir := t.TempDir()
-		writeValidAssets(t, dir)
-		if err := verifyMicroVMAssetDigests(dir, "amd64"); err != nil {
+		writeValidTestAssets(t, dir)
+		if err := verifyMicroVMAssetDigests(dir, digests); err != nil {
 			t.Fatalf("verifyMicroVMAssetDigests() = %v, want nil", err)
 		}
 	})
 
-	t.Run("mismatched digest fails", func(t *testing.T) {
+	t.Run("mismatched digests report all mismatches at once", func(t *testing.T) {
 		dir := t.TempDir()
-		writeValidAssets(t, dir)
-		if err := os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("corrupted"), 0o644); err != nil {
+		writeValidTestAssets(t, dir)
+		if err := os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("bad-kernel"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := verifyMicroVMAssetDigests(dir, "amd64")
-		if err == nil || !strings.Contains(err.Error(), "sha256 =") {
-			t.Fatalf("verifyMicroVMAssetDigests() = %v, want sha256 mismatch error", err)
+		if err := os.WriteFile(filepath.Join(dir, "rootfs.img"), []byte("bad-rootfs"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := verifyMicroVMAssetDigests(dir, digests)
+		if err == nil {
+			t.Fatal("verifyMicroVMAssetDigests() = nil, want mismatch error")
+		}
+		for _, wantSubstr := range []string{
+			"vmlinux: got " + sha256HexString("bad-kernel") + ", want " + digests["vmlinux"],
+			"rootfs.img: got " + sha256HexString("bad-rootfs") + ", want " + digests["rootfs.img"],
+		} {
+			if !strings.Contains(err.Error(), wantSubstr) {
+				t.Errorf("verifyMicroVMAssetDigests() = %q, missing %q", err, wantSubstr)
+			}
 		}
 	})
 
 	t.Run("missing file fails", func(t *testing.T) {
 		dir := t.TempDir()
-		writeValidAssets(t, dir)
+		writeValidTestAssets(t, dir)
 		if err := os.Remove(filepath.Join(dir, "rootfs.img")); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyMicroVMAssetDigests(dir, "amd64"); err == nil {
+		if err := verifyMicroVMAssetDigests(dir, digests); err == nil {
 			t.Fatal("verifyMicroVMAssetDigests() succeeded with missing file, want error")
 		}
 	})
 
-	t.Run("unknown arch fails", func(t *testing.T) {
-		if err := verifyMicroVMAssetDigests(t.TempDir(), "riscv64"); err == nil {
-			t.Fatal("verifyMicroVMAssetDigests() succeeded with unknown arch, want error")
+	t.Run("empty digests map fails", func(t *testing.T) {
+		if err := verifyMicroVMAssetDigests(t.TempDir(), nil); err == nil {
+			t.Fatal("verifyMicroVMAssetDigests() succeeded with nil digests, want error")
 		}
 	})
 }
@@ -123,15 +137,7 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 	if stamp != wantStamp {
 		t.Fatalf("microvmAssetStamp() =\n%q\nwant\n%q", stamp, wantStamp)
 	}
-
-	writeAllAssets := func(t *testing.T, dir string) {
-		t.Helper()
-		for _, f := range microvmAssets {
-			if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
+	digests := testAssetDigests()
 
 	t.Run("missing file triggers assemble without stale warning", func(t *testing.T) {
 		dir := t.TempDir()
@@ -140,7 +146,7 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
 		if !need || stale {
 			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, false)", need, stale)
 		}
@@ -148,8 +154,8 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 
 	t.Run("missing stamp with all files present reports stale", func(t *testing.T) {
 		dir := t.TempDir()
-		writeAllAssets(t, dir)
-		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		writeValidTestAssets(t, dir)
+		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
 		if !need || !stale {
 			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
 		}
@@ -157,24 +163,39 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 
 	t.Run("mismatched stamp reports stale", func(t *testing.T) {
 		dir := t.TempDir()
-		writeAllAssets(t, dir)
+		writeValidTestAssets(t, dir)
 		oldStamp := microvmAssetStamp("amd64", "4.0.0", defaultCloudHypervisorVersion)
 		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(oldStamp), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
 		if !need || !stale {
 			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
 		}
 	})
 
-	t.Run("matching stamp skips assemble", func(t *testing.T) {
+	t.Run("matching stamp with corrupted file digest reports stale", func(t *testing.T) {
 		dir := t.TempDir()
-		writeAllAssets(t, dir)
+		writeValidTestAssets(t, dir)
 		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(stamp), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp)
+		if err := os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("corrupted"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
+		if !need || !stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
+		}
+	})
+
+	t.Run("matching stamp and matching digests skip assemble", func(t *testing.T) {
+		dir := t.TempDir()
+		writeValidTestAssets(t, dir)
+		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(stamp), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
 		if need || stale {
 			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (false, false)", need, stale)
 		}
@@ -297,19 +318,17 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 
 	const virtiofsdBody = "fake-virtiofsd-binary"
 	const chBody = "fake-cloud-hypervisor-binary"
-	origDigests := microvmAssetDigests["amd64"]
-	microvmAssetDigests["amd64"] = map[string]string{
+	digests := map[string]string{
 		"cloud-hypervisor": sha256HexString(chBody),
 		"virtiofsd":        sha256HexString(virtiofsdBody),
 		"vmlinux":          sha256HexString("fake-kernel-bytes"),
 		"rootfs.img":       sha256HexString("fake-rootfs-bytes"),
 	}
-	t.Cleanup(func() { microvmAssetDigests["amd64"] = origDigests })
 
 	serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
 
 	outDir := t.TempDir()
-	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0"); err != nil {
+	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0", digests); err != nil {
 		t.Fatalf("assembleMicroVMAssets() = %v", err)
 	}
 
@@ -358,7 +377,7 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0"); err == nil {
+	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0", testAssetDigests()); err == nil {
 		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download aborted mid-stream")
 	}
 	if _, err := os.Stat(stampPath); !errors.Is(err, os.ErrNotExist) {
@@ -375,8 +394,8 @@ func TestAssembleMicroVMAssetsRejectsDigestMismatchBeforeStamping(t *testing.T) 
 	serveFakeReleases(t, validKataArchive(t, "bad-virtiofsd-bytes"), "ch", false)
 
 	outDir := t.TempDir()
-	err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0")
-	if err == nil || !strings.Contains(err.Error(), "sha256 =") {
+	err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0", testAssetDigests())
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 		t.Fatalf("assembleMicroVMAssets() = %v, want sha256 mismatch error", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outDir, assetStampFile)); !errors.Is(statErr, os.ErrNotExist) {
@@ -426,6 +445,24 @@ func TestExtractKataTarZstRejectsTraversal(t *testing.T) {
 
 func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 	tmplPath := filepath.Join(repoRoot(t), microvmSandboxConfigTemplate)
+	digests, err := loadMicroVMAssetDigests(tmplPath)
+	if err != nil {
+		t.Fatalf("loadMicroVMAssetDigests(%s) = %v", tmplPath, err)
+	}
+	for _, arch := range microvmArches {
+		for _, asset := range microvmAssets {
+			d := digests[arch][asset]
+			if len(d) != 64 {
+				t.Errorf("digests[%s][%s] = %q, want 64-char sha256 hex", arch, asset, d)
+			}
+		}
+	}
+	for _, asset := range microvmAssets {
+		if digests["amd64"][asset] == digests["arm64"][asset] {
+			t.Errorf("amd64 and arm64 share the same digest for %s: %s", asset, digests["amd64"][asset])
+		}
+	}
+
 	for _, tc := range []struct {
 		scheme string
 		bucket string
@@ -446,13 +483,10 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 			}
 			for _, arch := range microvmArches {
 				for _, asset := range microvmAssets {
-					wantURL := tc.scheme + "://" + tc.bucket + "/" + microvmAssetsPrefix + "/" + defaultMicroVMAssetVersion + "/" + arch + "/" + asset
+					wantDigest := digests[arch][asset]
+					wantURL := tc.scheme + "://" + tc.bucket + "/" + microvmAssetsPrefix + "/" + arch + "/" + wantDigest
 					if !strings.Contains(string(rendered), wantURL) {
 						t.Errorf("rendered manifest missing expected bucket URL %q:\n%s", wantURL, rendered)
-					}
-					wantDigest := microvmAssetDigests[arch][asset]
-					if !strings.Contains(string(rendered), wantDigest) {
-						t.Errorf("rendered manifest missing expected %s/%s digest %q:\n%s", arch, asset, wantDigest, rendered)
 					}
 				}
 			}
@@ -468,19 +502,65 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 	}
 }
 
+func TestMicroVMArches(t *testing.T) {
+	kindEnv := &Env{Cfg: &config.Config{Kind: true}}
+	if got, want := kindEnv.microVMArches(), []string{runtime.GOARCH}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Kind microVMArches() = %v, want %v", got, want)
+	}
+	gkeEnv := &Env{Cfg: &config.Config{Kind: false}}
+	if got, want := gkeEnv.microVMArches(), []string{"amd64", "arm64"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("non-Kind microVMArches() = %v, want %v", got, want)
+	}
+}
+
+func TestParseSandboxClasses(t *testing.T) {
+	for _, tc := range []struct {
+		raw         string
+		wantGvisor  bool
+		wantMicroVM bool
+		wantErr     bool
+	}{
+		{raw: "", wantGvisor: true, wantMicroVM: true},
+		{raw: "gvisor,microvm", wantGvisor: true, wantMicroVM: true},
+		{raw: "microvm,gvisor", wantGvisor: true, wantMicroVM: true},
+		{raw: "gvisor", wantGvisor: true, wantMicroVM: false},
+		{raw: "microvm", wantGvisor: false, wantMicroVM: true},
+		{raw: "kata", wantErr: true},
+		{raw: "gvisor,", wantErr: true},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			gvisor, microvm, err := parseSandboxClasses(tc.raw)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseSandboxClasses(%q) err = %v, wantErr %v", tc.raw, err, tc.wantErr)
+			}
+			if gvisor != tc.wantGvisor || microvm != tc.wantMicroVM {
+				t.Errorf("parseSandboxClasses(%q) = (%v, %v), want (%v, %v)", tc.raw, gvisor, microvm, tc.wantGvisor, tc.wantMicroVM)
+			}
+		})
+	}
+}
+
 func TestStageMicroVMAssetsToGCS(t *testing.T) {
 	silenceStepLog(t)
+
+	tmplPath := filepath.Join(repoRoot(t), microvmSandboxConfigTemplate)
+	digests, err := loadMicroVMAssetDigests(tmplPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	root := t.TempDir()
 	binDir := t.TempDir()
 	callsFile := filepath.Join(t.TempDir(), "gcloud-calls.txt")
-	if err := os.WriteFile(filepath.Join(binDir, "gcloud"), []byte("#!/bin/sh\necho \"$*\" >> "+callsFile+"\n"), 0o755); err != nil {
+	existingObj := "gs://test-bucket-assets/" + microvmAssetsPrefix + "/amd64/" + digests["amd64"]["vmlinux"]
+	script := "#!/bin/sh\necho \"$*\" >> " + callsFile + "\nif [ \"$2\" = \"ls\" ]; then\n  echo \"" + existingObj + "\"\nfi\n"
+	if err := os.WriteFile(filepath.Join(binDir, "gcloud"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	for _, arch := range microvmArches {
-		dir := filepath.Join(root, "bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch)
+		dir := filepath.Join(root, "bin", microvmAssetsPrefix, arch)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -492,7 +572,7 @@ func TestStageMicroVMAssetsToGCS(t *testing.T) {
 	}
 
 	env := &Env{Cfg: &config.Config{Root: root, BucketName: "test-bucket"}}
-	if err := env.stageMicroVMAssetsToGCS(t.Context(), "test-bucket-assets"); err != nil {
+	if err := env.stageMicroVMAssetsToGCS(t.Context(), "test-bucket-assets", digests); err != nil {
 		t.Fatalf("stageMicroVMAssetsToGCS() = %v", err)
 	}
 
@@ -503,16 +583,133 @@ func TestStageMicroVMAssetsToGCS(t *testing.T) {
 	got := string(gotBytes)
 	for _, arch := range microvmArches {
 		for _, f := range microvmAssets {
-			src := filepath.Join(root, "bin", microvmAssetsPrefix, defaultMicroVMAssetVersion, arch, f)
-			dst := "gs://test-bucket-assets/" + microvmAssetsPrefix + "/" + defaultMicroVMAssetVersion + "/" + arch + "/" + f
-			if want := "storage cp " + src + " " + dst; !strings.Contains(got, want) {
+			src := filepath.Join(root, "bin", microvmAssetsPrefix, arch, f)
+			dst := "gs://test-bucket-assets/" + microvmAssetsPrefix + "/" + arch + "/" + digests[arch][f]
+			want := "storage cp " + src + " " + dst
+			if dst == existingObj {
+				if strings.Contains(got, want) {
+					t.Errorf("expected existing object %q to be skipped, but found %q in:\n%s", dst, want, got)
+				}
+				continue
+			}
+			if !strings.Contains(got, want) {
 				t.Errorf("missing expected gcloud upload %q in:\n%s", want, got)
 			}
 		}
 	}
 }
 
-func TestDeployMicroVMDepsRequiresBucketOnNonKind(t *testing.T) {
+func TestStageMicroVMAssetsToRustfs(t *testing.T) {
+	silenceStepLog(t)
+
+	tmplPath := filepath.Join(repoRoot(t), microvmSandboxConfigTemplate)
+	digests, err := loadMicroVMAssetDigests(tmplPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	binDir := t.TempDir()
+	callsFile := filepath.Join(t.TempDir(), "docker-calls.txt")
+	existingKey := microvmAssetsPrefix + "/" + runtime.GOARCH + "/" + digests[runtime.GOARCH]["vmlinux"]
+	script := "#!/bin/sh\necho \"$*\" >> " + callsFile + "\ncase \"$*\" in\n  *\"s3 ls --recursive\"*)\n    echo \"2026-10-28 00:00:00 123 " + existingKey + "\"\n    ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	archDir := filepath.Join(root, "bin", microvmAssetsPrefix, runtime.GOARCH)
+	if err := os.MkdirAll(archDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range microvmAssets {
+		if err := os.WriteFile(filepath.Join(archDir, f), []byte(f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	replicas := int32(1)
+	cs := fake.NewClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "kind-worker"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "kind-worker2"}},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "rustfs", Namespace: "ate-system", Generation: 1},
+			Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration: 1,
+				Replicas:           1,
+				UpdatedReplicas:    1,
+				ReadyReplicas:      1,
+				AvailableReplicas:  1,
+			},
+		},
+		&batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: "rustfs-bucket-init", Namespace: "ate-system"},
+			Status: batchv1.JobStatus{
+				Conditions: []batchv1.JobCondition{{
+					Type:   batchv1.JobComplete,
+					Status: corev1.ConditionTrue,
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "rustfs-old-failed",
+				Namespace: "ate-system",
+				Labels:    map[string]string{"app": "rustfs"},
+			},
+			Spec:   corev1.PodSpec{NodeName: "kind-worker"},
+			Status: corev1.PodStatus{Phase: corev1.PodFailed},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "rustfs-abc",
+				Namespace: "ate-system",
+				Labels:    map[string]string{"app": "rustfs"},
+			},
+			Spec: corev1.PodSpec{NodeName: "kind-worker2"},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "rustfs", Namespace: "ate-system"},
+			Spec:       corev1.ServiceSpec{ClusterIP: "fd00:10:96::1234"},
+		},
+	)
+
+	env := &Env{
+		Cfg:  &config.Config{Root: root, Kind: true},
+		Kube: kube.NewFromClients(nil, cs, nil, cs.Discovery()),
+	}
+	if err := env.stageMicroVMAssetsToRustfs(t.Context(), defaultKindMicroVMBucket, digests); err != nil {
+		t.Fatalf("stageMicroVMAssetsToRustfs() = %v", err)
+	}
+
+	gotBytes, err := os.ReadFile(callsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(gotBytes)
+	if !strings.Contains(got, "--network container:kind-worker2") {
+		t.Errorf("expected rustfs pod's node (kind-worker2) in docker args, got:\n%s", got)
+	}
+	if !strings.Contains(got, "AWS_ENDPOINT_URL=http://[fd00:10:96::1234]:9000") {
+		t.Errorf("expected bracketed IPv6 endpoint URL in docker args, got:\n%s", got)
+	}
+	for _, f := range microvmAssets {
+		key := microvmAssetsPrefix + "/" + runtime.GOARCH + "/" + digests[runtime.GOARCH][f]
+		want := "s3 cp - s3://" + defaultKindMicroVMBucket + "/" + key
+		if key == existingKey {
+			if strings.Contains(got, want) {
+				t.Errorf("expected existing object %q to be skipped, but found %q in:\n%s", key, want, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("missing expected rustfs upload %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestPrepareMicroVMDepsRequiresBucketOnNonKind(t *testing.T) {
 	silenceStepLog(t)
 
 	cs := fake.NewClientset()
@@ -520,11 +717,10 @@ func TestDeployMicroVMDepsRequiresBucketOnNonKind(t *testing.T) {
 		Cfg:  &config.Config{Root: t.TempDir(), Kind: false},
 		Kube: kube.NewFromClients(nil, cs, nil, cs.Discovery()),
 	}
-	err := env.DeployMicroVMDeps(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "BUCKET_NAME") {
-		t.Fatalf("DeployMicroVMDeps() on non-Kind without BucketName = %v, want BUCKET_NAME error", err)
+	if _, err := env.prepareMicroVMDeps(t.Context()); err == nil || !strings.Contains(err.Error(), "BUCKET_NAME") {
+		t.Fatalf("prepareMicroVMDeps() on non-Kind without BucketName = %v, want BUCKET_NAME error", err)
 	}
-	err = env.DeploySandboxConfig(t.Context(), false)
+	err := env.DeploySandboxConfig(t.Context(), DefaultSandboxClasses)
 	if err == nil || !strings.Contains(err.Error(), "BUCKET_NAME") {
 		t.Fatalf("DeploySandboxConfig() on non-Kind without BucketName = %v, want BUCKET_NAME error", err)
 	}
@@ -612,34 +808,6 @@ func TestMicroVMBucket(t *testing.T) {
 	}
 }
 
-func TestDeleteMicroVMDeps(t *testing.T) {
-	silenceStepLog(t)
-
-	gvr := atev1.GroupVersion.WithResource("sandboxconfigs")
-	cs := fake.NewClientset()
-	cs.Resources = []*metav1.APIResourceList{{
-		GroupVersion: atev1.GroupVersion.String(),
-		APIResources: []metav1.APIResource{{Name: "sandboxconfigs", Kind: "SandboxConfig"}},
-	}}
-	scheme := runtime.NewScheme()
-	dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
-		scheme,
-		map[schema.GroupVersionResource]string{gvr: "SandboxConfigList"},
-		newSandboxConfig(microvmSandboxConfigName),
-	)
-	env := &Env{
-		Cfg:  &config.Config{Kind: true},
-		Kube: kube.NewFromClients(nil, cs, dc, cs.Discovery()),
-	}
-
-	if err := env.DeleteMicroVMDeps(t.Context()); err != nil {
-		t.Fatalf("DeleteMicroVMDeps() = %v, want nil", err)
-	}
-	if _, err := dc.Resource(gvr).Get(t.Context(), microvmSandboxConfigName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("Get(%s) after DeleteMicroVMDeps = %v, want NotFound", microvmSandboxConfigName, err)
-	}
-}
-
 func TestMicroVMDepsStepsAreSeparableFromContext(t *testing.T) {
 	silenceStepLog(t)
 
@@ -647,10 +815,10 @@ func TestMicroVMDepsStepsAreSeparableFromContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if err := env.DeployMicroVMDeps(ctx); err == nil {
-		t.Error("DeployMicroVMDeps() with a cancelled context = nil, want an error")
+	if _, err := env.prepareMicroVMDeps(ctx); err == nil {
+		t.Error("prepareMicroVMDeps() with a cancelled context = nil, want an error")
 	}
-	if err := env.DeleteMicroVMDeps(ctx); err == nil {
-		t.Error("DeleteMicroVMDeps() with a cancelled context = nil, want an error")
+	if err := env.applyMicroVMSandboxConfig(ctx, &microVMPrepared{}); err == nil {
+		t.Error("applyMicroVMSandboxConfig() with a cancelled context = nil, want an error")
 	}
 }

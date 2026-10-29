@@ -27,9 +27,10 @@ asset set is four files per architecture (`amd64` and `arm64`):
 - `rootfs.img` — the guest rootfs image (from `kata-static`)
 
 `go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
-assembles both architectures into `bin/microvm-assets/v2/{amd64,arm64}/`, verifies
+assembles the guest assets into `bin/microvm-assets/<arch>/` (the host
+architecture on kind, and both `amd64` and `arm64` on non-kind), verifies
 their SHA-256 digests against `manifests/ate-install/sandboxconfig-microvm.yaml.tmpl`,
-stages them into the cluster's object store under `microvm-assets/<version>/<arch>/`
+stages them into the cluster's object store under `microvm-assets/<arch>/<sha256>`
 (the shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
 bucket `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`
 `SandboxConfig`. Assets must not be stored under a snapshot location (an
@@ -77,9 +78,9 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.c
 ```
 
 This is a one-shot bring-up: it deploys the control plane (which assembles the
-guest runtime assets for `amd64` and `arm64` if not already present under
-`bin/microvm-assets/`, stages them into the in-cluster rustfs bucket, and
-applies the cluster-wide `microvm` `SandboxConfig`), then deploys the demo
+guest runtime assets for the host architecture if not already present under
+`bin/microvm-assets/<arch>/`, stages them into the in-cluster rustfs bucket,
+and applies the cluster-wide `microvm` `SandboxConfig`), then deploys the demo
 worker pool + template.
 
 ### 4. Verify
@@ -179,8 +180,8 @@ cd <your substrate checkout>
 ```
 
 The first run of `run-microvm-demo-kind.sh` downloads the guest runtime
-releases and extracts them into `bin/microvm-assets/v2/{amd64,arm64}/`; later
-runs reuse those directories when the version stamps and SHA-256 digests match.
+releases and extracts them into `bin/microvm-assets/<arch>/`; later
+runs reuse that directory when the version stamp and SHA-256 digests match.
 
 Verify as in Option A, step 4.
 

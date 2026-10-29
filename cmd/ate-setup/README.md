@@ -16,11 +16,14 @@ tag they share:
 
 ```
 ate-setup deploy ate-system \
+  --storage-bucket-name=BUCKET \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=IDS \
   --image-repo registry.example.com/substrate \
   --image-tag vX.Y.Z
 ```
+
+Pass `--sandbox-classes=gvisor` to skip staging microVM guest assets to `<BUCKET>-assets`.
 
 The registry has to hold every image the install deploys. The images a release
 publishes to `ghcr.io/agent-substrate/substrate` leave out the demos and the
