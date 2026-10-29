@@ -535,8 +535,6 @@ mod tests {
     let config = Config::default();
     let mut filter = CacheFilter::new_test_filter(config);
 
-    // The cache is process-wide and tests run in parallel, so this test needs an
-    // actor no other test caches to be sure it sees a miss.
     let target_actor = b"team-b/actor-forged";
     let mut mock = MockEnvoyHttpFilter::default();
     mock
@@ -579,7 +577,6 @@ mod tests {
 
   #[test]
   fn test_request_with_body_bypasses_cache_and_learns() {
-    // Each test uses its own actor: the cache is process-wide and tests run in parallel.
     let key = "team-b/actor-body";
     let _entry = cache::insert(key.to_string(), "10.244.9.1".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_CACHED_ACTORS);
 
@@ -1253,7 +1250,7 @@ mod tests {
   }
 
   #[test]
-  fn test_upstream_503_with_uc_does_not_replay_even_for_bodiless_get() {
+  fn test_upstream_503_uc_does_not_replay_when_entry_is_not_marked() {
     let config = Config::default();
     let entry = cache::insert("team-j/actor-14".to_string(), "10.244.6.4".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_CACHED_ACTORS);
 
@@ -1273,8 +1270,8 @@ mod tests {
       .expect_get_attribute_int()
       .returning(|_| Some(RESPONSE_FLAG_UC));
 
-    // UC cannot be safely replayed because an upstream termination could have occurred
-    // after the worker executed side effects. It is evicted, but not replayed.
+    // No refusal marked the entry stale, so the UC may be a tunnel cut off after the actor
+    // got the request. It is evicted, but not replayed.
     let resp_status = filter.on_response_headers(&mut mock, false);
     assert_eq!(
       resp_status,

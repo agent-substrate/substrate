@@ -238,37 +238,23 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	})
 }
 
-// tryProbeJSON calls a probe endpoint through the router and decodes its reply.
-func tryProbeJSON(ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string) (map[string]string, error) {
-	resp, err := router.Get(ctx, actorRef, path)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GET %s: status %d: %s", path, resp.StatusCode, body)
-	}
-
-	var out map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", path, err)
-	}
-	return out, nil
-}
-
 // probeJSON calls a probe endpoint through the router and decodes its reply.
 func probeJSON(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) map[string]string {
 	t.Helper()
 
-	out, err := tryProbeJSON(ctx, router, actorRef, path)
+	resp, err := router.Get(ctx, actorRef, path)
 	if err != nil {
-		// A stale cache hit after suspend/resume evicts on the first failure.
-		// Retry once through the fresh ext_proc route.
-		out, err = tryProbeJSON(ctx, router, actorRef, path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET %s: status %d: %s", path, resp.StatusCode, body)
+	}
+
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding %s: %v", path, err)
 	}
 	return out
 }
