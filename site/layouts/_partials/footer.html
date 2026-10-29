@@ -26,6 +26,7 @@ limitations under the License.
           <span>Agent Substrate</span>
         </a>
         <p class="as-footer__tagline">A secure-by-default runtime for running agents at scale.</p>
+        <p class="as-footer__origin">Agent Substrate was originally created by Google.</p>
       </div>
 
       <div class="as-footer__col">
@@ -53,8 +54,17 @@ limitations under the License.
       </div>
     </div>
 
+    <div class="as-footer__cncf">
+      <a href="https://www.cncf.io/" target="_blank" rel="noopener" class="as-footer__cncf-logo" aria-label="Cloud Native Computing Foundation">
+        {{ with resources.Get "icons/cncf.svg" -}}
+          <img src="{{ .RelPermalink }}" width="126" height="24" alt="Cloud Native Computing Foundation">
+        {{- end }}
+      </a>
+      <span class="as-footer__cncf-text">We are a <a href="https://www.cncf.io/" target="_blank" rel="noopener">Cloud Native Computing Foundation</a> sandbox project.</span>
+    </div>
+
     <div class="as-footer__bottom">
-      <span>&copy; {{ now.Year }} {{ .Site.Params.copyright }}. Licensed under Apache 2.0.</span>
+      <span>Copyright &copy; {{ now.Year }} {{ .Site.Params.copyright }}. For website terms of use, trademark policy and other project policies please see <a href="https://lfprojects.org/policies/" target="_blank" rel="noopener">policy</a>.</span>
     </div>
   </div>
 </footer>
@@ -67,7 +77,7 @@ limitations under the License.
 {{ end -}}
 <footer class="td-footer as-footer as-footer--docs d-print-none">
   <div class="as-footer__docs-bar">
-    <span>&copy; {{ now.Year }} {{ .Site.Params.copyright }}. Licensed under Apache 2.0.</span>
+    <span class="as-footer__docs-legal">Copyright &copy; {{ now.Year }} {{ .Site.Params.copyright }}. For website terms of use, trademark policy and other project policies please see <a href="https://lfprojects.org/policies/" target="_blank" rel="noopener">policy</a>.</span>
     {{ if and $repo $path -}}
     <div class="as-footer__docs-meta">
       <a href="{{ printf "%s/blob/%s/%s" $repo $branch $path }}" target="_blank" rel="noopener" class="td-page-meta__view">Source: {{ $path }}</a>

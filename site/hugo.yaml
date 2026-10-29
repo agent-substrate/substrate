@@ -94,7 +94,7 @@ params:
   github_subdir: "site"
   github_branch: "main"
 
-  copyright: "The Agent Substrate Authors"
+  copyright: "Agent Substrate a Series of LF Projects, LLC"
 
   # Directories under the repository root that are mounted as static files at
   # the same path, so relative image links in included docs resolve on the site.
