@@ -13,9 +13,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
-# Agent Substrate — Full Documentation Bundle (llms-full.txt)
+# Agent Substrate: Full Documentation Bundle (llms-full.txt)
 
-> Complete machine-readable compilation of Agent Substrate's Get Started guides, Concepts, Architecture, How-to Guides, Reference (API, CLI, Glossary, Metrics), Security, Tutorials, and Project documentation.
+> Complete Markdown compilation of Agent Substrate's Get Started guides, Concepts, Tutorials, How-to Guides, Reference, Security, and Project documentation.
 > Canonical index: {{ "llms.txt" | absURL }}
 
 {{- $docs := site.GetPage "/docs" -}}
@@ -27,6 +27,9 @@ limitations under the License.
 SECTION: {{ upper ($section.LinkTitle | default $section.Title) }}
 PAGE: {{ $p.Title }}
 URL: {{ $p.Permalink }}
+{{- with $p.OutputFormats.Get "markdown" }}
+MARKDOWN: {{ .Permalink }}
+{{- end }}
 {{- with $p.Params.repo_source }}
 SOURCE: {{ . }}
 {{- end }}

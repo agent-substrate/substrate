@@ -6,7 +6,7 @@ card_icon: "fa-solid fa-code"
 aliases:
   - "/docs/guides/api-guide/"
 description: >
-  Define WorkerPools and ActorTemplates, the workload blueprints of Agent Substrate.
+  Define WorkerPools, ActorTemplates, and SandboxConfigs, and call the Control Plane gRPC API.
 ---
 
 # Substrate API Guide: WorkerPool & ActorTemplate
