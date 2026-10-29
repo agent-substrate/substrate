@@ -157,15 +157,20 @@ if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+=" for \`linux/amd64\` and \`linux/arm64\`. The images a release publishes are listed in"
   notes+=" [Release images](https://github.com/${REPO}/blob/${tag}/docs/dev/releasing.md#release-images)."
   images_file="${RELEASE_IMAGES_FILE:-}"
+  # The example verifies by digest when the digests are known.
+  example="${RELEASE_IMAGE_REPO}/ateapi:${tag}"
   if [[ -n "${images_file}" && -r "${images_file}" ]]; then
     notes+=$' By digest:\n\n```\n'
     while read -r hex image; do
       notes+="${image}@sha256:${hex}"$'\n'
+      if [[ "${image}" == */ateapi ]]; then
+        example="${image}@sha256:${hex}"
+      fi
     done <"${images_file}"
     notes+='```'
   fi
   notes+=$'\n\nEach image has a build provenance attestation:\n\n```sh\n'
-  notes+="gh attestation verify oci://${RELEASE_IMAGE_REPO}/ateapi:${tag} --repo ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yaml"$'\n'
+  notes+="gh attestation verify oci://${example} --repo ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yaml --source-ref refs/tags/${tag}"$'\n'
   notes+='```'
   notes+=$'\n\n## Install\n\n'
   notes+="From a checkout of \`${tag}\`, with Go, install the release images into the current kubectl context."
@@ -188,7 +193,7 @@ if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+=" Download the binary for your platform and its \`.sha256\` file, check both, and put it on your \`PATH\` as \`kubectl-ate\`:"
   notes+=$'\n\n```sh\n'
   notes+=$'shasum -a 256 -c kubectl-ate-linux-amd64.sha256\n'
-  notes+="gh attestation verify kubectl-ate-linux-amd64 --repo ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yaml"$'\n'
+  notes+="gh attestation verify kubectl-ate-linux-amd64 --repo ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yaml --source-ref refs/tags/${tag}"$'\n'
   notes+=$'install -m 0755 kubectl-ate-linux-amd64 ~/.local/bin/kubectl-ate\n'
   notes+='```'
 fi
