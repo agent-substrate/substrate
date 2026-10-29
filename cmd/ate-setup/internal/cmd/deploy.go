@@ -151,10 +151,10 @@ var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
 	Short: "Deploy the SandboxConfig admission policy and this build's gVisor SandboxConfig only",
 	Long: `Deploy the SandboxConfig admission policy and create this build's gVisor
-SandboxConfig from manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl. A
-release names it substrate-<version>-gvisor. Any other build names it
-substrate-dev-<hash>-gvisor, hashed from the rendered config, so builds with
-the same config share one.
+SandboxConfig from manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl. It is
+named substrate-<hash>-gvisor, hashed from the rendered config, so builds with
+the same config share one, and labeled
+sandboxconfig.ate.dev/created-by-version with the version that creates it.
 
 When this run creates the config, it gets the
 sandboxconfig.ate.dev/is-class-default annotation, unless

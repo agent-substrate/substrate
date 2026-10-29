@@ -16,11 +16,10 @@
 # sandboxconfig-gvisor.yaml.tmpl, which every install applies, this is opt-in:
 # hack/install-microvm-deps.sh --install stages the asset set (assemble.sh +
 # stage-to-gcs.sh / stage-to-rustfs.sh), then creates
-# substrate-<release>-microvm from this template, or
-# substrate-dev-<hash>-microvm for a build that is not a release, and by
-# default annotates it as the class default. It leaves an existing config as
-# it is, so editing this file changes only the configs that later builds
-# create.
+# substrate-<hash>-microvm from this template, hashed from the rendered
+# config, and by default annotates it as the class default. It leaves an
+# existing config as it is, so editing this file changes only the configs
+# that later builds create.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the asset bucket ${ASSET_BUCKET_NAME} under
@@ -51,6 +50,8 @@ apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
   name: ${SANDBOXCONFIG_NAME}
+  labels:
+    sandboxconfig.ate.dev/created-by-version: "${SUBSTRATE_VERSION}"
 spec:
   sandboxClass: microvm
   defaultVersion: v2

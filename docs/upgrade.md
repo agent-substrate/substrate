@@ -218,7 +218,7 @@ kubectl -n ate-system rollout status deploy/atenet-egress
 go run ./cmd/ate-setup deploy sandboxconfig --config ~/ate-upgrade/new.yaml
 ```
 
-By default this creates this release's gVisor SandboxConfig, `substrate-$NEW_RELEASE-gvisor`, as the gVisor class default. gVisor pools without a `configRef` move to it without rolling their workers. If the cluster runs microVM pools, also follow [microVM](sandboxconfig-upgrade.md#microvm) in the SandboxConfig upgrade guide.
+By default this creates the new release's gVisor SandboxConfig as the gVisor class default, and gVisor pools without a `configRef` move to it without rolling their workers. If the release did not change the config, it exists already and nothing changes. If the cluster runs microVM pools, also follow [microVM](sandboxconfig-upgrade.md#microvm) in the SandboxConfig upgrade guide.
 
 To control which pools move and when, and for what happens to suspended actors, see the [SandboxConfig upgrade guide](sandboxconfig-upgrade.md).
 
@@ -240,7 +240,7 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 
 Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
 
-The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Then delete the SandboxConfigs of earlier releases that no pool uses, as in [Delete earlier configs](sandboxconfig-upgrade.md#delete-earlier-configs). Keep `~/ate-upgrade` while you might still roll back, then delete it.
+The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Then delete the earlier SandboxConfigs that no pool uses, as in [Delete earlier configs](sandboxconfig-upgrade.md#delete-earlier-configs). Keep `~/ate-upgrade` while you might still roll back, then delete it.
 
 ## Something's wrong, or I need to roll back
 

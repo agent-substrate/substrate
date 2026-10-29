@@ -114,9 +114,8 @@ resource below on the way, so those subcommands are only needed to redo one on
 a running cluster.
 
 `deploy ate-system` and `deploy sandboxconfig` create this build's gVisor
-SandboxConfig with the `sandboxconfig.ate.dev/is-class-default` annotation. A
-release names it `substrate-<version>-gvisor`. Any other build names it
-`substrate-dev-<hash>-gvisor`, hashed from the rendered config. Pass
+SandboxConfig with the `sandboxconfig.ate.dev/is-class-default` annotation. It
+is named `substrate-<hash>-gvisor`, hashed from the rendered config. Pass
 `--create-with-default-annotation=false` to create it without the annotation.
 An existing config is left as it is, annotations included.
 

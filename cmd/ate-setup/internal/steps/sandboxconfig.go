@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -32,7 +31,6 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
-	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
@@ -109,18 +107,20 @@ type sandboxConfig struct {
 	exists   bool
 }
 
-// checkSandboxConfig returns this build's gVisor SandboxConfig. It fails when
-// sandboxConfigExists does.
+// checkSandboxConfig returns this build's gVisor SandboxConfig, labeled with
+// the Substrate version that creates it. It fails when the version is not a
+// valid label value, or when sandboxConfigExists fails.
 func (e *Env) checkSandboxConfig(ctx context.Context) (sandboxConfig, error) {
+	version := e.SubstrateVersion()
+	if errs := validation.IsValidLabelValue(version); len(errs) > 0 {
+		return sandboxConfig{}, fmt.Errorf("version %q is not a valid SandboxConfig label value: %s; set VERSION to one", version, strings.Join(errs, "; "))
+	}
 	tmpl := e.Cfg.Manifest("sandboxconfig-gvisor.yaml.tmpl")
 	unnamed, err := render.Template(tmpl, nil, nil)
 	if err != nil {
 		return sandboxConfig{}, err
 	}
-	name, err := sandboxConfigName(e.SubstrateVersion(), atev1.SandboxClassGvisor, unnamed)
-	if err != nil {
-		return sandboxConfig{}, err
-	}
+	name := sandboxConfigName(atev1.SandboxClassGvisor, unnamed)
 	configs, err := e.listSandboxConfigs(ctx)
 	if err != nil {
 		return sandboxConfig{}, err
@@ -129,7 +129,7 @@ func (e *Env) checkSandboxConfig(ctx context.Context) (sandboxConfig, error) {
 	if err != nil {
 		return sandboxConfig{}, err
 	}
-	manifest := render.Expand(string(unnamed), map[string]string{"SANDBOXCONFIG_NAME": name}, nil)
+	manifest := render.Expand(string(unnamed), map[string]string{"SANDBOXCONFIG_NAME": name, "SUBSTRATE_VERSION": version}, nil)
 	return sandboxConfig{name: name, manifest: manifest, exists: exists}, nil
 }
 
@@ -166,40 +166,20 @@ func (e *Env) sandboxConfigs() dynamic.ResourceInterface {
 	return e.Kube.Dynamic.Resource(atev1.GroupVersion.WithResource("sandboxconfigs"))
 }
 
-// sandboxConfigName returns the name of the SandboxConfig of class that
-// Substrate version installs. unnamed is the config's manifest rendered
-// without its name.
-//
-//   - A release's config is substrate-<version>-<class>, with the version
-//     lower-cased. version is a release when it is a release tag without what
-//     `git describe` appends to one.
-//   - Any other build's is substrate-dev-<hash>-<class>. hash is the first
-//     10 hex digits of the SHA-256 of unnamed without its comment lines, so
-//     builds that render the same config share it.
-func sandboxConfigName(version string, class atev1.SandboxClass, unnamed []byte) (string, error) {
-	var id string
-	if images.CheckReleaseVersion(version) == nil && !gitDescribeSuffix.MatchString(version) {
-		id = strings.ToLower(version)
-	} else {
-		h := sha256.New()
-		for _, line := range strings.SplitAfter(string(unnamed), "\n") {
-			if !strings.HasPrefix(strings.TrimSpace(line), "#") {
-				h.Write([]byte(line))
-			}
+// sandboxConfigName returns the name of the SandboxConfig of class rendered
+// as unnamed, the config's manifest without its name and label. The name is
+// substrate-<hash>-<class>. hash is the first 10 hex digits of the SHA-256 of
+// unnamed without its comment lines, so builds that render the same config
+// share it. Editing the config later does not rename it.
+func sandboxConfigName(class atev1.SandboxClass, unnamed []byte) string {
+	h := sha256.New()
+	for _, line := range strings.SplitAfter(string(unnamed), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			h.Write([]byte(line))
 		}
-		id = "dev-" + hex.EncodeToString(h.Sum(nil))[:10]
 	}
-	name := fmt.Sprintf("substrate-%s-%s", id, class)
-	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
-		return "", fmt.Errorf("version %q gives the invalid SandboxConfig name %q: %s", version, name, strings.Join(errs, "; "))
-	}
-	return name, nil
+	return fmt.Sprintf("substrate-%s-%s", hex.EncodeToString(h.Sum(nil))[:10], class)
 }
-
-// gitDescribeSuffix matches what `git describe --dirty` appends to a tag: the
-// number of commits since it and the commit, and -dirty. A release tag
-// allows both as a prerelease.
-var gitDescribeSuffix = regexp.MustCompile(`(-[0-9]+-g[0-9a-f]+)(-dirty)?$|-dirty$`)
 
 // classDefaultWarning returns a warning about the class default of class, or
 // "" for none. configs are the SandboxConfigs in the cluster, and name is

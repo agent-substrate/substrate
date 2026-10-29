@@ -27,29 +27,18 @@ import (
 func TestSandboxConfigName(t *testing.T) {
 	tests := []struct {
 		name     string
-		version  string
+		class    atev1.SandboxClass
 		manifest string
 		want     string
-		wantErr  bool
 	}{
-		{name: "release tag", version: "v0.4.2", manifest: "spec: a\n", want: "substrate-v0.4.2-gvisor"},
-		{name: "release candidate in upper case", version: "v1.0.0-RC.1", manifest: "spec: a\n", want: "substrate-v1.0.0-rc.1-gvisor"},
-		{name: "git describe of a dirty checkout", version: "v0.4.2-12-gabc1234-dirty", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
-		{name: "comment lines do not count", version: "v0.4.2-12-gabc1234-dirty", manifest: "# a\n  # b\nspec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
-		{name: "another spec", version: "v0.4.2-12-gabc1234-dirty", manifest: "spec: b\n", want: "substrate-dev-22e34e826a-gvisor"},
-		{name: "git describe of a release tag", version: "v0.4.2-3-gabc1234", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
-		{name: "dirty checkout of a release tag", version: "v0.4.2-dirty", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
-		{name: "moving image tag", version: "main", manifest: "spec: a\n", want: "substrate-dev-d5ee99cf6b-gvisor"},
-		{name: "release candidate with an empty label", version: "v1.0.0-rc..1", manifest: "spec: a\n", wantErr: true},
+		{name: "gvisor", class: atev1.SandboxClassGvisor, manifest: "spec: a\n", want: "substrate-d5ee99cf6b-gvisor"},
+		{name: "comment lines do not count", class: atev1.SandboxClassGvisor, manifest: "# a\n  # b\nspec: a\n", want: "substrate-d5ee99cf6b-gvisor"},
+		{name: "another spec", class: atev1.SandboxClassGvisor, manifest: "spec: b\n", want: "substrate-22e34e826a-gvisor"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sandboxConfigName(tt.version, atev1.SandboxClassGvisor, []byte(tt.manifest))
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("sandboxConfigName(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
-			}
-			if got != tt.want {
-				t.Errorf("sandboxConfigName(%q) = %q, want %q", tt.version, got, tt.want)
+			if got := sandboxConfigName(tt.class, []byte(tt.manifest)); got != tt.want {
+				t.Errorf("sandboxConfigName(%q, %q) = %q, want %q", tt.class, tt.manifest, got, tt.want)
 			}
 		})
 	}

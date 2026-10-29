@@ -25,12 +25,12 @@
 # has them), stages the assets under kata-assets/ to the cluster's object
 # store bucket (rustfs on kind, GCS on GKE), and creates this build's
 # microVM SandboxConfig from the template unless it exists. It is named as
-# `ate-setup` names the gVisor config: substrate-<version>-microvm for a
-# release, else substrate-dev-<hash>-microvm. Every asset sha256 is pinned in
-# the template, so the render only substitutes the name and the bucket. A
-# config this run creates gets the sandboxconfig.ate.dev/is-class-default
-# annotation, unless --create-with-default-annotation=false. An existing
-# config is left as it is, annotations included.
+# `ate-setup` names the gVisor config, substrate-<hash>-microvm, and labeled
+# with VERSION. Every asset sha256 is pinned in the template, so the render
+# only substitutes the name, the label and the bucket. A config this run
+# creates gets the sandboxconfig.ate.dev/is-class-default annotation, unless
+# --create-with-default-annotation=false. An existing config is left as it
+# is, annotations included.
 #
 # Nothing here deletes the configs. Like the gVisor configs, they stay until
 # the SandboxConfig CRD is deleted with the control plane.
@@ -49,8 +49,8 @@
 #   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs); default
 #                    false uploads assets to GCS.
-#   VERSION          (optional) Substrate version that names the SandboxConfig
-#                    (default: git describe).
+#   VERSION          (optional) Substrate version the SandboxConfig is labeled
+#                    with (default: git describe).
 
 set -o errexit -o nounset -o pipefail
 
@@ -151,27 +151,17 @@ microvm_configs="$(get_microvm_configs)"
 # --- install ----------------------------------------------------------------
 
 # Name this build's config the way `ate-setup` names the gVisor one (see
-# sandboxConfigName in cmd/ate-setup/internal/steps/sandboxconfig.go). A
-# release tag without what `git describe` appends gives
-# substrate-<version>-microvm. Anything else gives substrate-dev-<hash>-microvm,
-# hashed from the config rendered without its name and comment lines. Checked
-# here so a bad name fails before the stage overwrites the bucket's assets.
-version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || true)}"
+# sandboxConfigName in cmd/ate-setup/internal/steps/sandboxconfig.go):
+# substrate-<hash>-microvm, hashed from the config rendered without its name,
+# label and comment lines. The version is checked here so a bad label value
+# fails before the stage overwrites the bucket's assets.
 manifest="$(sed -e "s|\${BUCKET_SCHEME}|${BUCKET_SCHEME}|g" \
     -e "s|\${ASSET_BUCKET_NAME}|${ASSET_BUCKET_NAME}|g" \
     "${MANIFEST_TEMPLATE}")"
-# The release tag pattern of CheckReleaseVersion in
-# cmd/ate-setup/internal/images/release.go.
-if [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ &&
-  ! "${version}" =~ (-[0-9]+-g[0-9a-f]+)(-dirty)?$|-dirty$ ]]; then
-  config_id="$(tr '[:upper:]' '[:lower:]' <<<"${version}")"
-else
-  config_id="dev-$(sed '/^[[:space:]]*#/d' <<<"${manifest}" | shasum -a 256 | cut -c1-10)"
-fi
-SANDBOXCONFIG_NAME="substrate-${config_id}-microvm"
-dns_label='[a-z0-9]([-a-z0-9]*[a-z0-9])?'
-if [[ ! "${SANDBOXCONFIG_NAME}" =~ ^${dns_label}(\.${dns_label})*$ || ${#SANDBOXCONFIG_NAME} -gt 253 ]]; then
-  echo "Error: version '${version}' gives the invalid SandboxConfig name ${SANDBOXCONFIG_NAME}." >&2
+SANDBOXCONFIG_NAME="substrate-$(sed '/^[[:space:]]*#/d' <<<"${manifest}" | shasum -a 256 | cut -c1-10)-microvm"
+version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || true)}"
+if [[ ! "${version}" =~ ^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$ || ${#version} -gt 63 ]]; then
+  echo "Error: version '${version}' is not a valid SandboxConfig label value; set VERSION to one." >&2
   exit 1
 fi
 
@@ -271,15 +261,15 @@ fi
 
 # --- 3. create this build's microVM SandboxConfig ---------------------------
 # Every asset is downloaded rather than built, so all four carry committed,
-# reproducible per-arch shas and the name and the bucket's scheme and name are
-# the only substitutions. An existing config may have been edited since, so it
+# reproducible per-arch shas and the name, the label, and the bucket's scheme
+# and name are the only substitutions. An existing config may have been edited since, so it
 # is left as it is.
 if [[ "${exists}" == "true" ]]; then
   log "SandboxConfig ${SANDBOXCONFIG_NAME} exists; leaving it and its annotations as they are."
 else
   log "Creating SandboxConfig ${SANDBOXCONFIG_NAME} from ${MANIFEST_TEMPLATE}..."
-  # shellcheck disable=SC2016 # the template's placeholder, not a variable
-  run_kubectl create -f - <<<"${manifest//'${SANDBOXCONFIG_NAME}'/${SANDBOXCONFIG_NAME}}"
+  run_kubectl create -f - <<<"$(sed -e "s|\${SANDBOXCONFIG_NAME}|${SANDBOXCONFIG_NAME}|g" \
+    -e "s|\${SUBSTRATE_VERSION}|${version}|g" <<<"${manifest}")"
   if [[ "${create_with_default_annotation}" == "true" ]]; then
     run_kubectl annotate --overwrite sandboxconfig "${SANDBOXCONFIG_NAME}" "${DEFAULT_ANNOTATION}=true"
   fi

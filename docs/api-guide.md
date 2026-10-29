@@ -63,7 +63,7 @@ spec:
   - name: gvisor
     # Optional. Pins the pool to one SandboxConfig instead of the class default.
     # configRef:
-    #   name: substrate-v0.4.2-gvisor
+    #   name: substrate-04e4d62011-gvisor
   template:
     labels:
       project: agent-platform
@@ -523,7 +523,7 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | `state` | `string` | Optional. `Enabled` (default) or `Disabled`. The version named by `defaultVersion` cannot be `Disabled`. |
 | `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A microVM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair; `url` is at most 2048 bytes. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. On update it checks only versions that are new or whose assets changed. atelet holds no storage credentials: it fetches every URL through the node's object-store plugin (`AssetProvider`), with the plugin's credentials. Which schemes work depends on the plugin; the in-tree one serves only its storage backend's scheme, `gs://` on GCS and `s3://` on S3, as `<bucket>/<object>`, and rejects other schemes without reading them. A `gs://` URL the plugin cannot serve (it has no such object, rejects the URL, does not implement `AssetProvider`, is unreachable, or fails with an error it does not recognize, such as GCS refusing its credentials for a public bucket) is then read anonymously, which serves public buckets such as `gs://gvisor`; any other refusal by the plugin is final. The plugin returns an object only if its content matches `sha256`, and refuses any URL under a snapshot location (a snapshot location followed by `/atespaces/`), so assets must not be stored there. On GKE, setup-gcp lets the plugin read only the asset bucket, `<BUCKET_NAME>-assets`, so keep assets there. atelet verifies the sha256 again before using an asset. Its logs and errors show an asset URL as `scheme://host/path`. |
 
-Each Substrate release installs its own gVisor `SandboxConfig`, `substrate-<release>-gvisor`, rendered from [`manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl`](../manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl). A build that is not a release names it `substrate-dev-<hash>-gvisor`, hashed from the rendered config, so builds with the same config share one. `ate-setup deploy ate-system` and `ate-setup deploy sandboxconfig` add the class-default annotation when they create it, unless run with `--create-with-default-annotation=false`, so gVisor `WorkerPool`s use it without any extra setup. They leave an existing config as it is, annotations included, so use `kubectl annotate` to change its annotation. If a newer config of the class already has the annotation, the newer one stays the default, and `ate-setup` warns. Configs from earlier releases stay in the cluster.
+Substrate installs a gVisor `SandboxConfig` rendered from [`manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl`](../manifests/ate-install/sandboxconfig-gvisor.yaml.tmpl). It is named `substrate-<hash>-gvisor`, hashed from the rendered config, so builds and releases with the same config share one. Editing the config does not rename it. The label `sandboxconfig.ate.dev/created-by-version` records the Substrate version that created it. `ate-setup deploy ate-system` and `ate-setup deploy sandboxconfig` add the class-default annotation when they create it, unless run with `--create-with-default-annotation=false`, so gVisor `WorkerPool`s use it without any extra setup. They leave an existing config as it is, annotations included, so use `kubectl annotate` to change its annotation. If a newer config of the class already has the annotation, the newer one stays the default, and `ate-setup` warns. Configs from earlier builds stay in the cluster.
 
 ### Class default
 
@@ -545,7 +545,7 @@ atecontroller keeps a `SandboxConfig` from being deleted while a `WorkerPool` us
 A delete cannot be undone, and an object that is being deleted cannot be recreated under the same name. Applying its manifest again only updates the terminating object. To recover from deleting a class default that pools still use:
 
 1. Create a replacement under a different name with the `is-class-default` annotation. Pools move to it on their own, the finalizer is released, and the old config disappears.
-2. Once the old config is gone, `ate-setup deploy sandboxconfig` recreates the release's config under its original name. Pools move back to it, because it is then the newest default.
+2. Once the old config is gone, `ate-setup deploy sandboxconfig` recreates this build's config under its original name. Pools move back to it, because it is then the newest default.
 
 atecontroller alone adds and releases the finalizer. While it is down, `kubectl delete sandboxconfig` of a config that carries the finalizer hangs until atecontroller is back. `ate-setup` strips the finalizer from every config when it deletes the control plane.
 
@@ -555,7 +555,9 @@ atecontroller alone adds and releases the finalizer. While it is down, `kubectl 
 apiVersion: ate.dev/v1
 kind: SandboxConfig
 metadata:
-  name: substrate-v0.4.2-gvisor
+  name: substrate-04e4d62011-gvisor
+  labels:
+    sandboxconfig.ate.dev/created-by-version: "v0.4.2"
   annotations:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
@@ -579,7 +581,7 @@ spec:
 
 A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture of each version must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, and `kata-image` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a microVM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them. The same convention applies to every class: worker pods of a pool tolerate `ate.dev/sandboxClass=<its class>:NoSchedule`, so a cluster can reserve a node pool per sandbox class with that taint, and the atelet DaemonSet tolerates the key for any value. On GKE, a pool can also select a ComputeClass with `template.nodeSelector` (`cloud.google.com/compute-class: <class>`): GKE taints the nodes it creates for the class `cloud.google.com/compute-class=<class>:NoSchedule` and adds the matching toleration to the worker pods, and the atelet DaemonSet tolerates that key as well.
 
-`hack/install-microvm-deps.sh --install` stages the assets and creates `substrate-<release>-microvm` from [`manifests/microvm/sandboxconfig-microvm.yaml.tmpl`](../manifests/microvm/sandboxconfig-microvm.yaml.tmpl), or `substrate-dev-<hash>-microvm` for a build that is not a release, with the class-default annotation unless run with `--create-with-default-annotation=false`. Like the gVisor installers, it leaves an existing config as it is. See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
+`hack/install-microvm-deps.sh --install` stages the assets and creates `substrate-<hash>-microvm` from [`manifests/microvm/sandboxconfig-microvm.yaml.tmpl`](../manifests/microvm/sandboxconfig-microvm.yaml.tmpl), hashed from the rendered config and labeled with `VERSION`, with the class-default annotation unless run with `--create-with-default-annotation=false`. Like the gVisor installers, it leaves an existing config as it is. See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 
 ---
 

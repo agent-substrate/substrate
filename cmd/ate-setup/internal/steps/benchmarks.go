@@ -120,8 +120,8 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 func (e *Env) runScript(ctx context.Context, relPath string, args ...string) error {
 	cmd := exec.CommandContext(ctx, e.Cfg.Path(relPath), args...)
 	cmd.Dir = e.Cfg.Root
-	// install-microvm-deps.sh names its SandboxConfig after VERSION. Set it
-	// so the name matches the gVisor config's, also with prebuilt images.
+	// install-microvm-deps.sh labels its SandboxConfig with VERSION. Set it
+	// so the label matches the gVisor config's, also with prebuilt images.
 	cmd.Env = append(e.Cfg.ScriptEnv(), "VERSION="+e.SubstrateVersion())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
