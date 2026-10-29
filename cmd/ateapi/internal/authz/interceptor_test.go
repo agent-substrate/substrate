@@ -484,7 +484,6 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	}}}
 	deleteTag := rpcCall{ateapi.Control_DeleteTag_FullMethodName, &ateapi.DeleteTagRequest{Tag: tag}}
 	mintJWT := rpcCall{ateapi.Control_MintActorJwt_FullMethodName, &ateapi.MintActorJwtRequest{Actor: actor}}
-	mintCert := rpcCall{ateapi.Control_MintActorCertificate_FullMethodName, &ateapi.MintActorCertificateRequest{Actor: actor}}
 	// cloneTag creates an actor in atespace from team-a's tag v1, with a
 	// template in that same atespace so only the tag check can differ.
 	cloneTag := func(atespace string, sourceTag *ateapi.ObjectRef) rpcCall {
@@ -586,7 +585,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		// Only the egress gateway mints actor credentials; not even owners.
 		{"editor cannot mint actor JWT", "editor", mintJWT, codes.PermissionDenied},
 		{"global owner cannot mint actor JWT", "global-owner", mintJWT, codes.PermissionDenied},
-		{"bootstrap owner cannot mint actor certificate", "bootstrap-owner", mintCert, codes.PermissionDenied},
+		{"bootstrap owner cannot mint actor JWT", "bootstrap-owner", mintJWT, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer)
@@ -661,7 +660,6 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	markUnavailable := rpcCall{ateapi.Control_MarkWorkerUnavailable_FullMethodName, &ateapi.MarkWorkerUnavailableRequest{Worker: worker}}
 	listAssignments := rpcCall{ateapi.Control_ListWorkerActorAssignments_FullMethodName, &ateapi.ListWorkerActorAssignmentsRequest{Worker: worker}}
 	mintJWT := rpcCall{ateapi.Control_MintActorJwt_FullMethodName, &ateapi.MintActorJwtRequest{Actor: actor}}
-	mintCert := rpcCall{ateapi.Control_MintActorCertificate_FullMethodName, &ateapi.MintActorCertificateRequest{Actor: actor}}
 
 	mtls := func(id string) principal.PrincipalInfo {
 		return principal.PrincipalInfo{ID: id, Kind: principal.KindMTLS}
@@ -699,7 +697,6 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"egress gateway lists actors", mtls(egressID), listAllActors, codes.OK},
 		{"egress gateway cannot get worker", mtls(egressID), getWorker, codes.PermissionDenied},
 		{"egress gateway mints actor JWT", mtls(egressID), mintJWT, codes.OK},
-		{"egress gateway mints actor certificate", mtls(egressID), mintCert, codes.OK},
 
 		// atenet-router resumes actors. Both it and atenet-egress list actors
 		// as their ateapi health check.
@@ -711,7 +708,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		{"ingress router cannot get egress policy", mtls(routerID), getEgress, codes.PermissionDenied},
 		{"ingress router cannot create worker", mtls(routerID), createWorker, codes.PermissionDenied},
 		{"ingress router cannot mint actor JWT", mtls(routerID), mintJWT, codes.PermissionDenied},
-		{"controller cannot mint actor certificate", mtls(controllerID), mintCert, codes.PermissionDenied},
+		{"controller cannot mint actor JWT", mtls(controllerID), mintJWT, codes.PermissionDenied},
 
 		// atelet reads egress policies for the worker that enforces them, and
 		// nothing else.

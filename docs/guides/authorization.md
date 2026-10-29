@@ -143,7 +143,7 @@ through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
 | Role | Held by | Allows |
 |---|---|---|
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
-| `egress_gateway` | `atenet-egress`, and any other SPIFFE IDs passed with `--egress-gateway-spiffe-id`, which ate-setup sets from `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs and certificates |
+| `egress_gateway` | `atenet-egress`, and any other SPIFFE IDs passed with `--egress-gateway-spiffe-id`, which ate-setup sets from `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
 | `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
@@ -192,7 +192,7 @@ viewer, and a global role holds the same role in every atespace. So
 | `ResumeActor` | `can_resume`, the actor | Editor of its atespace; `atenet-router` |
 | `GetActorEgressPolicy` | `can_get_egress_policy`, the actor | Viewer of its atespace; `atenet-egress`; `atelet` |
 | `CreateActorEgressPolicy`, `UpdateActorEgressPolicy`, `DeleteActorEgressPolicy` | `can_create_egress_policy` / `can_update_egress_policy` / `can_delete_egress_policy`, the actor | Editor of its atespace |
-| `MintActorJwt`, `MintActorCertificate` | `can_mint_actor_jwt` / `can_mint_actor_certificate`, the actor | `atenet-egress` only |
+| `MintActorJwt` | `can_mint_actor_jwt`, the actor | `atenet-egress` only |
 
 ### Tags
 

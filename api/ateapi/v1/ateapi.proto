@@ -90,16 +90,6 @@ service Control {
     option (method).resource = "Actor";
   }
 
-  // Create a Substrate-issued SPIFFE certificate asserting the actor identity.
-  //
-  // SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
-  //
-  // * Called by the egress gateway when actor client certificate injection is
-  //   configured for outbound requests.
-  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {
-    option (method).resource = "Actor";
-  }
-
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
   // cannot collect it. When the Actor's latest snapshot is not uploaded yet,
@@ -2011,39 +2001,6 @@ message MintActorJwtResponse {
 
   // expire_time is when actor_jwt expires. Equal to its exp claim.
   google.protobuf.Timestamp expire_time = 2;
-}
-
-// Request message for MintActorCertificate.
-message MintActorCertificateRequest {
-  // The actor for which the certificate should be issued.
-  //
-  // Must be a valid actor that currently exists according to the actor store.
-  //
-  // +k8s:required
-  ObjectRef actor = 1;
-
-  // The UID of the actor --- used to guard against deletion and recreation of
-  // an actor with the same name.
-  //
-  // +k8s:required
-  // +k8s:format=k8s-uuid
-  string actor_uid = 2;
-
-  // Request contains DER encoded bytes of a x509 certificate signing request.
-  // The signer will ignore the contents of the CSR except to extract the
-  // subject public key.
-  //
-  // +k8s:required
-  // +k8s:maxBytes=16384
-  bytes certificate_signing_request = 3;
-}
-
-// Response message for MintActorCertificate.
-message MintActorCertificateResponse {
-  // Response contains a list of DER encoded certificates. The first entry is the
-  // leaf certificate, and any remaining entries are intermediates in
-  // leaf-to-root order.
-  repeated bytes actor_certificates = 1;
 }
 
 message ListTagsRequest {

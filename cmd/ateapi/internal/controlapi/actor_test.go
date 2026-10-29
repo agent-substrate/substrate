@@ -16,11 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"strings"
@@ -34,13 +29,9 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
-	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/internal/substratex509"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1067,103 +1058,5 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				t.Fatalf("missing snapshot source for %s", scenario)
 			}
 		})
-	}
-}
-
-type fakeActorServiceStore struct {
-	serviceStore
-	actors map[resources.ActorRef]*ateapi.Actor
-}
-
-func (f *fakeActorServiceStore) GetActor(_ context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
-	a, ok := f.actors[actorRef]
-	if !ok {
-		return nil, store.ErrNotFound
-	}
-	return a, nil
-}
-
-func TestMintActorCertificate(t *testing.T) {
-	ctx := peer.NewContext(context.Background(), &peer.Peer{
-		AuthInfo: credentials.TLSInfo{
-			State: tls.ConnectionState{
-				PeerCertificates: []*x509.Certificate{{}},
-			},
-		},
-	})
-
-	actorUID := "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"
-	created := &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Uid: actorUID},
-		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-1"},
-		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
-	}
-	fakeStore := &fakeActorServiceStore{
-		actors: map[resources.ActorRef]*ateapi.Actor{
-			{Atespace: testAtespace, Name: testActorID}: created,
-		},
-	}
-
-	ca, err := localca.GenerateCA("1", localca.KeyTypeECDSAP256, 24*time.Hour)
-	if err != nil {
-		t.Fatalf("GenerateCA: %v", err)
-	}
-	caPool := &localca.ConcretePool{
-		CAs:              []*localca.CA{ca},
-		ActiveForSigning: "1",
-	}
-
-	svc := &RPCService{
-		impl:          fakeStore,
-		actorIDCAPool: caPool,
-	}
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
-	if err != nil {
-		t.Fatalf("CreateCertificateRequest: %v", err)
-	}
-
-	resp, err := svc.MintActorCertificate(ctx, &ateapi.MintActorCertificateRequest{
-		Actor:                     &ateapi.ObjectRef{Atespace: testAtespace, Name: testActorID},
-		ActorUid:                  created.GetMetadata().GetUid(),
-		CertificateSigningRequest: csr,
-	})
-	if err != nil {
-		t.Fatalf("MintActorCertificate() failed: %v", err)
-	}
-
-	chain := resp.GetActorCertificates()
-	if len(chain) == 0 {
-		t.Fatal("MintActorCertificate() returned empty chain")
-	}
-
-	leaf, err := x509.ParseCertificate(chain[0])
-	if err != nil {
-		t.Fatalf("ParseCertificate: %v", err)
-	}
-	if !key.PublicKey.Equal(leaf.PublicKey) {
-		t.Error("leaf public key does not match CSR key")
-	}
-
-	wantURI := fmt.Sprintf("spiffe://substrate-actor.local/actor/%s/%s", testAtespace, testActorID)
-	if len(leaf.URIs) != 1 || leaf.URIs[0].String() != wantURI {
-		t.Errorf("leaf URIs = %v, want [%s]", leaf.URIs, wantURI)
-	}
-
-	identity, err := substratex509.ActorIdentityFromCertificate(leaf)
-	if err != nil {
-		t.Fatalf("ActorIdentityFromCertificate: %v", err)
-	}
-	wantIdentity := &substratex509.ActorIdentity{
-		Atespace:  testAtespace,
-		ActorName: testActorID,
-		ActorUid:  created.GetMetadata().GetUid(),
-	}
-	if diff := cmp.Diff(wantIdentity, identity); diff != "" {
-		t.Errorf("ActorIdentity mismatch (-want +got):\n%s", diff)
 	}
 }

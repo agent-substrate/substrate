@@ -1772,7 +1772,7 @@ type MintActorCertificateRequest struct {
 	// corresponding private key.
 	//
 	// +k8s:required
-	// +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
+	// +k8s:maxBytes=16384 # matches the control-plane MintWorkerActorCertificateRequest bound this is forwarded to
 	CertificateSigningRequest []byte `protobuf:"bytes,4,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache

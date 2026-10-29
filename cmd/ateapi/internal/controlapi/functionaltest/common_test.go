@@ -30,7 +30,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/installdefaults"
-	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
@@ -219,18 +218,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		ActiveForSigning: "1",
 	}
 
-	actorCA, err := localca.GenerateCA("1", localca.KeyTypeECDSAP256, 365*24*time.Hour)
-	if err != nil {
-		t.Fatalf("Error generating actor CA: %v", err)
-	}
-
-	actorCAPool := &localca.ConcretePool{
-		CAs: []*localca.CA{
-			actorCA,
-		},
-		ActiveForSigning: "1",
-	}
-
 	objectStore := objectstoretest.New()
 
 	service := controlapi.NewRPCService(
@@ -245,7 +232,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		objectstoreplugintest.ControlClient(objectStore),
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
-		actorCAPool,
 		testStorageLocation,
 	)
 

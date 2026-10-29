@@ -436,7 +436,7 @@ message MintActorCertificateRequest {
   // corresponding private key.
   //
   // +k8s:required
-  // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
+  // +k8s:maxBytes=16384 # matches the control-plane MintWorkerActorCertificateRequest bound this is forwarded to
   bytes certificate_signing_request = 4;
 }
 

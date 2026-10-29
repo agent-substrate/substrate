@@ -79,7 +79,6 @@ const (
 	RelationCanListTags             = "can_list_tags"
 	RelationCanUseTag               = "can_use_tag"
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
-	RelationCanMintActorCertificate = "can_mint_actor_certificate"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100

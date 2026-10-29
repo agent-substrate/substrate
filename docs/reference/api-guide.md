@@ -756,7 +756,7 @@ Query the physical resource pool.
 
 ate-api-server mints credentials that identify an actor to services outside Substrate. They name the logical actor, so they stay the same as the actor moves between workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
-Both RPCs are on `substrate.ateapi.v1.Control`. Only the egress gateway may call them; see [authorization.md](../guides/authorization.md). It calls `MintActorJwt` when an egress policy injects an actor JWT into a request.
+`MintActorJwt` is on `substrate.ateapi.v1.Control`. Only the egress gateway may call it; see [authorization.md](../guides/authorization.md). It calls this RPC when an egress policy injects an actor JWT into a request.
 
 ### `MintActorJwt`
 
@@ -773,13 +773,6 @@ The token's header carries `typ: JWT`, the algorithm of the pool's active signin
 *   `actor.ate.dev`: an object with the actor's `atespace`, `actorName`, and `actorUID`.
 
 Relying parties find the signing keys through OpenID Connect Discovery at `<iss>/.well-known/openid-configuration`, which ate-idp-server serves in every install.
-
-### `MintActorCertificate`
-
-*   **Request:** `actor`; `actor_uid`, which must match the actor's current UID, so that a deleted and recreated actor isn't mistaken for the old one (`ABORTED` otherwise); and `certificate_signing_request`, a DER-encoded CSR. The signer checks the CSR's signature and uses only its public key.
-*   **Response:** `actor_certificates`, DER certificates with the leaf first, followed by any intermediates.
-
-The caller must connect with a client certificate; a bearer token is not enough. The leaf is valid for one hour, allows client and server authentication, carries the SPIFFE URI `spiffe://substrate-actor.local/actor/<atespace>/<name>`, and has the `ActorIdentity` X.509 extension with the actor's atespace, name, and UID.
 
 ---
 
