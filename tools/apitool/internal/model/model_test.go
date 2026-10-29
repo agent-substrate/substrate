@@ -488,3 +488,32 @@ func TestPublicDoc(t *testing.T) {
 		})
 	}
 }
+
+func TestParseStandardMethod(t *testing.T) {
+	actor := model.Message{Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}}
+	accessPolicy := model.Message{Name: "AccessPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Plural: "AccessPolicies"}}
+	tests := []struct {
+		name       string
+		methodName protoreflect.Name
+		resource   model.Message
+		wantVerb   model.Verb
+		wantParent string
+		wantOK     bool
+	}{
+		{name: "top-level get", methodName: "GetActor", resource: actor, wantVerb: model.VerbGet, wantOK: true},
+		{name: "top-level list by plural", methodName: "ListActors", resource: actor, wantVerb: model.VerbList, wantOK: true},
+		{name: "list by singular", methodName: "ListActor", resource: actor},
+		{name: "subresource get", methodName: "GetAtespaceAccessPolicy", resource: accessPolicy, wantVerb: model.VerbGet, wantParent: "Atespace", wantOK: true},
+		{name: "subresource list", methodName: "ListGlobalAccessPolicies", resource: accessPolicy, wantVerb: model.VerbList, wantParent: "Global", wantOK: true},
+		{name: "subresource without its parent", methodName: "GetAccessPolicy", resource: accessPolicy},
+		{name: "custom method", methodName: "SuspendActor", resource: actor},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, parent, ok := model.ParseStandardMethod(tc.methodName, tc.resource)
+			if v != tc.wantVerb || parent != tc.wantParent || ok != tc.wantOK {
+				t.Errorf("ParseStandardMethod(%q) = (%q, %q, %t), want (%q, %q, %t)", tc.methodName, v, parent, ok, tc.wantVerb, tc.wantParent, tc.wantOK)
+			}
+		})
+	}
+}
