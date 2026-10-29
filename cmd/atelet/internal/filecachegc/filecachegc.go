@@ -297,11 +297,11 @@ func (g *gc) runPass(ctx context.Context) {
 	}
 	if stats.FreedBytes < target {
 		// Everything left is linked, young, or busy: the remaining usage is
-		// not the cache's to free. Warn on the first few, then a periodic
-		// reminder, never a line per tick.
+		// not the cache's to free. Warn on the first few and on any pass
+		// that evicts, then a periodic reminder, never a line per tick.
 		g.consecutiveShortfalls++
 		switch {
-		case g.consecutiveShortfalls <= shortfallWarnLimit:
+		case g.consecutiveShortfalls <= shortfallWarnLimit || evicted > 0:
 			slog.WarnContext(ctx, "File cache GC could not reach its budget",
 				append(attrs, slog.Int("consecutive", g.consecutiveShortfalls))...)
 		case g.consecutiveShortfalls%shortfallReminderEvery == 0:
