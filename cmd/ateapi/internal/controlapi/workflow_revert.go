@@ -187,7 +187,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 
 	if actor.GetStatus().GetAssignedNode() != "" {
 		forgetNode := false
-		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, nil, ateattr.OperationRevert); err != nil {
 			if !canDetachWithoutAtelet(ctx, actor, err) {
 				return err
 			}

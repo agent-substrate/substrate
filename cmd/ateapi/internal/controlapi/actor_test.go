@@ -359,8 +359,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}
 
 	// When the old template no longer exists there is nothing left to
-	// compare the volume layout against, so the repoint only requires the new
-	// ref to resolve.
+	// compare the full layout against. The external volume names must still
+	// match the actor's records.
 	orphan := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "orphan-actor"},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-gone"},
@@ -1165,5 +1165,62 @@ func TestMintActorCertificate(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantIdentity, identity); diff != "" {
 		t.Errorf("ActorIdentity mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestUpdateActor_MissingTemplateExternalVolumes(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		recorded, declared []string
+		wantCode           codes.Code
+	}{
+		{name: "missing volume", declared: []string{"data"}, wantCode: codes.FailedPrecondition},
+		{name: "removed volume", recorded: []string{"data"}, wantCode: codes.FailedPrecondition},
+		{name: "renamed volume", recorded: []string{"data"}, declared: []string{"cache"}, wantCode: codes.FailedPrecondition},
+		{name: "extra volume", recorded: []string{"data"}, declared: []string{"data", "cache"}, wantCode: codes.FailedPrecondition},
+		{name: "pending volumes reordered", recorded: []string{"data", "cache"}, declared: []string{"cache", "data"}},
+		{name: "no external volumes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			storetest.MustCreateAtespace(t, ctx, st, testAtespace)
+			tmpl := &ateapi.ActorTemplate{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "replacement"},
+				Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1"}},
+				Resources:  &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+			}
+			for _, name := range tc.declared {
+				tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}}})
+				tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts, &ateapi.VolumeMount{Name: name, MountPath: "/" + name})
+			}
+			if _, err := st.CreateActorTemplate(ctx, tmpl); err != nil {
+				t.Fatal(err)
+			}
+			var vols []*ateapi.ExternalVolumeStatus
+			for _, name := range tc.recorded {
+				vols = append(vols, &ateapi.ExternalVolumeStatus{Name: name, VolumeType: "substrate.io/mock"})
+			}
+			actor := storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "orphan"},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "gone"},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED, ExternalVolumes: &ateapi.ExternalVolumes{Volumes: vols}},
+			})
+			svc := &RPCService{impl: newServiceImpl(st, nil)}
+			_, err := svc.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{Metadata: proto.CloneOf(actor.GetMetadata()), ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "replacement"}}})
+			if got := apierror.Code(err); got != tc.wantCode {
+				t.Fatalf("UpdateActor = %v, want %v: %v", got, tc.wantCode, err)
+			}
+			if tc.wantCode != codes.OK {
+				stored, err := st.GetActor(ctx, resources.ActorRefFromActor(actor))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !proto.Equal(actor, stored) {
+					t.Errorf("rejected update changed actor: %v", stored)
+				}
+			}
+		})
 	}
 }
