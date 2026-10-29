@@ -197,7 +197,7 @@ var Registry = []Setting{
 	{
 		// The egress gateway's credential providers: one JSON object, or a JSON array
 		// of them for several. A repeated flag would be ideal, but a Setting holds one
-		// string on every channel, so an array is the best available option.
+		// string on every channel, so an array is the least worst option.
 		Key: "atenet.egress.credentialProvider", Env: "ATE_CREDENTIAL_PROVIDER",
 		Flag: "credential-provider", Kind: KindString,
 		Usage: "Credential provider the egress gateway injects credentials from, as JSON; " +
