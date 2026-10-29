@@ -30,8 +30,11 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1257,5 +1260,149 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 				t.Fatal("resync queued a terminally failed template")
 			}
 		})
+	}
+}
+
+// goldenBuildsReader registers the golden-build counter on a fresh
+// ManualReader, so each subtest observes only its own recordings.
+func goldenBuildsReader(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	if err := RegisterGoldenBuilds(mp.Meter("ateapi")); err != nil {
+		t.Fatalf("RegisterGoldenBuilds: %v", err)
+	}
+	t.Cleanup(func() { goldenBuildsCounter = nil })
+	return reader
+}
+
+// TestReconcileOneGoldenBuildsMetric pins the golden-build outcome counter:
+// terminal commits record exactly once, a reconciled-again terminal template
+// adds nothing, and a disabled template builds nothing, so it records nothing.
+func TestReconcileOneGoldenBuildsMetric(t *testing.T) {
+	goldenSnapshot := "gs://bucket/root/atespaces/" + testTemplateRef.Atespace + "/actors/" + someActorUID + "/snapshots/snap-1"
+
+	t.Run("success records once and a retried terminal reconcile adds nothing", func(t *testing.T) {
+		reader := goldenBuildsReader(t)
+		r := newTestTemplateReconciler(newFakeTemplateStore(testTemplate()), &fakeGoldenControl{snapshot: goldenSnapshot})
+		defer r.queue.ShutDown()
+		for range 2 {
+			if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
+				t.Fatalf("reconcileOne: %v", err)
+			}
+		}
+		assertGoldenBuild(t, reader, ateattr.TemplateGoldenSuccess, 1)
+	})
+
+	t.Run("tag conflict records the bounded failure reason once", func(t *testing.T) {
+		reader := goldenBuildsReader(t)
+		tag := &ateapi.Tag{
+			SourceActor: &ateapi.ObjectRef{Atespace: testTemplateRef.Atespace, Name: "another-actor"},
+			Status:      &ateapi.TagStatus{ActorTemplateUid: testTemplateUID},
+		}
+		r := newTestTemplateReconciler(newFakeTemplateStore(testTemplate()), &fakeGoldenControl{tag: proto.CloneOf(tag), exists: true})
+		defer r.queue.ShutDown()
+		for range 2 {
+			if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
+				t.Fatalf("reconcileOne: %v", err)
+			}
+		}
+		assertGoldenBuild(t, reader, ateattr.TemplateGoldenTagConflict, 1)
+	})
+
+	t.Run("crashed golden actor records the failure reason once", func(t *testing.T) {
+		reader := goldenBuildsReader(t)
+		r := newTestTemplateReconciler(newFakeTemplateStore(testTemplate()), &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_CRASHED})
+		defer r.queue.ShutDown()
+		if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
+			t.Fatalf("reconcileOne: %v", err)
+		}
+		assertGoldenBuild(t, reader, ateattr.TemplateGoldenActorCrashed, 1)
+	})
+
+	t.Run("disabled template records nothing", func(t *testing.T) {
+		reader := goldenBuildsReader(t)
+		r := newTestTemplateReconciler(newFakeTemplateStore(testTemplate(withoutGoldenSnapshot)), &fakeGoldenControl{})
+		defer r.queue.ShutDown()
+		if _, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil {
+			t.Fatalf("reconcileOne: %v", err)
+		}
+		var rm metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &rm); err != nil {
+			t.Fatalf("collect: %v", err)
+		}
+		for _, m := range rm.ScopeMetrics {
+			for _, mtr := range m.Metrics {
+				if mtr.Name == goldenBuildsMetric {
+					t.Errorf("recorded %s for a disabled template: %v", goldenBuildsMetric, mtr.Data)
+				}
+			}
+		}
+	})
+}
+
+// assertGoldenBuild collects the golden-build counter and requires exactly one
+// cumulative monotonic datapoint, for the given outcome and carrying exactly
+// the template identity labels — no more, so a double record of any outcome
+// fails the assertion.
+func assertGoldenBuild(t *testing.T, reader *sdkmetric.ManualReader, outcome string, want int64) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != goldenBuildsMetric {
+				continue
+			}
+			if m.Unit != "{build}" {
+				t.Errorf("%s unit = %q, want %q", goldenBuildsMetric, m.Unit, "{build}")
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s data type = %T, want a sum", goldenBuildsMetric, m.Data)
+			}
+			if !sum.IsMonotonic {
+				t.Errorf("%s is not monotonic; a build counter must never decrease", goldenBuildsMetric)
+			}
+			if len(sum.DataPoints) != 1 {
+				t.Fatalf("%s has %d datapoints, want exactly 1: %v", goldenBuildsMetric, len(sum.DataPoints), sum.DataPoints)
+			}
+			dp := sum.DataPoints[0]
+			if got := len(dp.Attributes.ToSlice()); got != 3 {
+				t.Errorf("datapoint carries %d labels, want exactly the 3 (atespace, name, outcome): %v", got, dp.Attributes.ToSlice())
+			}
+			gotOutcome, _ := dp.Attributes.Value(ateattr.TemplateGoldenOutcomeKey)
+			name, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
+			atespace, _ := dp.Attributes.Value(ateattr.TemplateAtespaceKey)
+			if gotOutcome.AsString() != outcome {
+				t.Errorf("outcome label = %q, want %q", gotOutcome.AsString(), outcome)
+			}
+			if name.AsString() != testTemplateName || atespace.AsString() != testAtespace {
+				t.Errorf("labels = (%s, %s), want (%s, %s)", name.AsString(), atespace.AsString(), testTemplateName, testAtespace)
+			}
+			if dp.Value != want {
+				t.Errorf("outcome %s value = %d, want %d (terminal commits must record exactly once)", outcome, dp.Value, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("metric %s not recorded", goldenBuildsMetric)
+}
+
+// TestGoldenBuildOutcomesExhaustive pins that every terminal failure reason
+// maps to a bounded, non-success outcome value, so no fail() can skip or empty
+// an outcome label when a reason is added.
+func TestGoldenBuildOutcomesExhaustive(t *testing.T) {
+	for _, reason := range []string{reasonGoldenTagConflict, reasonGoldenEgressPolicyConflict, reasonGoldenActorInvalid, reasonGoldenActorCrashed, reasonUnexpectedState} {
+		outcome, ok := goldenBuildOutcomes[reason]
+		if !ok || outcome == "" {
+			t.Errorf("terminal reason %q has no bounded outcome value", reason)
+		}
+		if outcome == ateattr.TemplateGoldenSuccess {
+			t.Errorf("terminal reason %q maps to the success outcome", reason)
+		}
 	}
 }
