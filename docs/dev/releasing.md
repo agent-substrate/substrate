@@ -24,7 +24,7 @@ The ruleset limits tag pushes only. Anyone with write access can still publish i
    - Remove Other Changes entries users do not need, and move entries that landed in the wrong section.
 3. Publish the release.
 
-If the workflow did not run, start it from the tag, with the tag as the input too. The jobs refuse a run started from another ref, because the attestations name the commit the run started from:
+If the workflow did not run, start it from the tag, with the tag as the input too. The jobs refuse a run started from another ref, because the attestations name the ref and commit the run started from:
 
 ```sh
 gh workflow run release.yaml --ref v1.0.0 -f tag=v1.0.0
@@ -73,11 +73,11 @@ The images are built from the work tree, so it must hold the tag and nothing els
 Every release image and `kubectl-ate` binary has a build provenance attestation ([`actions/attest-build-provenance`](https://github.com/actions/attest-build-provenance)): a statement signed by the workflow run that built it, naming the artifact's digest and the commit, workflow and run, stored on the repository. To verify:
 
 ```sh
-gh attestation verify oci://ghcr.io/agent-substrate/substrate/ateapi:v1.0.0 --repo agent-substrate/substrate --signer-workflow agent-substrate/substrate/.github/workflows/release.yaml
-gh attestation verify kubectl-ate-linux-amd64 --repo agent-substrate/substrate --signer-workflow agent-substrate/substrate/.github/workflows/release.yaml
+gh attestation verify oci://ghcr.io/agent-substrate/substrate/ateapi@sha256:<digest from the release notes> --repo agent-substrate/substrate --signer-workflow agent-substrate/substrate/.github/workflows/release.yaml --source-ref refs/tags/v1.0.0
+gh attestation verify kubectl-ate-linux-amd64 --repo agent-substrate/substrate --signer-workflow agent-substrate/substrate/.github/workflows/release.yaml --source-ref refs/tags/v1.0.0
 ```
 
-`--signer-workflow` ties the artifact to this repository's `release` workflow; `--repo` alone accepts any workflow in it. The attestation does not pin a tag, so install by the digests the notes list where that matters.
+`--signer-workflow` ties the artifact to this repository's `release` workflow and `--source-ref` to the run started from that tag; `--repo` alone accepts any workflow in it. Name images by the digests the notes list, since a tag can be moved.
 
 Immutable releases are a repository or organization setting an admin turns on before the first `v1.0.0` release. GitHub then locks a published release's assets and tag, attests the assets, and `gh release verify-asset <tag> <file>` checks a download. Drafts stay editable. Registry tags are outside it, so the `images` job keeps refusing to publish for a published release.
 
@@ -91,7 +91,7 @@ To check, verify and install one:
 
 ```sh
 shasum -a 256 -c kubectl-ate-linux-amd64.sha256
-gh attestation verify kubectl-ate-linux-amd64 --repo agent-substrate/substrate --signer-workflow agent-substrate/substrate/.github/workflows/release.yaml
+gh attestation verify kubectl-ate-linux-amd64 --repo agent-substrate/substrate --signer-workflow agent-substrate/substrate/.github/workflows/release.yaml --source-ref refs/tags/v1.0.0
 install -m 0755 kubectl-ate-linux-amd64 ~/.local/bin/kubectl-ate
 ```
 

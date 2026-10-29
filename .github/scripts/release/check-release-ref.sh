@@ -14,14 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Fails unless GITHUB_SHA, which the attestations name, is TAG's commit.
+# Fails unless this run started from TAG's ref and GITHUB_SHA is TAG's commit.
+# The attestations record both, and verification checks the ref as the source
+# ref.
 #
-#   TAG=<tag> GITHUB_SHA=<sha> .github/scripts/release/check-release-ref.sh
+#   TAG=<tag> GITHUB_REF=<ref> GITHUB_SHA=<sha> .github/scripts/release/check-release-ref.sh
 #
 # Used by the images and draft jobs in .github/workflows/release.yaml.
 
 set -o errexit -o nounset -o pipefail
 
+if [[ "${GITHUB_REF}" != "refs/tags/${TAG}" ]]; then
+  echo "::error::this run started from ${GITHUB_REF}, which the attestations would record, but the release is ${TAG}. Start the workflow from the tag: gh workflow run release.yaml --ref ${TAG} -f tag=${TAG}"
+  exit 1
+fi
 want="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"
 # On a tag push GITHUB_SHA may be the tag object. An object the checkout did
 # not fetch is a mismatch.
