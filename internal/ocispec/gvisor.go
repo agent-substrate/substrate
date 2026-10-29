@@ -58,6 +58,9 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "tmpfs"
 			spec.Annotations["dev.gvisor.spec.mount."+v+".share"] = "container"
 			spec.Annotations["dev.gvisor.spec.mount."+v+".source"] = filepath.Join(o.ActorDirs.GetDurableDirVolumeMountsDir(), v)
+			// A tmpfs root is 01777 by default. Make it 0777, as Kubernetes
+			// creates an emptyDir.
+			spec.Annotations["dev.gvisor.spec.mount."+v+".options"] = "mode=0777"
 		}
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"

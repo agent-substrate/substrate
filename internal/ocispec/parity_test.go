@@ -170,6 +170,9 @@ func TestShapeGVisor_Sandbox(t *testing.T) {
 	if got, want := spec.Annotations["dev.gvisor.spec.mount.data.source"], "/node/actors/a/durable-dir/data"; got != want {
 		t.Errorf("durable-dir mount source annotation = %q, want %q", got, want)
 	}
+	if got, want := spec.Annotations["dev.gvisor.spec.mount.data.options"], "mode=0777"; got != want {
+		t.Errorf("durable-dir mount options annotation = %q, want %q", got, want)
+	}
 }
 
 // gVisor sizes the container's cgroup leaf from the actor-level limits: one
