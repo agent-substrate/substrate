@@ -21,7 +21,7 @@ kind: Namespace
 metadata:
   name: ate-demo-sandbox
 ---
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: sandbox-workerpool
@@ -30,7 +30,7 @@ metadata:
     workload: sandbox
 spec:
   replicas: 2
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
   template:

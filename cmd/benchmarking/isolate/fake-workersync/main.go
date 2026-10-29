@@ -16,7 +16,7 @@
 // controller and worker syncer in control-plane benchmarks. It honors every
 // WorkerPool's spec.replicas with fake Workers that no pod backs, placed
 // round robin on the nodes that run a fake-atelet pod, and has each Worker's
-// capacity reported through the fake-atelet on its node, as ateom reports
+// capacity reported through the fake-atelet on its node, as worker reports
 // through atelet. It writes each pool's status, so the scale subresource and
 // `kubectl get workerpool` work. It leaves its Workers registered when it
 // shuts down and adopts them when it starts, so a restart keeps every Actor
@@ -44,16 +44,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	ateinformers "github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	atelisters "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/spf13/pflag"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned"
+	ateinformers "go.ate.dev/substrate/pkg/client/informers/externalversions"
+	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -76,10 +77,11 @@ var (
 	cleanup      = pflag.Bool("cleanup", false, "Delete this run's registered fake Workers, then exit. Stop the serving fake-workersync first, as by scaling its Deployment to zero: it would go on counting the deleted Workers until it restarts.")
 	nodeGrace    = pflag.Duration("node-grace", 5*time.Minute, "How long a node keeps its fake Workers with no fake-atelet pod, as while its fake-atelet is replaced.")
 	healthAddr   = pflag.String("health-listen-addr", ":9091", "Address to serve /healthz and /readyz on.")
-	drainGrace   = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time ateom takes to stop a terminating pod's Actors.")
+	drainGrace   = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time worker takes to stop a terminating pod's Actors.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 )
 
 func main() {
@@ -93,6 +95,9 @@ func main() {
 	defer stop()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	if err := fakeworker.ValidateRun(*run); err != nil {
 		serverboot.Fatal(ctx, "Invalid --run", err)
@@ -129,7 +134,7 @@ func main() {
 	defer relay.Close()
 
 	factory := ateinformers.NewSharedInformerFactory(ac, 0)
-	poolInformer := factory.Api().V1alpha1().WorkerPools()
+	poolInformer := factory.Ate().V1().WorkerPools()
 	changed := make(chan struct{}, 1)
 	notify := func(any) {
 		select {
@@ -238,7 +243,7 @@ type kubeCluster struct {
 	seen map[string]time.Time
 }
 
-func (k *kubeCluster) Pools() ([]*atev1alpha1.WorkerPool, error) {
+func (k *kubeCluster) Pools() ([]*atev1.WorkerPool, error) {
 	return k.pools.List(labels.Everything())
 }
 
@@ -313,7 +318,7 @@ func (k *kubeCluster) Relays(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-func (k *kubeCluster) UpdateStatus(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
-	_, err := k.ac.ApiV1alpha1().WorkerPools(wp.Namespace).UpdateStatus(ctx, wp, metav1.UpdateOptions{})
+func (k *kubeCluster) UpdateStatus(ctx context.Context, wp *atev1.WorkerPool) error {
+	_, err := k.ac.AteV1().WorkerPools(wp.Namespace).UpdateStatus(ctx, wp, metav1.UpdateOptions{})
 	return err
 }

@@ -21,7 +21,7 @@
 // records).
 //
 // It exists for snapshotting durable-dir volumes and rootfs overlay uppers
-// (see cmd/ateom-microvm): the contents are written by the sandboxed workload
+// (see cmd/ateworker-microvm): the contents are written by the sandboxed workload
 // under arbitrary uids, shipped to object storage, and restored — possibly
 // onto another node — where the workload must see them unchanged. The upper
 // is why device nodes and overlay xattrs matter: the host kernel's overlayfs
@@ -82,6 +82,34 @@ func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
 	return io.CopyBuffer(writerOnly{dst}, readerOnly{src}, *bp)
 }
 
+// writeBehindChunk is how much of an archive may be dirty in the page cache
+// before we write it out and drop it. Dirty pages can't be reclaimed, and
+// piling up a whole archive of them can run a worker pod out of memory.
+const writeBehindChunk = 8 << 20
+
+// writeBehind writes to f, writing out and dropping each full chunk.
+type writeBehind struct {
+	f       *os.File
+	written int64
+	flushed int64
+}
+
+func (w *writeBehind) Write(p []byte) (int, error) {
+	n, err := w.f.Write(p)
+	w.written += int64(n)
+	if err != nil || w.written-w.flushed < writeBehindChunk {
+		return n, err
+	}
+	fd, off, size := int(w.f.Fd()), w.flushed, w.written-w.flushed
+	if err := unix.SyncFileRange(fd, off, size, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+		return n, fmt.Errorf("while writing out archive: %w", err)
+	}
+	// best effort, the range is on disk already
+	_ = unix.Fadvise(fd, off, size, unix.FADV_DONTNEED)
+	w.flushed = w.written
+	return n, nil
+}
+
 type writerOnly struct{ io.Writer }
 type readerOnly struct{ io.Reader }
 
@@ -129,7 +157,7 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	defer f.Close()
 
 	bw := tarWriterPool.Get().(*bufio.Writer)
-	bw.Reset(f)
+	bw.Reset(&writeBehind{f: f})
 	defer func() {
 		bw.Reset(nil)
 		tarWriterPool.Put(bw)
@@ -141,15 +169,16 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("closing tar %q: %w", tarPath, err)
 	}
-	// The buffer has to reach the file before the sync below, or the sync
-	// durably persists a truncated archive.
+	// The end of the archive is still in the buffer; flush it before returning.
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
 	}
-	// Durable-dir tars are handed to atelet for upload as soon as we return, so
-	// flush to disk rather than trusting the page cache to outlive us.
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("syncing tar %q: %w", tarPath, err)
+	// No fsync: local-only snapshots aren't guaranteed to survive a node
+	// restart, and atelet doesn't trust a local snapshot written before the
+	// current boot (#3050). fsync here also waits behind other actors' writes
+	// in the shared ext4 journal. See #1954.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %q: %w", tarPath, err)
 	}
 	return nil
 }
@@ -534,7 +563,7 @@ func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
 
 // restoreOverlayXattrs re-applies the xattrs recorded in the entry's PAX
 // records (writeTree's SCHILY.xattr.*) that keepXattr allows. Writing
-// trusted.* requires CAP_SYS_ADMIN; extraction runs as root in ateom, and the
+// trusted.* requires CAP_SYS_ADMIN; extraction runs as root in worker, and the
 // tests gate on it.
 //
 // The target is addressed THROUGH its parent directory opened via root (the
@@ -600,7 +629,7 @@ func keepXattr(attr string) bool {
 // readOverlayXattrs returns the extended attributes of name under root that
 // keepXattr allows. Filesystems without xattr support report none rather than
 // failing: tarutil archives arbitrary workload trees. Reading trusted.*
-// requires root, which archiving in ateom always has.
+// requires root, which archiving in worker always has.
 //
 // name is addressed through its parent directory opened via root, like
 // restoreOverlayXattrs, and the L* calls do not follow a final symlink.

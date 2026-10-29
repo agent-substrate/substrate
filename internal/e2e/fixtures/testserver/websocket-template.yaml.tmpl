@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # The websocket fixture's ActorTemplate: a protojson-shaped
-# ateapipb.ActorTemplate (NOT the ate.dev/v1alpha1 CRD), created through the
+# ateapi.ActorTemplate (NOT the ate.dev/v1 CRD), created through the
 # ate API by e2e.DeploySubstrateFixture.
 
 metadata:
@@ -24,14 +24,14 @@ workerSelector:
     workload: websocket${FIXTURE_SUFFIX}
 containers:
 - name: websocket
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/testserver
   args: ["websocket"]
   wakeupProbe:
     httpGet:
       path: /readyz
       port: 80
     timeoutSeconds: 30
-${TEMPLATE_RESOURCES}
-${TEMPLATE_SANDBOX_CONFIG}
-snapshotConfig:
-  storageLocation: gs://${BUCKET_NAME}/ate-e2e-websocket${FIXTURE_SUFFIX}/
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi

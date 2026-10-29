@@ -42,7 +42,7 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v0.0.0-alpha.168b05d6@sha256:5e8384d1fcfdc443a3ad5155ea6a64dc7953bde162df7f5f8e131a5c19ae08a3
+          image: cr.agentgateway.dev/agentgateway:v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -118,7 +118,7 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v0.0.0-alpha.168b05d6@sha256:5e8384d1fcfdc443a3ad5155ea6a64dc7953bde162df7f5f8e131a5c19ae08a3
+          image: cr.agentgateway.dev/agentgateway:v1.7.0@sha256:60216aafb03d37f94e952ff3d51d2f630a65b10ecaebdc0a864882f92610c45b
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -180,6 +180,8 @@ patches:
                   matchLabels:
                     podcert.ate.dev/canarying: live
                 path: trust-bundle.pem
+  # Agentgateway does not authenticate ingress clients yet, so it still serves
+  # the plaintext ports the Envoy router dropped.
   - target:
       version: v1
       kind: Service
@@ -193,3 +195,34 @@ patches:
           port: 15020
           targetPort: stats
           protocol: TCP
+      - op: add
+        path: /spec/ports/-
+        value:
+          name: http
+          port: 80
+          targetPort: 8080
+          protocol: TCP
+      - op: add
+        path: /spec/ports/-
+        value:
+          name: connect
+          port: 8081
+          targetPort: 8081
+          protocol: TCP
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: atenet-router
+      namespace: ate-system
+    patch: |-
+      - op: add
+        path: /spec/ingress/0/ports/-
+        value:
+          protocol: TCP
+          port: http
+      - op: add
+        path: /spec/ingress/0/ports/-
+        value:
+          protocol: TCP
+          port: connect

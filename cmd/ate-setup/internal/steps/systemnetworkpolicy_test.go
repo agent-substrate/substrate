@@ -27,9 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 )
 
 // systemPod is one ate-system workload's pod template, as the NetworkPolicies
@@ -62,7 +62,7 @@ var unadmittedPorts = map[string][]string{
 	// The provider ships its own policy admitting only the egress gateway's
 	// gRPC, and docs/egress-credential-injection.md promises nothing else
 	// gets in; its probes come from the node.
-	"k8s-credential-provider": {"statusz", "metrics", "health"},
+	"k8s-credential-provider": {"metrics", "health"},
 	// kind only: the rustfs web console.
 	"rustfs": {"console"},
 }
@@ -113,7 +113,7 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 		objs = append(objs, decoded...)
 	}
 	system := filepath.Join(root, SystemOverlay(cfg))
-	rendered, err := e.renderDataPlane(system)
+	rendered, err := e.render(system)
 	add(system, rendered, err)
 	rendered, err = e.render(e.postgresManifestPath())
 	add(e.postgresManifestPath(), rendered, err)
@@ -453,6 +453,8 @@ func TestSystemNetworkPoliciesLeastPrivilege(t *testing.T) {
 
 			// The API admits the control plane and opted-in namespaces only.
 			api := in.pod(t, "ate-api-server")
+			// The credential exchange beside it is for the node plugins only.
+			requireOnlyFromApps(t, in, api, numberedPort(t, api, 8445), "atelet")
 			for _, rule := range in.admittingRules(t, api, numberedPort(t, api, 443)) {
 				if len(rule.From) == 0 {
 					t.Error("ate-api-server port 443 is admitted from any source")

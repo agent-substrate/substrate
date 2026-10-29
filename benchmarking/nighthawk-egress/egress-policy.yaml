@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Substrate EgressPolicy resource (protojson-shaped ateapipb.EgressPolicy,
+# Substrate EgressPolicy resource (protojson-shaped ateapi.EgressPolicy,
 # NOT a Kubernetes CRD) for Nighthawk traffic-driver actors in the `nighthawk`
 # atespace. Applied to an actor with:
 #   kubectl-ate create egress-policy <actor-name> -a nighthawk -f egress-policy.yaml

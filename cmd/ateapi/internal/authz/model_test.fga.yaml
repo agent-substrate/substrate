@@ -87,6 +87,12 @@ tuples:
   - user: user:sys-router
     relation: ingress_router
     object: global:root
+  - user: user:sys-atelet
+    relation: atelet
+    object: global:root
+  - user: user:sys-api-server-sidecar
+    relation: api_server_sidecar
+    object: global:root
 
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
@@ -263,7 +269,6 @@ tests:
           can_get: true
           can_update: true
           can_delete: true
-          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
@@ -277,7 +282,6 @@ tests:
           can_get: true
           can_update: true
           can_delete: true
-          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
@@ -291,7 +295,6 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
@@ -305,7 +308,6 @@ tests:
           can_get: true
           can_update: false
           can_delete: false
-          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
@@ -317,14 +319,12 @@ tests:
         object: actor:runner-1
         assertions:
           can_get: false
-          can_pause: false
           can_get_egress_policy: false
           can_update_egress_policy: false
       - user: user:sa-router # Ingress router proxy can only resume
         object: actor:runner-1
         assertions:
           can_resume: true
-          can_pause: false
           can_get_egress_policy: false
       - user: user:sa-runner-1 # Workload identity can suspend and revert
         object: actor:runner-1
@@ -332,16 +332,16 @@ tests:
           can_suspend: true
           can_revert: true
 
-  - name: 5. Node Restriction (can_mint_ateom_actor_credential)
+  - name: 5. Node Restriction (can_mint_worker_actor_credential)
     check:
       - user: node:node-1 # Active host node
         object: actor:runner-1
         assertions:
-          can_mint_ateom_actor_credential: true
+          can_mint_worker_actor_credential: true
       - user: node:node-2 # Other node
         object: actor:runner-1
         assertions:
-          can_mint_ateom_actor_credential: false
+          can_mint_worker_actor_credential: false
 
   - name: 6. Worker Operations (Inherited from Global)
     check:
@@ -401,14 +401,12 @@ tests:
           can_get: true
           can_get_egress_policy: true
           can_mint_actor_jwt: true
-          can_mint_actor_certificate: true
           can_update: false
           can_delete: false
           can_create_egress_policy: false
           can_update_egress_policy: false
           can_delete_egress_policy: false
           can_resume: false
-          can_pause: false
       - user: user:sys-egress # lists actors as its ateapi health check
         object: global:root
         assertions:
@@ -420,12 +418,60 @@ tests:
           viewer: false
           can_list_actors: false
           can_get: false
+      - user: user:sys-atelet # atelet reads egress policies for the worker that enforces them
+        object: actor:runner-1
+        assertions:
+          can_get_egress_policy: true
+          can_get: false
+          can_update: false
+          can_delete: false
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+          can_mint_actor_jwt: false
+          can_resume: false
+          can_suspend: false
+      - user: user:sys-atelet
+        object: atespace:space-1
+        assertions:
+          viewer: false
+          can_get: false
+          can_list_actors: false
+          can_create_actor: false
+      - user: user:sys-atelet
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_list_workers: false
+          can_create_worker: false
+      - user: user:sys-api-server-sidecar # the control plugin reads actors to scope their storage credentials
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+          can_get_egress_policy: false
+          can_resume: false
+          can_suspend: false
+          can_mint_actor_jwt: false
+      - user: user:sys-api-server-sidecar
+        object: atespace:space-1
+        assertions:
+          viewer: false
+          can_get: false
+          can_list_actors: false
+          can_create_actor: false
+      - user: user:sys-api-server-sidecar
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_list_workers: false
+          can_list_atespaces: false
       - user: user:sys-router # atenet-router resumes actors and lists them
         object: actor:runner-1
         assertions:
           can_resume: true
           can_get: false
-          can_pause: false
           can_suspend: false
           can_revert: false
           can_delete: false
@@ -445,12 +491,16 @@ tests:
         assertions:
           egress_gateway: false
           ingress_router: false
+          atelet: false
+          api_server_sidecar: false
       - user: user:carol # Global owner does not hold system roles
         object: global:root
         assertions:
           controller: false
           egress_gateway: false
           ingress_router: false
+          atelet: false
+          api_server_sidecar: false
 
   - name: 8. Tag Operations (Inherited from Atespace)
     check:
@@ -514,14 +564,11 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
-          can_mint_actor_certificate: false
       - user: user:bob # Atespace editor
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
-          can_mint_actor_certificate: false
       - user: user:sys-router
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
-          can_mint_actor_certificate: false

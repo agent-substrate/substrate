@@ -16,11 +16,12 @@ package e2e
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -31,19 +32,13 @@ import (
 // ActorTemplate fixture templates carry: the substrate counterpart of
 // fixtureSubstitutions, whose block fragments are CRD-shaped and now serve
 // only the pool manifests. The inline placeholders match the pool manifests'
-// values so one (bucket, name) pair renders both halves of a fixture.
+// values so one name renders both halves of a fixture.
 // trustBundles names the trust bundles projected into one trust-bundle.pem.
-func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) (inline, blocks map[string]string) {
+func substrateTemplateSubstitutions(name string, trustBundles []string) (inline, blocks map[string]string) {
 	inline = map[string]string{
-		"${BUCKET_NAME}":    bucket,
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
-		// gvisor-default is the cluster-wide SandboxConfig
-		// manifests/ate-install ships; config_name is required, so the
-		// fixtures name it explicitly.
-		"${TEMPLATE_SANDBOX_CONFIG}": "sandboxConfig:\n  sandboxClass: gvisor\n  configName: gvisor-default",
-		"${TEMPLATE_RESOURCES}":      "",
 		// Off unless the caller opts in; see WithTrustBundle.
 		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
@@ -61,14 +56,6 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) 
 	}
 
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs;
-	// a missing or stale one fails loudly at template creation.
-	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: microvm\n  configName: microvm"
-	// Only for fixtures that declare no limits of their own. Without them the
-	// guest boots at ateom's default size (2GiB), and several of those
-	// do not fit beside the demo pools on CI's single kind node. These size
-	// the VM itself — see internal/sizing. Quantities are strings.
-	blocks["${TEMPLATE_RESOURCES}"] = "resources:\n  limits:\n  - name: cpu\n    quantity: \"1\"\n  - name: memory\n    quantity: 512Mi"
 	return inline, blocks
 }
 
@@ -77,9 +64,9 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) 
 // placeholder landing at the wrong depth or a misspelled field fails here
 // rather than applying cleanly and doing nothing — the same contract
 // `kubectl ate create actor-template` enforces.
-func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTemplate {
+func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapi.ActorTemplate {
 	t.Helper()
-	var templates []*ateapipb.ActorTemplate
+	var templates []*ateapi.ActorTemplate
 	for doc := range strings.SplitSeq(string(rendered), "\n---") {
 		jsonData, err := yaml.YAMLToJSON([]byte(doc))
 		if err != nil {
@@ -88,7 +75,7 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTe
 		if string(jsonData) == "null" {
 			continue
 		}
-		tmpl := &ateapipb.ActorTemplate{}
+		tmpl := &ateapi.ActorTemplate{}
 		if err := protojson.Unmarshal(jsonData, tmpl); err != nil {
 			t.Fatalf("decoding protojson ActorTemplate: %v", err)
 		}
@@ -98,6 +85,24 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTe
 		t.Fatalf("ActorTemplate manifest holds no documents")
 	}
 	return templates
+}
+
+// FixtureOption adjusts what DeploySubstrateFixture installs.
+type FixtureOption func(*fixtureConfig)
+
+type fixtureConfig struct {
+	templateValues map[string]string
+}
+
+// WithTemplateValue replaces the inline placeholder ${name} in the fixture's
+// ActorTemplate manifest with value.
+func WithTemplateValue(name, value string) FixtureOption {
+	return func(c *fixtureConfig) {
+		if c.templateValues == nil {
+			c.templateValues = map[string]string{}
+		}
+		c.templateValues["${"+name+"}"] = value
+	}
 }
 
 // SubstrateFixtureManifests names the two manifest templates a substrate
@@ -128,13 +133,18 @@ type SubstrateFixtureManifests struct {
 //
 // Returns the fixture's atespace (the same string that names the k8s
 // namespace holding the pool) and the created templates.
-func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundles []string) (string, []*ateapipb.ActorTemplate) {
+func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, name string, trustBundles []string, opts ...FixtureOption) (string, []*ateapi.ActorTemplate) {
 	t.Helper()
+
+	var cfg fixtureConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	// The pool manifest also carries the namespace. Its cleanup is registered
 	// first so it runs last (t.Cleanup is LIFO), after the templates that
 	// select the pool's workers are gone.
-	inline, blocks := fixtureSubstitutions(bucket, name)
+	inline, blocks := fixtureSubstitutions(name)
 	poolManifest := renderManifest(t, manifests.Pool, inline, blocks)
 	koApply(t, poolManifest)
 	t.Cleanup(func() {
@@ -145,7 +155,8 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		RunCmd(t, "kubectl", delArgs...)
 	})
 
-	tmplInline, tmplBlocks := substrateTemplateSubstitutions(bucket, name, trustBundles)
+	tmplInline, tmplBlocks := substrateTemplateSubstitutions(name, trustBundles)
+	maps.Copy(tmplInline, cfg.templateValues)
 	rendered := koResolve(t, renderManifest(t, manifests.Template, tmplInline, tmplBlocks))
 	templates := decodeSubstrateTemplates(t, rendered)
 
@@ -154,9 +165,16 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		if got := tmpl.GetMetadata().GetAtespace(); got != atespace {
 			t.Fatalf("fixture %s declares templates in different atespaces (%q and %q)", manifests.Template, atespace, got)
 		}
+		location := SnapshotLocation(t, "ate-e2e-"+tmpl.GetMetadata().GetName()+tmplInline["${FIXTURE_SUFFIX}"])
+		if location != "" {
+			if tmpl.SnapshotConfig == nil {
+				tmpl.SnapshotConfig = &ateapi.SnapshotConfig{}
+			}
+			tmpl.SnapshotConfig.StorageLocation = location
+		}
 	}
 
-	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
+	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: atespace}}}); err != nil && status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("failed to create atespace %q: %v", atespace, err)
 	}
 	t.Cleanup(func() {
@@ -164,18 +182,18 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		// next run tolerates AlreadyExists anyway.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if _, err := clients.SubstrateAPI.DeleteAtespace(cleanupCtx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespace}}); err != nil && status.Code(err) != codes.NotFound {
+		if _, err := clients.SubstrateAPI.DeleteAtespace(cleanupCtx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: atespace}}); err != nil && status.Code(err) != codes.NotFound {
 			t.Logf("failed to delete atespace %q: %v", atespace, err)
 		}
 	})
 
-	created := make([]*ateapipb.ActorTemplate, 0, len(templates))
+	created := make([]*ateapi.ActorTemplate, 0, len(templates))
 	for _, tmpl := range templates {
-		ref := &ateapipb.ObjectRef{Atespace: atespace, Name: tmpl.GetMetadata().GetName()}
-		if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
+		ref := &ateapi.ObjectRef{Atespace: atespace, Name: tmpl.GetMetadata().GetName()}
+		if _, err := clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
 			t.Fatalf("failed to clear leaked ActorTemplate %s/%s: %v", atespace, ref.GetName(), err)
 		}
-		c, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl})
+		c, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl})
 		if err != nil {
 			t.Fatalf("failed to create ActorTemplate %s/%s: %v", atespace, tmpl.GetMetadata().GetName(), err)
 		}
@@ -184,7 +202,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		t.Cleanup(func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
-			if _, err := clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
+			if _, err := clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil && status.Code(err) != codes.NotFound {
 				t.Logf("failed to delete ActorTemplate %s/%s: %v", atespace, ref.GetName(), err)
 			}
 		})

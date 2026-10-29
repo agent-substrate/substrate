@@ -33,8 +33,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/principal"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 func configureDockerEnv(ctx context.Context) error {
@@ -63,8 +64,14 @@ func configureDockerEnv(ctx context.Context) error {
 func startPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
+	// Without Docker the tests skip locally, but must fail in CI, where a
+	// skip would pass the package without running it.
+	unavailable := t.Skipf
+	if dockerenv.Required() {
+		unavailable = t.Fatalf
+	}
 	if err := configureDockerEnv(ctx); err != nil {
-		t.Skipf("skipping test; docker is unavailable: %v", err)
+		unavailable("docker is unavailable: %v", err)
 	}
 
 	pgContainer, err := postgres.Run(ctx,
@@ -75,7 +82,7 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 		postgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		t.Skipf("skipping test; failed to start postgres container: %v", err)
+		unavailable("failed to start postgres container: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = testcontainers.TerminateContainer(pgContainer)

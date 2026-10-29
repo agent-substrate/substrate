@@ -28,8 +28,11 @@ import (
 func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	// The first chunk doubles as the size probe: a range read reports the whole
-	// object's size in its attrs, so nothing pays an extra round trip for it.
-	head, err := g.client.Bucket(bucket).Object(object).NewRangeReader(ctx, 0, downloadChunkSize)
+	// object's size in its attrs, so nothing pays an extra round trip for it. It
+	// goes out on a pooled client because for most snapshots it is the whole
+	// download, and a node restoring several at once must not queue them all on
+	// one connection.
+	head, err := g.nextClient().Bucket(bucket).Object(object).NewRangeReader(ctx, 0, downloadChunkSize)
 	if err != nil {
 		cancel()
 		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
@@ -63,7 +66,7 @@ func (r *gcsReader) Close() error {
 // multiplex onto the one HTTP/2 connection a single storage.Client holds.
 func (g *gcsClient) fetchRange(bucket, object string) fetchRangeFunc {
 	return func(ctx context.Context, i int, off, n int64, buf []byte) error {
-		rc, err := g.uploadClient(ctx, i).Bucket(bucket).Object(object).NewRangeReader(ctx, off, n)
+		rc, err := g.uploadClient(i).Bucket(bucket).Object(object).NewRangeReader(ctx, off, n)
 		if err != nil {
 			return fmt.Errorf("while opening range %d+%d of %q: %w", off, n, object, err)
 		}

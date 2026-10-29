@@ -17,15 +17,16 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 )
 
 var getAtespacesCmd = &cobra.Command{
-	Use:     "atespace [name ...]",
+	Use:     "atespace [atespace-name ...]",
 	Aliases: []string{"atespaces"},
 	Short:   "List all atespaces or get one or more atespaces",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -35,9 +36,9 @@ var getAtespacesCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		if len(args) > 0 {
-			atespaces := make([]*ateapipb.Atespace, 0, len(args))
+			atespaces := make([]*ateapi.Atespace, 0, len(args))
 			for _, atespaceName := range args {
-				resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespaceName}})
+				resp, err := apiClient.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: atespaceName}})
 				if err != nil {
 					return fmt.Errorf("failed to get atespace %q: %w", atespaceName, err)
 				}
@@ -49,11 +50,11 @@ var getAtespacesCmd = &cobra.Command{
 			return printer.PrintAtespacesTo(cmd.OutOrStdout(), atespaces, outputFmt)
 		}
 
-		var allAtespaces []*ateapipb.Atespace
+		var allAtespaces []*ateapi.Atespace
 		pageToken := ""
 		for {
-			resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
-				Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+			resp, err := apiClient.ListAtespaces(ctx, &ateapi.ListAtespacesRequest{
+				Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list atespaces: %w", err)
@@ -70,9 +71,9 @@ var getAtespacesCmd = &cobra.Command{
 }
 
 var createAtespaceCmd = &cobra.Command{
-	Use:   "atespace [name]",
+	Use:   "atespace <atespace-name>",
 	Short: "Create an atespace",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<atespace-name>"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -81,9 +82,9 @@ var createAtespaceCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		resp, err := apiClient.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: args[0],
 				},
 			},
@@ -97,9 +98,9 @@ var createAtespaceCmd = &cobra.Command{
 }
 
 var deleteAtespaceCmd = &cobra.Command{
-	Use:   "atespace [name]",
+	Use:   "atespace <atespace-name>",
 	Short: "Delete an empty atespace (fails if any actors remain)",
-	Args:  cobra.ExactArgs(1),
+	Args:  exactlyOneArg("<atespace-name>"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := newAPIClient(cmd)
@@ -109,7 +110,7 @@ var deleteAtespaceCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		name := args[0]
-		if _, err := apiClient.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}); err != nil {
+		if _, err := apiClient.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: name}}); err != nil {
 			return fmt.Errorf("failed to delete atespace: %w", err)
 		}
 

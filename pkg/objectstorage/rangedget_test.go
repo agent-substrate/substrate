@@ -15,6 +15,7 @@
 package objectstorage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -58,5 +59,28 @@ func TestRangedReaderCloseStopsRequests(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close left the first range reader open")
+	}
+}
+
+// A read cut short by cancellation must fail, not end in a clean EOF that a
+// decoder could take for the end of a frame.
+func TestRangedReaderCancelIsNotEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	fetched := make(chan struct{}, downloadConcurrency)
+	head := io.NopCloser(bytes.NewReader(make([]byte, downloadChunkSize)))
+	r := newRangedReader(ctx, (downloadConcurrency+1)*downloadChunkSize, head, func(context.Context, int, int64, int64, []byte) error {
+		fetched <- struct{}{}
+		return nil
+	})
+	defer r.Close()
+
+	// Every buffer holds a fetched range, so the last range waits for one.
+	for range downloadConcurrency - 1 {
+		<-fetched
+	}
+	cancel()
+	n, err := io.Copy(io.Discard, r)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("read %d of %d bytes, err %v, want context.Canceled", n, r.ObjectSize(), err)
 	}
 }

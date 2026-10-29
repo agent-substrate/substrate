@@ -30,8 +30,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // The gateway's front door requires a client certificate signed by the
@@ -101,7 +101,7 @@ func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName strin
 		URIs: []*url.URL{{
 			Scheme: "spiffe",
 			Host:   "substrate-actor.local",
-			Path:   path.Join("ateom-for-actor", atespace, actorName),
+			Path:   path.Join("worker-for-actor", atespace, actorName),
 		}},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(actorCertificateLifetime),

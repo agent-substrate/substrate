@@ -88,7 +88,7 @@ groups:
         note: >
           Logs only. It is bounded, but it is only ever recorded beside actor
           identity, which no metric may carry. The values mirror
-          ateapipb.ActorState with the ACTOR_STATE_ prefix dropped, so the log
+          ateapi.ActorState with the ACTOR_STATE_ prefix dropped, so the log
           vocabulary and the state machine cannot fork.
         type:
           members:
@@ -104,14 +104,15 @@ groups:
               stability: development
               value: suspending
               brief: >
-                ateapi is writing a snapshot: durable for a suspend,
-                node-local for a pause.
+                ateapi is writing a snapshot: uploaded to object storage before
+                returning for a synchronous suspend, or in the background for
+                an asynchronous suspend.
             - id: suspended
               stability: development
               value: suspended
               brief: >
-                The actor holds no worker. Its latest snapshot is durable, or
-                node-local after a pause.
+                The actor holds no worker. Its latest snapshot is durable,
+                node-local, or both.
             - id: crashed
               stability: development
               value: crashed
@@ -150,11 +151,7 @@ groups:
             - id: suspend
               stability: development
               value: suspend
-              brief: ateapi wrote the durable snapshot and released the worker.
-            - id: pause
-              stability: development
-              value: pause
-              brief: ateapi wrote a node-local snapshot.
+              brief: ateapi wrote a snapshot, durable or node-local, and released the worker.
             - id: delete
               stability: development
               value: delete
@@ -167,9 +164,9 @@ groups:
               stability: development
               value: unknown
               brief: >
-                No lifecycle operation is running, such as when a running or
-                paused actor crashes because its worker is lost, or the
-                operation is not in this list. This is the default value.
+                No lifecycle operation is running, such as when a running actor
+                crashes because its worker is lost, or the operation is not in
+                this list. This is the default value.
 
   - id: registry.ate.template
     type: attribute_group
@@ -249,9 +246,8 @@ groups:
   - id: registry.ate.sandbox
     type: attribute_group
     brief: >
-      The sandbox that hosts an actor. The class comes from the template. Thus
-      it adds no series to the template labels. It lets a dashboard group the
-      data by class without a list of the template names.
+      The sandbox that hosts an actor. The class comes from the worker pool or
+      the snapshot runtime. It lets a dashboard group the data by class.
     attributes:
       - id: ate.sandbox.class
         stability: development
@@ -265,16 +261,16 @@ groups:
             - id: microvm
               stability: development
               value: microvm
-              brief: A micro-VM sandbox.
+              brief: A microVM sandbox.
             - id: unknown
               stability: development
               value: unknown
               brief: >
                 The source has no class, or a class that is not in this list.
                 The default is not gvisor. Thus a bad record stays visible.
-                ateapi reports it for a Worker that CreateWorker accepted with
-                no class, and for an ActorTemplate with no sandbox config.
-                atelet reports it for a snapshot manifest with no class.
+                ateapi reports it for a Worker that has not registered a
+                sandbox class. atelet reports it for a snapshot
+                manifest with no class.
       - id: ate.sandbox.oom_kills
         stability: development
         type: int
@@ -283,7 +279,7 @@ groups:
           has killed, over the life of the leaf (memory.events oom_kill).
         note: >
           Logs only. It is only ever recorded beside actor identity, which no
-          metric may carry. ateom-gvisor sets it on the record it writes when a
+          metric may carry. ateworker-gvisor sets it on the record it writes when a
           hosted actor's sandbox has no process left. A leaf left behind by an
           earlier activation of the same actor carries its count forward.
         examples: [0, 3]
@@ -303,15 +299,16 @@ groups:
             - id: local
               stability: development
               value: local
-              brief: A snapshot on the node. A pause writes it.
+              brief: >
+                The copy on the node. On checkpoint, an asynchronous suspend
+                writes local (whereas a synchronous suspend writes latest,
+                though it also keeps a copy on the node). On restore, a resume
+                reads local while the node still has the copy, after either
+                kind of suspend and whether or not the upload has finished.
             - id: latest
               stability: development
               value: latest
-              brief: The durable snapshot of the actor in object storage.
-            - id: golden
-              stability: development
-              value: golden
-              brief: The golden image of the ActorTemplate.
+              brief: A durable snapshot in object storage, including a template's golden snapshot.
             - id: boot
               stability: development
               value: boot
@@ -367,14 +364,14 @@ groups:
               stability: development
               value: oci_unpack
               brief: Restore. atelet unpacks the layers of the OCI image.
-            - id: ateom_restore
+            - id: worker_restore
               stability: development
-              value: ateom_restore
-              brief: Restore. This is the ateom restore call.
-            - id: ateom_checkpoint
+              value: worker_restore
+              brief: Restore. This is the worker restore call.
+            - id: worker_checkpoint
               stability: development
-              value: ateom_checkpoint
-              brief: Checkpoint. This is the ateom checkpoint call.
+              value: worker_checkpoint
+              brief: Checkpoint. This is the worker checkpoint call.
             - id: persist
               stability: development
               value: persist
@@ -382,10 +379,39 @@ groups:
                 Checkpoint. atelet writes the snapshot to its destination. It
                 uploads an external snapshot. It renames a local snapshot. The
                 ate.snapshot.kind key tells you which.
+            - id: cleanup
+              stability: development
+              value: cleanup
+              brief: >
+                Checkpoint. atelet removes superseded local snapshots, unmounts
+                external volumes, and resets the actor directories on the node.
             - id: total
               stability: development
               value: total
               brief: The full operation. Use this value as the denominator. Do not add the phases together.
+      - id: ate.snapshot.upload_overdue_band
+        stability: development
+        brief: >
+          How long past the upload delay (--snapshot-upload-delay) an undurable
+          local snapshot has waited for a durable upload.
+        type:
+          members:
+            - id: under_1m
+              stability: development
+              value: under_1m
+              brief: Overdue by up to 1 minute.
+            - id: 1m_to_5m
+              stability: development
+              value: 1m_to_5m
+              brief: Overdue by more than 1 minute and up to 5 minutes.
+            - id: 5m_to_15m
+              stability: development
+              value: 5m_to_15m
+              brief: Overdue by more than 5 minutes and up to 15 minutes.
+            - id: over_15m
+              stability: development
+              value: over_15m
+              brief: Overdue by more than 15 minutes.
 
   - id: registry.ate.scheduler
     type: attribute_group
@@ -500,13 +526,21 @@ groups:
               value: unavailable
               brief: >
                 The request got an Unavailable status, or a 503 without a gRPC
-                cause. For example, a denied egress request, a failed policy or
-                credential lookup, or a full parking lot when the resume did not
-                fail with ResourceExhausted.
+                cause. For example, a failed policy or credential lookup, or a
+                full parking lot when the resume did not fail with
+                ResourceExhausted.
             - id: rate_limited
               stability: development
               value: rate_limited
               brief: The router limited the rate of the request.
+            - id: denied
+              stability: development
+              value: denied
+              brief: >
+                The router refused the request by policy, with a 403 or a
+                PermissionDenied status. For example, an egress request that
+                the actor's egress policy does not allow. It is a policy
+                decision, not a defect.
             - id: resume_error
               stability: development
               value: resume_error
@@ -549,6 +583,57 @@ groups:
               value: timeout
               brief: The time limit of the caller ended.
 
+  - id: registry.ate.filecache
+    type: attribute_group
+    brief: >
+      The labels of the node-local file caches: the stores atelet serves
+      hard links from, such as the sandbox asset cache. They run on one
+      store and one eviction loop, so one set of instruments describes them,
+      told apart by name.
+    attributes:
+      - id: ate.filecache.name
+        stability: development
+        brief: Which file cache on the node the measurement is of.
+        type:
+          members:
+            - id: sandbox_asset
+              stability: development
+              value: sandbox_asset
+              brief: >
+                The sandbox asset cache: the runsc binaries, the kernels and
+                the guest images the workers run actors with. Each actor on
+                the node links its assets from this one cache.
+            - id: snapshot
+              stability: development
+              value: snapshot
+              brief: >
+                The snapshot cache: the files of snapshots many actors
+                restore from, a tag's or a golden's, served to each restore
+                as hard links or private copies.
+      - id: ate.filecache.gc.outcome
+        stability: development
+        brief: >
+          The result of one eviction pass that had work to do. A pass that
+          finds the cache within its budget records nothing.
+        type:
+          members:
+            - id: complete
+              stability: development
+              value: complete
+              brief: The pass freed what the budget asked.
+            - id: shortfall
+              stability: development
+              value: shortfall
+              brief: >
+                The pass freed less than the budget asked. What remains is
+                linked by a consumer, such as an actor or a worker's default
+                runtime, younger than the min age, or busy. The cache cannot
+                free it.
+            - id: skipped
+              stability: development
+              value: skipped
+              brief: The pass could not size the cache and removed nothing. It retries on the next tick.
+
   - id: registry.ate.stats
     type: attribute_group
     brief: The labels of the resource measurements of the actors.
@@ -584,7 +669,7 @@ groups:
             - id: periodic
               stability: development
               value: periodic
-              brief: The timer of the ateom took the sample.
+              brief: The timer of the ateworker took the sample.
             - id: initial
               stability: development
               value: initial
@@ -594,8 +679,8 @@ groups:
               value: final
               brief: >
                 The last sample of an activation, written when a checkpoint, a
-                terminate, a graceful shutdown, or a re-host on ateom-microvm
-                ends it. When the sandbox is still running, ateom reads the
+                terminate, a graceful shutdown, or a re-host on ateworker-microvm
+                ends it. When the sandbox is still running, ateworker reads the
                 stats just before the teardown; when no read runs, or the read
                 fails or times out, it repeats the newest measured sample, or
                 writes a pending record when there is none.
@@ -693,7 +778,7 @@ groups:
         stability: stable
         type: string
         brief: The gRPC method of the request.
-        examples: ["ateapi.Control/ResumeActor"]
+        examples: ["substrate.ateapi.v1.Control/ResumeActor"]
       - id: rpc.response.status_code
         stability: stable
         type: string
@@ -708,7 +793,7 @@ groups:
         stability: stable
         type: int
         brief: The TCP port of the server that a gRPC client called.
-        examples: [8085]
+        examples: [21998]
 
   # ---------------------------------------------------------------------------
   # Metrics. ateapi
@@ -728,9 +813,8 @@ groups:
       Substrate can also lose the data that it did not write. Some moves into
       this state are not a loss of data. They are careful responses to a control
       plane problem.
-      ate.sandbox.class is unknown when ateapi could not read the class of the
-      worker: the worker record is already gone, or its assignment is already
-      clear.
+      ate.sandbox.class is unknown when the actor's worker assignment is already
+      clear or carries no sandbox runtime.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -761,9 +845,14 @@ groups:
     stability: development
     brief: The number of workers in each pool, divided by state and by sandbox class.
     note: >
-      ateapi reads this value with a callback. You can add the counts together.
-      The sum across the states is the size of the pool. The sum across the
-      pools is the size of the fleet. Thus this instrument is an UpDownCounter
+      ateapi reads this value with a callback. Each ateapi replica reports the
+      whole fleet, and the default install runs two replicas. Thus a sum across
+      the replicas counts each worker once for each replica. Take the maximum
+      across the replicas first, by pool namespace, pool, state and sandbox
+      class, and add after that. Within one replica you can add the counts
+      together. The sum across the states is the size of the pool. The sum
+      across the pools is the size of the fleet. Thus this instrument is an
+      UpDownCounter
       and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
@@ -817,14 +906,14 @@ groups:
           conditionally_required: >
             The operation is a create, or ateapi loaded the actor. Thus this key
             is absent when a delete fails or when the load step fails. For a
-            resume, a suspend and a pause, the load step also reads the
+            resume and a suspend, the load step also reads the
             ActorTemplate.
       - ref: ate.template.name
         requirement_level:
           conditionally_required: >
             The operation is a create, or ateapi loaded the actor. Thus this key
             is absent when a delete fails or when the load step fails. For a
-            resume, a suspend and a pause, the load step also reads the
+            resume and a suspend, the load step also reads the
             ActorTemplate.
       - ref: ate.workerpool.namespace
         requirement_level:
@@ -835,15 +924,14 @@ groups:
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: >
-            The operation is resume, suspend, pause or revert, and ateapi found
-            the ActorTemplate. A revert continues when the ActorTemplate no
-            longer exists, and then omits this key.
+            The operation is resume, suspend or revert, and the actor has a
+            worker assignment or a snapshot with a sandbox runtime.
       - ref: ate.snapshot.kind
         requirement_level:
           conditionally_required: The operation is a resume and the snapshot source is known. Other operations do not restore, thus this key is absent.
       - ref: ate.snapshot.fidelity
         requirement_level:
-          conditionally_required: The operation is resume, suspend or pause, and the fidelity is known.
+          conditionally_required: The operation is resume or suspend, and the fidelity is known.
       - ref: error.type
         requirement_level:
           conditionally_required: The operation failed. If this key is absent, the operation was correct.
@@ -909,7 +997,7 @@ groups:
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
         buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
-        cuj: Cold starts are slow. Is the cause the download, the unpack, or ateom?
+        cuj: Cold starts are slow. Is the cause the download, the unpack, or ateworker?
     attributes:
       - ref: ate.template.atespace
         requirement_level: required
@@ -935,7 +1023,7 @@ groups:
     brief: The time of one phase of an actor checkpoint on the worker node.
     note: >
       The phases are the same as the phases of the restore histogram. Thus you
-      can find the cause of a slow suspend in ateom or in the upload. The phases
+      can find the cause of a slow suspend in ateworker or in the upload. The phases
       occur at the same time. They do not add up to the total.
     annotations:
       substrate:
@@ -943,7 +1031,7 @@ groups:
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
         buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
-        cuj: Suspends are slow. Is the cause ateom or the upload?
+        cuj: Suspends are slow. Is the cause ateworker or the upload?
     attributes:
       - ref: ate.template.atespace
         requirement_level: required
@@ -969,7 +1057,7 @@ groups:
     brief: The uncompressed allocated size in bytes of each snapshot image that a checkpoint writes.
     note: >
       atelet records one measurement for each image file from its allocated disk
-      blocks (st_blocks * 512, excluding sparse holes in micro-VM
+      blocks (st_blocks * 512, excluding sparse holes in microVM
       memory-ranges). It does not record one measurement for each checkpoint.
       Use the file.name key to compare the same type of image.
     annotations:
@@ -987,6 +1075,171 @@ groups:
       - ref: ate.template.name
         requirement_level: required
 
+  - id: metric.atelet.snapshot.upload.duration
+    type: metric
+    metric_name: atelet.snapshot.upload.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one background upload of a local snapshot to object storage on atelet.
+    note: >
+      atelet uploads deferred snapshots in the background once the upload delay
+      or the detach delay elapses. A probe that finds the manifest committed
+      already without uploading is not recorded. An upload that Terminate, an
+      atelet shutdown, or a newer durable snapshot cancels records error.type
+      Canceled, and one that runs past its timeout (--snapshot-upload-timeout
+      plus the time the snapshot takes at --snapshot-upload-est-throughput-mib,
+      doubled for each consecutive failure to at most 8 times that) records
+      DeadlineExceeded. Synchronous uploads from UPLOAD_MODE_IMMEDIATE
+      checkpoints and PromoteSnapshot are recorded on
+      ate.actor.checkpoint.duration instead.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600]
+        cuj: Are background snapshot uploads slow or failing on a node?
+    attributes:
+      - ref: ate.snapshot.fidelity
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The upload failed. If this key is absent, the upload was correct.
+
+  - id: metric.atelet.snapshot.detach.duration
+    type: metric
+    metric_name: atelet.snapshot.detach.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of deleting the local snapshots and node files of an actor during a background detach on atelet, excluding any snapshot upload.
+    note: >
+      atelet detaches an actor once it stays suspended on the node for the
+      detach delay. If object storage does not hold the latest local snapshot
+      yet, the detach uploads it first and records that upload on
+      atelet.snapshot.upload.duration; a detach whose upload fails stops there
+      and is not recorded here. Once the snapshot is durable, the detach deletes
+      the local snapshots and other node files of the actor (except
+      snapshot-state.json), which is what this histogram times. A detach that
+      Terminate or an atelet shutdown cancels records error.type Canceled. A
+      failed detach keeps LatestLocal, and atelet tries it again later. A detach
+      that a DetachActor call asks for is not recorded.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Local snapshots stay on a node after the detach delay. Do the detaches fail?
+    attributes:
+      - ref: ate.snapshot.fidelity
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The detach failed. If this key is absent, the detach was correct.
+
+  - id: metric.atelet.snapshot.upload.overdue.duration
+    type: metric
+    metric_name: atelet.snapshot.upload.overdue.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time from when a background snapshot upload on atelet is due to when a worker starts it.
+    note: >
+      This instrument has no labels. An upload is due the upload delay
+      (--snapshot-upload-delay) after the state of the actor on the node
+      stopped being durable, or when the retry delay ends after a failure. A
+      fixed number of upload workers (--snapshot-upload-workers) runs uploads
+      on each node, separate from the detach workers. The value stays near zero
+      while an upload worker is free. It grows when every upload worker is
+      busy, while a detach or a PromoteSnapshot of the actor runs, and after an
+      atelet restart for the uploads that came due while atelet was down.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        cuj: Background uploads fall behind on a node. Are the upload workers saturated?
+    attributes: []
+
+  - id: metric.atelet.snapshot.detach.overdue.duration
+    type: metric
+    metric_name: atelet.snapshot.detach.overdue.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time from when a background detach on atelet is due to when a worker starts it.
+    note: >
+      This instrument has no labels. A detach is due the detach delay
+      (--snapshot-detach-delay) after the latest checkpoint of the actor, or
+      when the retry delay ends after a failed detach. A fixed number of detach
+      workers (--snapshot-detach-workers) runs detaches on each node, separate
+      from the upload workers. The value stays near zero while a detach worker
+      is free. It grows when every detach worker is busy, while an upload, Run,
+      Restore, Checkpoint, or PromoteSnapshot of the actor runs, and after an
+      atelet restart for the detaches that came due while atelet was down.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        buckets: [0.1, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]
+        cuj: Local snapshots stay on a node after the detach delay. Are the detach workers saturated?
+    attributes: []
+
+  - id: metric.atelet.snapshot.upload.overdue.actors
+    type: metric
+    metric_name: atelet.snapshot.upload.overdue.actors
+    instrument: updowncounter
+    unit: "{actor}"
+    stability: development
+    brief: The number of actors on the node whose local snapshot is past the upload delay and not durable yet, by overdue band.
+    note: >
+      atelet reads this value with a callback. It counts each actor with a
+      snapshot state file on the node, and not only the actors in memory.
+      Overdue time counts from when the state of the actor stopped being
+      durable plus the upload delay (--snapshot-upload-delay). An actor leaves
+      the count only when its upload completes or the tracker drops it, so a
+      stuck or retrying upload keeps moving into higher bands. An undurable
+      snapshot with no object storage location to upload to does not enter this
+      count. The sum across bands is the number of actors on the node with an
+      overdue upload. atelet sets all four band values, also when they are 0.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        cuj: How many actors on a node have overdue snapshot uploads, and how far behind are they?
+    attributes:
+      - ref: ate.snapshot.upload_overdue_band
+        requirement_level: required
+
+  - id: metric.atelet.snapshot.undurable.age.max
+    type: metric
+    metric_name: atelet.snapshot.undurable.age.max
+    instrument: gauge
+    unit: s
+    stability: development
+    brief: The age of the oldest local snapshot on the node that object storage does not hold yet.
+    note: >
+      atelet reads this value with a callback. This instrument has no labels.
+      The age counts from when the state of the actor on the node stopped being
+      durable. The upload delay (--snapshot-upload-delay) counts from the same
+      time. The value is 0 if object storage holds each local snapshot. On a
+      correct node the value stays below the upload delay plus the time of one
+      upload. A larger value means that the uploads fail, wait for a worker, or
+      hang, or that a local snapshot has no object storage location to upload
+      it to.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/snapshottracker/metrics.go
+        cuj: Do background uploads keep up on a node, or would a loss of the node lose old actor state?
+    attributes: []
+
   - id: metric.ate.actor.stats.cpu.time
     type: metric
     metric_name: ate.actor.stats.cpu.time
@@ -1003,11 +1256,11 @@ groups:
 
       It does not count usage twice. It can count less: the end of an
       activation after the last sample atelet read of it, which is up to one
-      poll interval plus one ateom sample interval plus the sweep's own time
-      (up to 45s on a micro-VM), so an activation shorter than that can lose
+      poll interval plus one ateworker sample interval plus the sweep's own time
+      (up to 45s on a microVM), so an activation shorter than that can lose
       most or all of its CPU here, while its usage records keep it; the time
       around an atelet restart; and, in a
-      micro-VM restored from a full snapshot, a container's use before its
+      microVM restored from a full snapshot, a container's use before its
       first successful reading. A node clock that steps back across an atelet
       restart can count one activation in full a second time.
     annotations:
@@ -1117,6 +1370,80 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.filecache.size
+    type: metric
+    metric_name: ate.filecache.size
+    instrument: updowncounter
+    unit: By
+    stability: development
+    brief: The bytes of disk that a file cache on the node occupies, by cache.
+    note: >
+      atelet reads the value on each collection as the sum of the allocated
+      size of each entry in the cache. Compare it with the budget that the
+      cache's max-bytes flag sets, --sandbox-asset-cache-max-bytes or
+      --snapshot-cache-max-bytes. A value that stays over the budget with
+      shortfall passes means that the cache's consumers hold more than the
+      budget: for the sandbox asset cache, the actors and the workers'
+      default runtimes; for the snapshot cache, the restores in progress.
+      The budget is too small, or the node hosts too many runtimes.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
+        cuj: The disk of a worker node fills. Is it one of the file caches?
+    attributes:
+      - ref: ate.filecache.name
+        requirement_level: required
+
+  - id: metric.ate.filecache.evictions
+    type: metric
+    metric_name: ate.filecache.evictions
+    instrument: counter
+    unit: "{entry}"
+    stability: development
+    brief: The number of entries that the eviction passes removed from a file cache on the node, by cache.
+    note: >
+      An entry is one cached file or tree, such as a runsc binary or a
+      microVM kernel. A pass removes only an entry that nothing links,
+      oldest first, and a dry run removes none. A rate that stays above zero
+      with a size at the budget means that the cache thrashes: an entry
+      leaves and returns on each pass, and each return pays for a download.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
+        cuj: Actors download their runtime again and again on one node. Does the cache evict it?
+    attributes:
+      - ref: ate.filecache.name
+        requirement_level: required
+
+  - id: metric.ate.filecache.gc.passes
+    type: metric
+    metric_name: ate.filecache.gc.passes
+    instrument: counter
+    unit: "{pass}"
+    stability: development
+    brief: The number of eviction passes over a file cache on the node that had work to do, by cache and outcome.
+    note: >
+      A pass that finds the cache within its budget is not counted. Thus a
+      series that grows means that the cache is over its budget. Read the
+      outcome: complete means that the passes keep up; shortfall means that
+      what remains is not the cache's to free; skipped means that atelet
+      cannot read the cache directory.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/internal/filecachegc/filecachegc.go
+        cuj: A file cache stays over its budget. Does the collector run, and what stops it?
+    attributes:
+      - ref: ate.filecache.name
+        requirement_level: required
+      - ref: ate.filecache.gc.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. atecontroller
@@ -1279,13 +1606,13 @@ groups:
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
-      not make it. This instrument is the only metric of ateom. ateom has it on
+      not make it. This instrument is the only metric of ateworker. ateworker has it on
       the gRPC interface that atelet calls. credprovider is the
       kubernetes-secrets credential provider in
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm, credprovider]
+        emitted_by: [ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm, credprovider]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
@@ -1312,7 +1639,7 @@ groups:
       is much larger than the server duration of the same method, the delay is
       not in the handler. otelgrpc also sets server.address, but serverboot
       removes it with a View. The key holds the IP address of one server pod,
-      or the ateom socket path with the pod UID, so it has one value for each
+      or the ateworker socket path with the pod UID, so it has one value for each
       pod.
     annotations:
       substrate:

@@ -19,19 +19,20 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
+	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 )
 
 type fakeControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	mu             sync.Mutex
 	calls          []string
-	deleteRequests []*ateapipb.DeleteActorRequest
+	deleteRequests []*ateapi.DeleteActorRequest
+	suspendReqs    []*ateapi.SuspendActorRequest
 	// resumeErrs is returned by successive ResumeActor calls, in order, until
 	// it is drained; every call after that succeeds.
 	resumeErrs []error
@@ -54,14 +55,14 @@ func nextErr(errs *[]error) error {
 	return err
 }
 
-func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapi.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapi.Atespace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateAtespace")
-	return &ateapipb.Atespace{}, nil
+	return &ateapi.Atespace{}, nil
 }
 
-func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapi.CreateActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "CreateActor")
 	fn := f.createActorFn
@@ -75,42 +76,45 @@ func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.Create
 			return nil, err
 		}
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
-func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
 	if err := nextErr(&f.resumeErrs); err != nil {
 		return nil, err
 	}
-	return &ateapipb.ResumeActorResponse{}, nil
+	return &ateapi.ResumeActorResponse{}, nil
 }
 
-func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapipb.SuspendActorRequest, opts ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+func (f *fakeControlClient) SuspendActor(ctx context.Context, in *ateapi.SuspendActorRequest, opts ...grpc.CallOption) (*ateapi.SuspendActorResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, "SuspendActor")
+	f.calls = append(f.calls, suspendCallName(in))
+	f.suspendReqs = append(f.suspendReqs, in)
 	if err := nextErr(&f.suspendErrs); err != nil {
 		return nil, err
 	}
-	return &ateapipb.SuspendActorResponse{}, nil
+	return &ateapi.SuspendActorResponse{}, nil
 }
 
-func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseActorRequest, opts ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "PauseActor")
-	return &ateapipb.PauseActorResponse{}, nil
+// suspendCallName is the name a SuspendActor call is recorded under: an
+// async suspend is told apart from a sync one.
+func suspendCallName(in *ateapi.SuspendActorRequest) string {
+	if in.GetOptions().GetMode() == ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		return "SuspendActor(async)"
+	}
+	return "SuspendActor"
 }
 
-func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "DeleteActor")
 	f.deleteRequests = append(f.deleteRequests, in)
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
 func (f *fakeControlClient) recordedCalls() []string {
@@ -119,10 +123,16 @@ func (f *fakeControlClient) recordedCalls() []string {
 	return append([]string(nil), f.calls...)
 }
 
-func (f *fakeControlClient) recordedDeleteRequests() []*ateapipb.DeleteActorRequest {
+func (f *fakeControlClient) recordedSuspendRequests() []*ateapi.SuspendActorRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]*ateapipb.DeleteActorRequest(nil), f.deleteRequests...)
+	return append([]*ateapi.SuspendActorRequest(nil), f.suspendReqs...)
+}
+
+func (f *fakeControlClient) recordedDeleteRequests() []*ateapi.DeleteActorRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapi.DeleteActorRequest(nil), f.deleteRequests...)
 }
 
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
@@ -140,7 +150,7 @@ func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userc
 		cfg.Tracer = otel.Tracer("test")
 	}
 	if cfg.Dyn == nil {
-		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
+		cfg.Dyn = dynconfig.Static(gluttonKnobs{})
 	}
 	cfg.HTTPClient = ts.Client()
 	cfg.RouterURL = ts.URL

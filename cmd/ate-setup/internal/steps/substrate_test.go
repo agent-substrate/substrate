@@ -24,10 +24,10 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // TestActorTemplateFromManifestDemos parses the protojson ActorTemplate
@@ -40,13 +40,13 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 		t.Fatalf("RepoRoot: %v", err)
 	}
 
-	// The values benchmarking/workloads/deploy.sh substitutes, beyond the
-	// ${BUCKET_NAME} every installer provides.
+	// The values benchmarking/workloads/deploy.sh substitutes.
 	benchmarkValues := map[string]string{
-		"${ACTOR_MEMORY}":        "256Mi",
-		"${OTLP_ENDPOINT}":       "http://otel-collector.otel-system:4317",
-		"${SANDBOX_CLASS}":       "gvisor",
-		"${SANDBOX_CONFIG_NAME}": "gvisor-default",
+		"${ACTOR_CPU_MILLICORES}": "1000",
+		"${ACTOR_MEMORY_BYTES}":   "268435456",
+		"${ACTOR_MEMORY}":         "256Mi",
+		"${ATE_ENV_IMAGE}":        "gcr.io/example/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72",
+		"${OTLP_ENDPOINT}":        "http://otel-collector.otel-system:4317",
 	}
 
 	tests := []struct {
@@ -65,6 +65,11 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 		{
 			relPath: "demos/sandbox/manual-test-multi-template.yaml",
 			want:    resources.ActorTemplateRef{Atespace: "ate-manual-test-multi", Name: "sandbox-template"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/ate-env-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "ate-env"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/sleep-template.yaml.tmpl",
@@ -107,7 +112,7 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile: %v", err)
 			}
-			manifest := strings.ReplaceAll(string(data), "${BUCKET_NAME}", "ate-snapshots")
+			manifest := string(data)
 			for placeholder, value := range tc.values {
 				manifest = strings.ReplaceAll(manifest, placeholder, value)
 			}
@@ -120,6 +125,10 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			}
 			if got := resources.ActorTemplateRefFromActorTemplate(template); got != tc.want {
 				t.Errorf("manifest names template %s, want %s", got, tc.want)
+			}
+			// The API rejects storageLocation without its preview gate.
+			if got := template.GetSnapshotConfig().GetStorageLocation(); got != "" {
+				t.Errorf("manifest sets storageLocation %q, want none", got)
 			}
 		})
 	}
@@ -146,11 +155,11 @@ func TestActorTemplateFromManifestErrors(t *testing.T) {
 
 // failingControlClient fails every GetActorTemplate with a fixed error.
 type failingControlClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 	err error
 }
 
-func (f failingControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+func (f failingControlClient) GetActorTemplate(ctx context.Context, in *ateapi.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
 	return nil, f.err
 }
 
@@ -173,13 +182,13 @@ func TestWaitActorTemplateGoldenTimeoutIncludesLastError(t *testing.T) {
 // disabledTemplateClient serves one ActorTemplate that opted out of the
 // golden snapshot and has no golden status.
 type disabledTemplateClient struct {
-	ateapipb.ControlClient
+	ateapi.ControlClient
 }
 
-func (disabledTemplateClient) GetActorTemplate(_ context.Context, in *ateapipb.GetActorTemplateRequest, _ ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
-	return &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: in.GetActorTemplate().GetAtespace(), Name: in.GetActorTemplate().GetName()},
-		SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}},
+func (disabledTemplateClient) GetActorTemplate(_ context.Context, in *ateapi.GetActorTemplateRequest, _ ...grpc.CallOption) (*ateapi.ActorTemplate, error) {
+	return &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: in.GetActorTemplate().GetAtespace(), Name: in.GetActorTemplate().GetName()},
+		SnapshotConfig: &ateapi.SnapshotConfig{GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}},
 	}, nil
 }
 

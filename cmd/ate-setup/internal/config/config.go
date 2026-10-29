@@ -25,6 +25,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,9 +33,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/pkg/postgressetup"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -117,6 +118,14 @@ type Config struct {
 	// follows neither form.
 	ExpectedJWTIssuer string
 
+	// APIAuthzBootstrapOwners is the comma-separated principal list granted
+	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
+	APIAuthzBootstrapOwners string
+
+	// EgressGatewayExtraSPIFFEIDs hold ate-api-server's egress_gateway role
+	// next to atenet-egress (ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS).
+	EgressGatewayExtraSPIFFEIDs []string
+
 	// ActorJWTAlgorithm is the signing algorithm of the key in a new actor JWT
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
 	ActorJWTAlgorithm string
@@ -125,8 +134,24 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
-	// BucketName is the snapshot bucket demos are templated with.
+	// BucketName is the object-storage bucket (BUCKET_NAME) passed to install
+	// scripts such as hack/install-microvm-deps.sh. The kind profile also
+	// derives SnapshotLocation from it.
 	BucketName string
+
+	// SnapshotLocation is ate-api-server's --snapshot-location
+	// (SNAPSHOT_LOCATION): the cluster-wide object-storage URI actor snapshots
+	// are stored under. Required unless the PerTemplateSnapshotLocation
+	// preview gate is enabled, which also lets a
+	// template's snapshotConfig.storageLocation override it. The demos and
+	// benchmarks, and so e2e runs, need it even with the gate, since they do
+	// not set storageLocation.
+	SnapshotLocation string
+
+	// TransferGSAName is the name of the Google service account snapshot
+	// transfers run as on GCS, in ProjectID (SNAPSHOT_TRANSFER_GSA_NAME).
+	// Only the in-tree GCS backend uses it. See TransferServiceAccount.
+	TransferGSAName string
 
 	// KODockerRepo is where ko pushes images (KO_DOCKER_REPO).
 	KODockerRepo string
@@ -187,23 +212,34 @@ type Config struct {
 	// or size10.
 	ClusterSize string
 
-	// CordonControlPlane keeps the control plane off the worker nodes
-	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool
-	// labeled and tainted ate.dev/workloadType=ate-control-plane:NoSchedule,
-	// and a one-node pool labeled and tainted
-	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
-	CordonControlPlane bool
+	// CordonSystemInfraComponents keeps the system infra components, such as
+	// ate-api-server, atenet-router, atenet-egress and postgres, off the
+	// worker nodes (ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS). It assumes a
+	// small shared pool labeled and tainted
+	// ate.dev/workloadType=ate-system-infra:NoSchedule, and a one-node pool
+	// labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for
+	// postgres alone.
+	CordonSystemInfraComponents bool
 
 	// FakeDataPlane installs fake-atelet in place of atelet and
 	// fake-workersync in place of ate-controller
 	// (ATE_INSTALL_FAKE_DATA_PLANE), for control-plane benchmarks.
 	FakeDataPlane bool
 
+	// E2ETuning layers the e2e test kustomize component over control plane and
+	// data plane applies (ATE_INSTALL_E2E_TUNING).
+	E2ETuning bool
+
+	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
+	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
+	// Empty means no client may reach actors through the router.
+	IngressAllowedSPIFFEIDs []string
+
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
 
 	// CredentialProviderJSON is the --credential-provider value; see
-	// CredentialProvider for its schema.
+	// CredentialProviders for its schema.
 	CredentialProviderJSON string
 
 	// AnthropicAPIKey is required only by the claude-code-multiplex demo.
@@ -212,6 +248,16 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+
+	// PreviewGates is the --preview value (ATE_PREVIEW) every substrate
+	// component is deployed with: gate names, or "ALL" for all of them.
+	PreviewGates []string
+
+	// APILogLevel is the ate-api-server log level: debug, info, warn, or
+	// error. Empty means none was asked for, which keeps the level an
+	// existing install already has.
+	APILogLevel string
+
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string
@@ -243,6 +289,33 @@ func (c *Config) Resolved() *Resolved {
 		c.resolved = defaultsOnly()
 	}
 	return c.resolved
+}
+
+// TransferServiceAccount is the email of the snapshot transfer service
+// account, built from TransferGSAName and ProjectID as tools/setup-gcp builds
+// it. It is empty when either is.
+func (c *Config) TransferServiceAccount() string {
+	if c.TransferGSAName == "" || c.ProjectID == "" {
+		return ""
+	}
+	return c.TransferGSAName + "@" + c.ProjectID + ".iam.gserviceaccount.com"
+}
+
+// RequireTransferServiceAccount fails when the install would deploy
+// ate-api-server on GCS without a transfer service account. Its credential
+// exchange impersonates the account and refuses to start without one.
+// ate-setup installs GCS everywhere but kind, which uses S3.
+func (c *Config) RequireTransferServiceAccount() error {
+	if c.Kind {
+		return nil
+	}
+	if c.TransferGSAName == "" {
+		return c.Resolved().Require("storage.transferGSAName")
+	}
+	if c.ProjectID == "" {
+		return c.Resolved().Require("gcp.projectID")
+	}
+	return nil
 }
 
 // SetResolved attaches resolved settings to a Config built directly. Load
@@ -365,10 +438,9 @@ func (c *Config) Path(parts ...string) string {
 	return filepath.Join(append([]string{c.Root}, parts...)...)
 }
 
-// kindUnsetVars are the GKE-specific variables the shell kind installer unset
-// before delegating, so that a developer who had already sourced
-// .ate-dev-env.sh into their shell did not end up pointing a local install at a
-// cloud project.
+// kindUnsetVars are the GKE-specific variables a Kind install drops, so that a
+// developer who has already sourced .ate-dev-env.sh into their shell does not
+// point a local install at a cloud project.
 var kindUnsetVars = []string{
 	"GCE_REGION", "CLUSTER_LOCATION", "NETWORK", "SUBNETWORK",
 	"MEMORYSTORE_INSTANCE", "PROJECT_ID",
@@ -401,6 +473,7 @@ func (c *Config) ScriptEnv() []string {
 		"KUBECTL_CONTEXT":     c.Context,
 		"KUBECONFIG":          c.kubeconfigEnv,
 		"BUCKET_NAME":         c.BucketName,
+		"SNAPSHOT_LOCATION":   c.SnapshotLocation,
 		"KO_DOCKER_REPO":      c.KODockerRepo,
 		"KO_DEFAULTPLATFORMS": c.KODefaultPlatforms,
 		"PROJECT_ID":          c.ProjectID,
@@ -433,13 +506,29 @@ func (c *Config) ScriptEnv() []string {
 	if c.ClusterSize != "" && c.ClusterSize != ClusterSizeSize0 {
 		merged["ATE_INSTALL_CLUSTER_SIZE"] = c.ClusterSize
 	}
-	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
-	if c.CordonControlPlane {
-		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
+	delete(merged, "ATE_PREVIEW")
+	if len(c.PreviewGates) > 0 {
+		merged["ATE_PREVIEW"] = strings.Join(c.PreviewGates, ",")
+	}
+	delete(merged, "ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS")
+	if c.CordonSystemInfraComponents {
+		merged["ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS"] = "true"
 	}
 	delete(merged, "ATE_INSTALL_FAKE_DATA_PLANE")
 	if c.FakeDataPlane {
 		merged["ATE_INSTALL_FAKE_DATA_PLANE"] = "true"
+	}
+	delete(merged, "ATE_INSTALL_E2E_TUNING")
+	if c.E2ETuning {
+		merged["ATE_INSTALL_E2E_TUNING"] = "true"
+	}
+	delete(merged, "ATE_INGRESS_ALLOWED_SPIFFE_IDS")
+	if len(c.IngressAllowedSPIFFEIDs) > 0 {
+		merged["ATE_INGRESS_ALLOWED_SPIFFE_IDS"] = strings.Join(c.IngressAllowedSPIFFEIDs, ",")
+	}
+	delete(merged, "ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS")
+	if len(c.EgressGatewayExtraSPIFFEIDs) > 0 {
+		merged["ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS"] = strings.Join(c.EgressGatewayExtraSPIFFEIDs, ",")
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService
@@ -493,7 +582,8 @@ const credentialProviderKey = "atenet.egress.credentialProvider"
 // credentialProviderUsage lists the accepted --credential-provider values.
 const credentialProviderUsage = `{"name":"k8s.io"} for the bundled Kubernetes Secrets provider, ` +
 	`{"enabled":false} to turn egress credential injection off, ` +
-	`or {"name":"<provider>","address":"<host>:<port>"} for a provider you deploy`
+	`or {"name":"<provider>","address":"<host>:<port>"} for a provider you deploy; ` +
+	`a JSON array of provider objects selects several`
 
 // credentialProviderSpec is the schema of the --credential-provider JSON.
 type credentialProviderSpec struct {
@@ -519,6 +609,11 @@ func (p CredentialProvider) Enabled() bool { return p.Name != "" }
 // Kubernetes reports whether the provider is the bundled one.
 func (p CredentialProvider) Kubernetes() bool { return p.Name == K8sCredentialProviderName }
 
+// HasKubernetesProvider reports whether providers include the bundled one.
+func HasKubernetesProvider(providers []CredentialProvider) bool {
+	return slices.ContainsFunc(providers, CredentialProvider.Kubernetes)
+}
+
 // ServerName is the SAN the gateway expects on the provider's serving
 // certificate: the address without its port.
 func (p CredentialProvider) ServerName() string {
@@ -528,19 +623,10 @@ func (p CredentialProvider) ServerName() string {
 	return p.Address
 }
 
-// CredentialProvider parses --credential-provider, a JSON object that either
+// credentialProvider parses a --credential-provider JSON object that either
 // turns injection off with enabled false or names a provider and its address.
-// Only the bundled provider has a default address. A missing value is reported here rather than in validate
-// because only the deploys that render the egress gateway need it.
-func (c *Config) CredentialProvider() (CredentialProvider, error) {
-	raw := c.CredentialProviderJSON
-	if raw == "" {
-		// Every channel is named, not just the flag: a provider set in the
-		// configuration document is the documented way to do it, and a reader
-		// told only about the flag goes looking in the wrong place.
-		return CredentialProvider{}, fmt.Errorf("a credential provider is required; set one of %s: %s",
-			channelsFor(credentialProviderKey), credentialProviderUsage)
-	}
+// Only the bundled provider has a default address.
+func credentialProvider(raw string) (CredentialProvider, error) {
 	invalid := func(format string, args ...any) (CredentialProvider, error) {
 		return CredentialProvider{}, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
 	}
@@ -577,4 +663,66 @@ func (c *Config) CredentialProvider() (CredentialProvider, error) {
 		return invalid("address must be host:port, got %q", spec.Address)
 	}
 	return CredentialProvider{Name: spec.Name, Address: spec.Address}, nil
+}
+
+// CredentialProviders parses --credential-provider, which is one of:
+//
+//	{"name":"k8s.io"}                                       one provider
+//	[{"name":"k8s.io"},{"name":"<name>","address":"<addr>"}]  several providers
+//	{"enabled":false}                                       none: injection off
+//
+// credentialProvider checks each provider object. A missing value is reported
+// here rather than in validate because only the deploys that render the egress
+// gateway need it.
+func (c *Config) CredentialProviders() ([]CredentialProvider, error) {
+	raw := c.CredentialProviderJSON
+	if raw == "" {
+		return nil, fmt.Errorf("a credential provider is required; set one of %s: %s",
+			channelsFor(credentialProviderKey), credentialProviderUsage)
+	}
+	invalid := func(format string, args ...any) ([]CredentialProvider, error) {
+		return nil, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return invalid("%v; want %s", err, credentialProviderUsage)
+	}
+	var elems []any
+	switch v := value.(type) {
+	case map[string]any:
+		p, err := credentialProvider(raw)
+		if err != nil || !p.Enabled() {
+			return nil, err
+		}
+		return []CredentialProvider{p}, nil
+	case []any:
+		elems = v
+	default:
+		return invalid("want a JSON object or an array of them: %s", credentialProviderUsage)
+	}
+	if len(elems) == 0 {
+		return invalid(`the array names no provider; {"enabled":false} turns injection off`)
+	}
+	var providers []CredentialProvider
+	for _, elem := range elems {
+		if _, ok := elem.(map[string]any); !ok {
+			return invalid("array entries must be JSON objects; want %s", credentialProviderUsage)
+		}
+		obj, err := json.Marshal(elem)
+		if err != nil {
+			return invalid("%v", err)
+		}
+		p, err := credentialProvider(string(obj))
+		if err != nil {
+			return nil, err
+		}
+		if !p.Enabled() {
+			return invalid("enabled false is not allowed in an array")
+		}
+		if slices.ContainsFunc(providers, func(q CredentialProvider) bool { return q.Name == p.Name }) {
+			return invalid("provider name %q repeats", p.Name)
+		}
+		providers = append(providers, p)
+	}
+	return providers, nil
 }

@@ -18,8 +18,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,7 +27,7 @@ import (
 // and passed to the entry's Init func.
 type Config struct {
 	// APIStub is the shared gRPC client to ateapi (one connection, all goroutines).
-	APIStub ateapipb.ControlClient
+	APIStub ateapi.ControlClient
 	// HTTPClient is the shared HTTP client for atenet pings.
 	HTTPClient *http.Client
 	// RouterURL is the base URL of the atenet router (no trailing slash).
@@ -35,9 +35,10 @@ type Config struct {
 	// Atespace every actor this worker creates lives in. Required; caller
 	// is responsible for having ensured it exists (see EnsureAtespace).
 	Atespace string
-	// Dyn is the runtime-mutable config (wait-time bounds, trace
-	// probability). Required — every per-iteration read goes through it,
-	// so tests can mutate it without touching glutton internals.
+	// Dyn is the runtime-mutable config, built from the class's
+	// Entry.Config codec. Required: a class reads its typed knobs from it
+	// through dynconfig.Get on every iteration, so tests can swap the
+	// holder without touching class internals.
 	Dyn *dynconfig.Holder
 	// Tracer anchors sampled spans; falls back to the otel global if nil.
 	Tracer trace.Tracer

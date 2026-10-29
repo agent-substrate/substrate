@@ -1,6 +1,8 @@
-module github.com/agent-substrate/substrate/hack/tools/go-licenses
+module go.ate.dev/substrate/hack/tools/go-licenses
 
 go 1.27.0
+
+toolchain go1.27.3
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

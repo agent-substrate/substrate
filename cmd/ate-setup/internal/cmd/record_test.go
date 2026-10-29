@@ -23,8 +23,8 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 // A record describes how the system was installed, so only the commands that
@@ -55,6 +55,35 @@ func TestOnlySystemDeploysRecordTheirRun(t *testing.T) {
 			}
 			if got := recordsRun(target); got != tc.want {
 				t.Errorf("recordsRun(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// The publish commands build and push without a cluster, so the release job
+// runs them with no kubeconfig. Every other command connects to one.
+func TestOnlyPublishSkipsTheCluster(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: "publish release-images", want: false},
+		{path: "publish release-binaries", want: false},
+		{path: "publish worker-images", want: false},
+		{path: "deploy ate-system", want: true},
+		{path: "delete ate-system", want: true},
+		{path: "setup csi", want: true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			target, _, err := rootCmd.Find(strings.Fields(tc.path))
+			if err != nil {
+				t.Fatalf("Find(%q): %v", tc.path, err)
+			}
+			if target.CommandPath() != "ate-setup "+tc.path {
+				t.Fatalf("%q resolved to %q", tc.path, target.CommandPath())
+			}
+			if got := needsCluster(target); got != tc.want {
+				t.Errorf("needsCluster(%q) = %v, want %v", tc.path, got, tc.want)
 			}
 		})
 	}

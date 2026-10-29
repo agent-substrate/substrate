@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -41,12 +43,35 @@ func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
 	return field.ErrorList{field.Invalid(fldPath, name, fmt.Sprintf("must be %q", resources.SingletonName)).WithOrigin("custom=default")}
 }
 
+// MakeCreateOp returns an operation.Operation for a create operation. If ctx
+// has opted-out of preview features, the returned operation will have all
+// preview gates disabled (see preview.Header).
+func MakeCreateOp(ctx context.Context) operation.Operation {
+	return operation.Operation{Type: operation.Create, Options: optionsFor(ctx)}
+}
+
+// MakeUpdateOp returns an operation.Operation for an update operation. If ctx
+// has opted-out of preview features, the returned operation will have all
+// preview gates disabled (see preview.Header).
+func MakeUpdateOp(ctx context.Context) operation.Operation {
+	return operation.Operation{Type: operation.Update, Options: optionsFor(ctx)}
+}
+
+// optionsFor returns the preview gates enabled for ctx.
+// The returned map MUST NOT be modified.
+func optionsFor(ctx context.Context) map[string]bool {
+	if preview.IsOptedOut(ctx) {
+		return preview.DisabledMap()
+	}
+	return preview.AsMap()
+}
+
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
 // when set, must be a valid google.protobuf.Timestamp, and update_time must
 // not precede create_time. Both fields are scrubbed from input, so a
 // violation here is a server stamping bug surfaced by the final-object
 // validation pass, not a client error.
-func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, fldPath *field.Path, obj, _ *ateapipb.ResourceMetadata) field.ErrorList {
+func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, fldPath *field.Path, obj, _ *ateapi.ResourceMetadata) field.ErrorList {
 	var errs field.ErrorList
 	createTimeValid := false
 	if ct := obj.GetCreateTime(); ct != nil {
@@ -64,12 +89,6 @@ func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, f
 		}
 	}
 	return errs
-}
-
-// ValidateCustom_Limits validates one limit with resources.ValidateLimit.
-// Presence and uniqueness of names are enforced by tags.
-func ValidateCustom_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Limits) field.ErrorList {
-	return resources.ValidateLimit(fldPath, value.GetName(), value.GetQuantity())
 }
 
 // validateDualStackIPs checks that each entry is a valid, canonical IP and
@@ -94,4 +113,13 @@ func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
 		*seen = true
 	}
 	return errs
+}
+
+// validateSPIFFEID checks that id is a SPIFFE ID. Presence and length are
+// enforced by tags.
+func validateSPIFFEID(fldPath *field.Path, id string) field.ErrorList {
+	if _, err := spiffeid.FromString(id); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, id, err.Error())}
+	}
+	return nil
 }

@@ -19,19 +19,20 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
-	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
-	"github.com/agent-substrate/substrate/internal/egresspolicy"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
-	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
-	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/cmd/atecontroller/internal/controllers"
+	"go.ate.dev/substrate/cmd/atecontroller/internal/workersync"
+	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/egresspolicy"
+	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/version"
+	"go.ate.dev/substrate/pkg/client/clientset/versioned"
+	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
@@ -60,24 +61,31 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
-		"OTLP endpoint set on ateom worker pods so they push telemetry. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
+		"OTLP endpoint set on worker pods, which export to it directly when their node's atelet serves no OTLP relay. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
 
 	otelMetricExportInterval = pflag.String("otel-metric-export-interval", os.Getenv("OTEL_METRIC_EXPORT_INTERVAL"),
-		"Metric export interval in milliseconds set on ateom worker pods. Empty keeps the OTel SDK's 60s default. Defaults to the controller's own OTEL_METRIC_EXPORT_INTERVAL.")
+		"Metric export interval in milliseconds set on worker pods. Empty keeps the OTel SDK's 60s default. Defaults to the controller's own OTEL_METRIC_EXPORT_INTERVAL.")
 
 	otelMetricExportTimeout = pflag.String("otel-metric-export-timeout", os.Getenv("OTEL_METRIC_EXPORT_TIMEOUT"),
-		"Per-export timeout in milliseconds set on ateom worker pods. Empty keeps the OTel SDK's 30s default. Defaults to the controller's own OTEL_METRIC_EXPORT_TIMEOUT.")
+		"Per-export timeout in milliseconds set on worker pods. Empty keeps the OTel SDK's 30s default. Defaults to the controller's own OTEL_METRIC_EXPORT_TIMEOUT.")
 
 	otelTracesSampler = pflag.String("otel-traces-sampler", os.Getenv("OTEL_TRACES_SAMPLER"),
-		"Trace sampler set on ateom worker pods. Empty keeps the ateom binary's default. Defaults to the controller's own OTEL_TRACES_SAMPLER.")
+		"Trace sampler set on worker pods. Empty keeps the ateworker binary's default. Defaults to the controller's own OTEL_TRACES_SAMPLER.")
 
 	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
-		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
+		"Trace sampler argument set on worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
 
-	otelLogsExporter = pflag.String("otel-logs-exporter", os.Getenv("OTEL_LOGS_EXPORTER"),
-		"Logs exporter set on ateom worker pods. Empty keeps the ateom binary's default, none. Defaults to the controller's own OTEL_LOGS_EXPORTER.")
+	otelLogsExporter = pflag.String("otel-logs-exporter", os.Getenv("ATE_WORKER_OTEL_LOGS_EXPORTER"),
+		"Logs exporter set on worker pods, with OTEL_LOGS_EXPORTER's values. Empty keeps the ateworker binary's default, none. Defaults to the controller's ATE_WORKER_OTEL_LOGS_EXPORTER, not its own OTEL_LOGS_EXPORTER.")
+
+	otelTracesExporter = pflag.String("otel-traces-exporter", os.Getenv("ATE_WORKER_OTEL_TRACES_EXPORTER"),
+		"Traces exporter set on worker pods, with OTEL_TRACES_EXPORTER's values. Empty keeps the ateworker binary's otlp default. Defaults to the controller's ATE_WORKER_OTEL_TRACES_EXPORTER, not its own OTEL_TRACES_EXPORTER.")
+
+	otelMetricsExporter = pflag.String("otel-metrics-exporter", os.Getenv("ATE_WORKER_OTEL_METRICS_EXPORTER"),
+		"Metrics exporter set on worker pods, with OTEL_METRICS_EXPORTER's values. Empty keeps the ateworker binary's otlp default. Defaults to the controller's ATE_WORKER_OTEL_METRICS_EXPORTER, not its own OTEL_METRICS_EXPORTER.")
 
 	ateletServiceAccount = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel expects on the credential broker, so it has to match what the deployment actually creates.")
 	routerServiceAccount = pflag.String("router-service-account", installdefaults.RouterServiceAccount, "ServiceAccount atenet-router runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel accepts on actor ingress, so it has to match what the deployment actually creates.")
@@ -88,12 +96,12 @@ var (
 
 	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", 2, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry. Defaults to 2.")
 
-	dnsEgressPolicy = pflag.String("dns-egress-policy", "", "DNS egress policy enforcement mode propagated to ateom worker pods (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+").")
+	dnsEgressPolicy = pflag.String("dns-egress-policy", "", "DNS egress policy enforcement mode propagated to worker pods (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+").")
 )
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
+	utilruntime.Must(atev1.AddToScheme(scheme)) // Register our CRD
 }
 
 const (
@@ -149,6 +157,9 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
@@ -208,6 +219,9 @@ func main() {
 		os.Exit(1)
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	// atecontroller acts for the system, not a user, so it always opts in to
+	// the preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
 
 	ateapiConn, err := grpc.NewClient(*ateAPIConnSpec, dialOpts...)
 	if err != nil {
@@ -215,7 +229,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ateapiClient := ateapipb.NewControlClient(ateapiConn)
+	ateapiClient := ateapi.NewControlClient(ateapiConn)
 
 	// Empty ServiceAccounts would not fail here: path.Join drops the empty
 	// segment, yielding identities that parse but match nothing, so every
@@ -245,6 +259,8 @@ func main() {
 		OTelTracesSampler:        *otelTracesSampler,
 		OTelTracesSamplerArg:     *otelTracesSamplerArg,
 		OTelLogsExporter:         *otelLogsExporter,
+		OTelTracesExporter:       *otelTracesExporter,
+		OTelMetricsExporter:      *otelMetricsExporter,
 		SystemNamespace:          systemNamespace,
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,
@@ -268,6 +284,7 @@ func main() {
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		SystemNamespace: systemNamespace,
+		Recorder:        mgr.GetEventRecorder("networkpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetPolicy")
 		os.Exit(1)
@@ -300,13 +317,13 @@ func main() {
 	// informer, so asking the shared cache for one would impose it on every other
 	// controller here too.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
+	workerPoolInformer := ateFactory.Ate().V1().WorkerPools()
 	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
 
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer(), *workerSyncConcurrency).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), k8sClient.AppsV1(), workerPodInformer, workerPoolInformer.Informer(), *workerSyncConcurrency).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())

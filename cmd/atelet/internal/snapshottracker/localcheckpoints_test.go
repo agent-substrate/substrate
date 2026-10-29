@@ -1,0 +1,172 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package snapshottracker
+
+import (
+	"context"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+)
+
+func writeSnapshotDir(t *testing.T, dir, prefix string) {
+	t.Helper()
+	p := filepath.Join(dir, prefix)
+	if err := os.MkdirAll(p, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p, "memory.img"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeDenseFile writes n bytes of incompressible data to path, so all of them
+// are allocated on disk.
+func writeDenseFile(t *testing.T, path string, n int) {
+	t.Helper()
+	data := make([]byte, n)
+	_, _ = rand.NewChaCha8([32]byte{}).Read(data)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// localSnapshotSize counts the disk space allocated to every file of a local
+// snapshot, nested ones included, so a sparse image counts only its data, and
+// a missing snapshot counts nothing.
+func TestLocalSnapshotSize(t *testing.T) {
+	useTempNodeDirs(t)
+	if got, err := localSnapshotSize(trackedActorUID, "s1"); got != 0 || err != nil {
+		t.Fatalf("localSnapshotSize of a missing snapshot = %d, %v; want 0, nil", got, err)
+	}
+
+	dir := ateletpath.LocalSnapshotDir(trackedActorUID, "s1")
+	const dense = 96 << 10
+	writeDenseFile(t, filepath.Join(dir, "pages.img"), 64<<10)
+	writeDenseFile(t, filepath.Join(dir, "fs", "multitar.img"), 32<<10)
+	// A sparse image as large as a guest's RAM, with no data in it.
+	sparse, err := os.Create(filepath.Join(dir, "memory.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sparse.Truncate(1 << 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := sparse.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := localSnapshotSize(trackedActorUID, "s1")
+	if err != nil {
+		t.Fatalf("localSnapshotSize: %v", err)
+	}
+	if got < dense || got > 2*dense {
+		t.Errorf("localSnapshotSize = %d, want about %d, the dense files' size: the sparse image's holes must not count", got, dense)
+	}
+}
+
+func TestPruneRemovesEverySnapshot(t *testing.T) {
+	dir := t.TempDir()
+	writeSnapshotDir(t, dir, "pause-1")
+	writeSnapshotDir(t, dir, "pause-2")
+	writeSnapshotDir(t, dir, "pause-3")
+
+	if err := pruneLocalCheckpointDir(context.Background(), dir); err != nil {
+		t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
+	}
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("dir still exists (err=%v), want removed entirely", err)
+	}
+}
+
+func TestPruneKeepsSpecifiedSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		keep    []string
+		removed []string
+	}{
+		{name: "one", keep: []string{"pause-2"}, removed: []string{"pause-1", "pause-3"}},
+		{name: "the latest and one still uploading", keep: []string{"pause-3", "pause-1"}, removed: []string{"pause-2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSnapshotDir(t, dir, "pause-1")
+			writeSnapshotDir(t, dir, "pause-2")
+			writeSnapshotDir(t, dir, "pause-3")
+
+			if err := pruneLocalCheckpointDir(context.Background(), dir, tc.keep...); err != nil {
+				t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
+			}
+
+			for _, removed := range tc.removed {
+				if _, err := os.Stat(filepath.Join(dir, removed)); !os.IsNotExist(err) {
+					t.Errorf("%s still exists (err=%v), want removed", removed, err)
+				}
+			}
+			for _, kept := range tc.keep {
+				if _, err := os.Stat(filepath.Join(dir, kept, "memory.img")); err != nil {
+					t.Errorf("kept snapshot %s missing: %v", kept, err)
+				}
+			}
+		})
+	}
+}
+
+func TestPruneMissingDirIsNoop(t *testing.T) {
+	if err := pruneLocalCheckpointDir(context.Background(), filepath.Join(t.TempDir(), "absent")); err != nil {
+		t.Fatalf("pruneLocalCheckpointDir() = %v, want nil", err)
+	}
+}
+
+// An undeletable snapshot must be reported — Terminate turns that error into a
+// failed RPC so the delete workflow retries — without stranding the snapshots
+// that could have been removed.
+func TestPruneReportsFailureAndStillRemovesTheRest(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so no snapshot can be made undeletable")
+	}
+	dir := t.TempDir()
+	writeSnapshotDir(t, dir, "pause-1")
+	writeSnapshotDir(t, dir, "pause-2")
+
+	// A snapshot dir with no write bit: its files cannot be unlinked.
+	stuck := filepath.Join(dir, "pause-stuck")
+	writeSnapshotDir(t, dir, "pause-stuck")
+	if err := os.Chmod(stuck, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+
+	err := pruneLocalCheckpointDir(context.Background(), dir)
+	if err == nil {
+		t.Fatal("pruneLocalCheckpointDir() = nil, want an error naming the undeletable snapshot")
+	}
+	if !strings.Contains(err.Error(), "pause-stuck") {
+		t.Errorf("pruneLocalCheckpointDir() = %v, want it to name pause-stuck", err)
+	}
+	for _, name := range []string{"pause-1", "pause-2"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s still exists (err=%v), want removed", name, err)
+		}
+	}
+}

@@ -28,10 +28,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"go.ate.dev/substrate/api/objectstore/v1"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/objectstorage"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,24 +45,46 @@ const manifestFile = "manifest.json"
 
 // NodePlugin serves NodeProvider on an object storage client.
 type NodePlugin struct {
-	objectstorev1.UnimplementedNodeProviderServer
+	objectstore.UnimplementedNodeProviderServer
 
-	gcsClient objectstorage.ObjectStorage
+	// creds supplies the client each transfer runs with.
+	creds    Credentials
+	uploader *objectstorage.Uploader
 	// root confines every local path a caller names.
 	root string
 }
 
 // NewNodePlugin returns a NodePlugin that reads and writes local files only
-// below root.
-func NewNodePlugin(gcsClient objectstorage.ObjectStorage, root string) (*NodePlugin, error) {
+// below root. All upload requests share uploadMemory bytes of reservations for
+// compression and backend buffers. client is the pod's own storage client,
+// GCS or S3 as the environment selected. It sizes that budget and serves
+// every transfer unless WithCredentials supplies a per-actor one.
+func NewNodePlugin(client objectstorage.ObjectStorage, root string, uploadMemory int64, opts ...NodeOption) (*NodePlugin, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("root %q is not an absolute path", root)
 	}
-	return &NodePlugin{gcsClient: gcsClient, root: filepath.Clean(root)}, nil
+	uploader, err := objectstorage.NewUploader(client, uploadMemory)
+	if err != nil {
+		return nil, err
+	}
+	p := &NodePlugin{creds: Ambient(client), uploader: uploader, root: filepath.Clean(root)}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p, nil
+}
+
+// NodeOption configures a NodePlugin.
+type NodeOption func(*NodePlugin)
+
+// WithCredentials makes transfers run with the client creds supplies for the
+// actor JWT each request carries, instead of the ambient client.
+func WithCredentials(creds Credentials) NodeOption {
+	return func(p *NodePlugin) { p.creds = creds }
 }
 
 // FetchSnapshot downloads the requested snapshot files into write_path.
-func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstorev1.FetchSnapshotRequest) (*objectstorev1.FetchSnapshotResponse, error) {
+func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstore.FetchSnapshotRequest) (*objectstore.FetchSnapshotResponse, error) {
 	uri, dstDir, err := p.validate(req.GetSnapshotUri(), req.GetWritePath(), req.GetFiles())
 	if err != nil {
 		return nil, err
@@ -71,13 +94,14 @@ func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstorev1.Fetch
 		return nil, toStatus(fmt.Errorf("while opening restore directory: %w", err))
 	}
 	defer root.Close()
+	tr := p.begin(req.GetActorJwt())
 
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range req.GetFiles() {
 		fileName := fileName
 		g.Go(func() error {
 			if fileName == manifestFile {
-				return p.fetchManifest(gCtx, uri, root)
+				return p.fetchManifest(gCtx, tr, uri, root)
 			}
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
@@ -92,7 +116,12 @@ func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstorev1.Fetch
 			if err != nil {
 				return fmt.Errorf("while opening %s in restore directory: %w", fileName, err)
 			}
-			fetchErr := objectstorage.FetchFileFromGCSWithZstd(gCtx, p.gcsClient, objectURI, local)
+			fetchErr := tr.do(gCtx, func(client objectstorage.ObjectStorage, _ *objectstorage.Uploader) error {
+				if err := truncate(local); err != nil {
+					return err
+				}
+				return objectstorage.FetchFileFromGCSWithZstd(gCtx, client, objectURI, local)
+			})
 			closeErr := local.Close()
 			if err := errors.Join(fetchErr, closeErr); err != nil {
 				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
@@ -103,12 +132,12 @@ func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstorev1.Fetch
 	if err := g.Wait(); err != nil {
 		return nil, toStatus(err)
 	}
-	return &objectstorev1.FetchSnapshotResponse{}, nil
+	return &objectstore.FetchSnapshotResponse{}, nil
 }
 
 // UploadSnapshot uploads the requested files from local_path into the
 // snapshot.
-func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstorev1.UploadSnapshotRequest) (*objectstorev1.UploadSnapshotResponse, error) {
+func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstore.UploadSnapshotRequest) (*objectstore.UploadSnapshotResponse, error) {
 	uri, srcDir, err := p.validate(req.GetSnapshotUri(), req.GetLocalPath(), req.GetFiles())
 	if err != nil {
 		return nil, err
@@ -118,49 +147,69 @@ func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstorev1.Uplo
 		return nil, toStatus(fmt.Errorf("while opening snapshot directory: %w", err))
 	}
 	defer root.Close()
+	tr := p.begin(req.GetActorJwt())
 
+	upload := func(ctx context.Context, fileName string) error {
+		local, err := root.Open(fileName)
+		if err != nil {
+			return fmt.Errorf("while opening %s in snapshot directory: %w", fileName, err)
+		}
+		defer local.Close()
+		info, err := local.Stat()
+		if err != nil {
+			return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("snapshot file %s is not a regular file", fileName)
+		}
+		if fileName == manifestFile {
+			return p.uploadManifest(ctx, tr, uri, local)
+		}
+		objectURI, err := uri.ObjectURI(fileName + ".zstd")
+		if err != nil {
+			return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
+		}
+		err = tr.do(ctx, func(_ objectstorage.ObjectStorage, uploader *objectstorage.Uploader) error {
+			if err := rewind(local); err != nil {
+				return err
+			}
+			return uploader.SendFile(ctx, objectURI, local)
+		})
+		if err != nil {
+			return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
+		}
+		return nil
+	}
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range req.GetFiles() {
-		g.Go(func() error {
-			local, err := root.Open(fileName)
-			if err != nil {
-				return fmt.Errorf("while opening %s in snapshot directory: %w", fileName, err)
-			}
-			defer local.Close()
-			info, err := local.Stat()
-			if err != nil {
-				return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
-			}
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
-			}
-			if fileName == manifestFile {
-				return p.uploadManifest(gCtx, uri, local)
-			}
-
-			objectURI, err := uri.ObjectURI(fileName + ".zstd")
-			if err != nil {
-				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
-			}
-			if err := objectstorage.SendFileToGCSWithZstd(gCtx, p.gcsClient, objectURI, local); err != nil {
-				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
-			}
-			return nil
-		})
+		if fileName != manifestFile {
+			g.Go(func() error { return upload(gCtx, fileName) })
+		}
 	}
 	if err := g.Wait(); err != nil {
 		return nil, toStatus(err)
 	}
-	return &objectstorev1.UploadSnapshotResponse{}, nil
+	// A manifest commits the snapshot only after every requested data file has
+	// succeeded. Use ctx: errgroup cancels gCtx when Wait returns.
+	if slices.Contains(req.GetFiles(), manifestFile) {
+		if err := upload(ctx, manifestFile); err != nil {
+			return nil, toStatus(err)
+		}
+	}
+	return &objectstore.UploadSnapshotResponse{}, nil
 }
 
 // fetchManifest downloads the uncompressed manifest into root.
-func (p *NodePlugin) fetchManifest(ctx context.Context, uri resources.SnapshotURI, root *os.Root) error {
+func (p *NodePlugin) fetchManifest(ctx context.Context, tr *transfer, uri resources.SnapshotURI, root *os.Root) error {
 	manifestURI, err := uri.ObjectURI(manifestFile)
 	if err != nil {
 		return err
 	}
-	manifest, err := objectstorage.FetchFromGCS(ctx, p.gcsClient, manifestURI)
+	var manifest []byte
+	err = tr.do(ctx, func(client objectstorage.ObjectStorage, _ *objectstorage.Uploader) (err error) {
+		manifest, err = objectstorage.FetchFromGCS(ctx, client, manifestURI)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("while fetching snapshot manifest: %w", err)
 	}
@@ -171,19 +220,38 @@ func (p *NodePlugin) fetchManifest(ctx context.Context, uri resources.SnapshotUR
 }
 
 // uploadManifest uploads the manifest from local uncompressed.
-func (p *NodePlugin) uploadManifest(ctx context.Context, uri resources.SnapshotURI, local *os.File) error {
-	manifest, err := io.ReadAll(local)
-	if err != nil {
-		return fmt.Errorf("while reading %s in snapshot directory: %w", manifestFile, err)
-	}
+func (p *NodePlugin) uploadManifest(ctx context.Context, tr *transfer, uri resources.SnapshotURI, local *os.File) error {
 	manifestURI, err := uri.ObjectURI(manifestFile)
 	if err != nil {
 		return fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
 	}
-	if err := objectstorage.SendBytesToGCS(ctx, p.gcsClient, manifestURI, manifest); err != nil {
+	err = tr.do(ctx, func(_ objectstorage.ObjectStorage, uploader *objectstorage.Uploader) error {
+		if err := rewind(local); err != nil {
+			return err
+		}
+		return uploader.Send(ctx, manifestURI, local)
+	})
+	if err != nil {
 		return fmt.Errorf("while uploading snapshot manifest: %w", err)
 	}
 	return nil
+}
+
+// rewind puts an upload's source back at its start. A request storage
+// refuses may already have read the file, and the retry must send all of it
+// rather than what is left.
+func rewind(f *os.File) error {
+	_, err := f.Seek(0, io.SeekStart)
+	return err
+}
+
+// truncate empties a download's destination, so a retry does not append to
+// whatever a refused attempt wrote.
+func truncate(f *os.File) error {
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	return rewind(f)
 }
 
 // validate checks a request's snapshot URI, local directory and file names,

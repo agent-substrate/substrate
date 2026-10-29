@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Parking variant of the probe template: a protojson-shaped
-# ateapipb.ActorTemplate whose limits are one whole worker's worth, so two of
+# ateapi.ActorTemplate whose limits are one whole worker's worth, so two of
 # its actors cannot share the fixture's single worker. Reuses the probe image
 # (it serves /whoami, which names the actor that answered).
 
@@ -25,7 +25,7 @@ workerSelector:
     workload: probe-parking
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   - name: system-info
@@ -44,13 +44,7 @@ volumes:
           path: actor-id
 # One actor's worth of CPU, matching the pool's per-worker limit in
 # probe-parking.yaml.tmpl: what makes the worker full after one placement.
-# Quantities are strings in the proto.
 resources:
   limits:
-  - name: cpu
-    quantity: "1"
-  - name: memory
-    quantity: 512Mi
-${TEMPLATE_SANDBOX_CONFIG}
-snapshotConfig:
-  storageLocation: gs://${BUCKET_NAME}/ate-e2e${FIXTURE_SUFFIX}/
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi

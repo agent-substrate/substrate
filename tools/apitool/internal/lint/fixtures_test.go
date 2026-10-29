@@ -19,8 +19,8 @@ package lint_test
 import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // methodAPI builds an API whose test.Control service has the one method
@@ -51,7 +51,7 @@ func rpc(name, resource, output string) model.Method {
 func resource(name string, parents []string, fields ...model.Field) model.Message {
 	a := &model.ResourceAnnotation{Parents: parents, Plural: name + "s"}
 	if len(parents) == 0 {
-		a.Scope = ateapipb.Scope_SCOPE_ATESPACE
+		a.Scope = ateapi.Scope_SCOPE_ATESPACE
 	}
 	return model.Message{FullName: protoreflect.FullName("test." + name), Name: name, Fields: fields, ResourceAnnotation: a}
 }
@@ -60,7 +60,7 @@ func resource(name string, parents []string, fields ...model.Field) model.Messag
 // test.{name}, with the given fields.
 func globalResource(name string, fields ...model.Field) model.Message {
 	m := resource(name, nil, fields...)
-	m.ResourceAnnotation.Scope = ateapipb.Scope_SCOPE_GLOBAL
+	m.ResourceAnnotation.Scope = ateapi.Scope_SCOPE_GLOBAL
 	return m
 }
 

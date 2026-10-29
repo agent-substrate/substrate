@@ -22,8 +22,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/protoredact"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/protoredact"
 )
 
 type ContextHandler struct {

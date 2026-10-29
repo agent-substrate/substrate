@@ -1,6 +1,8 @@
-module github.com/agent-substrate/substrate/hack/tools/ko
+module go.ate.dev/substrate/hack/tools/ko
 
 go 1.27.0
+
+toolchain go1.27.3
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0 // indirect
@@ -95,7 +97,7 @@ require (
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jedisct1/go-minisign v0.0.0-20241212093149-d2f9f49435c7 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect

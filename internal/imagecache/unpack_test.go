@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,8 @@ type tarEntry struct {
 	body     string
 	linkname string
 	modTime  time.Time
+	devmajor int64
+	devminor int64
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -62,6 +65,8 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			Size:     int64(len(e.body)),
 			Linkname: e.linkname,
 			ModTime:  e.modTime,
+			Devmajor: e.devmajor,
+			Devminor: e.devminor,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)
@@ -627,25 +632,47 @@ func TestUnpackLayer_HardlinkEscape(t *testing.T) {
 	}
 }
 
-func TestUnpackLayer_RejectSpecialFiles(t *testing.T) {
-	tests := []struct {
-		name     string
-		typeflag byte
-	}{
-		{name: "char device", typeflag: tar.TypeChar},
-		{name: "block device", typeflag: tar.TypeBlock},
-		{name: "fifo", typeflag: tar.TypeFifo},
+func TestUnpackLayer_SkipsDeviceNodes(t *testing.T) {
+	dir, wh, err := runUnpack(t, []tarEntry{
+		{name: "dev/", typeflag: tar.TypeDir},
+		{name: "dev/console", typeflag: tar.TypeChar, devmajor: 5, devminor: 1},
+		{name: "dev/sda", typeflag: tar.TypeBlock, devmajor: 8},
+		{name: "dev/zero", typeflag: tar.TypeChar},
+		// Undeclared parent of a skipped device node must not be created or
+		// recorded in ImplicitDirs.
+		{name: "undeclared/tty0", typeflag: tar.TypeChar, devmajor: 4},
+		// A device node at an existing path removes the prior entry (including
+		// a declared directory subtree) without breaking the mode-restore pass.
+		{name: "dev/replaced", typeflag: tar.TypeReg, body: "stale"},
+		{name: "dev/replaced", typeflag: tar.TypeChar, devmajor: 1, devminor: 3},
+		{name: "dev/subdir/", typeflag: tar.TypeDir},
+		{name: "dev/subdir/nested/", typeflag: tar.TypeDir},
+		{name: "dev/subdir", typeflag: tar.TypeChar, devmajor: 1, devminor: 5},
+		{name: "etc/hostname", typeflag: tar.TypeReg, body: "x"},
+	})
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := runUnpack(t, []tarEntry{{name: "weird", typeflag: tc.typeflag}})
-			if err == nil {
-				t.Fatalf("unpackLayer succeeded, want unhandled-typeflag error")
-			}
-			if !strings.Contains(err.Error(), "unhandled tar entry typeflag") {
-				t.Errorf("error = %q, want it to mention 'unhandled tar entry typeflag'", err.Error())
-			}
-		})
+	for _, name := range []string{"dev/console", "dev/sda", "dev/zero", "undeclared", "undeclared/tty0", "dev/replaced", "dev/subdir"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Lstat(%q) = %v, want not exist", name, err)
+		}
+	}
+	if want := []string{"etc"}; !slices.Equal(wh.ImplicitDirs, want) {
+		t.Errorf("ImplicitDirs = %v, want %v", wh.ImplicitDirs, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "etc/hostname")); err != nil {
+		t.Errorf("entry after device nodes not extracted: %v", err)
+	}
+}
+
+func TestUnpackLayer_RejectFifo(t *testing.T) {
+	_, _, err := runUnpack(t, []tarEntry{{name: "weird", typeflag: tar.TypeFifo}})
+	if err == nil {
+		t.Fatalf("unpackLayer succeeded, want unhandled-typeflag error")
+	}
+	if want := `unhandled tar entry typeflag "6" at "weird"`; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), want)
 	}
 }
 

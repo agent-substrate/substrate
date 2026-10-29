@@ -34,8 +34,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 // Handler builds the request handler for the given wire mode. ModeGRPC serves
@@ -121,6 +121,7 @@ func newMux(svc *Service) *http.ServeMux {
 	mux.HandleFunc(BurnCPURoute, protoRoute("BurnCPU", svc.BurnCPU))
 	mux.HandleFunc(IngestRoute, protoRoute("Ingest", svc.Ingest))
 	mux.HandleFunc(UseCPURoute, protoRoute("UseCPU", svc.UseCPU))
+	mux.HandleFunc(RunScriptRoute, protoRoute("RunScript", svc.RunScript))
 	return mux
 }
 

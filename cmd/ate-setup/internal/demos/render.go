@@ -15,16 +15,12 @@
 package demos
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
-// bucketNamePlaceholder is substituted into every demo template with the
-// snapshot bucket for this environment.
-const bucketNamePlaceholder = "BUCKET_NAME"
-
 // ExternalVolumePlaceholders are the optional external-volume hooks in the
-// counter and autoscaled-workerpool templates. Every path except
+// counter templates. Every path except
 // `deploy demo counter --with-external-volume` drops them, which removes the
 // lines entirely.
 var ExternalVolumePlaceholders = []string{
@@ -33,13 +29,7 @@ var ExternalVolumePlaceholders = []string{
 	"EXTERNAL_VOLUMES",
 }
 
-// Render expands a demo template with the configured bucket name.
-func Render(e *steps.Env, relPath string, extraValues map[string]string, drop []string) ([]byte, error) {
-	values := map[string]string{
-		bucketNamePlaceholder: e.Cfg.BucketName,
-	}
-	for k, v := range extraValues {
-		values[k] = v
-	}
+// Render expands a demo template with values.
+func Render(e *steps.Env, relPath string, values map[string]string, drop []string) ([]byte, error) {
 	return render.Template(e.Cfg.Path(relPath), values, drop)
 }

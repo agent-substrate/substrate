@@ -23,8 +23,8 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 )
 
 const websocketDenialBody = "WebSocket egress is not supported"
@@ -74,7 +74,7 @@ func TestProcessReturnsWebSocketDenialAsImmediateResponse(t *testing.T) {
 			}
 			stream := &websocketProcessStream{ctx: context.Background(), requests: []*extprocv3.ProcessingRequest{request}}
 			server := extproc.NewServer(0, nil, extproc.Handlers{
-				extproc.DirectionEgress: egress.New(nil, nil, 0, nil, ""),
+				extproc.DirectionEgress: egress.New(nil, nil, 0, nil),
 			})
 
 			if err := server.Process(stream); err != nil {

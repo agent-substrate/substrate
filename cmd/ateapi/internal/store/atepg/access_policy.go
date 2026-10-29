@@ -19,14 +19,15 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
+func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+	dbPolicy := proto.Clone(policy).(*ateapi.AccessPolicy)
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
@@ -57,13 +58,13 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 	return dbPolicy, nil
 }
 
-func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error) {
+func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (*ateapi.AccessPolicy, error) {
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM global_access_policy
 		WHERE id = true`)
 }
 
-func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
+func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -108,8 +109,8 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	return dbPolicy, nil
 }
 
-func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
+func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+	dbPolicy := proto.Clone(policy).(*ateapi.AccessPolicy)
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
@@ -143,13 +144,13 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 	return dbPolicy, nil
 }
 
-func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error) {
+func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapi.AccessPolicy, error) {
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM atespace_access_policies
 		WHERE atespace_name = $1`, name)
 }
 
-func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
+func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -194,7 +195,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.AccessPolicy, error) {
+func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning access policy delete for %s: %w", name, err)
@@ -227,10 +228,11 @@ func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name strin
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing access policy delete for %s: %w", name, err)
 	}
+	deleted.Metadata.DeleteTime = timestamppb.Now()
 	return deleted, nil
 }
 
-func getAccessPolicyRow(ctx context.Context, q querier, query string, args ...any) (*ateapipb.AccessPolicy, error) {
+func getAccessPolicyRow(ctx context.Context, q querier, query string, args ...any) (*ateapi.AccessPolicy, error) {
 	var uid string
 	var version int64
 	var protoBytes []byte
@@ -243,8 +245,8 @@ func getAccessPolicyRow(ctx context.Context, q querier, query string, args ...an
 	return unmarshalAccessPolicy(uid, version, protoBytes)
 }
 
-func unmarshalAccessPolicy(uid string, version int64, protoBytes []byte) (*ateapipb.AccessPolicy, error) {
-	policy := &ateapipb.AccessPolicy{}
+func unmarshalAccessPolicy(uid string, version int64, protoBytes []byte) (*ateapi.AccessPolicy, error) {
+	policy := &ateapi.AccessPolicy{}
 	if err := unmarshalStored(protoBytes, policy); err != nil {
 		return nil, fmt.Errorf("unmarshaling access policy: %w", err)
 	}

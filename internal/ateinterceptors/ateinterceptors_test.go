@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/protoredact"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/credprovider/v1"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/protoredact"
+	"go.ate.dev/substrate/internal/serverboot"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -171,9 +171,9 @@ func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 		},
 		{
 			name:       "upstream status becomes Internal without its details",
-			handlerErr: fmt.Errorf("while calling ateom: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
+			handlerErr: fmt.Errorf("while calling worker: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
 			wantCode:   codes.Internal,
-			wantMsg:    "while calling ateom: rpc error: code = DataLoss desc = boom",
+			wantMsg:    "while calling worker: rpc error: code = DataLoss desc = boom",
 		},
 		{
 			name:       "wrapped upstream status becomes Internal",
@@ -359,7 +359,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 			Containers: []*ateletpb.Container{
 				{
 					Name: "main",
-					Env: []*ateletpb.EnvEntry{
+					Env: []*ateletpb.EnvVar{
 						{Name: "API_KEY", Value: "sk-secret"},
 						{Name: "PLAIN", Value: "not-a-secret"},
 					},
@@ -368,7 +368,7 @@ func TestServerUnaryInterceptorRequestLogMasksEnvValues(t *testing.T) {
 		},
 	}
 
-	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.AteomHerder/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.Atelet/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return &ateletpb.RunResponse{}, nil
 	})
 	if err != nil {
@@ -396,9 +396,9 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
-	resp := &ateapipb.MintActorJwtResponse{ActorJwt: token}
+	resp := &ateapi.MintActorJwtResponse{ActorJwt: token}
 
-	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapi.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/substrate.ateapi.v1.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -412,7 +412,7 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	if !strings.Contains(gotLog, `"actor_jwt":"`+protoredact.Placeholder+`"`) {
 		t.Fatalf("log does not show the redacted actor_jwt: %s", gotLog)
 	}
-	if got.(*ateapipb.MintActorJwtResponse).GetActorJwt() != token {
+	if got.(*ateapi.MintActorJwtResponse).GetActorJwt() != token {
 		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }
@@ -420,8 +420,8 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 	log := captureDefaultLog(t)
 
-	resp := &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte("hunter2-hunter2")}
-	_, err := InternalServerUnaryInterceptor(context.Background(), &credproviderpb.FetchSecretRequest{Uri: "ate-secret://kubernetes.io/ns/name"}, &grpc.UnaryServerInfo{FullMethod: "/credprovider.CredentialProvider/FetchSecret"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	resp := &credprovider.FetchSecretResponse{OpaqueBytes: []byte("hunter2-hunter2")}
+	_, err := InternalServerUnaryInterceptor(context.Background(), &credprovider.FetchSecretRequest{Uri: "ate-secret://kubernetes.io/ns/name"}, &grpc.UnaryServerInfo{FullMethod: "/substrate.credprovider.v1.CredentialProvider/FetchSecret"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -444,14 +444,46 @@ func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 }
 
 func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
-	log := captureDefaultLog(t)
-	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return nil, apierror.PermissionDenied("no")
-	})
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("err = %v", err)
+	tests := []struct {
+		name   string
+		method string
+		resp   any
+	}{
+		{name: "nil", method: "/substrate.ateapi.v1.Control/MintActorJwt", resp: nil},
+		// The generated handlers return a typed nil on error; a List call must
+		// not log it as an elided response.
+		{name: "typed nil List response", method: "/substrate.ateapi.v1.Control/ListActors", resp: (*ateapi.ListActorsResponse)(nil)},
 	}
-	if !strings.Contains(log.String(), `"resp":null`) {
-		t.Errorf("nil response should log as null: %s", log.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := captureDefaultLog(t)
+			_, err := ServerUnaryInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: tt.method}, func(ctx context.Context, req interface{}) (interface{}, error) {
+				return tt.resp, apierror.PermissionDenied("no")
+			})
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("err = %v", err)
+			}
+			if !strings.Contains(log.String(), `"resp":null`) {
+				t.Errorf("nil response should log as null: %s", log.String())
+			}
+		})
+	}
+}
+
+func TestServerUnaryInterceptorElidesListResponses(t *testing.T) {
+	log := captureDefaultLog(t)
+
+	resp := &ateapi.ListActorsResponse{Actors: []*ateapi.Actor{{Metadata: &ateapi.ResourceMetadata{Name: "gym-0123456789ab"}}}}
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapi.ListActorsRequest{Atespace: "nemo-gym"}, &grpc.UnaryServerInfo{FullMethod: "/substrate.ateapi.v1.Control/ListActors"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return resp, nil
+	})
+	if err != nil {
+		t.Fatalf("ServerUnaryInterceptor failed: %v", err)
+	}
+	if gotLog := log.String(); strings.Contains(gotLog, "gym-0123456789ab") || !strings.Contains(gotLog, "ListActors response elided") {
+		t.Fatalf("list response not elided from the log: %s", gotLog)
+	}
+	if len(got.(*ateapi.ListActorsResponse).GetActors()) != 1 {
+		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }

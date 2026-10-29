@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -43,7 +44,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 func resourceAttrs(res *resource.Resource) map[string]string {
@@ -65,6 +66,11 @@ func TestNewResourceDefaults(t *testing.T) {
 	}
 	if attrs[string(semconv.ServiceInstanceIDKey)] == "" {
 		t.Error("service.instance.id must be set")
+	}
+	// The SDK's own detector sets its semconv schema; a different one here
+	// makes the merge drop the schema URL (ErrSchemaURLConflict).
+	if got, want := res.SchemaURL(), resource.Default().SchemaURL(); got == "" || got != want {
+		t.Errorf("schema URL = %q, want the SDK's %q", got, want)
 	}
 }
 
@@ -118,7 +124,7 @@ func TestRelayAttrs(t *testing.T) {
 			if tc.conn {
 				conn = lazyConn(t)
 			}
-			res, err := newResource(context.Background(), "ateom-gvisor", relayAttrs(tc.relayCapable, conn)...)
+			res, err := newResource(context.Background(), "ateworker-gvisor", relayAttrs(tc.relayCapable, conn)...)
 			if err != nil {
 				t.Fatalf("newResource: %v", err)
 			}
@@ -143,7 +149,7 @@ func TestRelayAttrs(t *testing.T) {
 func collectedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map[string]string {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp, err := newMeterProvider(context.Background(), "ateom-gvisor", true, relayCapable, conn, nil, reader)
+	mp, err := newMeterProvider(context.Background(), "ateworker-gvisor", true, relayCapable, conn, nil, reader)
 	if err != nil {
 		t.Fatalf("newMeterProvider: %v", err)
 	}
@@ -406,12 +412,12 @@ func TestHTTPServerBoundsHeaderRead(t *testing.T) {
 }
 
 func TestInitMetricsPushOnlyHasNoPrometheusSurface(t *testing.T) {
-	mp, err := InitMetricsPushOnlyVia(context.Background(), "test-pushonly", nil)
+	mp, err := InitMetricsPushOnlyVia(context.Background(), "test-pushonly", lazyConn(t))
 	if err != nil {
 		t.Fatalf("InitMetricsPushOnlyVia: %v", err)
 	}
 	// Bound shutdown: the periodic reader would otherwise block flushing to the
-	// unreachable default OTLP endpoint until the export timeout.
+	// unreachable connection until the export timeout.
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -476,6 +482,16 @@ func (c *metricsCollector) flush(t *testing.T, mp *sdkmetric.MeterProvider) map[
 // OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_METRICS_EXPORTER.
 func startMetricsCollector(t *testing.T, exporter string) *metricsCollector {
 	t.Helper()
+	collector, addr := serveMetricsCollector(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+addr)
+	t.Setenv(metricsExporterEnv, exporter)
+	return collector
+}
+
+// serveMetricsCollector serves a metricsCollector on a loopback port and
+// returns it with its address.
+func serveMetricsCollector(t *testing.T) (*metricsCollector, string) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -485,9 +501,7 @@ func startMetricsCollector(t *testing.T, exporter string) *metricsCollector {
 	colmetricspb.RegisterMetricsServiceServer(srv, collector)
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(srv.Stop)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
-	t.Setenv(metricsExporterEnv, exporter)
-	return collector
+	return collector, ln.Addr().String()
 }
 
 func addOne(t *testing.T, mp *sdkmetric.MeterProvider, name string) {
@@ -605,33 +619,98 @@ func bridgedRegistry(t *testing.T) *prometheus.Registry {
 	return reg
 }
 
-// With the OTLP export, whether selected or the default, the bridged family and
-// the OTel instrument are each pushed once. The instrument must stay off the
-// bridged registry: there the bridge would push it a second time, under its
-// Prometheus name.
+// With the OTLP export, the bridged family and the OTel instrument are each
+// pushed once. When the scraped endpoint is on too, the instrument is served
+// from the bridged registry as well, and the bridge must not push it again
+// under its Prometheus name.
 func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
-	for _, tt := range []struct{ name, value string }{
-		{"unset", ""},
-		{"otlp", "otlp"},
-		{"list", "otlp,prometheus"},
+	for _, tt := range []struct {
+		name, value string
+		served      bool
+	}{
+		{"unset", "", true},
+		{"otlp", "otlp", false},
+		{"list", "otlp,prometheus", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			collector := startMetricsCollector(t, tt.value)
 			reg := bridgedRegistry(t)
-			mp, _, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
+			mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
 			if err != nil {
 				t.Fatalf("InitMetricsBridged: %v", err)
 			}
+			if servePull != tt.served {
+				t.Errorf("servePull = %v, want %v", servePull, tt.served)
+			}
 			addOne(t, mp, "ate.test.bridged.count")
-			if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
-				t.Error("the OTel instrument is registered on the bridged registry")
+			names := gatheredNames(t, reg)
+			if names["ate_test_bridged_count_total"] != tt.served {
+				t.Errorf("the bridged registry serves the OTel instrument = %v, want %v", !tt.served, tt.served)
+			}
+			if !names["test_bridged_family"] {
+				t.Error("the bridged registry lost its own family")
 			}
 			pushed := collector.flush(t, mp)
-			if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 || pushed["ate_test_bridged_count_total"] != 0 {
-				t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each and nothing else for them, got %v", pushed)
+			if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 {
+				t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each, got %v", pushed)
+			}
+			if pushed["ate_test_bridged_count_total"] != 0 || pushed["target_info"] != 0 {
+				t.Errorf("the bridge pushed what the OTel reader already covers: %v", pushed)
 			}
 		})
 	}
+}
+
+// A skip list that cannot be gathered drops the batch without failing the
+// collection, so nothing is pushed twice and the other metrics still push.
+// inner's own error is still returned.
+func TestSkipFamiliesDropsBatchOnGatherError(t *testing.T) {
+	innerErr := errors.New("inner failed")
+	for _, tt := range []struct {
+		name     string
+		innerErr error
+	}{
+		{"no inner error", nil},
+		{"inner error", innerErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
+				return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "kept"}}}}, tt.innerErr
+			})
+			failing := prometheus.NewRegistry()
+			failing.MustRegister(failingCollector{})
+			scopes, err := skipFamilies{inner: inner, skip: failing}.Produce(t.Context())
+			if scopes != nil || err != tt.innerErr {
+				t.Errorf("Produce = %v, %v; want no metrics and %v", scopes, err, tt.innerErr)
+			}
+		})
+	}
+}
+
+// A family that reaches the skip registry while inner produces is still
+// dropped, so the bridge never pushes it under its Prometheus name.
+func TestSkipFamiliesCoversFamiliesRegisteredDuringProduce(t *testing.T) {
+	skip := prometheus.NewRegistry()
+	inner := producerFunc(func(context.Context) ([]metricdata.ScopeMetrics, error) {
+		skip.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: "late_total", Help: "late"}))
+		return []metricdata.ScopeMetrics{{Metrics: []metricdata.Metrics{{Name: "late_total"}, {Name: "kept"}}}}, nil
+	})
+	scopes, err := skipFamilies{inner: inner, skip: skip}.Produce(t.Context())
+	if err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	if len(scopes) != 1 || len(scopes[0].Metrics) != 1 || scopes[0].Metrics[0].Name != "kept" {
+		t.Errorf("Produce = %v, want only kept", scopes)
+	}
+}
+
+// failingCollector is an unchecked collector whose every Gather fails.
+type failingCollector struct{}
+
+func (failingCollector) Describe(chan<- *prometheus.Desc) {}
+
+func (failingCollector) Collect(ch chan<- prometheus.Metric) {
+	ch <- prometheus.NewInvalidMetric(prometheus.NewDesc("failing", "always invalid", nil, nil), errors.New("boom"))
 }
 
 // wrapProducer sits between the bridge and the OTLP push.
@@ -860,8 +939,9 @@ func (c *traceCollector) Export(_ context.Context, req *coltracepb.ExportTraceSe
 }
 
 // startTraceCollector serves a traceCollector on a loopback port, points
-// OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_TRACES_EXPORTER.
-func startTraceCollector(t *testing.T, exporter string) *traceCollector {
+// OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_TRACES_EXPORTER. It returns
+// the collector and its address.
+func startTraceCollector(t *testing.T, exporter string) (*traceCollector, string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -874,14 +954,16 @@ func startTraceCollector(t *testing.T, exporter string) *traceCollector {
 	t.Cleanup(srv.Stop)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
 	t.Setenv(tracesExporterEnv, exporter)
-	return collector
+	return collector, ln.Addr().String()
 }
 
 // endOneSpan ends a sampled span, then flushes and shuts the provider down, so
-// a span exporter, if there is one, has exported it.
-func endOneSpan(t *testing.T, serviceName string) {
+// a span exporter, if there is one, has exported it. opts.Sampling is set to
+// sample every span.
+func endOneSpan(t *testing.T, opts TracingOptions) {
 	t.Helper()
-	tp, err := InitTracing(t.Context(), TracingOptions{ServiceName: serviceName, Sampling: ParentRatioSampling(1)})
+	opts.Sampling = ParentRatioSampling(1)
+	tp, err := InitTracing(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("InitTracing: %v", err)
 	}
@@ -897,8 +979,8 @@ func endOneSpan(t *testing.T, serviceName string) {
 }
 
 func TestInitTracingExportsOverOTLPByDefault(t *testing.T) {
-	collector := startTraceCollector(t, "")
-	endOneSpan(t, "test-traces-default")
+	collector, _ := startTraceCollector(t, "")
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-default"})
 	if got := collector.spans.Load(); got != 1 {
 		t.Errorf("the collector received %d span(s), want 1", got)
 	}
@@ -907,9 +989,135 @@ func TestInitTracingExportsOverOTLPByDefault(t *testing.T) {
 // With OTEL_TRACES_EXPORTER=none the span is still sampled, so the context a
 // component propagates keeps its sampled flag, and nothing is exported.
 func TestInitTracingExporterNoneExportsNothing(t *testing.T) {
-	collector := startTraceCollector(t, "none")
-	endOneSpan(t, "test-traces-none")
+	collector, _ := startTraceCollector(t, "none")
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-none"})
 	if got := collector.spans.Load(); got != 0 {
 		t.Errorf("OTEL_TRACES_EXPORTER=none still exported %d span(s)", got)
+	}
+}
+
+// ateworker exports through the relay without an OTLP endpoint of its own: the
+// connection is the destination.
+func TestInitTracingRelayCapableExportsThroughConnWithoutEndpoint(t *testing.T) {
+	collector, addr := startTraceCollector(t, "")
+	t.Setenv(otlpEndpointEnv, "")
+	conn, err := grpc.NewClient("passthrough:///"+addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-relay", ExporterConn: conn, RelayCapable: true})
+	if got := collector.spans.Load(); got != 1 {
+		t.Errorf("the collector received %d span(s) through the connection, want 1", got)
+	}
+}
+
+func TestHasOTLPDestination(t *testing.T) {
+	conn := lazyConn(t)
+	tests := []struct {
+		name            string
+		relayCapable    bool
+		conn            *grpc.ClientConn
+		generic, signal string
+		want            bool
+	}{
+		{name: "not relay capable", want: true},
+		{name: "relay connection", relayCapable: true, conn: conn, want: true},
+		{name: "generic endpoint", relayCapable: true, generic: "http://collector:4317", want: true},
+		{name: "signal endpoint", relayCapable: true, signal: "http://collector:4317", want: true},
+		{name: "neither", relayCapable: true, want: false},
+		{name: "blank endpoints", relayCapable: true, generic: " ", signal: " ", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(otlpEndpointEnv, tt.generic)
+			t.Setenv(tracesEndpointEnv, tt.signal)
+			if got := hasOTLPDestination(tracesEndpointEnv, tt.relayCapable, tt.conn); got != tt.want {
+				t.Errorf("hasOTLPDestination = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// Without a relay or an endpoint, InitLogging returns no provider for ateworker
+// rather than one that dials localhost:4317.
+func TestInitLoggingRelayCapableWithoutDestinationReturnsNil(t *testing.T) {
+	t.Setenv(otlpEndpointEnv, "")
+	t.Setenv(logsEndpointEnv, "")
+	lp, err := InitLogging(t.Context(), LoggingOptions{ServiceName: "test-logs-nowhere", Exporter: Exporters{ExporterOTLP: true}, RelayCapable: true})
+	if err != nil {
+		t.Fatalf("InitLogging: %v", err)
+	}
+	if lp != nil {
+		t.Error("InitLogging returned a provider with nowhere to export")
+	}
+}
+
+// captureLogs sends slog's default logger to the returned buffer for the rest
+// of the test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	// slog.SetDefault also points the log package at the handler, and setting
+	// slog back does not undo that, so restore all three.
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	return &buf
+}
+
+// Without a relay or an endpoint, ateworker installs no span exporter rather than
+// one that dials localhost:4317, and still samples.
+func TestInitTracingRelayCapableWithoutDestinationExportsNothing(t *testing.T) {
+	t.Setenv(otlpEndpointEnv, "")
+	t.Setenv(tracesEndpointEnv, "")
+	t.Setenv(tracesExporterEnv, "")
+	logs := captureLogs(t)
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-nowhere", RelayCapable: true})
+	if !strings.Contains(logs.String(), `level=WARN msg="Tracing initialized"`) || !strings.Contains(logs.String(), `export=false reason="no OTLP relay or endpoint"`) {
+		t.Errorf("InitTracing installed a span exporter with nowhere to export:\n%s", logs.String())
+	}
+}
+
+// Without a relay or an endpoint, ateworker installs no OTLP metric reader rather
+// than one that dials localhost:4317.
+func TestInitMetricsPushOnlyWithoutDestinationExportsNothing(t *testing.T) {
+	t.Setenv(otlpEndpointEnv, "")
+	t.Setenv(metricsEndpointEnv, "")
+	t.Setenv(metricsExporterEnv, "")
+	logs := captureLogs(t)
+	mp, err := InitMetricsPushOnlyVia(t.Context(), "test-metrics-nowhere", nil)
+	if err != nil {
+		t.Fatalf("InitMetricsPushOnlyVia: %v", err)
+	}
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	if !strings.Contains(logs.String(), `level=WARN msg="Metrics initialized" otlp_export=false reason="no OTLP relay or endpoint"`) {
+		t.Errorf("InitMetricsPushOnlyVia installed an OTLP reader with nowhere to export:\n%s", logs.String())
+	}
+}
+
+// ateworker exports metrics through the relay without an OTLP endpoint of its own:
+// the connection is the destination.
+func TestInitMetricsPushOnlyExportsThroughConnWithoutEndpoint(t *testing.T) {
+	collector, addr := serveMetricsCollector(t)
+	t.Setenv(otlpEndpointEnv, "")
+	t.Setenv(metricsEndpointEnv, "")
+	t.Setenv(metricsExporterEnv, "")
+	conn, err := grpc.NewClient("passthrough:///"+addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	mp, err := InitMetricsPushOnlyVia(t.Context(), "test-metrics-relay", conn)
+	if err != nil {
+		t.Fatalf("InitMetricsPushOnlyVia: %v", err)
+	}
+	addOne(t, mp, "ate.test.relay.count")
+	if got := collector.flush(t, mp); got["ate.test.relay.count"] != 1 {
+		t.Errorf("the collector received %v through the connection, want ate.test.relay.count once", got)
 	}
 }

@@ -1,0 +1,91 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Keeps the system infra components off the worker nodes. Selected by
+# cmd/ate-setup under --cordon-system-infra-components, which wraps every
+# system infra apply in a kustomization that includes this component.
+#
+# Assumes two node pools, each carrying its label as a matching NoSchedule
+# taint:
+#
+#   ate.dev/workloadType=ate-system-infra  A small pool shared by every
+#       system infra workload except postgres. Each workload's replicas are
+#       spread across its nodes on a best-effort basis, so the pool may be
+#       smaller than the pod count and rollout surges never wait on a free
+#       node.
+#   ate.dev/workloadType=ate-postgres  One node, postgres alone. The
+#       StatefulSet replaces its pod in place, so no spare is needed.
+#
+# A pool that is missing leaves its pods Pending rather than failing loudly.
+#
+# Name-regex targets rather than one patch per workload: the install applies
+# these workloads through several different streams (the base bundle, a lone
+# ate-api-server redeploy, the podcert overlay, the postgres file, the egress
+# variants, and the bundled credential provider), and kustomize leaves a stream
+# alone when nothing in it matches, so the same component fits every path.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      kind: Deployment
+      name: ate-api-server|ate-idp-server|ate-controller|atenet-router|atenet-egress|podcertificate-controller|k8s-credential-provider|fake-workersync
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: overridden-by-target
+      spec:
+        template:
+          metadata:
+            labels:
+              ate.dev/workloadType: ate-system-infra
+          spec:
+            nodeSelector:
+              ate.dev/workloadType: ate-system-infra
+            tolerations:
+            - key: ate.dev/workloadType
+              operator: Equal
+              value: ate-system-infra
+              effect: NoSchedule
+            topologySpreadConstraints:
+            # matchLabelKeys narrows the selector to pods sharing this pod's
+            # app label, so each workload spreads its own replicas.
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  ate.dev/workloadType: ate-system-infra
+              matchLabelKeys:
+              - app
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: overridden-by-target
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              ate.dev/workloadType: ate-postgres
+            tolerations:
+            - key: ate.dev/workloadType
+              operator: Equal
+              value: ate-postgres
+              effect: NoSchedule

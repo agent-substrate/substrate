@@ -17,7 +17,7 @@ package networking
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestAccessLogField(t *testing.T) {
@@ -107,19 +107,19 @@ func TestProtocolGatewayAccessLogMatches(t *testing.T) {
 		{
 			name:      "envoy success",
 			container: "envoy",
-			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/ateom-for-actor/networking-e2e/ws-1"`,
+			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/ws-1"`,
 			want:      true,
 		},
 		{
 			name:      "envoy wrong actor identity",
 			container: "envoy",
-			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/ateom-for-actor/networking-e2e/ws-2"`,
+			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/networking-e2e/ws-2"`,
 			want:      false,
 		},
 		{
 			name:      "envoy wrong atespace identity",
 			container: "envoy",
-			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/ateom-for-actor/other/ws-1"`,
+			line:      `authority=10.96.0.7:80 code=200 peer_san="spiffe://substrate-actor.local/worker-for-actor/other/ws-1"`,
 			want:      false,
 		},
 		{
@@ -139,5 +139,56 @@ func TestProtocolGatewayAccessLogMatches(t *testing.T) {
 	valid := gatewayAccessLogLine{container: "agentgateway", text: `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=ws-1 actor_uid=uid-1 atespace=networking-e2e`}
 	if protocolGatewayAccessLogMatches(valid, actorRef, "10.96.0.7:80", false) {
 		t.Fatal("opaque CONNECT evidence must not satisfy the MITM matcher")
+	}
+}
+
+func TestEgressConnectAccessLogMatches(t *testing.T) {
+	for _, test := range []struct {
+		name, container, line string
+		want                  bool
+	}{
+		{
+			name:      "envoy HTTP/2 CONNECT",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-mux-1 peer_serial=1 protocol=HTTP/2 code=200 flags=- up_bytes=0 down_bytes=0`,
+			want:      true,
+		},
+		{
+			name:      "envoy HTTP/1.1 CONNECT rejected",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-mux-1 peer_serial=1 protocol=HTTP/1.1 code=200 flags=- up_bytes=0 down_bytes=0`,
+			want:      false,
+		},
+		{
+			name:      "envoy missing protocol rejected",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-mux-1 peer_serial=1 code=200 flags=- up_bytes=0 down_bytes=0`,
+			want:      false,
+		},
+		{
+			name:      "envoy wrong port",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:443 peer_san=spiffe://substrate-actor.local/worker-for-actor/networking-e2e/egress-mux-1 peer_serial=1 protocol=HTTP/2 code=200 flags=- up_bytes=0 down_bytes=0`,
+			want:      false,
+		},
+		{
+			name:      "envoy wrong actor",
+			container: "envoy",
+			line:      `[egress] authority=10.96.0.7:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/networking-e2e/other peer_serial=1 protocol=HTTP/2 code=200 flags=- up_bytes=0 down_bytes=0`,
+			want:      false,
+		},
+		{
+			name:      "agentgateway tunnel",
+			container: "agentgateway",
+			line:      `CONNECT tunnel terminated target=10.96.0.7:80 actor_name=egress-mux-1 actor_uid=uid-1 atespace=networking-e2e`,
+			want:      true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := egressConnectAccessLogMatches(gatewayAccessLogLine{container: test.container, text: test.line}, "networking-e2e", "egress-mux-1", "80")
+			if got != test.want {
+				t.Fatalf("egressConnectAccessLogMatches() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }

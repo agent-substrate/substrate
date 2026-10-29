@@ -26,7 +26,7 @@ metadata:
 
 ---
 
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: WorkerPool
 metadata:
   name: probe-sized
@@ -35,5 +35,5 @@ metadata:
     workload: probe-sized
 spec:
   replicas: 3
-  workerImage: ${ATEOM_IMAGE}
+  workerImage: ${WORKER_IMAGE}
 ${WORKERPOOL_RUNTIME}
