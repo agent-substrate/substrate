@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package ext4uuid sets the UUID of an unmounted ext4 image, so copies of one
-// golden image get their own UUID without e2fsprogs
+// golden image get their own UUID without e2fsprogs.
 //
 // This is the offline equivalent of `tune2fs -U` for images with
 // metadata_csum_seed, where only the superblock copies change. Without the
@@ -68,7 +68,7 @@ type readerWriterAt interface {
 	io.WriterAt
 }
 
-// SetUUID writes uuid into every superblock copy of the ext4 image at path
+// SetUUID writes uuid into every superblock copy of the ext4 image at path.
 // The image must not be mounted.
 func SetUUID(path string, uuid [16]byte) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
@@ -105,7 +105,11 @@ func setUUID(f readerWriterAt, uuid [16]byte) error {
 		return errors.New("gdt_csum group descriptor checksums are keyed on the UUID, use tune2fs")
 	}
 
-	blockSize := int64(1024) << binary.LittleEndian.Uint32(sb[offLogBlockSize:])
+	logBlockSize := binary.LittleEndian.Uint32(sb[offLogBlockSize:])
+	if logBlockSize > 6 {
+		return fmt.Errorf("corrupt superblock: block size 2^%d KiB is larger than 64 KiB", logBlockSize)
+	}
+	blockSize := int64(1024) << logBlockSize
 	blocks := int64(binary.LittleEndian.Uint32(sb[offBlocksCountLo:]))
 	if incompat&incompat64Bit != 0 {
 		blocks |= int64(binary.LittleEndian.Uint32(sb[offBlocksCountHi:])) << 32
