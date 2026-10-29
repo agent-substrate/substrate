@@ -461,3 +461,26 @@ func TestLabelsKeyFor(t *testing.T) {
 		t.Errorf("labelsKeyFor(true) = %q, want logging.googleapis.com/labels", got)
 	}
 }
+
+func TestRecentLogs(t *testing.T) {
+	var buf bytes.Buffer
+	al := NewActorLogger(&buf, false)
+
+	// Ingest several log lines for container-a
+	input := strings.NewReader("line 1\nline 2\n{\"message\": \"json line 3\"}\nline 4\n")
+	al.WrapContainerLogs(input, testAttribution, "container-a")
+
+	logs := al.RecentLogs(testAttribution.UID, "container-a")
+	if len(logs) != 4 {
+		t.Fatalf("RecentLogs got %d lines, want 4: %v", len(logs), logs)
+	}
+	if logs[0] != "line 1" || logs[1] != "line 2" || logs[2] != "json line 3" || logs[3] != "line 4" {
+		t.Errorf("RecentLogs content unexpected: %v", logs)
+	}
+
+	// Verify ClearRecentLogs
+	al.ClearRecentLogs(testAttribution.UID)
+	if got := al.RecentLogs(testAttribution.UID, "container-a"); got != nil {
+		t.Errorf("RecentLogs after ClearRecentLogs = %v, want nil", got)
+	}
+}

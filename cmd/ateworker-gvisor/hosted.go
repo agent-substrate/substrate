@@ -139,6 +139,9 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 	if !ok {
 		return nil
 	}
+	if s.actorLogger != nil {
+		s.actorLogger.ClearRecentLogs(actorUID)
+	}
 	hosted.cancel()
 	defer func() {
 		s.actorsMu.Lock()
