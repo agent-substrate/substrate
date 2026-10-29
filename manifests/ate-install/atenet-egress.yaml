@@ -406,8 +406,11 @@ data:
               upgrade_configs:
               - upgrade_type: websocket
                 enabled: false
-              # Disable stream_idle_timeout as there is already an overall timeout in the outer tunnel in the HCM.
+              # Disable stream_idle_timeout to avoid disconnecting long running requests.
               stream_idle_timeout: 0s
+              request_headers_timeout: 10s
+              common_http_protocol_options:
+                idle_timeout: 300s
               # This is the leg that knows where the traffic actually went.
               # REQUESTED_SERVER_NAME is the SNI the leaf was minted for and it
               # should equal the authority, which is what the routes resolve
@@ -586,7 +589,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
           # REQUIRED. Without it an sdsmint outage does not fail a
           # first-contact handshake, it pauses it forever.
-          transport_socket_connect_timeout: 5s
+          transport_socket_connect_timeout: 10s
           transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
@@ -629,6 +632,9 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_cleartext
+              request_headers_timeout: 10s
+              common_http_protocol_options:
+                idle_timeout: 300s
               # http_inspector steers HTTP/1.0 here; without this the codec
               # answers it 426 before any filter runs.
               http_protocol_options:
