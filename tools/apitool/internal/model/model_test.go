@@ -393,3 +393,98 @@ func TestScopeToService(t *testing.T) {
 		t.Errorf("ScopeToService() mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestPublicDoc(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment string
+		want    string
+	}{
+		{
+			name:    "no directives",
+			comment: "atespace is the namespace the resource belongs to.",
+			want:    "atespace is the namespace the resource belongs to.",
+		},
+		{
+			name: "trailing directives are removed",
+			comment: "atespace is the namespace the resource belongs to.\n" +
+				"\n" +
+				"+k8s:optional\n" +
+				"+k8s:format=k8s-short-name\n" +
+				"+k8s:immutable",
+			want: "atespace is the namespace the resource belongs to.",
+		},
+		{
+			name: "directive with a trailing comment is removed whole",
+			comment: "content_scope is what the snapshot captured.\n" +
+				"\n" +
+				"+k8s:optional\n" +
+				"+k8s:minimum=1\n" +
+				"+k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum",
+			want: "content_scope is what the snapshot captured.",
+		},
+		{
+			name: "ate directives are removed",
+			comment: "volumes are the actor's volumes.\n" +
+				"\n" +
+				"+ate:preview=ExternalVolumes\n" +
+				"+k8s:optional",
+			want: "volumes are the actor's volumes.",
+		},
+		{
+			name: "prose merely mentioning +k8s: is kept",
+			comment: "Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`\n" +
+				"Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`\n" +
+				"+k8s:optional",
+			want: "Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`\n" +
+				"Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`",
+		},
+		{
+			name: "indented directive is still recognized",
+			comment: "field does X.\n" +
+				"  +k8s:optional",
+			want: "field does X.",
+		},
+		{
+			name:    "only directives leaves an empty comment",
+			comment: "+k8s:optional\n+k8s:immutable",
+			want:    "",
+		},
+		{
+			name:    "empty comment stays empty",
+			comment: "",
+			want:    "",
+		},
+		{
+			name: "removed directives collapse surrounding blank lines to one",
+			comment: "First paragraph.\n" +
+				"\n" +
+				"+k8s:optional\n" +
+				"\n" +
+				"Second paragraph.",
+			want: "First paragraph.\n\nSecond paragraph.",
+		},
+		{
+			name:    "internal note on its own lines is removed",
+			comment: "First paragraph.\n\n(-- An internal\nnote. --)\n\nSecond paragraph.",
+			want:    "First paragraph.\n\nSecond paragraph.",
+		},
+		{
+			name:    "internal note inside a paragraph is removed",
+			comment: "Bounded at 64. (-- A guardrail. --)\n\n+k8s:maxProperties=64",
+			want:    "Bounded at 64.",
+		},
+		{
+			name:    "unclosed internal note is kept",
+			comment: "First paragraph. (-- unclosed",
+			want:    "First paragraph. (-- unclosed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := model.PublicDoc(tt.comment); got != tt.want {
+				t.Errorf("PublicDoc(%q) = %q, want %q", tt.comment, got, tt.want)
+			}
+		})
+	}
+}

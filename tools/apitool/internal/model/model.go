@@ -19,6 +19,8 @@ package model
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/bufbuild/protocompile"
@@ -577,6 +579,43 @@ func parentFullName(d protoreflect.Descriptor) protoreflect.FullName {
 
 func comment(fd protoreflect.FileDescriptor, d protoreflect.Descriptor) string {
 	return strings.TrimSpace(fd.SourceLocations().ByDescriptor(d).LeadingComments)
+}
+
+// PublicDoc returns the part of a doc comment meant for readers of the API:
+// the comment without its internal notes, written between "(--" and "--)",
+// and without its lines starting with a "+k8s:" or "+ate:" directive.
+func PublicDoc(comment string) string {
+	lines := strings.Split(internalNote.ReplaceAllString(comment, ""), "\n")
+	lines = slices.DeleteFunc(lines, isDirective)
+	lines = collapseBlankRuns(lines)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// internalNote matches an internal note in a doc comment, which may span
+// lines. For example, "(-- The bound is a guardrail. --)".
+var internalNote = regexp.MustCompile(`(?s)\(--.*?--\)`)
+
+// isDirective reports whether line is a validation-gen directive, e.g.
+// "+k8s:required", or one of our own metadata tags, e.g. "+ate:preview".
+func isDirective(line string) bool {
+	line = strings.TrimSpace(line)
+	return strings.HasPrefix(line, "+k8s:") || strings.HasPrefix(line, "+ate:")
+}
+
+// collapseBlankRuns replaces each run of consecutive blank lines with one.
+func collapseBlankRuns(lines []string) []string {
+	var out []string
+	for i, line := range lines {
+		if i > 0 && isBlank(line) && isBlank(lines[i-1]) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func isBlank(line string) bool {
+	return strings.TrimSpace(line) == ""
 }
 
 // Resource pairs a resource message with every method (across services)
