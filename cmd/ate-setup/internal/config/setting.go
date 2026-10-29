@@ -195,9 +195,9 @@ var Registry = []Setting{
 			"certificates. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
 	},
 	{
-		// The egress gateway's credential provider, as a JSON object. Upstream
-		// takes it as one value on one flag; it is carried the same way here
-		// so the two channels accept the same text.
+		// The egress gateway's credential providers: one JSON object, or a JSON array
+		// of them for several. A repeated flag would be ideal, but a Setting holds one
+		// string on every channel, so an array is the best available option.
 		Key: "atenet.egress.credentialProvider", Env: "ATE_CREDENTIAL_PROVIDER",
 		Flag: "credential-provider", Kind: KindString,
 		Usage: "Credential provider the egress gateway injects credentials from, as JSON; " +
