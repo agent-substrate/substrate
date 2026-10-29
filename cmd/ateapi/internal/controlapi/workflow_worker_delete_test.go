@@ -115,7 +115,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING, func(a *ateapi.Actor) {
 		a.Status.LastAssignedGeneration = 2
 		a.Status.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "last", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "last", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 			newInProgressSnapshot(t, 2, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "partial-snapshot"),
 		}
 	})
@@ -140,12 +140,12 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	}
 	// The in-progress checkpoint is kept: it names the prefix whatever atelet
 	// already uploaded lives under, which delete or revert needs to collect it.
-	gotInProgressSnap := findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	gotInProgressSnap := findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
 	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); gotInProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != want {
 		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}
 	// The last completed snapshot is what makes the actor resumable, so it stays.
-	gotCompletedSnap := findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	gotCompletedSnap := findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); gotCompletedSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != want {
 		t.Errorf("external snapshot = %q, want it preserved as %q", gotCompletedSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(), want)
 	}

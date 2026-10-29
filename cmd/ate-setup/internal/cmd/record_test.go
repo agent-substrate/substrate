@@ -60,6 +60,35 @@ func TestOnlySystemDeploysRecordTheirRun(t *testing.T) {
 	}
 }
 
+// The publish commands build and push without a cluster, so the release job
+// runs them with no kubeconfig. Every other command connects to one.
+func TestOnlyPublishSkipsTheCluster(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: "publish release-images", want: false},
+		{path: "publish release-binaries", want: false},
+		{path: "publish worker-images", want: false},
+		{path: "deploy ate-system", want: true},
+		{path: "delete ate-system", want: true},
+		{path: "setup csi", want: true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			target, _, err := rootCmd.Find(strings.Fields(tc.path))
+			if err != nil {
+				t.Fatalf("Find(%q): %v", tc.path, err)
+			}
+			if target.CommandPath() != "ate-setup "+tc.path {
+				t.Fatalf("%q resolved to %q", tc.path, target.CommandPath())
+			}
+			if got := needsCluster(target); got != tc.want {
+				t.Errorf("needsCluster(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 // Nothing is recorded before the configuration is resolved: a run that failed
 // parsing its flags has no settings to record, and reaching for them would
 // dereference nil.

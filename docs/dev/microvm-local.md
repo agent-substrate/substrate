@@ -13,7 +13,7 @@ Complete the
 [Quickstart (Development)](../../README.md#quickstart-development) in the
 README first — it covers the base tooling and the default (gVisor) path this
 guide builds on. For background on the runtime, see
-[architecture.md](../architecture.md) and
+[architecture.md](../concepts/architecture.md) and
 [hack/microvm-assets/README.md](../../hack/microvm-assets/README.md).
 
 ## Option A: Linux host with KVM

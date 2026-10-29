@@ -16,6 +16,7 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -201,7 +202,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		}
 
 		// First check if there is an existing H/2 connection with available stream capacity.
-		// TODO(yanavlasov): do not use existing H/2 connections if their keys have been rotated.
+		current, _ := c.tlsConfig.GetClientCertificate(nil)
 		c.mu.Lock()
 		if c.closed {
 			c.mu.Unlock()
@@ -215,6 +216,17 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		// At the same time, discard these that are closed, or idle and GOAWAY'ed.
 		for _, h2Conn := range c.h2Conns {
 			if h2Conn.isClosed() {
+				continue
+			}
+			// The gateway authenticates each CONNECT with the handshake
+			// certificate, so retire connections from before a renewal.
+			if !h2Conn.retired.Load() && !sameCertificate(h2Conn.cert, current) {
+				h2Conn.retire()
+			}
+			if h2Conn.retired.Load() {
+				if !h2Conn.isClosed() {
+					keep = append(keep, h2Conn)
+				}
 				continue
 			}
 			if reserved == nil {
@@ -280,8 +292,23 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 				return nil, false, nil, err
 			}
 			if h2Conn != nil {
+				current, _ := c.tlsConfig.GetClientCertificate(nil)
+				c.mu.Lock()
+				if !h2Conn.retired.Load() && !sameCertificate(h2Conn.cert, current) {
+					h2Conn.retire()
+				}
 				wasVerified := h2Conn.verified.Load()
-				if err := h2Conn.cc.Reserve(); err == nil {
+				retired := h2Conn.retired.Load()
+				var reserveErr error
+				if !retired {
+					reserveErr = h2Conn.cc.Reserve()
+				}
+				c.mu.Unlock()
+				if retired {
+					// A renewal retired it while it was being dialed.
+					continue
+				}
+				if reserveErr == nil {
 					return h2Conn, wasVerified, nil, nil
 				}
 				if !wasVerified && h2Conn.isClosed() {
@@ -327,12 +354,19 @@ func (c *Client) runDial(dialCtx context.Context, call *dialCall) {
 	if dialErr != nil {
 		err = fmt.Errorf("egress: connecting to egress gateway: %w", dialErr)
 	} else {
-		tlsConn := tls.Client(rawConn, c.tlsConfig.Clone())
+		tlsConfig := c.tlsConfig.Clone()
+		var presented *tls.Certificate
+		tlsConfig.GetClientCertificate = func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			cert, err := c.tlsConfig.GetClientCertificate(info)
+			presented = cert
+			return cert, err
+		}
+		tlsConn := tls.Client(rawConn, tlsConfig)
 		if hsErr := tlsConn.HandshakeContext(dialCtx); hsErr != nil {
 			_ = rawConn.Close()
 			err = fmt.Errorf("%w: %w", ErrGatewayHandshake, hsErr)
 		} else if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
-			h2Conn, err = c.newH2ClientConn(dialCtx, tlsConn)
+			h2Conn, err = c.newH2ClientConn(dialCtx, tlsConn, presented)
 		} else {
 			h1Conn = tlsConn
 		}
@@ -371,7 +405,7 @@ func (c *Client) runDial(dialCtx context.Context, call *dialCall) {
 	c.mu.Unlock()
 }
 
-func (c *Client) newH2ClientConn(ctx context.Context, tlsConn *tls.Conn) (*h2ClientConn, error) {
+func (c *Client) newH2ClientConn(ctx context.Context, tlsConn *tls.Conn, cert *tls.Certificate) (*h2ClientConn, error) {
 	raw := &trackedTLSConn{Conn: tlsConn}
 	var protocols http.Protocols
 	protocols.SetHTTP2(true)
@@ -394,9 +428,20 @@ func (c *Client) newH2ClientConn(ctx context.Context, tlsConn *tls.Conn) (*h2Cli
 	return &h2ClientConn{
 		cc:         cc,
 		raw:        raw,
+		cert:       cert,
 		localAddr:  tlsConn.LocalAddr(),
 		remoteAddr: tlsConn.RemoteAddr(),
 	}, nil
+}
+
+func sameCertificate(a, b *tls.Certificate) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil || len(a.Certificate) == 0 || len(b.Certificate) == 0 {
+		return false
+	}
+	return bytes.Equal(a.Certificate[0], b.Certificate[0])
 }
 
 func (c *Client) removeH2Conn(target *h2ClientConn) {
@@ -480,7 +525,7 @@ func (c *Client) connectH2(ctx context.Context, h2Conn *h2ClientConn, wasVerifie
 				_ = h2Conn.cc.Close()
 			}
 		}
-		if wasVerified && ctx.Err() == nil && (h2Conn.isClosed() || h2Conn.cc.Available() == 0) {
+		if (wasVerified || h2Conn.retired.Load()) && ctx.Err() == nil && (h2Conn.isClosed() || h2Conn.cc.Available() == 0) {
 			c.removeH2Conn(h2Conn)
 			return nil, true, nil
 		}
@@ -518,17 +563,34 @@ type h2ClientConn struct {
 	// H/2 connection.
 	cc *http.ClientConn
 	// TLS connection backing this H/2 connection.
-	raw        *trackedTLSConn
+	raw *trackedTLSConn
+	// Client certificate presented during the TLS handshake.
+	cert       *tls.Certificate
 	localAddr  net.Addr
 	remoteAddr net.Addr
 	// Set to true when at least one request had been completed.
 	// Used to distinguish between connection establishment errors and errors
 	// on an already working connection.
 	verified atomic.Bool
+	// Set when cert is no longer current; the connection closes once its
+	// in-flight streams finish.
+	retired atomic.Bool
 }
 
 func (h *h2ClientConn) isClosed() bool {
 	return h.cc.Err() != nil || h.raw.firstErr() != nil
+}
+
+func (h *h2ClientConn) retire() {
+	h.retired.Store(true)
+	h.cc.SetStateHook(func(cc *http.ClientConn) {
+		if cc.InFlight() == 0 {
+			_ = cc.Close()
+		}
+	})
+	if h.cc.InFlight() == 0 {
+		_ = h.cc.Close()
+	}
 }
 
 func (h *h2ClientConn) connErr(fallback error) error {

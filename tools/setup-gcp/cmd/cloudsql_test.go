@@ -34,7 +34,7 @@ func TestCloudSQLIdentityDerivations(t *testing.T) {
 	}
 	// The IAM database username is the GSA email without the
 	// .gserviceaccount.com suffix — this must match what operators GRANT to
-	// and what install-ate.sh synthesizes into the DSN.
+	// and what ate-setup synthesizes into the DSN.
 	if got, want := cloudSQLDatabaseUser(cloudSQLGSAEmail(cfg)), "ate-api-server@my-proj.iam"; got != want {
 		t.Errorf("cloudSQLDatabaseUser() = %q, want %q", got, want)
 	}

@@ -1,3 +1,13 @@
+---
+title: "Stateful Counter"
+linkTitle: "Stateful Counter"
+weight: 1
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-stopwatch"
+description: >
+  Preserve in-memory and durable volume state across actor suspend and resume cycles.
+---
+
 # Counter Demo
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
@@ -8,19 +18,22 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed.
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
+- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
+
+The [Quickstart](../../README.md#quickstart-development) already deploys this
+demo, creates `my-counter-1` and starts its proxy on port `8000`. If you ran
+it, skip to [How to Use](#how-to-use).
 
 ### 1. Build and Deploy
 
 > [!NOTE]
 > Do not manually edit `demos/counter/counter.yaml.tmpl` or
-> `demos/counter/counter-template.yaml.tmpl`. The installation script
-> automatically injects your `${BUCKET_NAME}` environment variable during
-> deployment.
+> `demos/counter/counter-template.yaml.tmpl`. `ate-setup` fills in their
+> `${...}` placeholders during deployment.
 
 <details>
 <summary>Installation on MicroVM</summary>
@@ -58,17 +71,17 @@ go run ./cmd/ate-setup deploy demo counter-microvm
 
 <details>
 <summary>Installation on GVisor</summary>
-Use the core installation script to build the image and deploy the demo to your cluster:
+Use `ate-setup` to build the image and deploy the demo to your cluster:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter
+go run ./cmd/ate-setup deploy demo counter
 ```
 
 To enable validation of reading from an external volume (e.g.
 `/external-data/test.txt`), run:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-with-external-volume --preview=ExternalVolumes
+go run ./cmd/ate-setup deploy demo counter --with-external-volume --preview=ExternalVolumes
 ```
 
 This command will:
@@ -114,45 +127,35 @@ kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 ```
 </details>
 
-### 3. Port-Forward Services
+### 3. Proxy to the Actor
 
-To interact with the router locally:
+Start a local proxy that authenticates with `atenet-router` and forwards local port `8000` to port `80` on the actor:
+
+<details>
+<summary>Proxy on MicroVM</summary>
 
 ```bash
-# Port-forward the Atenet Router
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
-
-# Also port-forward the CONNECT listener if you want to reach the actor's
-# extra port (see "Reaching a non-default port" below).
-kubectl port-forward -n ate-system svc/atenet-router 8001:8081
+kubectl ate proxy actor my-counter-microvm-1 -a ate-demo-counter-microvm
 ```
+</details>
+
+<details>
+<summary>Proxy on GVisor</summary>
+
+```bash
+kubectl ate proxy actor my-counter-1 -a ate-demo-counter
+```
+</details>
 
 ## How to Use
 
-When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
-The two `-H` options below are the routing key; the request URL and `Host` are
-ordinary application metadata.
+When you send an HTTP request through the proxy, `atenet-router` automatically activates (resumes) the actor onto an available worker pod and routes the traffic.
 
-1. Send an HTTP POST request to increment the counter:
-<details>
-<summary>Send to MicroVM</summary>
+1. In a separate terminal, send an HTTP POST request to increment the counter:
 
 ```bash
-curl -X POST \
-  -H "ate-target-actor: ate-demo-counter-microvm/my-counter-microvm-1" \
-  http://localhost:8000
+curl -X POST http://localhost:8000
 ```
-</details>
-
-<details>
-<summary>Send to GVisor</summary>
-
-```bash
-curl -X POST \
-  -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-  http://localhost:8000
-```
-</details>
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
 <details>
@@ -217,22 +220,15 @@ kubectl ate delete actor my-counter-1 -a ate-demo-counter
 
 `counter.go` also listens on a second, configurable port (`--extra-port=9090`
 in this demo's template) to demonstrate atenet-router's arbitrary-port ingress
-support: a client reaches any port an actor listens on, not just its default
-(port 80), by naming the port in an HTTP `CONNECT` request's authority rather
-than a separate header. The router terminates the `CONNECT` on its own
-listener (`--port-connect`, 8081 by default) and tunnels ordinary HTTP requests
-through it to the named port.
-
-`curl -p` forces a tunnel even for a plain (non-TLS) target, which its default
-proxy behavior wouldn't do:
+support. Pass `[local-port:]remote-port` arguments to `kubectl ate proxy actor`
+to forward additional ports. This proxy also takes port `8000`, so stop the
+earlier one (such as the Quickstart's) first:
 
 <details>
 <summary>Non standard port with MicroVM</summary>
 
 ```bash
-curl -p -x http://localhost:8001 \
-  --proxy-header "ate-target-actor: ate-demo-counter-microvm/my-counter-microvm-1" \
-  http://my-counter-microvm-1:9090/
+kubectl ate proxy actor my-counter-microvm-1 8000:80 9090:9090 -a ate-demo-counter-microvm
 ```
 </details>
 
@@ -240,16 +236,18 @@ curl -p -x http://localhost:8001 \
 <summary>Non standard port with GVisor</summary>
 
 ```bash
-curl -p -x http://localhost:8001 \
-  --proxy-header "ate-target-actor: ate-demo-counter/my-counter-1" \
-  http://my-counter-1:9090/
+kubectl ate proxy actor my-counter-1 8000:80 9090:9090 -a ate-demo-counter
 ```
 </details>
 
-This reaches the same actor's second listener and resumes it exactly like any
-other request — the only difference from the default-port examples above is
-the port named in the URL and dialing the router's CONNECT listener (8081/8001
-here) instead of its plain HTTP one.
+Then send a request to local port `9090`:
+
+```bash
+curl http://localhost:9090/
+```
+
+This reaches the same actor's second listener and resumes it like any other
+request.
 
 **Current limitation**: only HTTP(S) traffic over the tunnel is supported.
 Raw TCP or other non-HTTP protocols on a non-default port aren't reachable
@@ -260,7 +258,7 @@ prioritizing it, not a fundamental limitation of the design.
 ## Settings
 
 The installer reads these settings in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels.
 
 | Key                               | Environment variable                    | Flag                     | Default    | Applies to            |

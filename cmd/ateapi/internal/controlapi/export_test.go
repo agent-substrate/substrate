@@ -97,7 +97,7 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			Name:  "suspend",
 			State: ateapi.ActorState_ACTOR_STATE_SUSPENDING,
 			Snapshot: func(t *testing.T) *ateapi.Snapshot {
-				return newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+				return newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
 			},
 			// As for the async suspend, the finalize commit is the first actor update.
 			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapi.Actor) error {

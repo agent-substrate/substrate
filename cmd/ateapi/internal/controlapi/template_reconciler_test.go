@@ -166,6 +166,7 @@ type fakeGoldenControl struct {
 	exists         bool
 	goldenState    ateapi.ActorState
 	goldenSnapshot string
+	goldenCrash    string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -185,10 +186,13 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapi.Create
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapi.ActorStatus {
 	st := &ateapi.ActorStatus{State: c.goldenState}
+	if c.goldenCrash != "" {
+		st.Crash = &ateapi.ActorCrash{Message: c.goldenCrash}
+	}
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 		}
 	}
 	return st
@@ -283,7 +287,7 @@ func (c *fakeGoldenControl) CreateTag(_ context.Context, req *ateapi.CreateTagRe
 	c.tag = proto.CloneOf(req.GetTag())
 	c.tag.Status = &ateapi.TagStatus{
 		ActorTemplateUid: testTemplateUID,
-		Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 	}
 	return proto.CloneOf(c.tag), nil
 }
@@ -350,6 +354,10 @@ func withoutWakeupProbe(tmpl *ateapi.ActorTemplate) {
 	for _, container := range tmpl.Containers {
 		container.WakeupProbe = nil
 	}
+}
+
+func withDeleteTime(tmpl *ateapi.ActorTemplate) {
+	tmpl.Metadata.DeleteTime = timestamppb.Now()
 }
 
 func withoutGoldenSnapshot(tmpl *ateapi.ActorTemplate) {
@@ -530,9 +538,9 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:             "crashed golden actor fails the template",
 			template:         testTemplate(),
-			control:          &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_CRASHED},
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_CRASHED, goldenCrash: "atelet Run: unhandled tar entry"},
 			wantFailedReason: reasonGoldenActorCrashed,
-			wantMessage:      "crashed",
+			wantMessage:      "crashed before its snapshot was taken: atelet Run: unhandled tar entry",
 		},
 		{
 			name:        "resume failure requeues without failing",
@@ -577,6 +585,12 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:    "deleted template is a noop",
 			control: &fakeGoldenControl{},
+		},
+		{
+			name:          "template marked for deletion is a noop",
+			template:      testTemplate(withDeleteTime),
+			control:       &fakeGoldenControl{},
+			wantUnchanged: true,
 		},
 		{
 			name:     "terminal golden snapshot is a noop",
@@ -1129,7 +1143,7 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 		Scope:       ateapi.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapi.TagStatus{
 			ActorTemplateUid: testTemplateUID,
-			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "tag-snapshot", "gs://bucket/tag-snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			Snapshot:         newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "tag-snapshot", "gs://bucket/tag-snapshot", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 		},
 	}
 	incomplete := proto.CloneOf(completed)
@@ -1187,7 +1201,7 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 			if !proto.Equal(st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetGoldenTag(), ref) {
 				t.Fatal("golden tag not recorded")
 			}
-			if tagDurableSnapshotURI(control.tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
+			if tagDurableSnapshotURI(control.tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 				t.Fatal("golden tag has no snapshot")
 			}
 			if len(control.createReqs) != 0 || len(control.resumeReqs) != 0 || len(control.suspendReqs) != 0 {

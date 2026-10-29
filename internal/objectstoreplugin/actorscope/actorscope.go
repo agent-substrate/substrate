@@ -103,7 +103,7 @@ func FromActor(actor *ateapi.Actor) ([]Grant, error) {
 		case ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR:
 			// Its own prefix is already granted above.
 		case ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG:
-			if durable.GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			if durable.GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 				continue
 			}
 			add(parsed.OwnerPrefix(), ReadOnly)

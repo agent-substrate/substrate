@@ -237,11 +237,6 @@ blind_spots:
       flag, and a 1% sample of the rest. The runtime keys
       access_log.min_status and access_log.sample on the admin port restore
       full logging while you debug.
-  - area: GCP Secret Manager credential provider
-    code: internal/plugins/gcp-secret-manager
-    brief: >
-      This plugin has no metrics. It does not install the otelgrpc server
-      handler. Thus rpc.server.call.duration has no credprovider series for it.
   - area: ate-idp-server
     code: cmd/ate-idp-server
     brief: >

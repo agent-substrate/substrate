@@ -41,12 +41,11 @@ var bootFetchManifests = e2e.SubstrateFixtureManifests{
 // goldenEgressPolicy is a preview feature: install the cluster with its gate
 // and pass the gate to the suite, which skips the test otherwise.
 //
-//	ATE_PREVIEW=GoldenEgressPolicy hack/install-ate-kind.sh
+//	ATE_PREVIEW=GoldenEgressPolicy go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}'
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -run TestGoldenBootEgress -v -args --no-color --preview=GoldenEgressPolicy
 func TestGoldenBootEgress(t *testing.T) {
 	e2e.RequirePreview(t, preview.GateGoldenEgressPolicy)
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
@@ -56,7 +55,7 @@ func TestGoldenBootEgress(t *testing.T) {
 
 	// DeploySubstrateFixture returns once every template has its golden
 	// snapshot, which is the assertion.
-	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, bootFetchManifests, env["BUCKET_NAME"], "egressmitm-bootfetch", []string{e2e.EgressTrustBundleName},
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, bootFetchManifests, "egressmitm-bootfetch", []string{e2e.EgressTrustBundleName},
 		e2e.WithTemplateValue("BOOT_FETCH_HOST", origin.SvcName()),
 		e2e.WithTemplateValue("BOOT_FETCH_URL", "https://"+origin.SvcName()+"/healthz"))
 

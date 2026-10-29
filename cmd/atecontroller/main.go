@@ -284,6 +284,7 @@ func main() {
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		SystemNamespace: systemNamespace,
+		Recorder:        mgr.GetEventRecorder("networkpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetPolicy")
 		os.Exit(1)

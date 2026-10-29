@@ -30,7 +30,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/installdefaults"
-	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
@@ -63,8 +62,8 @@ import (
 const (
 	testAtespace = "test-atespace"
 	testActorID  = "id1"
-	// testStorageLocation is the snapshot_config.storage_location the test
-	// templates hand out. No object store is wired up behind it.
+	// testStorageLocation is the --snapshot-location the test server runs
+	// with. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"
 	testActorJWTIssuer  = "https://idp.example.test"
 
@@ -219,18 +218,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		ActiveForSigning: "1",
 	}
 
-	actorCA, err := localca.GenerateCA("1", localca.KeyTypeECDSAP256, 365*24*time.Hour)
-	if err != nil {
-		t.Fatalf("Error generating actor CA: %v", err)
-	}
-
-	actorCAPool := &localca.ConcretePool{
-		CAs: []*localca.CA{
-			actorCA,
-		},
-		ActiveForSigning: "1",
-	}
-
 	objectStore := objectstoretest.New()
 
 	service := controlapi.NewRPCService(
@@ -245,7 +232,6 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		objectstoreplugintest.ControlClient(objectStore),
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
-		actorCAPool,
 		testStorageLocation,
 	)
 
@@ -472,9 +458,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				Atespace: testAtespace,
 				Name:     "tmpl1",
 			},
-			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation: testStorageLocation,
-			},
 			Containers: containers,
 			Volumes:    volumes,
 			WorkerSelector: &ateapi.Selector{
@@ -527,7 +510,7 @@ func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.S
 		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		DurableSnapshot: &ateapi.SnapshotStorage{
-			Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
@@ -550,7 +533,7 @@ func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
 		DurableSnapshot: &ateapi.SnapshotStorage{
-			Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: uri.String()},
 		},
 	}
@@ -560,7 +543,7 @@ func durableSnapshot(status *ateapi.ActorStatus) *ateapi.Snapshot {
 	var best *ateapi.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		st := snap.GetDurableSnapshot()
-		if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+		if st.GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED &&
 			st.GetObject().GetSnapshotUri() != "" {
 			if best == nil || snap.GetGeneration() > best.GetGeneration() {
 				best = snap
@@ -622,9 +605,6 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 			Metadata: &ateapi.ResourceMetadata{
 				Atespace: testAtespace,
 				Name:     name,
-			},
-			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation: testStorageLocation,
 			},
 			Containers: []*ateapi.Container{
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},

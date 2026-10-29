@@ -38,8 +38,9 @@ type Options struct {
 	PodcertWorkersPerSigner        int
 	EnvoyConcurrency               int
 	ClusterSize                    string
-	CordonControlPlane             bool
+	CordonSystemInfraComponents    bool
 	FakeDataPlane                  bool
+	E2ETuning                      bool
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
@@ -103,8 +104,9 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		val  bool
 	}{
 		{"kind", opts.Kind},
-		{"cordon-control-plane", opts.CordonControlPlane},
+		{"cordon-system-infra-components", opts.CordonSystemInfraComponents},
 		{"fake-data-plane", opts.FakeDataPlane},
+		{"e2e-tuning", opts.E2ETuning},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {

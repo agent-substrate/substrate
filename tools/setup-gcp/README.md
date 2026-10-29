@@ -254,7 +254,7 @@ project-level IAM permissions.
 atelet and ate-api authenticate via [GKE Workload Identity
 Federation](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity):
 their Kubernetes ServiceAccounts (`ate-system/atelet` and
-`ate-system/ate-api-server`, created by `install-ate.sh`) are addressed
+`ate-system/ate-api-server`, created by `ate-setup`) are addressed
 directly as IAM principals. The one Google service account `create iam`
 creates is the snapshot transfer account⁴, which ate-api-server's credential
 exchange impersonates and downscopes per actor for every snapshot transfer.

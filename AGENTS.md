@@ -2,8 +2,9 @@
 
 ## Rules for contributors
 
-- Read the "Using AI" section of `COLLABORATING.md`. You are responsible for everything your agent submits.
-- Say in the PR description that you used AI, and how. Don't add AI co-author or assisted-by trailers. Submit commits and PRs from your own account. We can't accept contributions from agent or bot accounts (a human must sign the contribution agreement).
+- Read `CONTRIBUTING.md` and the "Using AI" section of `COLLABORATING.md`. You are responsible for everything your agent submits.
+- Say in the PR description that you used AI, and how. Don't add AI co-author or assisted-by trailers. Submit commits and PRs from your own account. We can't accept contributions from agent or bot accounts.
+- Agents must never sign off a commit as themselves. Only a human can certify the [DCO](https://developercertificate.org/).
 - Before asking for review, review your own diff. For substantial changes, also have a fresh agent session review it adversarially, then validate its findings and fix the confirmed issues.
 - **Be brief.** Code comments, commit messages, PR descriptions and issues should be short, plain English, and read the way an experienced maintainer writes by hand. Reviewer time and agent context windows are limited.
   - `COLLABORATING.md` doesn't allow AI-generated commit messages, because they have usually been low quality and unreviewed. If you are asked to write one anyway, hold it to the same standard, and the person submitting it must review it.
@@ -65,7 +66,7 @@ It takes the Kubernetes control-plane out of the critical path to achieve lower 
 Agent Substrate relies on the fact that agent-like applications tend to be idle most of the time to achieve heavy multiplexing.
 
 For development, it's recommended to read the `README.md` and `CONTRIBUTING.md` in the root folder.
-See `hack/install-ate.sh` and `tools/setup-gcp` for provisioning and deploying clusters and GCP resources.
+See `cmd/ate-setup` and `tools/setup-gcp` for provisioning and deploying clusters and GCP resources.
 
 ## Repository Layout
 
@@ -94,7 +95,7 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Internal proto (atelet / ateworker) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
-| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `api/` and `pkg/`; see `internal/plugins/README.md` |
+| Plugin for a specific backend, implementing a plugin API like `api/credprovider` | Its own repository in the `agent-substrate-plugins` org; see "Plugins" in `docs/dev/code-layout.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 
@@ -103,9 +104,10 @@ See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` installer.
 
 ### Building and Installing
-- **Install from source**: `go run ./cmd/ate-setup deploy ate-system` (or the `hack/install-ate.sh` shim) builds every image with ko as part of the install; see `cmd/ate-setup/README.md`
+- **Install from source**: `go run ./cmd/ate-setup deploy ate-system` builds every image with ko as part of the install; see `cmd/ate-setup/README.md`
 - **Binaries**: `go build -o bin/kubectl-ate ./cmd/kubectl-ate`, `go build -o bin/ate-setup ./cmd/ate-setup`
-- **Release images**: `VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`)
+- **Release images**: `VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO` (the release set, `images.ReleaseComponents`, all tagged `TAG`; see `docs/dev/releasing.md`)
+- **Release binaries**: `VERSION=TAG go run ./cmd/ate-setup publish release-binaries --out DIR` (`kubectl-ate` for linux and darwin, amd64 and arm64, with `.sha256` files)
 
 ### Testing and Verification
 - **Run Unit Tests**: `go test -race ./...`
@@ -128,6 +130,10 @@ Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code 
 Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
 Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
 
+## Version Skew
+
+From v1.0.0, changes must keep upgrades and rollbacks working under [docs/reference/version-skew-policy.md](docs/reference/version-skew-policy.md). Read it before you change an RPC, a CRD, the worker pod template, a database migration, or file(s) that `atelet` and `ateworker` share on a node.
+
 ## Commit Messages
 
 - **Describe the change and why it was needed**: The message is read on `main` long after the PR branch is gone, so it should stand on its own.
@@ -143,7 +149,7 @@ Some attributes are defined in the registry but barred from metric labels: actor
 
 `docs/metrics/substrate.yaml` holds the rules Weaver cannot express: the cardinality rules, the known exceptions, and the subsystems that emit no metrics. Read `blind_spots` before you attribute a fault to a component.
 
-See the [metric registry](docs/observability.md#the-metric-registry) section of the observability guide.
+See the [metric registry](docs/guides/observability.md#the-metric-registry) section of the observability guide.
 
 ## Testing Instructions
 
@@ -155,9 +161,9 @@ See the [metric registry](docs/observability.md#the-metric-registry) section of 
 
 ## Security Considerations
 
-Agent Substrate is built for zero-trust, multi-tenant execution of untrusted actors. Preserve and extend these invariants when modifying the codebase (see `docs/security.md` and `docs/threat-model.md` for the full architecture):
+Agent Substrate is built for zero-trust, multi-tenant execution of untrusted actors. Preserve and extend these invariants when modifying the codebase (see `docs/security/security.md` and `docs/security/threat-model.md` for the full architecture):
 
 - **Workload & Storage Isolation**: Actors run strictly inside `gVisor` (`cmd/ateworker-gvisor`) or `Cloud Hypervisor` microVM (`cmd/ateworker-microvm`) sandboxes; plain Linux containers are not supported. `atelet` scrubs actor directories across lifecycle transitions (`resetActorDirs`), and snapshots are stamped with `ActorSandboxRuntime` metadata and transferred via `cmd/objectstore-plugin`.
 - **Component & Actor Identity (mTLS, JWTs, and JWKs)**: Inter-component communication uses mTLS backed by `cmd/podcertcontroller` (`podid`, `servicedns`, and `postgres` signers). Actor JWT signing (`internal/localjwtauthority`), verification (`internal/oidcjwt`), and key discovery (served via `cmd/ate-idp-server`) are built on the standard library's crypto packages. Extend those packages rather than adding `go-jose` or another JOSE library, so the code that decides whether a token is valid stays small and supports only the algorithms Substrate uses.
-- **Control-Plane Authentication & Authorization**: `ate-api-server` checks every Control RPC against an embedded OpenFGA model (`cmd/ateapi/internal/authz/model.fga`), always enforced. Every served unary RPC needs an entry in `defaultRPCPermissions` (`registry.go`): an RPC without one is denied, and a test fails the build. Access is granted per global scope and atespace through AccessPolicy (`kubectl ate access-policy`); the install's bootstrap owner is the shared `ate-client` ServiceAccount that `kubectl ate` uses. See `docs/authorization.md` for roles and known gaps. Callers are authenticated via `SPIFFE` mTLS or configured OIDC `JWTProvider`s (`cmd/ateapi/internal/apiauthn`).
+- **Control-Plane Authentication & Authorization**: `ate-api-server` checks every Control RPC against an embedded OpenFGA model (`cmd/ateapi/internal/authz/model.fga`), always enforced. Every served unary RPC needs an entry in `defaultRPCPermissions` (`registry.go`): an RPC without one is denied, and a test fails the build. Access is granted per global scope and atespace through AccessPolicy (`kubectl ate access-policy`); the install's bootstrap owner is the shared `ate-client` ServiceAccount that `kubectl ate` uses. See `docs/guides/authorization.md` for roles and known gaps. Callers are authenticated via `SPIFFE` mTLS or configured OIDC `JWTProvider`s (`cmd/ateapi/internal/apiauthn`).
 - **Network Isolation, Ingress, & Egress**: `manifests/ate-install/ate-system-networkpolicies.yaml` enforces default-deny ingress across `ate-system`, and `cmd/atecontroller` reconciles per-`WorkerPool` `NetworkPolicy` objects. Actors run in private `/30` point-to-point veth network namespaces (`internal/ateworker/actornet`) with link-local blocking, policy-enforced DNS filtering (`internal/atunnel/dns`), and zero ambient credentials. Outbound traffic traverses `atunnel` to `atenet-egress`, which enforces per-actor `EgressPolicy` and injects credentials out-of-band via `cmd/credential-provider/kubernetes-secrets` (`k8s-credential-provider`) or actor JWT minting.

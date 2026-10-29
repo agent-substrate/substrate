@@ -24,9 +24,10 @@ What it buys, concretely:
   single-digit milliseconds on warm nodes.
 - Layers shared between images are **downloaded and unpacked once per
   node**, not once per image; actors sharing layers also share page cache.
-- The cache is **on disk and survives atelet restarts and node reboots**
-  (the old in-memory cache was lost on every restart, and its unbounded heap
-  retention could OOM atelet — #437).
+- The cache is **on disk and survives atelet restarts** (the old in-memory
+  cache was lost on every restart, and its unbounded heap retention could OOM
+  atelet — #437). Its writes aren't synced, so atelet empties it at startup
+  after a node reboot.
 - **Tag refs are cacheable**: a tag costs one `HEAD` request to resolve to a
   manifest digest (the only safe cache key for mutable tags); digest refs
   hit the cache with zero network I/O.
