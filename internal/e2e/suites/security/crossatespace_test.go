@@ -95,14 +95,13 @@ type atespaces struct {
 // atespace's golden snapshot, which on the micro-VM lane is a cold boot plus a
 // checkpoint, so per-subtest fixtures would dominate the runtime.
 func TestCrossAtespaceIsolation(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	ns := deployAtespaces(t, ctx, clients, env["BUCKET_NAME"])
+	ns := deployAtespaces(t, ctx, clients)
 
 	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
@@ -306,16 +305,16 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 // deployAtespaces installs both atespaces and returns their names. A goes
 // first: it brings the only WorkerPool, and B's golden snapshot needs a worker
 // to boot on.
-func deployAtespaces(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) atespaces {
+func deployAtespaces(t *testing.T, ctx context.Context, clients *e2e.Clients) atespaces {
 	t.Helper()
 	a, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
 		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
-	}, bucket, "sec-a", nil)
+	}, "sec-a", nil)
 	b, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-b-namespace.yaml.tmpl",
 		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
-	}, bucket, "sec-b", nil)
+	}, "sec-b", nil)
 	if a == b {
 		t.Fatalf("both fixtures rendered to atespace %q — the fixture no longer isolates anything", a)
 	}

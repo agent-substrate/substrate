@@ -29,9 +29,7 @@ containers:
   #
   #   KO_DOCKER_REPO="gcr.io/<PROJECT_ID>/ate-env-guest" ko build --bare --platform=linux/amd64 ./cmd/ate-env-guest
   #
-  # Substituted by benchmarking/workloads/deploy.sh (which defaults ATE_ENV_IMAGE
-  # to us-docker.pkg.dev/gke-substrate-release/benchmark/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72;
-  # set ATE_ENV_IMAGE to override with a custom digest).
+  # Substituted from ATE_ENV_IMAGE by benchmarking/workloads/deploy.sh.
   image: "${ATE_ENV_IMAGE}"
   command:
   - "/ko-app/ate-env-guest"
@@ -46,4 +44,3 @@ resources:
     memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/ate-env/

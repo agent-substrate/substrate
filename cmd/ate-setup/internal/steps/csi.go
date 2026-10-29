@@ -69,17 +69,12 @@ type csiDriverSpec struct {
 // installsNothing reports whether the value selects no driver at all.
 func (s csiDriverSpec) installsNothing() bool { return !s.hostpath && !s.nfs }
 
-// csiDrivers is every accepted --setup-csi value. "true", "false" and the empty
-// string are the shell installer's boolean spellings, from before the flag grew
-// driver names, and still work.
+// csiDrivers is every accepted --setup-csi value.
 var csiDrivers = map[string]csiDriverSpec{
 	"nfs":      {nfs: true},
 	"hostpath": {hostpath: true},
 	"both":     {hostpath: true, nfs: true},
-	"true":     {hostpath: true, nfs: true},
 	"none":     {},
-	"false":    {},
-	"":         {},
 }
 
 // ValidateCSIDriver reports whether driver names something --setup-csi accepts.

@@ -1,3 +1,13 @@
+---
+title: "Request Parking"
+linkTitle: "Request Parking"
+weight: 5
+estimated_time: "10 mins"
+card_icon: "fa-solid fa-traffic-light"
+description: >
+  Hold and retry inbound requests during momentary WorkerPool saturation instead of failing with 503.
+---
+
 # Request Parking Demo
 
 This demo shows the **request parking** feature of the `atenet` router: when the
@@ -9,22 +19,17 @@ The setup is deliberately **oversubscribed**: a 2-worker pool with several
 actors. The workload is the same `counter` binary used by the counter demo; its
 reply includes the worker pod IP, so you can see which worker served a request.
 
-See [docs/request-parking.md](../../docs/request-parking.md) for the design.
+See [docs/concepts/request-parking.md](../../docs/concepts/request-parking.md) for the design.
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed.
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
+- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
 
 ### 1. Build and Deploy
-
-> [!NOTE]
-> Do not manually edit the `demos/parking/*.yaml.tmpl` manifests. The installation
-> script automatically injects your `${BUCKET_NAME}` environment variable during
-> deployment.
 
 ```bash
 go run ./cmd/ate-setup deploy demo parking
@@ -53,37 +58,36 @@ for id in p1 p2 p3 p4; do
 done
 ```
 
-### 3. Port-forward the atenet router
+### 3. Proxy to the actors
 
 ```bash
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+kubectl ate proxy actor p1 8001:80 -a ate-demo-parking &
+kubectl ate proxy actor p2 8002:80 -a ate-demo-parking &
+kubectl ate proxy actor p3 8003:80 -a ate-demo-parking &
 ```
 
 ## How to Use
 
 Parking is **on by default** (`--parked-request-budget=5s`,
 `--parked-request-max=1024`), so the cluster you just deployed already parks.
-Every curl request below selects its Actor with `ate-target-actor`; changing
-the URL or `Host` does not select another Actor.
 
 ### A. Watch a 503 become a served request
 
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "ate-target-actor: ate-demo-parking/p1" http://localhost:8000
-curl -s -H "ate-target-actor: ate-demo-parking/p2" http://localhost:8000
+curl -s http://localhost:8001
+curl -s http://localhost:8002
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
-kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
+kubectl ate get actors -a ate-demo-parking   # p1,p2 RUNNING; p3,p4 SUSPENDED
 ```
 
 Now request **p3** with timing. The pool is full, so this request **parks** —
 the `curl` hangs while the router retries the resume:
 
 ```bash
-curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "ate-target-actor: ate-demo-parking/p3" http://localhost:8000
+curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' http://localhost:8003
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1

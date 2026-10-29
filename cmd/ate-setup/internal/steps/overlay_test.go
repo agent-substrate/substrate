@@ -16,7 +16,6 @@ package steps
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -58,14 +57,16 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 		t.Fatalf("reading egress manifest: %v", err)
 	}
 
+	k8s := config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}
+	vault := config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}
 	for _, tc := range []struct {
-		name     string
-		provider config.CredentialProvider
-		want     []string
+		name      string
+		providers []config.CredentialProvider
+		want      []string
 	}{
 		{
-			name:     "kubernetes",
-			provider: config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress},
+			name:      "kubernetes",
+			providers: []config.CredentialProvider{k8s},
 			want: []string{
 				"--credential-provider-name=k8s.io",
 				"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
@@ -75,18 +76,31 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 			},
 		},
 		{
-			name:     "another provider",
-			provider: config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"},
+			name:      "another provider",
+			providers: []config.CredentialProvider{vault},
 			want: []string{
 				"--credential-provider-name=vault.example.com",
 				"--credential-provider-address=vault.ate-system.svc:8200",
 				"--credential-provider-server-name=vault.ate-system.svc",
 			},
 		},
+		{
+			name:      "several providers",
+			providers: []config.CredentialProvider{k8s, vault},
+			want: []string{
+				"--credential-provider-name=k8s.io",
+				"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
+				"--credential-provider-server-name=k8s-credential-provider.ate-system.svc",
+				"--credential-provider-name=vault.example.com",
+				"--credential-provider-address=vault.ate-system.svc:8200",
+				"--credential-provider-server-name=vault.ate-system.svc",
+				"--credential-provider-ca-file=",
+			},
+		},
 		{name: "off"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			patched, err := env.patchAtenetEgressInject(raw, tc.provider)
+			patched, err := env.patchAtenetEgressInject(raw, tc.providers)
 			if err != nil {
 				t.Fatalf("patchAtenetEgressInject failed: %v", err)
 			}
@@ -95,12 +109,16 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 					t.Errorf("patched manifest still contains an unreplaced marker: %q", line)
 				}
 			}
+			// The gateway pairs the repeated flags up by position.
+			rest := string(patched)
 			for _, want := range tc.want {
-				if !strings.Contains(string(patched), want) {
-					t.Errorf("patched manifest is missing spliced flag %q", want)
+				i := strings.Index(rest, want)
+				if i < 0 {
+					t.Fatalf("patched manifest is missing spliced flag %q, or has it out of order", want)
 				}
+				rest = rest[i+len(want):]
 			}
-			if !tc.provider.Enabled() && strings.Contains(string(patched), "- --credential-provider-") {
+			if len(tc.providers) == 0 && strings.Contains(string(patched), "- --credential-provider-") {
 				t.Error("patched manifest carries provider flags with injection off")
 			}
 			assertEgressManifestParses(t, patched)
@@ -109,7 +127,7 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 
 	// The marker is what the splice keys on; a manifest without it is a
 	// broken install, not a silent no-op.
-	if _, err := env.patchAtenetEgressInject([]byte("kind: ConfigMap\n"), config.CredentialProvider{}); err == nil {
+	if _, err := env.patchAtenetEgressInject([]byte("kind: ConfigMap\n"), nil); err == nil {
 		t.Error("patchAtenetEgressInject accepted a manifest without the marker")
 	}
 }
@@ -346,10 +364,10 @@ func TestSystemOverlayDefaultIsBase(t *testing.T) {
 }
 
 // pinnedWorkloads returns the Deployment and StatefulSet names in a rendered
-// manifest that carry the cordon-control-plane node pinning, mapped to the
-// pool each one selects, and every workload name seen. Only the shared pool
-// spreads its replicas, and no pool requires anti-affinity: that would need a
-// node per pod.
+// manifest that carry the cordon-system-infra-components node pinning, mapped
+// to the pool each one selects, and every workload name seen. Only the shared
+// pool spreads its replicas, and no pool requires anti-affinity: that would
+// need a node per pod.
 func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, all []string) {
 	t.Helper()
 	pinned = map[string]string{}
@@ -393,12 +411,12 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, a
 		if podSpec.Affinity["podAntiAffinity"] != nil {
 			t.Errorf("workload %s has pod anti-affinity", obj.Metadata.Name)
 		}
-		if spread := len(podSpec.TopologySpreadConstraints) > 0; spread != (pool == "ate-control-plane") {
+		if spread := len(podSpec.TopologySpreadConstraints) > 0; spread != (pool == "ate-system-infra") {
 			t.Errorf("workload %s in pool %s: topology spread = %v", obj.Metadata.Name, pool, spread)
 		}
 		// The spread narrows on the app label; without it the workload would
 		// spread against the whole pool instead of its own replicas.
-		if pool == "ate-control-plane" && obj.Spec.Template.Metadata.Labels["app"] == "" {
+		if pool == "ate-system-infra" && obj.Spec.Template.Metadata.Labels["app"] == "" {
 			t.Errorf("workload %s has no app label to spread its replicas by", obj.Metadata.Name)
 		}
 		pinned[obj.Metadata.Name] = pool
@@ -406,12 +424,13 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, a
 	return pinned, all
 }
 
-// Under --cordon-control-plane every control plane apply path has to carry the
-// pinning, since each workload reaches the cluster through a different one:
-// the system bundle, the lone redeploy files, the podcert overlay, the
-// postgres file, the egress variants, and the bundled credential provider. postgres gets a pool of its own;
-// every other control plane workload shares one.
-func TestRenderCordonControlPlane(t *testing.T) {
+// Under --cordon-system-infra-components every system infra apply path has
+// to carry the pinning, since each workload reaches the cluster through a
+// different one: the system bundle, the lone redeploy files, the podcert
+// overlay, the postgres file, the egress variants, and the bundled credential
+// provider. postgres gets a pool of its own; every other system infra
+// workload shares one.
+func TestRenderCordonSystemInfraComponents(t *testing.T) {
 	root := repoRoot(t)
 	for _, tc := range []struct {
 		name string
@@ -489,7 +508,7 @@ func TestRenderCordonControlPlane(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
 			cfg.Root = root
-			cfg.CordonControlPlane = true
+			cfg.CordonSystemInfraComponents = true
 			e := &Env{Cfg: &cfg}
 
 			rendered, err := e.render(tc.path(e))
@@ -501,7 +520,7 @@ func TestRenderCordonControlPlane(t *testing.T) {
 				if !slices.Contains(all, name) {
 					t.Errorf("rendered manifest has no workload %s (found %v)", name, all)
 				}
-				want := "ate-control-plane"
+				want := "ate-system-infra"
 				if name == "postgres" {
 					want = "ate-postgres"
 				}
@@ -510,10 +529,10 @@ func TestRenderCordonControlPlane(t *testing.T) {
 				}
 			}
 			// The DaemonSet-shaped and demo workloads stay off the pools; only
-			// the named control plane workloads are pinned.
+			// the named system infra workloads are pinned.
 			for name := range pinned {
 				if !slices.Contains(tc.want, name) {
-					t.Errorf("workload %s is pinned but is not a control plane workload", name)
+					t.Errorf("workload %s is pinned but is not a system infra workload", name)
 				}
 			}
 		})
@@ -522,10 +541,10 @@ func TestRenderCordonControlPlane(t *testing.T) {
 
 // The extproc-patched egress manifest arrives as bytes, and the pinning has to
 // reach it too.
-func TestRenderBytesCordonControlPlane(t *testing.T) {
+func TestRenderBytesCordonSystemInfraComponents(t *testing.T) {
 	e := &Env{Cfg: &config.Config{
 		Root:                           repoRoot(t),
-		CordonControlPlane:             true,
+		CordonSystemInfraComponents:    true,
 		AdditionalEgressExtprocService: "ate-system/foo:50051",
 	}}
 	patched, err := e.patchAtenetEgressManifest()
@@ -537,7 +556,7 @@ func TestRenderBytesCordonControlPlane(t *testing.T) {
 		t.Fatalf("renderBytes: %v", err)
 	}
 	pinned, _ := pinnedWorkloads(t, rendered)
-	if pinned["atenet-egress"] != "ate-control-plane" {
+	if pinned["atenet-egress"] != "ate-system-infra" {
 		t.Errorf("atenet-egress is not pinned in the composed extproc manifest (pinned: %v)", pinned)
 	}
 	if !strings.Contains(string(rendered), additionalEgressExtprocCluster) {
@@ -553,14 +572,14 @@ func TestRenderWithoutCordonLeavesManifestsAlone(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	if pinned, _ := pinnedWorkloads(t, rendered); len(pinned) != 0 {
-		t.Errorf("render without --cordon-control-plane pinned %v", pinned)
+		t.Errorf("render without --cordon-system-infra-components pinned %v", pinned)
 	}
 	raw, err := os.ReadFile(e.Cfg.Manifest("ate-api-server.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(rendered) != string(raw) {
-		t.Error("render of a plain file without --cordon-control-plane is not the file's bytes")
+		t.Error("render of a plain file without --cordon-system-infra-components is not the file's bytes")
 	}
 }
 
@@ -652,7 +671,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 		},
 		{
 			name:           "controller file under cordon",
-			cfg:            config.Config{CordonControlPlane: true},
+			cfg:            config.Config{CordonSystemInfraComponents: true},
 			path:           func(e *Env) string { return e.Cfg.Manifest("ate-controller.yaml") },
 			wantController: true,
 		},
@@ -756,11 +775,11 @@ func TestRenderFakeDataPlane(t *testing.T) {
 			// Both components compose: the cordon pinning survives the fake
 			// one, and reaches fake-workersync, which stands in for
 			// ate-controller.
-			if cfg.CordonControlPlane {
+			if cfg.CordonSystemInfraComponents {
 				pinned, _ := pinnedWorkloads(t, rendered)
 				for _, name := range []string{"ate-controller", fakeWorkersyncDeployment} {
-					if pinned[name] != "ate-control-plane" {
-						t.Errorf("under --cordon-control-plane %s is pinned to %q, want ate-control-plane", name, pinned[name])
+					if pinned[name] != "ate-system-infra" {
+						t.Errorf("under --cordon-system-infra-components %s is pinned to %q, want ate-system-infra", name, pinned[name])
 					}
 				}
 			}
@@ -768,8 +787,125 @@ func TestRenderFakeDataPlane(t *testing.T) {
 	}
 }
 
+// Under --e2e-tuning every path that applies atelet appends the e2e tuning
+// flags without dropping the overlay's own args, and a non-e2e kind render
+// keeps atelet on its default snapshot upload delay.
+func TestRenderE2ETuning(t *testing.T) {
+	root := repoRoot(t)
+	const ateletDS = "atelet"
+	for _, tc := range []struct {
+		name       string
+		cfg        config.Config
+		path       func(e *Env) string
+		wantAtelet bool
+		wantArgs   []string
+	}{
+		{
+			name:       "base bundle",
+			cfg:        config.Config{Router: config.RouterEnvoy},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true,
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+		},
+		{
+			name:       "kind bundle",
+			cfg:        config.Config{Router: config.RouterEnvoy, Kind: true},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true,
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+		},
+		{
+			name:       "agentgateway bundle",
+			cfg:        config.Config{Router: config.RouterAgentgateway},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true,
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+		},
+		{
+			name:       "kind agentgateway bundle",
+			cfg:        config.Config{Router: config.RouterAgentgateway, Kind: true},
+			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
+			wantAtelet: true,
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+		},
+		{
+			name:       "atelet file",
+			path:       func(e *Env) string { return e.Cfg.Manifest("atelet.yaml") },
+			wantAtelet: true,
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+		},
+		{
+			name:       "kind atelet overlay",
+			cfg:        config.Config{Kind: true},
+			path:       func(e *Env) string { return e.ateletManifestPath() },
+			wantAtelet: true,
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+		},
+		{
+			name: "api server file without atelet",
+			path: func(e *Env) string { return e.Cfg.Manifest("ate-api-server.yaml") },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			cfg.E2ETuning = true
+			e := &Env{Cfg: &cfg}
+
+			rendered, err := e.render(tc.path(e))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			daemonSets, _ := dataPlaneWorkloads(t, rendered)
+			ds, ok := daemonSets[ateletDS]
+			if ok != tc.wantAtelet {
+				t.Fatalf("DaemonSet %s present = %v, want %v", ateletDS, ok, tc.wantAtelet)
+			}
+			if !ok {
+				return
+			}
+			args := ds.Spec.Template.Spec.Containers[0].Args
+			for _, want := range tc.wantArgs {
+				if !slices.Contains(args, want) {
+					t.Errorf("atelet args = %v, missing %q", args, want)
+				}
+			}
+		})
+	}
+
+	t.Run("kind without e2e-tuning omits snapshot-upload-delay", func(t *testing.T) {
+		e := &Env{Cfg: &config.Config{Root: root, Kind: true}}
+		rendered, err := e.render(e.ateletManifestPath())
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		daemonSets, _ := dataPlaneWorkloads(t, rendered)
+		args := daemonSets[ateletDS].Spec.Template.Spec.Containers[0].Args
+		if !slices.Contains(args, "--log-level=debug") {
+			t.Errorf("kind atelet args = %v, missing --log-level=debug", args)
+		}
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--snapshot-upload-delay") {
+				t.Errorf("kind atelet without --e2e-tuning carries %q in args %v", arg, args)
+			}
+		}
+	})
+
+	t.Run("composes with fake-data-plane", func(t *testing.T) {
+		e := &Env{Cfg: &config.Config{Root: root, E2ETuning: true, FakeDataPlane: true}}
+		rendered, err := e.render(e.ateletManifestPath())
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		daemonSets, _ := dataPlaneWorkloads(t, rendered)
+		if args := daemonSets[ateletDS].Spec.Template.Spec.Containers[0].Args; len(args) != 0 {
+			t.Errorf("fake-atelet args = %v, want none", args)
+		}
+	})
+}
+
 // Both paths that deliver the Envoy router pass it the install's allowlist,
-// whatever the overlay, and refuse to render without one.
+// whatever the overlay, and pass none when the install sets none.
 func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
 	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
@@ -820,10 +956,14 @@ func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 			t.Run("without IDs", func(t *testing.T) {
 				cfg := cfg
 				cfg.IngressAllowedSPIFFEIDs = nil
-				_, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
-				var required *config.RequiredError
-				if !errors.As(err, &required) {
-					t.Fatalf("render error = %v, want a RequiredError", err)
+				rendered, err := tc.render(&Env{Cfg: &cfg, resolver: resolver})
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				for _, arg := range routerArgs(t, rendered) {
+					if strings.HasPrefix(arg, "--ingress-allowed-spiffe-ids") {
+						t.Errorf("atenet-router args include %q, want no allowlist", arg)
+					}
 				}
 			})
 		})
@@ -865,7 +1005,7 @@ func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
 		{
 			name: "egress redeploy",
 			render: func(e *Env) ([]byte, error) {
-				return e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+				return e.renderAtenetEgressManifest(t.Context(), nil)
 			},
 		},
 	} {
@@ -948,10 +1088,18 @@ func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
 
 			t.Run("without IDs", func(t *testing.T) {
 				cfg.IngressAllowedSPIFFEIDs = nil
-				_, err := tc.render(e)
-				var required *config.RequiredError
-				if !errors.As(err, &required) {
-					t.Fatalf("render error = %v, want a RequiredError", err)
+				manifest, err := tc.render(e)
+				if err != nil {
+					t.Fatalf("rendering static-mtls AgentGateway manifests: %v", err)
+				}
+				var gateway map[string]interface{}
+				if err := yaml.Unmarshal([]byte(agentgatewayRouterConfig(t, manifest).Data["config.yaml"]), &gateway); err != nil {
+					t.Fatalf("parsing rendered AgentGateway config: %v", err)
+				}
+				authorization := gateway["frontendPolicies"].(map[string]interface{})["networkAuthorization"].(map[string]interface{})
+				wantRules := []interface{}{map[string]interface{}{"allow": "source.spiffeId in []"}}
+				if got := authorization["rules"]; !reflect.DeepEqual(got, wantRules) {
+					t.Errorf("network authorization rules = %v, want %v", got, wantRules)
 				}
 			})
 		})
@@ -1102,13 +1250,16 @@ func TestAgentgatewayEgressOverlay(t *testing.T) {
 }
 
 func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
+	k8s := config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}
+	vault := config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}
 	for _, tc := range []struct {
-		name     string
-		provider config.CredentialProvider
+		name      string
+		providers []config.CredentialProvider
 	}{
 		{name: "disabled"},
-		{name: "kubernetes", provider: config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}},
-		{name: "custom", provider: config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}},
+		{name: "kubernetes", providers: []config.CredentialProvider{k8s}},
+		{name: "custom", providers: []config.CredentialProvider{vault}},
+		{name: "several providers", providers: []config.CredentialProvider{k8s, vault}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
@@ -1123,7 +1274,7 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 					return "sha256:" + strings.Repeat("2", 64), nil
 				}),
 			}
-			built, err := e.renderAtenetEgressManifest(t.Context(), tc.provider)
+			built, err := e.renderAtenetEgressManifest(t.Context(), tc.providers)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1167,24 +1318,27 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 					if err := policy.YNode().Decode(&got); err != nil {
 						t.Fatal(err)
 					}
-					if !tc.provider.Enabled() {
+					if len(tc.providers) == 0 {
 						if len(got.Providers) != 0 {
 							t.Errorf("%s unexpectedly has credential providers: %v", protocol, got.Providers)
 						}
 						continue
 					}
-					want := []map[string]any{{
-						"uriAuthority": tc.provider.Name,
-						"target": map[string]any{
-							"host": tc.provider.Address,
-							"policies": map[string]any{"backendTLS": map[string]any{
-								"hostname": tc.provider.ServerName(),
-								"cert":     "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-								"key":      "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-								"root":     "/run/servicedns-ca/trust-bundle.pem",
-							}},
-						},
-					}}
+					var want []map[string]any
+					for _, p := range tc.providers {
+						want = append(want, map[string]any{
+							"uriAuthority": p.Name,
+							"target": map[string]any{
+								"host": p.Address,
+								"policies": map[string]any{"backendTLS": map[string]any{
+									"hostname": p.ServerName(),
+									"cert":     "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+									"key":      "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+									"root":     "/run/servicedns-ca/trust-bundle.pem",
+								}},
+							},
+						})
+					}
 					if !reflect.DeepEqual(got.Providers, want) {
 						t.Errorf("credential providers = %v, want %v", got.Providers, want)
 					}
@@ -1199,7 +1353,7 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 
 func TestPatchAgentgatewayCredentialProviderRequiresOneMarker(t *testing.T) {
 	for _, raw := range []string{"", "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS\n#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS\n"} {
-		if _, err := patchAgentgatewayEgressInject([]byte(raw), config.CredentialProvider{}); err == nil {
+		if _, err := patchAgentgatewayEgressInject([]byte(raw), nil); err == nil {
 			t.Errorf("accepted a manifest without exactly one marker: %q", raw)
 		}
 	}
@@ -1300,8 +1454,7 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 // A pre-built install renders the envoy router, egress, and system manifests
 // without building anything: envoy-dataplane is pinned from the image
 // repository like every ko image, so neither docker nor KO_DOCKER_REPO is
-// needed. Releases do not publish it, so this holds for a repository someone
-// published it to.
+// needed.
 func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
@@ -1322,7 +1475,7 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	}{
 		{
 			name:   "egress",
-			render: func() ([]byte, error) { return e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{}) },
+			render: func() ([]byte, error) { return e.renderAtenetEgressManifest(t.Context(), nil) },
 		},
 		{
 			name:   "router",
@@ -1353,9 +1506,8 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	}
 }
 
-// An install from release images that needs envoy-dataplane fails with a
-// message saying releases do not publish it and how to proceed, rather than a
-// bare registry error.
+// An install from an image repository without a readable envoy-dataplane fails
+// with a message saying how to proceed, rather than a bare registry error.
 func TestDockerfileImagePrebuiltNotPublished(t *testing.T) {
 	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
 	e := &Env{
@@ -1365,12 +1517,12 @@ func TestDockerfileImagePrebuiltNotPublished(t *testing.T) {
 		}),
 	}
 
-	_, err := e.dockerfileImage(t.Context(), envoyDataplaneImage, envoyDataplaneDockefile)
+	_, err := e.dockerfileImage(t.Context(), images.EnvoyDataplane)
 	if err == nil {
 		t.Fatal("dockerfileImage() error = nil, want one")
 	}
 	for _, want := range []string{
-		"envoy-dataplane is built from a Dockerfile, and releases do not publish it",
+		"envoy-dataplane is built from a Dockerfile, and the image repository has no readable copy",
 		"--atenet-dataplane=agentgateway",
 		"resolving example.com/substrate/envoy-dataplane:v1.2.3 to a digest: MANIFEST_UNKNOWN",
 	} {
@@ -1419,7 +1571,7 @@ func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
 				return digest, nil
 			}),
 		}
-		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		out, err := e.renderAtenetEgressManifest(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
 		}
@@ -1441,7 +1593,7 @@ func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
 				return digest, nil
 			}),
 		}
-		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		out, err := e.renderAtenetEgressManifest(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
 		}

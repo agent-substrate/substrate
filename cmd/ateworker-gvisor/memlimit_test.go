@@ -112,23 +112,23 @@ func TestCheckMemoryKillsOncePausesForCheckpoint(t *testing.T) {
 		"cgroup.kill":    "",
 		"cgroup.events":  "populated 0\nfrozen 0\n",
 	})
-	h.memoryLimit.Store(limit)
+	h.memory.Resume(limit)
 
 	s.checkMemory(context.Background(), h)
-	if !h.oomKilled.Load() {
+	if !h.memory.Killed() {
 		t.Fatal("sandbox over its limit was not killed")
 	}
-	if got := pauseMemoryWatch(h); got != limit {
-		t.Errorf("pauseMemoryWatch() = %d, want %d", got, limit)
+	if got := h.memory.Pause(); got != limit {
+		t.Errorf("Pause() = %d, want %d", got, limit)
 	}
 	if got := readCgroupFile(t, leaf, "cgroup.kill"); got != "1" {
 		t.Errorf("cgroup.kill = %q after pausing, want the kill done", got)
 	}
 
 	writeCgroupFiles(t, leaf, map[string]string{"cgroup.kill": ""})
-	resumeMemoryWatch(h, limit)
+	h.memory.Resume(limit)
 	s.checkMemory(context.Background(), h)
-	pauseMemoryWatch(h)
+	h.memory.Pause()
 	if got := readCgroupFile(t, leaf, "cgroup.kill"); got != "" {
 		t.Errorf("sandbox was killed twice")
 	}

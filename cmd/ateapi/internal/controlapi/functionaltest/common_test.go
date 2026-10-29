@@ -63,8 +63,8 @@ import (
 const (
 	testAtespace = "test-atespace"
 	testActorID  = "id1"
-	// testStorageLocation is the snapshot_config.storage_location the test
-	// templates hand out. No object store is wired up behind it.
+	// testStorageLocation is the --snapshot-location the test server runs
+	// with. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"
 	testActorJWTIssuer  = "https://idp.example.test"
 
@@ -472,9 +472,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				Atespace: testAtespace,
 				Name:     "tmpl1",
 			},
-			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation: testStorageLocation,
-			},
 			Containers: containers,
 			Volumes:    volumes,
 			WorkerSelector: &ateapi.Selector{
@@ -622,9 +619,6 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 			Metadata: &ateapi.ResourceMetadata{
 				Atespace: testAtespace,
 				Name:     name,
-			},
-			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation: testStorageLocation,
 			},
 			Containers: []*ateapi.Container{
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},

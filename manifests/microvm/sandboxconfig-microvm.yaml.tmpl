@@ -14,7 +14,7 @@
 
 # Cluster-wide SandboxConfig for the micro-VM (kata + cloud-hypervisor) sandbox
 # class. Unlike sandboxconfig-gvisor.yaml (applied unconditionally by
-# hack/install-ate.sh --deploy-ate-system), this is opt-in: apply via
+# ate-setup deploy ate-system), this is opt-in: apply via
 # hack/install-microvm-deps.sh --install after staging the asset set
 # (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh). A microvm WorkerPool
 # resolves it as its class default (or names it via configRef: microvm), so

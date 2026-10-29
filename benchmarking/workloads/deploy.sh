@@ -23,12 +23,6 @@ if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
 fi
 
-# Ensure BUCKET_NAME is set
-if [[ -z "${BUCKET_NAME:-}" ]]; then
-  echo "Error: BUCKET_NAME environment variable is not set." >&2
-  exit 1
-fi
-
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
 # Generated sweperf ActorTemplates; see manifests/sweperf/generate_sweperf_templates.py.
@@ -39,8 +33,8 @@ SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default. The glutton-storage
 # template is added when a StorageClass is set, because it needs a CSI driver
-# that not every cluster has.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full ate-env}"
+# that not every cluster has; ate-env is added when ATE_ENV_IMAGE is set.
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
 # template_manifest prints the manifest path for ActorTemplate NAME.
 template_manifest() {
@@ -57,25 +51,24 @@ fi
 
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
-# Actor memory limit (ActorTemplate resources.limits.memory). The default
-# is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
-# since a bigger guest drags more page cache into every memory snapshot. Raise
-# it for RAM-consuming suites.
+# Actor memory limit (ActorTemplate resources.limits.memory). Small by
+# default, since a bigger guest drags more page cache into every memory
+# snapshot. Raise it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
 # Actor CPU limit (ActorTemplate resources.limits.cpu). The scheduler books
 # it against the worker's CPU capacity, so it bounds how many actors a worker
 # hosts at once as much as the memory limit does.
 ACTOR_CPU="1"
 # Worker pod memory (WorkerPool spec.template.resources), set as both request
-# and limit. Empty leaves the pod unsized. The limit is also the memory the
-# worker reports as its actor capacity.
+# and limit. Empty leaves the pod unsized. The limit, less what the worker
+# keeps for itself, is the memory it reports as its actor capacity.
 WORKER_MEMORY=""
 # The StorageClass for the glutton-storage external volume. Empty means the
 # template is not deployed.
 STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
-# The image for the ate-env benchmark ActorTemplate. Defaults to the pinned
-# release guest image; set ATE_ENV_IMAGE to override with a custom build.
-ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-us-docker.pkg.dev/gke-substrate-release/benchmark/ate-env-guest@sha256:1d38934ef1dac71fcb1f1286de734e06ab2e19747279bccbd37bfe69e0d5bc72}"
+# The image for the ate-env benchmark ActorTemplate. Empty means the
+# template is not deployed.
+ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -96,8 +89,7 @@ usage() {
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
-  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
-  echo "                              the smallest size microvm admits)"
+  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi)"
   echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
@@ -194,8 +186,7 @@ substitute() {
   if [[ -n "${WORKER_MEMORY}" ]]; then
     worker_resources="resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}"
   fi
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
+  sed -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
@@ -475,6 +466,13 @@ fi
 if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
   && { [[ -n "${STORAGE_CLASS_NAME}" ]] || [[ "${action}" == "delete" ]]; }; then
   TEMPLATES+=(glutton-storage)
+fi
+
+# ate-env joins the default set only when ATE_ENV_IMAGE is set. Delete always
+# includes it, because deleting a template that does not exist is a no-op.
+if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
+  && { [[ -n "${ATE_ENV_IMAGE}" ]] || [[ "${action}" == "delete" ]]; }; then
+  TEMPLATES+=(ate-env)
 fi
 
 if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then

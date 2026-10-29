@@ -40,8 +40,6 @@ resources:
   limits:
     cpuMillicores: 1000
     memoryBytes: 536870912 # 512Mi
-snapshotConfig:
-  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-default${FIXTURE_SUFFIX}/
 
 ---
 
@@ -70,8 +68,6 @@ resources:
   limits:
     cpuMillicores: 1000
     memoryBytes: 536870912 # 512Mi
-snapshotConfig:
-  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/
 ---
 
 # No capabilities at all, and the probe still binds :80: both runtimes lift
@@ -98,5 +94,3 @@ resources:
   limits:
     cpuMillicores: 1000
     memoryBytes: 536870912 # 512Mi
-snapshotConfig:
-  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-none${FIXTURE_SUFFIX}/

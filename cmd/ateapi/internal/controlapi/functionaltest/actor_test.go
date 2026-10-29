@@ -277,10 +277,9 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	ctx := context.Background()
 	if _, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
-			Containers:     []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+			Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
+			Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			Resources:  &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
@@ -401,8 +400,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	defer tc.cleanup()
 	template, err := tc.client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
-			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://snapshots"},
+			Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
 			Containers: []*ateapi.Container{{
 				Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
@@ -486,6 +484,60 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	if got := durableSnapshotURI(clone.GetStatus()); got != snapshotURI {
 		t.Errorf("clone external snapshot = %q, want the tag's %q", got, snapshotURI)
 	}
+}
+
+// TestCreateActor_FromDeletingTag verifies an Actor cannot be created from a tag
+// with delete_time set, since DeleteTag may already have collected its snapshot.
+func TestCreateActor_FromDeletingTag(t *testing.T) {
+	ns := namespaceForTest("ns-deleting-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplate(t, tc, ns)
+
+	tag := seedTag(t, tc, "deleting-source", "deleting", func(tag *ateapi.Tag) {
+		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
+	})
+	if _, err := tc.persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); err != nil {
+		t.Fatalf("MarkTagForDeletion: %v", err)
+	}
+
+	_, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     resources.TagRefFromTag(tag).ToObjectRef(),
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "source Tag "+testAtespace+"/deleting is being deleted")
+}
+
+// TestCreateActor_FromDeletingGoldenTag verifies an Actor created without a source
+// tag is refused while its template's golden tag has delete_time set.
+func TestCreateActor_FromDeletingGoldenTag(t *testing.T) {
+	ns := namespaceForTest("ns-deleting-golden-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplate(t, tc, ns)
+
+	golden := seedTag(t, tc, "golden-source", "golden", func(tag *ateapi.Tag) {
+		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
+	})
+	goldenRef := resources.TagRefFromTag(golden)
+	if _, err := tc.persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(toUpdate *ateapi.ActorTemplate) error {
+		toUpdate.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{GoldenTag: goldenRef.ToObjectRef()}}
+		return nil
+	}); err != nil {
+		t.Fatalf("recording the golden tag: %v", err)
+	}
+	if _, err := tc.persistence.MarkTagForDeletion(ctx, goldenRef, store.DeletePreconditions{}, nil); err != nil {
+		t.Fatalf("MarkTagForDeletion: %v", err)
+	}
+
+	_, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "source Tag "+testAtespace+"/golden is being deleted")
 }
 
 // TestGetActor_Found tests that an existing actor can be retrieved.
@@ -840,9 +892,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 							Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 							VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
-						Volumes:        tmpl.volumes,
-						SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-						Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+						Volumes:   tmpl.volumes,
+						Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 					},
 				}); err != nil {
 					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
@@ -1056,6 +1107,34 @@ func TestUpdateActor_NotFound(t *testing.T) {
 		}},
 	})
 	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
+}
+
+func TestUpdateActor_FailsIfDeleting(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor-deleting")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.persistence.CreateActor(ctx, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	marked, err := tc.persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
+	if err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
+	}
+
+	_, err = tc.client.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
+		Metadata:       marked.GetMetadata(),
+		ActorTemplate:  marked.GetActorTemplate(),
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is being deleted")
 }
 
 func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
@@ -3339,7 +3418,6 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				Name:     "tmpl1",
 			},
 			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation:   testStorageLocation,
 				PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			Containers: []*ateapi.Container{{

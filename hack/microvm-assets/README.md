@@ -31,8 +31,9 @@ it as a device, which is what places microVM workers there.
 
 2. **Bring up the cluster + control plane:**
    ```sh
-   hack/create-kind-cluster.sh        # mounts /dev/kvm into the nodes
-   hack/install-ate-kind.sh           # control plane + rustfs (bucket: ate-snapshots)
+   hack/create-kind-cluster.sh   # mounts /dev/kvm into the nodes
+   # control plane + rustfs (bucket: ate-snapshots)
+   go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}'
    ```
 
 3. **Stage assets into rustfs:**

@@ -191,8 +191,11 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	default:
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
-	// TODO: Refuse a tag with delete_time set. DeleteTag may already have
-	// collected its snapshot.
+	// DeleteTag may already have collected the snapshot of a tag with
+	// delete_time set.
+	if tag.GetMetadata().GetDeleteTime() != nil {
+		return nil, apierror.FailedPrecondition("source Tag %s/%s is being deleted", tagRef.GetAtespace(), tagRef.GetName())
+	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
 	if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
@@ -264,6 +267,9 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 	defer lease.Close()
 
 	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapi.Actor) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			return apierror.FailedPrecondition("Actor %s is being deleted", actorRef)
+		}
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is

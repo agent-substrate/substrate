@@ -166,6 +166,7 @@ type fakeGoldenControl struct {
 	exists         bool
 	goldenState    ateapi.ActorState
 	goldenSnapshot string
+	goldenCrash    string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -185,6 +186,9 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapi.Create
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapi.ActorStatus {
 	st := &ateapi.ActorStatus{State: c.goldenState}
+	if c.goldenCrash != "" {
+		st.Crash = &ateapi.ActorCrash{Message: c.goldenCrash}
+	}
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapi.Snapshot{
@@ -350,6 +354,10 @@ func withoutWakeupProbe(tmpl *ateapi.ActorTemplate) {
 	for _, container := range tmpl.Containers {
 		container.WakeupProbe = nil
 	}
+}
+
+func withDeleteTime(tmpl *ateapi.ActorTemplate) {
+	tmpl.Metadata.DeleteTime = timestamppb.Now()
 }
 
 func withoutGoldenSnapshot(tmpl *ateapi.ActorTemplate) {
@@ -530,9 +538,9 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:             "crashed golden actor fails the template",
 			template:         testTemplate(),
-			control:          &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_CRASHED},
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_CRASHED, goldenCrash: "atelet Run: unhandled tar entry"},
 			wantFailedReason: reasonGoldenActorCrashed,
-			wantMessage:      "crashed",
+			wantMessage:      "crashed before its snapshot was taken: atelet Run: unhandled tar entry",
 		},
 		{
 			name:        "resume failure requeues without failing",
@@ -577,6 +585,12 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:    "deleted template is a noop",
 			control: &fakeGoldenControl{},
+		},
+		{
+			name:          "template marked for deletion is a noop",
+			template:      testTemplate(withDeleteTime),
+			control:       &fakeGoldenControl{},
+			wantUnchanged: true,
 		},
 		{
 			name:     "terminal golden snapshot is a noop",

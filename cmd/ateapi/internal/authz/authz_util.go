@@ -233,7 +233,7 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 // every check, independent of any stored AccessPolicy.
 type SystemPrincipals struct {
 	ControllerSPIFFEID       string
-	EgressGatewaySPIFFEID    string
+	EgressGatewaySPIFFEIDs   []string
 	IngressRouterSPIFFEID    string
 	AteletSPIFFEID           string
 	APIServerSidecarSPIFFEID string
@@ -289,15 +289,21 @@ func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
 // parseSystemPrincipals validates system's SPIFFE IDs and maps each OpenFGA
 // user string to the system component roles it holds.
 func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error) {
-	bindings := []struct {
+	if len(system.EgressGatewaySPIFFEIDs) == 0 {
+		return nil, fmt.Errorf("no %s SPIFFE ID", RoleEgressGateway)
+	}
+	type binding struct {
 		role     string
 		spiffeID string
-	}{
+	}
+	bindings := []binding{
 		{role: RoleController, spiffeID: system.ControllerSPIFFEID},
-		{role: RoleEgressGateway, spiffeID: system.EgressGatewaySPIFFEID},
 		{role: RoleIngressRouter, spiffeID: system.IngressRouterSPIFFEID},
 		{role: RoleAtelet, spiffeID: system.AteletSPIFFEID},
 		{role: RoleAPIServerSidecar, spiffeID: system.APIServerSidecarSPIFFEID},
+	}
+	for _, id := range system.EgressGatewaySPIFFEIDs {
+		bindings = append(bindings, binding{role: RoleEgressGateway, spiffeID: id})
 	}
 	out := make(map[string][]string, len(bindings))
 	for _, b := range bindings {

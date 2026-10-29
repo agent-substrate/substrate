@@ -29,7 +29,7 @@ WORKER_COUNT=1
 SANDBOX_CLASS=gvisor
 SKIP_BUILD=0
 OTLP_ENDPOINT=""
-# Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
+# Empty keeps the default in workloads/deploy.sh (256Mi).
 ACTOR_MEMORY=""
 # Empty keeps the default in workloads/deploy.sh (1 CPU).
 ACTOR_CPU=""
@@ -50,7 +50,7 @@ usage() {
   echo "  --otlp-endpoint URL     Forwarded to workloads/deploy.sh. The address to which an"
   echo "                          instrumented actor container sends telemetry."
   echo "  --actor-memory SIZE     Forwarded to workloads/deploy.sh. Memory limit for the"
-  echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
+  echo "                          benchmark ActorTemplates (default: 256Mi)."
   echo "  --actor-cpu CPU         Forwarded to workloads/deploy.sh. CPU limit for the benchmark"
   echo "                          ActorTemplates (default: 1)."
   echo "  --worker-memory SIZE    Forwarded to workloads/deploy.sh. Memory request and limit"
@@ -63,7 +63,7 @@ usage() {
   echo "  -h|--help               Show this help message"
   echo ""
   echo "Environment:"
-  echo "  PROJECT_ID, BUCKET_NAME, etc. are read from .ate-dev-env.sh by the"
+  echo "  PROJECT_ID etc. are read from .ate-dev-env.sh by the"
   echo "  scripts this wrapper invokes."
 }
 

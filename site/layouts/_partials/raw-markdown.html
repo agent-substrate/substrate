@@ -1,0 +1,58 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{- $body := .RawContent -}}
+
+{{/* 1. Expand default {{% include-file %}} using .Params.repo_source */ -}}
+{{- with .Params.repo_source -}}
+  {{- $doc := partialCached "repo-doc.html" . . -}}
+  {{- if $doc.found -}}
+    {{- $body = replaceRE `\{\{[<%]\s*include-file\s*[>%]\}\}` $doc.body $body -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* 2. Expand explicit {{% include-file file="..." %}} shortcodes */ -}}
+{{- range findRESubmatch `\{\{[<%]\s*include-file\s+file="([^"]+)"([^}%>]*)[>%]\}\}` $body -}}
+  {{- $fullMatch := index . 0 -}}
+  {{- $file := index . 1 -}}
+  {{- $args := index . 2 -}}
+  {{- $doc := partialCached "repo-doc.html" $file $file -}}
+  {{- if $doc.found -}}
+    {{- $inc := $doc.body -}}
+    {{- if strings.Contains $args "shift_headings" -}}
+      {{- $inc = replaceRE `(?m)^(#{2,5}) ` "#$1 " $inc -}}
+    {{- end -}}
+    {{- $body = replace $body $fullMatch $inc -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* 3. Convert HTML code-tab wrappers into clean Markdown headings */ -}}
+{{- $body = replaceRE `<div class="code-tabs">\s*` "" $body -}}
+{{- $body = replaceRE `<div class="code-tab"\s+data-tab="([^"]+)"[^>]*>\s*` "#### $1\n\n" $body -}}
+{{- $body = replaceRE `(?m)^</div>\s*$` "" $body -}}
+
+{{/* 4. Strip any remaining Hugo shortcodes and clean up excessive blank lines */ -}}
+{{- $body = replaceRE `\{\{[<%]\s*/?alert[^}%>]*[>%]\}\}` "" $body -}}
+{{- $body = replaceRE `\n{3,}` "\n\n" (strings.TrimSpace $body) -}}
+
+{{- $header := printf "# %s\n\n" .Title -}}
+{{- with .Params.description -}}
+  {{- $header = printf "%s> %s\n\n" $header (strings.TrimSpace .) -}}
+{{- end -}}
+{{- $params := partialCached "page-params.html" . .Path -}}
+{{- with $params.status -}}
+  {{- $header = printf "%s> **Status: %s.** %s\n\n" $header (title .) (partial "status-text.html" $params) -}}
+{{- end -}}
+{{- printf "%s%s\n" $header $body -}}

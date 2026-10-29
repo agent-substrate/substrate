@@ -67,8 +67,7 @@ var probeNamespace string
 // The micro-VM variant additionally needs the micro-VM deps installed
 // (hack/run-microvm-demo-kind.sh, or hack/install-microvm-deps.sh --install).
 func TestActorEgressMITMTrust(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
@@ -92,7 +91,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	passthrough := e2e.DeployServerPod(t, ctx, passthroughSpec)
 	originRoots := "ca=" + url.QueryEscape(e2e.ServiceDNSTrustBundle(t, ctx, clients))
 
-	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle(), e2e.WithSystemRoots())
+	probeNamespace, _ = e2e.DeployProbe(t, "egressmitm", e2e.WithTrustBundle(), e2e.WithSystemRoots())
 
 	const id = "probe-mitm"
 	createAndResumeActor(t, ctx, clients, id, mitm, passthrough)
