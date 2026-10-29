@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"math/rand"
 	"slices"
 
@@ -43,6 +45,12 @@ type Constraints struct {
 	// snapshot stamped with it. Prepared once per Schedule, since Applies
 	// asks it of every candidate.
 	RequiredRuntime hardware.Requirement
+
+	// SnapshotRuntime is the runtime of the snapshot the actor restores from,
+	// or the zero Requirement when it starts on a worker's default runtime.
+	// Unlike RequiredRuntime it is never relaxed: it picks the worker runtime
+	// the actor runs under, and so the overhead it is booked with.
+	SnapshotRuntime hardware.Requirement
 
 	// TemplateSelector and ActorSelector must both match the worker's labels.
 	TemplateSelector labels.Selector
@@ -123,7 +131,11 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		if !s.Applies(worker, constraints) {
 			continue
 		}
-		if cand, ok := checkRoom(worker, constraints.Limits); ok {
+		booking, ok := Booking(worker, constraints)
+		if !ok {
+			continue
+		}
+		if cand, ok := checkRoom(worker, booking); ok {
 			candidates = append(candidates, cand)
 		}
 	}
@@ -252,8 +264,58 @@ func (s *scheduler) Applies(worker *ateapi.Worker, constraints Constraints) bool
 // this size. A dimension the worker does not report is unconstrained, so
 // placement is never blocked by missing data.
 func (s *scheduler) HasRoom(worker *ateapi.Worker, constraints Constraints) bool {
-	_, ok := checkRoom(worker, constraints.Limits)
+	booking, ok := Booking(worker, constraints)
+	if !ok {
+		return false
+	}
+	_, ok = checkRoom(worker, booking)
 	return ok
+}
+
+// Booking is what an actor takes from the worker's capacity: its limits plus
+// the overhead of the worker runtime it would run under there. It reports
+// false when that doesn't fit in an int64, and the actor doesn't fit on the worker.
+func Booking(worker *ateapi.Worker, constraints Constraints) (*ateapi.Resources, bool) {
+	overhead := constraints.SnapshotRuntime.WorkerRuntimeFor(worker.GetStatus()).GetActorOverhead()
+	if overhead == nil {
+		return constraints.Limits, true
+	}
+	limit := constraints.Limits.GetMemoryBytes()
+	scaled, ok := perGiB(limit, overhead.GetMemoryBytesPerGib())
+	if !ok {
+		return nil, false
+	}
+	memory, ok := sum(limit, overhead.GetMemoryBytes(), scaled)
+	if !ok {
+		return nil, false
+	}
+	return &ateapi.Resources{CpuMillicores: constraints.Limits.GetCpuMillicores(), MemoryBytes: memory}, true
+}
+
+// perGiB scales rate bytes per GiB to n bytes, and reports false on overflow.
+func perGiB(n, rate int64) (int64, bool) {
+	if n < 0 || rate < 0 {
+		return 0, false
+	}
+	hi, lo := bits.Mul64(uint64(n), uint64(rate))
+	// divide the 128-bit product by 1<<30
+	if hi>>30 != 0 {
+		return 0, false
+	}
+	v := hi<<34 | lo>>30
+	return int64(v), v <= math.MaxInt64
+}
+
+// sum adds non-negative values, and reports false on overflow.
+func sum(vs ...int64) (int64, bool) {
+	var total int64
+	for _, v := range vs {
+		if v < 0 || v > math.MaxInt64-total {
+			return 0, false
+		}
+		total += v
+	}
+	return total, true
 }
 
 func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) {

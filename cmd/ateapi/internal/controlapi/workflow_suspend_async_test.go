@@ -235,7 +235,7 @@ func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 			if localSnap.GetFidelity() != tc.want {
 				t.Errorf("local Snapshot.Fidelity = %v, want %v", localSnap.GetFidelity(), tc.want)
 			}
-			if got := localSnap.GetDurableSnapshot().GetStatus(); got != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+			if got := localSnap.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING {
 				t.Errorf("local DurableSnapshot.Status = %v, want PENDING", got)
 			}
 			if got := localSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got == "" {
@@ -358,7 +358,7 @@ func TestSuspendActorAsync_AteletPaused_DialFailureLeavesActorRetryable(t *testi
 
 			var snapshots []*ateapi.Snapshot
 			if tt.prevSnapshot != "" {
-				snapshots = append(snapshots, newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "prev-snapshot", tt.prevSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+				snapshots = append(snapshots, newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "prev-snapshot", tt.prevSnapshot, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED))
 			}
 			snapshots = append(snapshots, newInProgressSnapshot(t, 2, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "actor-1-never-written"))
 
@@ -390,7 +390,7 @@ func TestSuspendActorAsync_AteletPaused_DialFailureLeavesActorRetryable(t *testi
 			if gotSnap := snapshotAtLatestGeneration(stored.GetStatus()); gotSnap.GetUuid() != "actor-1-never-written" {
 				t.Errorf("in-progress local snapshot uuid = %q, want preserved for debugging", gotSnap.GetUuid())
 			}
-			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 			if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != tt.prevSnapshot {
 				t.Errorf("SnapshotUri = %q, want %q", got, tt.prevSnapshot)
 			}

@@ -15,8 +15,10 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -296,12 +298,39 @@ func TestFetchTrustsOnlyTheGivenCA(t *testing.T) {
 				if resp["error"] != "" || resp["status"] != "200" {
 					t.Errorf("fetch = status %q, error %q; want 200", resp["status"], resp["error"])
 				}
+				if resp["tls_handshake"] != "complete" {
+					t.Errorf("TLS handshake = %q, want complete", resp["tls_handshake"])
+				}
 				return
+			}
+			if resp["tls_handshake"] != "failed" {
+				t.Errorf("TLS handshake = %q, want failed", resp["tls_handshake"])
 			}
 			if !strings.Contains(resp["error"], "certificate") {
 				t.Errorf("error = %q, want a certificate verification failure", resp["error"])
 			}
 		})
+	}
+}
+
+func TestFetchReportsClientHelloClosure(t *testing.T) {
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("denied TLS reached HTTP")
+	}))
+	origin.TLS = &tls.Config{
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			if err := hello.Conn.Close(); err != nil {
+				t.Errorf("closing denied TLS connection: %v", err)
+			}
+			return nil, errors.New("TLS destination denied")
+		},
+	}
+	origin.StartTLS()
+	defer origin.Close()
+
+	resp := doFetch(t, origin.URL)
+	if resp["tls_handshake"] != "closed" || resp["status"] != "" || resp["error"] == "" {
+		t.Fatalf("fetch = %v, want connection closed during TLS with no HTTP response", resp)
 	}
 }
 

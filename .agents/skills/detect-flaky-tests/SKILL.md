@@ -74,7 +74,7 @@ The two sandbox-class lanes are NOT a matrix — each `e2e-test` job runs the st
 `hack/run-e2e-kind.sh` command, the second with `E2E_SANDBOX_CLASS: microvm`). Split the
 each `e2e-test` job log at the "Run E2E tests (micro-VM)" step boundary: PASS/FAIL lines
 before it belong to the gVisor lane, lines after it to the microVM lane. Because the
-steps are sequential, a gVisor-lane failure means the micro-VM step never ran — record
+steps are sequential, a gVisor-lane failure means the microVM step never ran — record
 no microVM results for that run rather than counting them as failures.
 
 Parse `go test -v` output from each log:

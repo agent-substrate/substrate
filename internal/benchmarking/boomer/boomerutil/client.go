@@ -15,10 +15,14 @@
 package boomerutil
 
 import (
+	"crypto/tls"
 	"fmt"
+	"os"
+	"sync"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateapiauth"
+	"go.ate.dev/substrate/internal/credbundle"
 	_ "go.ate.dev/substrate/internal/k8sresolver"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -28,16 +32,53 @@ import (
 )
 
 const (
-	// ateapiCAFile verifies ateapi's servicedns serving cert;
-	// ateapiCredBundle is the benchmark's own pod certificate. Both are
-	// projected in by benchmarking/locust/manifests/locust.yaml.
-	ateapiCAFile     = "/run/servicedns-ca/ca.crt"
-	ateapiCredBundle = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+	// DefaultRouterURL is the default HTTPS base URL for atenet-router.
+	DefaultRouterURL = "https://atenet-router.ate-system.svc"
+
+	// servicednsCAFile verifies ateapi's and atenet-router's servicedns serving
+	// certs; podIdentityCredBundle is the benchmark's own pod certificate. Both
+	// are projected in by benchmarking/locust/manifests/locust.yaml.
+	servicednsCAFile      = "/run/servicedns-ca/ca.crt"
+	podIdentityCredBundle = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 
 	// ateapiServerName is the DNS SAN on the apiserver's serving cert, which
 	// is shorter than the endpoint the benchmark dials.
 	ateapiServerName = "api.ate-system.svc"
+
+	// routerServerName is the 3-label DNS SAN on atenet-router's servicedns
+	// serving cert.
+	routerServerName = "atenet-router.ate-system.svc"
 )
+
+var routerTLSConfig = sync.OnceValues(func() (*tls.Config, error) {
+	return newRouterTLSConfig(servicednsCAFile, podIdentityCredBundle, routerServerName)
+})
+
+func newRouterTLSConfig(caFile, credBundle, serverName string) (*tls.Config, error) {
+	roots, err := credbundle.ParsePool(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("loading router CA file: %w", err)
+	}
+	if _, err := os.Stat(credBundle); err != nil {
+		return nil, fmt.Errorf("checking router client credential bundle: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:           tls.VersionTLS13,
+		RootCAs:              roots,
+		ServerName:           serverName,
+		GetClientCertificate: credbundle.ClientLoader(credBundle),
+	}, nil
+}
+
+// RouterTLSConfig returns a mutual-TLS client configuration for dialing
+// atenet-router.
+func RouterTLSConfig() (*tls.Config, error) {
+	cfg, err := routerTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Clone(), nil
+}
 
 // DialControl opens an authenticated gRPC connection to ateapi.
 //
@@ -62,8 +103,8 @@ func DialControl(endpoint string) (*grpc.ClientConn, ateapi.ControlClient, error
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
-		CAFile:           ateapiCAFile,
-		ClientCredBundle: ateapiCredBundle,
+		CAFile:           servicednsCAFile,
+		ClientCredBundle: podIdentityCredBundle,
 		ServerName:       ateapiServerName,
 	})
 	if err != nil {

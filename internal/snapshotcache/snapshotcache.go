@@ -111,6 +111,45 @@ func DropFiles(files []File) bool {
 	return dropped
 }
 
+// StartWriteback writes each path's dirty pages to disk in the background and
+// then calls done, if set. Writing can block on a busy disk, and callers don't
+// wait.
+func StartWriteback(paths []string, done func()) error {
+	var files []*os.File
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			for _, f := range files {
+				_ = f.Close()
+			}
+			return err
+		}
+		files = append(files, f)
+	}
+	go func() {
+		for _, f := range files {
+			_ = unix.Fdatasync(int(f.Fd()))
+			_ = f.Close()
+		}
+		if done != nil {
+			done()
+		}
+	}()
+	return nil
+}
+
+// SyncAndEvict waits for targets to reach disk and then evicts them, so pages
+// still dirty from a recent snapshot get dropped too.
+func SyncAndEvict(targets []File) {
+	for _, t := range targets {
+		if f, err := os.Open(t.Path); err == nil {
+			_ = unix.Fdatasync(int(f.Fd()))
+			_ = f.Close()
+		}
+	}
+	EvictWithRetries(targets)
+}
+
 // EvictFiles evicts clean cached pages of targets via POSIX_FADV_DONTNEED and
 // returns true if any target still has dirty or writeback pages remaining in
 // cache (or if fadvise failed). Files with dirty or writeback pages are skipped

@@ -22,10 +22,9 @@ kind: Kustomization
 # in the bundle and an overlay would be a duplicate resource. ate-setup applies
 # the ConfigMap directly for the single-component redeploys.
 #
-# pod-certificate-controller.yaml is deliberately absent, as in ../base: the
-# installers (hack/install-ate.sh and cmd/ate-setup) apply and delete it on
-# their own, and re-applying the base file from this bundle would revert the
-# WORKERS_PER_SIGNER override.
+# pod-certificate-controller.yaml is deliberately absent, as in ../base:
+# cmd/ate-setup applies and deletes it on its own, and re-applying the base
+# file from this bundle would revert the WORKERS_PER_SIGNER override.
 resources:
   - ./ate-api-server
   - ../ate-idp-server.yaml

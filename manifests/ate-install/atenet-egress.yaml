@@ -140,7 +140,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                   log_format:
                     text_format_source:
-                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
+                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% protocol=%PROTOCOL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
               route_config:
                 name: connect_route
                 virtual_hosts:
@@ -302,7 +302,7 @@ data:
       # policy ext_proc on every request. They also carry an
       # #ATE_MITM_EXTPROC_FILTER marker, with a matching
       # #ATE_MITM_EXTPROC_CLUSTER in the cluster list: inert comments until
-      # hack/install-ate.sh is run with
+      # ate-setup is run with
       # --experimental-additional-egress-extproc-service, which replaces each
       # with a generated block for an additional, external processor. The
       # marker sits below the policy filter, so that processor sees only
@@ -1398,6 +1398,11 @@ spec:
         # {"enabled":false}. Without a provider, a request matching a rule that
         # requires an injection is denied (see egress.applyEffects).
         #ATE_EGRESS_INJECT_FLAGS -- Don't modify this line.
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: POD_NAME
           valueFrom:

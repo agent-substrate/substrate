@@ -302,9 +302,6 @@ func (s *AteWorkerService) sampleSandbox(active *resources.ActorAttribution) (*a
 // and holds the actor's lock while it does, so a busy actor is skipped. The
 // cgroup was read before the lock was checked, and h is looked up again after,
 // so a teardown that starts or finishes in between is never reported.
-//
-// oom_kill counts over the cgroup's lifetime. A leaf left behind by an earlier
-// activation of the same actor carries its count forward.
 func (s *AteWorkerService) warnDeadSandbox(ctx context.Context, h *hostedActor, raw cgroupstats.Sample) {
 	if h.deadReported.Load() {
 		return

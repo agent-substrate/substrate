@@ -1,0 +1,54 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Docsy theme variable overrides. The palette is taken from the logo: Yolo's
+// greens, plus the blue, yellow, and pink of the robots.
+
+$substrate-green: #64d86b;
+$substrate-green-dark: #33a946;
+$substrate-green-light: #95f294;
+$substrate-blue: #66b8dd;
+$substrate-yellow: #f0f175;
+$substrate-pink: #e87cb3;
+
+// Brand typeface for the site name, loaded in _partials/hooks/head-end.html.
+$substrate-brand-font: "Ubuntu", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+$substrate-bg: #0a0e0b;
+$substrate-surface: #0e130f;
+$substrate-surface-elevated: #111612;
+$substrate-border: #243028;
+$substrate-border-subtle: #1a221c;
+$substrate-border-hover: #3b5a43;
+$substrate-text: #e4ebe6;
+$substrate-heading: #f4f8f5;
+$substrate-muted: #9aa89f;
+$substrate-subtle: #6e7d73;
+
+$primary: $substrate-green-dark;
+$secondary: #fff;
+$dark: #0e130f;
+$black: #0a0e0b;
+$info: $substrate-blue;
+$light: #dee2e6;
+$link-color: $substrate-green;
+
+$white: #fff;
+$navbar-dark-color: rgba($white, 1);
+
+$td-enable-google-fonts: true;
+$google_font_family: "Geist:400,500,600,700|Geist+Mono:400,500";
+$font-family-sans-serif: "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+$font-family-monospace: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+$brand-font-family: "Geist", system-ui, -apple-system, sans-serif;

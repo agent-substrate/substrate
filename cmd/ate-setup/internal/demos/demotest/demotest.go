@@ -48,7 +48,7 @@ func Env(t *testing.T) *steps.Env {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	cfg := &config.Config{Root: root, BucketName: "ate-snapshots"}
+	cfg := &config.Config{Root: root}
 	cfg.SetResolved(r)
 	return &steps.Env{Cfg: cfg}
 }
@@ -84,6 +84,10 @@ func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.A
 	}
 	if got := resources.ActorTemplateRefFromActorTemplate(template); got != want {
 		t.Errorf("manifest names template %s, want %s", got, want)
+	}
+	// The API rejects storageLocation without its preview gate.
+	if got := template.GetSnapshotConfig().GetStorageLocation(); got != "" {
+		t.Errorf("manifest sets storageLocation %q, want none", got)
 	}
 }
 

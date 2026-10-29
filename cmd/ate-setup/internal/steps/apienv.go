@@ -186,7 +186,9 @@ func sharedBootstrapOwnerWarning(bootstrapOwners []string, namespace string) str
 // snapshots. It is used whether or not the PerTemplateSnapshotLocation preview
 // gate is enabled; with the gate, an actor template's
 // snapshotConfig.storageLocation overrides it. It may be empty only when the
-// gate is enabled, in which case every template must set its own.
+// gate is enabled. CreateActorTemplate then fails with FailedPrecondition for
+// a template without storageLocation, which includes every demo and
+// benchmark.
 func clusterSnapshotLocation(location string, gates []string) (string, error) {
 	if location != "" {
 		if err := resources.ValidateSnapshotLocation(location); err != nil {
@@ -311,7 +313,7 @@ func (e *Env) EnsureEnvVarsSafeStandalone(ctx context.Context) error {
 	}
 	return fmt.Errorf("the running ate-api-server Deployment does not reference the %s Secret; "+
 		"rewriting the env vars alone would leave it without a DSN on its next restart. "+
-		"Run `ate-setup deploy ate-apiserver` instead, which also updates the Deployment", SecretAPIEnvVars)
+		"Run `ate-setup deploy apiserver` instead, which also updates the Deployment", SecretAPIEnvVars)
 }
 
 // annotateAPIServerEnvHash stamps the running Deployment's pod template with
@@ -354,6 +356,9 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIAuthzBootstrapOwners); err != nil {
 		return err
 	}
+	if err := setAPIServerEgressGatewayArgs(objs, e.Namespace(), e.Cfg.EgressGatewayExtraSPIFFEIDs); err != nil {
+		return err
+	}
 	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
 		log.Warnf("%s", msg)
 	}
@@ -364,9 +369,40 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 const apiServerAuthzFlag = "--authz-bootstrap-owners"
 
 // setAPIServerAuthzArgs sets ate-api-server's bootstrap owners flag on its
-// container in objs, replacing any the manifest already carries. A changed
-// flag changes the pod template, so it rolls the Deployment.
+// container in objs, replacing any the manifest already carries.
 func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners []string) error {
+	var values []string
+	if len(bootstrapOwners) > 0 {
+		values = []string{principal.FormatList(bootstrapOwners)}
+	}
+	return setAPIServerFlag(objs, apiServerAuthzFlag, values)
+}
+
+// apiServerEgressGatewayFlag is the ate-api-server flag
+// setAPIServerEgressGatewayArgs owns.
+const apiServerEgressGatewayFlag = "--egress-gateway-spiffe-id"
+
+// setAPIServerEgressGatewayArgs passes atenet-egress's SPIFFE ID and then each
+// of extras, without duplicates, to ate-api-server's egress gateway flag. With
+// no extras it drops the flag, leaving ate-api-server's default.
+func setAPIServerEgressGatewayArgs(objs []*unstructured.Unstructured, namespace string, extras []string) error {
+	var ids []string
+	if len(extras) > 0 {
+		// Passing the flag replaces ate-api-server's default.
+		ids = []string{installdefaults.EgressSPIFFEID(namespace)}
+		for _, id := range extras {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return setAPIServerFlag(objs, apiServerEgressGatewayFlag, ids)
+}
+
+// setAPIServerFlag replaces every flag arg on ate-api-server's container in
+// objs with one flag=value arg per value, in order. A changed flag changes the
+// pod template, so it rolls the Deployment.
+func setAPIServerFlag(objs []*unstructured.Unstructured, flag string, values []string) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
 		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
@@ -375,7 +411,7 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners []
 		}
 	}
 	if dep == nil {
-		return fmt.Errorf("the manifest has no deployment/ate-api-server to set authorization flags on")
+		return fmt.Errorf("the manifest has no deployment/ate-api-server to set %s on", flag)
 	}
 	containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
 	if err != nil || !found {
@@ -391,10 +427,10 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners []
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
 		}
 		args = slices.DeleteFunc(args, func(arg string) bool {
-			return arg == apiServerAuthzFlag || strings.HasPrefix(arg, apiServerAuthzFlag+"=")
+			return arg == flag || strings.HasPrefix(arg, flag+"=")
 		})
-		if len(bootstrapOwners) > 0 {
-			args = append(args, apiServerAuthzFlag+"="+principal.FormatList(bootstrapOwners))
+		for _, v := range values {
+			args = append(args, flag+"="+v)
 		}
 		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)

@@ -90,7 +90,7 @@ func valueFor(key string) string {
 		return RouterEnvoy
 	case "clusterSize":
 		return ClusterSizeSize0
-	case "ingressAllowedSPIFFEIDs":
+	case "ingressAllowedSPIFFEIDs", "ateapi.authz.egressGatewayExtraSPIFFEIDs":
 		return "spiffe://cluster.local/ns/a/sa/b"
 	case "ateapi.postgres.cloudsql.ipType":
 		return CloudSQLIPTypePSC
