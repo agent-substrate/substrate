@@ -58,7 +58,7 @@ var substrateFixtures = []struct {
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, 2, nil},
+	}, 3, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
@@ -79,7 +79,7 @@ var substrateFixtures = []struct {
 // a WorkerPool that never gets a micro-VM worker.
 func renderPool(t *testing.T, relPath string) *atev1.WorkerPool {
 	t.Helper()
-	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
+	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "render"))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}
@@ -115,7 +115,7 @@ func renderPool(t *testing.T, relPath string) *atev1.WorkerPool {
 // the cluster as literal text.
 func renderTemplates(t *testing.T, relPath string, values map[string]string) []*ateapi.ActorTemplate {
 	t.Helper()
-	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", nil)
+	inline, blocks := substrateTemplateSubstitutions("render", nil)
 	maps.Copy(inline, values)
 	rendered, err := os.ReadFile(renderManifest(t, relPath, inline, blocks))
 	if err != nil {
@@ -149,14 +149,12 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
-				// An inline placeholder with an empty value must substitute, not
-				// delete its line: the location is what the golden snapshot needs.
-				location := tmpl.GetSnapshotConfig().GetStorageLocation()
-				if want := "gs://test-bucket/"; !strings.HasPrefix(location, want) {
-					t.Errorf("template %s snapshot location = %q, want it to start with %q", name, location, want)
+				atespace := tmpl.GetMetadata().GetAtespace()
+				if want := "-render"; !strings.HasSuffix(atespace, want) {
+					t.Errorf("template %s atespace = %q, want it to end with %q", name, atespace, want)
 				}
-				if strings.Contains(location, "-microvm") {
-					t.Errorf("template %s snapshot location = %q, want no micro-VM suffix", name, location)
+				if strings.Contains(atespace, "-microvm") {
+					t.Errorf("template %s atespace = %q, want no micro-VM suffix", name, atespace)
 				}
 				// The selector is what ties the template to its fixture's pool.
 				for k, v := range tmpl.GetWorkerSelector().GetMatchLabels() {
@@ -170,7 +168,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 }
 
 // TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the
-// templates carry limits and the snapshots land under their own prefix.
+// templates carry limits and land in their own atespace.
 func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 	for _, fixture := range substrateFixtures {
@@ -193,9 +191,9 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if tmpl.GetResources().GetLimits().GetMemoryBytes() == 0 {
 					t.Errorf("template %s declares no memory limit", name)
 				}
-				location := tmpl.GetSnapshotConfig().GetStorageLocation()
-				if want := "-microvm-render/"; !strings.HasSuffix(location, want) {
-					t.Errorf("template %s snapshot location = %q, want it to end with %q", name, location, want)
+				atespace := tmpl.GetMetadata().GetAtespace()
+				if want := "-microvm-render"; !strings.HasSuffix(atespace, want) {
+					t.Errorf("template %s atespace = %q, want it to end with %q", name, atespace, want)
 				}
 			}
 		})
@@ -231,7 +229,7 @@ func TestSubstrateCounterFixture(t *testing.T) {
 			Name:          "counter",
 			PoolNamespace: "ate-demo-counter",
 			PoolName:      "counter",
-			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter",
+			DeployWith:    "go run ./cmd/ate-setup --kind deploy demo counter",
 		}
 		if got != want {
 			t.Errorf("SubstrateCounterFixture() = %+v, want %+v", got, want)
@@ -245,7 +243,7 @@ func TestSubstrateCounterFixture(t *testing.T) {
 			Name:          "counter-microvm",
 			PoolNamespace: "ate-demo-counter-microvm",
 			PoolName:      "counter-microvm",
-			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-microvm",
+			DeployWith:    "go run ./cmd/ate-setup --kind deploy demo counter-microvm",
 		}
 		if got != want {
 			t.Errorf("SubstrateCounterFixture() = %+v, want %+v", got, want)

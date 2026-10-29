@@ -25,7 +25,7 @@ import grpc
 import requests
 from common import ateapi_pb2
 from common import ateapi_pb2_grpc
-from common.ateapi_channel import ateapi_channel
+from common.ateapi_channel import CA_FILE, CRED_BUNDLE, ateapi_channel
 from common.atespace import ATESPACE, ensure_atespace
 from common.grpc_tracing import traced_grpc
 
@@ -50,7 +50,7 @@ tracer = get_tracer(__name__)
 
 # Atenet router fronts all actor traffic. The actor routing header selects
 # the actor whose current worker pod the router resolves.
-ROUTER_URL = "http://atenet-router.ate-system.svc.cluster.local"
+ROUTER_URL = "https://atenet-router.ate-system.svc"
 
 
 class CounterUser(User):
@@ -97,8 +97,10 @@ class CounterUser(User):
         except Exception as e:
             logger.error(f"Failed to create actor {self.actor_name}: {e}")
 
-        # One HTTP session per user, talking to the router.
+        # One HTTP session per user, talking to the router over mTLS.
         self.http_session = requests.Session()
+        self.http_session.verify = CA_FILE
+        self.http_session.cert = CRED_BUNDLE
         self.run_url = f"{ROUTER_URL}/"
 
     def on_stop(self) -> None:

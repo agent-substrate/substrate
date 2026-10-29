@@ -1,3 +1,7 @@
+---
+docsite: false
+---
+
 # Code Style Guide
 
 Go conventions for this repository — written for humans and coding agents

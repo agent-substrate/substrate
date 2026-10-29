@@ -263,6 +263,7 @@ const (
 // +kubebuilder:printcolumn:name="SandboxConfig",type=string,JSONPath=`.status.sandboxClasses[*].configRef.name`
 // +kubebuilder:printcolumn:name="Resolved",type=string,JSONPath=`.status.sandboxClasses[*].conditions[?(@.type=="Resolved")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="metadata.name must be at most 63 characters, because worker pods use it as a label value"
 type WorkerPool struct {
 	metav1.TypeMeta `json:",inline"`
 

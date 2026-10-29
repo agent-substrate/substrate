@@ -17,8 +17,9 @@
 (see API_SERVER_KNOBS) and a `postgres:` section (see POSTGRES_DEFAULTS).
 
 A test type validates the block with validate() and calls shape() from its
-pre_test. Isolation from the load is the install's: --cordon-control-plane
-in ateArgs keeps ate-api-server and Postgres on their own tainted pools.
+pre_test. Isolation from the load is the install's:
+--cordon-system-infra-components in ateArgs keeps ate-api-server and Postgres
+on their own tainted pools.
 """
 
 import json

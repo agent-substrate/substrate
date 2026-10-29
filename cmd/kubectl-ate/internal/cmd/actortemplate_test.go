@@ -175,25 +175,28 @@ func TestParseActorTemplate_DemoManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading demo manifest: %v", err)
 			}
-			// The install scripts substitute the bucket and drop the unused
-			// optional placeholder lines before applying.
-			rendered := strings.ReplaceAll(string(data), "${BUCKET_NAME}", "ate-snapshots")
+			// ate-setup drops the unused optional placeholder lines before
+			// applying.
 			var kept []string
-			for _, line := range strings.Split(rendered, "\n") {
+			for _, line := range strings.Split(string(data), "\n") {
 				if strings.Contains(line, "${") {
 					continue
 				}
 				kept = append(kept, line)
 			}
-			rendered = strings.Join(kept, "\n")
+			rendered := strings.Join(kept, "\n")
 
 			got := parseTemplate(t, rendered)
 			if got.GetMetadata().GetAtespace() != test.atespace || got.GetMetadata().GetName() != test.name {
 				t.Errorf("metadata = %s/%s, want %s/%s",
 					got.GetMetadata().GetAtespace(), got.GetMetadata().GetName(), test.atespace, test.name)
 			}
-			if len(got.GetContainers()) == 0 || got.GetSnapshotConfig().GetStorageLocation() == "" {
-				t.Errorf("missing required fields: %v", got)
+			if len(got.GetContainers()) == 0 {
+				t.Errorf("manifest has no containers: %v", got)
+			}
+			// The API rejects storageLocation without its preview gate.
+			if location := got.GetSnapshotConfig().GetStorageLocation(); location != "" {
+				t.Errorf("manifest sets storageLocation %q, want none", location)
 			}
 		})
 	}

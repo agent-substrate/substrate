@@ -194,7 +194,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 		return nil
 	}
 	tagRef := resources.TagRefFromTag(tag)
-	snapshotURI := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED)
+	snapshotURI := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED)
 	if snapshotURI == "" {
 		markSkipped(ctx, "the tag records no snapshot")
 		return nil
@@ -293,7 +293,7 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 	defer func() { err = done(err) }()
 
 	snap := latestSnapshot(actor.GetStatus(), func(*ateapi.Snapshot) bool { return true })
-	if snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 		markSkipped(ctx, "the actor's latest snapshot is already durable")
 		return actor, nil
 	}
@@ -387,7 +387,7 @@ func promoteSnapshotError(ctx context.Context, err error) error {
 // sourceSnapshotForTag returns the actor's latest COMPLETED external snapshot,
 // the one a tag copies.
 func sourceSnapshotForTag(actorRef resources.ActorRef, actor *ateapi.Actor) (*ateapi.Snapshot, error) {
-	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	if snap == nil {
 		return nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
@@ -465,7 +465,7 @@ func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *atea
 		"",
 		dst.Name(),
 		dst.String(),
-		ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 	)
 	pending.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
@@ -523,7 +523,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag,
 		"",
 		dst.Name(),
 		dst.String(),
-		ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+		ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 	)
 	finalSnapshot.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {

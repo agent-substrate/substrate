@@ -30,7 +30,7 @@
 # an actor with a 512Mi memory limit and capped near 125 MB with a 256Mi
 # limit, plus a rootfs tar of up to 22 MB.
 #
-# min_actor_memory is 256Mi: the script fits a 128 MiB micro-VM guest.
+# min_actor_memory is 256Mi.
 # Run it like personal-assistant, with a fractional
 # --agentsession-think-scale.
 name: personal-assistant-light

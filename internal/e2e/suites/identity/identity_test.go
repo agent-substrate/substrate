@@ -71,8 +71,7 @@ type whoamiResponse struct {
 // (e.g. a timestamped-directory symlink swap) would break every held fd of
 // any actor that ever touched a system-info file.
 func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
@@ -83,7 +82,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// contents.
 	wantTrust := e2e.AddEgressCA(t, ctx, clients, "ate-e2e-probe-trust")
 	var tmpl *ateapi.ActorTemplate
-	probeNamespace, tmpl = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity", e2e.WithTrustBundle())
+	probeNamespace, tmpl = e2e.DeployProbe(t, "identity", e2e.WithTrustBundle())
 	// The golden actor's id, for the not-golden assertion below. Coupled to
 	// the reconciler's naming: the golden actor is named after the template's
 	// UID (cmd/ateapi template reconciler), so a naming change there weakens

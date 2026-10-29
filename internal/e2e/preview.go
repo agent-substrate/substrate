@@ -73,6 +73,22 @@ func previewDialOptions() []grpc.DialOption {
 	return nil
 }
 
+// SnapshotLocation returns gs://$BUCKET_NAME/prefix/ when the install under
+// test enabled the PerTemplateSnapshotLocation gate, and "" otherwise. Tests
+// set it as a template's storageLocation, which the API rejects without the
+// gate, so the gate-off lane stores snapshots under --snapshot-location.
+func SnapshotLocation(t testing.TB, prefix string) string {
+	t.Helper()
+	if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		return ""
+	}
+	env, err := CheckEnv("BUCKET_NAME")
+	if err != nil {
+		t.Fatalf("CheckEnv: %v", err)
+	}
+	return "gs://" + env["BUCKET_NAME"] + "/" + prefix + "/"
+}
+
 // RequirePreview skips t unless the install under test enabled gate. Tests of
 // a preview feature call it first, so a run without the gate skips them.
 func RequirePreview(t testing.TB, gate preview.Gate) {

@@ -277,10 +277,9 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	ctx := context.Background()
 	if _, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
-			Containers:     []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+			Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
+			Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			Resources:  &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 		},
 	}); err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
@@ -401,8 +400,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	defer tc.cleanup()
 	template, err := tc.client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:       &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
-			SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://snapshots"},
+			Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
 			Containers: []*ateapi.Container{{
 				Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
@@ -448,7 +446,7 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	// Simulates a tag creation that failed while writing the snapshot to
 	// external storage.
 	pending := seedTag(t, tc, "pending-source", "pending", func(tag *ateapi.Tag) {
-		tag.Status.Snapshot.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+		tag.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
 	})
 	tagRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "pending"}
@@ -466,7 +464,7 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	if _, err := tc.persistence.UpdateTag(ctx,
 		resources.TagRefFromTag(pending), store.PreconditionFrom(pending),
 		func(toUpdate *ateapi.Tag) error {
-			toUpdate.Status.Snapshot.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			toUpdate.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 			return nil
 		}); err != nil {
 		t.Fatalf("finalizing the tag: %v", err)
@@ -486,6 +484,60 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	if got := durableSnapshotURI(clone.GetStatus()); got != snapshotURI {
 		t.Errorf("clone external snapshot = %q, want the tag's %q", got, snapshotURI)
 	}
+}
+
+// TestCreateActor_FromDeletingTag verifies an Actor cannot be created from a tag
+// with delete_time set, since DeleteTag may already have collected its snapshot.
+func TestCreateActor_FromDeletingTag(t *testing.T) {
+	ns := namespaceForTest("ns-deleting-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplate(t, tc, ns)
+
+	tag := seedTag(t, tc, "deleting-source", "deleting", func(tag *ateapi.Tag) {
+		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
+	})
+	if _, err := tc.persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); err != nil {
+		t.Fatalf("MarkTagForDeletion: %v", err)
+	}
+
+	_, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     resources.TagRefFromTag(tag).ToObjectRef(),
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "source Tag "+testAtespace+"/deleting is being deleted")
+}
+
+// TestCreateActor_FromDeletingGoldenTag verifies an Actor created without a source
+// tag is refused while its template's golden tag has delete_time set.
+func TestCreateActor_FromDeletingGoldenTag(t *testing.T) {
+	ns := namespaceForTest("ns-deleting-golden-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	tmpl := createTemplate(t, tc, ns)
+
+	golden := seedTag(t, tc, "golden-source", "golden", func(tag *ateapi.Tag) {
+		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
+	})
+	goldenRef := resources.TagRefFromTag(golden)
+	if _, err := tc.persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(toUpdate *ateapi.ActorTemplate) error {
+		toUpdate.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{GoldenTag: goldenRef.ToObjectRef()}}
+		return nil
+	}); err != nil {
+		t.Fatalf("recording the golden tag: %v", err)
+	}
+	if _, err := tc.persistence.MarkTagForDeletion(ctx, goldenRef, store.DeletePreconditions{}, nil); err != nil {
+		t.Fatalf("MarkTagForDeletion: %v", err)
+	}
+
+	_, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "source Tag "+testAtespace+"/golden is being deleted")
 }
 
 // TestGetActor_Found tests that an existing actor can be retrieved.
@@ -840,9 +892,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 							Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 							VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
-						Volumes:        tmpl.volumes,
-						SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-						Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
+						Volumes:   tmpl.volumes,
+						Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
 					},
 				}); err != nil {
 					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
@@ -1058,6 +1109,34 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
 }
 
+func TestUpdateActor_FailsIfDeleting(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor-deleting")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.persistence.CreateActor(ctx, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	marked, err := tc.persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
+	if err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
+	}
+
+	_, err = tc.client.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
+		Metadata:       marked.GetMetadata(),
+		ActorTemplate:  marked.GetActorTemplate(),
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is being deleted")
+}
+
 func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
 	ns := namespaceForTest("ns-span-update")
 	tc := setupTest(t, ns)
@@ -1197,7 +1276,7 @@ func TestDeleteActor_MissingSnapshotBucket(t *testing.T) {
 					if state != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
 						// A failed upload leaves only the in-progress URI, even
 						// when a prior deletion already marked the actor DELETING.
-						snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+						snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 					}
 					toUpdate.Status.Snapshots = []*ateapi.Snapshot{snap}
 					return nil
@@ -3339,7 +3418,6 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				Name:     "tmpl1",
 			},
 			SnapshotConfig: &ateapi.SnapshotConfig{
-				StorageLocation:   testStorageLocation,
 				PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			Containers: []*ateapi.Container{{
@@ -4212,8 +4290,8 @@ func TestResumeActor_SyncSuspendKeepsLocalCopy(t *testing.T) {
 			if snap == nil || snap.GetLocality() != "node1" {
 				t.Fatalf("sync snapshot = %v, want its local copy on node1 recorded", snap)
 			}
-			if got := snap.GetDurableSnapshot().GetStatus(); got != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-				t.Fatalf("sync snapshot durable status = %v, want COMPLETED", got)
+			if got := snap.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
+				t.Fatalf("sync snapshot durable state = %v, want COMPLETED", got)
 			}
 			if got := snap.GetActorTemplateUid(); got != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("snapshot template UID = %q, want original template %q", got, tmpl.GetMetadata().GetUid())
@@ -4712,8 +4790,8 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	if paused == nil {
 		t.Fatalf("pause left no local snapshot: %v", pauseResp.GetActor().GetStatus())
 	}
-	if got := paused.GetDurableSnapshot().GetStatus(); got != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
-		t.Fatalf("pause checkpoint durable status = %v, want PENDING (not yet uploaded)", got)
+	if got := paused.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING {
+		t.Fatalf("pause checkpoint durable state = %v, want PENDING (not yet uploaded)", got)
 	}
 	durable := durableSnapshot(pauseResp.GetActor().GetStatus())
 	if durable == nil || durable.GetGeneration() >= paused.GetGeneration() {
@@ -4750,7 +4828,7 @@ func TestResumeActor_PausedPendingSnapshotRefusesRuntimeFallback(t *testing.T) {
 	}
 	stillLocal := localSnapshot(after.GetStatus())
 	if stillLocal == nil || stillLocal.GetUuid() != paused.GetUuid() ||
-		stillLocal.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+		stillLocal.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING {
 		t.Errorf("pause checkpoint after the refused resume = %v, want %v still PENDING", stillLocal, paused)
 	}
 	if got := durableSnapshotURI(after.GetStatus()); got != durable.GetDurableSnapshot().GetObject().GetSnapshotUri() {
@@ -5795,7 +5873,7 @@ func TestSuspendActor_SnapshotConflictPreservesState(t *testing.T) {
 					pending = snap
 				}
 			}
-			if pending.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING || pending.GetLocality() != "" {
+			if pending.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING || pending.GetLocality() != "" {
 				t.Fatalf("in-progress snapshot = %v, want PENDING without locality", pending)
 			}
 			assertSnapshotCollected(t, tc, pending.GetDurableSnapshot().GetObject().GetSnapshotUri())

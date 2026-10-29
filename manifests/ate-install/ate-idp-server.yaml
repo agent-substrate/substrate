@@ -63,6 +63,8 @@ spec:
             scheme: HTTPS
           periodSeconds: 10
         securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
           capabilities:
             drop:
             - ALL
