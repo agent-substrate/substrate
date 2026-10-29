@@ -84,6 +84,11 @@ var (
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
 
+var (
+	asyncCheckpointTeardown = pflag.Bool("async-checkpoint-teardown", false, "Finish a checkpoint's teardown in the background, after the reply. The actor keeps its lock and its capacity until the teardown ends.")
+	asyncTeardownWorkers    = pflag.Int("async-teardown-workers", 4, "How many background checkpoint teardowns run at once, with --async-checkpoint-teardown")
+)
+
 // minUsageSampleInterval is the floor of --usage-sample-interval, the same as
 // atelet's poll interval floor. It keeps statsSweepBudget inside one interval.
 const minUsageSampleInterval = 50 * time.Second
@@ -121,6 +126,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateworker-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *asyncTeardownWorkers < 1 {
+		return fmt.Errorf("--async-teardown-workers must be at least 1, got %d", *asyncTeardownWorkers)
 	}
 	if *usageSampleInterval < minUsageSampleInterval {
 		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
@@ -238,7 +246,11 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID)
+	teardownWorkers := 0
+	if *asyncCheckpointTeardown {
+		teardownWorkers = *asyncTeardownWorkers
+	}
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, teardownWorkers, tunnel, actorLogger, bootID)
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -395,7 +407,7 @@ type AteWorkerService struct {
 	// usage writes the usage records. Nil writes none.
 	usage *workerstats.UsageEmitter
 
-	// Guards actors, draining, and mutable hostedActor fields.
+	// Guards actors, draining, teardownBooked, and mutable hostedActor fields.
 	actorsMu sync.RWMutex
 	// guestSlots bounds the guest reads of the sweeps and initial readings
 	// together to statsFanOut at once.
@@ -405,12 +417,21 @@ type AteWorkerService struct {
 	// Actors undergoing network cleanup still count against capacity.
 	draining  int
 	maxActors int
+
+	// teardownSlots bounds the checkpoint teardowns running in the background.
+	// Nil runs each teardown before CheckpointWorkload returns.
+	teardownSlots chan struct{}
+	// teardownBooked is the memory booking of actors whose background
+	// teardown has not ended. Their killed VMs may still hold it.
+	teardownBooked int64
 }
 
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
-// NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
+// NewService creates a new AteWorkerService. teardownWorkers is how many
+// checkpoint teardowns run in the background at once; 0 runs them before the
+// reply.
+func NewService(podUID, chBinary string, guestDebug bool, maxActors, teardownWorkers int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:          actorlock.New(),
 		inFlight:       actorlock.NewInFlight(),
@@ -426,6 +447,9 @@ func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel 
 		bootID:         bootID,
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
+	if teardownWorkers > 0 {
+		s.teardownSlots = make(chan struct{}, teardownWorkers)
+	}
 	return s
 }
 

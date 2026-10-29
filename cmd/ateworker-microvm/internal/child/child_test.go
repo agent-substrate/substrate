@@ -55,3 +55,28 @@ func TestStop(t *testing.T) {
 	// a second Stop on a reaped process must not block or signal anything
 	p.Stop()
 }
+
+func TestKillDoesNotWaitForTheReap(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// No reaper, so Done never closes and a Kill that waited would hang.
+	p := &Process{cmd: cmd, done: make(chan struct{})}
+	killed := make(chan struct{})
+	go func() {
+		p.Kill()
+		close(killed)
+	}()
+	select {
+	case <-killed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Kill waited for the process to be reaped")
+	}
+	if !p.Stopped() {
+		t.Error("Stopped() = false after Kill")
+	}
+	if state, _ := cmd.Process.Wait(); state.String() != "signal: killed" {
+		t.Errorf("process exit = %q, want %q", state, "signal: killed")
+	}
+}

@@ -65,14 +65,19 @@ func (p *Process) Done() <-chan struct{} {
 // Stop kills the process and waits until it is reaped. After Stop, Stopped
 // reports true, so a watcher on Done can tell this exit from a crash.
 func (p *Process) Stop() {
+	p.Kill()
+	<-p.done
+}
+
+// Kill is Stop without the wait: Done closes once the process is reaped.
+func (p *Process) Kill() {
 	p.stopping.Store(true)
 	// Signals go through a pidfd, so a process already reaped is not
 	// mistaken for a reused pid.
 	_ = p.cmd.Process.Kill()
-	<-p.done
 }
 
-// Stopped reports whether Stop was called.
+// Stopped reports whether Stop or Kill was called.
 func (p *Process) Stopped() bool {
 	return p.stopping.Load()
 }

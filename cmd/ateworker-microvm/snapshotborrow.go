@@ -17,11 +17,12 @@
 package main
 
 // unbookedMemory is the worker's reported memory capacity less what its
-// actors booked, overhead included.
+// actors booked, overhead included, and what background teardowns still hold.
 func (s *AteWorkerService) unbookedMemory(podLimit int64) int64 {
 	unbooked := podLimit - memoryReservedBytes
 	s.actorsMu.RLock()
 	defer s.actorsMu.RUnlock()
+	unbooked -= s.teardownBooked
 	for _, h := range s.actors {
 		unbooked -= actorBooking(h.memoryBytes)
 	}

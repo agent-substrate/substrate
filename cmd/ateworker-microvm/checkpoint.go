@@ -79,7 +79,14 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
-	defer s.locks.Unlock(req.GetActorUid())
+	// A background teardown takes over the lock and the inFlight token below.
+	var startTeardown func(unlock, releaseInFlight func())
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			s.locks.Unlock(req.GetActorUid())
+		}
+	}()
 
 	if s.lookupActor(req.GetActorUid()) == nil {
 		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), s.bootID, req.GetFidelity()); resp != nil {
@@ -90,7 +97,12 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
-	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
+	releaseInFlight := s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)
+	defer func() {
+		if !handedOff {
+			releaseInFlight()
+		}
+	}()
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed, and the failing step its elapsed time.
@@ -244,7 +256,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
 	// already on disk for atelet to ship.
 	tTeardown := time.Now()
-	if err := s.terminateWorkload(ctx, attribution, actorDirs); err != nil {
+	if s.teardownSlots != nil {
+		startTeardown = s.beginAsyncTeardown(ctx, actorUID, actorDirs)
+	} else if err := s.terminateWorkload(ctx, attribution, actorDirs); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
 			slog.String("actor", attribution.Ref.String()),
 			slog.String("actorUID", actorUID),
@@ -265,6 +279,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
 	if err := ateworker.RecordCheckpoint(checkpointDir, s.bootID, scope, resp); err != nil {
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
+	// Last, so no early return follows the hand-off.
+	if startTeardown != nil {
+		handedOff = true
+		startTeardown(func() { s.locks.Unlock(actorUID) }, releaseInFlight)
 	}
 	return resp, nil
 }
