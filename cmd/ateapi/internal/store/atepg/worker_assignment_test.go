@@ -102,3 +102,38 @@ func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
 		t.Errorf("saveWorker() on a deleted Worker = %v, want ErrVersionConflict", err)
 	}
 }
+
+func TestReleaseActorFromWorker_NoOpRollsBack(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	created, err := s.CreateWorker(ctx, &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: "noop-release-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	workerName := created.GetMetadata().GetName()
+
+	// getWorkerForUpdate takes a FOR UPDATE row lock and stamps its XID into
+	// the worker row's xmax. When the actor is not bound to the worker,
+	// writeAndAppendEvent rolls that transaction back.
+	released, err := s.ReleaseActorFromWorker(ctx, workerName, "uid-1")
+	if err != nil {
+		t.Fatalf("ReleaseActorFromWorker failed: %v", err)
+	}
+	if released != nil {
+		t.Fatalf("ReleaseActorFromWorker = %v, want nil", released)
+	}
+
+	var xid, status string
+	if err := s.pool.QueryRow(ctx, `SELECT xmax::text, pg_xact_status(xmax::text::xid8) FROM workers WHERE name = $1`, workerName).Scan(&xid, &status); err != nil {
+		t.Fatalf("reading worker row xmax status failed: %v", err)
+	}
+	if status != "aborted" {
+		t.Errorf("pg_xact_status(%s) = %q, want %q", xid, status, "aborted")
+	}
+}

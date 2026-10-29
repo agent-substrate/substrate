@@ -68,14 +68,12 @@ func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 	return store.WorkerEvent{Type: eventType, Worker: worker}, nil
 }
 
-// writeAndAppendEvent runs fn inside a transaction, then--only if fn reports a
-// worker worth publishing--appends the event to the worker_outbox table in the
-// same transaction, so watchers see it if and only if the transaction commits.
-// fn returns the worker the event carries, or nil to skip the event; it is
-// returned from writeAndAppendEvent so callers get back what actually
-// committed. The worker comes from fn rather than from the caller because an
-// update only knows what it wrote once its mutation has run inside the
-// transaction.
+// writeAndAppendEvent runs fn inside a transaction, appends the event to the
+// worker_outbox table in the same transaction, and commits so watchers see the
+// event if and only if the write commits. If fn returns a nil worker, the
+// transaction rolls back without appending an event. The worker comes from fn
+// rather than from the caller because an update only knows what it wrote once
+// its mutation has run inside the transaction.
 func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.WorkerEventType, fn func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error)) (*ateapi.Worker, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -87,24 +85,21 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 	if err != nil {
 		return nil, err
 	}
-
-	var payload []byte
-	if worker != nil {
-		payload, err = marshalWorkerEvent(eventType, worker)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling worker event: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO worker_outbox (payload) VALUES ($1)`, payload); err != nil {
-			return nil, fmt.Errorf("appending worker outbox: %w", err)
-		}
+	if worker == nil {
+		return nil, nil
 	}
 
+	payload, err := marshalWorkerEvent(eventType, worker)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling worker event: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO worker_outbox (payload) VALUES ($1)`, payload); err != nil {
+		return nil, fmt.Errorf("appending worker outbox: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing transaction: %w", err)
 	}
-	if payload != nil {
-		p.publishLocally(ctx, payload)
-	}
+	p.publishLocally(ctx, payload)
 	return worker, nil
 }
 

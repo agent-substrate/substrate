@@ -173,9 +173,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 }
 
 func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error) {
-	var released *ateapi.Worker
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
-		released = nil
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
 			return nil, err
@@ -204,13 +202,8 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		if err := saveWorker(ctx, tx, worker); err != nil {
 			return nil, err
 		}
-		released = worker
 		return worker, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return released, nil
 }
 
 // getAssignmentRow reads the assignment for actorUID and names the worker
