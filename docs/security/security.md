@@ -8,7 +8,7 @@ description: >
 
 # Substrate Security
 
-Substrate delivers zero trust for agents. Every agent has an identity, but no credentials, no open network, and no way out of the sandbox.
+Substrate delivers zero trust for agents. Every agent has an identity, but no credentials, no open network, and no escape from the sandbox.
 
 Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls operate within Substrate's cold-start and resume latency budget. This document defines the high-level security principles. For identity and credential configuration, see the [Authentication Guide](../guides/authentication.md). Detailed threat scenarios and mitigating invariants are documented [in the threat model](threat-model.md).
 
