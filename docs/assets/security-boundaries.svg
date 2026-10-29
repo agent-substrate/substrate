@@ -5,6 +5,7 @@
     <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e65100"/></marker>
     <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#212121"/></marker>
     <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a8a8a8"/></marker>
+    <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#00838f"/></marker>
     <marker id="arrowT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#00838f"/></marker>
   </defs>
   <rect width="1120" height="560" fill="#ffffff"/>
@@ -67,7 +68,7 @@
   <text x="1015.0" y="478.5" font-size="15" font-weight="bold" text-anchor="middle" fill="#212121">Snapshot storage</text>
   <!-- Flow numbers and boundary tags -->
   <text x="272" y="108" font-size="12" font-weight="bold" text-anchor="middle" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">manage actors</text>
-  <text x="790" y="462" font-size="12" font-weight="bold" text-anchor="middle" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">per-actor credentials</text>
+  <text x="790" y="462" font-size="12" font-weight="bold" text-anchor="middle" fill="#212121" stroke="#ffffff" stroke-width="4" paint-order="stroke">per-actor credentials (GCS)</text>
   <circle cx="428" cy="232" r="11" fill="#c62828"/>
   <text x="428" y="236.5" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#ffffff">1</text>
   <circle cx="428" cy="326" r="11" fill="#c62828"/>

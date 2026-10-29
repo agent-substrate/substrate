@@ -24,7 +24,7 @@ This threat model catalogs the security threats inherent to high-density statefu
 
 # Architecture of Substrate
 
-Two diagrams show the same components in the same positions. The first prepares an actor template. The second creates an actor from it and serves a request.
+Two diagrams coordinate component layouts so components both diagrams show are in the same positions. The first prepares an actor template. The second creates an actor from it and serves a request.
 
 ## Creating an actor template
 
@@ -34,16 +34,16 @@ Creating a template runs a golden actor once, snapshots it, and keeps that snaps
 
 | Step | What happens | What's checked |
 | :---- | :---- | :---- |
-| T1 | The application creates an actor template. `ate-api-server` stores it, and a background reconciler starts building its golden snapshot. | OpenFGA allows the caller to create templates in the atespace. Container images must be pinned by digest. |
-| T2 | The reconciler creates a golden actor in the template's atespace, picks a worker, and tells that node's `atelet` to run it. | `atelet` accepts only `ate-api-server`'s identity. |
-| T3 | `atelet` pulls the container image into the node's layer cache, which all actors on the node share. MicroVM nodes also fetch the guest kernel and image from the asset bucket. | The image is fetched by digest, with the node's registry credentials. |
-| T4 | `atelet` tells `ateworker` to start the sandbox. | The call stays on the node. |
-| T5 | `atunnel` asks `atelet` for the actor's certificate. | `atelet` accepts only workers on its own node. |
-| T6 | `atelet` asks `ate-api-server` to mint it. | It is minted only for the worker the actor is assigned to. |
-| T7 | Once the workload is ready and warmed up, the reconciler suspends the golden actor, and `atelet` checkpoints its memory and disk. | Only `ate-api-server` can order a suspend. |
-| T8 | `atelet` trades a JWT for this actor for storage credentials. | The credentials cover only this actor's snapshot location. |
-| T9 | `atelet` uploads the golden snapshot. | The sandbox never touches storage. |
-| T10 | The reconciler tags the snapshot, deletes the golden actor, and marks the template ready. | The worker's actor directories are wiped before it is reused. |
+| P1 | The application creates an actor template. `ate-api-server` stores it, and a background reconciler starts building its golden snapshot. | OpenFGA allows the caller to create templates in the atespace. Container images must be pinned by digest. |
+| P2 | The reconciler creates a golden actor in the template's atespace, picks a worker, and tells that node's `atelet` to run it. | `atelet` accepts only `ate-api-server`'s identity. |
+| P3 | `atelet` pulls the container image into the node's layer cache, which all actors on the node share. Nodes also fetch sandbox assets (such as runsc or guest kernel and rootfs) specified by the SandboxConfig. | The image is fetched by digest, using credentials from the node's credential provider config when available. |
+| P4 | `atelet` tells `ateworker` to start the sandbox. | The call stays on the node. |
+| P5 | `atunnel` asks `atelet` for the actor's certificate. | `atelet` accepts only workers on its own node. |
+| P6 | `atelet` asks `ate-api-server` to mint it. | It is minted only for the worker the actor is assigned to. |
+| P7 | Once the workload is ready and warmed up, the reconciler suspends the golden actor, and `atelet` checkpoints its memory and disk. | Only `ate-api-server` can order a suspend. |
+| P8 | `atelet` trades a JWT for this actor for storage credentials. | On GCS, the credentials cover only this actor's snapshot location (S3 uses node credentials). |
+| P9 | `atelet` uploads the golden snapshot. | The sandbox never touches storage. |
+| P10 | The reconciler tags the snapshot, deletes the golden actor, and marks the template ready. | The golden actor's local directories are removed when it is deleted. |
 
 The golden actor has no network egress unless the template sets a golden egress policy.
 
@@ -56,11 +56,11 @@ In **A**, an application creates an actor. In **B**, it sends the actor a reques
 | Step | What happens | What's checked |
 | :---- | :---- | :---- |
 | A1 | The application asks `ate-api-server` to create an actor from a template. | The caller is authenticated, and OpenFGA allows it to create actors in the atespace and use the template. |
-| A2 | `ate-api-server` saves the actor as suspended. It points at the template's golden snapshot without copying it, and nothing runs until its first request. | Only `ate-api-server` can reach the database, with a client certificate. |
+| A2 | `ate-api-server` saves the actor as suspended. It points at the template's golden snapshot without copying it, and nothing runs until its first request. | For bundled PostgreSQL, NetworkPolicy restricts access to `ate-api-server` with a client certificate; managed databases use provider network and IAM/TLS controls. |
 | B1 | The application sends a request for `<atespace>/<actor>` to `atenet-router`. | The caller's mTLS identity must be on the router's allowlist. |
-| B2 | The router asks `ate-api-server` to resume the actor and return its worker. | Only the router's identity can resume actors this way. |
+| B2 | The router asks `ate-api-server` to resume the actor and return its worker. | OpenFGA allows the router (or an authorized user/editor) to resume actors in the atespace. |
 | B3 | `ate-api-server` tells the `atelet` on the chosen node to restore the actor. | `atelet` accepts only `ate-api-server`'s identity. |
-| B4 | `atelet` downloads the actor's snapshot. | The storage credentials are scoped to this one actor. |
+| B4 | `atelet` downloads the actor's snapshot. | On GCS, credentials grant read/write access to this actor's snapshot prefix and read-only access to the template's source tag prefix (S3 uses node credentials). |
 | B5 | `atelet` tells `ateworker` to start a sandbox from the snapshot. If the node hasn't cached the image, `atelet` pulls it first. | The call stays on the node. |
 | B6 | The router forwards the request to `atunnel` in the actor's Worker Pod. | `atunnel` accepts only the router's identity, and NetworkPolicy admits only the router. |
 | B7 | `atunnel` delivers the request to the actor's sandbox. | It goes only to the actor named in the request. |
@@ -85,9 +85,9 @@ In **A**, an application creates an actor. In **B**, it sends the actor a reques
 * **Filesystem Support:** Container rootfs overlays and working directories captured in snapshots and wiped on actor teardown.
 * **k8s-credential-provider:** Gives `atenet-egress` the Kubernetes Secrets that egress rules reference.
 * **Kubernetes:** The underlying cluster infrastructure providing node isolation and network policies.
-* **Object Storage:** A snapshot bucket, partitioned by atespace and actor and reached only with per-actor credentials, and a separate read-only bucket of microVM assets.
-* **podcertcontroller:** Kubernetes controller that issues short-lived mTLS certificates for pod identity, service DNS, and database access.
-* **Substrate Database:** PostgreSQL (or a managed PostgreSQL service). Only `ate-api-server` can reach it.
+* **Object Storage:** A snapshot bucket, partitioned by atespace and actor (scoped per actor on GCS), and storage locations for sandbox assets specified by the SandboxConfig.
+* **podcertcontroller:** Substrate's Kubernetes controller, in the `podcertificate-controller-system` namespace, that issues short-lived mTLS certificates for pod identity, service DNS, and database access.
+* **Substrate Database:** PostgreSQL (or a managed PostgreSQL service). Bundled installs restrict network access to `ate-api-server` over TLS with a client certificate; managed installs use provider network and IAM controls.
 * **Worker Pod:** Pre-provisioned Pod that hosts many actors, each in its own sandbox.
 
 # Threats and Mitigations
