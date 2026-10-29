@@ -162,6 +162,57 @@ func (r *Runner) BuildTagged(ctx context.Context, tag string, labels []string, i
 	return refs, nil
 }
 
+// Retry sets how BuildEach retries an image that fails to build or push.
+// ghcr.io can briefly deny pushes to a package it has just created.
+type Retry struct {
+	// Attempts is the most builds per image, including the first.
+	Attempts int
+	// Backoff is the wait before the first retry. It doubles each retry.
+	Backoff time.Duration
+}
+
+// wait sleeps for d, or until ctx is done. Tests replace it.
+var wait = func(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// BuildEach runs BuildTagged once per import path, retrying each failure per
+// retry. It returns the refs in importPaths order.
+func (r *Runner) BuildEach(ctx context.Context, tag string, labels []string, retry Retry, importPaths ...string) ([]string, error) {
+	refs := make([]string, 0, len(importPaths))
+	for _, path := range importPaths {
+		ref, err := r.buildRetrying(ctx, tag, labels, retry, path)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+func (r *Runner) buildRetrying(ctx context.Context, tag string, labels []string, retry Retry, path string) (string, error) {
+	backoff := retry.Backoff
+	for attempt := 1; ; attempt++ {
+		refs, err := r.BuildTagged(ctx, tag, labels, path)
+		if err == nil {
+			return refs[0], nil
+		}
+		if attempt >= retry.Attempts {
+			return "", err
+		}
+		log.Warnf("%s: %v; retrying in %s (attempt %d of %d)", path, err, backoff, attempt+1, retry.Attempts)
+		if err := wait(ctx, backoff); err != nil {
+			return "", err
+		}
+		backoff *= 2
+	}
+}
+
 // ResolveBytes resolves an in-memory manifest, such as kustomize output.
 func (r *Runner) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	return r.Resolve(ctx, "-", manifest)
