@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -139,34 +141,36 @@ func (h *Handler) actorJWT(ctx context.Context, ref resources.ActorRef, dest egr
 // providerCredential fetches the secret uri names from the credential
 // provider. Every error it returns is already a client-facing denial.
 func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, uri string) ([]byte, error) {
-	if h.provider == nil {
+	if len(h.providers) == 0 {
 		slog.ErrorContext(ctx, "egress denied: policy requires credential injection but no credential provider is configured",
 			slog.Any("actor", ref), slog.String("host", dest.Hostname))
 		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
 	}
 
-	// Confirm the credential URI names the provider this gateway serves
-	// before dialing: the configured connection fronts one provider, so a URI
-	// naming another cannot be resolved here and must fail closed rather than
-	// be sent to the wrong provider.
-	if h.providerName != "" {
+	// When h.providers has exactly one entry and its key is "", that provider
+	// serves every URI. Otherwise look up the provider named by the URI's host,
+	// and fail closed if none matches.
+	var provider credprovider.CredentialProviderClient
+	if p, ok := h.providers[""]; ok && len(h.providers) == 1 {
+		provider = p
+	} else {
 		name, err := providerNameFromURI(uri)
 		if err != nil {
 			slog.ErrorContext(ctx, "egress denied: policy names an unparseable credential URI",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", uri), slog.Any("err", err))
 			return nil, extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
 		}
-		if name != h.providerName {
+		if provider = h.providers[name]; provider == nil {
 			slog.ErrorContext(ctx, "egress denied: credential URI names a provider this gateway does not serve",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", uri),
-				slog.String("provider", name), slog.String("serves", h.providerName))
+				slog.String("provider", name), slog.Any("serves", slices.Sorted(maps.Keys(h.providers))))
 			return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
 		}
 	}
 
 	// Atunnel connected to us with a worker-for-actor SPIFFE ID; translate it
 	// to a pure actor SPIFFE ID for plugins to make decisions on.
-	resp, err := h.provider.FetchSecret(ctx, &credprovider.FetchSecretRequest{
+	resp, err := provider.FetchSecret(ctx, &credprovider.FetchSecretRequest{
 		Uri:           uri,
 		ActorSpiffeId: resources.ActorSPIFFEID(ref).String(),
 	})

@@ -48,7 +48,7 @@ NIGHTHAWK_SERVICE = "nighthawk_service"
 ADAPTIVE_CLIENT = "nighthawk_adaptive_load_client"
 SERVICE_ADDRESS = "127.0.0.1:8443"
 
-DEFAULT_ROUTER_URL = "http://atenet-router.ate-system.svc.cluster.local:80"
+DEFAULT_ROUTER_URL = "https://atenet-router.ate-system.svc:443"
 DESC_PATH = os.environ.get("NIGHTHAWK_DESC", "/app/nighthawk.desc")
 
 

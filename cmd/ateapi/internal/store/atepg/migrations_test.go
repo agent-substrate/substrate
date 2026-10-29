@@ -41,7 +41,7 @@ var transactionControl = regexp.MustCompile(`(?im)^\s*(BEGIN|START\s+TRANSACTION
 //
 // Why this is needed:
 //  1. Substrate manages the OpenFGA PostgreSQL tables directly in
-//     migrations/000002_openfga.sql (rather than running OpenFGA's embedded Goose
+//     migrations/000001_initial.sql (rather than running OpenFGA's embedded Goose
 //     migrations) so that OpenFGA tables and Substrate resource tables live in
 //     the same PostgreSQL schema and migration ledger.
 //  2. cmd/ateapi/internal/authz/datastore.go adapts upstream postgres.Datastore
@@ -75,7 +75,7 @@ func TestOpenFGAMigrationVersionGuard(t *testing.T) {
 	}
 	if maxVersion != pinnedOpenFGAMigrationVersion {
 		t.Fatalf(
-			"OpenFGA embedded PostgreSQL migrations are at version %d, but 000002_openfga.sql and cmd/ateapi/internal/authz/datastore.go are pinned to version %d; port any new OpenFGA DDL to cmd/ateapi/internal/store/atepg/migrations/ and verify TransactionalDatastore before updating pinnedOpenFGAMigrationVersion",
+			"OpenFGA embedded PostgreSQL migrations are at version %d, but 000001_initial.sql and cmd/ateapi/internal/authz/datastore.go are pinned to version %d; port any new OpenFGA DDL to cmd/ateapi/internal/store/atepg/migrations/ and verify TransactionalDatastore before updating pinnedOpenFGAMigrationVersion",
 			maxVersion, pinnedOpenFGAMigrationVersion,
 		)
 	}

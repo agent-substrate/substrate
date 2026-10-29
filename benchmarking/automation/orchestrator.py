@@ -126,7 +126,7 @@ def apply_target_cluster(
     target_cluster: str, target_cluster_dir: str = TARGET_CLUSTER_DIR
 ) -> None:
     """Copy target_cluster_dir/<name>.sh into the cloned
-    substrate repo as .ate-dev-env.sh (so install-ate.sh / deploy.sh source
+    substrate repo as .ate-dev-env.sh (so ate-setup / deploy.sh source
     it) and merge it into this process's env (so the orchestrator's own
     gcloud / docker / kubectl calls see the same values). Resets os.environ
     to the startup baseline first so vars defined by a previous target
@@ -390,7 +390,7 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
 
 
 def substrate_args(test: dict[str, Any]) -> list[str]:
-    """Return the hack/install-ate.sh deploy ate-system arguments for a
+    """Return the ate-setup deploy ate-system arguments for a
     tests.yaml entry: its ateArgs, then the fake data plane flag its isolate
     block asks for. The teardown needs no matching flag: delete ate-system
     removes the fake data plane whether or not it was installed."""
@@ -413,11 +413,11 @@ def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
         "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
         "ATE_INGRESS_ALLOWED_SPIFFE_IDS": BENCHMARK_RUNNER_PRINCIPAL,
     }
-    run(["hack/install-ate.sh", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
+    run(["go", "run", "./cmd/ate-setup", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
 
 
 def teardown_substrate() -> None:
-    run_no_check(["hack/install-ate.sh", "delete", "ate-system"])
+    run_no_check(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
 
 
 def install_microvm_deps() -> None:
@@ -451,8 +451,8 @@ def deploy_workloads(
         "--sandbox-class",
         sandbox_class,
     ]
-    # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm
-    # minimum); RAM-consuming suites set actorMemory in tests.yaml.
+    # Empty keeps the default in workloads/deploy.sh (256Mi); RAM-consuming
+    # suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
     # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler
@@ -595,7 +595,7 @@ def main() -> None:
     # Per-target-cluster caches: re-running setup for the same target
     # cluster is wasted work, so we track what was last set up and only
     # redo it when the target cluster name changes (substrate images get
-    # rebuilt by install-ate.sh each test anyway via ko apply). Runner
+    # rebuilt by ate-setup each test anyway via ko). Runner
     # images are built lazily per test type, so a locust-only tests.yaml
     # never builds the nighthawk image and vice versa.
     last_target = None

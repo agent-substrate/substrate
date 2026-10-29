@@ -1,0 +1,5 @@
+{
+  "version": "v0.3.0",
+  "previous": "v0.2.0",
+  "added": ["docs/new.md", "docs/new-deprecated.md"]
+}

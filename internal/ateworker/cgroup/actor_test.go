@@ -46,11 +46,19 @@ func TestOpenActorLeafReusesAndResetsALeftover(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "uid-a"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "uid-a", "cpu.max"), nil, 0o644); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"cpu.max", "memory.high"} {
+		if err := os.WriteFile(filepath.Join(root, "uid-a", f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, milli := range []int64{500, 0} {
-		leaf, err := openActorLeaf(root, "uid-a", milli)
+	for _, tc := range []struct {
+		milli, high int64
+		wantHigh    string
+	}{
+		{milli: 500, high: 1 << 30, wantHigh: "1073741824"},
+		{milli: 0, high: 0, wantHigh: "max"},
+	} {
+		leaf, err := openActorLeaf(root, "uid-a", tc.milli, tc.high)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,12 +69,17 @@ func TestOpenActorLeafReusesAndResetsALeftover(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := cpuMax(milli); string(got) != want {
+		if want := cpuMax(tc.milli); string(got) != want {
 			t.Errorf("cpu.max = %q, want %q", got, want)
 		}
+		if got, _ := os.ReadFile(filepath.Join(root, "uid-a", "memory.high")); string(got) != tc.wantHigh {
+			t.Errorf("memory.high = %q, want %q", got, tc.wantHigh)
+		}
 	}
-	if err := os.Remove(filepath.Join(root, "uid-a", "cpu.max")); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"cpu.max", "memory.high"} {
+		if err := os.Remove(filepath.Join(root, "uid-a", f)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for range 2 {
 		if err := removeActorLeaf(root, "uid-a"); err != nil {
@@ -78,7 +91,7 @@ func TestOpenActorLeafReusesAndResetsALeftover(t *testing.T) {
 // Without the cpu controller there is no cpu.max; the leaf still isolates.
 func TestOpenActorLeafWithoutTheCPUController(t *testing.T) {
 	root := t.TempDir()
-	leaf, err := openActorLeaf(root, "uid-a", 500)
+	leaf, err := openActorLeaf(root, "uid-a", 500, 0)
 	if err != nil {
 		t.Fatalf("openActorLeaf without cpu.max: %v", err)
 	}
@@ -90,18 +103,103 @@ func TestOpenActorLeafWithoutTheCPUController(t *testing.T) {
 
 func TestActorLeafRejectsUnsafeNames(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "a/b", "../escape", workerLeaf, "nul\x00"} {
-		if _, err := openActorLeaf(t.TempDir(), name, 0); err == nil {
+		if _, err := openActorLeaf(t.TempDir(), name, 0, 0); err == nil {
 			t.Errorf("openActorLeaf(%q) succeeded, want an error", name)
 		}
 	}
 }
 
-func TestNilActorLeaf(t *testing.T) {
-	var leaf *ActorLeaf
-	if leaf.SysProcAttr() != nil {
-		t.Error("a nil leaf set SysProcAttr")
+func TestLimitLeafGrowth(t *testing.T) {
+	root := t.TempDir()
+	// A regular directory stands in for cgroupfs, which provides both files itself.
+	dir := filepath.Join(root, "uid-a")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if err := leaf.Close(); err != nil {
-		t.Error(err)
+	if err := os.WriteFile(filepath.Join(dir, "memory.current"), []byte("1000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.high"), []byte("max\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release, err := limitLeafGrowth(root, "uid-a", 24, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "1024" {
+		t.Errorf("memory.high = %q, want %q", got, "1024")
+	}
+	if _, err := limitLeafGrowth(root, "uid-a", 24, 4096, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "4096" {
+		t.Errorf("memory.high with a ceiling = %q, want %q", got, "4096")
+	}
+	if _, err := limitLeafGrowth(root, "uid-a", 24, 4096, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "4196" {
+		t.Errorf("memory.high with a borrow = %q, want %q", got, "4196")
+	}
+	release()
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "max" {
+		t.Errorf("memory.high after release = %q, want %q", got, "max")
+	}
+	// Releasing after the leaf is gone is a no-op.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
+
+// A leaf that already has a memory.high gets it back on release.
+func TestLimitLeafGrowthRestoresMemoryHigh(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "uid-a")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]string{"memory.current": "1000\n", "memory.high": "2048\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(v), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release, err := limitLeafGrowth(root, "uid-a", 24, 4096, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if got, _ := os.ReadFile(filepath.Join(dir, "memory.high")); string(got) != "2048" {
+		t.Errorf("memory.high after release = %q, want %q", got, "2048")
+	}
+}
+
+// Without the memory controller there is no memory.high to write.
+func TestLimitLeafGrowthWithoutTheMemoryController(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "uid-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := limitLeafGrowth(root, "uid-a", 24, 0, 0); err == nil {
+		t.Error("limitLeafGrowth succeeded without memory.current")
+	}
+}
+
+func TestPodMemory(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{"memory.max": "4294967296\n", "memory.current": "1073741824\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limit, current, err := podMemory(root)
+	if err != nil || limit != 4<<30 || current != 1<<30 {
+		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, current, err, int64(4<<30), int64(1<<30))
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("max\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if limit, _, err := podMemory(root); err != nil || limit != 0 {
+		t.Errorf("podMemory() without a limit = %d, %v, want 0", limit, err)
 	}
 }

@@ -65,7 +65,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 			},
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 			},
 		},
 	})
@@ -112,7 +112,7 @@ func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, act
 			State:                  ateapi.ActorState_ACTOR_STATE_RUNNING,
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 			},
 		},
 	})
@@ -130,7 +130,7 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING) == nil {
+	if findLatestDurableSnapshot(got.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING) == nil {
 		t.Error(`in-progress durable snapshot URI = "", want preserved`)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {

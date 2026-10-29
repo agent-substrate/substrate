@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -83,7 +84,8 @@ func (f testRoundTripper) RoundTrip(request *http.Request) (*http.Response, erro
 }
 
 // Connect has to complete a TLS handshake, presenting the client certificate,
-// before it sends the CONNECT.
+// before it sends the CONNECT. The httptest server requires and verifies the
+// client certificate over TLS, so a plaintext dial fails the handshake.
 func TestRouterClientConnectTLS(t *testing.T) {
 	clientCert := selfSignedClientCert(t, "spiffe://cluster.local/ns/test/sa/client")
 	clientCAs := x509.NewCertPool()
@@ -122,18 +124,14 @@ func TestRouterClientConnectTLS(t *testing.T) {
 		ServerName:   "example.com",
 	}
 	tlsConfig.RootCAs.AddCert(server.Certificate())
-	client := &RouterClient{tlsConfig: tlsConfig}
 
-	conn, err := client.connect(context.Background(), server.Listener.Addr().String(), resources.ActorRef{Atespace: "demo", Name: "fetcher"}, 9090, http.Header{
+	conn, err := ateclient.ConnectActorWithHeaders(context.Background(), server.Listener.Addr().String(), tlsConfig, resources.ActorRef{Atespace: "demo", Name: "fetcher"}, 9090, http.Header{
 		atenet.TargetActorHeader: []string{"demo/fetcher"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	defer conn.Close()
-	if _, ok := conn.Conn.(*tls.Conn); !ok {
-		t.Errorf("connect returned a %T tunnel, want one over TLS", conn.Conn)
-	}
 	got, err := io.ReadAll(conn)
 	if err != nil {
 		t.Fatalf("reading the tunnel: %v", err)

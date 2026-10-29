@@ -35,7 +35,7 @@ import (
 )
 
 // The ateapi store database and the Kubernetes identity that connects to it.
-// These match the atepg store (hack/install-ate.sh) and the ate-api-server
+// These match the atepg store (ate-setup) and the ate-api-server
 // deployment.
 const (
 	cloudSQLDatabase   = "atepg"
@@ -196,7 +196,7 @@ func cloudSQLInstanceSpec(cfg *Config) (*sqladmin.DatabaseInstance, error) {
 	settings := &sqladmin.Settings{
 		Tier: cfg.CloudSQLTier,
 		// This tool provisions private-services-access instances exclusively.
-		// The ATE_API_POSTGRES_CLOUDSQL_IP_TYPE setting in install-ate.sh exists
+		// The ATE_API_POSTGRES_CLOUDSQL_IP_TYPE setting in ate-setup exists
 		// only to connect to public/PSC instances provisioned out-of-band.
 		IpConfiguration: &sqladmin.IpConfiguration{
 			Ipv4Enabled:     false,
@@ -396,7 +396,7 @@ Cloud SQL is provisioned. Two steps remain:
 
      export ATE_API_POSTGRES_CLOUDSQL_INSTANCE=%s:%s:%s
      export ATE_API_POSTGRES_CLOUDSQL_GSA=%s
-     ./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
+     go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}'
 
 See tools/setup-gcp/cloud-sql.md for details and verification steps.
 `, cfg.ProjectID, cfg.Region, cfg.CloudSQLInstance, gsa)

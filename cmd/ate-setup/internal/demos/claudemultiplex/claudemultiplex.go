@@ -53,7 +53,7 @@ func init() {
 	d := &demo{}
 	d.sub = demos.Substrate{
 		DemoName:           "demo-claude-code-multiplex",
-		Short:              "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO)",
+		Short:              "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, KO_DOCKER_REPO)",
 		WorkerPoolManifest: poolManifest,
 		Deployments:        []steps.TemplateRef{{Atespace: atespace, Name: "claude-workerpool"}},
 		Templates:          agentTemplates(),
@@ -84,9 +84,6 @@ func (d *demo) Settings() []config.Setting { return nil }
 func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
 	if e.Cfg.AnthropicAPIKey == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY must be set")
-	}
-	if e.Cfg.BucketName == "" {
-		return fmt.Errorf("BUCKET_NAME must be set")
 	}
 	if e.Cfg.KODockerRepo == "" {
 		return fmt.Errorf("KO_DOCKER_REPO must be set (see hack/ate-dev-env.sh.example)")

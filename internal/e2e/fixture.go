@@ -32,11 +32,10 @@ import (
 // ActorTemplate fixture templates carry: the substrate counterpart of
 // fixtureSubstitutions, whose block fragments are CRD-shaped and now serve
 // only the pool manifests. The inline placeholders match the pool manifests'
-// values so one (bucket, name) pair renders both halves of a fixture.
+// values so one name renders both halves of a fixture.
 // trustBundles names the trust bundles projected into one trust-bundle.pem.
-func substrateTemplateSubstitutions(bucket, name string, trustBundles []string) (inline, blocks map[string]string) {
+func substrateTemplateSubstitutions(name string, trustBundles []string) (inline, blocks map[string]string) {
 	inline = map[string]string{
-		"${BUCKET_NAME}":    bucket,
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
@@ -134,7 +133,7 @@ type SubstrateFixtureManifests struct {
 //
 // Returns the fixture's atespace (the same string that names the k8s
 // namespace holding the pool) and the created templates.
-func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundles []string, opts ...FixtureOption) (string, []*ateapi.ActorTemplate) {
+func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, name string, trustBundles []string, opts ...FixtureOption) (string, []*ateapi.ActorTemplate) {
 	t.Helper()
 
 	var cfg fixtureConfig
@@ -145,7 +144,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 	// The pool manifest also carries the namespace. Its cleanup is registered
 	// first so it runs last (t.Cleanup is LIFO), after the templates that
 	// select the pool's workers are gone.
-	inline, blocks := fixtureSubstitutions(bucket, name)
+	inline, blocks := fixtureSubstitutions(name)
 	poolManifest := renderManifest(t, manifests.Pool, inline, blocks)
 	koApply(t, poolManifest)
 	t.Cleanup(func() {
@@ -156,7 +155,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 		RunCmd(t, "kubectl", delArgs...)
 	})
 
-	tmplInline, tmplBlocks := substrateTemplateSubstitutions(bucket, name, trustBundles)
+	tmplInline, tmplBlocks := substrateTemplateSubstitutions(name, trustBundles)
 	maps.Copy(tmplInline, cfg.templateValues)
 	rendered := koResolve(t, renderManifest(t, manifests.Template, tmplInline, tmplBlocks))
 	templates := decodeSubstrateTemplates(t, rendered)
@@ -165,6 +164,13 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 	for _, tmpl := range templates {
 		if got := tmpl.GetMetadata().GetAtespace(); got != atespace {
 			t.Fatalf("fixture %s declares templates in different atespaces (%q and %q)", manifests.Template, atespace, got)
+		}
+		location := SnapshotLocation(t, "ate-e2e-"+tmpl.GetMetadata().GetName()+tmplInline["${FIXTURE_SUFFIX}"])
+		if location != "" {
+			if tmpl.SnapshotConfig == nil {
+				tmpl.SnapshotConfig = &ateapi.SnapshotConfig{}
+			}
+			tmpl.SnapshotConfig.StorageLocation = location
 		}
 	}
 

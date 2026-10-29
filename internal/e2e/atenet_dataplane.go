@@ -39,9 +39,6 @@ type AtenetDataplane interface {
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
-	// AuthenticatesIngressClients reports whether the ingress dataplane
-	// requires an allowlisted client certificate.
-	AuthenticatesIngressClients() bool
 }
 
 // EgressConnectStats holds the delta of egress CONNECT connections and requests
@@ -80,13 +77,15 @@ func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
-	return (status == http.StatusForbidden && strings.Contains(body, "egress denied")) ||
+	return isEgressPolicyDenied(status, body)
+}
+
+func isEgressPolicyDenied(status int, body string) bool {
+	return (status == http.StatusForbidden && (strings.Contains(body, "egress denied") || strings.Contains(body, "actor egress policy denied"))) ||
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
 }
 
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
-
-func (envoyAtenetDataplane) AuthenticatesIngressClients() bool { return true }
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
@@ -141,15 +140,13 @@ func (agentGatewayAtenetDataplane) NewParkingObserver(context.Context) (ParkingO
 }
 
 func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body string) bool {
-	return status == http.StatusGatewayTimeout && strings.Contains(body, "request timed out")
+	return status == http.StatusServiceUnavailable && strings.Contains(body, "no worker has room for the actor")
 }
 
-func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
-
-func (agentGatewayAtenetDataplane) AuthenticatesIngressClients() bool { return false }
+func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
-	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
+	return isEgressPolicyDenied(status, body)
 }
 
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {

@@ -32,8 +32,8 @@
 #                  deploy that runs before this test. The orchestrator
 #                  redeploys workloads between tests, so each test can
 #                  pick its own scale.
-#   actorMemory    Optional (default "256Mi", the smallest size microvm
-#                  admits). Memory limit on the benchmark ActorTemplates;
+#   actorMemory    Optional (default "256Mi"). Memory limit on the
+#                  benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
 #   actorCPU       Optional (default "1"). CPU limit on the benchmark
 #                  ActorTemplates. The scheduler books it against each
@@ -43,8 +43,8 @@
 #                  or limits). Memory request and limit on each WorkerPool
 #                  pod. Use it to fix how many workers share a node: one per
 #                  node needs more than half the node's allocatable memory.
-#                  The limit is also the memory the worker reports as its
-#                  actor capacity.
+#                  The limit, less what the worker keeps for itself, is
+#                  the memory it reports as its actor capacity.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
@@ -52,14 +52,14 @@
 #                  large workerCount fleets whose image pulls or scheduling
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
-#                  `hack/install-ate.sh deploy ate-system` when this
+#                  `ate-setup deploy ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
 #                  The deploy requires --credential-provider; set it here
 #                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
 #                  (no shell quoting: the args are passed without a shell),
 #                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
 #   isolate        Optional. Isolate mode: installs substrate with the fake
-#                  data plane (hack/install-ate.sh deploy ate-system --fake-data-plane), which
+#                  data plane (ate-setup deploy ate-system --fake-data-plane), which
 #                  serves the WorkerPool without worker pods: fake-atelet
 #                  takes atelet's place on every atelet node and answers each
 #                  lifecycle call after a delay, and fake-workersync honors
@@ -128,8 +128,9 @@
 #   args           Optional. Postgres settings as name=value (e.g.
 #                  commit_delay=100), applied in the restart stats makes.
 # The block leaves placement to the install. A capacity run sets
-# --cordon-control-plane in ateArgs, which keeps ate-api-server and Postgres
-# off the nodes that run the load, on the tainted pools that flag expects.
+# --cordon-system-infra-components in ateArgs, which keeps ate-api-server and
+# Postgres off the nodes that run the load, on the tainted pools that flag
+# expects.
 #
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
@@ -174,9 +175,9 @@ tests:
   # GluttonUser fills the actor's RAM to --mem-target through the
   # glutton WriteRAM API before the first suspend, so every suspend/resume
   # cycle is measured against a realistically-sized actor. actorMemory =
-  # target + headroom (glutton itself, the guest, and on microvm the 128Mi
-  # VMM reserve). The golden snapshot and cold boot stay small: the working
-  # set exists from the first fill onward. --mem-churn re-randomizes 64Mi
+  # target + headroom (glutton itself and the guest). The golden snapshot
+  # and cold boot stay small: the working set exists from the first fill
+  # onward. --mem-churn re-randomizes 64Mi
   # each cycle through an advancing window (WriteRAM rotate), so repeated
   # suspends snapshot changing memory rather than a static set and the dirty
   # window moves across the array. --mem-read walks the whole working set
@@ -722,7 +723,7 @@ tests:
     isolate:
       delay: 150ms
     ateArgs:
-      - "--cordon-control-plane"
+      - "--cordon-system-infra-components"
     controlPlane:
       apiServer:
         replicas: 1
@@ -750,7 +751,7 @@ tests:
     isolate:
       delay: 150ms
     ateArgs:
-      - "--cordon-control-plane"
+      - "--cordon-system-infra-components"
     controlPlane:
       apiServer:
         replicas: 1
