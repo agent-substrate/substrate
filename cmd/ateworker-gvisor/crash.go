@@ -72,7 +72,7 @@ func (s *AteWorkerService) watchSandbox(ctx context.Context, hosted *hostedActor
 		ours := s.lookupActor(attribution.UID) == hosted && !hosted.stopping.Load()
 		if ours {
 			slog.WarnContext(ctx, "Sandbox died", slog.String("actorUID", attribution.UID), slog.Int("pid", pid))
-			if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, runscPath, actorDirs, containers); err != nil {
+			if err := s.terminateWorkload(ctx, attribution, runscPath, actorDirs, containers); err != nil {
 				slog.WarnContext(ctx, "Failed to tear down the dead sandbox", slog.String("actorUID", attribution.UID), slog.Any("err", err))
 			}
 			// not measured first: the sandbox, and its cgroup, are gone

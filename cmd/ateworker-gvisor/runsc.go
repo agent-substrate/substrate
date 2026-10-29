@@ -28,8 +28,11 @@ import (
 	"strings"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
+
+	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sizing"
 )
 
@@ -46,6 +49,27 @@ type runsc struct {
 	containers []*ateworkerpb.Container
 	// flags holds the configured flags; must not be nil.
 	flags *flagStore
+	// attribution and actorLogger label helper output with the actor's
+	// identity, without retaining an RPC context. Both must be set on any
+	// runsc whose helpers run; a nil actorLogger panics in the forwarding
+	// goroutine.
+	attribution resources.ActorAttribution
+	actorLogger *actorlog.ActorLogger
+}
+
+// runHelper labels each invocation with the sandbox diagnostics name.
+// A caller-provided stdout destination stays separate; stderr goes to the pipe.
+func (r *runsc) runHelper(cmd *exec.Cmd) error {
+	pw, err := r.actorLogger.StartJSONLogPipe(r.attribution, ocispec.SandboxID)
+	if err != nil {
+		return fmt.Errorf("while starting runsc log pipe: %w", err)
+	}
+	defer pw.Close()
+	if cmd.Stdout == nil {
+		cmd.Stdout = pw
+	}
+	cmd.Stderr = pw
+	return cmd.Run()
 }
 
 // buildArgs constructs the runsc argument vector for command, appending
@@ -180,9 +204,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
 
 	cmd := exec.CommandContext(ctx, r.path, r.checkpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
+	err := r.runHelper(cmd)
 	if err != nil {
 		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
 	}
@@ -205,9 +227,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
 
 	cmd := exec.CommandContext(ctx, r.path, r.fsCheckpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
+	err := r.runHelper(cmd)
 	if err != nil {
 		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
 	}
@@ -249,9 +269,7 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 		r.path,
 		r.buildArgs("delete", containerName)...,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
+	err := r.runHelper(cmd)
 	if err != nil {
 		return fmt.Errorf("while running `runsc delete`: %w", err)
 	}
@@ -264,9 +282,10 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 		r.path,
 		r.buildArgs("state", containerName)...,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	// Only the exit code is used; the multi-line status JSON would flood the
+	// diagnostics view, so discard stdout before the pipe can claim it.
+	cmd.Stdout = io.Discard
+	if err := r.runHelper(cmd); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
@@ -281,8 +300,7 @@ func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
 	)
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := r.runHelper(cmd); err != nil {
 		return nil, fmt.Errorf("while running `runsc list`: %w", err)
 	}
 	return strings.Fields(out.String()), nil
@@ -294,9 +312,7 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
 
 	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("kill", "", containerName, signal)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := r.runHelper(cmd); err != nil {
 		return fmt.Errorf("while running `runsc kill`: %w", err)
 	}
 	return nil
@@ -306,9 +322,7 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 // waited-on condition completes.
 func (r *runsc) runWait(ctx context.Context, containerName string, extraArgs ...string) error {
 	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName, extraArgs...)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := r.runHelper(cmd); err != nil {
 		return fmt.Errorf("while running `runsc wait`: %w", err)
 	}
 	return nil
