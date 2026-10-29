@@ -42,6 +42,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/sizing"
@@ -72,6 +73,10 @@ type runningActor struct {
 	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
 	// virtiofsd exits once its only client is gone.
 	stopping atomic.Bool
+	// memoryBytes is the actor's memory limit, what it books on the worker.
+	memoryBytes int64
+	// memory kills the actor's cgroup once it is stuck at its memory.high.
+	memory cgroup.MemoryGuard
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -135,30 +140,20 @@ const (
 // boots it as PID 1 (init=), so it is the guest's entire userspace.
 const kataAgentPath = "/usr/bin/kata-agent"
 
-// vmmMemReserveMiB is the DEFAULT guest RAM held back from the pod's memory limit
-// for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the same
-// pod cgroup as the guest RAM; without a margin the pod OOMs. Overridable per
-// deployment via --vmm-mem-reserve-mib (see AteWorkerService.memReserveMiB).
-//
-// Measured on the worker pod's cgroup with one 256MiB-guest actor: the VMM stack's own
-// cost is ~12MiB (anon 8.1 + kernel 3.7; the rest of cloud-hypervisor's RSS is the guest
-// memfd, already accounted as guest RAM), and two virtiofsds are ~3MiB each. What needs
-// the rest of the margin is transient: a pause/resume cycle took the cgroup from 94MiB
-// to 153MiB, and the 57MiB difference was page cache from writing and reading the
-// snapshot.
-//
-// That transient scales with snapshot size, so no fixed reserve is right for every guest
-// size — this one is halved rather than cut to the ~32MiB the steady state would justify.
-// The fix that would let it drop that far is keeping snapshot I/O out of the page cache
-// (posix_fadvise(DONTNEED) after the checkpoint write and the restore read); until then
-// the margin absorbs it, and a deployment running large guests can raise the flag.
-const vmmMemReserveMiB = 128
+// actorOverhead is what an actor costs outside its guest, in the same worker
+// pod cgroup, which the control plane books with every actor: cloud-hypervisor
+// and virtiofsd, and the host page tables for guest RAM, KVM's EPT and the
+// memfd's xarray.
+var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
 
-// minGuestMemMiB is the floor for guest RAM (the declared limit minus the VMM
-// reserve); a declared memory limit that leaves less is rejected at cold boot with a
-// clear error instead of being silently honored (see resolveGuestMemMiB), since too
-// little RAM makes the guest hang on boot rather than fail cleanly. Keep the admission
-// floor on ActorTemplate.spec.resources in sync (it is this value + vmmMemReserveMiB).
+// memoryReservedBytes is how much of the worker pod's memory limit we keep from
+// actors: the worker process itself, and the page cache of snapshot writes in
+// flight.
+const memoryReservedBytes = 32<<20 + snapshotWriteSlots*snapshotWriteHeadroom
+
+// minGuestMemMiB is the floor for guest RAM, and so for an actor's memory limit. A
+// smaller one is rejected at cold boot (see resolveGuestMemMiB), since too little
+// RAM makes the guest hang on boot rather than fail cleanly.
 //
 // Measured against the counter demo on a guest booting the agent as PID 1: 32MiB never
 // reaches Ready, 64MiB boots but idles with 1.1MB free (it only survives because page
@@ -283,7 +278,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -294,6 +289,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			_ = s.unhostActor(cleanupCtx, attribution.UID)
 		}
 	}()
+	if err := s.borrow.Wait(ctx); err != nil {
+		return nil, err
+	}
 
 	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
@@ -374,7 +372,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false, p.size.MemoryBytes); err != nil {
 			return err
 		}
 	}
@@ -455,8 +453,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	kparams := s.kernelParams()
 
 	// Size the VM to the actor's declared limits (see internal/sizing), which the
-	// API requires. vCPUs round up; VM RAM reserves a fixed margin for the VMM +
-	// virtiofsd, which share the pod cgroup with the guest RAM. NB: a MEMORY
+	// API requires. vCPUs round up; VM RAM is the memory limit, and what the actor
+	// costs outside the guest is booked as its overhead (see actorOverhead). NB: a MEMORY
 	// snapshot restore reuses the size baked into the snapshot
 	// (restoreMemoryFidelity), so resizing an existing actor takes effect on its
 	// next cold boot.
@@ -464,7 +462,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	if vcpus == 0 {
 		return errors.New("actor has no cpu limit to size the micro-VM's vCPUs")
 	}
-	memMiB, err := resolveGuestMemMiB(p.size.MemoryBytes, s.memReserveMiB)
+	memMiB, err := resolveGuestMemMiB(p.size.MemoryBytes)
 	if err != nil {
 		return err
 	}
@@ -481,10 +479,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// template spec is immutable, so an actor's limits were validated when its
 	// golden was built.
 	if err := checkResourceEnvelope(ctrs, guestEnvelope{
-		memMiB:        memMiB,
-		vcpus:         vcpus,
-		declaredBytes: p.size.MemoryBytes,
-		reserveMiB:    s.memReserveMiB,
+		memMiB: memMiB,
+		vcpus:  vcpus,
 	}); err != nil {
 		return err
 	}
@@ -499,7 +495,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
 	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
 	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU)
+	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU, s.leafMemoryHigh(p.size.MemoryBytes))
 	if err != nil {
 		return err
 	}
@@ -614,10 +610,11 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
+	ra.memory.Resume(uint64(s.leafMemoryHigh(p.size.MemoryBytes)))
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
@@ -747,19 +744,16 @@ func (s *AteWorkerService) kernelParams() string {
 }
 
 // resolveGuestMemMiB returns the micro-VM guest RAM (MiB) for an actor's declared
-// memory limit: the declared memory minus the VMM reserve. It errors if the limit is
-// unset or leaves less than a bootable minimum (see vmmMemReserveMiB, minGuestMemMiB,
-// and internal/sizing).
-func resolveGuestMemMiB(declaredBytes int64, reserveMiB int) (int, error) {
+// memory limit, which is all of it (see actorOverhead). It errors if the limit
+// is unset or below minGuestMemMiB.
+func resolveGuestMemMiB(declaredBytes int64) (int, error) {
 	if declaredBytes <= 0 {
 		return 0, errors.New("actor has no memory limit to size the micro-VM's RAM")
 	}
-	declaredMiB := int(declaredBytes / (1024 * 1024))
-	m := declaredMiB - reserveMiB
+	m := int(declaredBytes / (1024 * 1024))
 	if m < minGuestMemMiB {
-		return 0, fmt.Errorf("actor memory limit %dMiB is too small for a micro-VM: "+
-			"the %dMiB VMM reserve leaves %dMiB, below the %dMiB guest minimum",
-			declaredMiB, reserveMiB, m, minGuestMemMiB)
+		return 0, fmt.Errorf("actor memory limit %dMiB is too small for a microVM, the minimum is %dMiB",
+			m, minGuestMemMiB)
 	}
 	return m, nil
 }

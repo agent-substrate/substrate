@@ -72,7 +72,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 
 	// Flags for client authentication and authorization in ingress mode.
 	fs.StringVar(&cfg.IngressAuth.ClientCAFile, "ingress-client-ca-file", "", "PEM bundle of the CAs allowed to sign ingress client certificates. Envoy reads the file, so it must be mounted at this path in the Envoy container as well. Required for the Envoy ingress dataplane")
-	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Required for the Envoy ingress dataplane")
+	fs.StringSliceVar(&cfg.IngressAuth.AllowedSPIFFEIDs, "ingress-allowed-spiffe-ids", nil, "SPIFFE IDs (exact match) allowed to connect to actors through the ingress dataplane. Comma-separated or repeated. Without any, the Envoy ingress dataplane serves no traffic")
 
 	fs.StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80) and needs --upstream-connect=false.")
 	fs.StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
@@ -83,14 +83,14 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
 
 	// Egress credential injection (MITM leg). Only the egress gateway sets these,
-	// and only when injection is enabled: with an empty
+	// and only when injection is enabled: with no
 	// --credential-provider-address, a request matching an EgressPolicy rule
 	// that requires injection is denied.
-	fs.StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
-	fs.StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection, and requests matching a rule that requires it are denied")
+	fs.StringArrayVar(&cfg.CredentialProvider.Names, "credential-provider-name", nil, "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io). Repeat once per --credential-provider-address, in the same order; a policy credential URI naming no configured provider is refused. A single empty name disables the check (dev only)")
+	fs.StringArrayVar(&cfg.CredentialProvider.Addresses, "credential-provider-address", nil, "gRPC dial target of a credential provider the MITM-leg injector resolves secrets through. Repeat once per provider. None (the default) disables egress credential injection, and requests matching a rule that requires it are denied")
 	fs.StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
 	fs.StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
-	fs.StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate; required unless --credential-provider-insecure is set")
+	fs.StringArrayVar(&cfg.CredentialProvider.ServerNames, "credential-provider-server-name", nil, "SAN/SNI expected on a credential provider's serving certificate. Repeat once per --credential-provider-address, in the same order; required unless --credential-provider-insecure is set")
 	fs.BoolVar(&cfg.CredentialProvider.Insecure, "credential-provider-insecure", false, "Dial the credential provider WITHOUT TLS. Development only: secrets cross the network in the clear. Without this, a missing --credential-provider-ca-file or --credential-provider-client-cert fails startup instead of silently downgrading")
 
 	// Envoy learns the collector over xDS rather than from its own environment,
@@ -100,7 +100,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.OtlpCollectorAddress, "otlp-collector-address", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), "OTLP gRPC collector that Envoy reports tracing spans to, as host:port or an http:// URL. Defaults to $OTEL_EXPORTER_OTLP_ENDPOINT. An address Envoy cannot use — an https endpoint, for one, since the tracer cluster is plaintext — disables Envoy-side tracing with a warning rather than failing startup. Pass empty to disable Envoy tracing while leaving the router's own spans enabled")
 	fs.StringVar(&cfg.Auth.AteapiCAFile, "ateapi-ca-file", "", "PEM file with CAs trusted to verify the ateapi server cert. Required.")
 	fs.StringVar(&cfg.Auth.AteapiClientCertPath, "ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
-	fs.StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", installdefaults.APIServiceHost(installdefaults.NamespaceFromPodEnv()), "DNS name expected on the ateapi server cert, the API Service in the pod's namespace.")
+	fs.StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	fs.DurationVar(&cfg.RouteTimeout, "route-timeout", defaultRouteTimeout, "Envoy's end-to-end timeout on the workload route, bounding one request from the ingress listener to the actor's response. The default is generous because an agent relaying a model completion holds the request open for the whole generation; lower it to cap how long one turn may hold a request. This does not cover the resume that may precede the request; see --parked-request-budget. Shutdown is sized separately and does not follow this flag; to let long turns survive a drain, raise --drain-timeout and terminationGracePeriodSeconds too")
 	fs.DurationVar(&cfg.ParkedRequest.Budget, "parked-request-budget", ingress.DefaultParkedRequestBudget, "Maximum time a resume flight keeps a request parked (held and retried) waiting for its actor to become routable; concurrent requests for the same actor share one flight and its budget")
 	fs.IntVar(&cfg.ParkedRequest.Max, "parked-request-max", ingress.DefaultParkedRequestMax, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")

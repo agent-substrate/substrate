@@ -52,6 +52,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atelet"
+	"go.ate.dev/substrate/internal/bootid"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
@@ -85,10 +86,14 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/lru"
 )
@@ -230,7 +235,10 @@ func main() {
 		}()
 	}
 
-	startDevicePlugins(ctx)
+	// stopped on SIGTERM because the replacement pod starts while we drain and
+	// registers the same socket, and kubelet can wedge the resource when two
+	// registrations for one socket overlap
+	startDevicePlugins(shutdownCtx)
 
 	workerDialer := newWorkerDialer(256)
 
@@ -249,9 +257,30 @@ func main() {
 		imageCredsKeychain = kc
 	}
 
+	// Validated before the caches are cleared, so a directory the flags
+	// reject is never emptied.
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
+	if err := validateSandboxAssetCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
+	}
+	if err := validateSnapshotCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
+	}
+	bootID, err := bootid.Read(bootid.Path)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
+	}
+	cleared, err := clearCachesAfterReboot(bootID, ateletpath.CacheBootIDFile, nodepath.ActorsDir, nodepath.WorkersDir(),
+		*imageCacheDir, *sandboxAssetCacheDir, *snapshotCacheDir)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to clear the caches after a reboot", err)
+	}
+	if cleared {
+		slog.InfoContext(ctx, "Cleared the node-local caches after a node reboot")
+	}
+
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithKeychain(imageCredsKeychain),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
@@ -266,9 +295,6 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
-	if err := validateSandboxAssetCacheFlags(); err != nil {
-		serverboot.Fatal(ctx, "Invalid sandbox asset cache flags", err)
-	}
 	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to open sandbox asset cache", err)
@@ -280,9 +306,6 @@ func main() {
 	}
 	if err := filecachegc.Start(ctx, ateattr.FileCacheSandboxAsset, sandboxAssetCache, sandboxAssetCacheGCFlags, fileCacheInstruments); err != nil {
 		serverboot.Fatal(ctx, "Failed to start the sandbox asset cache GC", err)
-	}
-	if err := validateSnapshotCacheFlags(); err != nil {
-		serverboot.Fatal(ctx, "Invalid snapshot cache flags", err)
 	}
 	snapshotCache, err := openSnapshotCache(ctx, *snapshotCacheDir, *snapshotCacheMinAge, *snapshotCacheFetchTimeout)
 	if err != nil {
@@ -380,10 +403,6 @@ func main() {
 	defer ateapiConn.Close()
 	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 
-	bootID, err := readBootID(bootIDPath)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to read the node's boot ID", err)
-	}
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.
@@ -472,12 +491,19 @@ func main() {
 			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
 			o.LabelSelector = workerPoolLabel
 		}))
-	// Pre-download each local worker's default runtime, as the syncer plans
-	// the worker, so the first Run/Restore on this node hits the cache.
+	// Link each local worker's default runtime under the worker's directory
+	// as the syncer plans the worker, so it stays cached while no actor runs
+	// it.
 	// Best-effort: on failure the on-demand fetch in ensureSandboxAssets
 	// still covers correctness.
 	prewarmer := newRuntimePrewarmer(runtimes, wmService)
 	go prewarmer.run(ctx)
+	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: k8sClient.EventsV1()})
+	if err := eventBroadcaster.StartRecordingToSinkWithContext(ctx); err != nil {
+		serverboot.Fatal(ctx, "Failed to start the event broadcaster", err)
+	}
+	defer eventBroadcaster.Shutdown()
+
 	// Keep a sandbox runtimes file in each local worker's directory: the
 	// runtimes of the enabled versions of its pool's SandboxConfig,
 	// rewritten when the config changes.
@@ -486,7 +512,8 @@ func main() {
 		ateFactory.Ate().V1().WorkerPools(),
 		ateFactory.Ate().V1().SandboxConfigs(),
 		wmService,
-		nodepath.WorkersDir(), runtimes, prewarmer)
+		nodepath.WorkersDir(), runtimes, prewarmer,
+		eventBroadcaster.NewRecorder(newEventScheme(), "atelet"))
 	if err != nil {
 		// Without the syncer no runtime is ever indexed, so no actor could run.
 		serverboot.Fatal(ctx, "Failed to start the worker sandbox runtimes syncer", err)
@@ -551,6 +578,16 @@ func main() {
 	}
 	cancelWait()
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// newEventScheme returns a Scheme with core Kubernetes and ATE CRD types
+// registered so the event recorder can resolve ObjectReferences for both
+// regarding (Pod) and related (SandboxConfig, WorkerPool).
+func newEventScheme() *k8sruntime.Scheme {
+	s := k8sruntime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(atev1.AddToScheme(s))
+	return s
 }
 
 // servingCheck is the readiness check that holds /readyz at 503 until served
@@ -730,7 +767,7 @@ type Atelet struct {
 	// failures, so a restore that can never succeed stops being retried (see
 	// boundRetryableRestoreError).
 	restoreFailures restoreFailureCounter
-	// bootID is the node's boot ID (see readBootID), recorded in the manifest
+	// bootID is the node's boot ID (see bootid.Read), recorded in the manifest
 	// of each local snapshot. A local snapshot recording another, or none,
 	// was written before the node last rebooted.
 	bootID string
@@ -1088,9 +1125,9 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	})
 	dWorker = time.Since(tWorker)
 	if err != nil {
-		// TODO: Worker should classify checkpoint failures, and set "should-crash"
-		// in the metadata if the error is not retriable.
-		return nil, fmt.Errorf("while calling worker CheckpointWorkload: %w", err)
+		// TODO(#3046): Worker should classify checkpoint failures that left
+		// the workload intact as retriable.
+		return nil, workerCallError("CheckpointWorkload", err)
 	}
 	// The snapshot commits on this node once worker has written it, in either
 	// upload mode.
@@ -1280,7 +1317,9 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 	// Stage the files worker reported and the snapshot manifest inside
 	// checkpointDir before renaming the directory into local-checkpoint/, so a
 	// failure leaves nothing under local-checkpoint/ and ResetActorDirs cleans
-	// checkpointDir up.
+	// checkpointDir up. Staging links the files, so checkpointDir still holds
+	// them for a retried CheckpointWorkload if atelet dies before the snapshot
+	// commits.
 	stageDir := filepath.Join(checkpointDir, ".staged")
 	if err := root.RemoveAll(stageDir); err != nil {
 		return fmt.Errorf("while clearing local checkpoint staging directory: %w", err)
@@ -1304,8 +1343,8 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)
 		}
-		if err := root.Rename(src, dst); err != nil {
-			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
+		if err := root.Link(src, dst); err != nil {
+			return fmt.Errorf("failed to link %s to %s: %w", src, dst, err)
 		}
 	}
 
@@ -1323,6 +1362,11 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 
 	if err := root.MkdirAll(filepath.Dir(localDir), 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
+	}
+	// An attempt that died after this rename, before the snapshot committed,
+	// left localDir behind.
+	if err := root.RemoveAll(localDir); err != nil {
+		return fmt.Errorf("while removing uncommitted local snapshot: %w", err)
 	}
 	if err := root.Rename(stageDir, localDir); err != nil {
 		return fmt.Errorf("failed to move %s to %s: %w", stageDir, localDir, err)
@@ -1854,9 +1898,12 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 }
 
 // workerCallError is atelet's error for a failed call to the worker's rpc. A
-// worker that is unavailable, refusing workloads until it registers or gone
-// with a restart, is reported as Unavailable, so the caller retries once the
-// worker process has registered. Anything else reaches the caller as Internal.
+// worker that is unavailable, refusing workloads until it registers or
+// unreachable because its process is gone, is reported as Unavailable, so
+// ateapi keeps the actor's state and assignment for a retry instead of
+// crashing it. Once a restarted worker registers again, or when its pod is
+// gone, ateapi crashes the actors it hosted on its own. Anything else reaches
+// the caller as Internal.
 func workerCallError(rpc string, err error) error {
 	if status.Code(err) == codes.Unavailable {
 		return apierror.Unavailable("worker %s: the worker is unavailable: %s", rpc, status.Convert(err).Message())

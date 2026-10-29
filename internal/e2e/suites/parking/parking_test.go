@@ -199,14 +199,10 @@ func TestRequestParking(t *testing.T) {
 // actors (see probe-parking.yaml.tmpl).
 func deployParkingFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) *ateapi.ActorTemplate {
 	t.Helper()
-	env, err := e2e.CheckEnv("BUCKET_NAME")
-	if err != nil {
-		t.Fatalf("CheckEnv failed: %v", err)
-	}
 	_, templates := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-parking.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-parking-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "parking", nil)
+	}, "parking", nil)
 	return templates[0]
 }
 

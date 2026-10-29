@@ -16,10 +16,10 @@
 
 # One-shot bring-up of the counter-microvm demo. GKE/dev-env by default; for a
 # local kind cluster use hack/run-microvm-demo-kind.sh (which sets the kind env
-# and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
+# and calls this script).
 #
 # Composes:
-#   1. hack/install-ate.sh --deploy-ate-system  (control plane)
+#   1. ate-setup deploy ate-system              (control plane)
 #   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
 #                                                microvm SandboxConfig)
 #   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
@@ -29,8 +29,9 @@
 # registry / bucket settings unless NO_DEV_ENV is set. The control plane deploy
 # requires a credential provider selection, which reaches it only through the
 # environment here: export ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}';
-# see hack/install-ate.sh --help) before running this, the kind wrapper
-# included.
+# see go run ./cmd/ate-setup --help) before running this, the kind wrapper
+# included. The printed `kubectl ate proxy actor` step also needs
+# ATE_INGRESS_ALLOWED_SPIFFE_IDS to include spiffe://cluster.local/ns/ate-system/sa/atenet-client.
 #
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. gcr.io/PROJECT/ate-images for
@@ -41,8 +42,8 @@
 #   PROJECT_ID       (optional) GCP project for the GCS asset upload (GKE path).
 #   ARCH             target arch (default: from KO_DEFAULTPLATFORMS, else host arch).
 #   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
-#   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs + install-ate-kind.sh);
-#                    default false uploads assets to GCS + uses install-ate.sh.
+#   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs + ate-setup --kind);
+#                    default false uploads assets to GCS.
 
 set -o errexit -o nounset -o pipefail
 
@@ -72,7 +73,7 @@ if [[ -z "${KO_DOCKER_REPO}" ]]; then
 fi
 export KO_DOCKER_REPO
 
-# ANSI color codes for prettier output (mirrors hack/install-ate.sh).
+# ANSI color codes for prettier output.
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
 log() {
@@ -81,13 +82,9 @@ log() {
 
 # --- 1. deploy the control plane -------------------------------------------
 log "Deploying the ate control plane (deploy ate-system)..."
-if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
-  # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh deploy ate-system
-else
-  # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh deploy ate-system
-fi
+# ate-setup reads ATE_INSTALL_KIND from the environment, so this covers the kind
+# path too.
+KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" go run ./cmd/ate-setup deploy ate-system
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
 # install-microvm-deps.sh handles the assemble/stage/apply flow. Ordering
@@ -102,14 +99,9 @@ if [[ -n "${KUBECTL_CONTEXT}" ]]; then
 fi
 
 # The demo handler applies the worker pool, creates the atespace and the
-# ActorTemplate through the ate API, and waits for the golden snapshot;
-# dispatch through install-ate.sh like step 1.
-log "Deploying the counter-microvm demo (--deploy-demo-counter-microvm)..."
-if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh deploy demo counter-microvm
-else
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh deploy demo counter-microvm
-fi
+# ActorTemplate through the ate API, and waits for the golden snapshot.
+log "Deploying the counter-microvm demo (deploy demo counter-microvm)..."
+KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" go run ./cmd/ate-setup deploy demo counter-microvm
 
 log "Demo applied. Next steps:"
 cat <<EOF
@@ -121,11 +113,9 @@ cat <<EOF
        kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-microvm \\
          --template counter-microvm
 
-  3. Port-forward the atenet-router and curl the in-RAM counter:
-       kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
-       curl -X POST \\
-         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \
-         http://localhost:8000
+  3. Proxy to the actor and curl the in-RAM counter:
+       kubectl ate${KCTX_FLAG} proxy actor my-counter-1 -a ate-demo-counter-microvm &
+       curl -X POST http://localhost:8000
 
      Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),
      resume on another worker, and confirm the count continues — the guest memory snapshot round-tripped.

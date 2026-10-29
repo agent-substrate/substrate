@@ -281,12 +281,6 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req:        &ateapi.MintActorJwtRequest{Actor: actorRef},
 			want:       []check{{RelationCanMintActorJWT, "actor:team-a/runner"}},
 		},
-		{
-			name:       "MintActorCertificate",
-			fullMethod: ateapi.Control_MintActorCertificate_FullMethodName,
-			req:        &ateapi.MintActorCertificateRequest{Actor: actorRef},
-			want:       []check{{RelationCanMintActorCertificate, "actor:team-a/runner"}},
-		},
 
 		// Tags.
 		{
@@ -604,12 +598,6 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			wantField:  "actor.atespace",
 		},
 		{
-			name:       "MintActorCertificate with an invalid name",
-			fullMethod: ateapi.Control_MintActorCertificate_FullMethodName,
-			req:        &ateapi.MintActorCertificateRequest{Actor: &ateapi.ObjectRef{Atespace: "team-a", Name: "a/b"}},
-			wantField:  "actor.name",
-		},
-		{
 			name:       "CreateTag without a source actor",
 			fullMethod: ateapi.Control_CreateTag_FullMethodName,
 			req: &ateapi.CreateTagRequest{Tag: &ateapi.Tag{
@@ -692,9 +680,9 @@ func TestDefaultRPCPermissions_CoversEveryServedRPC(t *testing.T) {
 			m := methods.Get(j)
 			fullMethod := "/" + string(sd.FullName()) + "/" + string(m.Name())
 			if m.IsStreamingClient() || m.IsStreamingServer() {
-				// The authz interceptor is unary-only, so a streaming RPC would go
-				// unchecked.
-				t.Errorf("%s is a streaming RPC, which the authz interceptor does not check", fullMethod)
+				// StreamServerInterceptor denies any stream not in streamRules,
+				// and has no per-request checks like defaultRPCPermissions.
+				t.Errorf("%s is a streaming RPC, which StreamServerInterceptor denies", fullMethod)
 			}
 			served[fullMethod] = true
 		}

@@ -16,10 +16,8 @@ package apivalidation
 
 import (
 	"context"
-	"fmt"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -166,19 +164,9 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 }
 
 // ValidateCustom_SnapshotConfig_StorageLocation ensures an
-// ActorTemplate's snapshotConfig.location is a well-formed
+// ActorTemplate's snapshotConfig.storageLocation is a well-formed
 // URI with a bucket, so a bad location fails fast.
-//
-// The field is ignored while the PerTemplateSnapshotLocation gate is off, so a
-// declarative ifDisabled=forbidden would reject the templates that set it
-// on servers without the gate. Instead, with the gate on, a request that
-// did not opt in to preview features is forbidden from setting it.
-func ValidateCustom_SnapshotConfig_StorageLocation(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) && preview.IsOptedOut(ctx) {
-		return field.ErrorList{field.Forbidden(fldPath, fmt.Sprintf(
-			"requires a client that opts in to preview features (kubectl ate --preview, or the %s header) while the %s preview gate is enabled",
-			preview.Header, preview.GatePerTemplateSnapshotLocation))}
-	}
+func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
 	}

@@ -1,3 +1,7 @@
+---
+docsite: false
+---
+
 # Substrate gRPC API Style Guide
 
 This document is the authoritative style guide for Substrate public APIs. Today this only includes `ate-apiserver` API.
@@ -707,7 +711,7 @@ Rules:
 - `scope` **must** be set on a top-level resource: `SCOPE_ATESPACE` or `SCOPE_GLOBAL` (see section #2.1). A subresource **must not** set it, because it has its parent's scope.
 - `plural` **must** be set on every resource, singletons included. It is the plural that List methods and their repeated resource field use (see section #3).
 - A message that is not a resource, such as a request, a status message, or `ObjectRef`, carries no `(resource)` option.
-- When you add, remove, or re-parent a resource, update [the resource model](resource-model.md) too.
+- When you add, remove, or re-parent a resource, update [the resource model](reference/resource-model.md) too.
 
 ### 11.2 Methods
 

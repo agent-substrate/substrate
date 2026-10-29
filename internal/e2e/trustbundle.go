@@ -43,7 +43,7 @@ const (
 	// EgressTrustBundleObjectName is the reconciler-owned ClusterTrustBundle.
 	EgressTrustBundleObjectName = "egress-mitm.ate.dev:mitm:primary-bundle"
 
-	// egressCAPoolSecretName is not release-prefixed: hack/install-ate.sh
+	// egressCAPoolSecretName is not release-prefixed: ate-setup
 	// creates it under this fixed name and the reconciler looks it up the same
 	// way, so it does not follow the deployment's naming.
 	egressCAPoolSecretName = "egress-mitm-ca-pool"

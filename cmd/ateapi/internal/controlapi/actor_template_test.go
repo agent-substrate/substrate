@@ -42,7 +42,6 @@ func validActorTemplate(mutations ...func(*ateapi.ActorTemplate)) *ateapi.ActorT
 		Metadata:   &ateapi.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
 		Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapi.SnapshotConfig{
-			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},
@@ -57,7 +56,9 @@ func validActorTemplate(mutations ...func(*ateapi.ActorTemplate)) *ateapi.ActorT
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil)}
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	s := &RPCService{impl: impl}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapi.CreateActorTemplateRequest {
 		return &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
@@ -83,7 +84,7 @@ func TestCreateActorTemplate(t *testing.T) {
 
 // TestCreateActorTemplate_RequiresSnapshotLocation pins that create rejects,
 // with FailedPrecondition, a template whose actors would have no snapshot
-// location: neither an honored storageLocation nor --snapshot-location.
+// location: neither storageLocation nor --snapshot-location.
 func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 	tests := []struct {
 		name                    string
@@ -95,11 +96,9 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 	}{{
 		name:                    "gate off, cluster location set",
 		clusterSnapshotLocation: "gs://cluster-bucket/",
-		location:                "gs://my-bucket/snapshots",
 		wantCode:                codes.OK,
 	}, {
 		name:     "gate off, no cluster location",
-		location: "gs://my-bucket/snapshots",
 		wantCode: codes.FailedPrecondition,
 	}, {
 		name:     "gate on, location set, no cluster location",
@@ -153,7 +152,9 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil)}
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	s := &RPCService{impl: impl}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -259,7 +260,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 1
 				s.Snapshots = []*ateapi.Snapshot{
-					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), actorURI.Name(), actorURI.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), actorURI.Name(), actorURI.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 				}
 			})
 			var tag *ateapi.Tag

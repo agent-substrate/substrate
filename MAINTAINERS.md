@@ -20,7 +20,7 @@ The current maintainers of the Agent Substrate project are listed below.
 | Maya Wang                 | mayawang         | Google               |
 | Michelle Au               | msau42           | Google               |
 | Jaana Dogan               | rakyll           | Google               |
-|                           | sfunkenhauser    | Google               |
+| Scott Funkenhauser        | sfunkenhauser    | Google               |
 | Tim Hockin                | thockin          | Google               |
 | Zoe Zhao                  | zoez7            | Google               |
 

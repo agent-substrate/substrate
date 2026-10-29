@@ -39,6 +39,7 @@ type capabilitiesResponse struct {
 	Permitted   []string `json:"permitted"`
 	Inheritable []string `json:"inheritable"`
 	Ambient     []string `json:"ambient"`
+	NoNewPrivs  bool     `json:"noNewPrivs"`
 	Error       string   `json:"error"`
 }
 
@@ -51,14 +52,13 @@ type capabilitiesResponse struct {
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gvisor and micro-VM from one suite.
 func TestActorCapabilities(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	namespace := deployFixture(t, ctx, clients, env["BUCKET_NAME"])
+	namespace := deployFixture(t, ctx, clients)
 
 	tests := []struct {
 		name     string
@@ -76,6 +76,13 @@ func TestActorCapabilities(t *testing.T) {
 		name:     "drop ALL plus add yields exactly the added capability",
 		template: "caps-exact",
 		want:     []string{"NET_BIND_SERVICE"},
+	}, {
+		// The golden bake in deployFixture is what proves port 80 binds without
+		// NET_BIND_SERVICE; this row checks the restored actor still answers
+		// with an empty set.
+		name:     "drop ALL still binds port 80",
+		template: "caps-none",
+		want:     nil,
 	}}
 
 	for _, tt := range tests {
@@ -110,6 +117,10 @@ func TestActorCapabilities(t *testing.T) {
 			if len(got.Ambient) != 0 {
 				t.Errorf("ambient = %v, want empty (ambient capabilities are not supported)", got.Ambient)
 			}
+			// Neither runtime sets no_new_privileges; gVisor runs with --allow-suid.
+			if got.NoNewPrivs {
+				t.Error("no_new_privs = 1, want 0")
+			}
 		})
 	}
 }
@@ -128,17 +139,17 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 
 // deployFixture installs the fixture for the sandbox class under test and
 // returns its atespace (which also names the namespace it created, carrying
-// the class suffix so the gVisor and micro-VM lanes never share one). Both
-// templates are golden-snapshotted when this returns; a template whose
+// the class suffix so the gVisor and micro-VM lanes never share one). Every
+// template is golden-snapshotted when this returns; a template whose
 // container cannot start — for example because a needed capability was
 // dropped — fails the deploy with the template's error message rather than
 // timing out per subtest.
-func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) string {
+func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
 	t.Helper()
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, bucket, "capabilities", nil)
+	}, "capabilities", nil)
 	return atespace
 }
 

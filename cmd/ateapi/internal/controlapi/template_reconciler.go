@@ -197,8 +197,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		}
 		return 0, err
 	}
-	// TODO: Skip a template with delete_time set. DeleteActorTemplate may
-	// already have deleted the golden actor and tag, and this pass rebuilds them.
+	// DeleteActorTemplate may already have deleted the golden actor and tag,
+	// and this pass would rebuild them.
+	if tmpl.GetMetadata().GetDeleteTime() != nil {
+		return 0, nil
+	}
 
 	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		return 0, nil
@@ -236,7 +239,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			if tag.GetStatus().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() || resources.ActorRefFromObjectRef(tag.GetSourceActor()) != resources.ActorRefFromObjectRef(goldenActorRef) {
 				return 0, r.fail(ctx, tmpl, reasonGoldenTagConflict, "golden tag belongs to another actor or template")
 			}
-			if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != "" {
+			if tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) != "" {
 				return 0, r.saveGoldenTag(ctx, tmpl, goldenActorRef)
 			}
 			// CreateTag cannot resume an incomplete copy. Delete it before retrying.
@@ -256,7 +259,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		switch state := actor.GetStatus().GetState(); state {
 		case ateapi.ActorState_ACTOR_STATE_CRASHED:
-			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
+			msg := "golden actor crashed before its snapshot was taken"
+			if crash := actor.GetStatus().GetCrash().GetMessage(); crash != "" {
+				msg += ": " + crash
+			}
+			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, msg)
 
 		case ateapi.ActorState_ACTOR_STATE_RUNNING:
 			takeAt := goldenSnapshotStatus.GetSnapshotTime()
@@ -296,7 +303,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 			// The golden actor was never resumed, or a previous resume didn't
 			// finish; ResumeActor is reentrant from both.
-			if findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != nil {
+			if findLatestDurableSnapshot(actor.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) != nil {
 				// Golden actors never start from a source snapshot, so an
 				// existing snapshot means an earlier suspend completed
 				// without being recorded.
@@ -340,7 +347,7 @@ func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *a
 		// A crash during suspend is observed as CRASHED on the retry.
 		return fmt.Errorf("while suspending golden actor: %w", err)
 	}
-	if findLatestDurableSnapshot(resp.GetActor().GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == nil {
+	if findLatestDurableSnapshot(resp.GetActor().GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == nil {
 		return fmt.Errorf("suspending golden actor produced no external snapshot")
 	}
 	return nil

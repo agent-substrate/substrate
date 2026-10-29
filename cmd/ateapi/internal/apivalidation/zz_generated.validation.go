@@ -5878,110 +5878,6 @@ func Validate_MarkWorkerUnavailableRequest(
 	return errs
 }
 
-// Validate_MintActorCertificateRequest validates an instance of MintActorCertificateRequest according
-// to declarative validation rules in the API schema.
-func Validate_MintActorCertificateRequest(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *v1.MintActorCertificateRequest) (errs field.ErrorList) {
-
-	{ // field v1.MintActorCertificateRequest.Actor
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *v1.ObjectRef,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.MintActorCertificateRequest) *v1.ObjectRef {
-				return oldObj.Actor
-			})
-		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
-	}
-
-	{ // field v1.MintActorCertificateRequest.ActorUid
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.MintActorCertificateRequest) *string {
-				return &oldObj.ActorUid
-			})
-		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
-	}
-
-	{ // field v1.MintActorCertificateRequest.CertificateSigningRequest
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []byte,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 16384); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.MintActorCertificateRequest) []byte {
-				return oldObj.CertificateSigningRequest
-			})
-		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 // Validate_MintActorJwtRequest validates an instance of MintActorJwtRequest according
 // to declarative validation rules in the API schema.
 func Validate_MintActorJwtRequest(
@@ -7682,6 +7578,83 @@ func Validate_RevertActorRequest(
 	return errs
 }
 
+// Validate_RuntimeOverhead validates an instance of RuntimeOverhead according
+// to declarative validation rules in the API schema.
+func Validate_RuntimeOverhead(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.RuntimeOverhead) (errs field.ErrorList) {
+
+	{ // field v1.RuntimeOverhead.MemoryBytes
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 1099511627776); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.RuntimeOverhead) *int64 {
+				return &oldObj.MemoryBytes
+			})
+		errs = append(errs, fn(fldPath.Child("memory_bytes"), &obj.MemoryBytes, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.RuntimeOverhead.MemoryBytesPerGib
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 1073741824); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.RuntimeOverhead) *int64 {
+				return &oldObj.MemoryBytesPerGib
+			})
+		errs = append(errs, fn(fldPath.Child("memory_bytes_per_gib"), &obj.MemoryBytesPerGib, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_SecurityContext validates an instance of SecurityContext according
 // to declarative validation rules in the API schema.
 func Validate_SecurityContext(
@@ -8208,6 +8181,13 @@ func Validate_SnapshotConfig(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "PerTemplateSnapshotLocation", false, validate.ForbiddenValue).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "PerTemplateSnapshotLocation", false, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
 			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
@@ -8499,10 +8479,10 @@ func Validate_SnapshotStorage(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *v1.SnapshotStorage) (errs field.ErrorList) {
 
-	{ // field v1.SnapshotStorage.Status
+	{ // field v1.SnapshotStorage.State
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *v1.SnapshotStorageStatus,
+			obj, oldObj *v1.SnapshotStorageState,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -8528,10 +8508,10 @@ func Validate_SnapshotStorage(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.SnapshotStorage) *v1.SnapshotStorageStatus {
-				return &oldObj.Status
+			func(oldObj *v1.SnapshotStorage) *v1.SnapshotStorageState {
+				return &oldObj.State
 			})
-		errs = append(errs, fn(fldPath.Child("status"), &obj.Status, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("state"), &obj.State, oldVal, oldObj != nil)...)
 	}
 
 	{ // field v1.SnapshotStorage.Object
@@ -11089,6 +11069,36 @@ func Validate_WorkerSandboxRuntime(
 				return oldObj.Version
 			})
 		errs = append(errs, fn(fldPath.Child("version"), obj.Version, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.WorkerSandboxRuntime.ActorOverhead
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.RuntimeOverhead,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_RuntimeOverhead(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.WorkerSandboxRuntime) *v1.RuntimeOverhead {
+				return oldObj.ActorOverhead
+			})
+		errs = append(errs, fn(fldPath.Child("actor_overhead"), obj.ActorOverhead, oldVal, oldObj != nil)...)
 	}
 
 	return errs

@@ -309,6 +309,97 @@ func TestClientDialContextHTTP2ReconnectsAfterConnectionClose(t *testing.T) {
 	}
 }
 
+func TestClientDialContextHTTP2RetiresConnectionAfterRenewal(t *testing.T) {
+	ca := newTestCA(t)
+	serials := make(chan string, 4)
+	gatewayAddress, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serials <- r.TLS.PeerCertificates[0].SerialNumber.String()
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = io.Copy(w, r.Body)
+	}))
+
+	issue := func() *tls.Certificate {
+		cert := ca.issue(t,
+			"spiffe://substrate-actor.local/worker-for-actor/team/actor",
+			[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		)
+		return &cert
+	}
+	var current atomic.Pointer[tls.Certificate]
+	current.Store(issue())
+	trustPath := filepath.Join(t.TempDir(), "trust.pem")
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstConnClosed := make(chan struct{})
+	var tcpDials atomic.Int32
+	client, err := NewClient(ClientConfig{
+		GatewayAddress:       "127.0.0.1:1",
+		ServerName:           "egress.test",
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return current.Load(), nil },
+		TrustBundlePath:      trustPath,
+	}, withDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddress)
+		if err != nil {
+			return nil, err
+		}
+		if tcpDials.Add(1) == 1 {
+			return &closeNotifyingConn{Conn: c, closed: firstConnClosed}, nil
+		}
+		return c, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	before, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer before.Close()
+	first := receiveWithin(t, serials, "CONNECT before the renewal")
+
+	current.Store(issue())
+
+	after, err := client.DialContext(context.Background(), "192.0.2.11:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	if second := receiveWithin(t, serials, "CONNECT after the renewal"); second == first {
+		t.Errorf("CONNECT after the renewal presented certificate %s, want the renewed one", second)
+	}
+	if dials := tcpDials.Load(); dials != 2 {
+		t.Errorf("tcpDials = %d, want 2", dials)
+	}
+	select {
+	case <-firstConnClosed:
+		t.Fatal("first connection closed while its stream was still open")
+	default:
+	}
+
+	if _, err := io.WriteString(before, "still-open"); err != nil {
+		t.Fatal(err)
+	}
+	if cw, ok := before.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+	got, err := io.ReadAll(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "still-open" {
+		t.Errorf("stream opened before the renewal got %q, want still-open", got)
+	}
+	_ = before.Close()
+
+	receiveWithin(t, firstConnClosed, "retired connection to close after its last stream finished")
+}
+
 func TestClientDialContextHTTP2Deadlines(t *testing.T) {
 	ca := newTestCA(t)
 	releaseServerSend := make(chan struct{})

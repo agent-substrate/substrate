@@ -12,37 +12,190 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Pushing a vX.Y.Z[-PRERELEASE] tag creates a DRAFT release with generated
-# notes (.github/release.yml). A maintainer edits and publishes it; see
-# docs/dev/release-notes.md. Run manually to draft a release for a tag that
-# has none; an existing release is never modified.
+# Pushing a vX.Y.Z[-PRERELEASE] tag publishes the release images and then
+# creates a DRAFT release with generated notes (.github/release.yml), with the
+# kubectl-ate binaries attached. A maintainer edits and publishes it; see
+# docs/dev/releasing.md.
+#
+# Images are published only from agent-substrate/substrate, to
+# ghcr.io/agent-substrate/substrate. In any other repository (a fork) the
+# images job is skipped, because GitHub bills package storage to the fork's
+# owner, and the draft is created as before.
+#
+# Run manually to publish images or draft a release for an existing tag.
+# A complete image set is left unchanged unless overwrite is set; an incomplete
+# one is rebuilt in full. Nothing is published for a tag whose release is
+# published, and only a draft gets its binaries replaced.
 name: release
 on:
   push:
-    tags: ['v*']
+    # Starts on tags that begin vMAJOR.MINOR.PATCH. The filter cannot express
+    # the whole release tag, so ate-setup and draft-release.sh reject anything
+    # that is not vMAJOR.MINOR.PATCH[-PRERELEASE] before publishing.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
   workflow_dispatch:
     inputs:
       tag:
         description: 'Existing tag to draft a release for (e.g. v0.3.0)'
         required: true
-# Creating a release needs contents: write.
+      overwrite:
+        description: 'Rebuild and replace images that already exist for the tag'
+        type: boolean
+        default: false
+      dry_run_images:
+        description: 'Build the images into a registry inside the job and discard them; no images published, no draft'
+        type: boolean
+        default: false
+# Each job requests the permissions it needs.
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
 jobs:
-  draft:
+  # The only job that writes to a registry.
+  images:
+    if: github.repository == 'agent-substrate/substrate' && !inputs.dry_run_images
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    # Read by ate-setup publish release-images.
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
+      KO_DOCKER_REPO: ghcr.io/agent-substrate/substrate
+      KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
+      # inputs.overwrite is empty on a tag push; this makes the value explicit.
+      ATE_PUBLISH_OVERWRITE: ${{ inputs.overwrite == true }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       with:
+        ref: refs/tags/${{ inputs.tag || github.ref_name }}
+        persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: 'go.mod'
+        # These jobs can write packages or releases, so they restore no cache
+        # that another workflow could have written.
+        cache: false
+    # ko cross-compiles Go for arm64, and the envoy-dataplane Dockerfile
+    # cross-compiles its Rust module, so the job needs no QEMU. buildx builds
+    # envoy-dataplane for both platforms. ko, buildx, and ate-setup's registry
+    # checks read the credentials docker login stores. BuildKit is pinned by
+    # digest because it builds a published image with the ghcr.io login.
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+    - name: Log in to ghcr.io
+      env:
+        TOKEN: ${{ github.token }}
+      run: .github/scripts/release/ghcr-login.sh
+    # Publishing replaces the digests that operators of a published release
+    # install by tag, so nothing is published once the release is. This runs
+    # whether or not overwrite is set: without it, an incomplete set (an image
+    # deleted after release) is still rebuilt in full.
+    - name: Refuse to publish images for a published release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: .github/scripts/release/refuse-published-release.sh
+    # Builds nothing if every image already exists for the tag, unless overwrite
+    # is set, and after pushing checks that every tag names the pushed image on
+    # every platform.
+    - name: Publish images
+      run: go run ./cmd/ate-setup publish release-images
+  # The same build and checks against a registry that exists only for the
+  # duration of this job. Runs only when started manually with dry_run_images.
+  images-dry-run:
+    if: inputs.dry_run_images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      registry:
+        # The index registry:3 named on 2026-10-19, pinned like the actions above.
+        image: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+        ports: ['5000:5000']
+    env:
+      VERSION: ${{ inputs.tag }}
+      KO_DOCKER_REPO: localhost:5000/substrate
+      KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
+      ATE_PUBLISH_OVERWRITE: ${{ inputs.overwrite == true }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        ref: refs/tags/${{ inputs.tag }}
+        persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: 'go.mod'
+        # These jobs can write packages or releases, so they restore no cache
+        # that another workflow could have written.
+        cache: false
+    # The same BuildKit as the images job. Host networking and plain HTTP let
+    # buildx push to the registry service.
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        driver-opts: |
+          image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+          network=host
+        buildkitd-config-inline: |
+          [registry."localhost:5000"]
+            http = true
+    - name: Publish images
+      run: go run ./cmd/ate-setup publish release-images
+  draft:
+    needs: images
+    # Runs after images succeeded, or when images was skipped (any repository
+    # other than agent-substrate/substrate). If images failed, no draft is
+    # created, so a release cannot be published without its images. Skipped
+    # in a dry run.
+    if: ${{ !cancelled() && !inputs.dry_run_images && (needs.images.result == 'success' || needs.images.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Creating a release needs contents: write.
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        # Check out the tag being released, as the images job does. A manual
+        # run otherwise checks out the branch it was started on.
+        ref: refs/tags/${{ inputs.tag || github.ref_name }}
         # The committer list is read from local history back to the
         # previous release tag.
         fetch-depth: 0
         persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: 'go.mod'
+        # These jobs can write packages or releases, so they restore no cache
+        # that another workflow could have written.
+        cache: false
+    # Built before the draft exists, so a build failure leaves no draft, as an
+    # images failure does. A fork attaches no binaries, so it builds none.
+    - name: Build kubectl-ate
+      if: github.repository == 'agent-substrate/substrate'
+      env:
+        VERSION: ${{ inputs.tag || github.ref_name }}
+      run: go run ./cmd/ate-setup publish release-binaries --out bin/release
     - name: Draft release
       env:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag || github.ref_name }}
       run: hack/release/draft-release.sh "${TAG}"
+    # Only agent-substrate/substrate attaches binaries; a fork's draft gets
+    # none. Assets are replaced only while the release is a draft, so a rerun
+    # never changes the files of a published release.
+    - name: Attach kubectl-ate
+      if: github.repository == 'agent-substrate/substrate'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag || github.ref_name }}
+      run: .github/scripts/release/attach-binaries.sh bin/release

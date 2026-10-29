@@ -261,7 +261,7 @@ groups:
             - id: microvm
               stability: development
               value: microvm
-              brief: A micro-VM sandbox.
+              brief: A microVM sandbox.
             - id: unknown
               stability: development
               value: unknown
@@ -846,13 +846,18 @@ groups:
     brief: The number of workers in each pool, divided by state and by sandbox class.
     note: >
       ateapi reads this value with a callback. Each ateapi replica reports the
-      whole fleet, and the default install runs two replicas. Thus a sum across
-      the replicas counts each worker once for each replica. Take the maximum
-      across the replicas first, by pool namespace, pool, state and sandbox
-      class, and add after that. Within one replica you can add the counts
-      together. The sum across the states is the size of the pool. The sum
-      across the pools is the size of the fleet. Thus this instrument is an
-      UpDownCounter
+      whole fleet from its own worker cache, and the default install runs two
+      replicas. Thus a sum across the replicas counts each worker once for
+      each replica. The caches can disagree for a few seconds, and a worker
+      that changed state then sits under its old state on one replica and
+      under its new state on the other. Take the average across the replicas
+      first, by pool namespace, pool, state and sandbox class, and add after
+      that. A maximum would count that worker twice, once under each state.
+      The average keeps the sum across the states equal to the size of the
+      pool, and the counts can be fractional while the replicas disagree.
+      Within one replica you can add the counts together. The sum across the
+      states is the size of the pool. The sum across the pools is the size of
+      the fleet. Thus this instrument is an UpDownCounter
       and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
@@ -1057,7 +1062,7 @@ groups:
     brief: The uncompressed allocated size in bytes of each snapshot image that a checkpoint writes.
     note: >
       atelet records one measurement for each image file from its allocated disk
-      blocks (st_blocks * 512, excluding sparse holes in micro-VM
+      blocks (st_blocks * 512, excluding sparse holes in microVM
       memory-ranges). It does not record one measurement for each checkpoint.
       Use the file.name key to compare the same type of image.
     annotations:
@@ -1257,10 +1262,10 @@ groups:
       It does not count usage twice. It can count less: the end of an
       activation after the last sample atelet read of it, which is up to one
       poll interval plus one ateworker sample interval plus the sweep's own time
-      (up to 45s on a micro-VM), so an activation shorter than that can lose
+      (up to 45s on a microVM), so an activation shorter than that can lose
       most or all of its CPU here, while its usage records keep it; the time
       around an atelet restart; and, in a
-      micro-VM restored from a full snapshot, a container's use before its
+      microVM restored from a full snapshot, a container's use before its
       first successful reading. A node clock that steps back across an atelet
       restart can count one activation in full a second time.
     annotations:
@@ -1406,7 +1411,7 @@ groups:
     brief: The number of entries that the eviction passes removed from a file cache on the node, by cache.
     note: >
       An entry is one cached file or tree, such as a runsc binary or a
-      micro-VM kernel. A pass removes only an entry that nothing links,
+      microVM kernel. A pass removes only an entry that nothing links,
       oldest first, and a dry run removes none. A rate that stays above zero
       with a size at the budget means that the cache thrashes: an entry
       leaves and returns on each pass, and each return pays for a download.

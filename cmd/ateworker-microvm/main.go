@@ -45,9 +45,11 @@ import (
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
+	"go.ate.dev/substrate/internal/ateworker/memborrow"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
 	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/bootid"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/preview"
@@ -64,14 +66,13 @@ import (
 )
 
 var (
-	podUID        = pflag.String("pod-uid", "", "The UID of the current pod")
-	podIPs        = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
-	chBinary      = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	guestDebug    = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
-	vmmMemReserve = pflag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
-	showVersion   = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag  = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
-	previewFlags  = pflag.StringSlice("preview", nil, "Preview gates to enable.")
+	podUID       = pflag.String("pod-uid", "", "The UID of the current pod")
+	podIPs       = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
+	chBinary     = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	guestDebug   = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
@@ -123,6 +124,10 @@ func do(ctx context.Context) error {
 	}
 	if *usageSampleInterval < minUsageSampleInterval {
 		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
+	}
+	bootID, err := bootid.Read(bootid.Path)
+	if err != nil {
+		return err
 	}
 
 	const serviceName = "ateworker-microvm"
@@ -233,7 +238,11 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID)
+	ateworkerService.throttleMemory = cgroup.PSIEnabled(cgroup.Root)
+	if !ateworkerService.throttleMemory {
+		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so actor cgroups get no memory limit and an actor over its booking can restart the worker")
+	}
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
@@ -243,6 +252,9 @@ func do(ctx context.Context) error {
 	defer usageStdout.Close()
 	ateworkerService.usage = workerstats.NewUsageEmitter(lp, usageStdout, pool)
 	defer workerstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
+	if ateworkerService.throttleMemory {
+		go ateworkerService.watchMemory(ctx)
+	}
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -286,6 +298,8 @@ func do(ctx context.Context) error {
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
 		PodIPs:               register.ParsePodIPs(*podIPs),
+		MemoryReservedBytes:  memoryReservedBytes,
+		ActorOverhead:        actorOverhead,
 		SandboxClass:         string(atev1.SandboxClassMicroVM),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
@@ -355,6 +369,9 @@ type AteWorkerService struct {
 	// crashReporter reports actors whose micro-VM died. Nil if it could not
 	// be set up.
 	crashReporter crashReporter
+	// bootID is the node's boot ID, recorded with each completed checkpoint so
+	// a retry after a reboot does not reuse it.
+	bootID string
 
 	// shuttingDown is set once SIGTERM has been received. While true, new workload
 	// RPCs are rejected with codes.Unavailable so the control plane reschedules.
@@ -372,10 +389,13 @@ type AteWorkerService struct {
 	chBinary   string
 	guestDebug bool
 
-	// memReserveMiB is guest RAM (MiB) held back from the pod's memory limit for
-	// the cloud-hypervisor VMM + virtiofsd (host processes sharing the pod cgroup
-	// with the guest RAM). Set from --vmm-mem-reserve-mib.
-	memReserveMiB int
+	// snapshotWrites holds a slot per CH snapshot write in flight, whose page
+	// cache memoryReservedBytes budgets for.
+	snapshotWrites chan struct{}
+	borrow         *memborrow.Ledger
+	// throttleMemory is set when actor cgroups get memory.high at what the
+	// actor books, with watchMemory killing the ones stuck there.
+	throttleMemory bool
 
 	// actorLogger forwards the actor container's stdout/stderr to the worker pod's
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
@@ -400,20 +420,23 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteWorkerService {
-	return &AteWorkerService{
-		locks:         actorlock.New(),
-		inFlight:      actorlock.NewInFlight(),
-		actors:        map[string]*hostedActor{},
-		guestSlots:    make(chan struct{}, statsFanOut),
-		maxActors:     maxActors,
-		podUID:        podUID,
-		chBinary:      chBinary,
-		guestDebug:    guestDebug,
-		memReserveMiB: memReserveMiB,
-		tunnel:        tunnel,
-		actorLogger:   actorLogger,
+func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
+	s := &AteWorkerService{
+		locks:          actorlock.New(),
+		inFlight:       actorlock.NewInFlight(),
+		actors:         map[string]*hostedActor{},
+		guestSlots:     make(chan struct{}, statsFanOut),
+		maxActors:      maxActors,
+		podUID:         podUID,
+		chBinary:       chBinary,
+		guestDebug:     guestDebug,
+		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
+		tunnel:         tunnel,
+		actorLogger:    actorLogger,
+		bootID:         bootID,
 	}
+	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
+	return s
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
