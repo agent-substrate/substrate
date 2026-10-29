@@ -163,6 +163,10 @@ kind: Pod
 metadata:
   name: egress-identity-probe
   namespace: ate-system
+  labels:
+    # NetworkPolicy/atenet-egress admits ingress on https only from pods with
+    # this label. WorkerPoolSyncer ignores a pod whose pool does not exist.
+    ate.dev/worker-pool: egress-identity-probe
 spec:
   containers:
   - name: curl
@@ -191,27 +195,36 @@ ${K} -n ate-system wait --for=condition=Ready pod/${PROBE_POD} --timeout=60s >/d
 
 BEFORE=$(egress_log_count)
 # %{http_connect} carries the proxy's CONNECT response code, and stays 000 when
-# the tunnel never opens. curl exits non-zero on a failed handshake, so capture
-# both and require that no CONNECT was ever answered.
+# the tunnel never opens. Require both 000 and a curl exit code that comes from
+# the gateway rejecting the client certificate at TLS: 35 (handshake alert) or
+# 55/56 (TLS 1.3 post-Finished alert or close while sending/reading CONNECT).
+# A connect timeout (28) means the packet never reached the gateway.
 PROBE=$(${K} -n ate-system exec ${PROBE_POD} -- sh -c "curl -s -o /dev/null -w '%{http_connect}' \
+  --connect-timeout 5 --max-time 10 \
   --proxy-cacert /run/servicedns.podcert.ate.dev/trust-bundle.pem \
   --proxy-cert /run/podidentity.podcert.ate.dev/credential-bundle.pem \
   --proxy-key /run/podidentity.podcert.ate.dev/credential-bundle.pem \
-  --proxytunnel -x https://atenet-egress.ate-system.svc:443 http://${TARGET_IP}:${TARGET_PORT}/; echo \" exit=\$?\"" || true)
-CODE=${PROBE%% *}
-info "pod-identity CONNECT attempt: http_connect=${CODE:-000}${PROBE#"${CODE}"}"
-if [[ "${CODE}" != "200" ]]; then
-  pass "a pod identity cannot open an egress tunnel (no CONNECT succeeded)"
-else
-  fail "expected the gateway to refuse a non-actor client certificate, but CONNECT returned 200"
-fi
+  --proxytunnel -x https://atenet-egress.ate-system.svc:443 http://${TARGET_IP}:${TARGET_PORT}/; echo \" \$?\"" || true)
+read -r CODE EXIT_CODE <<< "${PROBE}" || true
+CODE="${CODE:-000}"
+EXIT_CODE="${EXIT_CODE:-1}"
+info "pod-identity CONNECT attempt: http_connect=${CODE} exit=${EXIT_CODE}"
 # A rejected handshake never becomes an HTTP request, so it produces no egress
 # access-log line. Report whatever the gateway logged so a real failure is
 # diagnosable, but do not assert on it.
-if LINE=$(egress_log_since "${BEFORE}" | tail -1); [[ -n "${LINE:-}" ]]; then
+LINE=$(egress_log_since "${BEFORE}" | tail -1 || true)
+if [[ -n "${LINE}" ]]; then
   info "gateway egress log since the probe: ${LINE}"
+fi
+if [[ "${CODE}" == "000" && "${EXIT_CODE}" =~ ^(35|55|56)$ ]]; then
+  pass "a pod identity cannot open an egress tunnel (refused at TLS, curl exit=${EXIT_CODE})"
+  if [[ -z "${LINE}" ]]; then
+    info "no new egress access-log lines: the handshake was refused before HTTP, as expected"
+  fi
+elif [[ "${CODE}" == "200" ]]; then
+  fail "expected the gateway to refuse a non-actor client certificate, but CONNECT returned 200"
 else
-  info "no new egress access-log lines — the handshake was refused before HTTP, as expected"
+  fail "expected a TLS rejection (http_connect=000, exit=35/55/56), got http_connect=${CODE} exit=${EXIT_CODE}"
 fi
 
 echo
