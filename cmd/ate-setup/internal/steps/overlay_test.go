@@ -789,7 +789,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 
 // Under --e2e-tuning every path that applies atelet appends the e2e tuning
 // flags without dropping the overlay's own args, and a non-e2e kind render
-// keeps atelet on its default snapshot upload delay.
+// keeps atelet on its default snapshot delays.
 func TestRenderE2ETuning(t *testing.T) {
 	root := repoRoot(t)
 	const ateletDS = "atelet"
@@ -805,41 +805,41 @@ func TestRenderE2ETuning(t *testing.T) {
 			cfg:        config.Config{Router: config.RouterEnvoy},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "kind bundle",
 			cfg:        config.Config{Router: config.RouterEnvoy, Kind: true},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "agentgateway bundle",
 			cfg:        config.Config{Router: config.RouterAgentgateway},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "kind agentgateway bundle",
 			cfg:        config.Config{Router: config.RouterAgentgateway, Kind: true},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "atelet file",
 			path:       func(e *Env) string { return e.Cfg.Manifest("atelet.yaml") },
 			wantAtelet: true,
-			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "kind atelet overlay",
 			cfg:        config.Config{Kind: true},
 			path:       func(e *Env) string { return e.ateletManifestPath() },
 			wantAtelet: true,
-			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name: "api server file without atelet",
@@ -873,7 +873,7 @@ func TestRenderE2ETuning(t *testing.T) {
 		})
 	}
 
-	t.Run("kind without e2e-tuning omits snapshot-upload-delay", func(t *testing.T) {
+	t.Run("kind without e2e-tuning omits snapshot delays", func(t *testing.T) {
 		e := &Env{Cfg: &config.Config{Root: root, Kind: true}}
 		rendered, err := e.render(e.ateletManifestPath())
 		if err != nil {
@@ -885,7 +885,7 @@ func TestRenderE2ETuning(t *testing.T) {
 			t.Errorf("kind atelet args = %v, missing --log-level=debug", args)
 		}
 		for _, arg := range args {
-			if strings.HasPrefix(arg, "--snapshot-upload-delay") {
+			if strings.HasPrefix(arg, "--snapshot-upload-delay") || strings.HasPrefix(arg, "--snapshot-detach-delay") {
 				t.Errorf("kind atelet without --e2e-tuning carries %q in args %v", arg, args)
 			}
 		}
