@@ -268,11 +268,14 @@ if [[ "${exists}" == "true" ]]; then
   log "SandboxConfig ${SANDBOXCONFIG_NAME} exists; leaving it and its annotations as they are."
 else
   log "Creating SandboxConfig ${SANDBOXCONFIG_NAME} from ${MANIFEST_TEMPLATE}..."
-  run_kubectl create -f - <<<"$(sed -e "s|\${SANDBOXCONFIG_NAME}|${SANDBOXCONFIG_NAME}|g" \
+  rendered="$(sed -e "s|\${SANDBOXCONFIG_NAME}|${SANDBOXCONFIG_NAME}|g" \
     -e "s|\${SUBSTRATE_VERSION}|${version}|g" <<<"${manifest}")"
+  # The annotation goes into the created object, so the config never exists
+  # without it.
   if [[ "${create_with_default_annotation}" == "true" ]]; then
-    run_kubectl annotate --overwrite sandboxconfig "${SANDBOXCONFIG_NAME}" "${DEFAULT_ANNOTATION}=true"
+    rendered="$(kubectl annotate --local -f - -o yaml "${DEFAULT_ANNOTATION}=true" <<<"${rendered}")"
   fi
+  run_kubectl create -f - <<<"${rendered}"
 fi
 # Checked again against the config's real creation time and annotations.
 microvm_configs="$(get_microvm_configs)"

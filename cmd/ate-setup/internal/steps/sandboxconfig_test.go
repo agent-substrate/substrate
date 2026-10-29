@@ -160,7 +160,7 @@ func TestClassDefaultWarning(t *testing.T) {
 	}
 }
 
-func TestSandboxConfigExists(t *testing.T) {
+func TestRequireSandboxConfigNotDeleting(t *testing.T) {
 	const name = "substrate-v2-gvisor"
 	config := func(name string, deleting bool) atev1.SandboxConfig {
 		sc := atev1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: name}}
@@ -171,25 +171,21 @@ func TestSandboxConfigExists(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		configs    []atev1.SandboxConfig
-		wantExists bool
-		wantErr    bool
+		name    string
+		configs []atev1.SandboxConfig
+		wantErr bool
 	}{
 		{name: "fresh cluster"},
 		{name: "only other configs", configs: []atev1.SandboxConfig{config("substrate-v1-gvisor", false)}},
-		{name: "exists", configs: []atev1.SandboxConfig{config(name, false)}, wantExists: true},
+		{name: "exists", configs: []atev1.SandboxConfig{config(name, false)}},
 		{name: "being deleted", configs: []atev1.SandboxConfig{config(name, true)}, wantErr: true},
 		{name: "another config being deleted", configs: []atev1.SandboxConfig{config("substrate-v1-gvisor", true)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			exists, err := sandboxConfigExists(tt.configs, name)
+			err := requireSandboxConfigNotDeleting(tt.configs, name)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("sandboxConfigExists() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if exists != tt.wantExists {
-				t.Errorf("sandboxConfigExists() = %v, want %v", exists, tt.wantExists)
+				t.Fatalf("requireSandboxConfigNotDeleting() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

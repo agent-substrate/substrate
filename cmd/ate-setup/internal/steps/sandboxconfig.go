@@ -18,15 +18,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 
@@ -52,7 +51,7 @@ func (e *Env) DeploySandboxConfig(ctx context.Context, createWithDefaultAnnotati
 
 // deploySandboxConfig is DeploySandboxConfig for the config that
 // checkSandboxConfig returned.
-func (e *Env) deploySandboxConfig(ctx context.Context, sc sandboxConfig, createWithDefaultAnnotation bool) error {
+func (e *Env) deploySandboxConfig(ctx context.Context, sc *unstructured.Unstructured, createWithDefaultAnnotation bool) error {
 	log.Step("deploy_sandboxconfig")
 
 	if err := e.EnsureCRDs(ctx); err != nil {
@@ -65,27 +64,26 @@ func (e *Env) deploySandboxConfig(ctx context.Context, sc sandboxConfig, createW
 		return err
 	}
 
-	if sc.exists {
-		// An existing config may have been edited since, so it is left as it
-		// is.
-		log.Infof("SandboxConfig %s exists; leaving it and its annotations as they are", sc.name)
+	if createWithDefaultAnnotation {
+		annotations := sc.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[atev1.SandboxConfigClassDefaultAnnotation] = "true"
+		sc.SetAnnotations(annotations)
+	}
+	// Create, not apply: an existing config may have been edited since, so it
+	// is left as it is.
+	created, err := e.Kube.CreateOne(ctx, sc)
+	if err != nil {
+		return err
+	}
+	if !created {
+		log.Infof("SandboxConfig %s exists; leaving it and its annotations as they are", sc.GetName())
+	} else if createWithDefaultAnnotation {
+		log.Infof("created SandboxConfig %s with %s=true", sc.GetName(), atev1.SandboxConfigClassDefaultAnnotation)
 	} else {
-		if err := e.Kube.ApplyBytes(ctx, sc.manifest); err != nil {
-			return err
-		}
-		log.Infof("created SandboxConfig %s", sc.name)
-		if createWithDefaultAnnotation {
-			patch, err := json.Marshal(map[string]any{
-				"metadata": map[string]any{"annotations": map[string]any{atev1.SandboxConfigClassDefaultAnnotation: "true"}},
-			})
-			if err != nil {
-				return fmt.Errorf("while building the patch for SandboxConfig %s: %w", sc.name, err)
-			}
-			if _, err := e.sandboxConfigs().Patch(ctx, sc.name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: kube.FieldManager}); err != nil {
-				return fmt.Errorf("while annotating SandboxConfig %s: %w", sc.name, err)
-			}
-			log.Infof("annotated SandboxConfig %s %s=true", sc.name, atev1.SandboxConfigClassDefaultAnnotation)
-		}
+		log.Infof("created SandboxConfig %s", sc.GetName())
 	}
 	// Checked after the create, against the config's real creation time and
 	// annotations.
@@ -93,55 +91,53 @@ func (e *Env) deploySandboxConfig(ctx context.Context, sc sandboxConfig, createW
 	if err != nil {
 		return err
 	}
-	if warning := classDefaultWarning(configs, sc.name, atev1.SandboxClassGvisor); warning != "" {
+	if warning := classDefaultWarning(configs, sc.GetName(), atev1.SandboxClassGvisor); warning != "" {
 		log.Warnf("%s", warning)
 	}
 	return nil
 }
 
-// sandboxConfig is this build's gVisor SandboxConfig.
-type sandboxConfig struct {
-	name string
-	// manifest is the config rendered with name.
-	manifest []byte
-	exists   bool
-}
-
 // checkSandboxConfig returns this build's gVisor SandboxConfig, labeled with
 // the Substrate version that creates it. It fails when the version is not a
-// valid label value, or when sandboxConfigExists fails.
-func (e *Env) checkSandboxConfig(ctx context.Context) (sandboxConfig, error) {
+// valid label value, or when requireSandboxConfigNotDeleting fails.
+func (e *Env) checkSandboxConfig(ctx context.Context) (*unstructured.Unstructured, error) {
 	version := e.SubstrateVersion()
 	if errs := validation.IsValidLabelValue(version); len(errs) > 0 {
-		return sandboxConfig{}, fmt.Errorf("version %q is not a valid SandboxConfig label value: %s; set VERSION to one", version, strings.Join(errs, "; "))
+		return nil, fmt.Errorf("version %q is not a valid SandboxConfig label value: %s; set VERSION to one", version, strings.Join(errs, "; "))
 	}
 	tmpl := e.Cfg.Manifest("sandboxconfig-gvisor.yaml.tmpl")
 	unnamed, err := render.Template(tmpl, nil, nil)
 	if err != nil {
-		return sandboxConfig{}, err
+		return nil, err
 	}
 	name := sandboxConfigName(atev1.SandboxClassGvisor, unnamed)
 	configs, err := e.listSandboxConfigs(ctx)
 	if err != nil {
-		return sandboxConfig{}, err
+		return nil, err
 	}
-	exists, err := sandboxConfigExists(configs, name)
-	if err != nil {
-		return sandboxConfig{}, err
+	if err := requireSandboxConfigNotDeleting(configs, name); err != nil {
+		return nil, err
 	}
 	manifest := render.Expand(string(unnamed), map[string]string{"SANDBOXCONFIG_NAME": name, "SUBSTRATE_VERSION": version}, nil)
-	return sandboxConfig{name: name, manifest: manifest, exists: exists}, nil
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if len(objs) != 1 {
+		return nil, fmt.Errorf("%s holds %d objects, want 1 SandboxConfig", tmpl, len(objs))
+	}
+	return objs[0], nil
 }
 
-// sandboxConfigExists reports whether configs hold the SandboxConfig named
-// name. It fails when that config is being deleted, because applying it would
-// only update the terminating object.
-func sandboxConfigExists(configs []atev1.SandboxConfig, name string) (bool, error) {
+// requireSandboxConfigNotDeleting fails when configs hold the SandboxConfig
+// named name and it is being deleted, because the create would find the
+// terminating object and leave it.
+func requireSandboxConfigNotDeleting(configs []atev1.SandboxConfig, name string) error {
 	i := slices.IndexFunc(configs, func(sc atev1.SandboxConfig) bool { return sc.Name == name })
 	if i >= 0 && !configs[i].DeletionTimestamp.IsZero() {
-		return false, fmt.Errorf("SandboxConfig %s is being deleted; wait until it is gone, then run this again", name)
+		return fmt.Errorf("SandboxConfig %s is being deleted; wait until it is gone, then run this again", name)
 	}
-	return i >= 0, nil
+	return nil
 }
 
 // listSandboxConfigs returns the SandboxConfigs in the cluster. A cluster

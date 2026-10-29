@@ -65,11 +65,11 @@ func (c *Client) Apply(ctx context.Context, objs []*unstructured.Unstructured) e
 	return nil
 }
 
-// applyBackoff paces the retries of a failed apply. Five attempts over roughly
-// eight seconds covers the two things that routinely fail here — a validating
-// webhook whose pod is still starting, and a namespace or CRD whose creation
-// has not reached the apiserver handling this request — without turning a
-// genuinely broken cluster into a long wait.
+// applyBackoff paces the retries of a failed apply or create. Five attempts
+// over roughly eight seconds covers the two things that routinely fail here —
+// a validating webhook whose pod is still starting, and a namespace or CRD
+// whose creation has not reached the apiserver handling this request — without
+// turning a genuinely broken cluster into a long wait.
 var applyBackoff = wait.Backoff{
 	Steps:    5,
 	Duration: 500 * time.Millisecond,
@@ -109,6 +109,34 @@ func applyWithRetry(ctx context.Context, ri dynamicResource, obj *unstructured.U
 		return fmt.Errorf("while applying %s: %w", Describe(obj), err)
 	}
 	return nil
+}
+
+// CreateOne creates obj unless an object of its name exists, retrying the
+// failures that clear on their own. It reports whether it created obj.
+func (c *Client) CreateOne(ctx context.Context, obj *unstructured.Unstructured) (bool, error) {
+	ri, err := c.resourceFor(obj)
+	if err != nil {
+		return false, err
+	}
+	return createWithRetry(ctx, ri, obj)
+}
+
+func createWithRetry(ctx context.Context, ri dynamicResource, obj *unstructured.Unstructured) (bool, error) {
+	retryable := func(err error) bool {
+		return ctx.Err() == nil && retryableWaitError(err)
+	}
+	err := retry.OnError(applyBackoff, retryable, func() error {
+		_, err := ri.Create(ctx, obj, metav1.CreateOptions{FieldManager: FieldManager})
+		return err
+	})
+	// A retry after a lost response can find the object the first attempt
+	// created, and so reports false.
+	if apierrors.IsAlreadyExists(err) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("while creating %s: %w", Describe(obj), err)
+	}
+	return true, nil
 }
 
 // retryableApplyError reports whether a failed apply is worth re-sending.
@@ -271,6 +299,7 @@ func (c *Client) resourceFor(obj *unstructured.Unstructured) (dynamicResource, e
 // namespaced and cluster-scoped clients both satisfy it.
 type dynamicResource interface {
 	Apply(ctx context.Context, name string, obj *unstructured.Unstructured, opts metav1.ApplyOptions, subresources ...string) (*unstructured.Unstructured, error)
+	Create(ctx context.Context, obj *unstructured.Unstructured, opts metav1.CreateOptions, subresources ...string) (*unstructured.Unstructured, error)
 	Delete(ctx context.Context, name string, opts metav1.DeleteOptions, subresources ...string) error
 	Get(ctx context.Context, name string, opts metav1.GetOptions, subresources ...string) (*unstructured.Unstructured, error)
 }
