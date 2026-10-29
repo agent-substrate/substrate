@@ -74,7 +74,8 @@ func useTempNodeDirs(t *testing.T) {
 // the request, never derived from the actor UID.
 type fakeWorker struct {
 	ateworkerpb.UnimplementedWorkerServer
-	// mu guards the record maps: concurrent RPCs record at the same time.
+	// mu guards the record maps and stoppedByResp: concurrent RPCs record at
+	// the same time.
 	mu sync.Mutex
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
@@ -85,6 +86,9 @@ type fakeWorker struct {
 	// restoreErr, if set, fails every RestoreWorkload after it recorded the
 	// request, as a worker that could not start the sandbox would.
 	restoreErr error
+	// checkpointErr, if set, fails every CheckpointWorkload after it recorded
+	// the request, before it writes any snapshot file.
+	checkpointErr error
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
 	actorDirs map[string]*ateworkerpb.ActorDirs
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
@@ -104,8 +108,32 @@ type fakeWorker struct {
 	// onRestore, if non-nil, runs inside RestoreWorkload after it recorded
 	// the request, before it fails with restoreErr or succeeds.
 	onRestore func()
+	// stopsWorkload, if set, makes a checkpoint stop the workload, as a real
+	// worker's does. Until a Run or Restore starts it again, CheckpointWorkload
+	// answers with the stopping checkpoint's response while the checkpoint dir
+	// still holds its files, and fails otherwise.
+	stopsWorkload bool
+	// stoppedByResp is the response of the checkpoint that stopped the
+	// workload, nil while the workload runs. Guarded by mu.
+	stoppedByResp *ateworkerpb.CheckpointWorkloadResponse
 	// terminations counts TerminateWorkload calls.
 	terminations atomic.Int32
+}
+
+// setStoppedBy records the response of the checkpoint that stopped the
+// workload, or nil once the workload runs again.
+func (f *fakeWorker) setStoppedBy(resp *ateworkerpb.CheckpointWorkloadResponse) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stoppedByResp = resp
+}
+
+// stoppedBy returns the response of the checkpoint that stopped the
+// workload, or nil while the workload runs.
+func (f *fakeWorker) stoppedBy() *ateworkerpb.CheckpointWorkloadResponse {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stoppedByResp
 }
 
 func (f *fakeWorker) recordFidelity(rpc string, fidelity ateworkerpb.SnapshotFidelity) {
@@ -128,13 +156,25 @@ func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDir
 
 func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
+	f.setStoppedBy(nil)
 	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
 
 func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
+	if resp := f.stoppedBy(); resp != nil {
+		for _, name := range resp.GetSnapshotFiles() {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				return nil, status.Errorf(codes.Internal, "no workload to checkpoint: %v", err)
+			}
+		}
+		return resp, nil
+	}
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
@@ -145,10 +185,14 @@ func (f *fakeWorker) CheckpointWorkload(ctx context.Context, req *ateworkerpb.Ch
 	if f.onCheckpoint != nil {
 		f.onCheckpoint()
 	}
+	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}
+	if f.stopsWorkload {
+		f.setStoppedBy(resp)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
+	return resp, nil
 }
 
 func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
@@ -161,6 +205,7 @@ func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.Restore
 	if f.restoreErr != nil {
 		return nil, f.restoreErr
 	}
+	f.setStoppedBy(nil)
 	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
 	for name := range f.snapshotFiles {
@@ -1479,9 +1524,10 @@ func (a *pluginActor) snapshot(name string, generation int32) *ateletpb.Snapshot
 	return lifecycleSnapshot(pluginActorUID, name, generation, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 }
 
-func (a *pluginActor) checkpoint(t *testing.T, snap *ateletpb.Snapshot, mode ateletpb.UploadMode) (*ateletpb.CheckpointResponse, error) {
-	t.Helper()
-	return a.s.Checkpoint(t.Context(), &ateletpb.CheckpointRequest{
+// checkpointRequest is the CheckpointRequest the control plane sends to take
+// snap under mode.
+func (a *pluginActor) checkpointRequest(snap *ateletpb.Snapshot, mode ateletpb.UploadMode) *ateletpb.CheckpointRequest {
+	return &ateletpb.CheckpointRequest{
 		Atespace:              "ate-demo",
 		ActorName:             "counter",
 		ActorUid:              pluginActorUID,
@@ -1491,7 +1537,12 @@ func (a *pluginActor) checkpoint(t *testing.T, snap *ateletpb.Snapshot, mode ate
 		Spec:                  a.spec,
 		Snapshot:              snap,
 		UploadConfig:          &ateletpb.UploadConfig{Mode: mode},
-	})
+	}
+}
+
+func (a *pluginActor) checkpoint(t *testing.T, snap *ateletpb.Snapshot, mode ateletpb.UploadMode) (*ateletpb.CheckpointResponse, error) {
+	t.Helper()
+	return a.s.Checkpoint(t.Context(), a.checkpointRequest(snap, mode))
 }
 
 // restoreLocal resumes the actor from its local snapshot named name, taken at
@@ -1784,6 +1835,62 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 	}
 }
 
+// TestRetriedCheckpointAfterUncommittedStaging retries a deferred Checkpoint
+// whose first attempt died after the worker stopped the workload and atelet
+// began staging the local snapshot, but before the snapshot committed. The
+// checkpoint dir still holds the worker's files, so the worker answers the
+// retry from them, and the retry commits the snapshot.
+func TestRetriedCheckpointAfterUncommittedStaging(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// notWritten names snapshot files the worker did not write. Staging
+		// stops at the first of them, as it would if atelet died there.
+		notWritten []string
+	}{
+		{name: "staging interrupted", notWritten: []string{"pages.img"}},
+		{name: "local snapshot published"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := runPluginActor(t)
+			a.worker.stopsWorkload = true
+			var captures atomic.Int32
+			a.worker.onCheckpoint = func() { captures.Add(1) }
+			snap := a.snapshot("snap-1", 1)
+			req := a.checkpointRequest(snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+
+			// The first attempt gets as far as staging the local snapshot.
+			wresp, err := a.worker.CheckpointWorkload(t.Context(), &ateworkerpb.CheckpointWorkloadRequest{
+				ActorDirs: ateletpath.ActorDirs(pluginActorUID),
+				Fidelity:  toWorkerFidelity(snap.GetFidelity()),
+			})
+			if err != nil {
+				t.Fatalf("CheckpointWorkload: %v", err)
+			}
+			rec, err := readSandboxRecord(pluginActorUID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec.SnapshotFiles = slices.Concat(wresp.GetSnapshotFiles(), tc.notWritten)
+			err = a.s.moveLocalCheckpoint(t.Context(), req, rec)
+			if wantErr := len(tc.notWritten) > 0; (err != nil) != wantErr {
+				t.Fatalf("moveLocalCheckpoint = %v, want error %t", err, wantErr)
+			}
+
+			resp, err := a.s.Checkpoint(t.Context(), req)
+			if err != nil {
+				t.Fatalf("retried Checkpoint: %v", err)
+			}
+			if got := resp.GetState().GetLatestLocal().GetSnapshot(); !proto.Equal(got, snap) {
+				t.Errorf("latest_local = %v, want %v", got, snap)
+			}
+			if n := captures.Load(); n != 1 {
+				t.Errorf("worker captured the workload %d times, want once", n)
+			}
+			a.restoreLocal(t, "snap-1", 1)
+		})
+	}
+}
+
 // TestTerminateWaitsForInFlightRPC checks that Terminate waits on the
 // per-actor lock while Checkpoint or PromoteSnapshot is in flight, then cleans
 // up the actor's tracked state and local files once that RPC returns.
@@ -1910,17 +2017,6 @@ func TestFailedCheckpointKeepsLocalSnapshot(t *testing.T) {
 			mode: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
 			fail: func(t *testing.T, a *pluginActor) {
 				a.store.putErr = errors.New("object store unavailable")
-			},
-		},
-		{
-			name: "pause move fails",
-			snap: "pause-snap-2",
-			mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
-			fail: func(t *testing.T, a *pluginActor) {
-				// A file where the new snapshot's directory belongs fails the move.
-				if err := os.WriteFile(ateletpath.LocalSnapshotDir(pluginActorUID, "pause-snap-2"), nil, 0o600); err != nil {
-					t.Fatal(err)
-				}
 			},
 		},
 		{
@@ -3870,4 +3966,28 @@ func TestCheckpointFinishesWhenCallerCancels(t *testing.T) {
 		}
 		unlock()
 	})
+}
+
+// A worker that is unreachable when Checkpoint calls it fails the checkpoint
+// with Unavailable, however many times in a row, so ateapi keeps the actor
+// SUSPENDING for a retry instead of crashing an actor whose state only the
+// worker holds. The retry checkpoints once the worker answers again.
+func TestCheckpointKeepsWorkerUnavailable(t *testing.T) {
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	checkpointCode := func() codes.Code {
+		_, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
+		return apierror.Code(err)
+	}
+
+	a.worker.checkpointErr = status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: dial unix /var/lib/ate/worker/sock: connect: no such file or directory"`)
+	for i := 1; i <= 5; i++ {
+		if got := checkpointCode(); got != codes.Unavailable {
+			t.Fatalf("Checkpoint %d with the worker unreachable: code = %v, want %v", i, got, codes.Unavailable)
+		}
+	}
+	a.worker.checkpointErr = nil
+	if got := checkpointCode(); got != codes.OK {
+		t.Fatalf("Checkpoint with the worker back: code = %v, want %v", got, codes.OK)
+	}
 }

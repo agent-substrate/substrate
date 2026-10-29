@@ -235,6 +235,24 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			wantUsageLine: "kubectl-ate logs actor <actor-name> [flags]",
 		},
 		{
+			name:          "proxy actor with nothing",
+			args:          []string{"proxy", "actor"},
+			wantErrorLine: "Error: missing required argument <actor-name> and required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate proxy actor <actor-name> [[local-port:]remote-port ...] [flags]",
+		},
+		{
+			name:          "proxy actor missing -a",
+			args:          []string{"proxy", "actor", "my-actor"},
+			wantErrorLine: "Error: missing required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate proxy actor <actor-name> [[local-port:]remote-port ...] [flags]",
+		},
+		{
+			name:          "proxy actor invalid port mapping",
+			args:          []string{"proxy", "actor", "my-actor", "badport", "-a", "space-1"},
+			wantErrorLine: `Error: invalid port "badport"`,
+			wantUsageLine: "kubectl-ate proxy actor <actor-name> [[local-port:]remote-port ...] [flags]",
+		},
+		{
 			name:          "create actor-template missing -f",
 			args:          []string{"create", "actor-template"},
 			wantErrorLine: "Error: missing required flag -f/--filename",

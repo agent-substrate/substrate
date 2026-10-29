@@ -47,7 +47,7 @@ body:
       label: Steps to Reproduce
       description: How can the issue be reproduced? Provide commands, scripts, or manifests (e.g., ActorTemplate).
       placeholder: |
-        1. Deploy Substrate with `hack/install-ate-kind.sh ...`
+        1. Deploy Substrate with `go run ./cmd/ate-setup --kind ...`
         2. Apply manifest `kubectl apply -f ...`
         3. Run command `...`
         4. See error

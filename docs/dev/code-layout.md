@@ -33,9 +33,7 @@ a commitment to backwards-compatibility and discoverability.
 **`internal/`** is for Go packages that are shared across multiple binaries
 within this module but are not part of any external API. The Go toolchain
 enforces that nothing outside `go.ate.dev/substrate` can import
-these. The exception is [`internal/plugins/`](../../internal/plugins/README.md):
-self-contained plugins, each a Go module of its own, in a temporary location
-that nothing else in the repo should depend on or import.
+these.
 
 > **Use `pkg/` sparingly.** Once the project reaches GA, any exported type,
 > function, or field in `pkg/` becomes subject to a compatibility guarantee —
@@ -62,6 +60,20 @@ Each `.proto` sits next to its generated Go. Proto packages are
 convention instead: `package v1`, imported as `atev1`. A new version of an
 API goes in a new directory next to the old one.
 
+### Plugins
+
+Core keeps a reference implementation of each plugin API, such as the
+Kubernetes Secrets credential provider. We use these to develop and test
+substrate on `kind`.
+
+Anyone can implement a plugin API and run their own plugin. We also host
+additional implementations in the
+[agent-substrate-plugins](https://github.com/agent-substrate-plugins)
+organization, subject to approval by the substrate maintainers. These import
+only substrate's public `api/` and `pkg/` packages, and each repository is named
+for the plugin API it implements and then its backend, as in
+[credprovider-gcp-secret-manager](https://github.com/agent-substrate-plugins/credprovider-gcp-secret-manager).
+
 ### `cmd/<binary>/`
 
 Each subdirectory of `cmd/` corresponds to one compiled binary:
@@ -73,7 +85,7 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
 | `cmd/atenet`         | Network proxy / Envoy external-processing server      |
 | `cmd/ateworker-gvisor`   | In-pod gVisor container image entry point             |
-| `cmd/ateworker-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
+| `cmd/ateworker-microvm`  | In-pod kata + cloud-hypervisor microVM container image entry point |
 | `cmd/kubectl-ate`    | `kubectl` plugin for interacting with Substrate       |
 | `cmd/podcertcontroller` | Controller that issues pod TLS certificates        |
 

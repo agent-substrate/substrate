@@ -62,7 +62,10 @@ func TestFromFiles(t *testing.T) {
 				t.Fatalf("writing memory limit: %v", err)
 			}
 
-			got := fromDir(dir, testActors)
+			got, err := fromDir(dir, testActors, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("reported capacity mismatch (-want +got):\n%s", diff)
 			}
@@ -71,10 +74,44 @@ func TestFromFiles(t *testing.T) {
 }
 
 func TestFromFilesMissing(t *testing.T) {
-	got := fromDir(t.TempDir(), testActors)
+	got, err := fromDir(t.TempDir(), testActors, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := &ateletpb.WorkerResources{Actors: testActors}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("unset environment capacity mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestFromFilesMemoryReserved(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, workercapacity.MemoryLimitFile), []byte("1073741824"), 0o600); err != nil {
+		t.Fatalf("writing memory limit: %v", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		reserved int64
+		want     int64
+		wantErr  bool
+	}{
+		{name: "some", reserved: 64 << 20, want: 960 << 20},
+		{name: "all of it", reserved: 1 << 30, wantErr: true},
+		{name: "more than all of it", reserved: 2 << 30, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := fromDir(dir, testActors, tc.reserved)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("fromDir() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			want := &ateletpb.WorkerResources{Actors: testActors, MemoryBytes: tc.want}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("reported capacity mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -843,5 +880,40 @@ func TestReportFailsFastOnMissingConfig(t *testing.T) {
 				t.Errorf("Report() retried a permanent failure until the deadline: %v", err)
 			}
 		})
+	}
+}
+
+func TestReconcilerSyncReportsActorOverhead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
+	f := gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v2"},
+		sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})
+	if _, err := sandboxruntimes.Write(path, f); err != nil {
+		t.Fatal(err)
+	}
+	overhead := &ateletpb.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
+	var got *ateletpb.SetWorkerSandboxRuntimesRequest
+	r := newReconciler(
+		ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, ActorOverhead: overhead},
+		3,
+		func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(path) },
+		func(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+			got = req
+			return nil
+		},
+	)
+	if retry, err := r.sync(context.Background()); retry || err != nil {
+		t.Fatalf("sync() = %v, %v, want false, nil", retry, err)
+	}
+	c := got.GetSandboxClasses()[0]
+	for _, rt := range append([]*ateletpb.WorkerSandboxRuntime{c.GetDefaultRuntime()}, c.GetRestorableRuntimes()...) {
+		if diff := cmp.Diff(overhead, rt.GetActorOverhead(), protocmp.Transform()); diff != "" {
+			t.Errorf("actor_overhead mismatch (-want +got):\n%s", diff)
+		}
+		if rt.GetActorOverhead() == overhead {
+			t.Error("runtime shares the worker's actor_overhead message")
+		}
+	}
+	if len(c.GetRestorableRuntimes()) != 1 {
+		t.Errorf("reported %d restorable runtimes, want 1", len(c.GetRestorableRuntimes()))
 	}
 }

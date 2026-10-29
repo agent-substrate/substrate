@@ -33,31 +33,16 @@ type Sysctl struct {
 	Value string
 }
 
-// forwardingSysctls disables IPv4 and IPv6 forwarding across all interfaces
-// and default interface templates. Explicitly clearing default/forwarding
-// ensures interfaces created after namespace setup (such as microVM taps)
-// do not inherit forwarding on nodes where all=0 but default=1.
-var forwardingSysctls = []Sysctl{
-	{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
-	{Key: "net/ipv4/conf/default/forwarding", Value: "0"},
-	{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
-	{Key: "net/ipv6/conf/default/forwarding", Value: "0"},
-}
-
-// DisableForwarding turns off IPv4 and IPv6 forwarding in this namespace, which
-// otherwise inherits the node's IPv4 setting. Missing IPv6 keys are skipped.
-func DisableForwarding() error {
-	return SetSysctls(forwardingSysctls...)
-}
-
-// SetSysctls writes value to each sysctl in the current network namespace under
-// a single lock hold and at most one /proc/sys read-write remount. Missing
-// net/ipv6/ keys are skipped.
+// SetSysctls writes each sysctl, in order, in the current network namespace,
+// under a single lock hold and at most one /proc/sys read-write remount.
+// Every key is written even if it already reads that way, because writing one
+// key can change another: turning net/ipv4/conf/all/forwarding off sets
+// net/ipv4/conf/all/accept_redirects. Missing net/ipv6/ keys are skipped.
 func SetSysctls(sysctls ...Sysctl) error {
 	return hostProcSys.set(sysctls)
 }
 
-// procSysMu serializes setSysctl. Sandboxes are set up concurrently and share
+// procSysMu serializes SetSysctls. Sandboxes are set up concurrently and share
 // one /proc/sys mount, so otherwise one caller's read-only restore can land
 // between another's remount and write, failing that write with EROFS.
 var procSysMu sync.Mutex
@@ -65,13 +50,11 @@ var procSysMu sync.Mutex
 // procSys wraps the /proc/sys file and mount operations so that unit tests can
 // substitute a fake mount. Production code uses hostProcSys.
 type procSys struct {
-	readFile  func(path string) ([]byte, error)
 	writeFile func(path string, data []byte) error
 	remount   func(readOnly bool) error
 }
 
 var hostProcSys = procSys{
-	readFile: os.ReadFile,
 	writeFile: func(path string, data []byte) error {
 		return os.WriteFile(path, data, 0o644)
 	},
@@ -88,35 +71,20 @@ func (p procSys) set(sysctls []Sysctl) error {
 	procSysMu.Lock()
 	defer procSysMu.Unlock()
 
-	var toWrite []Sysctl
-	for _, s := range sysctls {
-		path := "/proc/sys/" + s.Key
-		b, err := p.readFile(path)
-		if err == nil && strings.TrimSpace(string(b)) == s.Value {
-			continue
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			if strings.HasPrefix(s.Key, "net/ipv6/") {
+	writeAll := func() error {
+		for _, s := range sysctls {
+			err := p.writeFile("/proc/sys/"+s.Key, []byte(s.Value+"\n"))
+			if errors.Is(err, fs.ErrNotExist) && strings.HasPrefix(s.Key, "net/ipv6/") {
 				continue
 			}
-			return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
-		}
-		toWrite = append(toWrite, s)
-	}
-	if len(toWrite) == 0 {
-		return nil
-	}
-
-	writeAll := func() error {
-		for _, s := range toWrite {
-			path := "/proc/sys/" + s.Key
-			if err := p.writeFile(path, []byte(s.Value+"\n")); err != nil {
+			if err != nil {
 				return fmt.Errorf("while setting %s in the current netns: %w", s.Key, err)
 			}
 		}
 		return nil
 	}
 
+	// Only EROFS is worth remounting for; any other error is returned as is.
 	err := writeAll()
 	if err == nil || !errors.Is(err, unix.EROFS) {
 		return err

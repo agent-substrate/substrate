@@ -708,8 +708,6 @@ def main() -> None:
         (work_dir / f"{args.name}_failures.csv", "failures.csv"),
         (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
         (server_summary_json, "server_summary.json"),
-        # TODO: remove after data migration
-        (jsonl_path, f"{args.name}.jsonl"),
     ]
     for src, basename in files:
         if not src.exists():

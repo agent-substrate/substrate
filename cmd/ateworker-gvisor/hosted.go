@@ -26,6 +26,7 @@ import (
 
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -53,11 +54,15 @@ type hostedActor struct {
 	// nothing that waits on it later can be fooled by a reused pid. Nil if it
 	// could not be pinned. Set once, under the actor's lock.
 	sandbox *sandboxProcess
+	// memoryBytes is the actor's memory limit, what it books on the worker.
+	memoryBytes int64
+	// memory kills the sandbox once it is stuck at its memory.high.
+	memory cgroup.MemoryGuard
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*hostedActor, *actornet.SandboxSession, error) {
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, memoryBytes int64) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *actornet.SandboxSession
@@ -76,16 +81,17 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution) (*
 	// The sandbox cgroup is new with every activation, so its counters start
 	// at zero.
 	ctx, cancel := context.WithCancel(context.Background())
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel}
+	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
-// hostActor sets up the actor's network, replacing any stale one.
-func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs) (*hostedActor, error) {
+// hostActor sets up the actor's network, replacing any stale one. memoryBytes
+// is what the actor books.
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs, memoryBytes int64) (*hostedActor, error) {
 	uid := attribution.UID
 
-	hosted, stale, err := s.admitActor(attribution)
+	hosted, stale, err := s.admitActor(attribution, memoryBytes)
 	if err != nil {
 		return nil, err
 	}

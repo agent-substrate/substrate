@@ -695,6 +695,63 @@ spec:
 	}
 }
 
+func TestSetAPIServerEgressGatewayArgs(t *testing.T) {
+	const manifest = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: ate-api-server
+        args:
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+        - --egress-gateway-spiffe-id=stale
+`
+	const (
+		egress = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+		a      = "spiffe://cluster.local/ns/ate-system/sa/sts-credential-provider"
+		b      = "spiffe://cluster.local/ns/plugins/sa/other"
+	)
+	for _, tc := range []struct {
+		name   string
+		extras []string
+		want   []string
+	}{
+		{
+			name:   "gateway first, then extras without duplicates",
+			extras: []string{a, egress, b, a},
+			want: []string{
+				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
+				"--egress-gateway-spiffe-id=" + egress,
+				"--egress-gateway-spiffe-id=" + a,
+				"--egress-gateway-spiffe-id=" + b,
+			},
+		},
+		{
+			name: "no extras drops the flag",
+			want: []string{"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs, err := kube.DecodeManifestBytes([]byte(manifest))
+			if err != nil {
+				t.Fatalf("DecodeManifestBytes() error = %v", err)
+			}
+			if err := setAPIServerEgressGatewayArgs(objs, "ate-system", tc.extras); err != nil {
+				t.Fatalf("setAPIServerEgressGatewayArgs() error = %v", err)
+			}
+			containers, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "template", "spec", "containers")
+			args, _, _ := unstructured.NestedStringSlice(containers[0].(map[string]any), "args")
+			if diff := cmp.Diff(tc.want, args); diff != "" {
+				t.Errorf("ate-api-server args (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 	e := &Env{Cfg: &config.Config{
 		TransferGSAName: testTransferGSAName, ProjectID: testProjectID,

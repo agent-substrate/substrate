@@ -132,7 +132,7 @@ func pausedStatus(state ateapi.ActorState, node string) *ateapi.ActorStatus {
 func uploadPendingStatus(node string) *ateapi.ActorStatus {
 	status := pausedStatus(ateapi.ActorState_ACTOR_STATE_SUSPENDED, node)
 	status.Snapshots[0].DurableSnapshot = &ateapi.SnapshotStorage{
-		Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+		State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 		Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/team-a/actors/uid/snap-1"},
 	}
 	return status
@@ -361,7 +361,7 @@ func TestMintWorkerActorJwt_Errors(t *testing.T) {
 			ctx:  authed,
 			status: func() *ateapi.ActorStatus {
 				status := uploadPendingStatus("node-1")
-				status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				status.Snapshots[0].DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 				return status
 			}(),
 			want: codes.OK,

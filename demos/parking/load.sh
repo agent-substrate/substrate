@@ -29,43 +29,41 @@
 # See README.md for how to flip the router flag.
 #
 # Usage:
-#   ./load.sh [-d duration_secs] [-r router_url] [-a atespace] [actor_id ...]
+#   ./load.sh [-d duration_secs] [-a atespace] [actor_id ...]
 #
 # Examples:
-#   ./load.sh                      # 30s, actors p1 p2 p3 p4, http://localhost:8000
+#   ./load.sh                      # 30s, actors p1 p2 p3 p4
 #   ./load.sh -d 60 p1 p2 p3 p4 p5 p6
 #
 # Prerequisites:
 #   * `kubectl ate` plugin installed (go install ./cmd/kubectl-ate)
-#   * router port-forwarded:  kubectl port-forward -n ate-system svc/atenet-router 8000:80
+#   * an install whose --ingress-allowed-spiffe-ids includes
+#     spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
 set -uo pipefail
 
 DURATION=30
-ROUTER="http://localhost:8000"
 # The template name, resolved in the actors' atespace (--template).
 TEMPLATE="parking"
 ATESPACE="ate-demo-parking"
+BASE_PORT=18000
 
 usage() {
   cat <<'EOF'
 load.sh -- oversubscription load generator for the request-parking demo.
 
-Usage: ./load.sh [-d duration_secs] [-r router_url] [-a atespace] [actor_id ...]
+Usage: ./load.sh [-d duration_secs] [-a atespace] [actor_id ...]
   -d   load duration in seconds (default 30)
-  -r   router base URL          (default http://localhost:8000)
   -a   atespace for the actors  (default ate-demo-parking)
   args actor IDs                (default: p1 p2 p3 p4)
 
-Prereqs: `kubectl ate` installed and the router port-forwarded
-         (kubectl port-forward -n ate-system svc/atenet-router 8000:80).
+Prereqs: `kubectl ate` installed.
 EOF
 }
 
-while getopts ":d:r:a:h" opt; do
+while getopts ":d:a:h" opt; do
   case "${opt}" in
     d) DURATION="${OPTARG}" ;;
-    r) ROUTER="${OPTARG}" ;;
     a) ATESPACE="${OPTARG}" ;;
     h) usage; exit 0 ;;
     *) echo "unknown option -${OPTARG}; use -h for help" >&2; exit 2 ;;
@@ -80,13 +78,20 @@ fi
 
 TMP="$(mktemp -d)"
 pids=()
-cleanup() { rm -rf "${TMP}"; }
-abort() { [[ ${#pids[@]} -gt 0 ]] && kill "${pids[@]}" 2>/dev/null; cleanup; exit 130; }
+proxy_pids=()
+cleanup() {
+  [[ ${#proxy_pids[@]} -gt 0 ]] && kill "${proxy_pids[@]}" 2>/dev/null
+  rm -rf "${TMP}"
+}
+abort() {
+  [[ ${#pids[@]} -gt 0 ]] && kill "${pids[@]}" 2>/dev/null
+  cleanup
+  exit 130
+}
 trap cleanup EXIT
 trap abort INT TERM
 
 echo "==> request-parking load test"
-echo "    router:   ${ROUTER}"
 echo "    duration: ${DURATION}s"
 echo "    actors:   ${ACTORS[*]} (${#ACTORS[@]}) vs a 2-worker pool -> oversubscribed"
 echo
@@ -99,26 +104,36 @@ for a in "${ACTORS[@]}"; do
   kubectl ate create actor "${a}" --atespace "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 done
 
+echo "==> starting local proxies for actors ..."
+for i in "${!ACTORS[@]}"; do
+  a="${ACTORS[$i]}"
+  port=$((BASE_PORT + i + 1))
+  kubectl ate proxy actor "${a}" "${port}:80" --atespace "${ATESPACE}" >"${TMP}/${a}.proxy.log" 2>&1 &
+  proxy_pids+=($!)
+done
+sleep 3
+
 # One worker per actor: hammer it with request->suspend until the deadline.
 worker() {
-  local actor="$1" log="${TMP}/$1.log"
+  local actor="$1" port="$2" log="${TMP}/$1.log"
   local deadline=$(( $(date +%s) + DURATION ))
   while [[ $(date +%s) -lt ${deadline} ]]; do
     # %{http_code} lets us tally outcomes; %{time_total} reveals parking waits.
     curl -s -o /dev/null -w '%{http_code} %{time_total}\n' \
-      -H "ate-target-actor: ${ATESPACE}/${actor}" \
-      "${ROUTER}" >>"${log}" 2>/dev/null
+      "http://127.0.0.1:${port}" >>"${log}" 2>/dev/null
     # Free the worker so a parked competitor can proceed (simulate going idle).
     kubectl ate suspend actor "${actor}" --atespace "${ATESPACE}" >/dev/null 2>&1 || true
   done
 }
 
 echo "==> generating load for ${DURATION}s ..."
-for a in "${ACTORS[@]}"; do
-  worker "${a}" &
+for i in "${!ACTORS[@]}"; do
+  a="${ACTORS[$i]}"
+  port=$((BASE_PORT + i + 1))
+  worker "${a}" "${port}" &
   pids+=($!)
 done
-wait
+wait "${pids[@]}"
 
 # ---- aggregate -------------------------------------------------------------
 echo
@@ -126,7 +141,7 @@ echo "==> results"
 cat "${TMP}"/*.log 2>/dev/null >"${TMP}/all" || true
 total=$(wc -l <"${TMP}/all" | tr -d ' ')
 if [[ "${total}" -eq 0 ]]; then
-  echo "    no responses recorded -- is the router port-forwarded at ${ROUTER}?"
+  echo "    no responses recorded -- check proxy logs"
   exit 1
 fi
 

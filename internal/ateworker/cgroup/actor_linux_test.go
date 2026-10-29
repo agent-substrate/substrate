@@ -35,7 +35,7 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 	root := ownCgroup(t)
 	self := "/" + strings.TrimPrefix(root, Root)
 
-	leaf, err := openActorLeaf(root, "cgroup-test", 500)
+	leaf, err := openActorLeaf(root, "cgroup-test", 500, 0)
 	if err != nil {
 		t.Skipf("cannot create a cgroup here: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 func TestKillActorLeaf(t *testing.T) {
 	roottest.Require(t, "creates cgroups")
 	root := ownCgroup(t)
-	leaf, err := openActorLeaf(root, "cgroup-kill-test", 0)
+	leaf, err := openActorLeaf(root, "cgroup-kill-test", 0, 0)
 	if err != nil {
 		t.Skipf("cannot create a cgroup here: %v", err)
 	}
@@ -92,15 +92,9 @@ func TestKillActorLeaf(t *testing.T) {
 // ownCgroup is the test process's own cgroup, under which it may create leaves.
 func ownCgroup(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("/proc/self/cgroup")
+	p, err := cgroupPath("/proc/self/cgroup")
 	if err != nil {
-		t.Fatal(err)
+		t.Skip(err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		if p, ok := strings.CutPrefix(line, "0::"); ok {
-			return filepath.Join(Root, p)
-		}
-	}
-	t.Skip("no cgroup v2")
-	return ""
+	return filepath.Join(Root, p)
 }

@@ -103,13 +103,10 @@ func TestDialAgentRetryContextCanceled(t *testing.T) {
 	}
 }
 
-// resolveGuestMemMiB must honor a declared limit (minus the VMM reserve) and error
-// when the limit is unset or the reserve leaves too little to boot a guest.
+// resolveGuestMemMiB gives the guest the whole declared limit, and errors when
+// the limit is unset or too small to boot a guest.
 func TestResolveGuestMemMiB(t *testing.T) {
-	const (
-		mib     = 1024 * 1024
-		reserve = 256 // vmmMemReserveMiB
-	)
+	const mib = 1024 * 1024
 	tests := []struct {
 		name        string
 		declaredMiB int64 // 0 => unset
@@ -117,15 +114,13 @@ func TestResolveGuestMemMiB(t *testing.T) {
 		wantErr     bool
 	}{
 		{name: "unset", declaredMiB: 0, wantErr: true},
-		{name: "declared honored minus reserve", declaredMiB: 1536, wantMiB: 1536 - reserve},
-		{name: "just above minimum", declaredMiB: reserve + minGuestMemMiB, wantMiB: minGuestMemMiB},
-		{name: "reserve exactly swallows limit", declaredMiB: reserve, wantErr: true},
-		{name: "limit below reserve", declaredMiB: 128, wantErr: true},
-		{name: "boot-hang band (too little guest RAM)", declaredMiB: 320, wantErr: true},
+		{name: "declared honored", declaredMiB: 1536, wantMiB: 1536},
+		{name: "minimum", declaredMiB: minGuestMemMiB, wantMiB: minGuestMemMiB},
+		{name: "below minimum", declaredMiB: minGuestMemMiB - 1, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveGuestMemMiB(tc.declaredMiB*mib, reserve)
+			got, err := resolveGuestMemMiB(tc.declaredMiB * mib)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("resolveGuestMemMiB(%dMiB) = %d, nil; want an error", tc.declaredMiB, got)
