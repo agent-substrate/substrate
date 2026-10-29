@@ -66,17 +66,8 @@ write access to the results bucket. See
 
 ## 4. Pick the tests
 
-The orchestrator runs every test in the file you pass to `--tests`, so copy
-the entries you want into a new file:
-
-```bash
-python3 - <<'PY' > /tmp/cold-tests.yaml
-import yaml
-want = {"ateapi_cold_resume_pause_fake_smoke"}
-t = yaml.safe_load(open("benchmarking/automation/tests.yaml"))["tests"]
-print(yaml.safe_dump({"tests": [e for e in t if e["name"] in want]}, sort_keys=False))
-PY
-```
+The orchestrator runs every test in the file you pass to `--tests`. To run
+only some of them, pass `--test-name NAME` once per entry, as in step 6.
 
 | Test | Load | Duration |
 |---|---|---|
@@ -127,7 +118,8 @@ PY
 $S/benchmarking/automation/venv/bin/python -u $D/run.py \
   --repo file://$S --branch $(git branch --show-current) \
   --dest gs://<results-bucket>/<prefix> \
-  --tests /tmp/cold-tests.yaml \
+  --tests $S/benchmarking/automation/tests.yaml \
+  --test-name ateapi_cold_resume_pause_fake_smoke \
   --target-cluster-dir $D/target-clusters \
   --manifests-dir $S/benchmarking/automation/manifests \
   --junit-output $D/junit.xml 2>&1 | tee $D/orchestrator.log

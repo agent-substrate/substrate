@@ -18,9 +18,9 @@ Owns the generic benchmark lifecycle; everything specific to a test type
 lives in a testtypes/ module (see that package's docstring for the hook
 contract). The flow, with the type hooks marked:
 
-  1. Clone the substrate branch once; wait for the DIND sidecar.
-  2. Validate every tests.yaml entry before any cluster work
-     [hook: validate].
+  1. Pick the tests.yaml entries named by --test-name (default: all) and
+     validate them before any other work [hook: validate].
+  2. Clone the substrate branch once; wait for the DIND sidecar.
   3. Per test entry:
      a. Source the target cluster's env; gcloud/docker/kubectl setup and
         the runner image build [hook: build_image] are cached per
@@ -92,6 +92,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to the tests YAML file (mounted from a ConfigMap)",
     )
     p.add_argument(
+        "--test-name",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Run only the named test entry; repeatable. Default: all entries",
+    )
+    p.add_argument(
         "--target-cluster-dir",
         default=TARGET_CLUSTER_DIR,
         help="Directory containing target cluster configuration scripts (<cluster>.sh)",
@@ -106,6 +113,19 @@ def parse_args() -> argparse.Namespace:
         help="Path to write a JUnit XML report summarizing test results and durations",
     )
     return p.parse_args()
+
+
+def select_tests(tests: list[dict], names: list[str]) -> list[dict]:
+    """Return the entries of tests named in names, in file order, or all of
+    them when names is empty. Raise ValueError on a name not in tests."""
+    if not names:
+        return tests
+    unknown = sorted(set(names) - {t.get("name") for t in tests})
+    if unknown:
+        raise ValueError(
+            f"--test-name values not in the tests file: {', '.join(unknown)}"
+        )
+    return [t for t in tests if t.get("name") in names]
 
 
 def source_env(path: str) -> None:
@@ -564,6 +584,15 @@ def write_junit_xml(
 
 def main() -> None:
     args = parse_args()
+    tests = yaml.safe_load(Path(args.tests).read_text())["tests"]
+    try:
+        tests = select_tests(tests, args.test_name)
+        print(f"Running {len(tests)} test(s)", flush=True)
+        validate_and_normalize_tests(tests)
+        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
+        run_metadata()
+    except ValueError as e:
+        sys.exit(str(e))
 
     # Config-independent setup: DIND + clone the substrate branch once.
     wait_for_docker()
@@ -582,15 +611,6 @@ def main() -> None:
     os.chdir(SUBSTRATE_DIR)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(f"Building commit {commit}", flush=True)
-
-    tests = yaml.safe_load(Path(args.tests).read_text())["tests"]
-    print(f"Running {len(tests)} test(s)", flush=True)
-    try:
-        validate_and_normalize_tests(tests)
-        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
-        run_metadata()
-    except ValueError as e:
-        sys.exit(str(e))
 
     # Per-target-cluster caches: re-running setup for the same target
     # cluster is wasted work, so we track what was last set up and only
