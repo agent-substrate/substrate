@@ -102,7 +102,7 @@ rejects that option with agentgateway rather than silently omitting it.
 - A kind cluster with Agent Substrate installed (`hack/create-kind-cluster.sh`, followed by one of
   the [dataplane installation commands above](#choose-a-dataplane)). Egress is enabled by the
   ateapi flag above.
-- `ko`, `kubectl`, and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
+- `ko`, `kubectl`, `kubectl-ate` (`go install ./cmd/kubectl-ate`), and `python3` for the automated test.
 
 ## Deploy the demo fixture
 
@@ -121,7 +121,7 @@ kubectl ate get actor-template egress -a ate-demo-egress
 ## Run the automated test (easiest)
 
 ```bash
-./demos/egress/test-egress.sh
+./demos/egress/test-egress.py
 ```
 
 It detects the deployed dataplane, deploys an in-cluster HTTP target, creates and resumes an Actor,
@@ -251,6 +251,6 @@ from the cluster, works for a manual run.
 ## Cleanup
 
 ```bash
-./demos/egress/test-egress.sh --cleanup
+./demos/egress/test-egress.py --cleanup
 go run ./cmd/ate-setup delete demo egress
 ```
