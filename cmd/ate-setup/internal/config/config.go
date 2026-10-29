@@ -25,6 +25,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -238,7 +239,7 @@ type Config struct {
 	AdditionalEgressExtprocService string
 
 	// CredentialProviderJSON is the --credential-provider value; see
-	// CredentialProvider for its schema.
+	// CredentialProviders for its schema.
 	CredentialProviderJSON string
 
 	// AnthropicAPIKey is required only by the claude-code-multiplex demo.
@@ -581,7 +582,8 @@ const credentialProviderKey = "atenet.egress.credentialProvider"
 // credentialProviderUsage lists the accepted --credential-provider values.
 const credentialProviderUsage = `{"name":"k8s.io"} for the bundled Kubernetes Secrets provider, ` +
 	`{"enabled":false} to turn egress credential injection off, ` +
-	`or {"name":"<provider>","address":"<host>:<port>"} for a provider you deploy`
+	`or {"name":"<provider>","address":"<host>:<port>"} for a provider you deploy; ` +
+	`a JSON array of provider objects selects several`
 
 // credentialProviderSpec is the schema of the --credential-provider JSON.
 type credentialProviderSpec struct {
@@ -607,6 +609,11 @@ func (p CredentialProvider) Enabled() bool { return p.Name != "" }
 // Kubernetes reports whether the provider is the bundled one.
 func (p CredentialProvider) Kubernetes() bool { return p.Name == K8sCredentialProviderName }
 
+// HasKubernetesProvider reports whether providers include the bundled one.
+func HasKubernetesProvider(providers []CredentialProvider) bool {
+	return slices.ContainsFunc(providers, CredentialProvider.Kubernetes)
+}
+
 // ServerName is the SAN the gateway expects on the provider's serving
 // certificate: the address without its port.
 func (p CredentialProvider) ServerName() string {
@@ -616,19 +623,10 @@ func (p CredentialProvider) ServerName() string {
 	return p.Address
 }
 
-// CredentialProvider parses --credential-provider, a JSON object that either
+// credentialProvider parses a --credential-provider JSON object that either
 // turns injection off with enabled false or names a provider and its address.
-// Only the bundled provider has a default address. A missing value is reported here rather than in validate
-// because only the deploys that render the egress gateway need it.
-func (c *Config) CredentialProvider() (CredentialProvider, error) {
-	raw := c.CredentialProviderJSON
-	if raw == "" {
-		// Every channel is named, not just the flag: a provider set in the
-		// configuration document is the documented way to do it, and a reader
-		// told only about the flag goes looking in the wrong place.
-		return CredentialProvider{}, fmt.Errorf("a credential provider is required; set one of %s: %s",
-			channelsFor(credentialProviderKey), credentialProviderUsage)
-	}
+// Only the bundled provider has a default address.
+func credentialProvider(raw string) (CredentialProvider, error) {
 	invalid := func(format string, args ...any) (CredentialProvider, error) {
 		return CredentialProvider{}, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
 	}
@@ -665,4 +663,66 @@ func (c *Config) CredentialProvider() (CredentialProvider, error) {
 		return invalid("address must be host:port, got %q", spec.Address)
 	}
 	return CredentialProvider{Name: spec.Name, Address: spec.Address}, nil
+}
+
+// CredentialProviders parses --credential-provider, which is one of:
+//
+//	{"name":"k8s.io"}                                       one provider
+//	[{"name":"k8s.io"},{"name":"<name>","address":"<addr>"}]  several providers
+//	{"enabled":false}                                       none: injection off
+//
+// credentialProvider checks each provider object. A missing value is reported
+// here rather than in validate because only the deploys that render the egress
+// gateway need it.
+func (c *Config) CredentialProviders() ([]CredentialProvider, error) {
+	raw := c.CredentialProviderJSON
+	if raw == "" {
+		return nil, fmt.Errorf("a credential provider is required; set one of %s: %s",
+			channelsFor(credentialProviderKey), credentialProviderUsage)
+	}
+	invalid := func(format string, args ...any) ([]CredentialProvider, error) {
+		return nil, fmt.Errorf("invalid --credential-provider '%s': %s", raw, fmt.Sprintf(format, args...))
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return invalid("%v; want %s", err, credentialProviderUsage)
+	}
+	var elems []any
+	switch v := value.(type) {
+	case map[string]any:
+		p, err := credentialProvider(raw)
+		if err != nil || !p.Enabled() {
+			return nil, err
+		}
+		return []CredentialProvider{p}, nil
+	case []any:
+		elems = v
+	default:
+		return invalid("want a JSON object or an array of them: %s", credentialProviderUsage)
+	}
+	if len(elems) == 0 {
+		return invalid(`the array names no provider; {"enabled":false} turns injection off`)
+	}
+	var providers []CredentialProvider
+	for _, elem := range elems {
+		if _, ok := elem.(map[string]any); !ok {
+			return invalid("array entries must be JSON objects; want %s", credentialProviderUsage)
+		}
+		obj, err := json.Marshal(elem)
+		if err != nil {
+			return invalid("%v", err)
+		}
+		p, err := credentialProvider(string(obj))
+		if err != nil {
+			return nil, err
+		}
+		if !p.Enabled() {
+			return invalid("enabled false is not allowed in an array")
+		}
+		if slices.ContainsFunc(providers, func(q CredentialProvider) bool { return q.Name == p.Name }) {
+			return invalid("provider name %q repeats", p.Name)
+		}
+		providers = append(providers, p)
+	}
+	return providers, nil
 }

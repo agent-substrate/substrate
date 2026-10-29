@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/spf13/pflag"
@@ -64,10 +65,32 @@ import (
 	"go.ate.dev/substrate/internal/wakeupprobe"
 	"go.ate.dev/substrate/internal/workerstats"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func checkCoreTagsSupported() bool {
+	var cookie uint64
+	_, _, errno := unix.Syscall6(
+		unix.SYS_PRCTL,
+		unix.PR_SCHED_CORE,
+		unix.PR_SCHED_CORE_GET,
+		0,
+		unix.PR_SCHED_CORE_SCOPE_THREAD,
+		uintptr(unsafe.Pointer(&cookie)),
+		0,
+	)
+	switch errno {
+	case 0:
+		return true
+	case unix.EINVAL, unix.ENOSYS, unix.ENODEV:
+		return false
+	default:
+		panic(fmt.Sprintf("prctl(PR_SCHED_CORE_GET) failed: %v", errno))
+	}
+}
 
 func flagsConfigPath() string {
 	path := "internal_flags.json"
@@ -245,7 +268,7 @@ func do(ctx context.Context) error {
 		return err
 	}
 	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID)
-	ateworkerService.throttleMemory = psiEnabled(defaultCgroupRoot)
+	ateworkerService.throttleMemory = cgroup.PSIEnabled(defaultCgroupRoot)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
 	}
@@ -397,6 +420,9 @@ type AteWorkerService struct {
 	// which memoryReservedBytes budgets for.
 	checkpointWrites chan struct{}
 	borrow           *memborrow.Ledger
+
+	// enableCoreTags indicates whether the host kernel supports core tagging.
+	enableCoreTags bool
 }
 
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
@@ -414,6 +440,7 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 		flags:            flags,
 		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
 		bootID:           bootID,
+		enableCoreTags:   checkCoreTagsSupported(),
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s
@@ -686,11 +713,12 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
-			if hosted.oomKilled.Load() {
+			if hosted.memory.Killed() {
 				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
 			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -838,10 +866,11 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	// Checkpoint only saves state; no sizing is applied, so size is left zero.
 	rcmd := &runsc{
-		path:      req.GetRunscPath(),
-		actorUID:  req.GetActorUid(),
-		actorDirs: req.GetActorDirs(),
-		flags:     s.flags,
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		actorDirs:      req.GetActorDirs(),
+		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 
 	checkpointPath := req.GetActorDirs().GetCheckpointDir()
@@ -952,7 +981,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	// the sentry leaves its sandbox leaf for the checkpoint cgroup
 	var memoryLimit uint64
 	if hosted != nil {
-		memoryLimit = pauseMemoryWatch(hosted)
+		memoryLimit = hosted.memory.Pause()
 	}
 	cacheHigh, borrowed := s.checkpointCacheLimit(hosted, req.GetActorUid())
 	err = checkpointIsolated(ctx, s.cgroupRoot, req.GetActorUid(), cacheHigh, req.GetActorDirs(), checkpointFn, terminate)
@@ -960,8 +989,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		<-s.checkpointWrites
 	}
 	if err != nil {
-		if hosted != nil && memoryLimit != 0 {
-			resumeMemoryWatch(hosted, memoryLimit)
+		if hosted != nil {
+			hosted.memory.Resume(memoryLimit)
 		}
 		s.borrow.Return(borrowed)
 		return nil, err
@@ -1163,11 +1192,12 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 		containers:     req.GetSpec().GetContainers(),
 		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
-			if hosted.oomKilled.Load() {
+			if hosted.memory.Killed() {
 				retErr = fmt.Errorf("killed for exceeding its memory limit: %w", retErr)
 			}
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -1350,10 +1380,11 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	}
 
 	rcmd := &runsc{
-		path:      runscPath,
-		actorUID:  actorUID,
-		actorDirs: actorDirs,
-		flags:     s.flags,
+		path:           runscPath,
+		actorUID:       actorUID,
+		actorDirs:      actorDirs,
+		flags:          s.flags,
+		enableCoreTags: s.enableCoreTags,
 	}
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the

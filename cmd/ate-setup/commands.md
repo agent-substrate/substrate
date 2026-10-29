@@ -13,7 +13,7 @@ go run ./cmd/ate-setup [global flags] <command> [flags]
 
 These configure every command, and may appear before or after it, except
 `--version`, which takes no command.
-[`docs/operator-install.md`](../../docs/operator-install.md#settings) lists
+[`docs/guides/operator-install.md`](../../docs/guides/operator-install.md#settings) lists
 every setting with its environment variable.
 
 | Flag | Notes |
@@ -29,7 +29,7 @@ every setting with its environment variable.
 | `--ingress-allowed-spiffe-ids IDS` | Comma-separated SPIFFE IDs (exact match) of the clients the ingress router lets reach actors; any listed client may reach any actor. Unset, no client may reach actors through the router. Both dataplanes require a Pod Identity CA client certificate on HTTPS and TLS CONNECT. The SPIFFE URI SAN allowlist may be checked during or after TLS, including after CONNECT acceptance, but unlisted clients must be denied before actor routing. The podidentity signer issues `spiffe://cluster.local/ns/<namespace>/sa/<service-account>`. `ATE_INGRESS_ALLOWED_SPIFFE_IDS` when the flag is absent |
 | `--egress-gateway-extra-spiffe-ids IDS` | Comma-separated SPIFFE IDs that hold ate-api-server's `egress_gateway` role next to atenet-egress, such as a credential provider that mints actor JWTs. ate-setup passes atenet-egress's ID and then each listed ID as repeated `--egress-gateway-spiffe-id` flags; unset passes none, leaving ate-api-server's default. `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` when the flag is absent |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
-| `--credential-provider JSON` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/egress-credential-injection.md`](../../docs/egress-credential-injection.md). `ATE_CREDENTIAL_PROVIDER` when the flag is absent |
+| `--credential-provider JSON` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/guides/egress-credential-injection.md`](../../docs/guides/egress-credential-injection.md). `ATE_CREDENTIAL_PROVIDER` when the flag is absent |
 | `--ateapi-log-level LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). The server picks up a change without restarting. `ATE_API_LOG_LEVEL` when the flag is absent |
 | `--otlp-endpoint URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)). `ATE_OTLP_ENDPOINT` when the flag is absent |
 | `--preview GATES` | Preview gates passed as `--preview` to every substrate component: comma-separated gate names, or `ALL` for all. `ATE_PREVIEW` or `config.preview` when the flag is absent. An explicit `--preview=''` turns them all off, even when `ATE_PREVIEW` is set |

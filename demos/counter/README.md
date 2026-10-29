@@ -1,3 +1,13 @@
+---
+title: "Stateful Counter"
+linkTitle: "Stateful Counter"
+weight: 1
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-stopwatch"
+description: >
+  Preserve in-memory and durable volume state across actor suspend and resume cycles.
+---
+
 # Counter Demo
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
@@ -248,7 +258,7 @@ prioritizing it, not a fundamental limitation of the design.
 ## Settings
 
 The installer reads these settings in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels.
 
 | Key                               | Environment variable                    | Flag                     | Default    | Applies to            |

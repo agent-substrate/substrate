@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -57,15 +56,8 @@ type hostedActor struct {
 	sandbox *sandboxProcess
 	// memoryBytes is the actor's memory limit, what it books on the worker.
 	memoryBytes int64
-	// memoryLimit is the sandbox leaf's memory.high, or 0 while watchMemory
-	// should leave it alone.
-	memoryLimit atomic.Uint64
-	// oomKilled is set before watchMemory kills the sandbox.
-	oomKilled atomic.Bool
-	// memoryMu is held while watchMemory checks or kills the sandbox, and
-	// guards memoryWatch.
-	memoryMu    sync.Mutex
-	memoryWatch cgroup.MemoryWatch
+	// memory kills the sandbox once it is stuck at its memory.high.
+	memory cgroup.MemoryGuard
 }
 
 // admitActor reserves capacity before network setup. An actor that is already

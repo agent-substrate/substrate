@@ -27,7 +27,7 @@ To run the cold resume tests from your workstation instead, see
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
-   runner's calls pass [authorization](../../docs/authorization.md), and sets
+   runner's calls pass [authorization](../../docs/guides/authorization.md), and sets
    `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
    Envoy ingress router. For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which

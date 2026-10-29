@@ -16,6 +16,7 @@ package router
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -87,27 +88,50 @@ type authConfig struct {
 	AteapiServerName     string
 }
 
-// credentialProviderConfig holds the egress gateway's connection to the
-// credential provider the MITM-leg injection resolves secrets through. A
-// non-empty Address enables injection; the rest configures the mTLS the gateway
-// dials the provider with. See cmd/atenet/internal/router/egress.
+// credentialProviderConfig holds the egress gateway's connections to the
+// credential providers the MITM-leg injection resolves secrets through. Names,
+// Addresses and ServerNames pair up by position; the rest configures the mTLS
+// the gateway dials every provider with. See cmd/atenet/internal/router/egress.
 type credentialProviderConfig struct {
-	// Name is the provider this gateway serves, as a ate-secret://
-	// prefix; a policy credential URI naming any other provider is refused.
-	// Empty disables the check (dev only).
-	Name string
-	// Address is the provider's gRPC dial target. Empty disables injection.
-	Address string
+	// Names are the providers this gateway serves, as ate-secret://
+	// prefixes; a policy credential URI naming any other provider is refused.
+	// A lone empty name disables the check (dev only).
+	Names []string
+	// Addresses are the providers' gRPC dial targets. None disables injection.
+	Addresses []string
 	// CAFile is the CA the provider's serving certificate must chain to.
 	// Required unless Insecure is set.
 	CAFile string
 	// ClientCert is the credential bundle presented to the provider as the
 	// client certificate. Required unless Insecure is set.
 	ClientCert string
-	// ServerName is the SAN/SNI expected on the provider's serving certificate.
-	ServerName string
+	// ServerNames are the SAN/SNI expected on each provider's serving
+	// certificate. Empty leaves them all unset.
+	ServerNames []string
 	// Insecure dials the provider without TLS; explicit development-only opt-in.
 	Insecure bool
+}
+
+// validate checks that the repeated provider flags pair up.
+func (p credentialProviderConfig) validate() error {
+	if len(p.Names) != len(p.Addresses) {
+		return fmt.Errorf("got %d --credential-provider-name for %d --credential-provider-address, want one per address", len(p.Names), len(p.Addresses))
+	}
+	if len(p.ServerNames) != 0 && len(p.ServerNames) != len(p.Addresses) {
+		return fmt.Errorf("got %d --credential-provider-server-name for %d --credential-provider-address, want one per address or none", len(p.ServerNames), len(p.Addresses))
+	}
+	for i, name := range p.Names {
+		if p.Addresses[i] == "" {
+			return fmt.Errorf("--credential-provider-address must not be empty")
+		}
+		if name == "" && len(p.Names) > 1 {
+			return fmt.Errorf("an empty --credential-provider-name serves every credential URI, so it must be the only provider")
+		}
+		if slices.Contains(p.Names[:i], name) {
+			return fmt.Errorf("--credential-provider-name %q repeats", name)
+		}
+	}
+	return nil
 }
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.
@@ -156,10 +180,9 @@ type routerConfig struct {
 	EgressPolicyCacheTTL time.Duration
 
 	// CredentialProvider configures egress credential injection on the MITM leg.
-	// Only the egress gateway sets it, and only when injection is enabled: an
-	// empty CredentialProvider.Address leaves the injector disabled, so a rule
-	// that requires an injection is skipped and the request passes through
-	// without the credential. See egress.Handler.
+	// Only the egress gateway sets it, and only when injection is enabled: a
+	// CredentialProvider with no Addresses leaves the injector disabled, so a
+	// request that needs an injection is denied. See egress.Handler.
 	CredentialProvider credentialProviderConfig
 
 	LogLevel    string
@@ -279,6 +302,9 @@ func (c routerConfig) validate() error {
 		return err
 	}
 	if err := c.validateIngressAuth(); err != nil {
+		return err
+	}
+	if err := c.CredentialProvider.validate(); err != nil {
 		return err
 	}
 

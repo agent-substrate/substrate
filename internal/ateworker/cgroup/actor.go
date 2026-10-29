@@ -43,13 +43,13 @@ type ActorLeaf struct {
 }
 
 // OpenActorLeaf creates the actor's leaf under the delegated scope, or reuses a
-// leftover one, and caps it at milliCPU when that is set. Close it once its
-// processes are started.
-func OpenActorLeaf(actorUID string, milliCPU int64) (*ActorLeaf, error) {
-	return openActorLeaf(Root, actorUID, milliCPU)
+// leftover one, caps it at milliCPU and sets memory.high to memoryHigh bytes
+// when those are set. Close it once its processes are started.
+func OpenActorLeaf(actorUID string, milliCPU, memoryHigh int64) (*ActorLeaf, error) {
+	return openActorLeaf(Root, actorUID, milliCPU, memoryHigh)
 }
 
-func openActorLeaf(root, actorUID string, milliCPU int64) (*ActorLeaf, error) {
+func openActorLeaf(root, actorUID string, milliCPU, memoryHigh int64) (*ActorLeaf, error) {
 	path, err := actorLeafPath(root, actorUID)
 	if err != nil {
 		return nil, err
@@ -60,6 +60,13 @@ func openActorLeaf(root, actorUID string, milliCPU int64) (*ActorLeaf, error) {
 	// Written even when unset, so a reused leaf does not keep an old cap. A
 	// node that did not delegate the cpu controller has no cpu.max to write.
 	if err := writeExisting(filepath.Join(path, "cpu.max"), cpuMax(milliCPU)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("while limiting cgroup %q: %w", path, err)
+	}
+	high := "max"
+	if memoryHigh > 0 {
+		high = strconv.FormatInt(memoryHigh, 10)
+	}
+	if err := writeExisting(filepath.Join(path, "memory.high"), high); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("while limiting cgroup %q: %w", path, err)
 	}
 	dir, err := os.Open(path)
@@ -113,6 +120,16 @@ func limitLeafGrowth(root, actorUID string, headroom, ceiling, borrow int64) (fu
 	if err != nil {
 		return nil, err
 	}
+	return setLeafMemoryHigh(root, actorUID, strconv.FormatInt(max(current+headroom, ceiling)+borrow, 10))
+}
+
+// LiftActorLeafMemory clears memory.high on the actor's leaf, and returns a
+// func that puts back the memory.high it replaced.
+func LiftActorLeafMemory(actorUID string) (func(), error) {
+	return setLeafMemoryHigh(Root, actorUID, "max")
+}
+
+func setLeafMemoryHigh(root, actorUID, value string) (func(), error) {
 	path, err := actorLeafPath(root, actorUID)
 	if err != nil {
 		return nil, err
@@ -122,7 +139,7 @@ func limitLeafGrowth(root, actorUID string, headroom, ceiling, borrow int64) (fu
 	if err != nil {
 		return nil, fmt.Errorf("while limiting cgroup %q: %w", path, err)
 	}
-	if err := writeExisting(high, strconv.FormatInt(max(current+headroom, ceiling)+borrow, 10)); err != nil {
+	if err := writeExisting(high, value); err != nil {
 		return nil, fmt.Errorf("while limiting cgroup %q: %w", path, err)
 	}
 	return func() {

@@ -1,3 +1,13 @@
+---
+title: "Interactive Sandbox"
+linkTitle: "Interactive Sandbox"
+weight: 2
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-terminal"
+description: >
+  Execute interactive shell commands inside an isolated Alpine container with stateful snapshots.
+---
+
 # Sandbox Demo
 
 This directory contains a demo of a stateful sandbox execution environment running on Agent Substrate.

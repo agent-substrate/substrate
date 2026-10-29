@@ -1,3 +1,13 @@
+---
+title: "Jupyter Notebook"
+linkTitle: "Jupyter Notebook"
+weight: 3
+estimated_time: "10 mins"
+card_icon: "fa-solid fa-book-open"
+description: >
+  Run an unmodified Jupyter Notebook container that suspends when idle and resumes on browser access.
+---
+
 # Jupyter Notebook Demo
 
 This demo runs a Jupyter Notebook on Agent Substrate. It demonstrates how standard unmodified container images (like `jupyter/base-notebook`) can be deployed as Substrate actors that transparently suspend when idle and resume when you access them via your browser.

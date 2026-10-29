@@ -346,14 +346,26 @@ func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client,
 			return fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
 		}
 	}
+	// the page cache the write adds isn't the actor running away
+	if ra != nil {
+		defer ra.memory.Resume(ra.memory.Pause())
+	}
 	var borrowed int64
 	// the write caches about as much as the guest has populated, which is
 	// at most the leaf's usage. When the pod can lend all of that, the leaf
-	// stays unlimited: memory.high also shrinks the cgroup's dirty page
+	// goes unlimited: memory.high also shrinks the cgroup's dirty page
 	// limit, which throttles the write to the disk long before the cap
 	current, err := cgroup.ActorLeafMemory(actorUID)
 	if err == nil {
 		borrowed = s.borrow.Take(current)
+	}
+	if err == nil && borrowed >= current && s.throttleMemory {
+		release, err := cgroup.LiftActorLeafMemory(actorUID)
+		if err != nil {
+			slog.WarnContext(ctx, "Snapshotting under the actor's memory limit", slog.String("id", actorUID), slog.Any("err", err))
+		} else {
+			defer release()
+		}
 	}
 	if err != nil || borrowed < current {
 		var ceiling int64

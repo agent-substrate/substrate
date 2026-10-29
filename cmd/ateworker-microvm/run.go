@@ -75,6 +75,8 @@ type runningActor struct {
 	stopping atomic.Bool
 	// memoryBytes is the actor's memory limit, what it books on the worker.
 	memoryBytes int64
+	// memory kills the actor's cgroup once it is stuck at its memory.high.
+	memory cgroup.MemoryGuard
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -493,7 +495,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
 	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
 	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU)
+	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU, s.leafMemoryHigh(p.size.MemoryBytes))
 	if err != nil {
 		return err
 	}
@@ -612,6 +614,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
+	ra.memory.Resume(uint64(s.leafMemoryHigh(p.size.MemoryBytes)))
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
 

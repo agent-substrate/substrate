@@ -60,7 +60,7 @@ a checkpoint).
 ## Settings
 
 The installer reads these settings in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels:
 
 * `e2e.tuning` layers `manifests/ate-install/components/e2e` over control

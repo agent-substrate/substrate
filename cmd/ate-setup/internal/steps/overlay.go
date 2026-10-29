@@ -228,7 +228,7 @@ func (e *Env) atenetEgressManifestPath() string {
 }
 
 // renderAtenetEgressManifest produces the atenet egress manifest.
-func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.CredentialProvider) ([]byte, error) {
+func (e *Env) renderAtenetEgressManifest(ctx context.Context, providers []config.CredentialProvider) ([]byte, error) {
 	general := e.Cfg.AdditionalEgressExtprocService != ""
 
 	if e.Cfg.Router == config.RouterAgentgateway {
@@ -246,7 +246,7 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 		if err != nil {
 			return nil, err
 		}
-		raw, err = patchAgentgatewayEgressInject(raw, provider)
+		raw, err = patchAgentgatewayEgressInject(raw, providers)
 		if err != nil {
 			return nil, err
 		}
@@ -271,7 +271,7 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 	if err != nil {
 		return nil, err
 	}
-	raw, err = e.patchAtenetEgressInject(raw, provider)
+	raw, err = e.patchAtenetEgressInject(raw, providers)
 	if err != nil {
 		return nil, err
 	}
@@ -360,19 +360,22 @@ func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 // egress sidecar's args with the credential-provider flags, or removes it when
 // injection is off, which leaves the gateway with no provider. It takes the
 // manifest bytes so it can run after the general patch.
-func (e *Env) patchAtenetEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
+func (e *Env) patchAtenetEgressInject(raw []byte, providers []config.CredentialProvider) ([]byte, error) {
 	var flagsBlock string
-	if provider.Enabled() {
-		flagsBlock = emitEgressInjectFlags(provider.Name, provider.Address, provider.ServerName())
+	if len(providers) > 0 {
+		flagsBlock = emitEgressInjectFlags(providers)
 	}
 	return replaceManifestMarker(raw, "#ATE_EGRESS_INJECT_FLAGS", flagsBlock)
 }
 
 // The HTTP and HTTPS listeners share the egress policy and its providers.
-func patchAgentgatewayEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
+func patchAgentgatewayEgressInject(raw []byte, providers []config.CredentialProvider) ([]byte, error) {
 	var block string
-	if provider.Enabled() {
-		block = fmt.Sprintf(`credentialProviders:
+	for i, p := range providers {
+		if i == 0 {
+			block = "credentialProviders:"
+		}
+		block += fmt.Sprintf(`
 - uriAuthority: %q
   target:
     host: %q
@@ -381,7 +384,7 @@ func patchAgentgatewayEgressInject(raw []byte, provider config.CredentialProvide
         hostname: %q
         cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
         key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-        root: /run/servicedns-ca/trust-bundle.pem`, provider.Name, provider.Address, provider.ServerName())
+        root: /run/servicedns-ca/trust-bundle.pem`, p.Name, p.Address, p.ServerName())
 	}
 	return replaceManifestMarker(raw, "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS", block)
 }
@@ -408,12 +411,18 @@ func replaceManifestMarker(raw []byte, marker, block string) ([]byte, error) {
 	return []byte(strings.Join(out, "\n")), nil
 }
 
-func emitEgressInjectFlags(name, address, serverName string) string {
-	return fmt.Sprintf(`- --credential-provider-name=%s
+// emitEgressInjectFlags writes the name, address and server name flags of each
+// provider in order, then the CA and client certificate every provider shares.
+func emitEgressInjectFlags(providers []config.CredentialProvider) string {
+	var flags string
+	for _, p := range providers {
+		flags += fmt.Sprintf(`- --credential-provider-name=%s
 - --credential-provider-address=%s
-- --credential-provider-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
-- --credential-provider-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
-- --credential-provider-server-name=%s`, name, address, serverName)
+- --credential-provider-server-name=%s
+`, p.Name, p.Address, p.ServerName())
+	}
+	return flags + `- --credential-provider-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+- --credential-provider-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem`
 }
 
 func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
@@ -551,8 +560,8 @@ func emitAdditionalEgressExtprocCluster(address, port, serverName string) string
               port_value: %s`, additionalEgressExtprocCluster, serverName, serverName, additionalEgressExtprocCluster, address, port)
 }
 
-func (e *Env) applyAtenetEgress(ctx context.Context, provider config.CredentialProvider) error {
-	manifests, err := e.renderAtenetEgressManifest(ctx, provider)
+func (e *Env) applyAtenetEgress(ctx context.Context, providers []config.CredentialProvider) error {
+	manifests, err := e.renderAtenetEgressManifest(ctx, providers)
 	if err != nil {
 		return err
 	}
@@ -566,7 +575,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context, provider config.CredentialP
 		return err
 	}
 
-	if running && (e.Cfg.AdditionalEgressExtprocService != "" || provider.Enabled()) {
+	if running && (e.Cfg.AdditionalEgressExtprocService != "" || len(providers) > 0) {
 		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), "atenet-egress", time.Now()); err != nil {
 			return err
 		}
