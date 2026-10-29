@@ -441,8 +441,11 @@ func TestSecretLikeFieldsAreLabeled(t *testing.T) {
 	notSecret := map[string]string{
 		"page_token":      "opaque list cursor",
 		"next_page_token": "opaque list cursor",
-		"substrate.ateapi.v1.CredentialHeader.credential_uri": "ate-secret:// reference to a credential, not the value",
-		"substrate.ateapi.v1.CredentialHeader.actor_jwt":      "ActorJwtSource: audiences and lifetime for minting, not a token",
+		"substrate.ateapi.v1.CredentialHeader.credential_uri":                   "ate-secret:// reference to a credential, not the value",
+		"substrate.ateapi.v1.CredentialHeader.actor_jwt":                        "ActorJwtSource: audiences and lifetime for minting, not a token",
+		"substrate.ateapi.v1.ClientCertificateSource.credential_provider":       "credential provider selector, not a credential",
+		"substrate.ateapi.v1.CredentialClientCertificateSource.certificate_uri": "ate-secret:// reference to a credential, not the value",
+		"substrate.ateapi.v1.CredentialClientCertificateSource.private_key_uri": "ate-secret:// reference to a credential, not the value",
 	}
 	forEachField(func(fd protoreflect.FieldDescriptor) {
 		if !secretLikeName.MatchString(string(fd.Name())) || isDebugRedact(fd) {
