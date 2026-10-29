@@ -114,7 +114,7 @@ def isolate_block(test: dict) -> dict | None:
 
 
 def isolate_install_args(test: dict) -> list[str]:
-    """Return the hack/install-ate.sh flags a tests.yaml entry's isolate block
+    """Return the ate-setup flags a tests.yaml entry's isolate block
     installs the fake data plane with, or none without a block. The installer
     only chooses the data plane; the block's tuning goes to deploy.sh."""
     return [] if isolate_block(test) is None else ["--fake-data-plane"]

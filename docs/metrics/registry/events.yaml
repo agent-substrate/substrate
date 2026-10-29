@@ -115,7 +115,7 @@ groups:
       initial record is absent when the first reading fails. The final record
       is written when the ateworker tears the activation down: a checkpoint, a
       terminate, a graceful shutdown of the worker, or a re-host on a
-      micro-VM. It is read just before the teardown and repeats the newest
+      microVM. It is read just before the teardown and repeats the newest
       sample when that read fails or times out, or is pending when none was
       measured. It is absent when the activation ends otherwise, as by a
       crash, a lost worker, or a re-host on gVisor. Thus take the highest

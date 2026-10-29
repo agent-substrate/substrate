@@ -34,10 +34,10 @@ func actorURI(location, name string) string {
 	return location + "/atespaces/" + atespace + "/actors/" + uid + "/snapshots/" + name
 }
 
-func gen(n int32, owner ateapi.SnapshotOwner, status ateapi.SnapshotStorageStatus, uri string) *ateapi.Snapshot {
+func gen(n int32, owner ateapi.SnapshotOwner, state ateapi.SnapshotStorageState, uri string) *ateapi.Snapshot {
 	s := &ateapi.Snapshot{Generation: n, Owner: owner}
 	if uri != "" {
-		s.DurableSnapshot = &ateapi.SnapshotStorage{Status: status, Object: &ateapi.ObjectSnapshot{SnapshotUri: uri}}
+		s.DurableSnapshot = &ateapi.SnapshotStorage{State: state, Object: &ateapi.ObjectSnapshot{SnapshotUri: uri}}
 	} else {
 		s.Locality = "node-1"
 	}
@@ -65,8 +65,8 @@ var (
 	tagURI     = loc + "/atespaces/ate-golden/tags/" + tagUID
 	tagGrant   = Grant{Prefix: prefix(tagURI), Access: ReadOnly}
 	actorGrant = Grant{Prefix: prefix(loc + "/atespaces/" + atespace + "/actors/" + uid), Access: ReadWrite}
-	completed  = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-	pending    = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+	completed  = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+	pending    = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 	ownerActor = ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
 	ownerTag   = ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
 )

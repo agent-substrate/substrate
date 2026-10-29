@@ -165,7 +165,10 @@ func (p *Plugin) Run(ctx context.Context) error {
 		slog.InfoContext(ctx, "Device plugin registered",
 			slog.String("resource", p.dev.ResourceName), slog.String("device", p.dev.Path))
 
-		p.waitForKubeletRestart(ctx, watcher)
+		// stat after registering, so a Create already queued for this same
+		// socket (say, kubelet came up while we slept on a retry) is ignored
+		registered, _ := os.Stat(pluginapi.KubeletSocket)
+		p.waitForKubeletRestart(ctx, watcher, registered)
 		srv.Stop()
 	}
 	return ctx.Err()
@@ -223,8 +226,9 @@ func (p *Plugin) register(ctx context.Context) error {
 }
 
 // waitForKubeletRestart blocks until kubelet recreates its socket (meaning it
-// restarted and dropped our registration) or ctx is cancelled.
-func (p *Plugin) waitForKubeletRestart(ctx context.Context, watcher *fsnotify.Watcher) {
+// restarted and dropped our registration) or ctx is cancelled. registered is
+// the kubelet socket we registered with, nil if it could not be stat'd.
+func (p *Plugin) waitForKubeletRestart(ctx context.Context, watcher *fsnotify.Watcher, registered os.FileInfo) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -233,7 +237,7 @@ func (p *Plugin) waitForKubeletRestart(ctx context.Context, watcher *fsnotify.Wa
 			if !ok {
 				return
 			}
-			if event.Name == pluginapi.KubeletSocket && event.Has(fsnotify.Create) {
+			if kubeletRestarted(event, pluginapi.KubeletSocket, registered) {
 				slog.InfoContext(ctx, "Kubelet restarted; re-registering device plugin",
 					slog.String("resource", p.dev.ResourceName))
 				return
@@ -246,6 +250,22 @@ func (p *Plugin) waitForKubeletRestart(ctx context.Context, watcher *fsnotify.Wa
 				slog.String("resource", p.dev.ResourceName), slog.Any("err", err))
 		}
 	}
+}
+
+// kubeletRestarted reports whether event is kubelet recreating socket since we
+// stat'd it as registered. Re-registering on a stale event can wedge the
+// resource in kubelet as "already connected", if the second Register for our
+// socket arrives while kubelet is still closing the first stream.
+func kubeletRestarted(event fsnotify.Event, socket string, registered os.FileInfo) bool {
+	if event.Name != socket || !event.Has(fsnotify.Create) {
+		return false
+	}
+	if registered == nil {
+		return true
+	}
+	// mtime too, as a just freed inode can be reused for the new socket
+	fi, err := os.Stat(socket)
+	return err != nil || !os.SameFile(fi, registered) || !fi.ModTime().Equal(registered.ModTime())
 }
 
 // GetDevicePluginOptions implements the device plugin API; the defaults are

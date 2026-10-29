@@ -29,6 +29,10 @@ Usage: $0 [target-path] [go-test-flags] [-args [e2e-flags]]
 
 Runs End-to-End tests.
 
+The target cluster must be installed with --e2e-tuning (or
+ATE_INSTALL_E2E_TUNING=true) so atelet uses the shorter E2E snapshot delays
+instead of its 5m production default.
+
 The optional "target-path" must be the first argument and must start with
 "./internal/e2e" or "internal/e2e". It defaults to "./internal/e2e/suites/...".
 

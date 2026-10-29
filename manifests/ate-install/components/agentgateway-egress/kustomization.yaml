@@ -63,7 +63,7 @@ patches:
               mode: tunnel
             accessLog:
               add:
-                substrate.connect.authority: source.connectHeaders["host"]
+                substrate.connect.authority: 'destination.address + ":" + string(destination.port)'
             substrateEgressActorResolution:
               host: api.ate-system.svc:443
               policies:
@@ -139,7 +139,7 @@ patches:
                     body: WebSocket egress is not supported
               - backends:
                 - dynamic:
-                    target: source.connectHeaders["host"]
+                    target: 'destination.address + ":" + string(destination.port)'
                 policies:
                   substrateEgress: *egressPolicy
             - protocol: TLS

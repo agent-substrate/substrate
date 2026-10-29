@@ -30,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
 
@@ -49,13 +48,16 @@ type hostedActor struct {
 	// usage is this activation's epoch, CPU baseline, and latest sample.
 	// Immutable after admission.
 	usage *workerstats.Activation
+	// memoryBytes is the actor's memory limit, what it books on the worker.
+	// Immutable after admission.
+	memoryBytes int64
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
 // resumesGuest is true when the activation resumes a guest from a snapshot,
-// whose CPU counters come back with it.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, *actornet.SandboxSession, error) {
+// whose CPU counters come back with it. memoryBytes is what the actor books.
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *actornet.SandboxSession
@@ -64,17 +66,17 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, re
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest)}
+	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest), memoryBytes: memoryBytes}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
 // hostActor sets up the actor's network, replacing any stale one. resumesGuest
-// is as for admitActor.
-func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
+// and memoryBytes are as for admitActor.
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64) (*hostedActor, error) {
 	uid := attribution.UID
 
-	hosted, stale, err := s.admitActor(attribution, resumesGuest)
+	hosted, stale, err := s.admitActor(attribution, resumesGuest, memoryBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -106,24 +108,14 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 	return hosted, nil
 }
 
-// actorLeaf opens the actor's cgroup, or returns nil when the worker has none.
-func (s *AteWorkerService) actorLeaf(actorUID string, size sizing.SandboxSize) (*cgroup.ActorLeaf, error) {
-	if !s.actorCgroups {
-		return nil, nil
-	}
-	return cgroup.OpenActorLeaf(actorUID, size.MilliCPU)
-}
-
 // cleanupSandboxState kills what is left of the actor's host processes and
 // clears its sandbox directories.
 func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID string) {
-	if s.actorCgroups {
-		killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if err := cgroup.KillActorLeaf(killCtx, actorUID); err != nil {
-			slog.WarnContext(ctx, "Failed to kill the actor's leftover processes", slog.Any("err", err))
-		}
-		cancel()
+	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := cgroup.KillActorLeaf(killCtx, actorUID); err != nil {
+		slog.WarnContext(ctx, "Failed to kill the actor's leftover processes", slog.Any("err", err))
 	}
+	cancel()
 	kata.CleanupSandboxState(ctx, actorUID)
 }
 
@@ -147,10 +139,8 @@ func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) err
 		s.actorsMu.Unlock()
 	}()
 
-	if s.actorCgroups {
-		if err := cgroup.RemoveActorLeaf(actorUID); err != nil {
-			slog.WarnContext(ctx, "Failed to remove the actor's cgroup", slog.Any("err", err))
-		}
+	if err := cgroup.RemoveActorLeaf(actorUID); err != nil {
+		slog.WarnContext(ctx, "Failed to remove the actor's cgroup", slog.Any("err", err))
 	}
 	if hosted.network == nil {
 		return nil

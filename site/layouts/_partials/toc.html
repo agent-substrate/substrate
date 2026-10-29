@@ -1,0 +1,123 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{ $repo := $.Param "github_repo" -}}
+{{ $branch := $.Param "github_branch" | default "main" -}}
+{{ $path := .Params.repo_source -}}
+{{ if and (not $path) .File -}}
+  {{ $path = path.Join ($.Param "github_subdir") (strings.TrimPrefix (add hugo.WorkingDir "/") .File.Filename) -}}
+{{ end -}}
+
+<div class="as-toc-wrap">
+  {{ if not .Params.notoc -}}
+    {{ with .TableOfContents -}}
+      {{ if ne . `<nav id="TableOfContents"></nav>` -}}
+        <div class="td-toc as-toc">
+          <div class="td-toc__title">ON THIS PAGE</div>
+          {{ . }}
+        </div>
+        <script>
+          (function () {
+            function initTocScrollSpy() {
+              const toc = document.getElementById('TableOfContents');
+              if (!toc) return;
+              const links = Array.from(toc.querySelectorAll('a[href^="#"]'));
+              if (!links.length) return;
+
+              const items = links
+                .map((link) => {
+                  const id = decodeURIComponent(link.getAttribute('href').slice(1));
+                  const target = document.getElementById(id);
+                  return target ? { link, target } : null;
+                })
+                .filter(Boolean);
+
+              if (!items.length) return;
+
+              let ticking = false;
+              function updateActive() {
+                ticking = false;
+                const offset = 130;
+                const atBottom =
+                  window.innerHeight + Math.round(window.scrollY) >=
+                  document.documentElement.scrollHeight - 8;
+
+                let current = items[0];
+                if (atBottom) {
+                  current = items[items.length - 1];
+                } else {
+                  for (const item of items) {
+                    if (item.target.getBoundingClientRect().top <= offset) {
+                      current = item;
+                    } else {
+                      break;
+                    }
+                  }
+                }
+
+                for (const item of items) {
+                  item.link.classList.toggle('active', item === current);
+                }
+              }
+
+              window.addEventListener(
+                'scroll',
+                function () {
+                  if (!ticking) {
+                    window.requestAnimationFrame(updateActive);
+                    ticking = true;
+                  }
+                },
+                { passive: true }
+              );
+              window.addEventListener('resize', updateActive, { passive: true });
+              window.addEventListener('hashchange', function () {
+                window.requestAnimationFrame(updateActive);
+              });
+              updateActive();
+            }
+
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', initTocScrollSpy);
+            } else {
+              initTocScrollSpy();
+            }
+          })();
+        </script>
+      {{ end -}}
+    {{ end -}}
+  {{ end -}}
+
+  {{ if and $repo $path -}}
+  <div class="as-toc__actions">
+    <button type="button" class="as-toc__action-link as-copy-page-btn" data-copy-page="true">
+      <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+      <span class="as-copy-page-btn__label">Copy page as Markdown</span>
+    </button>
+    <a href="{{ printf "%s/edit/%s/%s" $repo $branch $path }}" target="_blank" rel="noopener" class="as-toc__action-link">
+      <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>
+      <span>Edit this page</span>
+    </a>
+    <a href="{{ printf "%s/issues/new?title=%s" $repo (urlquery (printf "docs: %s" .Title)) }}" target="_blank" rel="noopener" class="as-toc__action-link">
+      <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 16v.01"></path></svg>
+      <span>Report an issue</span>
+    </a>
+    <a href="#" class="as-toc__action-link" onclick="window.scrollTo({top: 0, behavior: 'smooth'}); return false;">
+      <svg class="ic" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      <span>Back to top</span>
+    </a>
+  </div>
+  {{ end -}}
+</div>

@@ -122,6 +122,8 @@ spec:
           periodSeconds: 2
           failureThreshold: 30
         securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
           capabilities:
             drop:
             - ALL
@@ -198,6 +200,14 @@ spec:
           - --drain-timeout=15s
           - --objectstore-plugin-socket=/run/objectstore-plugin/control.sock
           - --snapshot-location=@env
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+            - ALL
         env:
         - name: POD_NAME
           valueFrom:

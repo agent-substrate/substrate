@@ -19,7 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
@@ -155,6 +157,53 @@ func TestListAndWatchSendsDevicesThenBlocks(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("ListAndWatch() after cancel = %v, want nil", err)
+	}
+}
+
+// Only a Create for a kubelet socket other than the one we registered with
+// is a restart; one already queued for that same socket is stale.
+func TestKubeletRestartedIgnoresStaleCreate(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "kubelet.sock")
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registered, err := os.Stat(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := fsnotify.Event{Name: socket, Op: fsnotify.Create}
+
+	if kubeletRestarted(create, socket, registered) {
+		t.Error("kubeletRestarted() = true for a Create of the registered socket")
+	}
+	if kubeletRestarted(fsnotify.Event{Name: filepath.Join(dir, "other.sock"), Op: fsnotify.Create}, socket, registered) {
+		t.Error("kubeletRestarted() = true for another socket")
+	}
+	if kubeletRestarted(fsnotify.Event{Name: socket, Op: fsnotify.Write}, socket, registered) {
+		t.Error("kubeletRestarted() = true for a Write")
+	}
+	if !kubeletRestarted(create, socket, nil) {
+		t.Error("kubeletRestarted() = false with no registered socket")
+	}
+
+	// kubelet restarting unlinks and recreates its socket
+	if err := os.Remove(socket); err != nil {
+		t.Fatal(err)
+	}
+	if !kubeletRestarted(create, socket, registered) {
+		t.Error("kubeletRestarted() = false with the socket gone")
+	}
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// the inode may be reused, so only mtime tells them apart
+	later := registered.ModTime().Add(time.Second)
+	if err := os.Chtimes(socket, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if !kubeletRestarted(create, socket, registered) {
+		t.Error("kubeletRestarted() = false for a recreated socket")
 	}
 }
 

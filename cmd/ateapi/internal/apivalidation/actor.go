@@ -82,12 +82,6 @@ func ValidateMintActorJWTRequest(ctx context.Context, req *ateapi.MintActorJwtRe
 	return Validate_MintActorJwtRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapi.MintActorCertificateRequest) field.ErrorList {
-	// Call the generated validation.
-	op := MakeCreateOp(ctx)
-	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
-}
-
 func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapi.MintWorkerActorCertificateRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_MintWorkerActorCertificateRequest(ctx, op, nil, req, nil)

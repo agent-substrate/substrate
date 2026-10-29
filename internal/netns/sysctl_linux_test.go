@@ -75,6 +75,15 @@ func TestSetSysctlSerializesTheRemount(t *testing.T) {
 	}
 }
 
+// forwardingSysctls span both families, so a kernel without IPv6 exercises
+// the missing-key path.
+var forwardingSysctls = []Sysctl{
+	{Key: "net/ipv4/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv4/conf/default/forwarding", Value: "0"},
+	{Key: "net/ipv6/conf/all/forwarding", Value: "0"},
+	{Key: "net/ipv6/conf/default/forwarding", Value: "0"},
+}
+
 // Setting multiple sysctls performs at most one read-write remount cycle.
 func TestSetSysctlsBatchesRemount(t *testing.T) {
 	fake := &fakeProcSys{readOnly: true, values: map[string]string{
@@ -106,7 +115,7 @@ func TestSetSysctlsBatchesRemount(t *testing.T) {
 	}
 }
 
-func TestDisableForwardingClearsEveryFamily(t *testing.T) {
+func TestSetSysctlsWritesEveryFamily(t *testing.T) {
 	fake := &fakeProcSys{readOnly: true, values: map[string]string{
 		"/proc/sys/net/ipv4/conf/all/forwarding":     "1",
 		"/proc/sys/net/ipv4/conf/default/forwarding": "1",
@@ -123,18 +132,12 @@ func TestDisableForwardingClearsEveryFamily(t *testing.T) {
 	}
 }
 
-func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
+func TestSetSysctlsSkipsMissingIPv6Keys(t *testing.T) {
 	values := map[string]string{}
 	p := procSys{
-		readFile: func(path string) ([]byte, error) {
-			if strings.HasPrefix(path, "/proc/sys/net/ipv6/") {
-				return nil, &os.PathError{Op: "open", Path: path, Err: unix.ENOENT}
-			}
-			return []byte("1\n"), nil
-		},
 		writeFile: func(path string, data []byte) error {
 			if strings.HasPrefix(path, "/proc/sys/net/ipv6/") {
-				t.Errorf("wrote missing key %s", path)
+				return &os.PathError{Op: "open", Path: path, Err: unix.ENOENT}
 			}
 			values[path] = strings.TrimSpace(string(data))
 			return nil
@@ -154,14 +157,26 @@ func TestDisableIPv4ForwardingWhenIPv6Disabled(t *testing.T) {
 	}
 }
 
-func TestDisableForwardingReportsAMissingIPv4Key(t *testing.T) {
+func TestSetSysctlsReportsAMissingIPv4Key(t *testing.T) {
 	p := procSys{
-		readFile:  func(path string) ([]byte, error) { return nil, &os.PathError{Op: "open", Path: path, Err: unix.ENOENT} },
-		writeFile: func(path string, data []byte) error { return nil },
+		writeFile: func(path string, data []byte) error { return &os.PathError{Op: "open", Path: path, Err: unix.ENOENT} },
 		remount:   func(bool) error { return nil },
 	}
 	if err := p.set(forwardingSysctls); !errors.Is(err, unix.ENOENT) {
 		t.Fatalf("set with no IPv4 keys: got %v, want ENOENT", err)
+	}
+}
+
+// A key that already reads as wanted is still written: writing
+// conf/all/forwarding changes conf/all/accept_redirects, so a value read
+// before the batch says nothing about the value after it.
+func TestSetSysctlsWritesKeysThatAlreadyMatch(t *testing.T) {
+	fake := &fakeProcSys{values: map[string]string{"/proc/sys/net/ipv4/conf/all/accept_redirects": "0"}}
+	if err := fake.procSys().set([]Sysctl{{Key: "net/ipv4/conf/all/accept_redirects", Value: "0"}}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if fake.writes != 1 {
+		t.Errorf("writes = %d, want 1", fake.writes)
 	}
 }
 
@@ -171,6 +186,7 @@ type fakeProcSys struct {
 	mu       sync.Mutex
 	readOnly bool
 	values   map[string]string
+	writes   int
 	// remounted counts callers inside the read-write window; maxRemounted is
 	// its peak.
 	remounted, maxRemounted, remountCalls int
@@ -178,14 +194,6 @@ type fakeProcSys struct {
 
 func (f *fakeProcSys) procSys() procSys {
 	return procSys{
-		readFile: func(path string) ([]byte, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			if v, ok := f.values[path]; ok {
-				return []byte(v + "\n"), nil
-			}
-			return []byte("1024\n"), nil
-		},
 		writeFile: func(path string, data []byte) error {
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -193,6 +201,7 @@ func (f *fakeProcSys) procSys() procSys {
 				return &os.PathError{Op: "open", Path: path, Err: unix.EROFS}
 			}
 			f.values[path] = strings.TrimSpace(string(data))
+			f.writes++
 			return nil
 		},
 		remount: func(readOnly bool) error {

@@ -38,6 +38,10 @@ REQUEST_SOURCE_TYPE_URL = (
     "type.googleapis.com/nighthawk.request_source.InLineOptionsListRequestSourceConfig"
 )
 
+ROUTER_SNI = "atenet-router.ate-system.svc"
+CA_FILE = "/run/servicedns-ca/ca.crt"
+CRED_BUNDLE = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+
 # The default failure predicates (all 0) abort an execution on the first
 # 4xx/5xx; measuring periods must instead run to completion so overload
 # scores as degraded success-rate. All five defaults overridden.
@@ -143,26 +147,50 @@ def build_spec_dict(
                 upper_threshold=tail_latency_slo_ms * 1_000_000.0,
             )
         )
-    return {
-        "nighthawk_traffic_template": {
-            "uri": uri,
-            "concurrency": str(client_concurrency),
-            "connections": connections,
-            "max_pending_requests": max_pending_requests,
-            "open_loop": True,
-            "failure_predicates": dict(PERMISSIVE_FAILURE_PREDICATES),
-            # request_options shares a oneof with this field: method and
-            # headers must come from the per-variant RequestOptions.
-            "request_source_plugin_config": {
-                "name": REQUEST_SOURCE_PLUGIN,
-                "typed_config": {
-                    "@type": REQUEST_SOURCE_TYPE_URL,
-                    "options_list": {"options": request_variants},
-                    # 0 = cycle through options_list indefinitely.
-                    "num_requests": 0,
+    if not uri.startswith("https://"):
+        raise ValueError(f"router URI must use https://, got {uri!r}")
+
+    traffic_template: dict = {
+        "uri": uri,
+        "concurrency": str(client_concurrency),
+        "connections": connections,
+        "max_pending_requests": max_pending_requests,
+        "open_loop": True,
+        "failure_predicates": dict(PERMISSIVE_FAILURE_PREDICATES),
+        # request_options shares a oneof with this field: method and
+        # headers must come from the per-variant RequestOptions.
+        "request_source_plugin_config": {
+            "name": REQUEST_SOURCE_PLUGIN,
+            "typed_config": {
+                "@type": REQUEST_SOURCE_TYPE_URL,
+                "options_list": {"options": request_variants},
+                # 0 = cycle through options_list indefinitely.
+                "num_requests": 0,
+            },
+        },
+        "tls_context": {
+            "sni": ROUTER_SNI,
+            "common_tls_context": {
+                "tls_certificates": [
+                    {
+                        "certificate_chain": {"filename": CRED_BUNDLE},
+                        "private_key": {"filename": CRED_BUNDLE},
+                    },
+                ],
+                "validation_context": {
+                    "trusted_ca": {"filename": CA_FILE},
+                    "match_typed_subject_alt_names": [
+                        {
+                            "san_type": "DNS",
+                            "matcher": {"exact": ROUTER_SNI},
+                        },
+                    ],
                 },
             },
         },
+    }
+    return {
+        "nighthawk_traffic_template": traffic_template,
         "metric_thresholds": thresholds,
         "informational_metric_specs": [
             _metric_spec(m) for m in INFORMATIONAL_METRICS

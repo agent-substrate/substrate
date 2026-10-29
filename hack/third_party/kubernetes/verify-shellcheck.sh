@@ -61,7 +61,7 @@ if [[ "$#" == 0 ]]; then
   done < <(find . -name '*.sh' \
     -not \( \
       -path './_*'     -o \
-      -path './.git*'   -o \
+      -path './.git/*'  -o \
       -path '*/vendor/*' -o \
       -path '*/third_party/*' \
     \))
