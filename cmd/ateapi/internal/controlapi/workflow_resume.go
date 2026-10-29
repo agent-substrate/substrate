@@ -101,6 +101,11 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	actor = created
+	// A deleted template can be recreated under the same name without an
+	// UpdateActor. Reject missing volume records before booking a worker.
+	if _, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil); err != nil {
+		return nil, false, apierror.FailedPrecondition("actor %s does not match its template: %v", actorRef, err)
+	}
 	var worker *ateapi.Worker
 	var assigned *ateapi.Actor
 	assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
