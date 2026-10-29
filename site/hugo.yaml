@@ -143,6 +143,10 @@ module:
   mounts:
     - source: content
       target: content
+    # Content adapters, for pages made from generated data rather than from
+    # the stubs in content/.
+    - source: adapters
+      target: content
     - source: data
       target: data
     - source: layouts

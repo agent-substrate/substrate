@@ -21,6 +21,8 @@ on:
       - 'site/**'
       - 'docs/**'
       - 'demos/*/README.md'
+      - 'api/ateapi/v1/**'
+      - 'tools/apitool/**'
       - 'tools/site-content/**'
       - 'tools/site-release-data/**'
       - 'hack/site.sh'
@@ -32,6 +34,8 @@ on:
       - 'site/**'
       - 'docs/**'
       - 'demos/*/README.md'
+      - 'api/ateapi/v1/**'
+      - 'tools/apitool/**'
       - 'tools/site-content/**'
       - 'tools/site-release-data/**'
       - 'hack/site.sh'
@@ -59,8 +63,8 @@ jobs:
     - name: Setup Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        # The root module, for tools/site-release-data. Hugo fetches Docsy
-        # with the same Go.
+        # The root module, for tools/site-release-data and tools/apitool,
+        # which pins the same toolchain. Hugo fetches Docsy with the same Go.
         go-version-file: 'go.mod'
         cache: false
     - name: Setup Node

@@ -3934,3 +3934,97 @@ footer {
   }
 }
 
+
+// --------------------------------------------------
+// API reference
+// --------------------------------------------------
+// The page has no "On this page" column; its sidebar link lists the resources
+// instead (see layouts/_partials/api-reference-nav.html).
+.as-apiref-page .td-outer > .td-main > .row {
+  @media (min-width: 1200px) {
+    grid-template-columns: 248px minmax(0, 1fr);
+  }
+
+  > .td-sidebar-toc {
+    display: none !important;
+  }
+}
+
+.as-apiref-version {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: $substrate-muted;
+
+  select {
+    padding: 4px 28px 4px 10px;
+    border: 1px solid $substrate-border;
+    border-radius: 6px;
+    background: $substrate-surface;
+    color: $substrate-text;
+    font-family: $font-family-monospace;
+    font-size: 13px;
+
+    &:focus {
+      outline: 2px solid $substrate-green;
+      outline-offset: -1px;
+    }
+  }
+}
+
+.as-sb__tree {
+  list-style: none;
+  margin: 2px 0 6px 10px;
+  padding: 0 0 0 8px;
+  border-left: 1px solid $substrate-border;
+
+  .as-sb__tree {
+    margin: 0 0 0 10px;
+  }
+}
+
+.as-sb__tree-link {
+  display: block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: $substrate-muted !important;
+  font-family: $font-family-monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+
+  &:hover,
+  &:focus {
+    color: $substrate-text !important;
+  }
+
+  &.is-active {
+    background: #14231a;
+    color: $substrate-text !important;
+    font-weight: 500;
+    box-shadow: inset 2px 0 0 $substrate-green;
+  }
+}
+
+// tools/apitool/internal/docsite/style.css lays out the page and reads its
+// colors and fonts from these variables.
+.apiref {
+  --apiref-bg: #{$substrate-bg};
+  --apiref-bg-raised: #{$substrate-surface-elevated};
+  --apiref-bg-sunken: #{$substrate-surface};
+  --apiref-fg: #{$substrate-text};
+  --apiref-fg-muted: #{$substrate-muted};
+  --apiref-border: #{$substrate-border};
+  --apiref-accent: #{$substrate-green};
+  --apiref-mono: #{$font-family-monospace};
+  --apiref-code-type: #{$substrate-text};
+  --apiref-code-string: #{$substrate-green-light};
+  --apiref-code-number: #{$substrate-yellow};
+  --apiref-code-keyword: #{$substrate-blue};
+  --apiref-code-punct: #{$substrate-muted};
+}
