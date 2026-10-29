@@ -1395,7 +1395,7 @@ func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
 }
 
 // TestXdsServer_BuildRoutes_EndpointCachedRoute verifies that, with the ingress
-// cache enabled, the first route matches on the ate-endpoint-cached header and
+// cache enabled, the first route matches on the cache-hit dynamic metadata and
 // disables ext_proc via per-route config.
 func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 	x := NewXdsServer(18000)
@@ -1409,15 +1409,12 @@ func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 	if cachedRoute.GetMatch().GetPrefix() != "/" {
 		t.Errorf("cached route match prefix = %q, want '/'", cachedRoute.GetMatch().GetPrefix())
 	}
-	headers := cachedRoute.GetMatch().GetHeaders()
-	if len(headers) != 1 {
-		t.Fatalf("cached route headers matcher count = %d, want 1", len(headers))
+	if headers := cachedRoute.GetMatch().GetHeaders(); len(headers) != 0 {
+		t.Errorf("cached route matches headers %v, want none: clients can forge headers", headers)
 	}
-	if headers[0].GetName() != endpointCachedHeader {
-		t.Errorf("cached route header name = %q, want %q", headers[0].GetName(), endpointCachedHeader)
-	}
-	if headers[0].GetStringMatch().GetExact() != "1" {
-		t.Errorf("cached route header exact match = %q, want '1'", headers[0].GetStringMatch().GetExact())
+	if !matchesCacheHit(cachedRoute) {
+		t.Errorf("cached route dynamic metadata matchers = %v, want %s.%s = %q",
+			cachedRoute.GetMatch().GetDynamicMetadata(), cacheHitMetadataNamespace, cacheHitMetadataKey, cacheHitMetadataValue)
 	}
 
 	perFilterConfig := cachedRoute.GetTypedPerFilterConfig()
@@ -1529,11 +1526,18 @@ func TestIngressCacheConfigValidate(t *testing.T) {
 
 var defaultIngressCacheConfig = IngressCacheConfig{TTL: DefaultIngressCacheTTL, MaxCachedActors: DefaultIngressCacheMaxCachedActors}
 
+// matchesCacheHit reports whether r matches exactly the cache-hit dynamic metadata.
+func matchesCacheHit(r *routev3.Route) bool {
+	m := r.GetMatch().GetDynamicMetadata()
+	return len(m) == 1 &&
+		m[0].GetFilter() == cacheHitMetadataNamespace &&
+		len(m[0].GetPath()) == 1 && m[0].GetPath()[0].GetKey() == cacheHitMetadataKey &&
+		m[0].GetValue().GetStringMatch().GetExact() == cacheHitMetadataValue
+}
+
 // TestXdsServer_IngressCacheDisabledByDefault verifies that without the
 // IngressCache preview gate the router installs neither the ingress-cache
-// filter nor any route that skips ext_proc, on either upstream transport. A
-// leftover cached route would let a client that forges ate-endpoint-cached
-// bypass ext_proc.
+// filter nor any route that skips ext_proc, on either upstream transport.
 func TestXdsServer_IngressCacheDisabledByDefault(t *testing.T) {
 	for _, upstreamConnect := range []bool{false, true} {
 		t.Run("upstreamConnect="+strconv.FormatBool(upstreamConnect), func(t *testing.T) {
@@ -1551,10 +1555,8 @@ func TestXdsServer_IngressCacheDisabledByDefault(t *testing.T) {
 			}
 
 			for i, r := range x.buildRoutes().GetVirtualHosts()[0].GetRoutes() {
-				for _, h := range r.GetMatch().GetHeaders() {
-					if h.GetName() == endpointCachedHeader {
-						t.Errorf("route[%d] matches %q with the ingress cache disabled", i, endpointCachedHeader)
-					}
+				if got := r.GetMatch().GetDynamicMetadata(); len(got) != 0 {
+					t.Errorf("route[%d] matches dynamic metadata %v with the ingress cache disabled", i, got)
 				}
 				if _, ok := r.GetTypedPerFilterConfig()[httpExtProcFilterName]; ok {
 					t.Errorf("route[%d] overrides %q with the ingress cache disabled", i, httpExtProcFilterName)

@@ -32,9 +32,10 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
 use crate::cache::{self, Entry, Lookup};
 use crate::config::{Config, FilterConfig};
 use crate::routing::{
-  GRPC_STATUS_HEADER, ORIGINAL_DST_ADDRESS_KEY, ORIGINAL_DST_NAMESPACE, ROUTE_RESOLVED_HEADER,
-  STALE_ASSIGNMENT_HEADER, TARGET_ACTOR_HEADER, WORKER_SPIFFE_ID_KEY, is_grpc_unavailable,
-  request_header_str, response_header_str, response_trailer_str,
+  CACHE_HIT_METADATA_KEY, CACHE_HIT_METADATA_NAMESPACE, CACHE_HIT_METADATA_VALUE,
+  GRPC_STATUS_HEADER, ORIGINAL_DST_ADDRESS_KEY, ORIGINAL_DST_NAMESPACE, STALE_ASSIGNMENT_HEADER,
+  TARGET_ACTOR_HEADER, WORKER_SPIFFE_ID_KEY, is_grpc_unavailable, request_header_str,
+  response_header_str, response_trailer_str,
 };
 
 /// Counter incremented when an unexpired actor -> worker binding is served from cache.
@@ -112,15 +113,16 @@ pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter
 /// Per-stream HTTP filter sitting ahead of `ext_proc` in the ingress filter chain.
 ///
 /// * **On a hit**: publishes dynamic metadata for `ORIGINAL_DST` / `actor_connect`,
-///   sets [`ROUTE_RESOLVED_HEADER`] to select the route with `ext_proc` disabled,
-///   and clears the route cache.
+///   sets the [`CACHE_HIT_METADATA_NAMESPACE`] dynamic metadata to select the route
+///   with `ext_proc` disabled, and clears the route cache.
 /// * **On a miss**: lets `ext_proc` run normally, then learns the resolved worker IP
 ///   from dynamic metadata in `on_response_headers`.
 /// * **On a request with a body**: skips the cache lookup and routes through `ext_proc`,
 ///   since a stale hit couldn't be replayed. Learns from the response like a miss.
 /// * **On upstream stale rejection (`421` or `503` on a cache hit)**: evicts the
-///   stale cache entry, removes [`ROUTE_RESOLVED_HEADER`], and calls
-///   `recreate_stream` (if replay-safe) so the request replays through `ext_proc`.
+///   stale cache entry and calls `recreate_stream` (if replay-safe). The recreated
+///   stream starts without this stream's dynamic metadata, so it replays through
+///   `ext_proc`.
 ///   A `503` from a connection that ended before a response is replay-safe only if
 ///   the `tunnel_watcher` network filter marked the entry stale and not spoiled.
 /// * **On gRPC UNAVAILABLE (`grpc-status: 14`)**: does not learn the binding, and removes
@@ -286,29 +288,6 @@ fn request_has_body<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, end_of_stream: boo
     .map_or(true, |len| len.trim().parse::<u64>() != Ok(0))
 }
 
-/// Rejects a request that arrives with [`ROUTE_RESOLVED_HEADER`] set when the filter
-/// didn't route it from the cache, and reports whether it did.
-///
-/// Envoy evaluated the route table before this filter ran, so a client-supplied header
-/// already selected the route with ext_proc disabled. Stripping the header alone does
-/// not restore ext_proc to the constructed filter chain, so the request gets a 400.
-fn reject_forged_route_header<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
-  if envoy_filter
-    .get_request_header_value(ROUTE_RESOLVED_HEADER)
-    .is_none()
-  {
-    return false;
-  }
-  envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
-  envoy_filter.send_response(
-    400,
-    &[("content-type", b"text/plain")],
-    Some(b"forged ate-endpoint-cached header is not allowed\n"),
-    Some("untrusted_cached_header"),
-  );
-  true
-}
-
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
   fn on_request_headers(
     &mut self,
@@ -328,9 +307,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     // the risk: route it through ext_proc. Its response still refreshes the cache.
     if self.has_request_body {
       increment_counter(envoy_filter, self.cache_bypass);
-      if reject_forged_route_header(envoy_filter) {
-        return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
-      }
       self.was_cache_hit = false;
       self.learn_key = Some(key);
       return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
@@ -345,7 +321,11 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
           &entry.worker_ip,
           entry.worker_spiffe_id.as_deref(),
         );
-        envoy_filter.set_request_header(ROUTE_RESOLVED_HEADER, b"1");
+        envoy_filter.set_dynamic_metadata_string(
+          CACHE_HIT_METADATA_NAMESPACE,
+          CACHE_HIT_METADATA_KEY,
+          CACHE_HIT_METADATA_VALUE,
+        );
         envoy_filter.clear_route_cache();
         self.was_cache_hit = true;
         self.entry = Some(entry);
@@ -356,9 +336,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     }
 
     increment_counter(envoy_filter, self.cache_miss);
-    if reject_forged_route_header(envoy_filter) {
-      return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
-    }
     self.was_cache_hit = false;
     self.learn_key = Some(key);
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
@@ -395,7 +372,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
           // actor reference to ext_proc on replay.
           envoy_filter.set_request_header(TARGET_ACTOR_HEADER, key.as_bytes());
         }
-        envoy_filter.remove_request_header(ROUTE_RESOLVED_HEADER);
         increment_counter(envoy_filter, self.cache_replay);
         if envoy_filter.recreate_stream(None) {
           return envoy_dynamic_module_type_on_http_filter_response_headers_status::StopIteration;
@@ -473,10 +449,6 @@ mod tests {
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
       .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| None);
 
     let status = filter.on_request_headers(&mut mock, false);
     assert_eq!(
@@ -531,51 +503,6 @@ mod tests {
   }
 
   #[test]
-  fn test_cache_miss_with_forged_route_header_rejects_with_400() {
-    let config = Config::default();
-    let mut filter = CacheFilter::new_test_filter(config);
-
-    let target_actor = b"team-b/actor-forged";
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == TARGET_ACTOR_FILTER_STATE_KEY)
-      .returning(move |_| Some(EnvoyBuffer::new(target_actor)));
-    mock
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == CONNECT_AUTHORITY_FILTER_STATE_KEY)
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"1")));
-    mock
-      .expect_remove_request_header()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
-    mock
-      .expect_send_response()
-      .withf(|status_code, _, _, details| {
-        *status_code == 400 && details == &Some("untrusted_cached_header")
-      })
-      .returning(|_, _, _, _| ());
-
-    let status = filter.on_request_headers(&mut mock, true);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
-    );
-  }
-
-  #[test]
   fn test_request_with_body_bypasses_cache_and_learns() {
     let key = "team-b/actor-body";
     let _entry = cache::insert(key.to_string(), "10.244.9.1".to_string(), None, Duration::from_secs(5), DEFAULT_MAX_CACHED_ACTORS);
@@ -603,10 +530,6 @@ mod tests {
       .expect_get_request_header_value()
       .withf(|k| k == "content-length")
       .returning(|_| Some(EnvoyBuffer::new(b"12")));
-    mock
-      .expect_get_request_header_value()
-      .withf(|k| k == ROUTE_RESOLVED_HEADER)
-      .returning(|_| None);
     mock
       .expect_increment_counter()
       .withf(move |id, val| *id == bypass_id && *val == 1)
@@ -655,50 +578,6 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
     assert_eq!(cache::current(key).expect("should be cached").worker_ip, "10.244.9.2");
-  }
-
-  #[test]
-  fn test_request_with_body_and_forged_route_header_rejects_with_400() {
-    let mut filter = CacheFilter::new_test_filter(Config::default());
-    let target_actor = b"team-b/actor-body-forged";
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_filter_state_bytes()
-      .withf(|k| k == TARGET_ACTOR_FILTER_STATE_KEY)
-      .returning(move |_| Some(EnvoyBuffer::new(target_actor)));
-    mock
-      .expect_get_filter_state_bytes()
-      .withf(|k| k == CONNECT_AUTHORITY_FILTER_STATE_KEY)
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|k| k == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
-    mock
-      .expect_get_request_header_value()
-      .withf(|k| k == "content-length")
-      .returning(|_| Some(EnvoyBuffer::new(b"5")));
-    mock
-      .expect_get_request_header_value()
-      .withf(|k| k == ROUTE_RESOLVED_HEADER)
-      .returning(|_| Some(EnvoyBuffer::new(b"1")));
-    mock
-      .expect_remove_request_header()
-      .withf(|k| k == ROUTE_RESOLVED_HEADER)
-      .returning(|_| true);
-    mock
-      .expect_send_response()
-      .withf(|status_code, _, _, details| {
-        *status_code == 400 && details == &Some("untrusted_cached_header")
-      })
-      .times(1)
-      .returning(|_, _, _, _| ());
-
-    let status = filter.on_request_headers(&mut mock, false);
-    assert_eq!(
-      status,
-      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
-    );
   }
 
   #[test]
@@ -760,9 +639,14 @@ mod tests {
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-c/actor-3")
       .returning(|_, _| true);
     mock
-      .expect_set_request_header()
-      .withf(|key, val| key == ROUTE_RESOLVED_HEADER && val == b"1")
-      .returning(|_, _| true);
+      .expect_set_dynamic_metadata_string()
+      .withf(|ns, key, val| {
+        ns == CACHE_HIT_METADATA_NAMESPACE
+          && key == CACHE_HIT_METADATA_KEY
+          && val == CACHE_HIT_METADATA_VALUE
+      })
+      .times(1)
+      .returning(|_, _, _| ());
     mock.expect_clear_route_cache().returning(|| ());
 
     let status = filter.on_request_headers(&mut mock, true);
@@ -797,10 +681,6 @@ mod tests {
       .expect_set_request_header()
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-d/actor-4")
       .returning(|_, _| true);
-    mock
-      .expect_remove_request_header()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -835,10 +715,6 @@ mod tests {
       .expect_set_request_header()
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-d/actor-4-503")
       .returning(|_, _| true);
-    mock
-      .expect_remove_request_header()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -966,10 +842,6 @@ mod tests {
       .expect_set_request_header()
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-h/actor-10")
       .returning(|_, _| true);
-    mock
-      .expect_remove_request_header()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -1032,10 +904,6 @@ mod tests {
       .expect_set_request_header()
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-j/actor-12")
       .returning(|_, _| true);
-    mock
-      .expect_remove_request_header()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| false);
     mock.expect_recreate_stream().returning(|_| true);
 
     let resp_status = filter.on_response_headers(&mut mock, false);
@@ -1090,10 +958,6 @@ mod tests {
       .expect_set_request_header()
       .withf(|key, val| key == TARGET_ACTOR_HEADER && val == b"team-k/actor-1")
       .returning(|_, _| true);
-    mock
-      .expect_remove_request_header()
-      .withf(|key| key == ROUTE_RESOLVED_HEADER)
-      .returning(|_| false);
     mock.expect_recreate_stream().times(1).returning(|_| true);
 
     let status = filter.on_response_headers(&mut mock, false);

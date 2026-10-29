@@ -41,9 +41,11 @@ pub const ORIGINAL_DST_ADDRESS_KEY: &str = "local";
 pub const ORIGINAL_DST_PORT_KEY: &str = "port";
 pub const WORKER_SPIFFE_ID_KEY: &str = "worker_spiffe_id";
 
-/// Request header set on a cache hit so the route table selects the fast-path
-/// route with `ext_proc` disabled.
-pub const ROUTE_RESOLVED_HEADER: &str = "ate-endpoint-cached";
+/// Dynamic metadata set on a cache hit so the route table selects the cached route,
+/// which has `ext_proc` disabled. Clients can't set dynamic metadata.
+pub const CACHE_HIT_METADATA_NAMESPACE: &str = "ate.ingress_cache";
+pub const CACHE_HIT_METADATA_KEY: &str = "hit";
+pub const CACHE_HIT_METADATA_VALUE: &str = "true";
 
 /// Response header set by `atunnel` when a request arrives for an actor not
 /// hosted on that worker.

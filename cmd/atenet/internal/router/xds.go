@@ -153,9 +153,12 @@ const (
 	// DefaultIngressCacheMaxCachedActors is --ingress-cache-max-cached-actors's default.
 	DefaultIngressCacheMaxCachedActors = 10000
 
-	// endpointCachedHeader is set by the ingress-cache dynamic module on a cache
-	// hit so route selection picks the route that disables ext_proc.
-	endpointCachedHeader = "ate-endpoint-cached"
+	// The ingress-cache dynamic module sets this dynamic metadata on a cache hit
+	// so route selection picks the route that disables ext_proc. Clients can't
+	// set dynamic metadata.
+	cacheHitMetadataNamespace = "ate.ingress_cache"
+	cacheHitMetadataKey       = "hit"
+	cacheHitMetadataValue     = "true"
 )
 
 // defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
@@ -481,7 +484,7 @@ func (cfg IngressCacheConfig) validate() error {
 }
 
 // SetIngressCache installs the ingress-cache filter, configured by cfg, and,
-// for each workload route, a copy that matches endpointCachedHeader and skips
+// for each workload route, a copy that matches the cache-hit dynamic metadata and skips
 // ext_proc. With upstream CONNECT it also installs the tunnel_watcher network
 // filter on actor_connect. When disabled, none of these exist, so every
 // request is resolved by ext_proc.
@@ -1130,27 +1133,27 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 	}
 }
 
-// withCachedRoute returns a pair of routes: a copy of r that matches
-// endpointCachedHeader="1" and disables ext_proc, followed by r itself.
+// withCachedRoute returns a pair of routes: a copy of r that matches the
+// cache-hit dynamic metadata and disables ext_proc, followed by r itself.
 // Without the ingress cache it returns r alone, so no route skips ext_proc.
 func (x *XdsServer) withCachedRoute(r *routev3.Route) []*routev3.Route {
 	if !x.ingressCache {
 		return []*routev3.Route{r}
 	}
 	cached := proto.Clone(r).(*routev3.Route)
-	headers := make([]*routev3.HeaderMatcher, 0, len(r.GetMatch().GetHeaders())+1)
-	headers = append(headers, r.GetMatch().GetHeaders()...)
-	headers = append(headers, &routev3.HeaderMatcher{
-		Name: endpointCachedHeader,
-		HeaderMatchSpecifier: &routev3.HeaderMatcher_StringMatch{
-			StringMatch: &matcherv3.StringMatcher{
-				MatchPattern: &matcherv3.StringMatcher_Exact{
-					Exact: "1",
+	cached.Match.DynamicMetadata = []*matcherv3.MetadataMatcher{{
+		Filter: cacheHitMetadataNamespace,
+		Path: []*matcherv3.MetadataMatcher_PathSegment{{
+			Segment: &matcherv3.MetadataMatcher_PathSegment_Key{Key: cacheHitMetadataKey},
+		}},
+		Value: &matcherv3.ValueMatcher{
+			MatchPattern: &matcherv3.ValueMatcher_StringMatch{
+				StringMatch: &matcherv3.StringMatcher{
+					MatchPattern: &matcherv3.StringMatcher_Exact{Exact: cacheHitMetadataValue},
 				},
 			},
 		},
-	})
-	cached.Match.Headers = headers
+	}}
 	cached.TypedPerFilterConfig = map[string]*anypb.Any{
 		httpExtProcFilterName: newAny(&extprocv3filter.ExtProcPerRoute{
 			Override: &extprocv3filter.ExtProcPerRoute_Disabled{

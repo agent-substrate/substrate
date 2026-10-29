@@ -314,67 +314,9 @@ func TestIngressCache_BodyBypassesCache(t *testing.T) {
 	}
 }
 
-// TestIngressCache_UntrustedCachedHeaderStripped verifies that an external untrusted
-// client cannot forge ate-endpoint-cached: 1 on an un-cached actor to bypass
-// ext_proc resolution or corrupt routing.
-func TestIngressCache_UntrustedCachedHeaderStripped(t *testing.T) {
-	e2e.RequireIngressCache(t)
-	ctx := context.Background()
-	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "cache-spoof", e2e.SubstrateCounterFixture())
-	router := mustRouterClient(t, ctx)
-	defer router.Close()
-
-	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-
-	// 1. Warm up the route to ensure the actor is ready.
-	waitForRouteReady(t, "Warm up actor route", func() (*http.Response, error) {
-		return router.Get(ctx, actorRef, "/readyz")
-	})
-
-	// 2. Wait 6 seconds for the 5-second cache entry to expire, ensuring a cache miss.
-	time.Sleep(6 * time.Second)
-
-	// 3. Send request with forged ate-endpoint-cached: 1 on the expired (uncached) actor.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, router.BaseURL()+"/readyz", nil)
-	if err != nil {
-		t.Fatalf("creating request: %v", err)
-	}
-	req.Header.Set(atenet.TargetActorHeader, actorRef.String())
-	req.Header.Set("ate-endpoint-cached", "1")
-
-	scrapeBefore, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeRouterEnvoyMetrics before spoof request: %v", err)
-	}
-	missBefore := e2e.RouterCacheCounterValue(scrapeBefore, "ate_ingress_cache_miss")
-
-	resp, err := router.DoReq(req)
-	if err != nil {
-		t.Fatalf("request with forged ate-endpoint-cached failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// Ingress cache rejects untrusted downstream requests containing ate-endpoint-cached
-	// on a cache miss with HTTP 400 Bad Request, preventing ext_proc bypass.
-	if resp.StatusCode != http.StatusBadRequest {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("request with forged header returned status %d, want 400; body: %s", resp.StatusCode, body)
-	}
-
-	scrapeAfter, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeRouterEnvoyMetrics after spoof request: %v", err)
-	}
-	missAfter := e2e.RouterCacheCounterValue(scrapeAfter, "ate_ingress_cache_miss")
-	if missAfter <= missBefore {
-		t.Fatalf("expected cache miss counter to increment for spoofed request, before=%.0f, after=%.0f", missBefore, missAfter)
-	}
-}
-
 // TestIngressCache_DisabledByDefault verifies that without the IngressCache
-// preview gate a forged ate-endpoint-cached header has no effect: the router
-// has no route that skips ext_proc, so the request is resolved and served
-// normally, and the ingress-cache filter never sees it.
+// preview gate the ingress-cache filter never sees a request: it's served
+// through ext_proc and no cache counter moves.
 func TestIngressCache_DisabledByDefault(t *testing.T) {
 	if preview.IsEnabled(preview.GateIngressCache) {
 		t.Skipf("preview gate %q is enabled; this test covers the default install", preview.GateIngressCache)
@@ -394,33 +336,27 @@ func TestIngressCache_DisabledByDefault(t *testing.T) {
 	if countCacheMetrics {
 		scrape, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
 		if err != nil {
-			t.Fatalf("ScrapeRouterEnvoyMetrics before forged request: %v", err)
+			t.Fatalf("ScrapeRouterEnvoyMetrics before request: %v", err)
 		}
 		lookupsBefore = e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_hit") +
 			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss") +
 			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_bypass")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, router.BaseURL()+"/readyz", nil)
+	resp, err := router.Get(ctx, actorRef, "/readyz")
 	if err != nil {
-		t.Fatalf("creating request: %v", err)
-	}
-	req.Header.Set(atenet.TargetActorHeader, actorRef.String())
-	req.Header.Set("ate-endpoint-cached", "1")
-	resp, err := router.DoReq(req)
-	if err != nil {
-		t.Fatalf("request with forged ate-endpoint-cached failed: %v", err)
+		t.Fatalf("GET /readyz failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("request with forged header returned status %d, want 200; body: %s", resp.StatusCode, body)
+		t.Fatalf("GET /readyz returned status %d, want 200; body: %s", resp.StatusCode, body)
 	}
 
 	if countCacheMetrics {
 		scrape, err := e2e.ScrapeRouterEnvoyMetrics(ctx)
 		if err != nil {
-			t.Fatalf("ScrapeRouterEnvoyMetrics after forged request: %v", err)
+			t.Fatalf("ScrapeRouterEnvoyMetrics after request: %v", err)
 		}
 		lookupsAfter := e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_hit") +
 			e2e.RouterCacheCounterValue(scrape, "ate_ingress_cache_miss") +

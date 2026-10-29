@@ -62,9 +62,6 @@ thread).
   default). A full thread cache drops expired bindings before it caches another
   actor. If none had expired, the new actor isn't cached and its requests keep
   going through `ext_proc`.
-- **The cached route header is reserved.** A request that arrives with
-  `ate-endpoint-cached` set and isn't served from the cache (a miss, or any
-  request with a body) is rejected with `400 Bad Request`.
 
 ## How it works
 
@@ -72,9 +69,11 @@ thread).
   target actor, the filter writes the `ORIGINAL_DST` dynamic metadata
   (`envoy.filters.listener.original_dst`), sets the `x-ate-target-port` and
   `ate-target-actor` request headers that `ext_proc` would otherwise set, sets
-  `ate-endpoint-cached: 1` to select the route with `ext_proc` disabled, and
-  clears the route cache. The first two are sent to `atunnel` on the worker, so
-  their names are `atunnel`'s (`internal/atunnel/ingress`, `internal/atenet`).
+  the `ate.ingress_cache` `hit` dynamic metadata to select the route with
+  `ext_proc` disabled, and clears the route cache. Clients can't set dynamic
+  metadata, so they can't select that route. The two headers are sent to
+  `atunnel` on the worker, so their names are `atunnel`'s
+  (`internal/atunnel/ingress`, `internal/atenet`).
 - **Cache miss (`on_request_headers` / `on_response_headers`)**: The request
   proceeds through `ext_proc`, which resolves or resumes the actor and populates
   the `ORIGINAL_DST` dynamic metadata. On response headers, the filter records

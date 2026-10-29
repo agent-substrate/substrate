@@ -279,8 +279,18 @@ func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 	if got := rest.GetMatch().GetHeaders(); len(got) != 0 {
 		t.Errorf("fallback route matches headers %v, want none", got)
 	}
-	if got := restCached.GetMatch().GetHeaders(); len(got) != 1 || got[0].GetName() != endpointCachedHeader {
-		t.Errorf("cached fallback route matches headers %v, want [%s]", got, endpointCachedHeader)
+	if got := restCached.GetMatch().GetHeaders(); len(got) != 0 {
+		t.Errorf("cached fallback route matches headers %v, want none", got)
+	}
+	for _, r := range []*routev3.Route{grpcCached, restCached} {
+		if !matchesCacheHit(r) {
+			t.Errorf("cached route to %q doesn't match the cache-hit dynamic metadata", r.GetRoute().GetCluster())
+		}
+	}
+	for _, r := range []*routev3.Route{grpc, rest} {
+		if got := r.GetMatch().GetDynamicMetadata(); len(got) != 0 {
+			t.Errorf("route to %q matches dynamic metadata %v, want none", r.GetRoute().GetCluster(), got)
+		}
 	}
 
 	// Matches atunnel's isGRPC, minus the protocol check a route can't do.
