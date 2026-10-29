@@ -17,6 +17,7 @@ package router
 import (
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,5 +246,19 @@ func TestEgressManifestsLogPathsWithoutTheQuery(t *testing.T) {
 	walk(bootstrapTree(t), false)
 	if formats == 0 {
 		t.Fatal("no access log formats found; the manifest changed shape and this test is checking nothing")
+	}
+}
+
+func TestEgressManifestsConnectAccessLogIncludesProtocol(t *testing.T) {
+	t.Parallel()
+	logs := chainAccessLogsByLeg(bootstrapTree(t))["connect"]
+	if len(logs) == 0 {
+		t.Fatal("no connect access log found; the manifest changed shape and this test is checking nothing")
+	}
+	for i, al := range logs {
+		format := str(child(child(child(al, "typed_config"), "log_format"), "text_format_source"), "inline_string")
+		if !strings.Contains(format, "protocol=%PROTOCOL%") {
+			t.Errorf("connect access_log[%d] format %q does not log protocol=%%PROTOCOL%%", i, format)
+		}
 	}
 }

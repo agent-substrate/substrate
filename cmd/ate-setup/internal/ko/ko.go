@@ -138,10 +138,15 @@ func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
 }
 
 // BuildTagged builds and publishes the images for importPaths in one ko
-// invocation, tagging each with tag, and returns their pushed references.
-func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...string) ([]string, error) {
+// invocation, tagging each with tag and setting each "key=value" in labels as
+// an image label, and returns their pushed references.
+func (r *Runner) BuildTagged(ctx context.Context, tag string, labels []string, importPaths ...string) ([]string, error) {
 	defer log.Elapsed(time.Now(), "ko build --tags="+tag)
-	cmd := exec.CommandContext(ctx, r.binary, append(r.args("build", importPaths...), "--tags="+tag)...)
+	args := append(r.args("build", importPaths...), "--tags="+tag)
+	for _, label := range labels {
+		args = append(args, "--image-label="+label)
+	}
+	cmd := exec.CommandContext(ctx, r.binary, args...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)
 	var stdout bytes.Buffer
@@ -175,7 +180,38 @@ func (r *Runner) args(subcommand string, target ...string) []string {
 
 // ldflags returns the version stamp ko should bake into binaries.
 func (r *Runner) ldflags() []string {
-	return []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(r.Root))}
+	return Ldflags(r.Root)
+}
+
+// Ldflags returns the -X flags that stamp a binary built from root with
+// internal/version's Version, and with Commit and BuildDate when root has a
+// commit checked out. internal/version replaces a stamped Version with the
+// module's build info unless Commit is stamped too. BuildDate is the commit's
+// time, so rebuilding one commit gives the same binary.
+func Ldflags(root string) []string {
+	flags := []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(root))}
+	if commit, date, ok := CommitStamp(root); ok {
+		flags = append(flags,
+			fmt.Sprintf("-X=%s.Commit=%s", versionPkg, commit),
+			fmt.Sprintf("-X=%s.BuildDate=%s", versionPkg, date))
+	}
+	return flags
+}
+
+// CommitStamp returns the commit checked out at root and its committer date in
+// RFC 3339 form. ok is false when root has no commit, as in a source tarball.
+func CommitStamp(root string) (commit, date string, ok bool) {
+	cmd := exec.Command("git", "show", "-s", "--format=%H %cI", "HEAD")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", false
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return "", "", false
+	}
+	return fields[0], fields[1], true
 }
 
 // BuildVersion is the VERSION environment variable, else `git describe`, or

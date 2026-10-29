@@ -73,7 +73,7 @@ holds the same count connector and gives the same two counts. A meter in front
 of it would add a hop and measure nothing new. The meter exists for GKE only,
 where the managed collector cannot hold a connector.
 
-`hack/install-ate.sh` installs the collector and a Prometheus with it, thus a
+`ate-setup --kind` installs the collector and a Prometheus with it, thus a
 kind cluster needs no other step:
 
 ```bash

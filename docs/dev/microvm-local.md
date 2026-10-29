@@ -13,7 +13,7 @@ Complete the
 [Quickstart (Development)](../../README.md#quickstart-development) in the
 README first — it covers the base tooling and the default (gVisor) path this
 guide builds on. For background on the runtime, see
-[architecture.md](../architecture.md) and
+[architecture.md](../concepts/architecture.md) and
 [hack/microvm-assets/README.md](../../hack/microvm-assets/README.md).
 
 ## Option A: Linux host with KVM
@@ -40,11 +40,11 @@ instead, or open up the device with `sudo chmod 666 /dev/kvm`.
 
 ```sh
 ./hack/create-kind-cluster.sh
-# Look for: "/dev/kvm found: micro-VM (kata + cloud-hypervisor) support will be enabled."
+# Look for: "/dev/kvm found: microVM (kata + cloud-hypervisor) support will be enabled."
 ```
 
 Once the control plane is up, atelet advertises the device on each KVM-capable
-node, which is what places micro-VM workers:
+node, which is what places microVM workers:
 
 ```sh
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.capacity.ate\.dev/kvm}{"\n"}{end}'
@@ -107,18 +107,13 @@ brew install lima docker
 
 ### 2. Launch Lima with nested virtualization
 
-The arm64 nested-virtualization kernel regression affects kernels 6.19 and
-newer, so use a guest image with an older kernel — pinned here to Ubuntu
-24.04 LTS:
+Start the `docker-rootful` template with nested virtualization and a writable home mount:
 
 ```sh
-limactl start --name=docker-nested template://docker-rootful --nested-virt --set '.images = [
-{"location":"https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img","arch":"aarch64"},
-{"location":"https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img","arch":"x86_64"}
-]'
+limactl start --name=docker-nested template:docker-rootful --cpus=8 --memory=16 --nested-virt --mount-writable
 ```
 
-When prompted to edit the configuration, set at least:
+If prompted to edit the configuration, verify it includes at least:
 
 ```yaml
 cpus: 8
@@ -135,16 +130,29 @@ The writable home mount lets the kind/ko workflows write into your checkout,
 8 CPUs / 16 GiB is a comfortable floor for the control plane plus a microVM
 worker, and `vzNAT` gives the VM outbound networking under the vz VM type.
 
+On `arm64` (`amd64` is unaffected), Linux 6.19 and newer clear the active state
+of GICv3 LPIs when folding list registers on a VM exit (upstream commit
+`73c9726975af`). Under nested virtualization, hardware EOI in the L2 microVM
+guest then leaves the interrupt priority active in `ICH_AP1R0_EL2` and blocks
+subsequent `virtio` interrupts. Enable `kvm-arm.vgic_v3_group1_trap=1` on the
+Lima guest kernel so L1 KVM traps Group 1 EOI writes and clears the active
+priority in software:
+
+```sh
+limactl shell docker-nested sudo tee /etc/default/grub.d/99-vgic-trap.cfg <<'EOF'
+GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:-} kvm-arm.vgic_v3_group1_trap=1"
+EOF
+limactl shell docker-nested sudo update-grub
+limactl stop docker-nested
+limactl start docker-nested
+```
+
 ### 3. Assemble the arm64 assets inside the Lima VM
 
 Assemble the arm64 assets in the guest because macOS does not ship `zstd` by default:
 
 ```sh
 limactl shell docker-nested
-
-# Inside the VM — 24.04's git 2.43 can't read a reftable checkout:
-sudo add-apt-repository -y ppa:git-core/ppa
-sudo apt-get install -y git
 
 cd <your substrate checkout>    # visible via the writable home mount
 ./hack/microvm-assets/assemble.sh
@@ -177,7 +185,7 @@ resume it and confirm the count continues — proving the guest-memory snapshot
 round-tripped. The flow is the same as the
 [README Quickstart](../../README.md#quickstart-development), just with the
 microVM template; see the
-[counter demo's micro-VM variant](../../demos/counter/README.md#micro-vm-variant)
+[counter demo's microVM steps](../../demos/counter/README.md#1-build-and-deploy)
 for background. Note that an actor template showing a GOLDEN SNAPSHOT in the
 verify step already exercises the runtime end-to-end — the golden snapshot
 requires a full guest boot and checkpoint.
@@ -188,3 +196,4 @@ requires a full guest boot and checkpoint.
 |---|---|---|
 | `/dev/kvm: permission denied` during the kind KVM probe | Rootless Docker: the probe container's root is remapped to your user, which can't open the device (`660 root:kvm`) | Use rootful Docker, or `sudo chmod 666 /dev/kvm` before `./hack/create-kind-cluster.sh` |
 | Lima: `[hostagent] Starting VZ ... FATA exiting` on M1/M2 | Apple's Virtualization framework supports nested virtualization only on M3 and later | Use an M3+ Mac, or a Linux/KVM host (Option A) |
+| MicroVM golden build or actor boot hangs on arm64 Linux 6.19+ | L1 KVM drops LPI active state on VM exits, stalling `virtio` interrupts in nested guests | Add `kvm-arm.vgic_v3_group1_trap=1` to the Lima VM kernel command line and reboot (Option B, step 2) |

@@ -14,7 +14,7 @@
 
 # Substrate ActorTemplate resource (protojson-shaped ateapi.ActorTemplate,
 # NOT the ate.dev/v1 CRD) for the Nighthawk egress traffic-driver actor.
-# Applied with `kubectl-ate create actor-template -f -` by
+# Applied with `kubectl-ate create actor-template -f` by
 # deploy-traffic-driver.sh; the `nighthawk` atespace must exist.
 #
 # Runs Envoy's `nighthawk_service` gRPC server on port 80 (the default actor
@@ -65,4 +65,3 @@ resources:
     memoryBytes: 1073741824 # 1Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/nighthawk/traffic-driver/

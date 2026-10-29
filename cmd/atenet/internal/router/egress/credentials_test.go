@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -57,7 +58,11 @@ func bearerTokenResponse(token string) *credprovider.FetchSecretResponse {
 }
 
 func injectionHandlerFor(policy *ateapi.EgressPolicy, provider credprovider.CredentialProviderClient, providerName string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
+	var providers map[string]credprovider.CredentialProviderClient
+	if provider != nil {
+		providers = map[string]credprovider.CredentialProviderClient{providerName: provider}
+	}
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, providers)
 }
 
 // withAuthorization adds the placeholder authorization header the sample
@@ -110,6 +115,69 @@ func TestInjectionOnRequestLegs(t *testing.T) {
 				t.Errorf("actor identity = %q, want %q", got, wantActorSPIFFEID)
 			}
 		})
+	}
+}
+
+func TestInjectionPicksProviderByName(t *testing.T) {
+	policy := &ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
+		Hostnames: []string{"api.example.com"},
+		Effects: &ateapi.HttpRuleEffects{ReplaceHeaders: []*ateapi.CredentialHeader{
+			{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"},
+			{Header: "x-api-key", CredentialUri: "ate-secret://vault/team/key"},
+		}},
+	}}}}
+	k8s := &fakeProvider{resp: bearerTokenResponse("from-k8s")}
+	vault := &fakeProvider{resp: bearerTokenResponse("from-vault")}
+	h := New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0,
+		map[string]credprovider.CredentialProviderClient{"k8s": k8s, "vault": vault})
+
+	md := withAuthorization(innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	md.Headers["x-api-key"] = "placeholder"
+	res, err := h.HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders: %v", err)
+	}
+	got := map[string]string{}
+	for _, hv := range res.Response.GetResponse().GetHeaderMutation().GetSetHeaders() {
+		got[hv.GetHeader().GetKey()] = string(hv.GetHeader().GetRawValue())
+	}
+	want := map[string]string{"authorization": "Bearer from-k8s", "x-api-key": "from-vault"}
+	if !maps.Equal(got, want) {
+		t.Errorf("injected headers = %v, want %v", got, want)
+	}
+	if uri := k8s.got.GetUri(); uri != "ate-secret://k8s/default/token" {
+		t.Errorf("k8s provider got URI %q", uri)
+	}
+	if uri := vault.got.GetUri(); uri != "ate-secret://vault/team/key" {
+		t.Errorf("vault provider got URI %q", uri)
+	}
+}
+
+func TestInjectionCatchAllProvider(t *testing.T) {
+	policy := credentialInjectionPolicySample("api.example.com")
+	md := func() *extproc.RequestMetadata {
+		return withAuthorization(innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+	}
+
+	catchAll := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	h := New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0,
+		map[string]credprovider.CredentialProviderClient{"": catchAll})
+	if _, err := h.HandleRequestHeaders(context.Background(), md()); err != nil {
+		t.Fatalf("HandleRequestHeaders with a lone \"\" provider: %v", err)
+	}
+	if catchAll.got == nil {
+		t.Error("a lone \"\" provider was not asked for the credential")
+	}
+
+	catchAll = &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	k8s := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	h = New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0,
+		map[string]credprovider.CredentialProviderClient{"": catchAll, injectionProviderName: k8s})
+	if _, err := h.HandleRequestHeaders(context.Background(), md()); err != nil {
+		t.Fatalf("HandleRequestHeaders with a \"\" provider next to another: %v", err)
+	}
+	if catchAll.got != nil || k8s.got == nil {
+		t.Errorf("next to another provider, the \"\" entry was asked (%v) and %s was asked (%v); want only %s", catchAll.got != nil, injectionProviderName, k8s.got != nil, injectionProviderName)
 	}
 }
 
@@ -349,7 +417,7 @@ func TestActorJWTInjection(t *testing.T) {
 				actorJWTHeader("authorization"),
 				&ateapi.CredentialHeader{Header: "x-api-key", CredentialUri: "ate-secret://k8s/default/token"},
 			)}
-			h := New(client, nil, 0, nil, "")
+			h := New(client, nil, 0, nil)
 
 			res, err := h.HandleRequestHeaders(context.Background(),
 				withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
@@ -384,7 +452,7 @@ func TestActorJWTInjection(t *testing.T) {
 
 func TestActorJWTInjectionSkippedWithoutHeader(t *testing.T) {
 	client := &egressMockClient{actor: runningActor(), policy: replaceHeadersPolicy(extproc.EgressTLSMITMFilterChainName, actorJWTHeader("authorization"))}
-	h := New(client, nil, 0, nil, "")
+	h := New(client, nil, 0, nil)
 	res, err := h.HandleRequestHeaders(context.Background(),
 		innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
 	if err != nil {
@@ -422,7 +490,7 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 						policy:  replaceHeadersPolicy(leg, actorJWTHeader(header)),
 						mintErr: tc.mintErr,
 					}
-					h := New(mock, nil, 0, nil, "")
+					h := New(mock, nil, 0, nil)
 					md := innerMetadata(leg, "GET", "api.example.com", nil)
 					md.Headers[header] = "placeholder"
 					_, err := h.HandleRequestHeaders(context.Background(), md)

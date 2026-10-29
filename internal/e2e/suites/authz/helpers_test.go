@@ -277,10 +277,10 @@ func deleteAtespace(ctx context.Context, clients *e2e.Clients, name string) erro
 // deployFixture deploys the probe template into a new atespace and creates
 // one actor from it, all as the bootstrap owner. The actor is never resumed:
 // the tests only need an actor that exists.
-func deployFixture(t *testing.T, ctx context.Context, bucket string) *fixture {
+func deployFixture(t *testing.T, ctx context.Context) *fixture {
 	t.Helper()
 	clients := e2e.GetClients()
-	atespace, _ := e2e.DeployProbe(t, bucket, "authz")
+	atespace, _ := e2e.DeployProbe(t, "authz")
 	actor := &ateapi.ObjectRef{Atespace: atespace, Name: actorName}
 	template := &ateapi.ObjectRef{Atespace: atespace, Name: e2e.ProbeName}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{

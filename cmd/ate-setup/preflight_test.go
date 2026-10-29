@@ -40,9 +40,8 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Each invocation gets its own command tree and flags, including invocations
-// made by the real shell shims. The test executable runs the installer without
-// rebuilding it or contacting a real cluster.
+// Each invocation gets its own command tree and flags. The test executable runs
+// the installer without rebuilding it or contacting a real cluster.
 func TestInstallerPreflightProcess(t *testing.T) {
 	if os.Getenv("ATE_SETUP_PREFLIGHT_TEST") != "1" {
 		return
@@ -66,17 +65,6 @@ func runPreflightInstaller(t *testing.T, kubeconfig, dockerStatus string, args .
 	}
 	for name, source := range map[string]string{
 		"docker": "#!/bin/sh\necho called >> \"$PREFLIGHT_DOCKER_LOG\"\nexit \"$PREFLIGHT_DOCKER_STATUS\"\n",
-		"go": `#!/bin/sh
-if [ "$*" = "env GOARCH" ]; then
-  echo amd64
-elif [ "$1" = run ] && [ "$2" = ./cmd/ate-setup ]; then
-  shift 2
-  exec "$PREFLIGHT_EXECUTABLE" -test.run='^TestInstallerPreflightProcess$' -- "$@"
-else
-  echo "unexpected go invocation: $*" >&2
-  exit 1
-fi
-`,
 	} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(source), 0o755); err != nil {
 			t.Fatal(err)
@@ -93,7 +81,6 @@ fi
 		"NO_DEV_ENV=true",
 		"ATE_NO_REPORT_DEFAULTS=1",
 		"ATE_SETUP_PREFLIGHT_TEST=1",
-		"PREFLIGHT_EXECUTABLE=" + executable,
 		"PREFLIGHT_DOCKER_STATUS=" + dockerStatus,
 		"PREFLIGHT_DOCKER_LOG=" + filepath.Join(bin, "docker.log"),
 	}
@@ -194,6 +181,21 @@ func TestKindInstallerHelpNeedsNoCluster(t *testing.T) {
 	out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "1", args...)
 	if code != 0 || !strings.Contains(out, "Usage:") {
 		t.Fatalf("exit=%d, want help without prerequisites\n%s", code, out)
+	}
+}
+
+// Cobra rejects an unknown command only at the root, so a typo one level down
+// used to print help and exit 0 having installed nothing.
+func TestInstallerRejectsUnknownSubcommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"deploy", "demo-counter"},
+		{"deploy", "demo", "demo-counter"},
+	} {
+		out, code := runPreflightInstaller(t, preflightKubeconfig(t, ""), "0", args...)
+		want := `unknown command "demo-counter"`
+		if code == 0 || !strings.Contains(out, want) {
+			t.Errorf("%v: exit=%d, want an error containing %q\n%s", args, code, want, out)
+		}
 	}
 }
 

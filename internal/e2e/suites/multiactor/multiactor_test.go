@@ -44,15 +44,14 @@ type whoamiResponse struct {
 func TestTwoActorsShareOneWorker(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatal(err)
 	}
 
 	e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-multiactor.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-multiactor-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "multiactor", nil)
+	}, "multiactor", nil)
 
 	names := []string{"ma-first", "ma-second"}
 	pods := map[string]string{}

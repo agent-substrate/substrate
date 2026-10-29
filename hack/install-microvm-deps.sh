@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # Install (or delete) the cluster-wide micro-VM (kata + cloud-hypervisor)
-# dependencies. This is opt-in on top of hack/install-ate.sh --deploy-ate-system,
+# dependencies. This is opt-in on top of ate-setup deploy ate-system,
 # which only installs the default gVisor SandboxConfig. Used by:
 #   * hack/run-microvm-demo.sh (before applying the counter-microvm demo)
 #   * benchmarking/automation/orchestrator.py (before deploying a microvm
@@ -106,7 +106,7 @@ if [[ -z "${KUBECTL_CONTEXT}" ]] && ! kubectl config current-context >/dev/null 
   exit 1
 fi
 
-# ANSI color codes for prettier output (mirrors hack/install-ate.sh).
+# ANSI color codes for prettier output.
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
 log() {

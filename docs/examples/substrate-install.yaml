@@ -16,7 +16,7 @@
 # An Agent Substrate installation, as a document an operator owns.
 #
 #   ate-setup deploy ate-system --config substrate-install.yaml
-#   ATE_CONFIG=substrate-install.yaml hack/install-ate.sh --deploy-ate-system
+#   ATE_CONFIG=substrate-install.yaml ate-setup deploy ate-system
 #
 # Every setting here can equally be an environment variable or a flag; see
 # docs/operator-install.md for the full list and the precedence between them.
@@ -42,9 +42,10 @@ atenet:
 
 # Prebuilt images. Both halves are required together: a tag with no repository
 # would be dropped, leaving a build from source that looks like the release the
-# tag names.
+# tag names. The repository has to hold every image the install deploys; see
+# docs/dev/releasing.md for what releases publish.
 images:
-  repo: ghcr.io/agent-substrate/substrate
+  repo: registry.example.com/substrate
   tag: v0.4.1
 
 # Snapshot storage.

@@ -178,6 +178,7 @@ spec:
           mountPath: "/run/ca-state"
         securityContext:
           allowPrivilegeEscalation: false
+          runAsNonRoot: true
           capabilities:
             add:
             - NET_BIND_SERVICE
