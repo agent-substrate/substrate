@@ -112,6 +112,11 @@
 # seconds, or the step falls short of its rate. A resumepaused iteration is a
 # resume plus a pause, so size it by the p99 of both together.
 #
+# `--density-step-duration <duration>` in `flags` makes `runner.py` run the
+# actor density search in `density_runner.py` (see "Density Limit Benchmark"
+# in docs/guides/benchmarking.md). It steps concurrent users up toward `users`
+# and binary-searches the highest passing count within `duration`.
+#
 # An optional `controlPlane:` block shapes the control plane for a capacity
 # run; pre_test applies it after the deploy. Its `apiServer:` section, which
 # is required, sizes ate-api-server:
@@ -763,3 +768,58 @@ tests:
       - "50"
       - "--ladder"
       - "50:2m@20,50:2m@50"
+  - name: density_pa_light_gvisor
+    type: locust
+    description: "Actor density limit: personal-assistant-light on 1 gVisor worker"
+    targetCluster: dev
+    file: /app/tests/agentsession.py
+    duration: 90m
+    users: 1024
+    workerCount: 1
+    actorMemory: "256Mi"
+    actorCPU: "250m"
+    runnerCpu: "4"
+    runnerMemory: "8Gi"
+    flags:
+      - "--density-step-duration"
+      - "5m"
+      - "--spawn-rate"
+      - "64"
+      - "--agentsession-script"
+      - "personal-assistant-light"
+      - "--agentsession-think-scale"
+      - "0.005"
+      - "--agentsession-phase-in"
+      - "90"
+      - "--lifecycle-mode"
+      - "async"
+      - "--resume-mode"
+      - "implicit"
+  - name: density_pa_light_microvm
+    type: locust
+    description: "Actor density limit: personal-assistant-light on 1 microVM worker"
+    targetCluster: dev
+    file: /app/tests/agentsession.py
+    duration: 90m
+    users: 1024
+    workerCount: 1
+    sandboxClass: microvm
+    actorMemory: "256Mi"
+    actorCPU: "250m"
+    runnerCpu: "4"
+    runnerMemory: "8Gi"
+    flags:
+      - "--density-step-duration"
+      - "5m"
+      - "--spawn-rate"
+      - "64"
+      - "--agentsession-script"
+      - "personal-assistant-light"
+      - "--agentsession-think-scale"
+      - "0.005"
+      - "--agentsession-phase-in"
+      - "90"
+      - "--lifecycle-mode"
+      - "async"
+      - "--resume-mode"
+      - "implicit"
