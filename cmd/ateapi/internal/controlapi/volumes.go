@@ -65,6 +65,28 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 	return volumes, nil
 }
 
+// validateExternalVolumeNames checks the layout information retained on an
+// actor after its template has been deleted. Storage IDs may still be pending.
+func validateExternalVolumeNames(actor *ateapi.Actor, template *ateapi.ActorTemplate) error {
+	names := make(map[string]struct{})
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		names[vol.GetName()] = struct{}{}
+	}
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternal().GetTemplate() == nil {
+			continue
+		}
+		if _, ok := names[vol.GetName()]; !ok {
+			return apierror.FailedPrecondition("external volume %q is not recorded on the actor", vol.GetName())
+		}
+		delete(names, vol.GetName())
+	}
+	if len(names) != 0 {
+		return apierror.FailedPrecondition("the new actor template omits external volumes recorded on the actor")
+	}
+	return nil
+}
+
 // createActorVolumes provisions the external volumes in volumesToCreate that have no storage volume ID, using the provided volume plugin.
 // It returns the list of external volumes (with storage IDs), or an error if any creation fails.
 // Any volumes processed before or during a failure are returned alongside the error so they can be persisted on the actor.

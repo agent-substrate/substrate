@@ -2283,6 +2283,8 @@ type attachFailVolumePlugin struct {
 	failUntil      int
 	attachedNodes  []string
 	detachedNodes  []string
+	detachedIDs    []string
+	detachErr      error
 	deleted        []string
 }
 
@@ -2310,7 +2312,8 @@ func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, nod
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.detachedNodes = append(a.detachedNodes, node)
-	return nil
+	a.detachedIDs = append(a.detachedIDs, volumeID)
+	return a.detachErr
 }
 
 func (a *attachFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {

@@ -333,8 +333,10 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 					return err
 				}
 			case errors.Is(err, errActorTemplateNotFound):
-				// The old template is gone, so there is nothing left to
-				// compare the volume layout against.
+				// Only the recorded external volume names remain available.
+				if err := validateExternalVolumeNames(oldVal, newTemplate); err != nil {
+					return err
+				}
 			default:
 				return err
 			}

@@ -60,12 +60,13 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
 	}
 
+	workloadSpec := workloadSpecForDelete(ctx, actor, actorTemplate)
 	var atletTerminatedErr, volumesDetachedErr error
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
+	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, workloadSpec, ateattr.OperationDelete); err != nil {
 		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
 		errs = append(errs, atletTerminatedErr)
 	}
-	if err := w.ensureVolumesDetachedForDelete(ctx, actor, actorTemplate); err != nil {
+	if err := w.ensureVolumesDetachedForDelete(ctx, actor); err != nil {
 		volumesDetachedErr = fmt.Errorf("while detaching volumes: %w", err)
 		errs = append(errs, volumesDetachedErr)
 	}
@@ -97,7 +98,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, opName string) (err error) {
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, workloadSpec *ateletpb.WorkloadSpec, opName string) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
@@ -147,21 +148,23 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 
 	client := ateletpb.NewAteletClient(conn)
 
-	var workloadSpec *ateletpb.WorkloadSpec
-	if actorTemplate != nil {
-		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
-		if err != nil {
-			return err
+	if workloadSpec == nil {
+		if actorTemplate != nil {
+			spec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
+			if err != nil {
+				return err
+			}
+			workloadSpec = spec
+		} else {
+			// When the template is missing/deleted, build a fallback workload spec with
+			// all external volumes recorded on the actor so atelet can unmount them on the node.
+			slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
+				slog.String("actor", actorRef.Name),
+				slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
+				slog.String("templateName", actor.GetActorTemplate().GetName()))
+			workloadSpec = fallbackWorkloadSpec(actor)
 		}
-		workloadSpec = spec
-	} else {
-		// When the template is missing/deleted, build a fallback workload spec with
-		// all external volumes recorded on the actor so atelet can unmount them on the node.
-		slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
-			slog.String("actor", actorRef.Name),
-			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
-			slog.String("templateName", actor.GetActorTemplate().GetName()))
-		workloadSpec = fallbackWorkloadSpec(actor)
+
 	}
 
 	req := &ateletpb.TerminateRequest{
@@ -185,6 +188,38 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	return nil
 }
 
+// workloadSpecForDelete preserves container cleanup when the template is
+// usable, and includes provisioned volumes even if it no longer mounts them.
+func workloadSpecForDelete(ctx context.Context, actor *ateapi.Actor, template *ateapi.ActorTemplate) *ateletpb.WorkloadSpec {
+	fallback := fallbackWorkloadSpec(actor)
+	if template == nil {
+		return fallback
+	}
+	spec, err := workloadSpecFromActorTemplate(template, actor, nil)
+	if err != nil {
+		slog.WarnContext(ctx, "actor template cannot describe the workload during delete", slog.Any("err", err))
+		return fallback
+	}
+	for _, recorded := range fallback.GetVolumes() {
+		var found *ateletpb.Volume
+		for _, vol := range spec.GetVolumes() {
+			if vol.GetName() == recorded.GetName() {
+				found = vol
+				break
+			}
+		}
+		if found != nil {
+			if found.GetExternal() == nil {
+				slog.WarnContext(ctx, "recorded external volume conflicts with template volume during delete", slog.String("volume", recorded.GetName()))
+				return fallback
+			}
+			continue
+		}
+		spec.Volumes = append(spec.Volumes, recorded)
+	}
+	return spec
+}
+
 // fallbackWorkloadSpec is the spec to terminate an actor with when its template
 // cannot be resolved, whether deleted or never readable from the caller. Only
 // the external volumes recorded on the actor are carried, because atelet still
@@ -198,26 +233,24 @@ func fallbackWorkloadSpec(actor *ateapi.Actor) *ateletpb.WorkloadSpec {
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
 	spec := &ateletpb.WorkloadSpec{}
-	if preview.IsEnabled(preview.GateExternalVolumes) {
-		for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
-			if vol.GetStorageVolumeId() == "" {
-				continue
-			}
-			spec.Volumes = append(spec.Volumes, &ateletpb.Volume{
-				Name: vol.GetName(),
-				External: &ateletpb.ExternalVolumeSource{
-					StorageVolumeId: vol.GetStorageVolumeId(),
-					VolumeType:      vol.GetVolumeType(),
-					VolumeContext:   vol.GetVolumeContext(),
-				},
-			})
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		if vol.GetStorageVolumeId() == "" {
+			continue
 		}
+		spec.Volumes = append(spec.Volumes, &ateletpb.Volume{
+			Name: vol.GetName(),
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: vol.GetStorageVolumeId(),
+				VolumeType:      vol.GetVolumeType(),
+				VolumeContext:   vol.GetVolumeContext(),
+			},
+		})
 	}
 	return spec
 }
 
 // ensureVolumesDetachedForDelete detaches external volumes.
-func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapi.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
@@ -226,7 +259,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	// disabling the gate while in use would be an orphaned volume
 	// attachment, we are NOT checking the ExternalVolumes gate in the
 	// delete/suspend path.
-	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, nil, "delete")
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.

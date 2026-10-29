@@ -16,6 +16,7 @@ package functionaltest
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // calls returns copies of the nodes the plugin attached to and detached from,
@@ -315,4 +317,162 @@ func TestRevertActor_WorkerNoLongerHosts_Detaches(t *testing.T) {
 		t.Errorf("TerminateRequest.WorkerPodUid = %q, want empty", gotUID)
 	}
 	tc.fakeAtelet.Lock.Unlock()
+}
+
+// Seed the mismatch independently of UpdateActor so its validation cannot hide
+// failures to delete actors already stored by an earlier version.
+func TestActorTemplateVolumeMismatch(t *testing.T) {
+	for _, tt := range []struct {
+		name, layout, failure string
+		gateOff, resumeOnly   bool
+	}{
+		{name: "resume after same-name replacement", layout: "missing record", resumeOnly: true},
+		{name: "delete resuming actor with missing record", layout: "missing record"},
+		{name: "delete removed volume", layout: "removed"},
+		{name: "delete unmounted volume", layout: "unmounted"},
+		{name: "delete changed volume type", layout: "changed type"},
+		{name: "delete missing template with gate disabled", layout: "missing template", gateOff: true},
+		{name: "retry failed termination with mismatched template", layout: "removed", failure: "terminate"},
+		{name: "retry failed detach with mismatched template", layout: "removed", failure: "detach"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, "ExternalVolumes")
+			ns := namespaceForTest("ns-template-volume-mismatch")
+			plugin := &attachFailVolumePlugin{}
+			tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{"substrate.io/mock": plugin})
+			defer tc.cleanup()
+			ctx := context.Background()
+			ext := &ateapi.Volume{Name: "vol1", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 10 << 30}}}
+			mounts := []*ateapi.VolumeMount{{Name: "vol1", MountPath: "/data"}}
+			var vols []*ateapi.Volume
+			var initialMounts []*ateapi.VolumeMount
+			if tt.layout != "missing record" {
+				vols = []*ateapi.Volume{ext}
+				initialMounts = mounts
+			}
+			tmpl := createTemplateWithVolumes(t, tc, ns, vols, initialMounts)
+			workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+			ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: "id1"}
+			actor, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: ref.Name}, ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tt.resumeOnly {
+				if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
+					t.Fatal(err)
+				}
+				actor, err = tc.persistence.GetActor(ctx, resources.ActorRefFromActor(actor))
+				if err != nil {
+					t.Fatal(err)
+				}
+				actor, err = tc.persistence.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(a *ateapi.Actor) error { a.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING; return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := tc.persistence.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: testAtespace, Name: "tmpl1"}, store.DeletePreconditions{}); err != nil {
+				t.Fatal(err)
+			}
+			replacement := proto.CloneOf(tmpl)
+			replacement.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"}
+			replacement.Status = nil
+			switch tt.layout {
+			case "missing record":
+				replacement.Volumes = []*ateapi.Volume{ext}
+				replacement.Containers[0].VolumeMounts = mounts
+			case "removed":
+				replacement.Volumes = nil
+				replacement.Containers[0].VolumeMounts = nil
+			case "unmounted":
+				replacement.Containers[0].VolumeMounts = nil
+			case "changed type":
+				replacement.Volumes = []*ateapi.Volume{{Name: "vol1", DurableDir: &ateapi.DurableDirVolumeSource{}}}
+			}
+			if tt.layout != "missing template" {
+				if _, err := tc.persistence.CreateActorTemplate(ctx, replacement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.gateOff {
+				preview.InitForTest(t)
+			}
+			if tt.resumeOnly {
+				if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("ResumeActor = %v, want FailedPrecondition", err)
+				}
+				stored, err := tc.persistence.GetActor(ctx, resources.ActorRefFromActor(actor))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !proto.Equal(actor, stored) {
+					t.Errorf("rejected resume changed actor: %v", stored)
+				}
+				if worker, err := tc.persistence.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("unexpected worker assignment %q: %v", worker, err)
+				}
+				return
+			}
+			if tt.failure != "" {
+				tc.fakeAtelet.Lock.Lock()
+				if tt.failure == "terminate" {
+					tc.fakeAtelet.FailTerminate = status.Error(codes.Unavailable, "injected failure")
+				}
+				plugin.mu.Lock()
+				if tt.failure == "detach" {
+					plugin.detachErr = status.Error(codes.Unavailable, "injected detach failure")
+				}
+				plugin.mu.Unlock()
+				tc.fakeAtelet.Lock.Unlock()
+				if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err == nil {
+					t.Fatal("delete succeeded despite cleanup failure")
+				}
+				stored, err := tc.persistence.GetActor(ctx, resources.ActorRefFromActor(actor))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stored.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_DELETING || stored.GetStatus().GetWorkerAssignment() == nil {
+					t.Fatalf("lost retry state: %v", stored)
+				}
+				if worker, err := tc.persistence.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); err != nil || worker != workerName {
+					t.Fatalf("lost worker assignment: %q, %v", worker, err)
+				}
+				tc.fakeAtelet.Lock.Lock()
+				tc.fakeAtelet.FailTerminate = nil
+				plugin.mu.Lock()
+				plugin.detachErr = nil
+				plugin.mu.Unlock()
+				tc.fakeAtelet.Lock.Unlock()
+			}
+			if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tc.persistence.GetActor(ctx, resources.ActorRefFromActor(actor)); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("actor still exists: %v", err)
+			}
+			if worker, err := tc.persistence.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("assignment remains on %q: %v", worker, err)
+			}
+			tc.fakeAtelet.Lock.Lock()
+			request := proto.CloneOf(tc.fakeAtelet.TerminateRequest)
+			tc.fakeAtelet.Lock.Unlock()
+			if request == nil {
+				t.Fatal("Terminate was not sent")
+			}
+			if tt.layout != "missing record" {
+				want := actor.GetStatus().GetExternalVolumes().GetVolumes()[0].GetStorageVolumeId()
+				if len(request.GetSpec().GetVolumes()) != 1 || request.GetSpec().GetVolumes()[0].GetExternal().GetStorageVolumeId() != want {
+					t.Errorf("terminate volumes = %v, want %q", request.GetSpec().GetVolumes(), want)
+				}
+				plugin.mu.Lock()
+				ids := slices.Clone(plugin.detachedIDs)
+				plugin.mu.Unlock()
+				if !slices.Contains(ids, want) {
+					t.Errorf("detached IDs = %v, want %q", ids, want)
+				}
+				if tt.layout != "changed type" && tt.layout != "missing template" && len(request.GetSpec().GetContainers()) == 0 {
+					t.Error("lost containers from usable template")
+				}
+			}
+		})
+	}
 }
