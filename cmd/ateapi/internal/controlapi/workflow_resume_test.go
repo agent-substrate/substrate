@@ -888,9 +888,9 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 }
 
 // TestValidateAssignedWorker verifies that RESUMING recovery only proceeds on
-// a live, registered, non-draining worker that still suits the actor, and
-// crashes the actor, releasing its assignment, when the worker can never take
-// it back.
+// a live, registered, non-draining worker that still suits the actor, crashes
+// the actor, releasing its assignment, when the worker can never take it back,
+// and leaves an actor that has moved on since it was read alone.
 func TestValidateAssignedWorker(t *testing.T) {
 	activeStatus := registered(&ateapi.WorkerStatus{
 		State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
@@ -903,9 +903,10 @@ func TestValidateAssignedWorker(t *testing.T) {
 	tests := []struct {
 		name         string
 		workerStatus *ateapi.WorkerStatus
-		// unbound leaves the worker without the actor's assignment, as a
-		// release by a writer that took over the actor's lease does.
-		unbound bool
+		// movedOn stores the actor RUNNING with no assignment on the worker the
+		// resume read, as a revert and a new resume that took over the actor's
+		// lease leave it.
+		movedOn bool
 		// workerGone seeds no worker, as a worker delete that took over the
 		// actor's lease leaves.
 		workerGone   bool
@@ -946,13 +947,12 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantActorState: ateapi.ActorState_ACTOR_STATE_RESUMING,
 		},
 		{
-			name:             "crashes actor whose worker no longer holds it",
-			workerStatus:     activeStatus,
-			unbound:          true,
-			wantCode:         codes.Aborted,
-			wantActorState:   ateapi.ActorState_ACTOR_STATE_CRASHED,
-			wantCrashMessage: "resume failed: " + crashMessageWorkerReassigned,
-			wantReleased:     true,
+			name:           "leaves actor untouched when it has moved off the worker it was read on",
+			workerStatus:   activeStatus,
+			movedOn:        true,
+			wantCode:       codes.Aborted,
+			wantActorState: ateapi.ActorState_ACTOR_STATE_RUNNING,
+			wantReleased:   true,
 		},
 		{
 			name:           "leaves actor untouched when its worker is gone",
@@ -982,7 +982,11 @@ func TestValidateAssignedWorker(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
-			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_RESUMING)
+			storedState := ateapi.ActorState_ACTOR_STATE_RESUMING
+			if tt.movedOn {
+				storedState = ateapi.ActorState_ACTOR_STATE_RUNNING
+			}
+			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", storedState)
 			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
@@ -1001,7 +1005,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
-				if !tt.unbound {
+				if !tt.movedOn {
 					seedAssignment(t, persistence, testWorkerUID("pod-1"), &ateapi.ActorAssignment{
 						Actor:    &ateapi.ObjectRef{Atespace: "team-a", Name: "shared"},
 						ActorUid: uid,

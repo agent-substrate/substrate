@@ -311,6 +311,8 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // node-local snapshot with its PENDING durable copy (async), and commits
 // SUSPENDED with the assignment cleared in a single update, then releases the
 // durable snapshot that update replaced.
+// When the latest snapshot cannot be recorded, it commits CRASHED instead and
+// fails the step.
 // It re-reads the actor first so a write that landed after this workflow lost
 // its lease, such as a crash or a delete, is not overwritten: an actor that is
 // no longer SUSPENDING is left as it is and the step fails with
@@ -345,9 +347,21 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if state := latestActor.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_SUSPENDING {
 		return nil, apierror.FailedPrecondition("FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, state, ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 	}
-	// A SUSPENDING actor is on the node the bind recorded, with the snapshot
-	// and its PENDING durable copy that ensureMarkedSuspending recorded at the
-	// latest generation: nothing else writes a SUSPENDING actor.
+	if mode == suspendAsync {
+		// A local snapshot on an unknown node can never be found by the scheduler.
+		if latestActor.GetStatus().GetAssignedNode() == "" {
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
+		}
+		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		}
+	}
+	// Both modes mark the durable copy PENDING up front. Without it a sync
+	// suspend has nothing to mark COMPLETED, and atelet's background upload of
+	// an async suspend's snapshot could never be recorded.
+	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
+	}
 
 	// A state that conflicts with the record crashes the actor. Atelet has
 	// already destroyed the workload, so a retried Checkpoint can't succeed.

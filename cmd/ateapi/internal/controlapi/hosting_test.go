@@ -233,6 +233,9 @@ func TestHostingNodeWithoutWorker(t *testing.T) {
 		{"older snapshot on the node, latest not", olderOnNode, "node-1"},
 		{"local copy but no assigned node", noAssignedNode, ""},
 		{"crashed with a local copy", status(ateapi.ActorState_ACTOR_STATE_CRASHED, "node-1", nil), ""},
+		{"resuming without a worker", status(ateapi.ActorState_ACTOR_STATE_RESUMING, "", nil), ""},
+		{"running without a worker", status(ateapi.ActorState_ACTOR_STATE_RUNNING, "", nil), ""},
+		{"suspending without a worker", status(ateapi.ActorState_ACTOR_STATE_SUSPENDING, "", nil), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			actor := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "a", Name: "n", Uid: "uid"}, Status: tc.status}

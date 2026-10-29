@@ -41,9 +41,8 @@ func HostingNode(actor *ateapi.Actor) string {
 	if !slices.Contains(resources.TransferStates, status.GetState()) {
 		return ""
 	}
-	// Of these states, only a SUSPENDED actor names no worker.
-	if assignment := status.GetWorkerAssignment(); assignment != nil {
-		return assignment.GetNodeName()
+	if status.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		return status.GetAssignedNode()
 	}
-	return status.GetAssignedNode()
+	return status.GetWorkerAssignment().GetNodeName()
 }

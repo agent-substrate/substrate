@@ -954,6 +954,57 @@ func TestSuspendActor_Finalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	}
 }
 
+// TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment verifies that if the
+// latest generation snapshot entry is missing when the suspend finalizes, the
+// actor transitions to CRASHED and releases its worker rather than getting
+// stuck in SUSPENDING, and the suspend fails.
+func TestSuspendActor_Finalized_MissingDurableSnapshotClearsAssignment(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	seedSuspendTemplate(t, ctx, st, &ateapi.SnapshotConfig{StorageLocation: testStorageLocation})
+	w, atelet := newWireCaptureWorkflow(t, st)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	records := crashRecords(t)
+
+	created := storetest.MustCreateActor(t, ctx, st, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: suspendTestTemplateRef(),
+		Status: &ateapi.ActorStatus{
+			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDING,
+			AssignedNode:           "node-1",
+			WorkerAssignment:       wireTestAssignment(),
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapi.Snapshot{
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "snapshot-1", someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
+			},
+		},
+	})
+	seedWireWorker(t, ctx, st, assignmentOf(created))
+	updateDuringCheckpoint(t, atelet, st, actorRef, func(s *ateapi.ActorStatus) {
+		s.Snapshots = nil
+	})
+
+	if _, err := w.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("SuspendActor error = %v, want FailedPrecondition for the actor it crashed", err)
+	}
+	got, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageDurableSnapshotMissing; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
+	}
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
+	}
+	if len(*records) != 1 {
+		t.Fatalf("got %d crash records, want 1", len(*records))
+	}
+}
+
 // suspendModes runs a table test against both suspend workflows: sync, whose
 // snapshot is durable before it returns, and async, whose snapshot stays
 // node-local.

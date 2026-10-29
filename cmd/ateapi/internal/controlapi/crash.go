@@ -34,13 +34,15 @@ import (
 // Fixed messages recorded in ActorCrash.message for crashes due to non-atelet
 // reasons. A failed atelet call builds its message with ateletCrashMessage instead.
 const (
-	crashMessageLocalSnapshotNodeGone = "node holding the actor's latest snapshot no longer exists"
-	crashMessageSnapshotStateConflict = "atelet's snapshot state conflicts with the actor's record"
-	crashMessageWorkerDraining        = "assigned worker is draining"
-	crashMessageWorkerReassigned      = "assigned worker no longer hosts the actor"
-	crashMessageWorkerIneligible      = "assigned worker no longer satisfies the actor's placement constraints"
-	crashMessageWorkerPodGone         = "worker pod went away while hosting the actor"
-	crashMessageWorkerRestarted       = "worker restarted while hosting the actor"
+	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageLocalSnapshotNodeGone    = "node holding the actor's latest snapshot no longer exists"
+	crashMessageLocalSnapshotMissing     = "actor has no local snapshot"
+	crashMessageDurableSnapshotMissing   = "actor has no durable snapshot"
+	crashMessageSnapshotStateConflict    = "atelet's snapshot state conflicts with the actor's record"
+	crashMessageWorkerDraining           = "assigned worker is draining"
+	crashMessageWorkerIneligible         = "assigned worker no longer satisfies the actor's placement constraints"
+	crashMessageWorkerPodGone            = "worker pod went away while hosting the actor"
+	crashMessageWorkerRestarted          = "worker restarted while hosting the actor"
 )
 
 // maxCrashMessageBytes matches the maxLength on ActorCrash.message.

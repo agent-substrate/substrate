@@ -331,12 +331,12 @@ func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed t
 }
 
 // validateAssignedWorker checks a RESUMING actor's persisted assignment
-// against the current worker record. It crashes an actor whose worker drained,
-// no longer holds it, or is no longer eligible, since such an actor can never
-// make progress on its own. A worker that is only unavailable is reported as
-// UNAVAILABLE for the caller to retry. A worker that is gone is reported as
-// ABORTED: deleting it already crashed the actor, under a lease this resume
-// lost.
+// against the current worker record. It crashes an actor whose worker drained
+// or is no longer eligible, since such an actor can never make progress on its
+// own. A worker that is only unavailable is reported as UNAVAILABLE for the
+// caller to retry. A worker that is gone, or no longer holds the actor, is
+// reported as ABORTED: a writer that took over under a lease this resume lost
+// has already moved the actor on.
 func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (*ateapi.Worker, error) {
 	workerName := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
 	worker, err := w.store.GetWorker(ctx, workerName)
@@ -364,20 +364,17 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !scheduling.Registered(worker) {
 		return nil, apierror.Unavailable("worker %s assigned to actor %s has not finished registering", worker.GetMetadata().GetName(), actorRef)
 	}
-	// A writer that took over after this resume lost its lease may have
-	// released the actor since it was read. Restoring it then would start a
-	// sandbox no worker assignment books.
+	// The actor names a worker only while that worker holds its assignment,
+	// so a missing assignment means a writer that took over after this resume
+	// lost its lease has moved the actor since it was read. Restoring it then
+	// would start a sandbox no worker assignment books, and crashing it would
+	// crash whatever the actor is now.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
 	if err != nil {
 		return nil, err
 	}
 	if !hosted {
-		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer hosts it",
-			slog.String("worker", worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerReassigned); cerr != nil {
-			return nil, fmt.Errorf("while crashing actor: %w", cerr)
-		}
-		return nil, apierror.Aborted("actor %s crashed", actorRef)
+		return nil, apierror.Aborted("actor %s has moved off worker %s since it was read", actorRef, worker.GetMetadata().GetName())
 	}
 	constraints := schedulingConstraints(actor, actorTemplate)
 	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
