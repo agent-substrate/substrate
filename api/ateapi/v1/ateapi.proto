@@ -587,6 +587,23 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 5;
+
+  // labels identify the Actor for its creator, for example the object of
+  // the creating platform it belongs to. At creation they are merged over
+  // the actor_labels of the ActorTemplate, the Actor's own value winning on
+  // a key conflict; a later change of actor_template does not touch them.
+  // Immutable after creation: an UpdateActor that changes them, including by
+  // omitting them, returns INVALID_ARGUMENT. Keys in ate.dev and its
+  // subdomains are reserved, and keys and values together may not exceed
+  // 4096 bytes.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
+  // +k8s:customValidation # reserved keys and total size
+  // +k8s:immutable
+  map<string, string> labels = 6;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1221,6 +1238,18 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 7;
+
+  // actor_labels are the default labels of Actors created from this
+  // template. An Actor's own labels win on a key conflict. Keys in ate.dev
+  // and its subdomains are reserved, and keys and values together may not
+  // exceed 4096 bytes.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
+  // +k8s:customValidation # reserved keys and total size
+  map<string, string> actor_labels = 8;
 }
 
 // ResourceRequirements are the compute resources a workload may use.

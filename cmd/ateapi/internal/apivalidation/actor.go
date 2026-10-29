@@ -127,6 +127,10 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	return errs
 }
 
+func ValidateCustom_Actor_Labels(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return validateLabels(fldPath, value)
+}
+
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_WorkerAssignment_WorkerPodIps(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return validateDualStackIPs(fldPath, value)

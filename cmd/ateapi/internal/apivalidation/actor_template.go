@@ -112,6 +112,10 @@ func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operat
 	return resources.ValidateNestedMountPaths(fldPath, paths)
 }
 
+func ValidateCustom_ActorTemplate_ActorLabels(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return validateLabels(fldPath, value)
+}
+
 func ValidateCustom_ActorMetadataItem_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateProjectedPath(fldPath, *value)
 }

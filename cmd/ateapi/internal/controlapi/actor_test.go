@@ -210,6 +210,36 @@ func TestUpdateActor(t *testing.T) {
 			wantCode: codes.InvalidArgument,
 		},
 		{
+			name:   "unchanged labels are kept",
+			stored: &ateapi.Actor{Labels: map[string]string{"app": "billing"}},
+			req: &ateapi.Actor{
+				ActorTemplate:  &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+				Labels:         map[string]string{"app": "billing"},
+				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			},
+			want: &ateapi.Actor{
+				Labels:         map[string]string{"app": "billing"},
+				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			},
+		},
+		{
+			name:   "changed labels are rejected",
+			stored: &ateapi.Actor{Labels: map[string]string{"app": "billing"}},
+			req: &ateapi.Actor{
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+				Labels:        map[string]string{"app": "checkout"},
+			},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:   "omitted labels are rejected",
+			stored: &ateapi.Actor{Labels: map[string]string{"app": "billing"}},
+			req: &ateapi.Actor{
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+			},
+			wantCode: codes.InvalidArgument,
+		},
+		{
 			name:   "refused while another operation holds the actor",
 			stored: &ateapi.Actor{},
 			req: &ateapi.Actor{
@@ -971,6 +1001,81 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 			gotTemplate, err := svc.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: tmplRef})
 			if err != nil || !proto.Equal(gotTemplate, tmpl) {
 				t.Fatalf("creating runtime policies changed the template: %v, %v", gotTemplate, err)
+			}
+		})
+	}
+}
+
+func TestCreateActor_Labels(t *testing.T) {
+	// labelsOf returns n labels whose keys are prefix plus a counter padded to
+	// width digits, and whose values are valueLen bytes.
+	labelsOf := func(prefix string, n, width, valueLen int) map[string]string {
+		labels := map[string]string{}
+		for i := range n {
+			labels[fmt.Sprintf("%s%0*d", prefix, width, i)] = strings.Repeat("v", valueLen)
+		}
+		return labels
+	}
+	for _, tt := range []struct {
+		name           string
+		templateLabels map[string]string
+		actorLabels    map[string]string
+		want           map[string]string
+		wantCode       codes.Code
+	}{{
+		name:        "actor labels without template defaults",
+		actorLabels: map[string]string{"app": "billing"},
+		want:        map[string]string{"app": "billing"},
+	}, {
+		name:           "template defaults without actor labels",
+		templateLabels: map[string]string{"team": "payments"},
+		want:           map[string]string{"team": "payments"},
+	}, {
+		name:           "actor value wins on a key conflict",
+		templateLabels: map[string]string{"team": "payments", "app": "default"},
+		actorLabels:    map[string]string{"app": "billing"},
+		want:           map[string]string{"team": "payments", "app": "billing"},
+	}, {
+		// 20 labels of 126 bytes each fit alone; the 40 merged do not.
+		name:           "merged labels over the size cap are rejected",
+		templateLabels: labelsOf("t", 20, 62, 63),
+		actorLabels:    labelsOf("a", 20, 62, 63),
+		wantCode:       codes.InvalidArgument,
+	}, {
+		name:           "merged labels over the count cap are rejected",
+		templateLabels: labelsOf("t", 3, 1, 1),
+		actorLabels:    labelsOf("a", 62, 2, 1),
+		wantCode:       codes.InvalidArgument,
+	}} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"}
+				tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots"
+				tmpl.ActorLabels = tt.templateLabels
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor, err := svc.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "alpha"},
+				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+				Labels:        tt.actorLabels,
+			}})
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("CreateActor error = %v (code %v), want code %v", err, code, tt.wantCode)
+			}
+			if tt.wantCode != codes.OK {
+				return
+			}
+			got, err := svc.GetActor(ctx, &ateapi.GetActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tt.want, got.GetLabels()); diff != "" {
+				t.Errorf("stored labels mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

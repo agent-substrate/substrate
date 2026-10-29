@@ -152,6 +152,30 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		"invalid actor.source_tag.name",
 		validReq(validActor(withSourceTag("as", "invalid value"))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "source_tag", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"valid labels",
+		validReq(validActor(withActorLabels(map[string]string{"example.com/agent": "billing"}))),
+		nil,
+	}, {
+		"invalid label key",
+		validReq(validActor(withActorLabels(map[string]string{"bad key!": "1"}))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "labels"), "bad key!", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		"invalid label value",
+		validReq(validActor(withActorLabels(map[string]string{"app": "not valid!"}))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "labels").Key("app"), "not valid!", "").WithOrigin("format=k8s-label-value")},
+	}, {
+		"too many labels",
+		validReq(validActor(withActorLabels(selectorLabelsOfSize(65)))),
+		field.ErrorList{field.TooMany(field.NewPath("actor", "labels"), 65, 64).WithOrigin("maxProperties")},
+	}, {
+		"reserved label key",
+		validReq(validActor(withActorLabels(map[string]string{"ate.dev/agent": "a"}))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "labels"), "ate.dev/agent", "")},
+	}, {
+		"labels over the size cap",
+		validReq(validActor(withActorLabels(labelsOfBytes(1)))),
+		field.ErrorList{field.TooLong(field.NewPath("actor", "labels"), 4097, 4096)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -246,6 +270,25 @@ func TestValidateActorUpdate(t *testing.T) {
 		oldVal: validInput(withSourceTag("as1", "nm1")),
 		newVal: validOutput(withSourceTag("as2", "nm2")),
 		want:   field.ErrorList{field.Invalid(field.NewPath("source_tag"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "keep actor.labels",
+		oldVal: validInput(withActorLabels(map[string]string{"app": "billing"})),
+		newVal: validOutput(withActorLabels(map[string]string{"app": "billing"})),
+	}, {
+		name:   "add actor.labels",
+		oldVal: validInput(),
+		newVal: validOutput(withActorLabels(map[string]string{"app": "billing"})),
+		want:   field.ErrorList{field.Invalid(field.NewPath("labels"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "clear actor.labels",
+		oldVal: validInput(withActorLabels(map[string]string{"app": "billing"})),
+		newVal: validOutput(),
+		want:   field.ErrorList{field.Invalid(field.NewPath("labels"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "change actor.labels",
+		oldVal: validInput(withActorLabels(map[string]string{"app": "billing"})),
+		newVal: validOutput(withActorLabels(map[string]string{"app": "checkout"})),
+		want:   field.ErrorList{field.Invalid(field.NewPath("labels"), nil, "").WithOrigin("immutable")},
 	}, {
 		name:   "set valid worker_selector",
 		oldVal: validInput(),
@@ -1126,6 +1169,12 @@ func withActorActorTemplate(atespace, name string) func(*ateapi.Actor) {
 // the actor's source_tag to a valid value.
 func withActorSourceTag(atespace, name string) func(*ateapi.Actor) {
 	return func(a *ateapi.Actor) { a.SourceTag = &ateapi.ObjectRef{Atespace: atespace, Name: name} }
+}
+
+// withActorLabels returns a modifier func (see validActor) which sets the
+// actor's labels.
+func withActorLabels(labels map[string]string) func(*ateapi.Actor) {
+	return func(a *ateapi.Actor) { a.Labels = labels }
 }
 
 // withActorWorkerAssignment returns a modifier func (see validActor) which sets

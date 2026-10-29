@@ -221,6 +221,36 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			field.Required(field.NewPath("actor_template", "resources", "limits", "cpu_millicores"), ""),
 			field.Required(field.NewPath("actor_template", "resources", "limits", "memory_bytes"), ""),
 		},
+	}, {
+		"valid actor_labels",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorLabels = map[string]string{"example.com/team": "payments"}
+		})},
+		nil,
+	}, {
+		"invalid actor_labels key",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorLabels = map[string]string{"bad key!": "1"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "actor_labels"), "bad key!", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		"too many actor_labels",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorLabels = selectorLabelsOfSize(65)
+		})},
+		field.ErrorList{field.TooMany(field.NewPath("actor_template", "actor_labels"), 65, 64).WithOrigin("maxProperties")},
+	}, {
+		"reserved actor_labels key",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorLabels = map[string]string{"ate.dev/agent": "a"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "actor_labels"), "ate.dev/agent", "")},
+	}, {
+		"actor_labels over the size cap",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorLabels = labelsOfBytes(1)
+		})},
+		field.ErrorList{field.TooLong(field.NewPath("actor_template", "actor_labels"), 4097, 4096)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
