@@ -292,7 +292,7 @@ shell-installed cluster rolls `ate-api-server` once.
 `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` set and no explicit
 `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`, the DSN is built passwordless
 against the proxy's loopback listener from the GSA's email
-([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)), so
+([`cloud-sql.md`](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/cloud-sql.md) in substrate-gke), so
 `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false` is rejected rather than producing a
 DSN that cannot authenticate. The owner connection uses the same IAM login
 unless `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` is set. An *unset* instance variable is distinct from an

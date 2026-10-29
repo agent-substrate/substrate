@@ -37,7 +37,7 @@ gcloud services enable cloudtrace.googleapis.com --project=PROJECT_ID
 ```
 
 2. The GKE cluster must have **Managed OpenTelemetry** enabled. Clusters created by
-`setup-gcp create cluster` or `setup-gcp bootstrap` always enable it. For a cluster that does
+[substrate-gke](https://github.com/ai-on-gke/substrate-gke)'s `setup-gcp create cluster` or `setup-gcp bootstrap` always enable it. For a cluster that does
 not have it, enable it with:
 
 ```bash

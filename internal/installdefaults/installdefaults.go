@@ -53,7 +53,8 @@ const (
 	APIServerServiceAccount  = "ate-api-server"
 
 	// TransferServiceAccountName is the default name of the Google service
-	// account snapshot transfers run as on GCS, which tools/setup-gcp creates.
+	// account snapshot transfers run as on GCS, which substrate-gke's
+	// tools/setup-gcp creates.
 	TransferServiceAccountName = "ate-snapshot-transfer"
 
 	// WorkerServiceAccount is what worker pods run as when their WorkerPool
