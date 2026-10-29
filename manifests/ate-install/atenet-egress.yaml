@@ -31,6 +31,7 @@ kind: ServiceAccount
 metadata:
   name: atenet-egress
   namespace: ate-system
+automountServiceAccountToken: false
 #
 # No RBAC is bound to this ServiceAccount on purpose: the ext_proc sidecar runs
 # with --mode=egress, which serves the egress ext_proc handler and nothing else
@@ -1179,6 +1180,7 @@ spec:
         app: atenet-egress
     spec:
       serviceAccountName: atenet-egress
+      automountServiceAccountToken: false
       # sdsmint and envoy containers must share a UID: sdsmint creates the SDS socket mode
       # 0600, and Envoy has to be able to open it. The stock Envoy image runs as
       # UID 101 and ko's distroless base as 65532, so left alone they would not
