@@ -37,7 +37,16 @@ var renderAteSystemCmd = &cobra.Command{
 	Long: `Write the manifests "deploy ate-system" applies to a fresh cluster into
 --output-dir, one file per apply step, with every image pinned to a digest.
 
-  ate-setup render ate-system --image-repo REPO --image-tag TAG --output-dir DIR
+  ate-setup render ate-system --kind --image-repo REPO --image-tag TAG \
+    --output-dir DIR
+
+Other clusters store snapshots on GCS today, so they also need the snapshot
+location and the snapshot transfer service account:
+
+  ate-setup render ate-system --image-repo REPO --image-tag TAG \
+    --snapshot-location gs://BUCKET/ \
+    --gcp-project-id PROJECT --snapshot-transfer-gsa-name NAME \
+    --output-dir DIR
 
 The files are numbered in apply order. Create the key pools after the
 namespace, and apply the CRDs and wait for them before the rest, because a
@@ -59,6 +68,9 @@ read from a cluster:
 - The service account issuer is EXPECTED_JWT_ISSUER, else the GKE issuer when
   --gcp-project-id, --gcp-cluster-location and --gcp-cluster-name are set,
   else https://kubernetes.default.svc.
+- Without --credential-provider (ATE_CREDENTIAL_PROVIDER), the egress gateway
+  uses the bundled Kubernetes Secrets provider, {"name":"k8s.io"}, as kind
+  installs do. It runs in the cluster and needs nothing outside it.
 - None of deploy's checks against an existing install run, and the settings
   ConfigMaps are written whole. Do not apply the output over a running
   install.

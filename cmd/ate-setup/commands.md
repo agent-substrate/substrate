@@ -131,7 +131,24 @@ a running cluster.
 `render ate-system` writes the manifests `deploy ate-system` applies to a fresh
 cluster into `--output-dir`, a new or empty directory, without contacting a
 cluster. It needs `--image-repo` and `--image-tag`, and pins every image to a
-digest. The files are numbered in apply order. Create the key pools after the
+digest:
+
+```bash
+ate-setup render ate-system --kind --image-repo REPO --image-tag TAG \
+  --output-dir DIR
+```
+
+Other clusters store snapshots on GCS today, so they also need the snapshot
+location and the snapshot transfer service account:
+
+```bash
+ate-setup render ate-system --image-repo REPO --image-tag TAG \
+  --snapshot-location gs://BUCKET/ \
+  --gcp-project-id PROJECT --snapshot-transfer-gsa-name NAME \
+  --output-dir DIR
+```
+
+The files are numbered in apply order. Create the key pools after the
 namespace, and apply the CRDs and wait for them before the rest, because a
 later file holds a SandboxConfig:
 
@@ -166,7 +183,9 @@ manifest does yet. The CSI drivers are not written. None of deploy's checks
 against an existing install run, so do not apply the output over a running
 install. The service account issuer is `EXPECTED_JWT_ISSUER`,
 else the GKE issuer when the `--gcp-*` cluster settings are set, else the
-in-cluster default. With an external database, `ate-api-server-secret-envvars`
+in-cluster default. Without `--credential-provider`, the egress gateway uses
+the bundled Kubernetes Secrets provider, `{"name":"k8s.io"}`, as kind installs
+do. With an external database, `ate-api-server-secret-envvars`
 is not written, so its connection strings stay out of the directory; create it
 with the keys `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`,
 `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_SCHEMA`.

@@ -25,6 +25,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
@@ -73,7 +74,7 @@ func (e *Env) RenderAteSystem(ctx context.Context, dir string) error {
 	if !e.Cfg.Images.IsPrebuilt() {
 		return errors.New("render ate-system pins published images; set --image-repo and --image-tag (ATE_IMAGE_REPO, ATE_IMAGE_TAG)")
 	}
-	provider, err := e.Cfg.CredentialProvider()
+	provider, err := e.renderCredentialProvider()
 	if err != nil {
 		return err
 	}
@@ -184,6 +185,21 @@ func (e *Env) RenderAteSystem(ctx context.Context, dir string) error {
 		log.Infof("wrote %s", path)
 	}
 	return nil
+}
+
+// renderCredentialProvider is the configured credential provider, or the
+// bundled Kubernetes Secrets provider when none is set. The bundled provider
+// runs in the install namespace and needs nothing outside the cluster, which
+// is why kind installs use it too.
+func (e *Env) renderCredentialProvider() (config.CredentialProvider, error) {
+	if e.Cfg.CredentialProviderJSON == "" {
+		log.Infof("no credential provider set; rendering the bundled %s provider", config.K8sCredentialProviderName)
+		return config.CredentialProvider{
+			Name:    config.K8sCredentialProviderName,
+			Address: config.K8sCredentialProviderAddress,
+		}, nil
+	}
+	return e.Cfg.CredentialProvider()
 }
 
 // takeOtelConfig removes the ate-otel-config ConfigMap from objs and returns
