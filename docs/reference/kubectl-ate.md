@@ -86,7 +86,9 @@ kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 kubectl ate get workers
 
 # Filter workers by Kubernetes namespace, assigned-actor atespace, or
-# worker pool labels (same flags as `top workers`)
+# worker pool labels (same flags as `top workers`). Note: workers are global
+# objects; listing workers requires global viewer permission even when
+# filtering by atespace.
 kubectl ate get workers -n <namespace>
 kubectl ate get workers -a <atespace>
 kubectl ate get workers -l <label-selector>
