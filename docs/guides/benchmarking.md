@@ -518,6 +518,30 @@ To go back to a built-in variant, redeploy without the flag.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
 
+### Density Limit Benchmark
+
+Passing `--density-step-duration <duration>` to `runner.py` runs
+`locust/density_runner.py` to find the highest concurrent actor count a cluster
+sustains within the `-t` duration budget. It starts at 1 user to measure
+baseline P90 latencies, doubles the user count each step up to `-u`, and
+switches to binary search (stopping once the bracket is within 8 users or 12.5%
+of the failing step) when a step fails any check:
+
+* Wake P90 (`TimeToWake`) exceeds `max(2.0 * baseline_p90, 1000ms)`.
+* Suspend P90 (`SuspendActor` or `SuspendActorAsync`) exceeds
+  `max(2.0 * baseline_p90, 1000ms)`.
+* `TimeToWake` failure ratio exceeds `1%`, live actors (`CreateActor` successes
+  minus unretired `DeleteActor` calls) drop below 90% of target users, or a
+  non-zero OOM, worker restart, pod eviction, lost worker pod, or explicit-mode
+  `actor_CrashCount` is recorded.
+
+Each step runs `runner.py` into a local scratch directory so intermediate step
+files stay out of `--dest`. At the end of the search, `density_runner.py`
+uploads `logs.txt`, `status.json`, and one `stats.jsonl` carrying the
+highest passing step's `trial_summary` (with `run_start` and `run_end` spanning
+the whole search) and `server_summary`, a `density_limit` summary row, and one
+`density_step_NNNN` row per step.
+
 ### Spawn Benchmark
 
 The Spawn benchmark creates a batch of actors once and measures how long each
