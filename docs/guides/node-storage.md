@@ -4,7 +4,8 @@ linkTitle: "Node Storage"
 weight: 11
 docsite: false
 description: >
-  Where atelet keeps node-local state, and how to give snapshot I/O its own disk.
+  Where atelet keeps node-local state, how to size the disk for snapshots, and
+  how to give snapshot I/O its own disk.
 ---
 
 # Node Storage
@@ -19,29 +20,35 @@ Snapshot staging lives under `/var/lib/ate/snapshots`. By default this shares
 the node's boot disk, so heavy guest disk writes can slow checkpoint and
 restore. To avoid that, you can mount a dedicated disk there:
 
-- Mount it before any actors run on the node. A mount over a populated directory
-  hides the snapshots already there.
+- Mount it before any actors run on the node. A mount over a populated
+  directory hides the snapshots already there.
 - Use a mount instead of a symlink, since worker pods only see `/var/lib/ate`.
-- Keep `/var/lib/ate/actors` on the same filesystem as `/var/lib/ate`. atelet
-  checks this at startup.
+- Keep `/var/lib/ate/actors` on the same filesystem as `/var/lib/ate`.
+  atelet checks this at startup.
 - The shared snapshot cache stays on the boot disk, so gVisor restores from a
   shared snapshot copy the cached files instead of hard-linking them.
 
 ## Disk Space for Suspended Actors
 
-Each suspend writes the actor's snapshot under `/var/lib/ate/snapshots`. atelet
-keeps it there for `--snapshot-detach-delay` (30 minutes by default), even after
-the upload makes it durable. A node holds at least this much snapshot data:
+Each suspend writes the actor's snapshot under `/var/lib/ate/snapshots`, and
+deletes the actor's previous local snapshot once the new one is written. atelet
+keeps the latest one for `--snapshot-detach-delay` (30 minutes by default) after
+the suspend, even after the upload makes it durable. An actor that resumes on
+the same node keeps it while it runs, until its next suspend replaces it. A node
+holds about this much snapshot data:
 
 ```
-suspends per minute on the node × snapshot size × detach delay in minutes
+actors with a local snapshot on the node × snapshot size
 ```
 
-For example, 2 suspends a minute of actors with 1 GiB snapshots keep about 60
-GiB on the node. A memory snapshot is about the size of the memory the actor
-uses, plus its filesystem changes. Local snapshots of resumed actors add to
-this. A detach uploads the snapshot first if it isn't durable yet, and keeps it
-until the upload succeeds, so a failing object store fills the disk faster.
+For example, if 60 different actors suspend on a node within 30 minutes and
+their snapshots are 1 GiB each, they keep about 60 GiB. A memory snapshot is
+about the size of the memory the actor uses, plus its filesystem changes.
+
+An actor briefly holds up to 3 local snapshots. These are the latest one, one a
+suspend is writing, and an older one atelet is still uploading. A detach uploads
+the latest snapshot first if it isn't durable yet, and keeps it until the upload
+succeeds, so a failing object store fills the disk faster.
 
 Size the disk that holds `/var/lib/ate/snapshots` for this. On the boot disk, it
 has to fit above the kubelet's `nodefs.available` eviction threshold, which is
@@ -59,8 +66,9 @@ kubelet neither evicts nor rejects it, and its uploads and detaches go on.
 
 Snapshot files belong to no pod, so evicting pods frees almost none of the
 space. The node recovers when atelet detaches the snapshots,
-`--snapshot-detach-delay` after each suspend. Until then the condition can clear
-and return, and the kubelet evicts the replacement workers each time.
+`--snapshot-detach-delay` after each actor's latest suspend. Until then the
+condition can clear and return, and the kubelet evicts the replacement workers
+each time.
 
 To check a node, look at its conditions and eviction events, and at the pods
 running on it:
