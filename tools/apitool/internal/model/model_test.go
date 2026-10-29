@@ -205,6 +205,25 @@ message Widget {
 	}
 }
 
+func TestBuild_DebugRedact(t *testing.T) {
+	got := buildAPI(t, `
+message Widget {
+  string token = 1 [debug_redact = true];
+}
+`)
+
+	want := &model.API{
+		Messages: []model.Message{
+			{FullName: "fixture.Widget", Name: "Widget", Fields: []model.Field{
+				{Name: "token", Number: 1, Kind: protoreflect.StringKind, TypeDisplay: "string", Redacted: true},
+			}},
+		},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("API mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestBuild_Annotations(t *testing.T) {
 	api, err := model.Build(t.Context(), ateapi.Source)
 	if err != nil {
@@ -249,6 +268,90 @@ func TestBuild_Annotations(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantMethods, gotMethods); diff != "" {
 		t.Errorf("method annotations mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// Older releases declare the annotations in another package, so Build can't
+// look them up in this binary's descriptors.
+func TestBuild_AnnotationsInOtherPackage(t *testing.T) {
+	got := buildAPI(t, `
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  ResourceAnnotation resource = 50000;
+}
+extend google.protobuf.MethodOptions {
+  MethodAnnotation method = 50000;
+}
+message ResourceAnnotation {
+  repeated string parents = 1;
+  bool singleton = 2;
+  Scope scope = 3;
+  string plural = 4;
+}
+message MethodAnnotation {
+  string resource = 1;
+}
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  SCOPE_ATESPACE = 1;
+}
+
+service Svc {
+  rpc GetWidget(Widget) returns (Widget) {
+    option (method).resource = "Widget";
+  }
+}
+message Widget {
+  option (resource) = {
+    scope: SCOPE_ATESPACE
+    plural: "Widgets"
+  };
+}
+`)
+
+	var gotResource *model.ResourceAnnotation
+	for _, m := range got.Messages {
+		if m.Name == "Widget" {
+			gotResource = m.ResourceAnnotation
+		}
+	}
+	wantResource := &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Widgets"}
+	if diff := cmp.Diff(wantResource, gotResource); diff != "" {
+		t.Errorf("Widget annotation mismatch (-want +got):\n%s", diff)
+	}
+	if got := got.Services[0].Methods[0].Resource; got != "Widget" {
+		t.Errorf("GetWidget resource = %q, want %q", got, "Widget")
+	}
+}
+
+func TestBuild_UnknownAnnotation(t *testing.T) {
+	for _, tc := range []struct {
+		name, extensionNumber, pluralNumber string
+	}{
+		{name: "renumbered extension", extensionNumber: "50001", pluralNumber: "4"},
+		{name: "renumbered annotation field", extensionNumber: "50000", pluralNumber: "5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := `syntax = "proto3";
+package fixture;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  ResourceAnnotation resource = ` + tc.extensionNumber + `;
+}
+message ResourceAnnotation {
+  string plural = ` + tc.pluralNumber + `;
+}
+message Widget {
+  option (resource).plural = "Widgets";
+}
+`
+			if _, err := model.Build(t.Context(), source); err == nil {
+				t.Error("Build() error = nil, want an error for the annotation this binary can't read")
+			}
+		})
 	}
 }
 
@@ -365,6 +468,35 @@ func TestResources_Invalid(t *testing.T) {
 			_, err := model.Resources(tt.api)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Resources() error = %v, want one containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseStandardMethod(t *testing.T) {
+	actor := model.Message{Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}}
+	accessPolicy := model.Message{Name: "AccessPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Plural: "AccessPolicies"}}
+	tests := []struct {
+		name       string
+		methodName protoreflect.Name
+		resource   model.Message
+		wantVerb   model.Verb
+		wantParent string
+		wantOK     bool
+	}{
+		{name: "top-level get", methodName: "GetActor", resource: actor, wantVerb: model.VerbGet, wantOK: true},
+		{name: "top-level list by plural", methodName: "ListActors", resource: actor, wantVerb: model.VerbList, wantOK: true},
+		{name: "list by singular", methodName: "ListActor", resource: actor},
+		{name: "subresource get", methodName: "GetAtespaceAccessPolicy", resource: accessPolicy, wantVerb: model.VerbGet, wantParent: "Atespace", wantOK: true},
+		{name: "subresource list", methodName: "ListGlobalAccessPolicies", resource: accessPolicy, wantVerb: model.VerbList, wantParent: "Global", wantOK: true},
+		{name: "subresource without its parent", methodName: "GetAccessPolicy", resource: accessPolicy},
+		{name: "custom method", methodName: "SuspendActor", resource: actor},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, parent, ok := model.ParseStandardMethod(tc.methodName, tc.resource)
+			if v != tc.wantVerb || parent != tc.wantParent || ok != tc.wantOK {
+				t.Errorf("ParseStandardMethod(%q) = (%q, %q, %t), want (%q, %q, %t)", tc.methodName, v, parent, ok, tc.wantVerb, tc.wantParent, tc.wantOK)
 			}
 		})
 	}
@@ -489,30 +621,42 @@ func TestPublicDoc(t *testing.T) {
 	}
 }
 
-func TestParseStandardMethod(t *testing.T) {
-	actor := model.Message{Name: "Actor", ResourceAnnotation: &model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"}}
-	accessPolicy := model.Message{Name: "AccessPolicy", ResourceAnnotation: &model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Plural: "AccessPolicies"}}
+func TestSummary(t *testing.T) {
 	tests := []struct {
-		name       string
-		methodName protoreflect.Name
-		resource   model.Message
-		wantVerb   model.Verb
-		wantParent string
-		wantOK     bool
+		name    string
+		comment string
+		want    string
 	}{
-		{name: "top-level get", methodName: "GetActor", resource: actor, wantVerb: model.VerbGet, wantOK: true},
-		{name: "top-level list by plural", methodName: "ListActors", resource: actor, wantVerb: model.VerbList, wantOK: true},
-		{name: "list by singular", methodName: "ListActor", resource: actor},
-		{name: "subresource get", methodName: "GetAtespaceAccessPolicy", resource: accessPolicy, wantVerb: model.VerbGet, wantParent: "Atespace", wantOK: true},
-		{name: "subresource list", methodName: "ListGlobalAccessPolicies", resource: accessPolicy, wantVerb: model.VerbList, wantParent: "Global", wantOK: true},
-		{name: "subresource without its parent", methodName: "GetAccessPolicy", resource: accessPolicy},
-		{name: "custom method", methodName: "SuspendActor", resource: actor},
+		{
+			name:    "one paragraph",
+			comment: "Get an Actor.",
+			want:    "Get an Actor.",
+		},
+		{
+			name:    "first paragraph spanning lines",
+			comment: "Suspend an actor\nto a new snapshot.\n\nA running actor is checkpointed.",
+			want:    "Suspend an actor\nto a new snapshot.",
+		},
+		{
+			name:    "paragraphs split by a whitespace-only line",
+			comment: "Summary.\n \nDetails.",
+			want:    "Summary.",
+		},
+		{
+			name:    "internal notes and directives are not part of it",
+			comment: "(-- Internal. --)\nSummary.\n\n+k8s:optional",
+			want:    "Summary.",
+		},
+		{
+			name:    "empty comment",
+			comment: "",
+			want:    "",
+		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			v, parent, ok := model.ParseStandardMethod(tc.methodName, tc.resource)
-			if v != tc.wantVerb || parent != tc.wantParent || ok != tc.wantOK {
-				t.Errorf("ParseStandardMethod(%q) = (%q, %q, %t), want (%q, %q, %t)", tc.methodName, v, parent, ok, tc.wantVerb, tc.wantParent, tc.wantOK)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := model.Summary(tt.comment); got != tt.want {
+				t.Errorf("Summary(%q) = %q, want %q", tt.comment, got, tt.want)
 			}
 		})
 	}
