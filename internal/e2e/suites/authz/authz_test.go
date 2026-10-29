@@ -34,12 +34,11 @@ import (
 // against it. The subtests run in order, not in parallel: each sets the
 // fixture atespace's AccessPolicy for its own principals.
 func TestAuthz(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
-	f := deployFixture(t, ctx, env["BUCKET_NAME"])
+	f := deployFixture(t, ctx)
 
 	t.Run("BasicFlow", func(t *testing.T) { testBasicFlow(t, ctx, f) })
 	t.Run("SecurityRegression", func(t *testing.T) { testSecurityRegression(t, ctx, f) })

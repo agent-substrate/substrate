@@ -36,8 +36,9 @@ const Root = "/sys/fs/cgroup"
 const workerLeaf = "worker"
 
 // Delegate prepares the worker pod's cgroup so the runtime can create per-actor
-// leaves under it with real cpu/memory/pids accounting. It reports whether it
-// did: a worker outside a private cgroup namespace is left alone.
+// leaves under it with real cpu/memory/pids accounting. A worker outside a
+// private cgroup namespace fails here rather than running actors without their
+// cgroups.
 //
 // The unprivileged worker runs in a private cgroup namespace, so /sys/fs/cgroup
 // is the pod's own cgroup scope rather than the host root. Two things must be
@@ -54,21 +55,20 @@ const workerLeaf = "worker"
 // worker holds CAP_SYS_ADMIN with no user namespace, so the ro flag is not
 // locked: clear it and leave it writable (the runtime writes here on every
 // create/restore).
-func Delegate(ctx context.Context) (bool, error) {
-	const leaf = Root + "/" + workerLeaf
+func Delegate(ctx context.Context) error {
+	return delegate(ctx, "/proc/self/cgroup", Root)
+}
 
-	// Delegation only makes sense inside a private cgroup namespace, where
-	// /sys/fs/cgroup is the pod's own scope. A privileged worker instead inherits
-	// the host cgroup namespace, so /sys/fs/cgroup is the true host root: it holds
-	// unmovable kernel threads (cgroup.procs would never drain) and must not be
-	// carved up. Detect the namespace via /proc/self/cgroup, which reads "0::/"
-	// only at a cgroup-namespace root, and skip delegation otherwise (the runtime
-	// then falls back to its own cgroup handling).
-	if private, err := inPrivateCgroupNamespace(); err != nil {
-		return false, fmt.Errorf("while detecting cgroup namespace: %w", err)
-	} else if !private {
-		slog.InfoContext(ctx, "not in a private cgroup namespace; skipping cgroup delegation (worker is likely privileged)")
-		return false, nil
+func delegate(ctx context.Context, procSelfCgroup, root string) error {
+	leaf := root + "/" + workerLeaf
+
+	// Outside a private cgroup namespace, as in a privileged pod, /sys/fs/cgroup
+	// is the host's root: it holds unmovable kernel threads and must not be
+	// carved up. /proc/self/cgroup reads "0::/" only at a namespace root.
+	if path, err := cgroupPath(procSelfCgroup); err != nil {
+		return fmt.Errorf("while detecting cgroup namespace: %w", err)
+	} else if path != "/" {
+		return fmt.Errorf("worker needs a private cgroup namespace (cgroup path %q, want /): workers must run unprivileged", path)
 	}
 
 	if err := os.Mkdir(leaf, 0o755); err != nil && !os.IsExist(err) {
@@ -77,59 +77,58 @@ func Delegate(ctx context.Context) (bool, error) {
 		// that permits mount. The gVisor worker runs AppArmor-unconfined, which
 		// runsc's own mounts require anyway; on nodes that do enforce the default
 		// profile (GKE COS) this mount is otherwise denied with EPERM.
-		if err := unix.Mount("none", Root, "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
-			return false, fmt.Errorf("while remounting %q read-write: %w", Root, err)
+		if err := unix.Mount("none", root, "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
+			return fmt.Errorf("while remounting %q read-write: %w", root, err)
 		}
 		if err := os.Mkdir(leaf, 0o755); err != nil && !os.IsExist(err) {
-			return false, fmt.Errorf("while creating cgroup leaf %q: %w", leaf, err)
+			return fmt.Errorf("while creating cgroup leaf %q: %w", leaf, err)
 		}
 	}
 
-	if err := moveProcs(ctx, Root+"/cgroup.procs", leaf+"/cgroup.procs"); err != nil {
-		return false, fmt.Errorf("while moving worker processes into %q: %w", leaf, err)
+	if err := moveProcs(ctx, root+"/cgroup.procs", leaf+"/cgroup.procs"); err != nil {
+		return fmt.Errorf("while moving worker processes into %q: %w", leaf, err)
 	}
 
-	avail, err := os.ReadFile(Root + "/cgroup.controllers")
+	avail, err := os.ReadFile(root + "/cgroup.controllers")
 	if err != nil {
-		return false, fmt.Errorf("while reading available cgroup controllers: %w", err)
+		return fmt.Errorf("while reading available cgroup controllers: %w", err)
 	}
 	// Enable controllers one at a time so a single controller the node cannot
 	// delegate (for example cpuset without an assigned cpu set) does not prevent
 	// the others from being enabled.
 	var enabled []string
 	for _, c := range strings.Fields(string(avail)) {
-		if err := os.WriteFile(Root+"/cgroup.subtree_control", []byte("+"+c), 0o644); err != nil {
+		if err := os.WriteFile(root+"/cgroup.subtree_control", []byte("+"+c), 0o644); err != nil {
 			slog.WarnContext(ctx, "could not enable cgroup controller for delegation", slog.String("controller", c), slog.Any("err", err))
 			continue
 		}
 		enabled = append(enabled, c)
 	}
 	slog.InfoContext(ctx, "cgroup delegation ready", slog.Any("controllers", enabled))
-	return true, nil
+	return nil
 }
 
-// inPrivateCgroupNamespace reports whether the process sits at the root of its
-// own cgroup namespace. The cgroup v2 line of /proc/self/cgroup ("0::<path>")
-// reports the path relative to the namespace root, so it reads exactly "/" only
-// when /sys/fs/cgroup is the namespace's own (pod-scoped) cgroup. A privileged
+// cgroupPath returns the cgroup v2 path from a /proc/<pid>/cgroup file
+// ("0::<path>"). It is relative to the namespace root, so it reads exactly "/"
+// only when /sys/fs/cgroup is the namespace's own (pod-scoped) cgroup. A privileged
 // worker inheriting the host cgroup namespace instead sees its full host path
 // (for example "/kubepods.slice/.../cri-containerd-<id>.scope").
-func inPrivateCgroupNamespace() (bool, error) {
-	b, err := os.ReadFile("/proc/self/cgroup")
+func cgroupPath(procCgroup string) (string, error) {
+	b, err := os.ReadFile(procCgroup)
 	if err != nil {
-		return false, fmt.Errorf("while reading /proc/self/cgroup: %w", err)
+		return "", fmt.Errorf("while reading %q: %w", procCgroup, err)
 	}
-	return atNamespaceRoot(string(b))
+	return parseCgroupPath(string(b))
 }
 
-// atNamespaceRoot parses the contents of /proc/self/cgroup.
-func atNamespaceRoot(procSelfCgroup string) (bool, error) {
+// parseCgroupPath parses the contents of /proc/self/cgroup.
+func parseCgroupPath(procSelfCgroup string) (string, error) {
 	for _, line := range strings.Split(strings.TrimSpace(procSelfCgroup), "\n") {
 		if path, ok := strings.CutPrefix(line, "0::"); ok {
-			return path == "/", nil
+			return path, nil
 		}
 	}
-	return false, fmt.Errorf("no cgroup v2 (0::) entry in /proc/self/cgroup")
+	return "", fmt.Errorf("no cgroup v2 (0::) entry in /proc/self/cgroup")
 }
 
 // moveProcs relocates every process listed in srcProcs into dstProcs. cgroup.procs

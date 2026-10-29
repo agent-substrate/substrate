@@ -15,7 +15,6 @@
 package e2e
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -23,9 +22,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -193,79 +189,5 @@ func (c *RouterClient) ConnectWithHeaders(ctx context.Context, actorRef resource
 	if err != nil {
 		return nil, err
 	}
-	conn, err := c.connect(ctx, addr, actorRef, port, header)
-	if err != nil {
-		stop()
-		return nil, err
-	}
-	conn.stop = stop
-	return conn, nil
-}
-
-func (c *RouterClient) connect(ctx context.Context, addr string, actorRef resources.ActorRef, port int, header http.Header) (*bufferedConn, error) {
-	tcpConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to router's CONNECT listener: %w", err)
-	}
-	rawConn := tls.Client(tcpConn, c.tlsConfig.Clone())
-	if err := rawConn.HandshakeContext(ctx); err != nil {
-		_ = tcpConn.Close()
-		return nil, fmt.Errorf("TLS handshake with router's CONNECT listener: %w", err)
-	}
-
-	destination := net.JoinHostPort(actorRef.Name, strconv.Itoa(port))
-	req := &http.Request{
-		Method: http.MethodConnect,
-		URL:    &url.URL{Host: destination},
-		Host:   destination,
-		Header: header,
-	}
-	if err := req.Write(rawConn); err != nil {
-		_ = rawConn.Close()
-		return nil, fmt.Errorf("writing CONNECT request: %w", err)
-	}
-
-	reader := bufio.NewReader(rawConn)
-	resp, err := http.ReadResponse(reader, req)
-	if err != nil {
-		_ = rawConn.Close()
-		return nil, fmt.Errorf("reading CONNECT response: %w", err)
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		_ = resp.Body.Close()
-		_ = rawConn.Close()
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = resp.Status
-		}
-		return nil, fmt.Errorf("router rejected CONNECT to %s with %s: %s", destination, resp.Status, message)
-	}
-
-	// http.ReadResponse may have buffered bytes past the header boundary into
-	// reader; wrap the connection so a caller's Read sees them instead of
-	// losing them to reader's own buffer.
-	return &bufferedConn{Conn: rawConn, reader: reader}, nil
-}
-
-// bufferedConn recovers bytes http.ReadResponse buffered past the header
-// boundary, mirroring internal/atunnel/egress/client.go's identical need on the
-// egress CONNECT client.
-type bufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-	stop   func()
-}
-
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
-
-func (c *bufferedConn) Close() error {
-	err := c.Conn.Close()
-	if c.stop != nil {
-		c.stop()
-		c.stop = nil
-	}
-	return err
+	return ateclient.ConnectActorWithHeaders(ctx, addr, c.tlsConfig, actorRef, port, header, stop)
 }

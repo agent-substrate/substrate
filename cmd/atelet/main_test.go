@@ -1657,7 +1657,7 @@ func TestServingCheck(t *testing.T) {
 
 // A worker that is unavailable, whether refusing workloads until it registers
 // or unreachable after a restart, reaches atelet's caller as Unavailable so the
-// resume is retried. Any other worker failure is Internal.
+// resume or suspend is retried. Any other worker failure is Internal.
 func TestWorkerCallError(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1667,6 +1667,8 @@ func TestWorkerCallError(t *testing.T) {
 		{name: "worker refuses", err: status.Error(codes.Unavailable, "worker has not registered yet"), want: codes.Unavailable},
 		{name: "worker unreachable", err: fmt.Errorf("dial: %w", status.Error(codes.Unavailable, "connection refused")), want: codes.Unavailable},
 		{name: "worker fails", err: status.Error(codes.Internal, "sandbox would not start"), want: codes.Internal},
+		{name: "worker canceled", err: status.Error(codes.Canceled, "gave up waiting for the actor's lock: context canceled"), want: codes.Internal},
+		{name: "worker deadline exceeded", err: status.Error(codes.DeadlineExceeded, "gave up waiting for the actor's lock: context deadline exceeded"), want: codes.Internal},
 		{name: "plain error", err: errors.New("boom"), want: codes.Internal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

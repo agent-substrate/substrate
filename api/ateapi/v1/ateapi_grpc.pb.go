@@ -45,7 +45,6 @@ const (
 	Control_UpdateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
 	Control_DeleteActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/DeleteActorEgressPolicy"
 	Control_MintActorJwt_FullMethodName               = "/substrate.ateapi.v1.Control/MintActorJwt"
-	Control_MintActorCertificate_FullMethodName       = "/substrate.ateapi.v1.Control/MintActorCertificate"
 	Control_CreateTag_FullMethodName                  = "/substrate.ateapi.v1.Control/CreateTag"
 	Control_GetTag_FullMethodName                     = "/substrate.ateapi.v1.Control/GetTag"
 	Control_ListTags_FullMethodName                   = "/substrate.ateapi.v1.Control/ListTags"
@@ -115,13 +114,6 @@ type ControlClient interface {
 	//
 	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
 	MintActorJwt(ctx context.Context, in *MintActorJwtRequest, opts ...grpc.CallOption) (*MintActorJwtResponse, error)
-	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
-	//
-	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
-	//
-	// * Called by the egress gateway when actor client certificate injection is
-	//   configured for outbound requests.
-	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
@@ -330,16 +322,6 @@ func (c *controlClient) MintActorJwt(ctx context.Context, in *MintActorJwtReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MintActorJwtResponse)
 	err := c.cc.Invoke(ctx, Control_MintActorJwt_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintActorCertificateResponse)
-	err := c.cc.Invoke(ctx, Control_MintActorCertificate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -683,13 +665,6 @@ type ControlServer interface {
 	//
 	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
 	MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error)
-	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
-	//
-	// SPIFFE URI: spiffe://${trustdomain}/actor/${atespace}/${actor}
-	//
-	// * Called by the egress gateway when actor client certificate injection is
-	//   configured for outbound requests.
-	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
@@ -819,9 +794,6 @@ func (UnimplementedControlServer) DeleteActorEgressPolicy(context.Context, *Dele
 }
 func (UnimplementedControlServer) MintActorJwt(context.Context, *MintActorJwtRequest) (*MintActorJwtResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintActorJwt not implemented")
-}
-func (UnimplementedControlServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
 }
 func (UnimplementedControlServer) CreateTag(context.Context, *CreateTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTag not implemented")
@@ -1146,24 +1118,6 @@ func _Control_MintActorJwt_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).MintActorJwt(ctx, req.(*MintActorJwtRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_MintActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintActorCertificateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).MintActorCertificate(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_MintActorCertificate_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).MintActorCertificate(ctx, req.(*MintActorCertificateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1762,10 +1716,6 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MintActorJwt",
 			Handler:    _Control_MintActorJwt_Handler,
-		},
-		{
-			MethodName: "MintActorCertificate",
-			Handler:    _Control_MintActorCertificate_Handler,
 		},
 		{
 			MethodName: "CreateTag",

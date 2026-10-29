@@ -1,0 +1,590 @@
+---
+title: "Architecture"
+linkTitle: "Architecture"
+weight: 1
+description: >
+  The components of Agent Substrate and how actors, workers, and the control plane interact.
+status: planned
+status_note: >
+  Much of this architecture is aspirational and not yet implemented.
+---
+# Agent Substrate Architecture
+
+## Overview
+
+Agent Substrate is a security-hardened, zero-trust runtime for sandboxed agents, engineered to safely run millions of agents and tools with 10x higher density than standard containers. Purpose-built for the era of autonomous agents, Substrate delivers fast resume operations in less than 400ms, with more than 1500 activations per second. Agents get isolated compute, identity, networking, and storage. Sensitive credentials are kept out of reach from untrusted code. It supports multiple sandbox technologies, including microVMs and gVisor, while enabling a consistent lifecycle and management of all sandboxes.
+
+At its core, Agent Substrate maps a larger set of “actors” (applications such
+as agents) onto a smaller set of ready “workers”, relying on
+the fact that agent-like applications tend to be idle most of the time to
+achieve heavy multiplexing.  It provides functionality to manage an actor’s
+lifecycle (e.g. create/destroy, suspend/resume), to assign actors to workers in real
+time, and to route incoming traffic to them.
+
+
+## Problem Statement
+Agents and "agent-like" workloads are generally very bursty, spending most of
+their time waiting for input or events, then handling those events, then going
+back to waiting.  The time they spend actually doing work is often very short,
+and the time they spend waiting can be unbounded.  Because they often run
+untrusted logic, they are often run in sandboxes, which means they are usually
+single-tenant instances, and there are a great many of them.
+
+## Core Concepts and Approaches
+
+### Terminology: "Actor"
+
+Agent Substrate seeks to solve these problems for "agent-like" workloads.
+Often we simply say "agents", but it's important to clarify that "agent-like"
+workloads are not necessarily literally AI agents.  In most of the docs we
+instead use the term "actor" to refer to an instance of an agent-like workload.
+
+### Decoupling the Actor Lifecycle from Workers (Kubernetes Pods)
+
+Since many agents run untrusted code, we need to run them in sandboxes of some
+sort. Agent Substrate is designed to support multiple sandbox technologies with
+[gVisor](http://gvisor.dev) and microVMs such as
+[Kata Containers](https://katacontainers.io/) being popular options. Both
+of those happen to support a notion of suspend and resume which is core for the Agent Substrate functionality.
+
+Agent Substrate starts with suspend and resume.  When an actor is idle, we
+suspend it, which frees up the resources it was consuming.  When an event comes
+in that needs to be handled, we resume the actor.  To avoid the latency of
+going through the Kubernetes scheduler, we pre-start long-running "worker"
+Pods, which are just sandboxes waiting for work.  When an event comes in, we
+assign it to a worker, which resumes the actor in that worker.  We can now
+multiplex a larger number of actors onto a smaller number of workers, which
+allows us to achieve higher density and efficiency, while also reducing
+latency.
+
+### A Focused Control Plane
+
+Agent Substrate includes a small, focused control-plane component which
+focuses on high scale, QPS and low-latency suspend/resume operations for actors (Agent Sandboxes). It relies on the Kubernetes control plane for infrastructure and worker (Pods) provisioning which are low-frequency operations that align well with Kubernetes' strength in the infrastructure lifecycle management and workload resource isolation.
+
+### Agent-Aware Routing
+
+In order to achieve on-demand resuming of actors, we need to be able to trap and
+inspect network traffic.  Agent Substrate includes a lightweight,
+substrate-aware network proxy which can inspect incoming traffic and trigger
+the resumption of actors as needed.
+
+### New Problems
+
+Of course, there's no such thing as a free lunch, and these approaches have
+trade-offs.
+
+First, we trade one problem (many idle Pods consuming resources) for another.
+Doing suspend and resume at this scale introduces a vast data management
+problem.  We need to store the state of millions of actors, which can update
+many times per second.  Agent Substrate will need to consider data locality as
+a first-class concern.  When an event comes in, we need to know where the
+actor's most recent state is stored, and either route the event to that
+location or move the state to where the event can be serviced.
+
+In addition to that, we must acknowledge that building a new production-grade
+control-plane component is a non-trivial effort.  It will need to be highly
+available, secure, and performant, and it will need to integrate well with
+Kubernetes.
+
+Another problem to consider is observability and debugging.  With actors being
+multiplexed onto and off of workers all the time, it will be more difficult to
+understand what is happening. Agent Substrate will need to provide robust
+tooling for monitoring and debugging actors, including the ability to thread
+together metrics and logs for an actor over time, to inspect the state of
+suspended actors, and to trace the events that lead to their current state.
+
+### Problems We Haven't Addressed Yet
+
+As early as this project is, there are several problems that we haven't even
+started to tackle yet, but which we know will need to be solved eventually.
+
+  * Autoscaling: We will need to be able to automatically scale the number of workers up
+    and down based on demand.  Kubernetes Pod autoscaling may be sufficient or
+    it might not.
+  * Peer to peer state sharing: Relying on data locality presents a risk of
+    data loss.  We probably need some form of state-sharing to protect against
+    that, which needs to be balanced with saving state to a "permanent" store.
+  * Identity and policy: We know that agents' needs for identity are very
+    different than traditional workload identity and end-user credentials.
+  * There are certainly more that we haven't thought of yet!
+
+## North Star Metrics
+
+Agent Substrate is an ambitious effort.  To keep us focused on the right
+problems, we have identified a few north star metrics and targets.
+
+  * Activation Latency: The time from when a wakeup event is received to when
+    the agent can receive traffic.
+    - Target: 100ms at 95th percentile
+  * Scale: The total number of agents, active and idle, that can be supported
+    in a single cluster.
+    - Target: 1 billion
+  * Throughput: The number of wakeup events that can be handled per second in
+    a single cluster.
+    - Target: 1000/second
+
+## Personas
+
+There are a few different personas that interact with the system:
+
+  1) **Cluster admins**: These are the people who own the Kubernetes cluster and
+     are responsible for its overall health and performance.  If the Agent
+     Substrate needs more capacity, these are the folks who manage things like
+     cluster autoscaling, node provisioning, and so on.  They probably don't
+     need to interact directly with the Agent Substrate much, if ever.
+
+  2) **Substrate admins**: These are the people who set up and own the Agent
+     Substrate instance(s) in a Kubernetes cluster.  They are obviously aware
+     that it is running in a Kubernetes cluster, and are responsible for
+     configuring the Kubernetes resources for it (such as WorkerPools).
+
+  3) **Agent developers**: These are the people who deploy agents into a substrate
+     for users or higher-level systems to consume. They might have to be aware
+     that they are using Kubernetes (some concepts are represented as CRDs,
+     such as WorkerPools), or they might be using a higher level API which
+     itself uses Agent Substrate under the hood. ActorTemplates are managed
+     through the substrate API (`kubectl-ate`), not through Kubernetes.
+
+  4) **Agent users**: These are the people who interact with agents running in the
+     substrate.  They might be end-users of an application that is built on top
+     of Agent Substrate, or they might be higher-level systems that are using
+     Agent Substrate as a building block. They should not need to be aware that
+     they are using Kubernetes at all.
+
+## Relationship to Kubernetes
+
+Kubernetes is the industry standard platform for running modern workloads.  It
+is built to support a wide array of workloads, and it can scale to very large
+clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning and worker lifecycle management (Kubernetes Pods). It builds on top of Kubernetes features like Pods and Pod autoscaling, while Agent Substrate provides agent-specific scheduling and control to achieve lower latency. Using Kubernetes as the underlying system enables consistent infrastructure management across all workloads types that are required for end to end agentic deployments and allows holistic infrastructure optimizations for RL scenarios that span agentic, inference and training cycles.
+
+### Why do we need a specialized control plane for Agent Substrate?
+ * Idle Pods still consume resources.  While Kubernetes is very scalable,
+   compute capacity is finite and has real costs.  Whether we're talking about
+   CPU time, memory space, or just the number of Pods per node, agent-like
+   workloads are terrible for efficiency.
+ * The Kubernetes API server is not designed to handle millions of resources.
+   It excels at reconciling resources asynchronously across many controllers,
+   but it is not so good at storing very large numbers of discrete resources,
+   or for handling a huge volume of write traffic.
+ * Scheduling a workload on Kubernetes requires several asynchronous processes
+   to converge, plus several network hops, plus image pulling and other steps,
+   which can add up.  Getting a Pod running in a couple of seconds is great
+   when that Pod will run for hours or days, but for a workload that will run
+   for milliseconds to low-digit seconds, that latency is unacceptable.
+ * State management is difficult.  Kubernetes provides an API for managing
+   state (PersistentVolumes), but it is not designed for millions of volumes,
+   with widely varying amounts of data, being attached and detached at high
+   Speed.
+Using a specialized Agent Substrate control plane for Actor allows us to achieve high scale and low latency control. We still rely on Kubernetes for infrastructure provisioning, such as worker pods, and workload isolation, which is what Kubernetes excels at.
+
+## High-Level Design
+
+A substrate admin deploys the Agent Substrate into a Kubernetes cluster.  They
+configure the WorkerPool(s) that will be used to execute actors and prepare the
+substrate's control-plane for use.  Worker Pods are started, waiting for
+assignments.
+
+An agent developer defines an ActorTemplate (an ate API resource) which describes what it
+means to instantiate that actor - what OCI image to run, how much memory it
+needs, behavioral parameters, etc.  The Agent Substrate uses that ActorTemplate
+to create a "golden snapshot" of the actor, which will be used to fast-start
+instances of that actor in the future.
+
+An agent user (or a higher-level system) makes a request to instantiate an
+actor.  They specify which ActorTemplate to use and other parameters.  The
+Agent Substrate creates an Actor record in its control-plane storage, which
+tracks the state of that actor (suspended or running).
+
+When a request comes in for that actor instance, the Agent Substrate's proxy
+intercepts the request.  It looks in the control-plane to determine if that
+actor is currently running or not.  If not, it assigns the actor to a worker,
+which involves telling a node-level component (the "atelet") to restore the
+actor's most-recent snapshot into the worker on that node.  The request is then
+forwarded to the actor.
+
+Eventually, the user (or the higher-level system) is done with the actor, or it
+has been idle for a while.  It can request the Agent Substrate to suspend the
+actor, taking a snapshot and freeing up the worker.  The next time a request
+comes in for that actor, it will be resumed again, possibly on a different
+worker.
+
+## API Resource Models
+
+Agent Substrate categorizes resources into two groups based on their
+persistence requirements and the frequency of state transitions.
+
+### System Configuration (Declarative)
+
+These resources define the intended state of the system. They are used for
+administrative operations and actor environment definitions.
+
+  * **WorkerPool** (Kubernetes CRD): Defines a pool of "warm" compute
+    capacity. It manages a fleet of standby worker pods initialized and ready
+    to receive resumed actor states. Optional `spec.template` fields configure
+    worker pod node selection, tolerations, priority class, and node affinity.
+
+  * **ActorTemplate** (ate API resource): An immutable definition of an
+    actor-version. It encapsulates the container image, configuration, and
+    environment required to generate a "golden" snapshot. ActorTemplates are
+    created and managed through the substrate gRPC API (e.g. `kubectl ate
+    create actor-template`) and stored in the control-plane state store; they
+    are not Kubernetes objects.
+
+### Dynamic Instance State (Database-based)
+
+These resources represent the high-frequency, ephemeral state of individual
+actors and workers. They are stored in a high-performance, low-latency state
+store (PostgreSQL) to support real-time operations.
+
+  * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
+    its globally unique identifier, physical location (Worker IP), current
+    state (RUNNING or SUSPENDED), and version-specific state metadata.
+
+  * **Worker**: A representation of a worker pod in the WorkerPool. It tracks
+    the worker's unique identifier, current status (IDLE or BUSY), and the
+    Actor it is currently hosting (if any).
+
+### Architectural Rationale
+
+Agent Substrate utilizes this dual-layer model to optimize for both Reliability
+and Performance:
+
+  1.  **Scalability**: Offloading the high-frequency, high-scale management of
+      millions of actors to a specialized state store prevents overwhelming the
+      primary cluster control plane with thousands of updates per second.
+
+  2.  **Latency**: Achieving 100ms resumption requires low-latency state
+      lookups and atomic worker assignments that bypass the eventual
+      consistency and variable latency of standard Kubernetes API servers.
+
+  3.  **Governance**: Keeping infrastructure resources (WorkerPools,
+      SandboxConfigs) as Kubernetes objects allows platform teams to apply
+      familiar RBAC, auditing, and policy enforcement to the underlying
+      infrastructure, while workload definitions (ActorTemplates) are managed
+      through the substrate API instead, which authenticates and authorizes
+      callers itself (see [authentication.md](../guides/authentication.md) and
+      [authorization.md](../guides/authorization.md)).
+
+### Resource Model
+
+The Kubernetes resources and control-plane records described above, with their
+relationships and multiplicities (UML class diagram):
+
+```mermaid
+classDiagram
+    namespace kube-apiserver {
+        class WorkerPool {
+            <<CRD>>
+        }
+        class Deployment
+        class WorkerPod {
+            ateworker
+            runsc
+        }
+    }
+
+    namespace ate-api-server {
+        class ActorTemplate {
+            <<record>>
+        }
+        class Actor {
+            <<record>>
+            status
+            snapshotRefs
+        }
+        class Worker {
+            <<record>>
+            actorName
+            podIP
+        }
+    }
+
+    ActorTemplate ..> WorkerPool : worker_selector (labels)
+    WorkerPool ..> Deployment : reconciled by atecontroller
+    Deployment "1" *-- "*" WorkerPod : manages
+    Actor "*" --> "1" ActorTemplate : actor_template
+    Actor "0..1" --> "0..1" Worker : runs on
+    Worker "1" --> "1" WorkerPod : maps to
+```
+
+## System Components
+
+### Control Plane (`ate-api-server`)
+
+The brain of the system. It exposes a gRPC API for the data plane and CLI to
+manage actor lifecycles.
+
+  * **State Store**: Tracks the mapping of Actors to Workers in a
+    PostgreSQL store.
+
+  * **Scheduler**: Selects a ready worker for a resumption request.
+
+  * **Workflow Engine**: Orchestrates the multi-step Resume/Suspend sequences
+    (lock acquisition, storage download, sandbox restore).
+
+  * **Authentication & Authorization**: [Authenticates](../guides/authentication.md)
+    every RPC and [authorizes](../guides/authorization.md) it per atespace with an
+    embedded OpenFGA model.
+
+### Node Supervisor (`atelet` + `ateworker`)
+
+The node-level subsystem manages the physical execution of sandboxes and the movement of snapshots.
+
+  * **atelet**: A lightweight supervisor running on each node as a DaemonSet. It acts as the "Herder," managing a pool of physical pods and communicating with the Control Plane.
+
+  * **ateworker**: A specialized sandbox-herder container image — one per sandbox class (`ateworker-gvisor`, `ateworker-microvm`) — that runs inside the physical worker pods. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
+
+  * **Lifecycle Management**: The `ateworker` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for microVMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
+
+  * **Storage Mover**: External snapshots move through an *object-store plugin*, a sidecar that serves the `objectstore.v1` gRPC API over a Unix socket in its pod. `atelet`'s sidecar (`NodeProvider`) uploads and fetches a snapshot's files; `ate-api-server`'s sidecar (`ControlProvider`) copies and deletes whole snapshots. Neither main process talks to object storage for snapshots. The in-tree plugin, `cmd/objectstore-plugin`, backs the API with GCS or S3; `ATE_STORAGE_BACKEND` on the sidecar (unset or `gcs`, or `s3` with the `AWS_*` variables) selects which, see `manifests/ate-install/atelet.yaml`, `ate-api-server.yaml`, and the kind overlay for an S3 example. The same `atelet` sidecar serves `AssetProvider`, which fetches every sandbox asset; `atelet` reads a `gs://` asset anonymously only when the plugin cannot serve it, which covers public buckets such as `gs://gvisor`. The plugin stages each download where `atelet` cannot read it, and copies it into `atelet`'s cache only if its sha256 matches; it refuses any URL under a snapshot location. `atelet` verifies the sha256 again and has no object storage credentials or settings of its own.
+
+  * **Sandbox Asset Cache**: `atelet` keeps one node-local, content-addressed cache of the sandbox binaries every actor runs on and gives each actor hard links into it, prewarms each local worker's default runtime and keeps it linked under the worker's directory, and evicts to a byte budget without taking anything an actor or a worker still uses. See the [Sandbox Asset Cache](sandbox-asset-cache.md) page.
+
+### Sandbox Classes
+
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](../reference/api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades.
+
+  * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint; `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
+
+  * **microVM** (`ateworker-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging. Container rootfs writes are host-backed: the overlay is assembled on the host (read-only OCI image lower plus a per-actor writable upper) and served to the guest over the single virtio-fs share, so they cost reclaimable host page cache rather than guest RAM, and `ROOTFS` and `MEMORY` snapshots ship the upper as its own tar (a `ROOTFS` restore puts it back and cold-boots on it). `DurableDir` volumes travel over that same share and are likewise shipped as a tar, so a `VOLUMES` snapshot can capture them without any guest memory. Each volume is a subdirectory of the share, so an actor can have several at no extra cost in devices.
+
+### Networking Stack (`atenet` + `atunnel`)
+
+Handles actor-aware routing and automatic re-animation.
+
+  * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
+    processor. A higher-order system connects to the router and supplies the
+    Actor target in `ate-target-actor` as `<atespace>/<actor>`.
+    The ext_proc calls the Control Plane to resume the Actor and resolve its
+    current worker assignment. `Host` remains application authority and does
+    not select the Actor.
+
+  * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
+    mTLS `CONNECT` tunnel to the worker's `atunnel` listener on port 8443.
+    `atunnel`, hosted by `ateworker`, forwards the request to the active Actor over
+    its private veth interface. Worker pod port 80 is not a direct Actor ingress
+    path. With `--upstream-connect=false`, the Envoy router instead reaches
+    `atunnel` over HTTPS on port 443.
+
+  * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
+    its default (80) with an HTTP `CONNECT` request naming the port in the
+    authority (e.g. `CONNECT <actor-dns>:9090`), rather than a separate header
+    or field. `atenet-router` terminates the `CONNECT` on a dedicated listener
+    and re-enters the tunneled traffic through the same ingress path as
+    ordinary requests, so each request inside a long-lived tunnel still
+    resumes the Actor and re-routes it independently if it moves workers. Only
+    HTTP(S) traffic over the tunnel is supported today; raw TCP or other
+    non-HTTP protocols on a non-default port are not yet reachable this way.
+
+  * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
+
+### System Infra Isolation
+
+System infra components, such as ate-api-server, atenet-router, atenet-egress
+and postgres, can be kept on nodes of their own, away from the workers, so a
+burst of worker or actor load cannot starve them. Under
+`--cordon-system-infra-components`, these workloads select a node label and
+tolerate the matching `NoSchedule` taint:
+
+* `ate.dev/workloadType=ate-system-infra`: a small pool shared by every
+  system infra workload except postgres. Each workload's replicas are spread
+  across its nodes on a best-effort basis.
+* `ate.dev/workloadType=ate-postgres`: a one-node pool for postgres alone,
+  in the zone of the postgres volume.
+
+## Actor Lifecycle
+
+The lifecycle of an actor follows a state-driven sequence. A request reaches an
+actor through the networking stack, which resumes it onto a worker if it is
+suspended (UML sequence diagram):
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant Gateway as atenet-router
+    participant API as ate-api-server
+    participant Atelet as atelet
+    participant Tunnel as ateworker / atunnel
+    participant A as Actor
+    participant Store as snapshot storage
+
+    Client->>Gateway: HTTP request (ate-target-actor)
+    Gateway->>API: ResumeActor(atespace, actor name)
+    API->>Atelet: Restore
+    Store-->>Atelet: download snapshot
+    Atelet->>Tunnel: RestoreWorkload
+    Note over Tunnel: restore sandbox and activate Actor network
+    Tunnel-->>Atelet: ready
+    Atelet-->>API: worker pod IP
+    API-->>Gateway: worker assignment
+    Gateway->>Tunnel: mTLS tunnel to worker port 443
+    Tunnel->>A: forward request to Actor port
+    A-->>Tunnel: response
+    Tunnel-->>Gateway: response
+    Gateway-->>Client: response
+    Note over API,Store: later: an explicit SuspendActor checkpoints the actor and frees the worker
+```
+
+An Actor's `state` moves through these states (UML state machine diagram):
+
+```mermaid
+stateDiagram-v2
+    [*] --> SUSPENDED : CreateActor
+    SUSPENDED --> RESUMING : ResumeActor
+    RESUMING --> RUNNING : restore / boot complete
+    RUNNING --> SUSPENDING : SuspendActor
+    SUSPENDING --> SUSPENDED : checkpoint complete
+    SUSPENDED --> [*] : DeleteActor
+```
+
+Both synchronous and asynchronous `SuspendActor` pass through `SUSPENDING`,
+leave the actor in `SUSPENDED`, and keep a local copy of the snapshot on the
+node (`locality`). They differ in when the snapshot is uploaded to object
+storage:
+
+  * After an asynchronous suspend (the default), `SuspendActor` returns as soon
+    as the local checkpoint is written, with a `PENDING` `durableSnapshot`.
+    `atelet` uploads the snapshot in the background (`--snapshot-upload-delay`)
+    and reports it, which marks the `durableSnapshot` `COMPLETED`.
+  * After a synchronous suspend, `atelet` uploads the snapshot before
+    `SuspendActor` returns, so the `durableSnapshot` is immediately
+    `COMPLETED`.
+  * While the latest snapshot has `locality`, `ResumeActor` restores from the
+    local files on that node. `--snapshot-detach-delay` after the suspend (or
+    during `ResumeActor` when that node has no room), `atelet` deletes the
+    local files (uploading the snapshot first if needed), clearing `locality`
+    and `status.assignedNode`.
+
+`SuspendActor` on a `SUSPENDED` actor returns it as it is, in either mode.
+
+### Phase 1: Creation (`CreateActor`)
+
+A user or framework calls `CreateActor` with a unique ID and a reference to an
+`ActorTemplate`.
+
+  * **State**: The actor is registered in the database with state
+    `ACTOR_STATE_SUSPENDED`.
+
+  * **State**: The record is initialized in the database with the metadata and
+    **Golden Snapshot** (Version 0) reference derived from the associated
+    ActorTemplate. This ensures the actor can be instantly hydrated into a warm
+    worker upon its first request.
+
+### Phase 2: Activation (`ResumeActor`)
+
+Triggered by an inbound request at the Gateway or an explicit API call.
+
+  1. **Trigger**: The Gateway pauses the request and asks the Control Plane for
+     the actor's location.
+
+  2. **Assignment**: The Control Plane claims a warm worker from the
+     `WorkerPool`.
+
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateworker` process inside the worker pod to restore the ActorTemplate's golden external snapshot (for first-run) or the Actor's own external snapshot (for recurring runs) into the sandbox.
+
+  4. **State**: State transitions to `ACTOR_STATE_RUNNING`. The actor now has an
+     active Worker IP.
+
+  5. **Response**: The Control Plane returns the worker assignment to the
+     Gateway. The Gateway opens an authenticated tunnel to `atunnel` on that
+     worker, which forwards the original request to the active Actor.
+
+### Phase 3: Hibernation (`SuspendActor`)
+
+Triggered by an explicit `SuspendActor` call.
+
+  1. **Checkpoint**: The `atelet` instructs `ateworker` to freeze the process and capture a memory+disk snapshot.
+
+  2. **Persistence**: The `atelet` keeps a local copy of the snapshot on the
+     node and uploads it to durable storage (e.g., GCS). With
+     `DURABILITY_MODE_SYNCHRONOUS` the upload finishes before `SuspendActor`
+     returns. With the asynchronous default `SuspendActor` returns once the
+     local checkpoint is written, and `atelet` uploads it in the background.
+
+  3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
+
+  4. **Release**: A synchronous suspend deletes the external snapshot the
+     Actor held before it from object storage. An asynchronous suspend keeps
+     that snapshot, since its own is not yet durable. It is deleted by the
+     first suspend after a newer snapshot is durable, or by `DeleteActor`. A
+     snapshot borrowed from a tag is left alone, since the tag owns it.
+
+  5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
+     `status.snapshots` records the external snapshot it resumes from.
+
+Snapshots may be given tags owned and addressed by an Atespace. The same tag 
+name may exist in different Atespaces. A tag is an immutable alias and retention pin:
+it holds its own copy of the external snapshot, made at creation, so it outlives the 
+Actor that took it, and publishing it permits reuse from other Atespaces without changing its
+`atespace/name` address. Deleting a tag deletes that copy; an Atespace with
+tags cannot be deleted until they are.
+
+### Phase 4: Recovery (`RevertActor`) and Deletion (`DeleteActor`)
+
+An actor in `ACTOR_STATE_RUNNING` or `ACTOR_STATE_CRASHED`, or an `ACTOR_STATE_SUSPENDED` actor with a node-local latest snapshot, can be reverted back to `ACTOR_STATE_SUSPENDED` at its durable snapshot via `RevertActor`. Reverting terminates any active sandbox, discards any node-local checkpoint or partial in-progress snapshot, and preserves the actor's last completed external snapshot so a subsequent `ResumeActor` restores from that checkpoint.
+
+An actor in any state (such as `ACTOR_STATE_RUNNING`) can be deleted from the Control Plane. The workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
+
+After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
+
+## State Management & Persistence
+
+Agent Substrate distinguishes between two types of state, which are currently
+captured together in a single versioned snapshot:
+
+  1.  **Memory Snapshot**: The exact RAM state of the process.
+
+  2.  **Working Volume (Disk)**: The files written to the container's writable
+      layer (the "working memory").
+
+In the current implementation, both memory and disk states are tied to the
+specific version of the code (ActorTemplate). This ensures strict consistency
+during resumption.
+
+Snapshots are stored durably in **Google Cloud Storage (GCS)**. This model
+allows the physical compute resources in the `WorkerPool` to be fully reclaimed
+while an actor is idle, without losing any process or filesystem progress.
+
+## Security & Isolation
+
+Agent Substrate is built on a **Defense-in-Depth** model:
+
+  * **Sandboxed Execution**: Every actor runs inside a hardened kernel-space
+    isolation layer (e.g. gVisor), preventing container escapes.
+
+  * **Actor Identity**: Every interaction is powered by a unique, Agent
+    Substrate-managed identity that is independent of the underlying hardware.
+    This ensures that actors maintain their own granular permissions and
+    security context even as they migrate across physical nodes or code
+    versions.
+
+  * **API Authorization**: Every `ate-api-server` RPC is authorized. Users
+    and automation get owner, editor, or viewer roles on the global scope or
+    on an atespace through AccessPolicy (`kubectl ate access-policy`), and
+    Substrate's components hold fixed system roles bound to their pod
+    certificates. The atespace is the finest boundary today. See
+    [authorization.md](../guides/authorization.md) for the roles, the check behind each
+    RPC, and known gaps.
+
+  * **Ingress Authentication and Routing**: The gateway routes each request to
+    the actor its `ate-target-actor` header names, and only to recognized,
+    registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
+    static allowlist; any listed client may reach any actor, as per-actor
+    ingress authorization is not yet supported.
+    The installer takes that allowlist from `--ingress-allowed-spiffe-ids`
+    (`ATE_INGRESS_ALLOWED_SPIFFE_IDS` or `ingressAllowedSPIFFEIDs` in its config).
+    Both dataplanes must verify the client certificate against the Pod Identity
+    CA during the TLS handshake on both HTTPS and TLS CONNECT listeners.
+    The SPIFFE URI SAN allowlist may be checked during or after TLS, but an
+    unlisted client must not reach actor routing. A CONNECT tunnel may be
+    accepted before that check, but traffic inside it must still be denied.
+    Neither dataplane serves plaintext ingress listeners.
+
+  * **Network Policy**: Agent Substrate leverages standard Kubernetes
+    NetworkPolicy for connectivity control. Policies can be applied at the
+    `WorkerPool` boundary to restrict ingress/egress traffic for all actors
+    hosted within that pool.
+
+  * **mTLS Everywhere**: All internal system communication (e.g., Control Plane
+    to Atelet) is secured via mutual TLS with short-lived certificates.

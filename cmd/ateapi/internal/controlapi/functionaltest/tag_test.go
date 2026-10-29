@@ -16,6 +16,7 @@ package functionaltest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -360,6 +361,30 @@ func TestUpdateTag_NotFound(t *testing.T) {
 		},
 	})
 	assertGrpcError(t, err, codes.NotFound, "Tag test-atespace/does-not-exist not found")
+}
+
+// TestUpdateTag_DeletingTag verifies a tag left in place by a failed delete
+// can no longer be updated.
+func TestUpdateTag_DeletingTag(t *testing.T) {
+	ns := namespaceForTest("ns-update-tag-deleting")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+
+	tagRef := resources.TagRefFromTag(seedTag(t, tc, "actor-1", "v1"))
+	tc.objectStore.OnList = func(string, string) error { return errors.New("injected list failure") }
+	if _, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err == nil {
+		t.Fatal("DeleteTag succeeded despite the failing snapshot cleanup")
+	}
+
+	marked, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef.ToObjectRef()})
+	if err != nil {
+		t.Fatalf("GetTag after the failed delete: %v", err)
+	}
+	marked.Scope = ateapi.TagScope_TAG_SCOPE_PUBLISHED
+	_, err = tc.client.UpdateTag(ctx, &ateapi.UpdateTagRequest{Tag: marked})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Tag "+tagRef.String()+" is being deleted")
 }
 
 func TestDeleteTag(t *testing.T) {

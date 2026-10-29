@@ -194,7 +194,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 			actorTemplate.GetMetadata().GetUid(),
 			uri.Name(),
 			uri.String(),
-			ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 		)
 		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
 		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
@@ -401,9 +401,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)
 		if mode == suspendSync {
-			snap.GetDurableSnapshot().Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			snap.GetDurableSnapshot().State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		}
-		durable := snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		durable := snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		// Keep the actor on the node that holds its snapshot. atelet holds an
 		// async suspend's snapshot until it detaches it, which it does only
 		// once the snapshot is durable.
@@ -450,14 +450,14 @@ func ateletKeptLocal(state *ateletpb.ActorSnapshotState, snap *ateapi.Snapshot) 
 // whole prefix. An upload atelet reports can make a newer snapshot COMPLETED
 // outside any workflow, so the next one can drop more than one.
 func (w *ActorWorkflow) releaseDroppedSnapshots(ctx context.Context, before, after *ateapi.Actor) {
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	kept := map[string]bool{}
 	for _, snap := range after.GetStatus().GetSnapshots() {
 		kept[snap.GetDurableSnapshot().GetObject().GetSnapshotUri()] = true
 	}
 	for _, snap := range before.GetStatus().GetSnapshots() {
 		dropped := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
-		if snap.GetDurableSnapshot().GetStatus() != completed || kept[dropped] {
+		if snap.GetDurableSnapshot().GetState() != completed || kept[dropped] {
 			continue
 		}
 		if err := w.releaseReplacedSnapshot(ctx, before, dropped); err != nil {

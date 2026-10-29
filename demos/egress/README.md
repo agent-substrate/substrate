@@ -1,3 +1,13 @@
+---
+title: "Pluggable Egress Networking"
+linkTitle: "Pluggable Egress Networking"
+weight: 6
+estimated_time: "10 mins"
+card_icon: "fa-solid fa-shield-halved"
+description: >
+  Tunnel and authenticate outbound actor traffic over mTLS using Envoy or agentgateway.
+---
+
 # Egress Demo — Pluggable Egress Networking
 
 This demo shows an Actor's outbound traffic being **transparently tunneled through an
@@ -53,16 +63,11 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 
 ## Choose a dataplane
 
-The dataplane is selected when installing `ate-system`, not when installing this demo. The Actor,
-ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
-
-```bash
-# Envoy (default)
-./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
-
-# agentgateway
-./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway --credential-provider='{"name":"k8s.io"}'
-```
+The dataplane is selected when installing `ate-system`, not when installing this demo. Install as
+in the [Quickstart](../../README.md#quickstart-development) or
+[GKE Quickstart](../../README.md#gke-quickstart-development); for agentgateway, add
+`--atenet-dataplane=agentgateway` to `deploy ate-system`. The Actor, ActorTemplate, worker pool,
+test, and manual walkthrough are otherwise the same.
 
 | | Envoy | agentgateway |
 | --- | --- | --- |
@@ -92,15 +97,15 @@ rejects that option with agentgateway rather than silently omitting it.
   (step 3 below) and `kubectl ate get egress-policy` reads it back; the e2e suites create theirs
   with `e2e.EnsureEgressPolicy`. An `all` rule reproduces the pre-policy behavior.
 - **Actor-identity trust** — the gateway mounts the `actor-id-ca-certs` Secret, a cert-only copy of
-  the actor-identity CA root that `hack/install-ate.sh` derives from `actor-id-ca-pool` (which also
+  the actor-identity CA root that `ate-setup` derives from `actor-id-ca-pool` (which also
   holds the CA signing key and is deliberately *not* mounted here).
 
 ## Prerequisites
 
-- A kind cluster with Agent Substrate installed (`hack/create-kind-cluster.sh`, followed by one of
-  the [dataplane installation commands above](#choose-a-dataplane)). Egress is enabled by the
-  ateapi flag above.
-- `ko`, `kubectl`, and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
+- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development), with the dataplane
+  [chosen above](#choose-a-dataplane). Egress is enabled by the ateapi flag above.
+- `kubectl` and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
 
 ## Deploy the demo fixture
 
@@ -168,16 +173,13 @@ EOF
 # 4. Drive the Actor's egress through the ingress gateway. The gateway caches a
 #    missing policy as deny for 10s (--egress-policy-cache-ttl), so a fetch tried
 #    before step 3 keeps failing for up to that long after the policy appears.
-kubectl -n ate-system port-forward service/atenet-router 8000:80 &
+kubectl ate proxy actor egress-demo 8000:80 -a ate-demo-egress &
 curl -s -X POST http://localhost:8000/ \
-  -H 'ate-target-actor: ate-demo-egress/egress-demo' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
 
-The `ate-target-actor` header selects the Actor receiving this ingress request. The
-URL in the JSON body selects that Actor's egress destination and is unrelated
-to Actor routing.
+The URL in the JSON body selects the Actor's egress destination.
 
 ### What to observe
 
@@ -186,7 +188,7 @@ With Envoy:
 ```bash
 # The egress gateway logs each tunneled CONNECT against the verified peer certificate:
 kubectl -n ate-system logs deploy/atenet-egress -c envoy | grep '\[egress\]'
-#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress/actor/egress-demo … code=200 …
+#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/ate-demo-egress/egress-demo … code=200 …
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress tunnel opened\|egress denied'
@@ -243,7 +245,7 @@ from the cluster, works for a manual run.
 - The gateway **authenticates** identity (is this a real, running actor?) and **authorizes**
   destinations against the Actor's `EgressPolicy`. The same `ext_proc` can also replace a
   placeholder request header with an upstream credential on HTTPS an `https` rule allows — see
-  [docs/egress-credential-injection.md](../../docs/egress-credential-injection.md).
+  [docs/guides/egress-credential-injection.md](../../docs/guides/egress-credential-injection.md).
 - Identity comes entirely from the actor certificate: the atespace, actor name, and UID are read
   out of the `ActorIdentity` extension and the UID is matched against the live actor, so a
   certificate cannot survive its actor being deleted and recreated under the same name. Nothing

@@ -146,7 +146,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 				inProgress.DurableSnapshot.Object.SnapshotUri = mustActorSnapshotURI(t, tmpl, actor, "local-in-progress").String()
 				s.LastAssignedGeneration = 3
 				s.Snapshots = []*ateapi.Snapshot{
-					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "kept", keptURI, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "kept", keptURI, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 					local1,
 					inProgress,
 				}
@@ -170,7 +170,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			if got := gotStatus.GetLastAssignedGeneration(); got != 3 {
 				t.Errorf("last_assigned_generation = %d, want 3", got)
 			}
-			gotSnap := findLatestDurableSnapshot(gotStatus, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			gotSnap := findLatestDurableSnapshot(gotStatus, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 			if got := gotSnap.GetGeneration(); got != 1 {
 				t.Errorf("retained snapshot generation = %d, want 1", got)
 			}
@@ -183,7 +183,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			if got := findLatestLocalSnapshot(gotStatus); got != nil {
 				t.Errorf("local snapshot info = %v, want nil", got)
 			}
-			if got := findLatestDurableSnapshot(gotStatus, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
+			if got := findLatestDurableSnapshot(gotStatus, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING); got != nil {
 				t.Errorf("in-progress durable snapshot = %v, want nil", got)
 			}
 			if got := len(gotStatus.GetSnapshots()); got != 1 {
@@ -260,12 +260,12 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 				s.AssignedNode = tt.node
 				s.LastAssignedGeneration = 2
 				snap := newPausedSnapshot(t, 2, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "uploaded", tt.node)
-				snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 				if tt.pending {
-					snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+					snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 				}
 				s.Snapshots = []*ateapi.Snapshot{
-					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, snap.GetFidelity(), "", "older", "gs://snapshots/atespaces/team-a/actors/older/snapshots/snapshot", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, snap.GetFidelity(), "", "older", "gs://snapshots/atespaces/team-a/actors/older/snapshots/snapshot", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 					snap,
 				}
 				if tt.assigned {
@@ -343,7 +343,7 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 // terminate, as in TestRevertActor_ReturnsActorToItsSnapshot.
 func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -365,7 +365,7 @@ func TestRevertActor_PausedSnapshotAlreadyUploaded(t *testing.T) {
 	objects.PutSnapshot(t, uploaded, "manifest.json")
 	mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapi.ActorStatus) {
 		paused := newPausedSnapshot(t, 2, memory, "", "pause-snap", "node-1")
-		paused.DurableSnapshot = &ateapi.SnapshotStorage{Status: completed, Object: &ateapi.ObjectSnapshot{SnapshotUri: uploaded.String()}}
+		paused.DurableSnapshot = &ateapi.SnapshotStorage{State: completed, Object: &ateapi.ObjectSnapshot{SnapshotUri: uploaded.String()}}
 		s.LastAssignedGeneration = 2
 		s.Snapshots = []*ateapi.Snapshot{
 			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", old.Name(), old.String(), completed),
@@ -472,7 +472,7 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 	if got := reverted.GetStatus().GetCrash(); got != nil {
 		t.Errorf("Crash = %v, want cleared by the revert", got)
 	}
-	gotSnap := findLatestDurableSnapshot(reverted.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	gotSnap := findLatestDurableSnapshot(reverted.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != "" {
 		t.Errorf("external snapshot = %q, want none", got)
 	}
@@ -581,15 +581,15 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 1
 				s.Snapshots = []*ateapi.Snapshot{
-					newDurableSnapshot(1, currentType, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(1, currentType, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 				}
 				if tt.earlierPause {
 					s.LastAssignedGeneration++
-					s.Snapshots = append(s.Snapshots, newDurableSnapshot(s.LastAssignedGeneration, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", earlierPause.Name(), earlierPause.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(s.LastAssignedGeneration, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", earlierPause.Name(), earlierPause.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING))
 				}
 				if tt.inFlight != "" {
 					s.LastAssignedGeneration++
-					s.Snapshots = append(s.Snapshots, newDurableSnapshot(s.LastAssignedGeneration, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(s.LastAssignedGeneration, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING))
 				}
 			})
 
@@ -647,7 +647,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 			AssignedNode:           "node-1",
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapi.Snapshot{
-				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "abandoned", someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+				newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "abandoned", someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 			},
 		},
 	})
@@ -667,7 +667,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	if got := finalized.GetStatus().GetAssignedNode(); got != "" {
 		t.Errorf("assigned node = %q, want empty", got)
 	}
-	if got := findLatestDurableSnapshot(finalized.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
+	if got := findLatestDurableSnapshot(finalized.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING); got != nil {
 		t.Errorf("in-progress durable snapshot = %v, want nil", got)
 	}
 }

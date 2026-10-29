@@ -44,6 +44,11 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
   verbs: ["get", "list", "watch"]
+# Sync failures are reported as Warning Events on the worker pod
+# (see cmd/atelet/worker_sandbox_syncer.go).
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 # ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
 # resolved on the node: atelet reads them through an informer and projects
 # the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
@@ -183,6 +188,7 @@ spec:
         # Reads and writes snapshot and asset files under the /var/lib/ate
         # hostPath as root, like atelet; needs no capabilities.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:
@@ -257,6 +263,7 @@ spec:
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
+          allowPrivilegeEscalation: false
           runAsUser: 0
           runAsGroup: 0
           capabilities:

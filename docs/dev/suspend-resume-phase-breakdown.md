@@ -11,7 +11,7 @@ atelet (the outer phases: `download`, `persist`, `worker_*`, …) and by
 ateworker-microvm (the phases inside `worker_*`: `pause`, `snapshot`, `vm_restore`,
 `wakeup_probe`, …). `benchmarking/analysis/` collects the records from the pod
 logs and aggregates them. See
-[docs/observability.md](../observability.md#actor-attributed-component-logs)
+[docs/guides/observability.md](../guides/observability.md#actor-attributed-component-logs)
 for the record shape and
 [benchmarking/analysis/README.md](../../benchmarking/analysis/README.md) for
 the report.
@@ -24,10 +24,10 @@ the report.
   or the [GKE Quickstart](../../README.md#gke-quickstart-development). For GKE
   the scripts below read `.ate-dev-env.sh` from the repository root
   (`collect_logs.sh` sources it itself; set `NO_DEV_ENV` to opt out).
-* A **micro-VM** or **gVisor** pool: both ateworkers write the inner records,
+* A **microVM** or **gVisor** pool: both ateworkers write the inner records,
   so the report shows both layers for either class (a worker image that
   predates the gVisor records shows the atelet layer only on a gVisor pool).
-  For micro-VM see [microvm-local.md](microvm-local.md).
+  For microVM see [microvm-local.md](microvm-local.md).
 * `kubectl`, `kubectl-ate` (`go install ./cmd/kubectl-ate`), and `python3`
   (standard library only).
 

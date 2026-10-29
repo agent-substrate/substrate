@@ -67,8 +67,7 @@ var probeNamespace string
 // The micro-VM variant additionally needs the micro-VM deps installed
 // (hack/run-microvm-demo-kind.sh, or hack/install-microvm-deps.sh --install).
 func TestActorEgressMITMTrust(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
@@ -92,7 +91,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	passthrough := e2e.DeployServerPod(t, ctx, passthroughSpec)
 	originRoots := "ca=" + url.QueryEscape(e2e.ServiceDNSTrustBundle(t, ctx, clients))
 
-	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle(), e2e.WithSystemRoots())
+	probeNamespace, _ = e2e.DeployProbe(t, "egressmitm", e2e.WithTrustBundle(), e2e.WithSystemRoots())
 
 	const id = "probe-mitm"
 	createAndResumeActor(t, ctx, clients, id, mitm, passthrough)
@@ -158,29 +157,18 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachableAddress, bySNI.Status)
 	}
 
-	// Envoy closes denied connections at the ClientHello; agentgateway
-	// terminates TLS to return 403. Trust the gateway's CA so a certificate
-	// failure cannot masquerade as either policy-denial response.
-	//
-	// Each name is an origin's fully qualified alias: rules match names
-	// exactly, so only the wrong-port rule lists the first and none the
-	// second. A gateway that relayed either would hand the actor a
-	// certificate the bundle rejects, and the dial keeps the actor off DNS.
+	// Each name is an origin's fully qualified alias: only the wrong-port rule
+	// lists the first and none lists the second. Neither may complete TLS.
+	// Certificate-verification failures must not count as policy refusals.
+	// The dial bypasses DNS.
 	for _, tc := range []struct{ name, origin, dial string }{
 		{"passthrough rule excludes port 443", "https://" + passthrough.SvcName() + ".cluster.local/healthz", passthrough.TLSAddress()},
 		{"host outside the policy", "https://" + mitm.SvcName() + ".cluster.local/healthz", mitm.TLSAddress()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
-			switch {
-			case denied.Status == "403" && denied.Error == "":
-				// An explicit denial after completing TLS with the actor.
-			case denied.Error == "":
-				t.Errorf("fetch of %s returned status %s, want 403 or a connection closed at the ClientHello", tc.origin, denied.Status)
-			case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
-				t.Errorf("fetch of %s failed certificate verification instead of returning a policy denial: %s", tc.origin, denied.Error)
-			case denied.Status != "":
-				t.Errorf("fetch of %s got status %s with error %q, want no HTTP exchange after a TLS failure", tc.origin, denied.Status, denied.Error)
+			if denied.TLSHandshake != "closed" || denied.Status != "" || denied.Error == "" {
+				t.Errorf("fetch of %s: handshake %q, status %q, error %q; want connection closed during TLS with no HTTP response", tc.origin, denied.TLSHandshake, denied.Status, denied.Error)
 			}
 		})
 	}
@@ -213,9 +201,10 @@ const (
 )
 
 type fetchResponse struct {
-	Status string `json:"status"`
-	Error  string `json:"error"`
-	Body   string `json:"body"`
+	Status       string `json:"status"`
+	Error        string `json:"error"`
+	Body         string `json:"body"`
+	TLSHandshake string `json:"tls_handshake"`
 }
 
 // reachWindow bounds the retries of a fetch that must return 200.

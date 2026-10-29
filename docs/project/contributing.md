@@ -1,0 +1,141 @@
+---
+title: "Contributing Guidelines"
+linkTitle: "Contributing"
+weight: 3
+docsite: false
+description: >
+  How to set up your development environment, submit pull requests, and contribute to Agent Substrate.
+---
+
+# How to Contribute
+
+We would love to accept your patches and contributions to this project. Before
+you spend a lot of time on a contribution, please review the following
+guidelines.
+
+## Before you begin
+
+### Sign off your commits
+
+Every commit must be signed off under the
+[Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+The `Signed-off-by` line certifies that you wrote the change or otherwise have
+the right to submit it under the project's license.
+
+Sign off with your real name, not an anonymous ID or a false name. It doesn't
+need to be your legal name, just the name the community knows you by. See the
+[CNCF DCO guidelines](https://github.com/cncf/foundation/blob/main/policies-guidance/dco-guidelines.md).
+
+Git adds the line with `-s`, using `user.name` and `user.email` from your git
+config. The name and email must match the commit author.
+
+```sh
+git commit -s -m "fix typo in README"
+```
+
+The DCO check on your PR fails if any commit is missing a sign-off. To sign off
+the commits already on your branch, then force-push:
+
+```sh
+git rebase --signoff upstream/main
+```
+
+### Review our Community Guidelines
+
+This project follows [Google's Open Source Community
+Guidelines](https://opensource.google/conduct/).
+
+### Set up a local development environment
+
+The [Quickstart (Development)](../../README.md#quickstart-development) in the README
+covers bringing up a local cluster with the default (gVisor) runtime. To run
+the microVM runtime locally — which needs `/dev/kvm`, or Lima nested
+virtualization on Apple Silicon — see
+[docs/dev/microvm-local.md](../dev/microvm-local.md). To measure where a
+suspend or resume spends its time on such a cluster, follow
+[docs/dev/suspend-resume-phase-breakdown.md](../dev/suspend-resume-phase-breakdown.md).
+
+## Contribution process
+
+This is a very new project, so we are still working out exactly how it is going
+to be developed. For now, we are focused on iterating quickly to find the right
+design and architecture. This has implications for contributors:
+
+1) Things are moving quickly, so PRs may need to be rebased or updated
+frequently. Small PRs that are focused on a single issue or feature are easier
+to review and update than large PRs that touch many different parts of the
+codebase.
+
+2) While we welcome new contributors, we are really focused on the minimal
+capabilities needed to make this project useful. Small fixes and cleanups can
+go straight to a PR. Before you start anything larger, please discuss it with
+us first (if there is an issue open, comment there and if not, open one), and
+search open PRs so we are not duplicating work that is already in flight. We
+want to make sure that your work is aligned with our near-term goals for the
+project.
+
+3) PRs which are not aligned with our near-term goals may be closed without
+extensive review. We are not trying to be discouraging, but we need to make
+sure that we are focused on the most important work.
+
+If you are building something that runs *on* Substrate rather than changing
+Substrate itself, see [Integration
+Repositories](integration-repos.md) for where that code should live.
+
+### Sizing PRs for review
+
+We optimize PRs for easy review — large PRs get broken
+down, small PRs get merged.
+
+* **Large PRs**: split huge changes into a series of smaller PRs, each a
+  logically distinct feature. When the intermediate steps are not useful
+  on their own, keep the change as one PR split into commits at logical
+  break points for review. PRs are squash-merged, so only the branch
+  `HEAD` needs to build and pass tests.
+* **Small and bulk PRs**: if you find a typo, review the whole file and
+  fix everything in one pass rather than sending the single edit. Group
+  related typo, doc, and single-line cleanup fixes into one PR rather
+  than opening several small ones for the same area. Maintainers may ask
+  you to consolidate fragmented PRs into one, or close them in favor of a
+  combined submission.
+
+As a rough scale: S is under 30 changed lines, M under 100, L under 500, XL under 1000. Most PRs should be L or smaller; XL and above are candidates for breaking down.
+
+### Code Reviews
+
+All submissions, including submissions by project members, require review. We
+use [GitHub pull requests](https://docs.github.com/articles/about-pull-requests)
+for this purpose.
+
+Changes that add or alter behavior should come with tests, and existing tests
+should be updated when behavior they cover changes. We will not merge code that
+causes tests to fail. Every test runs in CI on every PR, so please don't add
+tests whose only purpose is to raise coverage numbers. Tests should be
+inherently valuable for future changes.
+
+Follow the [PostgreSQL schema evolution rules](../dev/postgresql-schema-evolution.md) for each application schema change.
+
+Each pull request title becomes its line in the [release notes](../dev/release-notes.md).
+
+### Root-gated tests
+
+Tests that need root (overlay mounts, mknod, `trusted.*` xattrs, ...) call
+`roottest.Require(t, ...)` from [internal/roottest](../../internal/roottest) as
+their first statement. They skip in a plain `go test ./...`; CI reruns every
+package whose tests import that package under `sudo`. To run them locally:
+
+```sh
+hack/run-root-tests.sh
+```
+
+New privileged tests only need the `roottest.Require` call — no CI changes.
+
+### Copyright Headers
+
+Every file containing source code must include copyright and license
+information. This includes any JS/CSS files that you might be serving out to
+browsers. (This is to help well-intentioned people avoid accidental copying
+that doesn't comply with the license.)
+
+Our standard headers for various filetypes can be found in
+[./hack/boilerplate](../../hack/boilerplate/).

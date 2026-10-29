@@ -53,6 +53,9 @@ func (s *AteWorkerService) watchVM(attribution resources.ActorAttribution, actor
 	}
 	ctx := context.Background()
 	message := fmt.Sprintf("%s exited: %s", what, exit)
+	if ra.memory.Killed() {
+		message = "killed for exceeding its memory limit"
+	}
 	slog.WarnContext(ctx, "Micro-VM died", slog.String("actorUID", attribution.UID), slog.String("reason", message))
 
 	// Not reported under the actor's lock: a suspend in flight holds the
