@@ -273,40 +273,17 @@ fn read_learned_binding<EHF: EnvoyHttpFilter>(
   Some((ip, spiffe_id))
 }
 
-/// Reports whether the current HTTP request has (or may have) a request body.
-///
-/// Under RFC 9110 and RFC 9112:
-/// - If `end_of_stream` is true (e.g. HTTP/2 HEADERS frame with END_STREAM set),
-///   there is definitely no body.
-/// - If `content-length` is present, `0` indicates no body, while `> 0` indicates a body.
-/// - If `content-length` is not present:
-///   - For standard safe/read-only methods (`GET`, `HEAD`), RFC 9110 specifies no body
-///     by default. On HTTP/1.1 keep-alive connections, Envoy can deliver `end_of_stream = false`
-///     on request headers even though no body will ever follow. Treating these as bodiless
-///     is essential for safe replay.
-///   - For other methods (`POST`, `PUT`, `PATCH`, etc.), unknown methods, or HTTP/2 streams
-///     without END_STREAM, a body may follow via subsequent data chunks, so they are
-///     conservatively treated as having a body.
+/// Reports whether the request may have a body. Envoy doesn't buffer request bodies, so a
+/// replay could only resend the headers: a request counts as bodiless only if it ends with
+/// its headers or has `content-length: 0`. Envoy's HTTP/1 codec delivers a bodiless
+/// request's headers with `end_of_stream`, so this assumes a body for chunked requests,
+/// HTTP/2 requests without END_STREAM, and upgrades, whatever their method.
 fn request_has_body<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, end_of_stream: bool) -> bool {
   if end_of_stream {
     return false;
   }
-
-  if let Some(cl_str) = request_header_str(envoy_filter, "content-length") {
-    return cl_str.trim().parse::<u64>().map_or(true, |len| len > 0);
-  }
-
-  // Method may be available via request header :method or via Envoy's RequestMethod attribute
-  // (which directly queries Envoy's inline Method() header).
-  let method = request_header_str(envoy_filter, ":method").or_else(|| {
-    envoy_filter
-      .get_attribute_string(envoy_dynamic_module_type_attribute_id::RequestMethod)
-      .and_then(|buf| std::str::from_utf8(buf.as_slice()).ok().map(str::to_string))
-  });
-  match method.as_deref().map(str::to_ascii_uppercase).as_deref() {
-    Some("GET") | Some("HEAD") => false,
-    _ => true,
-  }
+  request_header_str(envoy_filter, "content-length")
+    .map_or(true, |len| len.trim().parse::<u64>() != Ok(0))
 }
 
 /// Rejects a request that arrives with [`ROUTE_RESOLVED_HEADER`] set when the filter
@@ -791,7 +768,7 @@ mod tests {
       .returning(|_, _| true);
     mock.expect_clear_route_cache().returning(|| ());
 
-    let status = filter.on_request_headers(&mut mock, false);
+    let status = filter.on_request_headers(&mut mock, true);
     assert_eq!(
       status,
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
@@ -1443,97 +1420,34 @@ mod tests {
     filter.on_request_headers(&mut mock, false);
     assert!(!filter.has_request_body);
 
-    // 4. Request with end_of_stream: false, no content-length, method: GET (RFC 9110 bodiless)
-    let mut filter = CacheFilter::new_test_filter(config.clone());
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
-    mock.expect_get_filter_state_bytes().returning(|_| None);
-    mock
-      .expect_get_request_header_values()
-      .returning(|_| vec![]);
-    filter.on_request_headers(&mut mock, false);
-    assert!(!filter.has_request_body);
+    // 4. A GET or HEAD without end_of_stream or content-length may carry a body (a chunked
+    // or HTTP/2 GET, or an upgrade), so it counts as having one.
+    for method in [b"GET".as_slice(), b"HEAD".as_slice()] {
+      let mut filter = CacheFilter::new_test_filter(config.clone());
+      let mut mock = MockEnvoyHttpFilter::default();
+      mock
+        .expect_get_request_header_value()
+        .withf(|key| key == "content-length")
+        .returning(|_| None);
+      mock
+        .expect_get_request_header_value()
+        .withf(|key| key == ":method")
+        .returning(move |_| Some(EnvoyBuffer::new(method)));
+      mock.expect_get_filter_state_bytes().returning(|_| None);
+      mock
+        .expect_get_request_header_values()
+        .returning(|_| vec![]);
+      filter.on_request_headers(&mut mock, false);
+      assert!(filter.has_request_body);
+    }
 
-    // 5. Request with end_of_stream: false, no content-length, method: HEAD (RFC 9110 bodiless)
-    let mut filter = CacheFilter::new_test_filter(config.clone());
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"HEAD")));
-    mock.expect_get_filter_state_bytes().returning(|_| None);
-    mock
-      .expect_get_request_header_values()
-      .returning(|_| vec![]);
-    filter.on_request_headers(&mut mock, false);
-    assert!(!filter.has_request_body);
-
-    // 6. Request with end_of_stream: false, no content-length, method: POST (payload may follow)
-    let mut filter = CacheFilter::new_test_filter(config.clone());
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
-    mock.expect_get_filter_state_bytes().returning(|_| None);
-    mock
-      .expect_get_request_header_values()
-      .returning(|_| vec![]);
-    filter.on_request_headers(&mut mock, false);
-    assert!(filter.has_request_body);
-
-    // 7. Request with end_of_stream: false, no content-length, :method absent, but RequestMethod attribute is GET
-    let mut filter = CacheFilter::new_test_filter(config.clone());
-    let mut mock = MockEnvoyHttpFilter::default();
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == "content-length")
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| None);
-    mock
-      .expect_get_attribute_string()
-      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::RequestMethod)
-      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
-    mock.expect_get_filter_state_bytes().returning(|_| None);
-    mock
-      .expect_get_request_header_values()
-      .returning(|_| vec![]);
-    filter.on_request_headers(&mut mock, false);
-    assert!(!filter.has_request_body);
-
-    // 8. Request with end_of_stream: false, no content-length, :method absent, and RequestMethod attribute is POST
+    // 5. An unparsable content-length counts as a body.
     let mut filter = CacheFilter::new_test_filter(config);
     let mut mock = MockEnvoyHttpFilter::default();
     mock
       .expect_get_request_header_value()
       .withf(|key| key == "content-length")
-      .returning(|_| None);
-    mock
-      .expect_get_request_header_value()
-      .withf(|key| key == ":method")
-      .returning(|_| None);
-    mock
-      .expect_get_attribute_string()
-      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::RequestMethod)
-      .returning(|_| Some(EnvoyBuffer::new(b"POST")));
+      .returning(|_| Some(EnvoyBuffer::new(b"abc")));
     mock.expect_get_filter_state_bytes().returning(|_| None);
     mock
       .expect_get_request_header_values()

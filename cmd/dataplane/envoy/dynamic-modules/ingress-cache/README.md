@@ -81,8 +81,10 @@ thread).
   the worker IP in the cache for `cache_ttl_seconds`.
 - **Request with a body (`on_request_headers`)**: The filter skips the cache
   lookup and the request proceeds through `ext_proc`, then is learned from like a
-  miss. A request counts as having a body unless it ends with its headers, has
-  `content-length: 0`, or is a `GET` or `HEAD` without `content-length`.
+  miss. A request counts as having a body unless it ends with its headers or has
+  `content-length: 0`. Envoy delivers a bodiless HTTP/1 request's headers that
+  way, so this sends chunked or HTTP/2 GETs and upgrades such as WebSocket
+  through `ext_proc`.
 - **gRPC `UNAVAILABLE` (`on_response_headers` / `on_response_trailers`)**: A
   response with gRPC status `14` is not learned from. If the status arrives in
   the trailers, after the headers were learned from, the actor's binding is
