@@ -331,9 +331,9 @@ manage actor lifecycles.
 
 The node-level subsystem manages the physical execution of sandboxes and the movement of snapshots.
 
-  * **atelet**: A lightweight supervisor running on each node as a DaemonSet. It acts as the "Herder," managing a pool of physical pods and communicating with the Control Plane.
+  * **atelet**: A lightweight supervisor running on each node as a DaemonSet. It manages local worker pods and communicates with the Control Plane.
 
-  * **ateworker**: A specialized sandbox-herder container image — one per sandbox class (`ateworker-gvisor`, `ateworker-microvm`) — that runs inside the physical worker pods. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
+  * **ateworker**: The worker container image (`ateworker-gvisor` or `ateworker-microvm`, one per sandbox class) that runs inside each physical worker pod. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
 
   * **Lifecycle Management**: The `ateworker` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for microVMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
 
@@ -343,7 +343,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` herder image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](../reference/api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and each class has a matching `ateworker` image. The sandbox binaries themselves are not baked into the worker image. They come at runtime from the cluster-scoped [`SandboxConfig`](../reference/api-guide.md#3-sandboxconfig-the-sandbox-itself) the `WorkerPool` resolves for its class (an explicit `configRef`, else the class default). Each snapshot records the sandbox runtime it was taken on, and a memory restore runs on a worker that still offers that runtime, so restores stay reproducible across runtime upgrades.
 
   * **gVisor** (`ateworker-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree. `DurableDir` volumes and each container's rootfs overlay are saved as separate filesystem checkpoint bundles (`fs/` and `rootfs/`). A `MEMORY` snapshot splits them out of the process checkpoint; `VOLUMES` and `ROOTFS` snapshots save only the bundles they need with `runsc fscheckpoint`, without memory, and restore them on a cold boot.
 

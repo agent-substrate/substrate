@@ -15,14 +15,14 @@ This guide explains how to configure Substrate resources to deploy high-density,
 
 ## 1. WorkerPool: The Physical Capacity
 
-The `WorkerPool` defines the pool of physical "warm" compute capacity. It manages a fleet of standby pods (herders) that are ready to receive and execute actor states.
+The `WorkerPool` defines the pool of physical "warm" compute capacity. It manages a fleet of standby worker pods that are ready to receive and execute actor states.
 
 ### Specification (`WorkerPoolSpec`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
-| `workerImage` | `string` | **Required.** The container image for the `ateworker` herder process (e.g. `ko://go.ate.dev/substrate/cmd/ateworker-gvisor`). |
+| `workerImage` | `string` | **Required.** The container image for the `ateworker` process (e.g. `ko://go.ate.dev/substrate/cmd/ateworker-gvisor`). |
 | `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`, immutable), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. Without `configRef`, the pool uses the class default (see [Class default](#class-default)). The controller records the result in `status.sandboxClasses`. The sandbox binaries an actor boots with come from the `SandboxConfig` the pool of its assigned worker resolved. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 

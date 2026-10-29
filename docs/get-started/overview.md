@@ -41,7 +41,7 @@ Substrate decouples the **Actor** (a stateful agent or workload instance) from t
     <div class="as-diagram-node as-diagram-node--stack">
       <span class="as-diagram-node__tag">Pre-Warmed Worker Pod (WorkerPool)</span>
       <span class="mono as-diagram-node__title">Worker (ateworker + Sandbox)</span>
-      <span class="mono as-diagram-node__sub">ateworker herder · atunnel mTLS · microVM / gVisor hosting Actor</span>
+      <span class="mono as-diagram-node__sub">ateworker · atunnel mTLS · microVM / gVisor hosting Actor</span>
     </div>
   </div>
   <figcaption class="as-diagram-card__caption">
