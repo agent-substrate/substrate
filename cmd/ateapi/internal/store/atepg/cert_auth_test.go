@@ -44,7 +44,7 @@ import (
 
 func TestBundledPostgresCertificateAuthentication(t *testing.T) {
 	// Reuse the package's Docker requirement, including its fail-closed CI guard.
-	requirePool(t)
+	requireContainer(t)
 	dir := t.TempDir()
 	serverCA, err := localca.GenerateCA("service-dns", localca.KeyTypeED25519, 24*time.Hour)
 	if err != nil {

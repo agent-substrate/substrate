@@ -33,10 +33,13 @@ func Required() bool {
 }
 ```
 
-Callers branch on it (`storetest.go:187-192`, `atepg/main_test.go:105-110`):
+Callers branch on it (`storetest.go:224-232`, `atepg/main_test.go:105-113`):
 
 ```go
 if containerErr != nil {
+    if pgtestdb.AdminDSN() != "" {
+        t.Fatalf("PostgreSQL at %s unavailable: %v", pgtestdb.AdminDSNEnv, containerErr)
+    }
     if dockerenv.Required() {
         t.Fatalf("PostgreSQL testcontainer unavailable and required "+
             "(CI or REQUIRE_DOCKER is set): %v", containerErr)
@@ -46,6 +49,8 @@ if containerErr != nil {
 ```
 
 Both messages name the cause; the fatal one also names what made it fatal.
+`ATE_TEST_POSTGRES_ADMIN_DSN` points the tests at an existing server instead of
+a container, so an unreachable server always fails.
 
 ### Bash
 

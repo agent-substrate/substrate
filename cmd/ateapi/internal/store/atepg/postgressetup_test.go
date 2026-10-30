@@ -29,7 +29,7 @@ import (
 )
 
 func TestPostgresSetupScript(t *testing.T) {
-	requirePool(t)
+	requireContainer(t)
 	const scriptPath = "/tmp/substrate-postgres-setup.sql"
 	if err := containerPG.CopyToContainer(t.Context(), []byte(postgressetup.Script()), scriptPath, 0o600); err != nil {
 		t.Fatalf("copying setup script to PostgreSQL container: %v", err)

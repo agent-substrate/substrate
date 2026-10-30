@@ -208,15 +208,11 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 			DROP TABLE IF EXISTS public.substrate_schema_test_marker`)
 	})
 
-	dsn, err := containerPG.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("getting PostgreSQL connection string: %v", err)
-	}
 	persistence, err := Connect(ctx, ConnectConfig{
-		ReadWriteDSN:  dsn + "&search_path=public",
-		OwnerDSN:      dsn,
-		ReadWriteRole: "atepg",
-		OwnerRole:     "atepg",
+		ReadWriteDSN:  containerDSN + "&search_path=public",
+		OwnerDSN:      containerDSN,
+		ReadWriteRole: containerRole,
+		OwnerRole:     containerRole,
 		Schema:        schema,
 	})
 	if err != nil {
@@ -267,12 +263,20 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	admin := requirePool(t)
 	ctx := t.Context()
 	const (
-		schema       = "separate-role-test"
-		runtimeRole  = "atepg_runtime_test"
-		ddlRole      = "atepg_ddl_test"
-		runtimeLogin = "atepg_runtime_login_a"
-		ddlLogin     = "atepg_ddl_login_a"
-		password     = "test-password"
+		schema   = "separate-role-test"
+		password = "test-password"
+	)
+	var database string
+	if err := admin.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
+		t.Fatalf("reading database name: %v", err)
+	}
+	// Roles are cluster-wide, so name them after this database for test
+	// processes that share a server.
+	var (
+		runtimeRole  = "atepg_runtime_test_" + database
+		ddlRole      = "atepg_ddl_test_" + database
+		runtimeLogin = "atepg_runtime_login_a_" + database
+		ddlLogin     = "atepg_ddl_login_a_" + database
 	)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`
 		DROP SCHEMA IF EXISTS %s CASCADE;
@@ -286,7 +290,7 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		CREATE ROLE %s LOGIN PASSWORD '%s';
 		GRANT %s TO %s;
 		GRANT %s TO %s;
-		GRANT CREATE ON DATABASE atepg TO %s`,
+		GRANT CREATE ON DATABASE %s TO %s`,
 		pgx.Identifier{schema}.Sanitize(),
 		pgx.Identifier{runtimeLogin}.Sanitize(),
 		pgx.Identifier{ddlLogin}.Sanitize(),
@@ -296,7 +300,7 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		pgx.Identifier{ddlLogin}.Sanitize(), password,
 		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{runtimeLogin}.Sanitize(),
 		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{ddlLogin}.Sanitize(),
-		pgx.Identifier{ddlRole}.Sanitize())); err != nil {
+		pgx.Identifier{database}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize())); err != nil {
 		t.Fatalf("creating PostgreSQL test roles: %v", err)
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`
@@ -315,22 +319,19 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 			pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize()))
 		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
 			DROP SCHEMA IF EXISTS %s CASCADE;
-			REVOKE ALL ON DATABASE atepg FROM %s;
+			REVOKE ALL ON DATABASE %s FROM %s;
 			DROP ROLE IF EXISTS %s;
 			DROP ROLE IF EXISTS %s;
 			DROP ROLE IF EXISTS %s;
 			DROP ROLE IF EXISTS %s`, pgx.Identifier{schema}.Sanitize(),
-			pgx.Identifier{ddlRole}.Sanitize(),
+			pgx.Identifier{database}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
 			pgx.Identifier{runtimeLogin}.Sanitize(),
 			pgx.Identifier{ddlLogin}.Sanitize(),
 			pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize()))
 	})
 
-	runtimeDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeLogin+":"+password+"@", 1)
-	ddlDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+ddlLogin+":"+password+"@", 1)
-	if runtimeDSN == containerDSN || ddlDSN == containerDSN {
-		t.Fatalf("unexpected test DSN format: %q", containerDSN)
-	}
+	runtimeDSN := withLogin(t, containerDSN, runtimeLogin, password)
+	ddlDSN := withLogin(t, containerDSN, ddlLogin, password)
 	p, err := Connect(ctx, ConnectConfig{
 		ReadWriteDSN:  runtimeDSN,
 		OwnerDSN:      ddlDSN,

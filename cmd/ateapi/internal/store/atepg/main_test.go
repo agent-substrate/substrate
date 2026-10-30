@@ -17,6 +17,7 @@ package atepg
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -26,23 +27,36 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/pgtestdb"
 )
 
 // One Postgres container serves every test in this package; each test gets
 // isolation via clearAll rather than a fresh container, which would be
 // far slower. Tests in this package are not safe to run with -parallel.
+// With pgtestdb.AdminDSNEnv set, a database on that server replaces the
+// container and containerPG stays nil.
 var (
 	containerOnce sync.Once
 	containerPool *pgxpool.Pool
 	containerDSN  string
+	containerRole = "atepg" // the role containerDSN logs in as
 	containerPG   *postgres.PostgresContainer
 	containerErr  error
+	dropDatabase  func(context.Context) error
 )
 
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if containerPool != nil {
 		containerPool.Close()
+	}
+	if dropDatabase != nil {
+		if err := dropDatabase(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "dropping PostgreSQL test database: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
 	}
 	if containerPG != nil {
 		if err := containerPG.Terminate(context.Background()); err != nil {
@@ -59,21 +73,7 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
-		if err := dockerenv.Configure(ctx); err != nil {
-			containerErr = err
-			return
-		}
-		pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
-			postgres.WithDatabase("atepg"),
-			postgres.WithUsername("atepg"),
-			postgres.WithPassword("atepg"),
-		)
-		if err != nil {
-			containerErr = err
-			return
-		}
-		containerPG = pgContainer
-		dsn, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+		dsn, err := startPostgres(ctx)
 		if err != nil {
 			containerErr = err
 			return
@@ -103,6 +103,9 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 		containerPool = pool
 	})
 	if containerErr != nil {
+		if pgtestdb.AdminDSN() != "" {
+			t.Fatalf("PostgreSQL at %s unavailable: %v", pgtestdb.AdminDSNEnv, containerErr)
+		}
 		if dockerenv.Required() {
 			t.Fatalf("PostgreSQL testcontainer unavailable and required (CI or REQUIRE_DOCKER is set): %v", containerErr)
 		}
@@ -111,12 +114,71 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return containerPool
 }
 
+// startPostgres returns the URI of a fresh database that containerRole, a
+// superuser, logs in to. The URI always has a query string, so tests can
+// append parameters with "&".
+func startPostgres(ctx context.Context) (string, error) {
+	if admin := pgtestdb.AdminDSN(); admin != "" {
+		dsn, drop, err := pgtestdb.Create(ctx, admin, "atepg_test")
+		if err != nil {
+			return "", err
+		}
+		dropDatabase = drop
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "", err
+		}
+		containerRole = u.User.Username()
+		if u.RawQuery == "" {
+			u.RawQuery = "sslmode=prefer"
+		}
+		return u.String(), nil
+	}
+	if err := dockerenv.Configure(ctx); err != nil {
+		return "", err
+	}
+	pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
+		postgres.WithDatabase("atepg"),
+		postgres.WithUsername("atepg"),
+		postgres.WithPassword("atepg"),
+	)
+	if err != nil {
+		return "", err
+	}
+	containerPG = pgContainer
+	return pgContainer.ConnectionString(ctx, "sslmode=disable")
+}
+
+// requireContainer skips tests that need Docker when pgtestdb.AdminDSNEnv
+// replaces the container. Like requirePool, it fails instead in CI.
+func requireContainer(t *testing.T) {
+	t.Helper()
+	requirePool(t)
+	if containerPG == nil {
+		if dockerenv.Required() {
+			t.Fatalf("test needs Docker and is required (CI or REQUIRE_DOCKER is set); unset %s", pgtestdb.AdminDSNEnv)
+		}
+		t.Skipf("test needs Docker; %s is set", pgtestdb.AdminDSNEnv)
+	}
+}
+
+// withLogin returns dsn with its user and password replaced.
+func withLogin(t *testing.T, dsn, user, password string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parsing test DSN: %v", err)
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String()
+}
+
 func testConnectConfig(schema string) ConnectConfig {
 	return ConnectConfig{
 		ReadWriteDSN:  containerDSN,
 		OwnerDSN:      containerDSN,
-		ReadWriteRole: "atepg",
-		OwnerRole:     "atepg",
+		ReadWriteRole: containerRole,
+		OwnerRole:     containerRole,
 		Schema:        schema,
 	}
 }

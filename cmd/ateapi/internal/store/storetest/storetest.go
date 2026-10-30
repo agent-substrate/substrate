@@ -16,7 +16,8 @@
 //
 // One PostgreSQL container is shared by every test in a package; each test gets
 // its own database. Nothing stops that container when the test binary exits, so
-// packages using this package must call [Shutdown] from their TestMain.
+// packages using this package must call [Shutdown] from their TestMain. Setting
+// [pgtestdb.AdminDSNEnv] uses that server instead of a container.
 package storetest
 
 import (
@@ -25,7 +26,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +37,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/pgtestdb"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/proto"
@@ -48,7 +49,6 @@ var (
 	adminPool     *pgxpool.Pool
 	containerPG   *postgres.PostgresContainer
 	containerErr  error
-	databaseCount atomic.Uint64
 	// pools maps each *atepg.Persistence SetupPostgresPersistence returned to
 	// its pool, for fixtures the store API cannot write.
 	pools sync.Map
@@ -67,7 +67,7 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 	t.Helper()
 	ctx := context.Background()
 	admin := requireAdminPool(t)
-	databaseName := fmt.Sprintf("ateapi_test_%d", databaseCount.Add(1))
+	databaseName := pgtestdb.UniqueName("ateapi_test")
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+databaseName); err != nil {
 		t.Fatalf("creating PostgreSQL test database: %v", err)
 	}
@@ -252,6 +252,13 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
+		if dsn := pgtestdb.AdminDSN(); dsn != "" {
+			adminPool, containerErr = pgxpool.New(ctx, dsn)
+			if containerErr == nil {
+				containerErr = adminPool.Ping(ctx)
+			}
+			return
+		}
 		if err := dockerenv.Configure(ctx); err != nil {
 			containerErr = err
 			return
@@ -286,6 +293,9 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 		containerErr = fmt.Errorf("pinging PostgreSQL testcontainer after retries: %w", pingErr)
 	})
 	if containerErr != nil {
+		if pgtestdb.AdminDSN() != "" {
+			t.Fatalf("PostgreSQL at %s unavailable: %v", pgtestdb.AdminDSNEnv, containerErr)
+		}
 		if dockerenv.Required() {
 			t.Fatalf("PostgreSQL testcontainer unavailable and required (CI or REQUIRE_DOCKER is set): %v", containerErr)
 		}

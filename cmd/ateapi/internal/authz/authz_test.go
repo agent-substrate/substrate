@@ -34,6 +34,7 @@ import (
 	"google.golang.org/grpc/codes"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/pgtestdb"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
 )
@@ -64,34 +65,7 @@ func configureDockerEnv(ctx context.Context) error {
 func startPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
-	// Without Docker the tests skip locally, but must fail in CI, where a
-	// skip would pass the package without running it.
-	unavailable := t.Skipf
-	if dockerenv.Required() {
-		unavailable = t.Fatalf
-	}
-	if err := configureDockerEnv(ctx); err != nil {
-		unavailable("docker is unavailable: %v", err)
-	}
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:18-alpine",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("postgres"),
-		postgres.WithPassword("postgres"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		unavailable("failed to start postgres container: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = testcontainers.TerminateContainer(pgContainer)
-	})
-
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("getting connection string: %v", err)
-	}
+	connStr := postgresDSN(t)
 
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
@@ -123,6 +97,54 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("run Substrate and OpenFGA migrations: %v", err)
 	}
 	return pool
+}
+
+// postgresDSN returns the DSN of an empty database: on the server named by
+// pgtestdb.AdminDSNEnv if set, otherwise in a new testcontainer.
+func postgresDSN(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+	if admin := pgtestdb.AdminDSN(); admin != "" {
+		dsn, drop, err := pgtestdb.Create(ctx, admin, "authz_test")
+		if err != nil {
+			t.Fatalf("creating test database: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := drop(context.Background()); err != nil {
+				t.Errorf("dropping test database: %v", err)
+			}
+		})
+		return dsn
+	}
+	// Without Docker the tests skip locally, but must fail in CI, where a
+	// skip would pass the package without running it.
+	unavailable := t.Skipf
+	if dockerenv.Required() {
+		unavailable = t.Fatalf
+	}
+	if err := configureDockerEnv(ctx); err != nil {
+		unavailable("docker is unavailable: %v", err)
+	}
+
+	pgContainer, err := postgres.Run(ctx,
+		"postgres:18-alpine",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		postgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		unavailable("failed to start postgres container: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testcontainers.TerminateContainer(pgContainer)
+	})
+
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("getting connection string: %v", err)
+	}
+	return connStr
 }
 
 func newTestAuthz(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (*server.Server, string, string) {

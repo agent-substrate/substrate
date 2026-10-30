@@ -283,7 +283,7 @@ func TestQueryTracerAgainstPostgreSQL(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 	t.Cleanup(func() { _ = tp.Shutdown(ctx) })
 
-	cfg, err := poolConfig(containerDSN, "atepg")
+	cfg, err := poolConfig(containerDSN, containerRole)
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
