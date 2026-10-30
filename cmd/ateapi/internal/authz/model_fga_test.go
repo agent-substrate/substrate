@@ -22,6 +22,8 @@ import (
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"sigs.k8s.io/yaml"
+
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 )
 
 // modelTestFile is in the format `fga model test` reads, so the same file
@@ -86,7 +88,7 @@ func TestModelFGATests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("pool.Begin failed: %v", err)
 		}
-		if _, err := fgaSrv.Write(ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+		if _, err := fgaSrv.Write(pgfga.ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
 			StoreId:              storeID,
 			AuthorizationModelId: modelID,
 			Writes:               &openfgav1.WriteRequestWrites{TupleKeys: keys},

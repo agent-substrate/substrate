@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 	"go.ate.dev/substrate/internal/installdefaults"
 )
 
@@ -50,12 +51,16 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 // always does.
 func setTestPolicyManager(t *testing.T, p *Persistence) {
 	t.Helper()
-	fgaServer, err := authz.NewOpenFGAServer(p.pool)
+	ds, err := pgfga.New(p.pool)
+	if err != nil {
+		t.Fatalf("pgfga.New failed: %v", err)
+	}
+	fgaServer, err := authz.NewOpenFGAServer(ds)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil, authz.SystemPrincipals{
+	_, policyManager, err := authz.New(t.Context(), p, fgaServer, nil, authz.SystemPrincipals{
 		ControllerSPIFFEID:       installdefaults.ControllerSPIFFEID(installdefaults.SystemNamespace),
 		EgressGatewaySPIFFEIDs:   []string{installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace)},
 		IngressRouterSPIFFEID:    installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),

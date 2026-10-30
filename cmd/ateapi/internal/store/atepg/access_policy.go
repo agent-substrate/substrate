@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -49,7 +50,7 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 		}
 		return nil, fmt.Errorf("inserting global access policy: %w", err)
 	}
-	if err := p.policyManager.ReconcileGlobalBindings(ctx, tx, dbPolicy.GetBindings()); err != nil {
+	if err := p.policyManager.ReconcileGlobalBindings(pgfga.ContextWithTx(ctx, tx), dbPolicy.GetBindings()); err != nil {
 		return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -100,7 +101,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	if err != nil {
 		return nil, fmt.Errorf("updating global access policy: %w", err)
 	}
-	if err := p.policyManager.ReconcileGlobalBindings(ctx, tx, dbPolicy.GetBindings()); err != nil {
+	if err := p.policyManager.ReconcileGlobalBindings(pgfga.ContextWithTx(ctx, tx), dbPolicy.GetBindings()); err != nil {
 		return nil, fmt.Errorf("reconciling global access policy bindings: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -135,7 +136,7 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 		}
 		return nil, fmt.Errorf("inserting access policy for %s: %w", name, err)
 	}
-	if err := p.policyManager.ReconcileAtespaceBindings(ctx, tx, name, dbPolicy.GetBindings()); err != nil {
+	if err := p.policyManager.ReconcileAtespaceBindings(pgfga.ContextWithTx(ctx, tx), name, dbPolicy.GetBindings()); err != nil {
 		return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -186,7 +187,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	if err != nil {
 		return nil, fmt.Errorf("updating access policy for %s: %w", name, err)
 	}
-	if err := p.policyManager.ReconcileAtespaceBindings(ctx, tx, name, dbPolicy.GetBindings()); err != nil {
+	if err := p.policyManager.ReconcileAtespaceBindings(pgfga.ContextWithTx(ctx, tx), name, dbPolicy.GetBindings()); err != nil {
 		return nil, fmt.Errorf("reconciling access policy bindings for %s: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -222,7 +223,7 @@ func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name strin
 	if err != nil {
 		return nil, err
 	}
-	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
+	if err := p.policyManager.DeleteAtespacePolicies(pgfga.ContextWithTx(ctx, tx), name); err != nil {
 		return nil, fmt.Errorf("deleting authorization tuples for %s: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {

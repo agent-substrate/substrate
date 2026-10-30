@@ -22,6 +22,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
@@ -52,13 +53,17 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	persistence := storetest.SetupPostgresPersistence(t)
 	pool := persistence.Pool()
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	ds, err := pgfga.New(pool)
+	if err != nil {
+		t.Fatalf("pgfga.New failed: %v", err)
+	}
+	fgaServer, err := authz.NewOpenFGAServer(ds)
 	if err != nil {
 		t.Fatalf("authz.NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil, storetest.DefaultSystemPrincipals())
+	authorizer, policyManager, err := authz.New(ctx, persistence, fgaServer, nil, storetest.DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -125,7 +130,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 			t.Fatalf("pool.Begin failed: %v", err)
 		}
 		defer tx.Rollback(ctx) //nolint:errcheck
-		_, err = fgaServer.Write(authz.ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+		_, err = fgaServer.Write(pgfga.ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
 			StoreId: storeID,
 			Writes: &openfgav1.WriteRequestWrites{
 				TupleKeys: []*openfgav1.TupleKey{

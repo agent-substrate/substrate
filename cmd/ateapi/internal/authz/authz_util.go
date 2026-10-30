@@ -17,20 +17,22 @@ package authz
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
 	"github.com/openfga/openfga/pkg/server"
-	"github.com/openfga/openfga/pkg/storage/postgres"
-	"github.com/openfga/openfga/pkg/storage/sqlcommon"
+	"github.com/openfga/openfga/pkg/storage"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
 const (
@@ -177,44 +179,44 @@ func FormatMember(member string) (string, error) {
 //go:embed model.fga
 var modelDSL string
 
-// NewOpenFGAServer creates an embedded OpenFGA server backed by a transaction-aware
-// PostgreSQL datastore on pool. Calling Close on the returned server stops
-// OpenFGA's background workers without closing the caller-owned pool.
-func NewOpenFGAServer(pool *pgxpool.Pool) (*server.Server, error) {
-	if pool == nil {
-		return nil, fmt.Errorf("postgres pool must not be nil")
+// NewOpenFGAServer creates an embedded OpenFGA server backed by ds. The store
+// backend provides ds, which must write tuples in the store's transaction
+// carried by ctx. Calling Close on the returned server closes ds.
+func NewOpenFGAServer(ds storage.OpenFGADatastore) (*server.Server, error) {
+	if ds == nil {
+		return nil, fmt.Errorf("datastore must not be nil")
 	}
-	rawDatastore, err := postgres.NewWithDB(pool, nil, sqlcommon.NewConfig())
-	if err != nil {
-		return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
-	}
-	fgaServer, err := server.NewServerWithOpts(
-		server.WithDatastore(newTransactionalDatastore(rawDatastore)),
-	)
+	fgaServer, err := server.NewServerWithOpts(server.WithDatastore(ds))
 	if err != nil {
 		return nil, fmt.Errorf("creating OpenFGA server: %w", err)
 	}
 	return fgaServer, nil
 }
 
+// InitLocker serializes OpenFGA store provisioning across replicas.
+// store.Interface implements it.
+type InitLocker interface {
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+}
+
 // EnsureStoreAndModel ensures the default OpenFGA store and checked-in authorization model
-// are provisioned on fgaServer (serialized across replicas via a PostgreSQL
-// advisory lock on pool) and returns the provisioned (storeID, modelID).
-func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server) (string, string, error) {
-	if pool == nil {
-		return "", "", fmt.Errorf("postgres pool must not be nil")
+// are provisioned on fgaServer (serialized across replicas by a lease from
+// initLock) and returns the provisioned (storeID, modelID).
+func EnsureStoreAndModel(ctx context.Context, initLock InitLocker, fgaServer *server.Server) (string, string, error) {
+	if initLock == nil {
+		return "", "", fmt.Errorf("initLock must not be nil")
 	}
 	if fgaServer == nil {
 		return "", "", fmt.Errorf("fgaServer must not be nil")
 	}
 
-	unlock, err := acquireInitLock(ctx, pool)
+	lease, err := acquireInitLock(ctx, initLock)
 	if err != nil {
 		return "", "", err
 	}
-	defer unlock()
+	defer lease.Close()
 
-	storeID, modelID, err := ensureStoreAndModel(ctx, fgaServer)
+	storeID, modelID, err := ensureStoreAndModel(lease.Context(), fgaServer)
 	if err != nil {
 		return "", "", fmt.Errorf("initializing OpenFGA store and model: %w", err)
 	}
@@ -243,7 +245,7 @@ type SystemPrincipals struct {
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
 // check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals) (*Authorizer, *PolicyManager, error) {
+func New(ctx context.Context, initLock InitLocker, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals) (*Authorizer, *PolicyManager, error) {
 	owners, err := parseBootstrapOwners(bootstrapOwners)
 	if err != nil {
 		return nil, nil, err
@@ -252,7 +254,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 	if err != nil {
 		return nil, nil, err
 	}
-	storeID, modelID, err := EnsureStoreAndModel(ctx, pool, fgaServer)
+	storeID, modelID, err := EnsureStoreAndModel(ctx, initLock, fgaServer)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -318,23 +320,31 @@ func parseSystemPrincipals(system SystemPrincipals) (map[string][]string, error)
 	return out, nil
 }
 
-// ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing
-// OpenFGA store provisioning across replicas.
-const ateFGAInitLockID = int64(0x6174656667610000) // "atefga\0\0"
+const (
+	// initLeaseKey is the lease that serializes OpenFGA store provisioning.
+	initLeaseKey = "lease:openfga:init"
+	// initLeaseRetryPeriod is how often a replica retries the lease while
+	// another replica provisions.
+	initLeaseRetryPeriod = time.Second
+)
 
-func acquireInitLock(ctx context.Context, pool *pgxpool.Pool) (func(), error) {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("acquiring connection for OpenFGA init lock: %w", err)
+// acquireInitLock blocks until it holds the init lease or ctx ends. If the
+// holder dies, the others wait for its lease to expire.
+func acquireInitLock(ctx context.Context, initLock InitLocker) (*store.Lease, error) {
+	for {
+		lease, err := initLock.AcquireLease(ctx, initLeaseKey)
+		if err == nil {
+			return lease, nil
+		}
+		if !errors.Is(err, store.ErrLeaseConflict) {
+			return nil, fmt.Errorf("acquiring OpenFGA init lease: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for OpenFGA init lease: %w", ctx.Err())
+		case <-time.After(initLeaseRetryPeriod):
+		}
 	}
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, ateFGAInitLockID); err != nil {
-		conn.Release()
-		return nil, fmt.Errorf("acquiring OpenFGA init advisory lock: %w", err)
-	}
-	return func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, ateFGAInitLockID)
-		conn.Release()
-	}, nil
 }
 
 // ensureStoreAndModel compiles the embedded model.fga DSL into an OpenFGA proto,

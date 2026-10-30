@@ -32,13 +32,9 @@ func setupTestAuthorizer(t *testing.T) *Authorizer {
 	ctx := context.Background()
 	pool := startPostgres(t)
 
-	fgaServer, err := NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
+	fgaServer := newTestFGAServer(t, pool)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, &testLocker{}, fgaServer, nil, testSystemPrincipals())
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -271,14 +267,10 @@ func TestStreamServerInterceptor(t *testing.T) {
 func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
-	fgaServer, err := NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
+	fgaServer := newTestFGAServer(t, pool)
 	// bootstrap-owner is a global owner through configuration only; it has no
 	// stored tuples.
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, &testLocker{}, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -419,14 +411,10 @@ func TestUnaryServerInterceptor_ActorAndTemplateChecks(t *testing.T) {
 func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
-	fgaServer, err := NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
+	fgaServer := newTestFGAServer(t, pool)
 	// bootstrap-owner is a global owner through configuration only; it has no
 	// stored tuples.
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
+	authorizer, policyManager, err := New(ctx, &testLocker{}, fgaServer, []string{"bootstrap-owner"}, testSystemPrincipals())
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -610,11 +598,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgres(t)
-	fgaServer, err := NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer failed: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
+	fgaServer := newTestFGAServer(t, pool)
 	const (
 		controllerID = "spiffe://cluster.local/ns/ate-system/sa/ate-controller"
 		egressID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
@@ -623,7 +607,7 @@ func TestUnaryServerInterceptor_SystemPrincipals(t *testing.T) {
 		pluginID     = "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
 		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
 	)
-	authorizer, _, err := New(ctx, pool, fgaServer, nil, SystemPrincipals{
+	authorizer, _, err := New(ctx, &testLocker{}, fgaServer, nil, SystemPrincipals{
 		ControllerSPIFFEID:       controllerID,
 		EgressGatewaySPIFFEIDs:   []string{egressID},
 		IngressRouterSPIFFEID:    routerID,

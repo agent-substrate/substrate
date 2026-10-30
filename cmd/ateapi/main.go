@@ -38,6 +38,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
 	"go.ate.dev/substrate/internal/ateinterceptors"
@@ -250,12 +251,16 @@ func main() {
 	ateletSPIFFEID := installdefaults.SPIFFEID(ateletNamespace, *ateletServiceAccount)
 	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace), slog.String("atelet-spiffe-id", ateletSPIFFEID))
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	fgaDatastore, err := pgfga.New(pool)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create OpenFGA datastore", err)
+	}
+	fgaServer, err := authz.NewOpenFGAServer(fgaDatastore)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
 	defer fgaServer.Close()
-	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners, authz.SystemPrincipals{
+	authorizer, policyManager, err := authz.New(shutdownCtx, persistence, fgaServer, *authzBootstrapOwners, authz.SystemPrincipals{
 		ControllerSPIFFEID:       *controllerSPIFFEID,
 		EgressGatewaySPIFFEIDs:   *egressGatewaySPIFFEIDs,
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,

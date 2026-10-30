@@ -36,6 +36,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/resources"
@@ -92,12 +93,16 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 		}
 	})
 	// The server always wires a PolicyManager, so test stores do too.
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	ds, err := pgfga.New(pool)
+	if err != nil {
+		t.Fatalf("creating OpenFGA datastore: %v", err)
+	}
+	fgaServer, err := authz.NewOpenFGAServer(ds)
 	if err != nil {
 		t.Fatalf("creating OpenFGA server: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals())
+	_, policyManager, err := authz.New(ctx, persistence, fgaServer, nil, DefaultSystemPrincipals())
 	if err != nil {
 		t.Fatalf("initializing OpenFGA authz: %v", err)
 	}
