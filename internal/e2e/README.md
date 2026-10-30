@@ -45,7 +45,7 @@ The microVM lane needs its fixtures installed first, which also needs a node
 with `/dev/kvm` (`hack/create-kind-cluster.sh` detects one and labels the node):
 
 ```shell
-$ hack/run-microvm-demo-kind.sh                             # counter-microvm + assets
+$ go run ./cmd/ate-setup --kind deploy demo counter-microvm # counter-microvm
 $ go run ./cmd/ate-setup --kind deploy demo egress-microvm  # egress-microvm
 ```
 

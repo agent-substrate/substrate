@@ -46,22 +46,10 @@ sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor).
 - [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl) —
   the `counter-microvm` actor template, created through the ate API in the
   `ate-demo-counter-microvm` atespace.
-- [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
-  that builds the microVM worker image, stages the guest assets, deploys the
-  control plane, and applies the manifests above. Like the other hack scripts it
-  reads `.ate-dev-env.sh` for GKE; use the kind wrapper for a local cluster.
 
-Run it and follow the printed next steps:
-
-```bash
-# GKE (uses .ate-dev-env.sh, uploads assets to GCS):
-./hack/run-microvm-demo.sh
-
-# local kind (local registry + in-cluster rustfs):
-KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
-```
-
-To deploy onto an existing cluster where `ate-system` is already installed:
+`deploy ate-system` already stages the microVM guest assets and applies the
+cluster-wide `microvm` `SandboxConfig`, so on a cluster installed as in the
+Quickstart, deploy the demo with:
 
 ```bash
 go run ./cmd/ate-setup deploy demo counter-microvm

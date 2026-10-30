@@ -74,14 +74,16 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.c
 ### 3. Run the microVM demo
 
 ```sh
-./hack/run-microvm-demo-kind.sh
+go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
+go run ./cmd/ate-setup --kind deploy demo counter-microvm
 ```
 
-This is a one-shot bring-up: it deploys the control plane (which assembles the
-guest runtime assets for the host architecture if not already present under
-`bin/microvm-assets/<arch>/`, stages them into the in-cluster rustfs bucket,
-and applies the cluster-wide `microvm` `SandboxConfig`), then deploys the demo
-worker pool + template.
+`deploy ate-system` assembles the guest runtime assets for the host
+architecture if not already present under `bin/microvm-assets/<arch>/`, stages
+them into the in-cluster rustfs bucket, and applies the cluster-wide `microvm`
+`SandboxConfig`. `deploy demo counter-microvm` then deploys the demo worker
+pool + template.
 
 ### 4. Verify
 
@@ -176,10 +178,12 @@ echo 'export DOCKER_HOST="unix://${HOME}/.lima/docker-nested/sock/docker.sock"' 
 cd <your substrate checkout>
 
 ./hack/create-kind-cluster.sh
-./hack/run-microvm-demo-kind.sh
+go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
+go run ./cmd/ate-setup --kind deploy demo counter-microvm
 ```
 
-The first run of `run-microvm-demo-kind.sh` downloads the guest runtime
+The first run of `deploy ate-system` downloads the guest runtime
 releases and extracts them into `bin/microvm-assets/<arch>/`; later
 runs reuse that directory when the version stamp and SHA-256 digests match.
 
@@ -187,10 +191,9 @@ Verify as in Option A, step 4.
 
 ## Trying it out
 
-On completion, `run-microvm-demo-kind.sh` prints next steps: create an actor
-from the `counter-microvm` template, hit the in-RAM counter, then suspend and
-resume it and confirm the count continues — proving the guest-memory snapshot
-round-tripped. The flow is the same as the
+Next, create an actor from the `counter-microvm` template, hit the in-RAM
+counter, then suspend and resume it and confirm the count continues — proving
+the guest-memory snapshot round-tripped. The flow is the same as the
 [README Quickstart](../../README.md#quickstart-development), just with the
 microVM template; see the
 [counter demo's microVM steps](../../demos/counter/README.md#1-build-and-deploy)
