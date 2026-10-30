@@ -150,27 +150,50 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	hosted := s.lookupActor(actorUID)
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
-	// either way ateworker owns it and tracks its api-socket.
+	// either way ateworker owns it and tracks its api-socket. A previous ROOTFS
+	// checkpoint attempt may have powered the guest off already.
 	ra := s.runningVM(actorUID)
+	poweredOff := ra.isGuestPoweredOff()
+	if poweredOff && scope == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		return nil, apierror.FailedPrecondition("guest is already powered off")
+	}
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
 	}
 	client := ch.NewClient(chSocket)
-	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
-		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
-	}
-	// Read before the pause: a paused guest cannot answer.
-	if hosted != nil {
-		s.readFinal(ctx, hosted)
+	if !poweredOff {
+		if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
+			return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
+		}
+		// Read before the pause: a paused or powering-off guest cannot answer.
+		if hosted != nil && (ra == nil || !ra.poweringOff.Load()) {
+			s.readFinal(ctx, hosted)
+		}
 	}
 
 	tPause := time.Now()
 	dPrep = tPause.Sub(tStart)
-	pauseErr := client.Pause(ctx)
+	// A ROOTFS restore boots a fresh guest on the upper disks, so the guest
+	// syncs them and powers off instead of pausing (powerOffGuest).
+	var pauseErr error
+	if !poweredOff && scope == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		for _, name := range containerNames(req.GetSpec().GetContainers()) {
+			if hasUpperDisk(rootfsUpperDir(actorDirs), name) {
+				pauseErr = powerOffGuest(ctx, kata.VsockSocketPath(actorUID), client, ra)
+				poweredOff = true
+				break
+			}
+		}
+	}
+	if !poweredOff {
+		if err := client.Pause(ctx); err != nil {
+			pauseErr = fmt.Errorf("while pausing guest: %w", err)
+		}
+	}
 	dPause = time.Since(tPause)
 	if pauseErr != nil {
-		return nil, fmt.Errorf("while pausing guest: %w", pauseErr)
+		return nil, pauseErr
 	}
 
 	checkpointDir := actorDirs.GetCheckpointDir()
@@ -197,6 +220,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	//   - Rootfs upper tars (ROOTFS and MEMORY): host-backed like the durable
 	//     volumes — the memory snapshot does not carry rootfs writes. Under
 	//     VOLUMES the workload cold-starts on restore, discarding rootfs state.
+	//     A container with an upper disk ships the disk image instead
+	//     (rootfsdisk.go).
 	shipsRootfs := includesRootfs(scope)
 	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)

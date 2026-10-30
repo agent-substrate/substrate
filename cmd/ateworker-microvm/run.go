@@ -77,6 +77,10 @@ type runningActor struct {
 	memoryBytes int64
 	// memory kills the actor's cgroup once it is stuck at its memory.high.
 	memory cgroup.MemoryGuard
+	// poweringOff is set right before DestroySandbox powers the guest off for a
+	// ROOTFS checkpoint, and guestPoweredOff is set once the guest is down.
+	poweringOff     atomic.Bool
+	guestPoweredOff atomic.Bool
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -112,6 +116,25 @@ type runningActor struct {
 	workloadIDs []string
 }
 
+// isGuestPoweredOff reports whether powerOffGuest has already shut the guest down.
+func (ra *runningActor) isGuestPoweredOff() bool {
+	if ra == nil {
+		return false
+	}
+	if ra.guestPoweredOff.Load() {
+		return true
+	}
+	if ra.poweringOff.Load() && ra.chProc != nil {
+		select {
+		case <-ra.chProc.Done():
+			ra.guestPoweredOff.Store(true)
+			return true
+		default:
+		}
+	}
+	return false
+}
+
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
 // the FROZEN base sandbox id — the id the guest's virtio-fs find-paths are pinned
 // to (<baseID>/rootfs). It is the id the RO base was FIRST shared under (the golden
@@ -130,6 +153,9 @@ const (
 	assetKernel    = "kata-kernel"
 	assetImage     = "kata-image"
 	assetVirtiofsd = "virtiofsd"
+	// assetUpperDisk is the empty ext4 image upper disks start from
+	// (rootfsdisk.go). Only the RootfsUpperDisks preview gate needs it.
+	assetUpperDisk = "rootfs-upper-disk"
 
 	// guestImagePmemID names the virtio-pmem device that carries the guest
 	// image, in the VM config and so in every snapshot's config.json.
@@ -436,7 +462,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	upperDone := make(chan error, 1)
 	upperJoined := false
 	go func() {
-		upperDone <- stageRootfsUpper(p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers))
+		upperDone <- stageRootfsUpper(ctx, p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers))
 	}()
 	defer func() {
 		if !upperJoined {
@@ -491,24 +517,11 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return err
 	}
 
-	// Assemble each container's merged rootfs on the host (overlay of image lower +
-	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
-	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
-	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
 	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU, s.leafMemoryHigh(p.size.MemoryBytes))
 	if err != nil {
 		return err
 	}
 	defer leaf.Close()
-	vfsdProc, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if retErr != nil {
-			vfsdProc.Stop()
-		}
-	}()
 
 	// Launch a bare VMM (CH + api-socket); ateworker owns this process for teardown.
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
@@ -528,13 +541,47 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		}
 	}()
 
-	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/pmem0 +
-	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
-	// host-side overlay upper through the shared mount). The console log is also read
-	// on a failed agent dial below, so keep it here.
+	// Upper disks need the agent as PID 1, which syncs and powers off the
+	// guest for a ROOTFS checkpoint (powerOffGuest). A ROOTFS restore keeps the
+	// uppers its snapshot had.
+	agentIsInit := agentInit(ctx, client.Info())
+	if s.upperDisks && agentIsInit && p.rootfsUpperSnapshotDir == "" {
+		img := paths[assetUpperDisk]
+		if img == "" {
+			return fmt.Errorf("the RootfsUpperDisks preview gate needs the SandboxConfig to define the %q asset", assetUpperDisk)
+		}
+		if err := makeUpperDisks(rootfsUpperDir(p.actorDirs), img, containerNames(containers)); err != nil {
+			return err
+		}
+	}
+	disks, diskMounts, err := upperDisks(rootfsUpperDir(p.actorDirs), ctrs)
+	if err != nil {
+		return err
+	}
+	if err := checkUpperDiskSupport(disks, agentIsInit); err != nil {
+		return err
+	}
+
+	// Assemble each container's merged rootfs on the host (overlay of image lower +
+	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
+	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
+	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
+	vfsdProc, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			vfsdProc.Stop()
+		}
+	}()
+
+	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/pmem0,
+	// the virtio-fs device, and a virtio-blk disk per upper disk). The console log
+	// is also read on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.guestDebug)
+		agentIsInit, s.guestDebug, disks)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -591,7 +638,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	}()
 
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
-	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
+	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs, diskMounts); err != nil {
 		return err
 	}
 	tContainers := time.Now()
@@ -695,7 +742,12 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*child.Process, error) {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
-		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
+		if hasUpperDisk(upperBase, c.name) {
+			// The guest mounts the overlay. The share serves the lower.
+			if err := kata.ReconstructSharedDirFromImage(ctx, c.bundleRootfs, id, c.id); err != nil {
+				return nil, fmt.Errorf("while staging the rootfs lower for %q: %w", c.name, err)
+			}
+		} else if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, c.name, id, c.id); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
@@ -790,6 +842,7 @@ func initParams(agentInit bool) string {
 // buildVMConfig assembles the cloud-hypervisor VmConfig.
 //
 // The disk-backed rootfs upper share (see rootfsupper.go) is always present.
+// disks are the upper disks (rootfsdisk.go).
 //
 // The guest console is a virtio-console (hvc0), not the emulated UART. Every byte
 // written to an 8250/pl011 traps to the VMM, and a kata guest prints ~340 lines
@@ -799,7 +852,7 @@ func initParams(agentInit bool) string {
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
 // map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
-func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
+func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool, disks []ch.DiskConfig) ch.VmConfig {
 	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
 		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
 		initParams(agentInit)
@@ -821,6 +874,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only
 		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
 		Pmem:     []ch.PmemConfig{{ID: guestImagePmemID, File: image, DiscardWrites: true}},
+		Disks:    disks,
 		Fs:       buildFsConfigs(id),
 		Balloon:  &ch.BalloonConfig{FreePageReporting: true},
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
@@ -854,16 +908,18 @@ func buildFsConfigs(id string) []ch.FsConfig {
 // startActorContainers performs the post-boot kata-agent setup the shim normally
 // does at boot: establish the sandbox once (mounting the kataShared virtio-fs base),
 // configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
-// container on its own overlay rootfs. On failure it dumps guest diagnostics.
-func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
+// container on its own overlay rootfs. diskMounts has the guest mount of each
+// upper disk by container name. On failure it dumps guest diagnostics.
+func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer, diskMounts map[string]*kata.UpperDisk) error {
 	// Establish the agent sandbox + the kataShared virtio-fs mount (every
 	// container's merged rootfs, durable volumes, CSI volumes, and system-info
 	// volumes). All containers share it, so use the first container's hostname.
 	tStart := time.Now()
 	sbCtx, sbCancel := context.WithTimeout(ctx, 20*time.Second)
 	err := ac.CreateSandboxForActor(sbCtx, kata.CreateSandboxOpts{
-		SandboxID: id,
-		Hostname:  ctrs[0].spec.Hostname,
+		SandboxID:  id,
+		Hostname:   ctrs[0].spec.Hostname,
+		UpperDisks: sandboxUpperDisks(ctrs, diskMounts),
 	})
 	sbCancel()
 	if err != nil {
@@ -887,7 +943,7 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, vsockPath, c, diskMounts[c.name]); err != nil {
 			return err
 		}
 	}
@@ -900,13 +956,14 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<id>/rootfs). On failure it
-// dumps the guest's view of the shared tree.
+// stock kata flow: create + start against shared/<id>/rootfs), or on a guest
+// overlay over its upper disk when disk is set. On failure it dumps the guest's
+// view of the shared tree.
 //
 // Its spec binds every declared volume at its mount path.
-func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer, disk *kata.UpperDisk) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
+	err := ac.StartRootfsContainer(cCtx, c.id, c.spec, disk)
 	cancel()
 	if err != nil {
 		if s.guestDebug {

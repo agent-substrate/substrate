@@ -26,6 +26,7 @@ type VmConfig struct {
 	Cpus     CpusConfig      `json:"cpus"`
 	Memory   MemoryConfig    `json:"memory"`
 	Payload  PayloadConfig   `json:"payload"`
+	Disks    []DiskConfig    `json:"disks,omitempty"`
 	Pmem     []PmemConfig    `json:"pmem,omitempty"`
 	Fs       []FsConfig      `json:"fs,omitempty"`
 	Balloon  *BalloonConfig  `json:"balloon,omitempty"`
@@ -53,7 +54,7 @@ type FsConfig struct {
 }
 
 // PlatformConfig sets VM-wide platform options. NumPciSegments must be >1 when a
-// virtio-fs device sits on a non-zero PCI segment (kata puts fs on segment 1).
+// device sits on a non-zero PCI segment (kata puts fs on segment 1).
 type PlatformConfig struct {
 	NumPciSegments int32 `json:"num_pci_segments,omitempty"`
 }
@@ -86,6 +87,18 @@ type PmemConfig struct {
 	// If true, maps File with MAP_PRIVATE so guest writes land in a private
 	// in-memory copy.
 	DiscardWrites bool `json:"discard_writes,omitempty"`
+}
+
+// DiskConfig is a virtio-blk disk: a container's writable rootfs upper (see
+// cmd/ateworker-microvm/rootfsdisk.go).
+type DiskConfig struct {
+	Path       string `json:"path"`
+	Readonly   bool   `json:"readonly"`
+	Direct     bool   `json:"direct"`
+	NumQueues  int32  `json:"num_queues,omitempty"`
+	QueueSize  int32  `json:"queue_size,omitempty"`
+	ImageType  string `json:"image_type,omitempty"`
+	PciSegment int32  `json:"pci_segment,omitempty"`
 }
 
 // RngConfig sets the entropy source (kata uses /dev/urandom).

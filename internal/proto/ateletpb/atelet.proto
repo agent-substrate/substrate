@@ -1228,6 +1228,10 @@ message RestoreResponse {
   // The epoch of the worker process that restored the workload, as it
   // registered with the control plane.
   int64 worker_epoch = 1;
+
+  // The fidelity the worker restored the actor at. It is lower than the
+  // request's when the snapshot cannot serve the requested fidelity.
+  SnapshotFidelity fidelity = 2;
 }
 
 message PromoteSnapshotRequest {

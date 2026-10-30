@@ -1338,7 +1338,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
-	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch, Fidelity: fidelity}, nil
 }
 
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {

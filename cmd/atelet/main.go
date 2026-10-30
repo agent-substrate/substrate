@@ -1296,6 +1296,19 @@ func toWorkerFidelity(fidelity ateletpb.SnapshotFidelity) ateworkerpb.SnapshotFi
 	}
 }
 
+func fromWorkerFidelity(fidelity ateworkerpb.SnapshotFidelity) ateletpb.SnapshotFidelity {
+	switch fidelity {
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	default:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+	}
+}
+
 func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, rec *sandboxAssetsRecord) error {
 	snapshotRoot := ateletpath.ActorSnapshotPath(req.GetActorUid())
 	root, err := os.OpenRoot(snapshotRoot)
@@ -1894,7 +1907,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, s.boundRetryableRestoreError(actorUID, req.GetSnapshot().GetSnapshotUuid(), workerRestoreError(ctx, err))
 	}
 
-	return &ateletpb.RestoreResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: workerResp.GetWorkerEpoch(), Fidelity: fromWorkerFidelity(workerResp.GetFidelity())}, nil
 }
 
 // workerCallError is atelet's error for a failed call to the worker's rpc. A

@@ -85,11 +85,11 @@ func containerNames(containers []*ateworkerpb.Container) []string {
 // a ROOTFS or MEMORY snapshot left in snapshotDir. Either way any previous
 // activation's contents are gone first. Must run after CleanupSandboxState
 // has dropped the overlay mounts that used the dir.
-func stageRootfsUpper(actorDirs *ateworkerpb.ActorDirs, snapshotDir string, containers []string) error {
+func stageRootfsUpper(ctx context.Context, actorDirs *ateworkerpb.ActorDirs, snapshotDir string, containers []string) error {
 	if snapshotDir == "" {
 		return resetRootfsUpperDir(actorDirs)
 	}
-	return untarRootfsUpper(rootfsUpperDir(actorDirs), snapshotDir, containers)
+	return untarRootfsUpper(ctx, rootfsUpperDir(actorDirs), snapshotDir, containers)
 }
 
 // resetRootfsUpperDir gives a cold boot a pristine upper directory: a cold
@@ -109,12 +109,18 @@ func resetRootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) error {
 }
 
 // tarRootfsUpper archives each container's rootfs upperdir under dir into the
-// checkpoint directory, one tar per container. The caller must have paused the
-// guest first: virtiofsd is write-through, so a completed guest write has
-// reached the host overlay's upper by then, but a running guest could still
-// add more after the walk.
+// checkpoint directory, one tar per container. A container with an upper
+// disk gets its image linked instead (rootfsdisk.go). The caller must have
+// paused the guest first: virtiofsd is write-through, so a completed guest
+// write has reached the host overlay's upper by then, but a running guest
+// could still add more after the walk.
 func tarRootfsUpper(ctx context.Context, dir, checkpointDir string, containers []string) error {
 	for _, cid := range containers {
+		if ok, err := linkUpperDisk(ctx, dir, checkpointDir, cid); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
 		name, err := rootfsUpperTarFile(cid)
 		if err != nil {
 			return err
@@ -132,8 +138,10 @@ func tarRootfsUpper(ctx context.Context, dir, checkpointDir string, containers [
 // mounted (the mounts consume these contents). The directory is recreated from
 // scratch: nothing else owns it, and stale contents from a previous activation
 // would corrupt the overlay state the guest's find-paths re-opens. Every
-// directory above the upperdirs is created here, never taken from the tar.
-func untarRootfsUpper(dir, snapshotDir string, containers []string) error {
+// directory above the upperdirs is created here, never taken from the tar. A
+// container whose snapshot has an upper disk image gets the image back
+// instead (rootfsdisk.go).
+func untarRootfsUpper(ctx context.Context, dir, snapshotDir string, containers []string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("while clearing rootfs upper dir %q: %w", dir, err)
 	}
@@ -144,6 +152,11 @@ func untarRootfsUpper(dir, snapshotDir string, containers []string) error {
 		name, err := rootfsUpperTarFile(cid)
 		if err != nil {
 			return err
+		}
+		if ok, err := restoreUpperDisk(ctx, dir, snapshotDir, cid); err != nil {
+			return fmt.Errorf("while restoring the upper disk of %q: %w", cid, err)
+		} else if ok {
+			continue
 		}
 		upper, _, err := kata.MkdirUpperWorkDirs(dir, cid)
 		if err != nil {

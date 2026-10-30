@@ -18,11 +18,12 @@
 # ateworker-microvm fetches at runtime (fetch-not-bake). Run this on a Linux
 # host of the TARGET arch.
 #
-# Produces, under $OUT, the four assets named as the SandboxConfig expects:
-#   cloud-hypervisor  virtiofsd  vmlinux  rootfs.img
-# Every asset is downloaded rather than built, so all four have reproducible bytes:
-# paste their sha256 sums into the manifest
-# (manifests/microvm/sandboxconfig-microvm.yaml.tmpl).
+# Produces, under $OUT, the five assets named as the SandboxConfig expects:
+#   cloud-hypervisor  virtiofsd  vmlinux  rootfs.img  upper-disk.ext4.zst
+# The first four are downloaded. upper-disk.ext4.zst, the empty ext4 image of the
+# RootfsUpperDisks preview gate, is copied from this directory (upper-disk-image.sh
+# regenerates it). So all five have reproducible bytes: paste their sha256 sums into
+# the manifest (manifests/microvm/sandboxconfig-microvm.yaml.tmpl).
 #
 # ateworker drives the kata-agent directly (the kata containerd shim is NOT an asset). The
 # actor rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper), so virtiofsd IS an
@@ -55,6 +56,7 @@ CH_VER="${CH_VER:-v53.0}"
 # what kata ships.
 VIRTIOFSD_VER="1.14.0"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
+UPPER_DISK="${ROOT}/hack/microvm-assets/upper-disk.ext4.zst"
 
 case "$ARCH" in
   arm64) CH_ASSET="cloud-hypervisor-static-aarch64" ;;
@@ -71,8 +73,8 @@ esac
 # dir should say which one it holds.
 STAMP_FILE=".asset-versions"
 asset_stamp() {
-  printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\n' \
-    "$ARCH" "$KATA_VER" "$CH_VER" "$VIRTIOFSD_VER"
+  printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\nupper-disk=%s\n' \
+    "$ARCH" "$KATA_VER" "$CH_VER" "$VIRTIOFSD_VER" "$(sha256sum "${UPPER_DISK}" | cut -d' ' -f1)"
 }
 
 if [ "${1:-}" = "--print-stamp" ]; then
@@ -116,10 +118,12 @@ curl -fSL -o "${OUT}/cloud-hypervisor" \
   "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VER}/${CH_ASSET}"
 chmod +x "${OUT}/cloud-hypervisor"
 
+cp "${UPPER_DISK}" "${OUT}/upper-disk.ext4.zst"
+
 echo
 echo ">> Assets assembled in ${OUT}:"
 cd "${OUT}"
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
+for f in cloud-hypervisor virtiofsd vmlinux rootfs.img upper-disk.ext4.zst; do
   [ -f "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
 # The stamp names a virtiofsd version, so confirm the tarball carried that one before
@@ -134,11 +138,11 @@ if GOT_VIRTIOFSD="$("${OUT}/virtiofsd" --version 2>/dev/null | head -1 | awk '{p
   fi
   echo "virtiofsd ${GOT_VIRTIOFSD}"
 fi
-# Written only once all four are present and virtiofsd matches, and only after the
+# Written only once all five are present and virtiofsd matches, and only after the
 # up-front rm, so the stamp exists exactly when this dir was assembled end-to-end by
 # these pins.
 asset_stamp > "${OUT}/${STAMP_FILE}"
 echo
-echo ">> sha256 (paste all four into the per-arch block in"
+echo ">> sha256 (paste all five into the per-arch block in"
 echo ">> manifests/microvm/sandboxconfig-microvm.yaml.tmpl):"
-sha256sum cloud-hypervisor virtiofsd vmlinux rootfs.img
+sha256sum cloud-hypervisor virtiofsd vmlinux rootfs.img upper-disk.ext4.zst

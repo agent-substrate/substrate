@@ -573,6 +573,12 @@ message RestoreWorkloadRequest {
 message RestoreWorkloadResponse {
   // The epoch this worker process registered with.
   int64 worker_epoch = 1;
+
+  // The fidelity the worker restored the actor at. It is lower than the
+  // request's when the snapshot cannot serve the requested fidelity: a
+  // ROOTFS restore of a MEMORY snapshot whose rootfs is only consistent with
+  // its memory restores at VOLUMES.
+  SnapshotFidelity fidelity = 2;
 }
 
 message GetWorkloadStatsRequest {

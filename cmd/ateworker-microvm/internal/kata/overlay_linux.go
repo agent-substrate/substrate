@@ -380,7 +380,9 @@ func setNosuidNodev(dst string) error {
 
 // ReconstructSharedDirFromImage bind-mounts a container's OCI image rootfs at
 // <cid>/rootfs under SharedDir(restoreID) so virtiofsd serves it as the read-only
-// lower. LEGACY restores only: guests from retired guest-tmpfs-upper snapshots hold
+// lower. Two users: a container with an upper disk, whose guest overlay uses
+// this as its lower (see UpperDisk), and LEGACY restores: guests from retired
+// guest-tmpfs-upper snapshots hold
 // this plain image tree open (their overlay upper lives inside the restored guest
 // memory), so the share must present the bare image, not a merged overlay. The bind
 // copies nothing on the host. cid is stable across the actor's lineage.
@@ -415,46 +417,147 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 type CreateSandboxOpts struct {
 	SandboxID string
 	Hostname  string
+	// UpperDisks are mounted with the sandbox (see UpperDiskMount).
+	UpperDisks []UpperDisk
 }
 
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
 // (the merged rootfs trees, durable volumes, CSI volumes, and system-info
-// volumes every container runs on). Mirrors kata startSandbox.
+// volumes every container runs on) and any rootfs upper disks. Mirrors kata
+// startSandbox.
 func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSandboxOpts) error {
+	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
+		Hostname:  opts.Hostname,
+		SandboxId: opts.SandboxID,
+		Storages:  sandboxStorages(opts),
+	})
+}
+
+// sandboxStorages builds the agent Storage list: the virtio-fs share, then each
+// upper disk.
+//
+// Upper disks use virtioFSDriver because the agent's virtio-fs handler is a
+// plain mount(2) of Source (src/agent/src/storage/fs_handler.rs). Its block
+// handlers wait for a hotplug uevent, and a cold-plugged disk sends none.
+func sandboxStorages(opts CreateSandboxOpts) []*agentpb.Storage {
 	storages := []*agentpb.Storage{{
 		Driver:     virtioFSDriver,
 		Source:     FsTag,
 		Fstype:     typeVirtioFS,
 		MountPoint: guestSharedDir,
 	}}
-	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
-		Hostname:  opts.Hostname,
-		SandboxId: opts.SandboxID,
-		Storages:  storages,
-	})
+	for _, d := range opts.UpperDisks {
+		storages = append(storages, &agentpb.Storage{
+			Driver:     virtioFSDriver,
+			Source:     d.Device,
+			Fstype:     d.Fstype,
+			Options:    d.Options,
+			MountPoint: d.MountPoint,
+		})
+	}
+	return storages
 }
 
-// StartRootfsContainer creates + starts one container on the shared merged rootfs —
-// the stock kata flow: the agent's setup_bundle binds shared/<cid>/rootfs to
-// /run/kata-containers/<cid>/rootfs and the container runs there. Writable: the
-// host-side overlay upper receives the writes (the guest mounts no overlay itself).
-func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec) error {
+// StartRootfsContainer creates and starts one container. With a nil disk it
+// runs on the host-merged rootfs, the stock kata flow: the agent's
+// setup_bundle binds shared/<cid>/rootfs to /run/kata-containers/<cid>/rootfs
+// and the host overlay's upper takes the writes. With a disk, the agent first
+// mounts the guest overlay at /run/kata-containers/<cid>/rootfs, with the
+// image from the share as the lower and the disk as the upper.
+func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec, disk *UpperDisk) error {
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: GuestSharedRootfs(cid), Readonly: false}
+	req := &agentpb.CreateContainerRequest{
+		ContainerId: cid,
+		ExecId:      cid,
+		OCI:         pbSpec,
+	}
+	if disk != nil {
+		pbSpec.Root.Path = guestContainerRootfs(cid)
+		req.Storages = []*agentpb.Storage{disk.overlayStorage(cid)}
+	}
 	// Per-container cgroup under the shared /actor parent, so the guest
 	// kernel accounts an actor's containers hierarchically (see agentstats).
 	if pbSpec.Linux != nil {
 		pbSpec.Linux.CgroupsPath = "/actor/" + cid
 	}
-	if err := a.CreateContainer(ctx, &agentpb.CreateContainerRequest{
-		ContainerId: cid,
-		ExecId:      cid,
-		OCI:         pbSpec,
-	}); err != nil {
+	if err := a.CreateContainer(ctx, req); err != nil {
 		return fmt.Errorf("creating rootfs container %q: %w", cid, err)
 	}
 	if err := a.StartContainer(ctx, cid); err != nil {
 		return fmt.Errorf("starting rootfs container %q: %w", cid, err)
 	}
 	return nil
+}
+
+// A container with an upper disk (cmd/ateworker-microvm/rootfsdisk.go) has
+// its overlay mounted in the guest. The share serves the bare image at
+// shared/<cid>/rootfs (ReconstructSharedDirFromImage) as the lower. upperdir
+// and workdir are fs/ and work/ on the disk.
+
+const (
+	// guestContainerBase is the kata agent's container state directory.
+	guestContainerBase = "/run/kata-containers/"
+	// overlayfsDriver is the agent storage driver for overlay mounts.
+	overlayfsDriver = "overlayfs"
+	// MaxUpperDisks is how many upper disks the /dev/vd[a-z] names cover.
+	MaxUpperDisks = 26
+)
+
+// guestContainerRootfs is the in-guest rootfs path for cid.
+func guestContainerRootfs(cid string) string { return guestContainerBase + cid + "/rootfs" }
+
+// UpperDisk is a container's rootfs upper disk as the guest sees it.
+type UpperDisk struct {
+	// Device is the guest block device (/dev/vd<x>).
+	Device     string
+	Fstype     string
+	Options    []string
+	MountPoint string
+}
+
+// UpperDiskMount returns the sandbox mount for cid's upper disk, the
+// device-th virtio-blk disk in the VM config. Upper disks are the VM's only
+// virtio-blk devices and probe in config order, so the index names the
+// device. noinit_itable skips zeroing the lazily initialized inode tables.
+// discard frees the host blocks of deleted files, so the image a snapshot
+// ships holds only live data.
+func UpperDiskMount(device int, cid string) (UpperDisk, error) {
+	if device < 0 || device >= MaxUpperDisks {
+		return UpperDisk{}, fmt.Errorf("upper disk %d is out of range: at most %d containers can keep their upper on a disk", device, MaxUpperDisks)
+	}
+	return UpperDisk{
+		Device:     "/dev/vd" + string(rune('a'+device)),
+		Fstype:     "ext4",
+		Options:    []string{"noinit_itable", "discard"},
+		MountPoint: guestContainerBase + "upper/" + cid,
+	}, nil
+}
+
+// overlayOptions returns the guest overlay's mount options for cid with its
+// upper on d. metacopy=off,index=off keep the upper free of lower inode
+// references, for the reason StageMergedRootfs gives. There is no volatile
+// because the disk keeps its workdir across mounts.
+//
+// The lower ends in "/." because the image is its own mount on the host.
+// --announce-submounts shows it to the guest as an automount point, and
+// overlayfs rejects a lowerdir that still needs its automount. Walking
+// through "." triggers the automount.
+func (d UpperDisk) overlayOptions(cid string) []string {
+	return []string{
+		"lowerdir=" + GuestSharedRootfs(cid) + "/.",
+		"upperdir=" + d.MountPoint + "/fs",
+		"workdir=" + d.MountPoint + "/work",
+		"metacopy=off", "index=off",
+	}
+}
+
+func (d UpperDisk) overlayStorage(cid string) *agentpb.Storage {
+	return &agentpb.Storage{
+		Driver:     overlayfsDriver,
+		Source:     "overlay",
+		Fstype:     "overlay",
+		Options:    d.overlayOptions(cid),
+		MountPoint: guestContainerRootfs(cid),
+	}
 }

@@ -146,6 +146,16 @@ func (a *AgentClient) CreateContainer(ctx context.Context, req *agentpb.CreateCo
 	return nil
 }
 
+// DestroySandbox destroys the sandbox's containers and stops the agent, which,
+// as the guest's PID 1, then syncs and powers the guest off. It does not
+// unmount the sandbox's storages. Mirrors grpc.AgentService/DestroySandbox.
+func (a *AgentClient) DestroySandbox(ctx context.Context) error {
+	if err := a.client.Call(ctx, "grpc.AgentService", "DestroySandbox", &agentpb.DestroySandboxRequest{}, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent DestroySandbox: %w", err)
+	}
+	return nil
+}
+
 // ReseedRandomDev feeds fresh entropy into the guest's random device: the agent
 // writes data into /dev/random and reseeds the kernel CRNG. This is how a restored
 // or cloned guest diverges from the entropy state frozen in its snapshot. Mirrors
