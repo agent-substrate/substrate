@@ -1812,6 +1812,10 @@ func TestValidateContainer(t *testing.T) {
 			obj:  caps(nil, []string{"net_bind_service"}),
 			want: field.ErrorList{field.Invalid(capsPath.Child("drop").Index(0), nil, "")},
 		}, {
+			name: "capabilities: unknown name rejected",
+			obj:  caps(nil, []string{"NET_ADIMN"}),
+			want: field.ErrorList{field.Invalid(capsPath.Child("drop").Index(0), nil, "")},
+		}, {
 			name: "capabilities: duplicate rejected by the set",
 			obj:  caps([]string{"SYS_TIME", "SYS_TIME"}, nil),
 			want: field.ErrorList{field.Duplicate(capsPath.Child("add").Index(1), nil)},
