@@ -56,7 +56,7 @@ func (p StoragePrefix) String() string { return p.uri }
 // snapshot URI or an owner's prefix. It rejects a bare bucket, so a prefix
 // can never name every object in a bucket.
 func ParseStoragePrefix(uri string) (StoragePrefix, error) {
-	u, err := parseStorageURI(uri)
+	u, err := parseStorageURI("storage prefix", uri)
 	if err != nil {
 		return StoragePrefix{}, err
 	}
@@ -122,7 +122,7 @@ func (o SnapshotOwner) Prefix(location string) (StoragePrefix, error) {
 	if err := o.validate(); err != nil {
 		return StoragePrefix{}, err
 	}
-	if _, err := parseStorageURI(location); err != nil {
+	if _, err := parseStorageURI("snapshot location", location); err != nil {
 		return StoragePrefix{}, err
 	}
 	uri, err := url.JoinPath(location, atespacesPathSegment, o.atespace, o.kind, o.id)

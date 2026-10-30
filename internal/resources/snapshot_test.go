@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -607,12 +608,16 @@ func TestParseStoragePrefix(t *testing.T) {
 		{uri: "gs://bucket/", wantErr: true},
 		{uri: "gs:///root", wantErr: true},
 		{uri: "gs://bucket/root?x=1", wantErr: true},
+		{uri: "gs://bucket/root?", wantErr: true},
 		{uri: "gs://user@bucket/root", wantErr: true},
 	} {
 		got, err := ParseStoragePrefix(tc.uri)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("ParseStoragePrefix(%q) error = %v, wantErr %v", tc.uri, err, tc.wantErr)
 			continue
+		}
+		if err != nil && !strings.HasPrefix(err.Error(), "invalid storage prefix ") {
+			t.Errorf("ParseStoragePrefix(%q) error = %v, want an invalid storage prefix error", tc.uri, err)
 		}
 		if err == nil && got.String() != tc.uri {
 			t.Errorf("ParseStoragePrefix(%q) = %q", tc.uri, got)

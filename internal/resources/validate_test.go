@@ -169,6 +169,7 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"unparseable", "://bucket", true},
 		// Appended object names must not be swallowed by URL components.
 		{"query", "gs://bucket/path?x=1", true},
+		{"empty query", "gs://bucket/path?", true},
 		{"fragment", "gs://bucket/path#frag", true},
 		{"userinfo", "gs://user@bucket/path", true},
 		// Opaque form (no //) parses with an empty host, so it is rejected
@@ -209,6 +210,12 @@ func TestValidateSnapshotLocation(t *testing.T) {
 				t.Errorf("ValidateSnapshotLocation(%q) err = %v, wantErr %v", tt.location, err, tt.wantErr)
 			}
 		})
+	}
+
+	// An empty segment gets its own message, not the allowlist's.
+	const emptySegment = "gs://bucket/a//b"
+	if err := ValidateSnapshotLocation(emptySegment); err == nil || !strings.Contains(err.Error(), "must not contain an empty path segment") {
+		t.Errorf("ValidateSnapshotLocation(%q) err = %v, want an empty path segment error", emptySegment, err)
 	}
 }
 
