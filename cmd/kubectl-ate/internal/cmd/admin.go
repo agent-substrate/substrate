@@ -259,13 +259,7 @@ func updateJWTPool(ctx context.Context, errOut io.Writer, secrets typedcorev1.Se
 		if err != nil {
 			return fmt.Errorf("while marshaling pool: %w", err)
 		}
-		jwks, err := pool.JWKS()
-		if err != nil {
-			return fmt.Errorf("while publishing the pool's public keys: %w", err)
-		}
-		// Written together so a verifier reading "jwks" never lags "pool".
 		secret.Data["pool"] = wire
-		secret.Data["jwks"] = jwks
 		if _, err := secrets.Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("while writing pool secret: %w", err)
 		}
@@ -337,11 +331,6 @@ func newJWTPoolSecret(namespace, name, algorithm, keyID string) (*corev1.Secret,
 	if err != nil {
 		return nil, "", fmt.Errorf("while generating JWT authority pool: %w", err)
 	}
-	jwks, err := localjwtauthority.PublicJWKS(poolBytes)
-	if err != nil {
-		return nil, "", fmt.Errorf("while publishing the pool's public keys: %w", err)
-	}
-
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
@@ -349,7 +338,6 @@ func newJWTPoolSecret(namespace, name, algorithm, keyID string) (*corev1.Secret,
 		},
 		Data: map[string][]byte{
 			"pool": poolBytes,
-			"jwks": jwks,
 		},
 	}, id, nil
 }

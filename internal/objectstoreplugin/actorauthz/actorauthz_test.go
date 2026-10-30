@@ -78,7 +78,11 @@ func newPool(t *testing.T) *localjwtauthority.ConcretePool {
 func newSigner(t *testing.T) (*signer, *oidcjwt.Verifier) {
 	t.Helper()
 	pool := newPool(t)
-	jwks, err := pool.JWKS()
+	keys, err := pool.VerificationKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwks, err := localjwtauthority.JWKS(keys)
 	if err != nil {
 		t.Fatal(err)
 	}

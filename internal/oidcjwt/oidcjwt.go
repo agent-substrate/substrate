@@ -30,7 +30,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -187,33 +186,6 @@ type Verifier struct {
 	lastRefresh           time.Time
 	lastFailedRefresh     time.Time
 	lastUnknownKeyRefresh time.Time
-}
-
-type fileKeySource struct {
-	path string
-}
-
-func (s fileKeySource) Keys(ctx context.Context) ([]*KeyAndID, error) {
-	b, err := os.ReadFile(s.path)
-	if err != nil {
-		return nil, fmt.Errorf("while reading JWKS file: %w", err)
-	}
-	var set jwkSetT
-	if err := json.Unmarshal(b, &set); err != nil {
-		return nil, fmt.Errorf("while parsing JWKS file %s: %w", s.path, err)
-	}
-	return keysFromJWKSet(ctx, set, "file "+s.path)
-}
-
-// FileKeySource reads a JWK set from a file, for a verifier that is handed the
-// issuer's public keys directly rather than fetching them over discovery. The
-// file is re-read on every call, so a rotated set is picked up on the
-// verifier's next refresh. For that to work the file must be replaced
-// atomically, as a projected volume mounted without subPath is: an in-place
-// rewrite can be read half-written, and a subPath mount never sees the
-// rotation. The file holds public keys only.
-func FileKeySource(path string) KeySource {
-	return fileKeySource{path: path}
 }
 
 // Option configures a Verifier.
