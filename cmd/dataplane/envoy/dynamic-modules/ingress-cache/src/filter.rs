@@ -275,11 +275,9 @@ fn read_learned_binding<EHF: EnvoyHttpFilter>(
   Some((ip, spiffe_id))
 }
 
-/// Reports whether the request may have a body. Envoy doesn't buffer request bodies, so a
-/// replay could only resend the headers: a request counts as bodiless only if it ends with
-/// its headers or has `content-length: 0`. Envoy's HTTP/1 codec delivers a bodiless
-/// request's headers with `end_of_stream`, so this assumes a body for chunked requests,
-/// HTTP/2 requests without END_STREAM, and upgrades, whatever their method.
+/// Reports whether the request may have a body, which a replay can't resend because Envoy
+/// doesn't buffer it. A request is bodiless only if it ends with its headers or has
+/// `content-length: 0`, so chunked requests and WS upgrades still count as having a body.
 fn request_has_body<EHF: EnvoyHttpFilter>(envoy_filter: &EHF, end_of_stream: bool) -> bool {
   if end_of_stream {
     return false;
