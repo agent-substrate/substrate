@@ -38,6 +38,9 @@ func SandboxClass() string { return os.Getenv(sandboxClassEnv) }
 // Assertions that only hold for one runtime gate on this.
 func IsMicroVM() bool { return SandboxClass() == SandboxClassMicroVM }
 
+// IsAgentGateway reports whether the suites run against the agentgateway lane.
+func IsAgentGateway() bool { return os.Getenv(AtenetDataplaneEnv) == "agentgateway" }
+
 // Fixture identifies an installed WorkerPool + ActorTemplate pair (both carry
 // the same name) that suites either create Actors from directly or copy the
 // resolved runtime — sandbox class, worker image, container images — out of.
