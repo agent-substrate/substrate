@@ -108,6 +108,7 @@ func TestMain(m *testing.M) {
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		SystemNamespace: installdefaults.SystemNamespace,
+		Recorder:        mgr.GetEventRecorder("networkpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "netpolicy controller setup failed: %v\n", err)
 		os.Exit(1)

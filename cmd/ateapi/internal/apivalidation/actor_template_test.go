@@ -167,9 +167,9 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		nil,
 	}, {
-		"snapshot_config.storage_location is not needed when the preview gate is off",
+		"valid storage_location",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
-			tmpl.SnapshotConfig.StorageLocation = ""
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots"
 		})},
 		nil,
 	}, {
@@ -184,6 +184,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots?versions=true"
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
+	}, {
+		"storage_location under another actor's prefix",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d", "")},
+	}, {
+		"storage_location with a dot in a path segment",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots.v1"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots.v1", "")},
 	}, {
 		// preferred_fidelity has no default of its own at this layer, so leaving it
 		// unset is a required violation.
@@ -230,6 +242,10 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 				want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "golden_egress_policy"), "")}
 				wantWithPreview = map[string]field.ErrorList{"GoldenEgressPolicy": tt.want, "ALL": tt.want}
 			}
+			if tt.req.GetActorTemplate().GetSnapshotConfig().GetStorageLocation() != "" {
+				want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "snapshot_config", "storage_location"), "")}
+				wantWithPreview = map[string]field.ErrorList{"PerTemplateSnapshotLocation": tt.want, "ALL": tt.want}
+			}
 			assertValidate(t, func() field.ErrorList {
 				return ValidateCreateActorTemplateRequest(context.Background(), tt.req)
 			}, want, wantWithPreview)
@@ -241,6 +257,7 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	setPreviewForTest(t, "ALL")
 	req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 		tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, StorageClassName: "fast-ssd"}}}}
+		tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots"
 	})}
 
 	t.Run("allowed", func(t *testing.T) {
@@ -256,9 +273,9 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 	})
 }
 
-func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocationOptIn(t *testing.T) {
+func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocation(t *testing.T) {
 	storageLocation := field.NewPath("actor_template", "snapshot_config", "storage_location")
-	withoutLocation := func(tmpl *ateapi.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" }
+	withLocation := func(tmpl *ateapi.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots" }
 	tests := []struct {
 		name   string
 		gates  string
@@ -266,29 +283,34 @@ func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocationOptIn(t *
 		mutate func(*ateapi.ActorTemplate)
 		want   field.ErrorList
 	}{{
+		name:   "gate off, opted in, location set",
+		mutate: withLocation,
+		want:   field.ErrorList{field.Forbidden(storageLocation, "")},
+	}, {
 		name:   "gate off, opted out, location set",
 		optOut: true,
+		mutate: withLocation,
+		want:   field.ErrorList{field.Forbidden(storageLocation, "")},
 	}, {
 		name:   "gate off, opted out, no location",
 		optOut: true,
-		mutate: withoutLocation,
 	}, {
 		name:   "gate on, opted out, location set",
 		gates:  "PerTemplateSnapshotLocation",
 		optOut: true,
+		mutate: withLocation,
 		want:   field.ErrorList{field.Forbidden(storageLocation, "")},
 	}, {
 		name:   "gate on, opted out, no location",
 		gates:  "PerTemplateSnapshotLocation",
 		optOut: true,
-		mutate: withoutLocation,
 	}, {
-		name:  "gate on, opted in, location set",
-		gates: "PerTemplateSnapshotLocation",
-	}, {
-		name:   "gate on, opted in, no location",
+		name:   "gate on, opted in, location set",
 		gates:  "PerTemplateSnapshotLocation",
-		mutate: withoutLocation,
+		mutate: withLocation,
+	}, {
+		name:  "gate on, opted in, no location",
+		gates: "PerTemplateSnapshotLocation",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -471,13 +493,15 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.SnapshotConfig.StorageLocation = "gs://" + strings.Repeat("x", 1020)
 		},
-		want: field.ErrorList{field.TooLong(field.NewPath("snapshot_config", "storage_location"), nil, 1024).WithOrigin("maxLength")},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("snapshot_config", "storage_location"), "")},
+		wantWithPreview: map[string]field.ErrorList{"PerTemplateSnapshotLocation": {field.TooLong(field.NewPath("snapshot_config", "storage_location"), nil, 1024).WithOrigin("maxLength")}},
 	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapi.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
 		// Optional with or without the gate: an empty field falls back to
 		// --snapshot-location.
-		want: nil,
+		want:            nil,
+		wantWithPreview: map[string]field.ErrorList{"PerTemplateSnapshotLocation": nil},
 	}, {
 		name: "unspecified snapshot scope",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
@@ -962,7 +986,6 @@ func validActorTemplate(mutations ...func(*ateapi.ActorTemplate)) *ateapi.ActorT
 		Metadata:   &ateapi.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
 		Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapi.SnapshotConfig{
-			StorageLocation:   "gs://my-bucket/snapshots",
 			PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		Resources: &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 512<<20)},

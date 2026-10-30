@@ -27,12 +27,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"sigs.k8s.io/yaml"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -615,6 +617,95 @@ func TestXdsServer_ServesSecretOverSds(t *testing.T) {
 	}
 	if got, want := tlsCert.GetWatchedDirectory().GetPath(), filepath.Dir(certPath); got != want {
 		t.Errorf("Expected watched directory '%s', got '%s'", want, got)
+	}
+}
+
+// TestXdsServer_AnswersClusterSecretsBeforeListeners replays Envoy's startup
+// over delta xDS, which the router manifest must configure. While warming
+// clusters, Envoy subscribes only to the secrets the clusters reference, and
+// asks for listeners (and their secrets) only after. The server has to answer
+// that partial secret request, or Envoy stalls until its 15s
+// initial_fetch_timeout.
+func TestXdsServer_AnswersClusterSecretsBeforeListeners(t *testing.T) {
+	var bootstrap struct {
+		DynamicResources struct {
+			AdsConfig struct {
+				APIType string `json:"api_type"`
+			} `json:"ads_config"`
+		} `json:"dynamic_resources"`
+	}
+	if err := yaml.Unmarshal([]byte(envoyConfigFrom(t, routerManifestPath, "atenet-router-envoy-config")), &bootstrap); err != nil {
+		t.Fatalf("parsing envoy.yaml: %v", err)
+	}
+	if got := bootstrap.DynamicResources.AdsConfig.APIType; got != "DELTA_GRPC" {
+		t.Fatalf("Router Envoy ads_config.api_type is %q; it must be DELTA_GRPC, since the state-of-the-world ADS cache ignores a partial secret request", got)
+	}
+
+	server := NewXdsServer(18000)
+	server.SetConfig(50053, "127.0.0.1")
+	server.SetTlsConfig(8443, "/run/servicedns.podcert.ate.dev/credential-bundle.pem")
+	server.SetDownstreamClientAuth("/run/podidentity.podcert.ate.dev/trust-bundle.pem", []string{"spiffe://cluster.local/ns/demo/sa/client"})
+	server.SetUpstreamTls("/run/podidentity.podcert.ate.dev/credential-bundle.pem", "/run/podidentity.podcert.ate.dev/trust-bundle.pem")
+	server.SetUpstreamConnect(true)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to create tcp listener: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go server.Serve(ctx, lis)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Failed to dial xDS server: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	streamCtx, streamCancel := context.WithTimeout(ctx, 10*time.Second)
+	t.Cleanup(streamCancel)
+	stream, err := discoverygrpc.NewAggregatedDiscoveryServiceClient(conn).DeltaAggregatedResources(streamCtx)
+	if err != nil {
+		t.Fatalf("Failed to open delta ADS stream: %v", err)
+	}
+
+	if err := stream.Send(&discoverygrpc.DeltaDiscoveryRequest{
+		Node:    &corev3.Node{Id: NodeID},
+		TypeUrl: resourcev3.ClusterType,
+	}); err != nil {
+		t.Fatalf("Failed to send CDS request: %v", err)
+	}
+	cds, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Failed to receive CDS response: %v", err)
+	}
+	if got := cds.GetTypeUrl(); got != resourcev3.ClusterType {
+		t.Fatalf("Expected a CDS response, got %s", got)
+	}
+
+	clusterSecrets := []string{UpstreamCertSecretName, UpstreamTrustSecretName}
+	if err := stream.Send(&discoverygrpc.DeltaDiscoveryRequest{
+		TypeUrl:                resourcev3.SecretType,
+		ResourceNamesSubscribe: clusterSecrets,
+	}); err != nil {
+		t.Fatalf("Failed to send SDS request: %v", err)
+	}
+	// A server that ignores the request leaves Recv blocked until streamCtx
+	// expires.
+	sds, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("No SDS response for the cluster secrets: %v", err)
+	}
+	if got := sds.GetTypeUrl(); got != resourcev3.SecretType {
+		t.Fatalf("Expected an SDS response, got %s", got)
+	}
+	var names []string
+	for _, r := range sds.GetResources() {
+		names = append(names, r.GetName())
+	}
+	slices.Sort(names)
+	if want := slices.Sorted(slices.Values(clusterSecrets)); !slices.Equal(names, want) {
+		t.Errorf("Expected SDS response with secrets %v, got %v", want, names)
 	}
 }
 
@@ -1652,23 +1743,39 @@ func TestXdsServer_UpdateSnapshot_DownstreamClientAuth(t *testing.T) {
 }
 
 // A TLS listener without client authentication would let any client reach any
-// actor, so UpdateSnapshot refuses to build one.
+// actor. With no allowlist UpdateSnapshot serves no TLS listener, and with an
+// allowlist but no CA it refuses to build one.
 func TestXdsServer_UpdateSnapshot_TLSListenerWithoutClientAuth(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		httpsPort      int
 		connectTLSPort int
+		caPath         string
+		allowed        []string
+		wantErr        bool
 	}{
-		{name: "HTTPS", httpsPort: 8443},
-		{name: "CONNECT-TLS", connectTLSPort: 8444},
+		{name: "HTTPS without allowlist", httpsPort: 8443, caPath: "/run/podidentity.podcert.ate.dev/trust-bundle.pem"},
+		{name: "CONNECT-TLS without allowlist", connectTLSPort: 8444, caPath: "/run/podidentity.podcert.ate.dev/trust-bundle.pem"},
+		{name: "HTTPS without CA", httpsPort: 8443, allowed: []string{"spiffe://cluster.local/ns/demo/sa/client"}, wantErr: true},
+		{name: "CONNECT-TLS without CA", connectTLSPort: 8444, allowed: []string{"spiffe://cluster.local/ns/demo/sa/client"}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := NewXdsServer(18000)
 			server.SetConfig(50053, "127.0.0.1")
 			server.SetConnectTLSPort(tc.connectTLSPort)
 			server.SetTlsConfig(tc.httpsPort, "/run/servicedns.podcert.ate.dev/credential-bundle.pem")
-			if err := server.UpdateSnapshot(); err == nil {
-				t.Fatal("UpdateSnapshot succeeded, want an error")
+			server.SetDownstreamClientAuth(tc.caPath, tc.allowed)
+			if tc.wantErr {
+				if err := server.UpdateSnapshot(); err == nil {
+					t.Fatal("UpdateSnapshot succeeded, want an error")
+				}
+				return
+			}
+			listeners := snapshotListeners(t, server)
+			for _, name := range []string{IngressHTTPSListener, "connect_terminate_tls"} {
+				if _, exists := listeners[name]; exists {
+					t.Errorf("TLS listener '%s' is served without an allowlist", name)
+				}
 			}
 		})
 	}

@@ -137,13 +137,12 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 // deploys as a plain pod, so the two directions cannot disagree about what a
 // working RPC is.
 func TestIngressGRPC(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 
-	fixture := deployGRPCEchoTemplate(t, ctx, env["BUCKET_NAME"])
+	fixture := deployGRPCEchoTemplate(t, ctx)
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "grpcingress", fixture)
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	ctx = metadata.AppendToOutgoingContext(ctx,
@@ -262,9 +261,9 @@ func TestIngressGRPC(t *testing.T) {
 // under test, waits for its golden snapshot and returns it. The suite gets its
 // own copy of the fixture: suite packages run as concurrent processes, so a
 // shared one would be deleted out from under another.
-func deployGRPCEchoTemplate(t *testing.T, ctx context.Context, bucket string) e2e.SubstrateFixture {
+func deployGRPCEchoTemplate(t *testing.T, ctx context.Context) e2e.SubstrateFixture {
 	t.Helper()
-	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", nil)
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, "networking", nil)
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,
 		Name:       "grpcecho",

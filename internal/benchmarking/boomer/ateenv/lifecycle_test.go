@@ -336,15 +336,23 @@ func TestRouterGRPCTarget(t *testing.T) {
 	}{
 		{
 			input: "",
-			want:  "dns:///atenet-router.ate-system.svc.cluster.local:80",
+			want:  "dns:///atenet-router.ate-system.svc:443",
 		},
 		{
-			input: "http://atenet-router.ate-system.svc.cluster.local",
-			want:  "dns:///atenet-router.ate-system.svc.cluster.local:80",
+			input: "https://atenet-router.ate-system.svc",
+			want:  "dns:///atenet-router.ate-system.svc:443",
 		},
 		{
-			input: "http://atenet-router.ate-system.svc.cluster.local:8080",
-			want:  "dns:///atenet-router.ate-system.svc.cluster.local:8080",
+			input: "https://atenet-router.ate-system.svc.cluster.local",
+			want:  "dns:///atenet-router.ate-system.svc.cluster.local:443",
+		},
+		{
+			input: "https://atenet-router.ate-system.svc.cluster.local:8443",
+			want:  "dns:///atenet-router.ate-system.svc.cluster.local:8443",
+		},
+		{
+			input: "atenet-router.ate-system.svc",
+			want:  "dns:///atenet-router.ate-system.svc:443",
 		},
 		{
 			input: "router.example.internal:9000",
@@ -364,11 +372,11 @@ func TestRouterGRPCTarget(t *testing.T) {
 		})
 	}
 
-	if _, err := routerGRPCTarget("https://atenet-router.ate-system.svc.cluster.local"); err == nil {
-		t.Errorf("routerGRPCTarget(https) succeeded, want error")
-	}
-	if _, err := routerGRPCTarget("http:///missing-host"); err == nil {
+	if _, err := routerGRPCTarget("https:///missing-host"); err == nil {
 		t.Errorf("routerGRPCTarget(empty host) succeeded, want error")
+	}
+	if _, err := routerGRPCTarget("http://atenet-router.ate-system.svc.cluster.local"); err == nil {
+		t.Errorf("routerGRPCTarget(http) succeeded, want error")
 	}
 }
 

@@ -82,6 +82,34 @@ func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
 	return io.CopyBuffer(writerOnly{dst}, readerOnly{src}, *bp)
 }
 
+// writeBehindChunk is how much of an archive may be dirty in the page cache
+// before we write it out and drop it. Dirty pages can't be reclaimed, and
+// piling up a whole archive of them can run a worker pod out of memory.
+const writeBehindChunk = 8 << 20
+
+// writeBehind writes to f, writing out and dropping each full chunk.
+type writeBehind struct {
+	f       *os.File
+	written int64
+	flushed int64
+}
+
+func (w *writeBehind) Write(p []byte) (int, error) {
+	n, err := w.f.Write(p)
+	w.written += int64(n)
+	if err != nil || w.written-w.flushed < writeBehindChunk {
+		return n, err
+	}
+	fd, off, size := int(w.f.Fd()), w.flushed, w.written-w.flushed
+	if err := unix.SyncFileRange(fd, off, size, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+		return n, fmt.Errorf("while writing out archive: %w", err)
+	}
+	// best effort, the range is on disk already
+	_ = unix.Fadvise(fd, off, size, unix.FADV_DONTNEED)
+	w.flushed = w.written
+	return n, nil
+}
+
 type writerOnly struct{ io.Writer }
 type readerOnly struct{ io.Reader }
 
@@ -129,7 +157,7 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	defer f.Close()
 
 	bw := tarWriterPool.Get().(*bufio.Writer)
-	bw.Reset(f)
+	bw.Reset(&writeBehind{f: f})
 	defer func() {
 		bw.Reset(nil)
 		tarWriterPool.Put(bw)
@@ -411,7 +439,7 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		}
 		// Only ownership applies to a symlink itself; its mode is meaningless
 		// and its times would follow the target.
-		return lchownEntry(root, name, hdr)
+		return Lchown(root, name, hdr)
 
 	case tar.TypeFifo:
 		if err := replaceExisting(root, name); err != nil {
@@ -501,28 +529,16 @@ func restoreDirMeta(root *os.Root, dirs map[string]*tar.Header) error {
 	return nil
 }
 
-// restoredMode is the mode an extracted entry ends up with: the permission bits
-// plus setuid, setgid, and sticky, which FileMode.Perm() alone would drop.
-//
-// The archive records them, so dropping them would make the round trip silently
-// lossy. The case that bites is a setgid data directory (0o2775): the workload
-// relies on group inheritance for files its different uids create, and losing
-// the bit only surfaces later, when the next file lands with the wrong group.
-// These bits govern behavior inside the sandbox — the host never executes a
-// workload's files — and a running workload can set them on its own data
-// anyway, so carrying them across a suspend/resume grants it nothing new.
-func restoredMode(hdr *tar.Header) os.FileMode {
-	return hdr.FileInfo().Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
-}
-
 // restoreMeta applies ownership, mode, and modification time to an extracted
 // path. Ownership is applied first because chowning a file clears its setuid
-// and setgid bits, which the chmod below then puts back.
+// and setgid bits, which the chmod below then puts back. Restoring a snapshot
+// grants nothing new with those bits: a running workload can set them on its
+// own files anyway.
 func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
-	if err := lchownEntry(root, name, hdr); err != nil {
+	if err := Lchown(root, name, hdr); err != nil {
 		return err
 	}
-	if err := root.Chmod(name, restoredMode(hdr)); err != nil {
+	if err := root.Chmod(name, Mode(hdr)); err != nil {
 		return fmt.Errorf("restoring mode on %q: %w", name, err)
 	}
 	if !hdr.ModTime.IsZero() {

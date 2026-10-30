@@ -10,14 +10,24 @@
 **Zero-trust sandboxing for millions of agents on Kubernetes.**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Release](https://img.shields.io/github/v/release/agent-substrate/substrate)](https://github.com/agent-substrate/substrate/releases)
+[![CI](https://github.com/agent-substrate/substrate/actions/workflows/pr-workflow.yaml/badge.svg?branch=main)](https://github.com/agent-substrate/substrate/actions/workflows/pr-workflow.yaml?query=branch%3Amain)
+[![govulncheck](https://github.com/agent-substrate/substrate/actions/workflows/govulncheck.yaml/badge.svg)](https://github.com/agent-substrate/substrate/actions/workflows/govulncheck.yaml)
+[![GitHub stars](https://img.shields.io/github/stars/agent-substrate/substrate?style=flat)](https://github.com/agent-substrate/substrate/stargazers)
 
-[Quickstart](#quickstart-development) · [Security](docs/security.md) · [Architecture](docs/architecture.md) · [Contributing](CONTRIBUTING.md)
+<a href="https://trendshift.io/repositories/34772"><img src="https://trendshift.io/api/badge/repositories/34772" alt="agent-substrate/substrate on Trendshift: #1 repository of the day" width="250" height="55"></a>
+
+[Quickstart](#quickstart-development) · [Security](docs/security/security.md) · [Architecture](docs/concepts/architecture.md) · [Contributing](CONTRIBUTING.md)
+
+<a href="https://ate.dev">
+  <img src="docs/assets/readme-hero.svg" alt="Agents are idle most of the time. Agent Substrate suspends idle agents and resumes them on request onto a small pool of warm worker pods." width="900">
+</a>
 
 </div>
 
 ## What is Agent Substrate?
 
-Agent Substrate is a security-hardened, zero-trust runtime for sandboxed agents, engineered to safely run millions of agents and tools with 10x higher density than standard containers. Purpose-built for the era of autonomous agents, Substrate delivers fast resume operations in less than 400ms, with more than 1500 activations per second. Agents get isolated compute, identity, networking, and storage. Sensitive credentials are kept out of reach from untrusted code. It supports multiple sandbox technologies, including microVMs and gVisor, while enabling a consistent lifecycle and management of all sandboxes.
+Agent Substrate is a security-hardened, zero-trust runtime for sandboxed agents, engineered to safely run millions of agents and tools with 10x higher density than standard containers. Purpose-built for the era of autonomous agents, Substrate delivers fast resume operations in less than 500ms, with more than 500 activations per second. Agents get isolated compute, identity, networking, and storage. Sensitive credentials are kept out of reach from untrusted code. It supports multiple sandbox technologies, including microVMs and gVisor, while enabling a consistent lifecycle and management of all sandboxes.
 
 At its core, Agent Substrate maps a larger set of “actors” (stateful workloads such as agents) onto a smaller pool of ready “workers”. Because agents spend most of their lives waiting on models, tools, or humans, Substrate snapshots idle actors out of memory and restores them when a request arrives.
 
@@ -25,12 +35,12 @@ Substrate is a low-opinion runtime, not an agent SDK. The workloads it runs do n
 
 ## Security Model
 
-Substrate treats every actor as untrusted and mutually hostile, so tenants can share physical nodes without sharing a security boundary. Every control operates within the cold-start and resume budget. See the [Security Guide](docs/security.md) for the full list of security principles and threat model.
+Substrate treats every actor as untrusted and mutually hostile, so tenants can share physical nodes without sharing a security boundary. Every control operates within the cold-start and resume budget. See the [Security Guide](docs/security/security.md) for the full list of security principles and threat model.
 
 * **Always sandboxed, VM-grade boundaries:** Every actor runs inside a dedicated [gVisor](https://gvisor.dev/) (`runsc`) or [Cloud Hypervisor](https://www.cloudhypervisor.org/) microVM sandbox with segregated compute, network, and storage. Plain Linux containers are not supported.
 * **Per-agent cryptographic identity:** Every active actor receives a short-lived [SPIFFE](https://spiffe.io/) X.509 certificate by default, and the egress gateway can mint per-actor JWTs on demand when an egress policy calls for one. Both carry the actor identity and atespace (the Substrate namespace grouping), and are designed to federate with external identity systems.
-* **Zero credentials in the sandbox:** Actors never hold actor identity JWTs/certs, API keys, or cloud tokens. The built-in egress gateway ([`atenet-egress`](docs/egress-credential-injection.md)) injects credentials into approved outbound requests outside the sandbox, so a prompt-injected or compromised agent has nothing to exfiltrate.
-* **Default-deny networking:** Actors start with a private network stack, no inbound path except through the ingress router (`atenet-router`), no lateral actor-to-actor or control-plane access, and outbound traffic [restricted by the egress gateway](docs/egress-traffic.md).
+* **Zero credentials in the sandbox:** Actors never hold actor identity JWTs/certs, API keys, or cloud tokens. The built-in egress gateway ([`atenet-egress`](docs/guides/egress-credential-injection.md)) injects credentials into approved outbound requests outside the sandbox, so a prompt-injected or compromised agent has nothing to exfiltrate.
+* **Default-deny networking:** Actors start with a private network stack, no inbound path except through the ingress router (`atenet-router`), no lateral actor-to-actor or control-plane access, and outbound traffic [restricted by the egress gateway](docs/guides/egress-traffic.md).
 * **Pluggable policy at the edge:** The egress gateway acts as an external Policy Enforcement Point (PEP) that is fully replaceable, allowing you to attach your own authorization, DLP, prompt-injection scanning, or cloud IAM policy engine without placing policy code inside the untrusted sandbox.
 
 ## Performance & Multiplexing
@@ -115,14 +125,19 @@ To quickly set up the complete environment:
 
 2. Run the following steps:
 ```shell
-# create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
+# create cluster and local registry
 hack/create-kind-cluster.sh
 
-# install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh deploy ate-system --credential-provider='{"name":"k8s.io"}'
+# make ate-setup target the kind cluster; set this in every shell that runs
+# ate-setup, including for the demo walkthroughs
+export ATE_INSTALL_KIND=true
+
+# install Substrate
+go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+  --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
 # install counter demo
-hack/install-ate-kind.sh deploy demo-counter
+go run ./cmd/ate-setup deploy demo counter
 
 # install kubectl-ate
 go install ./cmd/kubectl-ate
@@ -131,21 +146,20 @@ go install ./cmd/kubectl-ate
 # actor template, resolved in the actor's atespace)
 kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
-# port-forward the network router to bind to local port `8000`
-kubectl port-forward -n ate-system svc/atenet-router 8000:80
+# serve a local proxy on port 8000 that sends requests to the actor through the
+# network router
+kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ```
 
 > [!IMPORTANT]
 > `{"name":"k8s.io"}` deploys the bundled credential provider with an empty,
 > default-deny namespace policy. Before an actor can have a credential
 > injected, grant its atespace the namespaces whose Secrets it may read; see
-> [Enable it](docs/egress-credential-injection.md#enable-it).
+> [Enable it](docs/guides/egress-credential-injection.md#enable-it).
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST \
-   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
-   -i http://localhost:8000/
+curl -X POST -i http://localhost:8000/
 ```
 
 ### GKE Quickstart (Development)
@@ -172,28 +186,36 @@ curl -X POST \
    that ate-api-server and atelet depend on. See
    [what `create iam` actually grants](tools/setup-gcp/README.md#what-create-iam-actually-grants)
    to audit them or apply them manually. If you bring your own cluster instead,
-   note the required Kubernetes beta APIs can only be enabled **at cluster
-   creation** — see the [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
+   it needs the PodCertificateRequest and ClusterTrustBundle APIs, which GKE
+   1.37 and higher serve by default. On 1.36, enable them as beta APIs, then
+   replace any 1.36 node pools created before that. See the
+   [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
-   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}'
+   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
+     --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
    ```
+
+   `--ingress-allowed-spiffe-ids` lists the clients the router lets reach
+   actors. The ID above is the one `kubectl ate proxy actor` presents. Without
+   the flag no client reaches actors. See
+   [Ingress to actors](docs/guides/operator-install.md#ingress-to-actors).
 
    `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
    bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only
    the egress gateway; `{"enabled":false}` turns egress credential injection off
-   (see [docs/egress-credential-injection.md](docs/egress-credential-injection.md)).
+   (see [docs/guides/egress-credential-injection.md](docs/guides/egress-credential-injection.md)).
    `ATE_CREDENTIAL_PROVIDER` in `.ate-dev-env.sh` is the same choice.
 
    **Credential injection needs a namespace policy.** The bundled provider
    starts with an empty, default-deny one, so it resolves no Secrets until you
    grant each atespace the namespaces it may read; see
-   [Enable it](docs/egress-credential-injection.md#enable-it).
+   [Enable it](docs/guides/egress-credential-injection.md#enable-it).
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
-   go run ./cmd/ate-setup deploy demo demo-counter
+   go run ./cmd/ate-setup deploy demo counter
    ```
 
 #### Custom Setup and Deployment
@@ -207,8 +229,8 @@ go run ./tools/setup-gcp create bucket
 To run the PostgreSQL store backend on Cloud SQL — with IAM database
 authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
 
-Similarly, you can deploy or cleanup specific Agent Substrate components using
-the installation script. See `go run ./cmd/ate-setup` for all options.
+Similarly, you can deploy or clean up specific Agent Substrate components with
+`ate-setup`. See `go run ./cmd/ate-setup --help` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system
 go run ./cmd/ate-setup deploy apiserver
@@ -222,8 +244,11 @@ go run ./cmd/ate-setup delete all
 If you need to delete the resources created by the setup script, you can use the provided script `hack/teardown.sh`. This script will delete resources in the reverse order of creation and handles partial failures gracefully.
 
 ```bash
-./hack/teardown.sh --all
+./hack/teardown.sh [--all|--cluster-scoped]
 ```
+
+* `--all` deletes everything, including the dashboards, the snapshot transfer service account and the project-level IAM bindings, which every Substrate cluster in the project shares.
+* `--cluster-scoped` deletes only this cluster, its buckets and the bindings on them. Use it while other Substrate clusters still use the project.
 
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 
@@ -246,21 +271,22 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 5. **[Request Parking](demos/parking/README.md)**: An oversubscribed pool where the router holds inbound requests until a worker frees up, instead of returning `503`.
 
 ### Documentation & Guides
-* [Architecture](docs/architecture.md): How the control plane, node supervisor, and networking stack fit together.
-* [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
-* [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
-* [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateworker) and how they relate.
-* [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
-* [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
-* [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
-* [Egress Traffic](docs/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
-* [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
-* [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
-* [Sandbox Asset Cache](docs/sandbox-asset-cache.md): How a node caches the sandbox binaries actors run on, decides which runtimes it needs, and evicts to a budget.
-* [Upgrade Runbook](docs/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
-* [Node Storage](docs/node-storage.md): How to give snapshot I/O its own disk.
-* [Security Guide](docs/security.md): Security overview, security principles, and threat modeling.
-* [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
+* [Architecture](docs/concepts/architecture.md): How the control plane, node supervisor, and networking stack fit together.
+* [API Configuration Guide](docs/reference/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
+* [Full CLI Documentation](docs/reference/kubectl-ate.md): Installation and usage for `kubectl-ate`.
+* [Glossary](docs/reference/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateworker) and how they relate.
+* [Integration Repositories](docs/project/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
+* [Observability Guide](docs/guides/observability.md): Guide to actor logging, metrics, and distributed tracing.
+* [Extending Substrate](docs/security/extensibility.md): How to augment or replace the built-in ingress and egress gateways.
+* [Authentication Guide](docs/guides/authentication.md): Configure trusted JWT providers and human credentials.
+* [Egress Traffic](docs/guides/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
+* [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/guides/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
+* [Request Parking](docs/concepts/request-parking.md): How the router parks requests through transient worker-pool saturation.
+* [Sandbox Asset Cache](docs/concepts/sandbox-asset-cache.md): How a node caches the sandbox binaries actors run on, decides which runtimes it needs, and evicts to a budget.
+* [Upgrade Runbook](docs/guides/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
+* [Node Storage](docs/guides/node-storage.md): How to give snapshot I/O its own disk.
+* [Security Guide](docs/security/security.md): Security overview, security principles, and threat modeling.
+* [Benchmarking Guide](docs/guides/benchmarking.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
 
 ## Tour
 
@@ -272,10 +298,10 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/ate-idp-server`: Serves the OpenID discovery document and key set that relying parties use to verify actor JWTs.
 * `cmd/atenet`: A combined networking controller providing Envoy routing and proxy sidecars.
 * `cmd/ateworker-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
-* `cmd/ateworker-microvm`: The micro-VM peer of `ateworker-gvisor`, running actors as cloud-hypervisor VMs.
+* `cmd/ateworker-microvm`: The microVM peer of `ateworker-gvisor`, running actors as cloud-hypervisor VMs.
 * `cmd/podcertcontroller`: A "polyfill" that provides Pod Certificate signers that
   will eventually ship in upstream Kubernetes (with different names).
-* `cmd/kubectl-ate`: A CLI tool for managing Agent Substrate resources. See its [README](cmd/kubectl-ate/README.md).
+* `cmd/kubectl-ate`: A CLI tool for managing Agent Substrate resources. See its [README](docs/reference/kubectl-ate.md).
 * `cmd/benchmarking`: Synthetic workloads used by the load tests, including `glutton`, which consumes RAM, disk, and file descriptors on demand.
 * `tools/setup-gcp`: A provisioning utility to set up the necessary GCP infrastructure resources (GKE, GCS, IAM).
 * `demos/`: Sample applications demonstrating Agent Substrate capabilities.

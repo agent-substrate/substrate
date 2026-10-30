@@ -18,7 +18,7 @@
 # atespace must exist.
 #
 # The ${...}_ARG/MOUNTS/VOLUMES placeholder lines are dropped on a plain
-# deploy and filled in by --deploy-demo-counter-with-external-volume.
+# deploy and filled in by `deploy demo counter --with-external-volume`.
 metadata:
   atespace: ate-demo-counter
   name: counter
@@ -57,7 +57,6 @@ snapshotConfig:
   # memory cold-boots) is exercised by the e2e demo suite's own
   # parameterized templates, not by this one.
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/ate-demo-counter/
 volumes:
 - name: data
   durableDir: {}

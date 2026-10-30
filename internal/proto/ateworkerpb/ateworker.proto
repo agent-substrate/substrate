@@ -349,6 +349,19 @@ message ContainerSpec {
   //
   // +k8s:optional
   ResourceRequirements resources = 4;
+
+  // user is the process identity, the image's USER resolved against its
+  // /etc/passwd and /etc/group. Unset is root.
+  ProcessUser user = 5;
+
+  // cwd is the process working directory, the image's WORKDIR. Empty is "/".
+  string cwd = 6;
+}
+// ProcessUser is a resolved process identity.
+message ProcessUser {
+  uint32 uid = 1;
+  uint32 gid = 2;
+  repeated uint32 additional_gids = 3;
 }
 
 // ResourceRequirements mirrors atelet's ResourceRequirements.

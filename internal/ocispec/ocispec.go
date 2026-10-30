@@ -17,6 +17,7 @@
 package ocispec
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -98,19 +99,21 @@ func namespaces(actorUID string) []specs.LinuxNamespace {
 	}
 }
 
+// processUser maps the resolved identity onto the OCI process. nil is root.
+func processUser(u *ateworkerpb.ProcessUser) specs.User {
+	return specs.User{UID: u.GetUid(), GID: u.GetGid(), AdditionalGids: u.GetAdditionalGids()}
+}
+
 // Build returns a runtime-neutral OCI spec for an actor container.
 func Build(o Options) *specs.Spec {
 	container := o.Container
 	containerSpec := container.GetContainerSpec()
 	spec := &specs.Spec{
 		Process: &specs.Process{
-			User: specs.User{
-				UID: 0,
-				GID: 0,
-			},
+			User: processUser(containerSpec.GetUser()),
 			Args: containerSpec.GetArgs(),
 			Env:  containerSpec.GetEnv(),
-			Cwd:  "/",
+			Cwd:  cmp.Or(containerSpec.GetCwd(), "/"),
 			Capabilities: &specs.LinuxCapabilities{
 				Bounding:  containerSpec.GetCapabilities(),
 				Effective: containerSpec.GetCapabilities(),

@@ -808,6 +808,35 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertIn("Failed to summarize ladder steps: prometheus down", out.getvalue())
         self.assertTrue(upload.called)
 
+    # The fill-done line of a turnover run starts the telemetry's steady
+    # window and the turnover_window row; a run without one gets neither.
+    @mock.patch.object(runner, "upload")
+    def test_turnover_start_reaches_telemetry_and_window(self, _up):
+        for line, start in (
+            ('[boomer] {"time":"2026-10-30T00:04:10Z","msg":"agentsession: turnover fill done"}\n',
+             1793318650),
+            ('[boomer] {"time":"2026-10-30T00:04:10Z","msg":"dynconfig applied"}\n', None),
+        ):
+            with self.subTest(start=start):
+                def run_test(_args, _csv_prefix, logs, _traces, line=line):
+                    logs.write(line)
+                    logs.flush()
+                    return 1
+
+                telemetry, window = mock.Mock(), mock.Mock(return_value=True)
+                with mock.patch.object(runner, "run_test", run_test), \
+                     mock.patch.object(runner, "extract_and_record_server_telemetry", telemetry), \
+                     mock.patch.object(runner, "append_turnover_window", window), \
+                     mock.patch.object(sys, "argv", ARGV + ["--no-cluster-facts",
+                                                            "--allow-empty-stats"]), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    runner.main()
+                self.assertEqual(telemetry.call_args.kwargs["steady_not_before"], start)
+                if start is None:
+                    self.assertFalse(window.called)
+                else:
+                    self.assertEqual(window.call_args.args[1], start)
+
 
 if __name__ == "__main__":
     unittest.main()

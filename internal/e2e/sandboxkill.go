@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 )
 
@@ -49,29 +50,35 @@ func testserverImage(t *testing.T) string {
 // crash would, from an ephemeral container sharing the worker's PID namespace.
 func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, namespace, podName, actorUID string) {
 	t.Helper()
+	image := testserverImage(t)
 	pods := clients.K8s.CoreV1().Pods(namespace)
-	pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting worker pod %s/%s: %v", namespace, podName, err)
-	}
-	name := fmt.Sprintf("kill-sandbox-%d", len(pod.Spec.EphemeralContainers))
-	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, corev1.EphemeralContainer{
-		TargetContainerName: "worker",
-		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name:  name,
-			Image: testserverImage(t),
-			// kills the runsc sandbox and gofer, or cloud-hypervisor and
-			// virtiofsd: each names the actor UID in its command line
-			Args: []string{"kill", "--cmdline-contains", actorUID},
-			// root, like the sandbox processes, which also run unconfined, and
-			// the default AppArmor profile, enforced on GKE, may not signal them
-			SecurityContext: &corev1.SecurityContext{
-				RunAsUser:       ptr.To[int64](0),
-				AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+	var name string
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		name = fmt.Sprintf("kill-sandbox-%d", len(pod.Spec.EphemeralContainers))
+		pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, corev1.EphemeralContainer{
+			TargetContainerName: "worker",
+			EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+				Name:  name,
+				Image: image,
+				// kills the runsc sandbox and gofer, or cloud-hypervisor and
+				// virtiofsd: each names the actor UID in its command line
+				Args: []string{"kill", "--cmdline-contains", actorUID},
+				// root, like the sandbox processes, which also run unconfined, and
+				// the default AppArmor profile, enforced on GKE, may not signal them
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser:       ptr.To[int64](0),
+					AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+				},
 			},
-		},
+		})
+		_, err = pods.UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{})
+		return err
 	})
-	if _, err := pods.UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{}); err != nil {
+	if err != nil {
 		t.Fatalf("adding ephemeral container to %s/%s: %v", namespace, podName, err)
 	}
 

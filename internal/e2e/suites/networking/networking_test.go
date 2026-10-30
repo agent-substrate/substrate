@@ -141,7 +141,6 @@ func TestActorEgress(t *testing.T) {
 
 func TestActorEgressMultiplexing(t *testing.T) {
 	ctx := context.Background()
-	dataplane := e2e.CurrentAtenetDataplane()
 
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
@@ -153,11 +152,6 @@ func TestActorEgressMultiplexing(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	waitForActorRoute(t, ctx, router, actorRef)
-
-	beforeScrape, err := dataplane.ScrapeMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeMetrics before /mux: %v", err)
-	}
 
 	url := fmt.Sprintf("http://%s/fetch", target.Address())
 	payload, err := json.Marshal(map[string]string{"url": url})
@@ -173,24 +167,6 @@ func TestActorEgressMultiplexing(t *testing.T) {
 	t.Logf("Actor egress mux of %s succeeded; body: %s", url, body)
 
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
-
-	afterScrape, err := dataplane.ScrapeMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeMetrics after /mux: %v", err)
-	}
-
-	const (
-		// Different dataplane may have different stream concurrency.
-		wantConnectionsAtLeast = 1
-		wantRequests           = 250
-	)
-	stats := dataplane.EgressConnectStats(beforeScrape, afterScrape)
-	if stats.Connections != -1 && stats.Connections < wantConnectionsAtLeast {
-		t.Errorf("egress connect connections = %d, want at least %d", stats.Connections, wantConnectionsAtLeast)
-	}
-	if stats.Requests != -1 && stats.Requests != wantRequests {
-		t.Errorf("egress connect requests = %d, want %d", stats.Requests, wantRequests)
-	}
 }
 
 // egressHTTPSTarget returns an origin whose /healthz answers with body over
@@ -356,38 +332,41 @@ func postThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.
 }
 
 // assertEgressGatewayConnect waits for the atenet-egress log to show a CONNECT
-// to port opened by actorName. Envoy logs authenticated peer details in its
-// successful CONNECT access record; AgentGateway logs the terminated tunnel.
+// to port opened by actorName. Envoy logs authenticated peer details and the
+// negotiated HTTP/2 protocol in its successful CONNECT access record;
+// AgentGateway logs the terminated tunnel.
 func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, atespace, actorName, port string) {
 	t.Helper()
 	want := fmt.Sprintf("a CONNECT to port %s by actor %s/%s", port, atespace, actorName)
 	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
 		for _, line := range lines {
-			switch line.container {
-			case "envoy":
-				authority, ok := accessLogField(line.text, "authority")
-				if !ok {
-					continue
-				}
-				if !strings.HasSuffix(authority, ":"+port) {
-					continue
-				}
-				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
-				if !strings.Contains(line.text, spiffeSlug) {
-					continue
-				}
+			if egressConnectAccessLogMatches(line, atespace, actorName, port) {
+				t.Logf("egress gateway tunneled the request: %s", line.text)
 				return true
-			case "agentgateway":
-				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
-					strings.Contains(line.text, "target=") &&
-					strings.Contains(line.text, ":"+port) {
-					t.Logf("egress gateway tunneled the request: %s", line.text)
-					return true
-				}
 			}
 		}
 		return false
 	})
+}
+
+func egressConnectAccessLogMatches(line gatewayAccessLogLine, atespace, actorName, port string) bool {
+	switch line.container {
+	case "envoy":
+		authority, ok := accessLogField(line.text, "authority")
+		if !ok || !strings.HasSuffix(authority, ":"+port) {
+			return false
+		}
+		if protocol, ok := accessLogField(line.text, "protocol"); !ok || protocol != "HTTP/2" {
+			return false
+		}
+		spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
+		return strings.Contains(line.text, spiffeSlug)
+	case "agentgateway":
+		target, ok := accessLogField(line.text, "target")
+		return ok && strings.HasSuffix(target, ":"+port) &&
+			protocolGatewayAccessLogMatches(line, resources.ActorRef{Atespace: atespace, Name: actorName}, target, true)
+	}
+	return false
 }
 
 type gatewayAccessLogLine struct {

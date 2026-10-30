@@ -235,8 +235,8 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 // TestHostingNodeWithoutWorker pins which no-worker shapes count assigned_node
 // as hosting the actor. None of them reads the store.
 func TestHostingNodeWithoutWorker(t *testing.T) {
-	durable := func(st ateapi.SnapshotStorageStatus) *ateapi.SnapshotStorage {
-		return &ateapi.SnapshotStorage{Status: st, Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/a/actors/uid/snap-1"}}
+	durable := func(st ateapi.SnapshotStorageState) *ateapi.SnapshotStorage {
+		return &ateapi.SnapshotStorage{State: st, Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://snaps/root/atespaces/a/actors/uid/snap-1"}}
 	}
 	status := func(state ateapi.ActorState, locality string, d *ateapi.SnapshotStorage) *ateapi.ActorStatus {
 		return &ateapi.ActorStatus{
@@ -246,9 +246,9 @@ func TestHostingNodeWithoutWorker(t *testing.T) {
 			Snapshots:              []*ateapi.Snapshot{{Uuid: "snap-1", Generation: 1, Owner: ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, Locality: locality, DurableSnapshot: d}},
 		}
 	}
-	olderOnNode := status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+	olderOnNode := status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED))
 	olderOnNode.LastAssignedGeneration = 2
-	olderOnNode.Snapshots = append(olderOnNode.Snapshots, &ateapi.Snapshot{Uuid: "snap-2", Generation: 2, Owner: ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, DurableSnapshot: durable(ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)})
+	olderOnNode.Snapshots = append(olderOnNode.Snapshots, &ateapi.Snapshot{Uuid: "snap-2", Generation: 2, Owner: ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, DurableSnapshot: durable(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)})
 	noAssignedNode := status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", nil)
 	noAssignedNode.AssignedNode = ""
 	for _, tc := range []struct {
@@ -257,11 +257,11 @@ func TestHostingNodeWithoutWorker(t *testing.T) {
 		want   string
 	}{
 		{"paused", status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", nil), "node-1"},
-		{"paused, upload pending", status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), "node-1"},
-		{"paused, uploaded, local copy kept", status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)), "node-1"},
+		{"paused, upload pending", status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)), "node-1"},
+		{"paused, uploaded, local copy kept", status(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1", durable(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)), "node-1"},
 		{"older snapshot on the node, latest not", olderOnNode, "node-1"},
 		{"local copy but no assigned node", noAssignedNode, ""},
-		{"suspending without a worker", status(ateapi.ActorState_ACTOR_STATE_SUSPENDING, "node-1", durable(ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)), ""},
+		{"suspending without a worker", status(ateapi.ActorState_ACTOR_STATE_SUSPENDING, "node-1", durable(ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)), ""},
 		{"crashed with a local copy", status(ateapi.ActorState_ACTOR_STATE_CRASHED, "node-1", nil), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

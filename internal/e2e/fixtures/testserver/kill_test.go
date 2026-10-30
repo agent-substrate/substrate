@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +33,18 @@ func TestKillMatching(t *testing.T) {
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
+
+	// Start returns when exec closes the child's status pipe, before the
+	// kernel has set up the new argv, so /proc/<pid>/cmdline can read empty.
+	cmdline := filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "cmdline")
+	for start := time.Now(); ; time.Sleep(time.Millisecond) {
+		if b, _ := os.ReadFile(cmdline); strings.Contains(string(b), "sleep\x0031337") {
+			break
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Fatalf("%s still has no command line", cmdline)
+		}
+	}
 
 	n, err := killMatching("/proc", "sleep\x0031337", os.Getpid())
 	if err != nil {

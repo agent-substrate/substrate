@@ -180,7 +180,7 @@ func withUploadedPausedShape(t *testing.T, node string) func(*ateapi.Actor) {
 	paused := withPausedShape(t, node)
 	return func(a *ateapi.Actor) {
 		paused(a)
-		a.Status.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		a.Status.Snapshots[0].DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	}
 }
 
@@ -189,7 +189,7 @@ func withUploadedPausedShape(t *testing.T, node string) func(*ateapi.Actor) {
 // yet.
 func newInProgressSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity, uuid string) *ateapi.Snapshot {
 	t.Helper()
-	return newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	return newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uuid, someActorSnapshotURI(t, testStorageLocation, "team-a", uuid), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
 }
 
 // newPausedSnapshot builds the snapshot an asynchronous suspend leaves on node

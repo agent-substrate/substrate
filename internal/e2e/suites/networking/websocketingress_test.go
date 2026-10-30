@@ -32,15 +32,14 @@ import (
 // under test and waits for its golden snapshot.
 func deployWebsocketFixture(t *testing.T, ctx context.Context) e2e.SubstrateFixture {
 	t.Helper()
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
 		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
-	}, env["BUCKET_NAME"], "websocket", nil)
+	}, "websocket", nil)
 
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,

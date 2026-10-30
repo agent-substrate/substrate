@@ -96,3 +96,14 @@ def add_agentsession_arguments(parser: LocustArgumentParser) -> None:
         ),
         include_in_web_ui=True,
     )
+    parser.add_argument(
+        "--agentsession-awake",
+        type=int,
+        default=0,
+        env_var="LOCUST_AGENTSESSION_AWAKE",
+        help=(
+            "Turnover mode when > 0: keep this many sessions awake and swap "
+            "--target-rps sessions/s with parked ones (default: 0, off)"
+        ),
+        include_in_web_ui=True,
+    )

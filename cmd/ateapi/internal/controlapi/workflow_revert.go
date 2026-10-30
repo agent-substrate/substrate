@@ -221,7 +221,7 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 	var inProgress []string
 	for _, snap := range actor.GetStatus().GetSnapshots() {
 		storage := snap.GetDurableSnapshot()
-		if storage.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING && storage.GetObject().GetSnapshotUri() != "" {
+		if storage.GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING && storage.GetObject().GetSnapshotUri() != "" {
 			inProgress = append(inProgress, storage.GetObject().GetSnapshotUri())
 		}
 	}

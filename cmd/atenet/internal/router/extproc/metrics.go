@@ -95,6 +95,8 @@ func classifyOutcome(err error) string {
 		return ateattr.RouterOutcomeNotFound
 	case codes.Unavailable:
 		return ateattr.RouterOutcomeUnavailable
+	case codes.PermissionDenied:
+		return ateattr.RouterOutcomeDenied
 	}
 	var re *ReqError
 	if errors.As(err, &re) {
@@ -106,13 +108,15 @@ func classifyOutcome(err error) string {
 			// ResourceExhausted cause, since status.Code unwraps through
 			// ReqError.Cause. A 503 that reaches here has no such cause: a
 			// shed request whose resume did not fail with ResourceExhausted,
-			// a denied egress request, or a failed policy or credential
-			// lookup. None of these mean the fleet is full.
+			// or a failed policy or credential lookup. None of these mean
+			// the fleet is full.
 			return ateattr.RouterOutcomeUnavailable
 		case envoy_type.StatusCode_GatewayTimeout:
 			return ateattr.RouterOutcomeTimeout
 		case envoy_type.StatusCode_TooManyRequests:
 			return ateattr.RouterOutcomeRateLimited
+		case envoy_type.StatusCode_Forbidden:
+			return ateattr.RouterOutcomeDenied
 		}
 	}
 	return ateattr.RouterOutcomeResumeError
