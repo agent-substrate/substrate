@@ -164,14 +164,23 @@ def get_steady_state_window(
 
 
 def start_steady_window_at(
-    window: tuple[int, int], not_before: int | None
+    window: tuple[int, int],
+    not_before: int | None,
+    log: Callable[[str], None] | None = None,
 ) -> tuple[int, int]:
     """The steady-state window, started at not_before when that falls inside
-    it. A turnover run is measured from the end of its fill
+    [start, end). A turnover run is measured from the end of its fill
     (turnover_window.py), which comes after all its users have started."""
     start, end = window
-    if not_before is not None and start < not_before < end:
+    if not_before is None:
+        return start, end
+    if start <= not_before < end:
         return not_before, end
+    if log is not None:
+        log(
+            f"Turnover start {not_before} lies outside detected steady-state "
+            f"window [{start}, {end}]; keeping [{start}, {end}]"
+        )
     return start, end
 
 
@@ -837,6 +846,7 @@ def extract_and_record_server_telemetry(
     steady_start, steady_end = start_steady_window_at(
         get_steady_state_window(stats_history_csv, start_ts, end_ts),
         steady_not_before,
+        log=log,
     )
     log(
         f"Detected steady-state window: [{steady_start}, {steady_end}] "

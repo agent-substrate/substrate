@@ -154,13 +154,33 @@ class AppendTest(unittest.TestCase):
 
 class SteadyWindowTest(unittest.TestCase):
     def test_a_start_inside_the_window_starts_it(self):
-        self.assertEqual(server_telemetry.start_steady_window_at((100, 500), 250), (250, 500))
+        logged: list[str] = []
+        self.assertEqual(
+            server_telemetry.start_steady_window_at((100, 500), 250, log=logged.append),
+            (250, 500),
+        )
+        self.assertEqual(
+            server_telemetry.start_steady_window_at((100, 500), 100, log=logged.append),
+            (100, 500),
+        )
+        self.assertEqual(
+            server_telemetry.start_steady_window_at((100, 500), None, log=logged.append),
+            (100, 500),
+        )
+        self.assertEqual(logged, [])
 
-    def test_a_start_outside_the_window_or_none_leaves_it(self):
-        for not_before in (None, 50, 100, 500, 600):
+    def test_a_start_outside_the_window_logs_and_leaves_it(self):
+        for not_before in (50, 500, 600):
             with self.subTest(not_before=not_before):
+                logged: list[str] = []
                 self.assertEqual(
-                    server_telemetry.start_steady_window_at((100, 500), not_before), (100, 500))
+                    server_telemetry.start_steady_window_at(
+                        (100, 500), not_before, log=logged.append
+                    ),
+                    (100, 500),
+                )
+                self.assertEqual(len(logged), 1)
+                self.assertIn(str(not_before), logged[0])
 
 
 if __name__ == "__main__":

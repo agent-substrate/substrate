@@ -434,12 +434,13 @@ turnover. Three things keep them apart:
   It holds each request's count (`requests_<name>`), failures
   (`failures_<name>`) and rate (`rps_<name>`) from there to the end of the run
   (`window_start`, `window_end`), read from `stats_history.csv`. Read the swap
-  rate from `rps_ResumeActor` against `--target-rps`.
+  rate from `rps_TimeToWake` against `--target-rps`.
 * The server telemetry's steady-state window starts at the same point, so the
   memory, PSI and snapshot figures cover the turnover only.
 
-The fill's wakes stay in the `ResumeActor` and `TimeToWake` rows: there are
-`--agentsession-awake` of them, at most 8 at a time.
+The fill's wakes stay in the `TimeToWake` and `WakeFirstTouch` rows (and
+`ResumeActor` in explicit resume mode): there are `--agentsession-awake` of
+them, at most 8 at a time.
 
 #### Writing an agent-session script
 
