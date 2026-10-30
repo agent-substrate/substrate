@@ -222,17 +222,17 @@ const (
 	// RouterResumeJoined indicates this request waited on another request's
 	// singleflight resume, which completed a cold activation.
 	RouterResumeJoined = "joined"
-	// RouterResumeParkedExhausted: the parking budget elapsed while the resume
-	// was still blocked, so the request failed with the last capacity error.
-	RouterResumeParkedExhausted = "parked_exhausted"
+	// RouterResumeBudgetExhausted: the parking budget elapsed while the resume
+	// was still blocked on an error the router retries, and the request failed
+	// with that error. Set only with parking enabled; the parking wait metric
+	// names the same fact budget_exhausted.
+	RouterResumeBudgetExhausted = "budget_exhausted"
 	// RouterResumeParkedRejected: the parking lot was full, so the request was
 	// shed at once.
 	RouterResumeParkedRejected = "parked_rejected"
-	// RouterResumeCanceled: the request ended (client disconnect or deadline)
-	// before the shared resume answered. The flight goes on.
-	RouterResumeCanceled = "canceled"
-	// RouterResumeUnknown: the resume failed for another reason, or the
-	// direction never resumes an actor.
+	// RouterResumeUnknown indicates the resume did not complete, so the router
+	// cannot tell whether an activation ran. The resume failed, or the request
+	// stopped first, or the direction never resumes an actor.
 	RouterResumeUnknown = "unknown"
 )
 

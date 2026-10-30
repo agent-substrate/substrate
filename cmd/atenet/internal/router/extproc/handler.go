@@ -61,7 +61,7 @@ type Result struct {
 
 	// Resume is the actor-resume outcome, as one of the ateattr.RouterResume*
 	// values. Empty means "unknown" — the direction never resumes an actor, or
-	// the request never got far enough to attempt one.
+	// the request never got far enough to learn whether an activation ran.
 	Resume string
 
 	// DynamicMetadata is attached to the ProcessingResponse alongside Response,

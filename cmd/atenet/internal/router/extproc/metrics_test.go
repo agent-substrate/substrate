@@ -220,7 +220,7 @@ func TestResultResume_DefaultsToUnknown(t *testing.T) {
 		{name: "none preserved", resume: ateattr.RouterResumeNone, want: ateattr.RouterResumeNone},
 		{name: "triggered preserved", resume: ateattr.RouterResumeTriggered, want: ateattr.RouterResumeTriggered},
 		{name: "joined preserved", resume: ateattr.RouterResumeJoined, want: ateattr.RouterResumeJoined},
-		{name: "parked_exhausted preserved", resume: ateattr.RouterResumeParkedExhausted, want: ateattr.RouterResumeParkedExhausted},
+		{name: "budget_exhausted preserved", resume: ateattr.RouterResumeBudgetExhausted, want: ateattr.RouterResumeBudgetExhausted},
 		{name: "unknown preserved", resume: ateattr.RouterResumeUnknown, want: ateattr.RouterResumeUnknown},
 	}
 	for _, tt := range tests {

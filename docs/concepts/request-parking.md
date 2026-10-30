@@ -184,8 +184,7 @@ bounds the wait.
   `no_capacity` combines fast shed requests with requests that waited out the
   parking budget, read `ate.router.resume` on the route histogram to separate
   them: a shed request reports `parked_rejected`, and a request that waited out
-  the budget reports `parked_exhausted`. A request whose client disconnected or
-  whose own deadline ended while parked reports `canceled`.
+  the budget reports `budget_exhausted`.
 
 **Status page** (`/statusz`): a "Request Parking" card shows whether parking is
 enabled, the current vs. maximum parked count, and the max wait.
