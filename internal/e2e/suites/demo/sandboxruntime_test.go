@@ -151,6 +151,49 @@ func TestSandboxConfigEdit(t *testing.T) {
 	}
 }
 
+// TestTagCloneOnDisabledVersion covers an actor cloned from a Tag whose
+// snapshot is stamped with a version that was disabled afterwards:
+//  1. An actor boots on v1, increments its counters twice (memory=2, file=2,
+//     rootfs=2) and suspends. A Tag created from it carries the v1-stamped
+//     snapshot.
+//  2. The SandboxConfig switches defaultVersion to v2 and disables v1, so no
+//     worker can restore v1.
+//  3. An actor cloned from the Tag borrows that snapshot and drops from
+//     MEMORY to ROOTFS on v2 (memory=1, file=3, rootfs=3).
+func TestTagCloneOnDisabledVersion(t *testing.T) {
+	t.Parallel()
+	f := setupSuspendedV1Actor(t, "tag-clone")
+
+	tagRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: "tag-" + f.actorName}
+	t.Cleanup(func() {
+		_, _ = f.clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
+	})
+	tag, err := f.clients.SubstrateAPI.CreateTag(f.ctx, &ateapi.CreateTagRequest{
+		Tag: &ateapi.Tag{
+			Metadata:    &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: tagRef.GetName()},
+			Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: f.actorRef,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create Tag from v1 actor: %v", err)
+	}
+	if diff := cmp.Diff(f.v1Runtime, tag.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("tag snapshot stamp mismatch (-want v1 +got):\n%s", diff)
+	}
+
+	// 2. Switch defaultVersion to v2 and disable v1.
+	f.updateVersions(t, f.v2.Name, []atev1.SandboxVersionConfig{withState(f.v1, atev1.SandboxVersionStateDisabled), f.v2})
+	status := f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
+		defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
+		return defHash != "" && defHash != f.v1Hash && !hardware.WorkerMatches(status, f.v1Runtime)
+	})
+
+	// 3. A clone of the Tag drops to ROOTFS on v2.
+	clone := f.cloneFromTag(t, tagRef, "clone-"+f.actorName)
+	clone.resumeAndCheck(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, hardware.ColdBootRuntime(status))
+}
+
 // sandboxRuntimeFixture is a suspended actor on a pool whose SandboxConfig
 // the test owns, so the test can edit versions and watch the worker
 // re-register and the actor resume.
@@ -422,6 +465,39 @@ func (f *sandboxRuntimeFixture) suspend(t *testing.T, wantRuntime *ateapi.ActorS
 		t.Fatalf("snapshot sandbox_runtime of %s (-want +got):\n%s", f.actorName, diff)
 	}
 	f.generation = snap.GetGeneration()
+}
+
+// cloneFromTag creates an actor named name from tag, which holds the
+// fixture actor's v1-stamped snapshot, and returns a fixture for it on the
+// same pool: the clone starts from the counters the Tag captured, and its
+// snapshot generations are its own.
+func (f *sandboxRuntimeFixture) cloneFromTag(t *testing.T, tag *ateapi.ObjectRef, name string) *sandboxRuntimeFixture {
+	t.Helper()
+	ref := &ateapi.ObjectRef{Atespace: demoAtespace, Name: name}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = e2e.RetryAborted(t, cleanupCtx, f.clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{Actor: ref})
+	})
+	actor, err := f.clients.SubstrateAPI.CreateActor(f.ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: name},
+			ActorTemplate: f.templateRef,
+			SourceTag:     tag,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create Actor %s from Tag: %v", name, err)
+	}
+	snap := durableSnapshot(actor.GetStatus())
+	if diff := cmp.Diff(f.v1Runtime, snap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("Actor %s borrowed tag snapshot stamp (-want v1 +got):\n%s", name, diff)
+	}
+	clone := *f
+	clone.actorName = name
+	clone.actorRef = ref
+	clone.generation = snap.GetGeneration()
+	return &clone
 }
 
 // repoint creates a copy of the fixture's ActorTemplate under another name
