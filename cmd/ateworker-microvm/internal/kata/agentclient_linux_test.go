@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"path/filepath"
 	"slices"
@@ -75,6 +76,17 @@ func serveFakeAgent(t *testing.T, methods map[string]ttrpc.Method) *AgentClient 
 	ac := &AgentClient{conn: conn, client: ttrpc.NewClient(conn)}
 	t.Cleanup(func() { _ = ac.Close() })
 	return ac
+}
+
+// unary serves one grpc.AgentService method with handle.
+func unary[Req, Resp any](handle func(*Req) (Resp, error)) ttrpc.Method {
+	return func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+		var req Req
+		if err := unmarshal(&req); err != nil {
+			return nil, err
+		}
+		return handle(&req)
+	}
 }
 
 // The restore path fails when this call fails, so a wrong service or method name
@@ -173,5 +185,35 @@ func TestStartRootfsContainerClosesStdin(t *testing.T) {
 				t.Errorf("CloseStdin got container %q exec %q, want both %q", closeReq.GetContainerId(), closeReq.GetExecId(), "c1")
 			}
 		})
+	}
+}
+
+// Empty data from the agent is the end of the stream; so is an agent error.
+func TestStreamReaderEndsOnEmptyDataAndOnError(t *testing.T) {
+	reads := 0
+	ac := serveFakeAgent(t, map[string]ttrpc.Method{"ReadStdout": unary(func(req *agentpb.ReadStreamRequest) (*agentpb.ReadStreamResponse, error) {
+		reads++
+		switch {
+		case req.GetContainerId() == "gone":
+			return nil, errors.New("cannot get stream reader")
+		case reads == 1:
+			return &agentpb.ReadStreamResponse{Data: []byte("line\n")}, nil
+		default:
+			return &agentpb.ReadStreamResponse{}, nil
+		}
+	})})
+	buf := make([]byte, 64)
+	r := NewStdioReader(t.Context(), ac, "c1", "c1", false)
+	if n, err := r.Read(buf); err != nil || string(buf[:n]) != "line\n" {
+		t.Fatalf("first Read = %q, %v; want the line", buf[:n], err)
+	}
+	if n, err := r.Read(buf); n != 0 || err != io.EOF {
+		t.Fatalf("Read after the stream ended = %d, %v; want 0, io.EOF", n, err)
+	}
+	if reads != 2 {
+		t.Errorf("reads = %d, want 2: the reader must not ask again after an empty answer", reads)
+	}
+	if n, err := NewStdioReader(t.Context(), ac, "gone", "gone", false).Read(buf); n != 0 || err != io.EOF {
+		t.Fatalf("Read with an agent error = %d, %v; want 0, io.EOF", n, err)
 	}
 }
