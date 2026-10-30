@@ -29,7 +29,6 @@
   <polyline points="1088,665 1088,290 815,290 815,274" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowP)"/>
   <polyline points="1200,682 1330,682" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowP)"/>
   <polyline points="760,190 760,132 1595,132 1595,682 1570,682" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowP)"/>
-  <!-- API -> PostgreSQL: template ready -->
   <polyline points="675,274 675,320" fill="none" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowP)"/>
   <!-- atunnel -> golden actor -->
   <polyline points="380,735 380,806" fill="none" stroke="#a8a8a8" stroke-width="1.2" marker-end="url(#arrowG)"/>
@@ -107,6 +106,9 @@
   <circle cx="1595" cy="410" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
   <text x="1595" y="414" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">P10</text>
   <text x="1580" y="414" font-size="12" font-weight="bold" text-anchor="end" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">copy tag snapshot</text>
+  <circle cx="675" cy="297" r="12" fill="#ffffff" stroke="#00838f" stroke-width="1.6"/>
+  <text x="675" y="301" font-size="11" font-weight="bold" text-anchor="middle" fill="#00838f">P10</text>
+  <text x="692" y="301" font-size="12" font-weight="bold" text-anchor="start" fill="#00838f" stroke="#ffffff" stroke-width="4" paint-order="stroke">mark ready</text>
   <polyline points="20,1024 60,1024" stroke="#00838f" stroke-width="1.8" marker-end="url(#arrowP)"/>
   <text x="70" y="1028" font-size="12" fill="#212121">P: prepare an actor template</text>
   <polyline points="20,1046 60,1046" stroke="#a8a8a8" stroke-width="1.8" marker-end="url(#arrowG)"/>

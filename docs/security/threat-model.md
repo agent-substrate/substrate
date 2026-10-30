@@ -24,7 +24,7 @@ This threat model catalogs the security threats inherent to high-density statefu
 
 # Architecture of Substrate
 
-Two diagrams coordinate component layouts so components both diagrams show are in the same positions. The first prepares an actor template. The second creates an actor from it and serves a request.
+Components that appear in both diagrams are in the same positions. The first prepares an actor template. The second creates an actor from it and serves a request.
 
 ## Creating an actor template
 
@@ -36,14 +36,14 @@ Creating a template runs a golden actor once, snapshots it, and keeps that snaps
 | :---- | :---- | :---- |
 | P1 | The application creates an actor template. `ate-api-server` stores it, and a background reconciler starts building its golden snapshot. | OpenFGA allows the caller to create templates in the atespace. Container images must be pinned by digest. |
 | P2 | The reconciler creates a golden actor in the template's atespace, picks a worker, and tells that node's `atelet` to run it. | `atelet` accepts only `ate-api-server`'s identity. |
-| P3 | `atelet` pulls the container image into the node's layer cache, which all actors on the node share. Nodes also fetch sandbox assets (such as runsc or guest kernel and rootfs) specified by the SandboxConfig. | The image is fetched by digest, using credentials from the node's credential provider config when available. |
+| P3 | `atelet` pulls the container image into the node's layer cache, which all actors on the node share. Nodes also fetch sandbox assets (such as runsc or guest kernel and rootfs) specified by the SandboxConfig. | The image is fetched by digest (using node credential provider config when available). Each sandbox asset must match the sha256 pinned in the SandboxConfig. |
 | P4 | `atelet` tells `ateworker` to start the sandbox. | The call stays on the node. |
 | P5 | `atunnel` asks `atelet` for the actor's certificate. | `atelet` accepts only workers on its own node. |
 | P6 | `atelet` asks `ate-api-server` to mint it. | It is minted only for the worker the actor is assigned to. |
 | P7 | Once the workload is ready and warmed up, the reconciler suspends the golden actor, and `atelet` checkpoints its memory and disk. | Only `ate-api-server` can order a suspend. |
-| P8 | `atelet` trades a JWT for this actor for storage credentials. | On GCS, the credentials cover only this actor's snapshot location (S3 uses node credentials). |
+| P8 | `atelet` trades a JWT for this actor for storage credentials. | On GCS, the credentials cover only this actor's snapshot location (S3 uses the plugin's own pod credentials). |
 | P9 | `atelet` uploads the golden snapshot. | The sandbox never touches storage. |
-| P10 | The reconciler tags the snapshot, deletes the golden actor, and marks the template ready. | The golden actor's local directories are removed when it is deleted. |
+| P10 | The control plane copies the snapshot to the tag, deletes the golden actor, and marks the template ready. | The golden actor's local directories are removed when it is deleted. |
 
 The golden actor has no network egress unless the template sets a golden egress policy.
 
@@ -60,7 +60,7 @@ In **A**, an application creates an actor. In **B**, it sends the actor a reques
 | B1 | The application sends a request for `<atespace>/<actor>` to `atenet-router`. | The caller's mTLS identity must be on the router's allowlist. |
 | B2 | The router asks `ate-api-server` to resume the actor and return its worker. | OpenFGA allows the router (or an authorized user/editor) to resume actors in the atespace. |
 | B3 | `ate-api-server` tells the `atelet` on the chosen node to restore the actor. | `atelet` accepts only `ate-api-server`'s identity. |
-| B4 | `atelet` downloads the actor's snapshot. | On GCS, credentials grant read/write access to this actor's snapshot prefix and read-only access to the template's source tag prefix (S3 uses node credentials). |
+| B4 | `atelet` downloads the actor's snapshot. | On GCS, credentials grant read/write access to this actor's snapshot prefix and read-only access to the template's source tag prefix (S3 uses the plugin's own pod credentials). |
 | B5 | `atelet` tells `ateworker` to start a sandbox from the snapshot. If the node hasn't cached the image, `atelet` pulls it first. | The call stays on the node. |
 | B6 | The router forwards the request to `atunnel` in the actor's Worker Pod. | `atunnel` accepts only the router's identity, and NetworkPolicy admits only the router. |
 | B7 | `atunnel` delivers the request to the actor's sandbox. | It goes only to the actor named in the request. |
