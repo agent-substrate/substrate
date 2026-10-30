@@ -15,11 +15,16 @@ limitations under the License.
 */ -}}
 {{- $body := .RawContent -}}
 
-{{/* 1. Expand default {{% include-file %}} using .Params.repo_source */ -}}
+{{/* 1. Expand default {{% include-file %}} using .Params.repo_source.
+     Use findRE + replace so "$VAR" in shell examples is not expanded as a
+     capture group reference. */ -}}
 {{- with .Params.repo_source -}}
   {{- $doc := partialCached "repo-doc.html" . . -}}
   {{- if $doc.found -}}
-    {{- $body = replaceRE `\{\{[<%]\s*include-file\s*[>%]\}\}` $doc.body $body -}}
+    {{- $inc := partial "rewrite-repo-links.html" (dict "content" $doc.body "dir" (path.Dir .) "absolute" true "markdown" true) -}}
+    {{- range findRE `\{\{[<%]\s*include-file\s*[>%]\}\}` $body -}}
+      {{- $body = replace $body . $inc -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 
@@ -34,11 +39,13 @@ limitations under the License.
     {{- if strings.Contains $args "shift_headings" -}}
       {{- $inc = replaceRE `(?m)^(#{2,5}) ` "#$1 " $inc -}}
     {{- end -}}
+    {{- $inc = partial "rewrite-repo-links.html" (dict "content" $inc "dir" (path.Dir $file) "absolute" true "markdown" true) -}}
     {{- $body = replace $body $fullMatch $inc -}}
   {{- end -}}
 {{- end -}}
 
-{{/* 3. Convert HTML code-tab wrappers into clean Markdown headings */ -}}
+{{/* 3. Drop decorative HTML diagram cards and convert code-tab wrappers into headings */ -}}
+{{- $body = replaceRE `(?s)<figure class="as-diagram-card[^"]*">.*?</figure>\s*` "" $body -}}
 {{- $body = replaceRE `<div class="code-tabs">\s*` "" $body -}}
 {{- $body = replaceRE `<div class="code-tab"\s+data-tab="([^"]+)"[^>]*>\s*` "#### $1\n\n" $body -}}
 {{- $body = replaceRE `(?m)^</div>\s*$` "" $body -}}
@@ -47,12 +54,15 @@ limitations under the License.
 {{- $body = replaceRE `\{\{[<%]\s*/?alert[^}%>]*[>%]\}\}` "" $body -}}
 {{- $body = replaceRE `\n{3,}` "\n\n" (strings.TrimSpace $body) -}}
 
-{{- $header := printf "# %s\n\n" .Title -}}
-{{- with .Params.description -}}
-  {{- $header = printf "%s> %s\n\n" $header (strings.TrimSpace .) -}}
-{{- end -}}
+{{- $dir := path.Dir (.Params.repo_source | default "") -}}
 {{- $params := partialCached "page-params.html" . .Path -}}
-{{- with $params.status -}}
-  {{- $header = printf "%s> **Status: %s.** %s\n\n" $header (title .) (partial "status-text.html" $params) -}}
+{{- $header := printf "# %s\n\n" .Title -}}
+{{- with $params.description -}}
+  {{- $desc := partial "rewrite-repo-links.html" (dict "content" (strings.TrimSpace .) "dir" $dir "absolute" true "markdown" true) -}}
+  {{- $header = printf "%s> %s\n\n" $header (replaceRE `\s+` " " $desc) -}}
 {{- end -}}
-{{- printf "%s%s\n" $header $body -}}
+{{- with $params.status -}}
+  {{- $note := partial "rewrite-repo-links.html" (dict "content" (partial "status-text.html" $params) "dir" $dir "absolute" true "markdown" true) -}}
+  {{- $header = printf "%s> **Status: %s.** %s\n\n" $header (title .) $note -}}
+{{- end -}}
+{{- return (printf "%s%s\n" $header $body) -}}

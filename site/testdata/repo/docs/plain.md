@@ -6,3 +6,5 @@ Plain body before rule.
 ---
 
 Plain body after rule.
+
+`echo "$SHELL_VAR" 'quotes'`

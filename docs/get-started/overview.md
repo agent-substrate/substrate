@@ -40,8 +40,8 @@ Substrate decouples the **Actor** (a stateful agent or workload instance) from t
     </div>
     <div class="as-diagram-node as-diagram-node--stack">
       <span class="as-diagram-node__tag">Pre-Warmed Worker Pod (WorkerPool)</span>
-      <span class="mono as-diagram-node__title">Worker (ateom + Sandbox)</span>
-      <span class="mono as-diagram-node__sub">ateom herder · atunnel mTLS · microVM / gVisor hosting Actor</span>
+      <span class="mono as-diagram-node__title">Worker (ateworker + Sandbox)</span>
+      <span class="mono as-diagram-node__sub">ateworker · atunnel mTLS · microVM / gVisor hosting Actor</span>
     </div>
   </div>
   <figcaption class="as-diagram-card__caption">
@@ -50,6 +50,6 @@ Substrate decouples the **Actor** (a stateful agent or workload instance) from t
   </figcaption>
 </figure>
 
-* **Core Platform Terms at a Glance:** Each actor lives in an `atespace` (`<atespace>/<actor>`), traffic enters via `atenet`, node supervision and snapshot streaming are handled by `atelet`, and sandbox execution inside each warm `Worker` is managed by `ateom` (internally prefixed `ate` across binaries and CRDs). See the **[Glossary](../reference/glossary.md)** for complete definitions.
+* **Core Platform Terms at a Glance:** Each actor lives in an `atespace` (`<atespace>/<actor>`), traffic enters via `atenet-router`, node supervision and snapshot streaming are handled by `atelet`, and sandbox execution inside each warm `Worker` is managed by `ateworker` (internally prefixed `ate` across binaries and CRDs). See the **[Glossary](../reference/glossary.md)** for complete definitions.
 * **Framework Agnostic:** Runs standard OCI containers inside zero-trust sandboxes—supporting ADK, LangChain, Hermes, OpenClaw, MCP servers, and stateful coding environments out of the box.
-* **Ready to try it?** Jump straight to **[Quickstart](quickstart.md)** to launch your first actor locally on Kind, follow the **[GKE Installation Guide](https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate)** to deploy on Google Kubernetes Engine, or explore the **[Architecture](../concepts/architecture.md)**.
+* **Ready to try it?** Jump straight to **[Quickstart](quickstart.md)** to launch your first actor locally on [kind](https://kind.sigs.k8s.io/), follow the **[GKE Installation Guide](https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate)** to deploy on Google Kubernetes Engine, or explore the **[Architecture](../concepts/architecture.md)**.

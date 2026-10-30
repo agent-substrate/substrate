@@ -22,7 +22,7 @@ For how the pieces fit together, see the [Architecture](../concepts/architecture
   overall platform and runtime, while **`ate`** (originally *Agent Task /
   Execution Engine*) is the internal prefix used across Kubernetes namespaces
   (`ate-system`), control-plane binaries (`ate-api-server`, `atecontroller`),
-  node and pod daemons (`atelet`, `ateom`), networking components (`atenet`,
+  node and pod daemons (`atelet`, `ateworker`), networking components (`atenet`,
   `atunnel`), HTTP routing headers (`ate-target-actor`), and the `kubectl-ate`
   CLI plugin.
 
@@ -45,10 +45,10 @@ For how the pieces fit together, see the [Architecture](../concepts/architecture
 
 - **SandboxConfig** (Kubernetes CRD): a cluster-scoped resource holding the
   sandbox binaries for one runtime family (the gVisor `runsc` binary, or a
-  microVM kernel/firmware/config). An actor resolves its sandbox at first cold
-  boot from the config its `ActorTemplate` names (naming one is currently
-  required; per-class cluster defaults are planned), so one config pins the
-  runtime version for many templates.
+  microVM kernel/firmware/config). Each `WorkerPool` resolves a `SandboxConfig`
+  for its sandbox class, either by explicit `configRef` or via the class
+  default. A new or cold-booted actor gets the config's default version. A
+  memory restore gets the version its snapshot was taken with.
 
 ## Records (dynamic state, in the control-plane store)
 
@@ -153,8 +153,8 @@ for etcd.
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
   Templates with golden snapshot creation disabled do not create one. By
   default an Actor of that template is first restored from this shared
-  snapshot when it is available; otherwise it cold-boots. It is always a
-  `MEMORY` capture.
+  snapshot when it is available, and otherwise cold-boots. It is captured at
+  the template's `preferredFidelity` (`MEMORY` by default).
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

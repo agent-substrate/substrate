@@ -42,6 +42,10 @@ var substrateFixtures = []struct {
 	}, 1, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-nonroot-template.yaml.tmpl",
+	}, 1, nil},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-bootfetch-template.yaml.tmpl",
 	}, 1, map[string]string{
 		"${BOOT_FETCH_HOST}": "origin.example",

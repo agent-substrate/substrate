@@ -37,13 +37,15 @@ What it buys, concretely:
 ## The privilege split
 
 The design is shaped by an existing substrate boundary: **atelet runs as
-plain root with every Linux capability dropped** ("atelet does no mounts" —
-see `manifests/ate-install/atelet.yaml`), while the **worker pods are
-privileged** and own all mounts on the node. The module is split accordingly:
+root with every Linux capability dropped but a few for files other users
+own** ("atelet does no mounts" — see
+[`manifests/ate-install/atelet.yaml`](../../manifests/ate-install/atelet.yaml),
+which gives the reason for each), while the **worker pods hold the mount
+capabilities** and own all mounts on the node. The module is split accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
-| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
+| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | file I/O; `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_FSETID` |
 | Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
@@ -59,7 +61,7 @@ anywhere.
 
 ```
 <cache-root>/                        default: /var/lib/ate/image-cache
-  version                            layout version marker ("2")
+  version                            layout version marker ("3")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
@@ -101,12 +103,18 @@ layer diffIDs in order — layers shared by N images exist once.
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
    without `CAP_DAC_OVERRIDE`, and creation of parent directories that the
-   layer tar omits (they may exist only in lower layers). Character and
-   block device nodes are skipped (atelet runs without `CAP_MKNOD` and the
-   runtime mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written
-   into the tree — overlayfs whiteouts are char devices atelet cannot
-   create — they are recorded in `whiteouts.json` for the consumer to
-   materialize.
+   layer tar omits (they may exist only in lower layers). Every entry keeps
+   the numeric owner and the exact mode its tar header records, setuid,
+   setgid and sticky bits included, as containerd and moby apply them
+   (see `unpackLayer` for how a failed chown or chmod is handled). A root
+   atelet inside a user namespace (rootless or userns-remapped nodes) can
+   only give files to uids and gids the namespace maps, so a layer with an
+   owner outside that range fails to unpack, as it does under rootless
+   Docker. Character and block device nodes are skipped (atelet runs
+   without `CAP_MKNOD` and the runtime mounts `/dev`). Whiteout entries
+   (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
+   char devices atelet cannot create — they are recorded in
+   `whiteouts.json` for the consumer to materialize.
 5. **Verify** before the layer enters the pool. Images share layers by
    diffID, but each image's author chooses the diffIDs in its config. So
    the uncompressed stream is hashed as it unpacks and must match the
@@ -117,7 +125,8 @@ layer diffIDs in order — layers shared by N images exist once.
    A layer already in the pool is reused without re-hashing, because it
    was checked when it was written. The reusing image's own blob is never
    downloaded, so it is never checked. atelet refuses a layout version 1
-   pool, whose layers may not have been checked.
+   pool, whose layers may not have been checked, and a version 2 pool,
+   whose layers are root-owned without setuid, setgid or sticky bits.
 6. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 

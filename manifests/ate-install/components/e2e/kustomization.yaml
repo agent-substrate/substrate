@@ -21,9 +21,10 @@ kind: Component
 
 patches:
   # Upload asynchronous snapshots in the background 2s after a suspend (5m by
-  # default), so e2e suites run alongside uploads. Appended via JSON6902 rather
-  # than a strategic merge patch so the base or kind overlay's existing args
-  # are preserved.
+  # default) and detach suspended actors from their node 30s after a suspend
+  # (30m by default), so e2e suites run alongside uploads and the demo suite
+  # can check background detach. Appended via JSON6902 rather than a strategic
+  # merge patch so the base or kind overlay's existing args are preserved.
   - target:
       group: apps
       version: v1
@@ -37,3 +38,6 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --snapshot-upload-delay=2s
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --snapshot-detach-delay=30s

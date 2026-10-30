@@ -17,6 +17,7 @@
 package imagecache
 
 import (
+	"archive/tar"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,35 +30,6 @@ import (
 
 	"go.ate.dev/substrate/internal/roottest"
 )
-
-// writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's
-// unpack would.
-func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutSet) {
-	t.Helper()
-	fs := filepath.Join(dir, layerFSDirName)
-	if err := os.MkdirAll(fs, 0o755); err != nil {
-		t.Fatalf("mkdir fs: %v", err)
-	}
-	for name, body := range files {
-		p := filepath.Join(fs, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", name, err)
-		}
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	if wh != nil {
-		wh.Version = 1
-		b, err := json.Marshal(wh)
-		if err != nil {
-			t.Fatalf("marshal whiteouts: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, layerWhiteoutsFileName), b, 0o600); err != nil {
-			t.Fatalf("write whiteouts.json: %v", err)
-		}
-	}
-}
 
 // FinalizeLayer materializes whiteout devices (mknod, CAP_MKNOD) and opaque
 // xattrs (trusted.*, CAP_SYS_ADMIN); only root has those in a plain test
@@ -207,6 +179,48 @@ func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(bundle, "upper", "secret")); err != nil {
 		t.Errorf("repair did not copy up into the bundle upper: %v", err)
 	}
+}
+
+// The merged rootfs root is the container's "/"; at 0700 a non-root container
+// cannot search it and can exec nothing.
+func TestSetupBundleRootfs_RootIsSearchableByNonRoot(t *testing.T) {
+	assertSearchable := func(t *testing.T, rootfs string) {
+		t.Helper()
+		fi, err := os.Stat(rootfs)
+		if err != nil {
+			t.Fatalf("stat merged rootfs root: %v", err)
+		}
+		if perm := fi.Mode().Perm(); perm&0o005 != 0o005 {
+			t.Errorf("merged rootfs root mode = %04o, want world read+search", perm)
+		}
+	}
+
+	t.Run("zero layers", func(t *testing.T) {
+		bundle := t.TempDir()
+		if err := WriteSpec(bundle, &OverlaySpec{Layers: nil}); err != nil {
+			t.Fatalf("WriteSpec: %v", err)
+		}
+		if err := SetupBundleRootfs(bundle); err != nil {
+			t.Fatalf("SetupBundleRootfs: %v", err)
+		}
+		assertSearchable(t, filepath.Join(bundle, "rootfs"))
+	})
+
+	t.Run("overlay", func(t *testing.T) {
+		roottest.Require(t, "mount/unmount")
+		layer := t.TempDir()
+		writeLayer(t, layer, map[string]string{"bin/app": "x"}, nil)
+
+		bundle := t.TempDir()
+		if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{layer}}); err != nil {
+			t.Fatalf("WriteSpec: %v", err)
+		}
+		if err := SetupBundleRootfs(bundle); err != nil {
+			t.Fatalf("SetupBundleRootfs: %v", err)
+		}
+		t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+		assertSearchable(t, filepath.Join(bundle, "rootfs"))
+	})
 }
 
 // Full overlay mount + UnmountAllUnder round trip; needs CAP_SYS_ADMIN.
@@ -388,5 +402,111 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 				t.Error("volume still shows content after unmount")
 			}
 		})
+	}
+}
+
+// unpackTestLayer unpacks entries into a layer dir under dir the way the
+// store's unpack does: the tree under fs/ plus its whiteouts.json.
+func unpackTestLayer(t *testing.T, dir string, entries []tarEntry) {
+	t.Helper()
+	fsDir := filepath.Join(dir, layerFSDirName)
+	if err := os.Mkdir(fsDir, 0o755); err != nil {
+		t.Fatalf("mkdir fs: %v", err)
+	}
+	wh, err := unpackInto(t, fsDir, buildTar(t, entries))
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	b, err := json.Marshal(wh)
+	if err != nil {
+		t.Fatalf("marshal whiteouts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, layerWhiteoutsFileName), b, 0o600); err != nil {
+		t.Fatalf("write whiteouts.json: %v", err)
+	}
+}
+
+// TestSetupBundleRootfs_PresentsLayerOwnership composes a rootfs from layers
+// unpacked from tars and checks the merged view shows the owners the tars
+// record: the view runsc's gofer and virtiofsd serve to the actor. The top
+// layer adds files under the private home directory and the setgid team
+// directory without declaring them, so the merged directories' owners and
+// modes also have to survive the implicit-dir repair, which copies them from
+// the base layer's unpacked tree. It runs as root and under the gVisor
+// worker's capabilities, which have no CAP_FSETID.
+func TestSetupBundleRootfs_PresentsLayerOwnership(t *testing.T) {
+	roottest.Require(t, "chown and mount")
+	t.Run("root", testSetupBundleRootfsPresentsLayerOwnership)
+	runUnderCaps(t, "gvisor-worker-caps", gvisorWorkerCaps, testSetupBundleRootfsPresentsLayerOwnership)
+}
+
+func testSetupBundleRootfsPresentsLayerOwnership(t *testing.T) {
+	base := t.TempDir()
+	unpackTestLayer(t, base, ownershipEntries)
+	top := t.TempDir()
+	unpackTestLayer(t, top, []tarEntry{
+		{name: "home/agent/.profile", typeflag: tar.TypeReg, mode: 0o600, body: "p", uid: 1000, gid: 1000},
+		{name: "srv/team/notes", typeflag: tar.TypeReg, mode: 0o664, body: "n", uid: 1000, gid: 100},
+	})
+
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{base, top}}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	rootfs := filepath.Join(bundle, "rootfs")
+	assertOwner(t, filepath.Join(rootfs, "home/agent"), 1000, 1000, os.ModeDir|0o700)
+	assertOwner(t, filepath.Join(rootfs, "home/agent/.bashrc"), 1000, 1000, 0o644)
+	assertOwner(t, filepath.Join(rootfs, "home/agent/.profile"), 1000, 1000, 0o600)
+	assertOwner(t, filepath.Join(rootfs, "home/agent/rc"), 1002, 1002, os.ModeSymlink|0o777)
+	assertOwner(t, filepath.Join(rootfs, "srv/app.conf"), 1000, 2000, 0o640)
+	assertOwner(t, filepath.Join(rootfs, "srv/team"), 1000, 100, os.ModeDir|os.ModeSetgid|0o775)
+	assertOwner(t, filepath.Join(rootfs, "opt/app"), 1001, 1001, os.ModeDir|0o555)
+	assertOwner(t, filepath.Join(rootfs, "home"), 0, 0, os.ModeDir|0o755)
+}
+
+// TestSetupBundleRootfs_RepairsWhiteoutParentUnderSetgidDir checks the repair
+// of an implicit directory that FinalizeLayer creates for a whiteout. The top
+// layer declares srv/shared setgid with group 1000 and whites out a file in
+// srv/shared/docs without declaring docs, so docs starts as 0:1000 with
+// setgid inherited. The repair must still give it the base layer's 02770, and
+// in the gVisor worker root is not in group 1000 and has no CAP_FSETID.
+func TestSetupBundleRootfs_RepairsWhiteoutParentUnderSetgidDir(t *testing.T) {
+	roottest.Require(t, "chown, mknod and mount")
+	t.Run("root", testSetupBundleRootfsRepairsWhiteoutParentUnderSetgidDir)
+	runUnderCaps(t, "gvisor-worker-caps", gvisorWorkerCaps, testSetupBundleRootfsRepairsWhiteoutParentUnderSetgidDir)
+}
+
+func testSetupBundleRootfsRepairsWhiteoutParentUnderSetgidDir(t *testing.T) {
+	base := t.TempDir()
+	unpackTestLayer(t, base, []tarEntry{
+		{name: "srv/shared/docs/", typeflag: tar.TypeDir, mode: 0o2770, uid: 1000, gid: 1000},
+		{name: "srv/shared/docs/old", typeflag: tar.TypeReg, mode: 0o660, body: "o", uid: 1000, gid: 1000},
+	})
+	top := t.TempDir()
+	unpackTestLayer(t, top, []tarEntry{
+		{name: "srv/shared/", typeflag: tar.TypeDir, mode: 0o2775, gid: 1000},
+		{name: "srv/shared/docs/.wh.old", typeflag: tar.TypeReg},
+	})
+
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{base, top}}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	// FinalizeLayer created docs in the top layer under the setgid parent.
+	assertOwner(t, filepath.Join(top, layerFSDirName, "srv/shared/docs"), 0, 1000, 0)
+	rootfs := filepath.Join(bundle, "rootfs")
+	assertOwner(t, filepath.Join(rootfs, "srv/shared/docs"), 1000, 1000, os.ModeDir|os.ModeSetgid|0o770)
+	if _, err := os.Lstat(filepath.Join(rootfs, "srv/shared/docs/old")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("whited-out srv/shared/docs/old: Lstat error %v, want ErrNotExist", err)
 	}
 }

@@ -87,6 +87,7 @@ outputFormats:
 outputs:
   home: [HTML, LLMS, LLMSFULL]
   section: [HTML]
+  page: [HTML, MARKDOWN]
 
 params:
   github_repo: "https://github.com/agent-substrate/substrate"

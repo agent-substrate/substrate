@@ -55,6 +55,7 @@ from common.boomer_config import build_config_json
 from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
 from ladder_steps import append_ladder_steps
+from turnover_window import append_turnover_window, fill_done_ts
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -638,6 +639,18 @@ def main() -> None:
             except Exception as e:
                 tee(logs, f"Warning: Failed to record cluster facts: {e}")
 
+        # A turnover run is measured from the end of its fill, past the
+        # registration of its fleet: the server telemetry's steady window and
+        # the turnover_window row start there. Other runs have no such line.
+        turnover_start = None
+        try:
+            with open(logs_path, errors="replace") as f:
+                turnover_start = fill_done_ts(f)
+            if turnover_start is not None:
+                tee(logs, f"Turnover fill done at {turnover_start}; measuring the turnover from there")
+        except Exception as e:
+            tee(logs, f"Warning: Failed to read the turnover start: {e}")
+
         # Server telemetry is a Prometheus time-window query, so it runs
         # either way. A run too loaded to write a CSV is the one its
         # bin-packing, PSI and snapshot numbers matter most for.
@@ -655,6 +668,7 @@ def main() -> None:
                 logs=logs,
                 lag_s=args.atelet_lag_s,
                 worker_pods=diff_worker_pods(pods_before, pods_after, evicted_uids),
+                steady_not_before=turnover_start,
             )
         except Exception as e:
             tee(logs, f"Warning: Failed to harvest server telemetry: {e}")
@@ -671,6 +685,16 @@ def main() -> None:
                 tee(logs, f"Appended {n} ladder step rows to {jsonl_path}")
         except Exception as e:
             tee(logs, f"Warning: Failed to summarize ladder steps: {e}")
+
+        if turnover_start is not None:
+            try:
+                if append_turnover_window(
+                    jsonl_path, turnover_start, stats_history_csv, data_ts,
+                    args.tag, args.name, logs,
+                ):
+                    tee(logs, f"Appended the turnover_window row to {jsonl_path}")
+            except Exception as e:
+                tee(logs, f"Warning: Failed to summarize the turnover window: {e}")
 
         # The phase breakdown is additive too. It reads the node logs now,
         # while the pods still exist: the orchestrator deletes them as soon

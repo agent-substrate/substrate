@@ -118,10 +118,22 @@ lacks main "${F}/override/index.html" 'as-status-banner--deprecated'
 lacks main "${F}/plain/index.html" 'as-status-banner'
 lacks main "${F}/index.html" 'as-status-banner'
 
-# Copy as Markdown and llms-full.txt carry the status line.
+# Copy as Markdown, per-page index.md, and llms-full.txt carry unescaped
+# Markdown, preserve shell variables, and rewrite relative links.
 has main "${F}/experimental/index.html" '\*\*Status: Experimental\.\*\* This feature is experimental'
-has main llms-full.txt '(>|&gt;) \*\*Status: Deprecated\.\*\* Use the \[experimental page\]\(experimental\.md\) instead\.'
+has main "${F}/deprecated/index.md" '> \*\*Status: Deprecated\.\*\* Use the \[experimental page\]\(https://example\.org/docs/fixtures/experimental/index\.md\) instead\.'
+has main llms-full.txt '> \*\*Status: Deprecated\.\*\* Use the \[experimental page\]\(https://example\.org/docs/fixtures/experimental/index\.md\) instead\.'
+has main "${F}/plain/index.md" '[$]SHELL_VAR'
+has main llms-full.txt '[$]SHELL_VAR'
+lacks main "${F}/plain/index.md" '&gt;|&lt;|&#34;|&#39;'
+lacks main llms-full.txt '&gt;|&lt;|&#34;|&#39;'
 lacks main "${F}/plain/index.html" '\*\*Status:'
+
+# llms.txt links to per-page Markdown files and prefixes non-GA statuses.
+has main llms.txt '\[Plain Page\]\(https://example\.org/docs/fixtures/plain/index\.md\):'
+has main llms.txt '\[Experimental Page\]\(https://example\.org/docs/fixtures/experimental/index\.md\): \[Status: Experimental\]'
+has main llms.txt '\[Deprecated Page\]\(https://example\.org/docs/fixtures/deprecated/index\.md\): \[Status: Deprecated\]'
+has main llms.txt '\[Planned Page\]\(https://example\.org/docs/fixtures/planned/index\.md\): \[Status: Planned\]'
 
 # A status outside the allowed set fails the build and names the value.
 if build bogus testdata/hugo.bogus.yaml; then

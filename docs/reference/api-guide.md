@@ -6,7 +6,7 @@ card_icon: "fa-solid fa-code"
 aliases:
   - "/docs/guides/api-guide/"
 description: >
-  Define WorkerPools and ActorTemplates, the workload blueprints of Agent Substrate.
+  Define WorkerPools, ActorTemplates, and SandboxConfigs, and call the Control Plane gRPC API.
 ---
 
 # Substrate API Guide: WorkerPool & ActorTemplate
@@ -15,14 +15,14 @@ This guide explains how to configure Substrate resources to deploy high-density,
 
 ## 1. WorkerPool: The Physical Capacity
 
-The `WorkerPool` defines the pool of physical "warm" compute capacity. It manages a fleet of standby pods (herders) that are ready to receive and execute actor states.
+The `WorkerPool` defines the pool of physical "warm" compute capacity. It manages a fleet of standby worker pods that are ready to receive and execute actor states.
 
 ### Specification (`WorkerPoolSpec`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
-| `workerImage` | `string` | **Required.** The container image for the `ateworker` herder process (e.g. `ko://go.ate.dev/substrate/cmd/ateworker-gvisor`). |
+| `workerImage` | `string` | **Required.** The container image for the `ateworker` process (e.g. `ko://go.ate.dev/substrate/cmd/ateworker-gvisor`). |
 | `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`, immutable), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. Without `configRef`, the pool uses the class default (see [Class default](#class-default)). The controller records the result in `status.sandboxClasses`. The sandbox binaries an actor boots with come from the `SandboxConfig` the pool of its assigned worker resolved. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
@@ -111,13 +111,13 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
-| `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool decides the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may land on any class, and keeps it from its first checkpoint on. |
+| `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool sets the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may run on any class, and keeps it from its first checkpoint on. An actor created from the golden snapshot or a `sourceTag` runs on that snapshot's class. See [Sandbox Classes](sandbox-classes.md) for what differs between classes. |
 | `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field that requires the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `external` CSI volume source (see [CSI Volumes Guide](../guides/csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `image` read-only OCI image volume (`image.reference`, pinned by digest), an `external` CSI volume source (preview, behind the `ExternalVolumes` gate; see [CSI Volumes Guide](../guides/csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 | `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview.** Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
-The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a microVM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-compute-foundation) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
+The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a microVM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-physical-capacity) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
 
 ### Golden Egress Policy (`goldenEgressPolicy`)
 
@@ -171,11 +171,11 @@ continue to work.
 Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate`. Both are required. Declared limits do two things:
 
 1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateworker):
-   - **gVisor (`ateworker-gvisor`)** — applied to the container OCI spec: `limits.cpuMillicores` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memoryBytes` caps the sandbox's memory and bounds the virtual total memory it reports (so JVM/Go do not over-allocate from host RAM). When the node's kernel has cgroup memory pressure (PSI) enabled, an actor that stays over its limit is killed and reported crashed, and other actors on its worker keep running.
-   - **microVM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, all of it. The microVM worker refuses to boot an actor with less than 128 MiB. What the actor costs outside the guest comes out of the worker's capacity instead (see [Worker Capacity](#worker-capacity-spectemplateresources)). When the node's kernel has cgroup memory pressure (PSI) enabled, an actor whose VMM and virtiofsd stay over what it books is killed and reported crashed, and other actors on its worker keep running.
-2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits, plus its runtime's overhead on that worker.
+   - **gVisor (`ateworker-gvisor`):** The limits go into the container OCI spec. `limits.cpuMillicores` sets the cgroup v2 CPU quota (`cpu.max`) and the CPU count the Sentry reports (`--cpu-num-from-quota`, at least 2; see [CPU Count and Throttling](sandbox-classes.md#cpu-count-and-throttling)). `limits.memoryBytes` caps the sandbox's memory and bounds the virtual total memory it reports (so JVM/Go do not over-allocate from host RAM). When the node's kernel has cgroup memory pressure (PSI) enabled, an actor that stays over its limit is killed and reported crashed, and other actors on its worker keep running.
+   - **microVM (`ateworker-microvm`):** `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs, minimum 1), and the host caps the VMM and `virtiofsd` at the same limit with cgroup v2 `cpu.max`. `limits.memoryBytes` sets guest RAM, all of it. The microVM worker refuses to boot an actor with less than 128 MiB. What the actor costs outside the guest comes out of the worker's capacity instead (see [Worker Capacity](#worker-capacity-spectemplateresources)). When the node's kernel has cgroup memory pressure (PSI) enabled, an actor whose VMM and virtiofsd stay over what it books is killed and reported crashed, and other actors on its worker keep running.
+2. **Gate scheduling.** An actor is only placed on a worker whose remaining [capacity](#worker-capacity-spectemplateresources) is `>=` these limits, plus its runtime's overhead on that worker.
 
-The size is baked into snapshots, so a **microVM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
+There is no `requests` field. To change an actor's limits, point the suspended actor at a new template with `UpdateActor`. Its next resume restores its `VOLUMES` data and cold-boots.
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
@@ -305,13 +305,19 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `wakeupProbe` | `WakeupProbe` | Optional. HTTP wakeup probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
-| `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
+| `resources` | `ResourceRequirements` | Optional. Compute limits for this container (`limits.cpuMillicores` and `limits.memoryBytes`), enforced inside the actor's sandbox. See [Per-container limits](#per-container-limits). |
 
 `command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
+
+The process runs as the image's `USER`, resolved as Docker does against the image's own `/etc/passwd` and `/etc/group`: a numeric `uid:gid` as is; a bare uid with its login group, or gid 0 when it has no entry; a name must have an entry or `Run`/`Restore` fails. Group memberships become supplementary groups. Ids are at most 2147483647. No `USER` means root. There is no `runAsUser` field.
+
+The process starts in the image's `WORKDIR`, or in `/` when the image sets none. A `WORKDIR` the image lacks is created in the actor's writable layer. There is no `workingDir` field.
 
 ### Container Capabilities (`securityContext.capabilities`)
 
 Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, `KILL` and `NET_BIND_SERVICE`. `securityContext.capabilities` adjusts that set, mirroring `securityContext.capabilities` on a Kubernetes Pod container.
+
+A container running as root has that set as its effective capabilities. A container whose image `USER` is not root starts with no effective capabilities, as under Kubernetes, because ambient capabilities are not supported. Its set then only limits what a setuid-root program can gain.
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
@@ -331,8 +337,10 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 
 - **`ALL` in `add` is rejected.** Kubernetes accepts it in the API and relies on PodSecurity admission to deny it; Substrate has no equivalent policy layer yet, so it is refused at admission instead. Name the capabilities the container needs.
 - **Ambient capabilities are not supported** ([gvisor#3166](https://github.com/google/gvisor/issues/3166)).
-- **Low ports.** A container may bind a port below 1024 without `NET_BIND_SERVICE` on both runtimes: gVisor's network stack has no privileged-port limit, and the micro-VM guest sets `net.ipv4.ip_unprivileged_port_start=0` to match.
+- **Low ports.** A container may bind a port below 1024 without `NET_BIND_SERVICE` on both runtimes: gVisor's network stack has no privileged-port limit, and the microVM guest sets `net.ipv4.ip_unprivileged_port_start=0` to match.
+- **`NET_RAW`.** gVisor removes it even when `add` lists it, and microVM grants it. See [Capabilities (`NET_RAW`)](sandbox-classes.md#capabilities-net_raw).
 - **Setuid binaries work.** Neither runtime sets `no_new_privileges`, as for a Kubernetes container with `allowPrivilegeEscalation: true`; gVisor runs with `--allow-suid`.
+- **Image files owned by other users.** Image files keep the owner their image's layers record, as under containerd. A container running as its image's `USER` can use what the image gave that user, for example after `RUN chown -R app:app /app` and `USER app`. A container running as root, because its image sets no `USER` or `USER root`, has no `DAC_OVERRIDE` or `DAC_READ_SEARCH` by default. On a file or directory another user owns, it gets only what the permission bits grant to others. Add `DAC_OVERRIDE` if it writes to such files, or `DAC_READ_SEARCH` if it only reads them.
 
 The sandbox — gVisor or microVM — remains the isolation boundary; capabilities constrain the workload *inside* it.
 
@@ -344,13 +352,13 @@ A container may cap its own CPU and memory so it cannot starve or kill its sibli
 containers:
   - name: trainer
     resources:
-      limits: {memory: 1500Mi}
+      limits: {memoryBytes: 1572864000} # 1500Mi
   - name: sidecar
     resources:
-      limits: {memory: 256Mi, cpu: "0.2"}
+      limits: {memoryBytes: 268435456, cpuMillicores: 200} # 256Mi, 0.2 CPU
 ```
 
-A container that exceeds its memory limit is OOM-killed on its own; the actor's other containers are unaffected. A `cpu` limit below `10m` is raised to `10m`, because the kernel rejects a CFS quota under 1ms.
+A container that exceeds its memory limit is OOM-killed on its own; the actor's other containers are unaffected. A `cpuMillicores` limit below 10 is raised to 10, because the kernel rejects a CFS quota under 1ms.
 
 Per-container limits are microVM only today. gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). On a gVisor worker the per-container limits are accepted but not enforced; only the sandbox-level size applies.
 
@@ -434,6 +442,10 @@ records its snapshot's URI in `status.snapshot` right after it is reserved,
 before anything is copied, so a tag whose creation failed still names any
 partial copy to collect.
 
+Every owner's prefix starts with `<location>/atespaces/`. So where a location is set, through `--snapshot-location` or a template's `storageLocation`, each path segment may contain only ASCII letters, digits, `_` and `-`, and no segment may be `atespaces` in any letter case. The bucket is not restricted. A location such as `gs://my-bucket/atespaces/team-a/actors/<actor uid>` would otherwise put one owner's objects under another owner's or atespace's prefix, inside its grants and its cleanup.
+
+ate-api-server refuses to start with a `--snapshot-location` that breaks these rules, `ate-setup deploy` rejects it, and creating a template rejects such a `storageLocation`. Creating a tag checks the location the tag is stored under and fails with `FAILED_PRECONDITION` on one that breaks them.
+
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
 An `Actor` reports its snapshots in the server-managed `status.snapshots` (and
@@ -488,7 +500,11 @@ a `Snapshot` with the following fields:
     case.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
-  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. Because a
+  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime-version placement constraint.
+  On gVisor, such a restore runs under the worker's default `runsc`, which may
+  not be the version that wrote its files (see the
+  [Version Skew Policy](version-skew-policy.md#sandboxconfig)). A snapshot that
+  records a sandbox class always restores on a worker of that class. Because a
   `ROOTFS` restore reuses the container's rootfs upper layer over the template's
   image, pools selected by an `ActorTemplate` must share a CPU architecture.
 
@@ -660,7 +676,7 @@ The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler 
 
 ## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. When golden snapshots are enabled, this initialization can be captured in the Golden Snapshot. Actors that cold-boot run initialization again.
-*   **Placement:** The `WorkerPool` decides the sandbox class (`sandboxClasses[].name`), so use the template's `workerSelector` to target the pools whose class your workload needs — pool selection is by label match, not by namespace or RBAC. Without a selector an actor may land on any pool.
+*   **Placement:** The `WorkerPool` sets the sandbox class (`sandboxClasses[].name`). Use the template's `workerSelector` to target the pools whose class your workload needs (see [Sandbox Classes](sandbox-classes.md)). Pool selection matches pool labels only. A pool's namespace and RBAC do not limit which templates can select it. Without a selector an actor may run on any pool.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root. Suspended actors can be repointed to the new template via `UpdateActor` (`kubectl ate update actor --template`).
 *   **Eviction:** Give every actor a `SIGTERM` handler that does not exit, and have the actor suspended within 30 minutes of it. See [Eviction](#eviction).
 
