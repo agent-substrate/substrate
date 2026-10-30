@@ -144,10 +144,15 @@ var (
 	defaultHTTPClient        = &http.Client{Timeout: 10 * time.Second}
 )
 
+// ErrSigningKeysUnavailable is wrapped by Verify errors that come from not
+// having the issuer's keys, rather than from the token: a failed fetch with no
+// cached key for the token, or the backoff that follows one.
+var ErrSigningKeysUnavailable = errors.New("could not fetch signing keys")
+
 // KeySource supplies the public keys a Verifier checks signatures with. The
-// Verifier calls Keys on first use, every jwksRefreshInterval, and once per
-// jwksRefreshRetryInterval when a token names a key ID it does not have, so a
-// source may read its backing store on every call.
+// Verifier calls Keys on Refresh, on first use, every jwksRefreshInterval,
+// and once per jwksRefreshRetryInterval when a token names a key ID it does
+// not have, so a source may read its backing store on every call.
 type KeySource interface {
 	Keys(ctx context.Context) ([]*KeyAndID, error)
 }
@@ -228,6 +233,22 @@ func NewVerifier(issuer string, audiences []string, source KeySource, opts ...Op
 		o(v)
 	}
 	return v
+}
+
+// Refresh fetches the issuer's keys and caches them, as a fetch from Verify
+// would. A failure keeps the cached keys and leaves any backoff from an
+// earlier failed fetch as it was.
+func (v *Verifier) Refresh(ctx context.Context, now time.Time) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	keys, err := v.source.Keys(ctx)
+	if err != nil {
+		return fmt.Errorf("%w from %s: %w", ErrSigningKeysUnavailable, v.issuer, err)
+	}
+	v.keys = keys
+	v.lastRefresh = now
+	v.lastFailedRefresh = time.Time{}
+	return nil
 }
 
 // Verify verifies and extracts claims from a JWT.
@@ -404,60 +425,70 @@ func decodeSubstrateClaim(name string, raw json.RawMessage) (*actoridjwt.WireSub
 
 func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto.PublicKey, error) {
 	v.mu.RLock()
-	key := findKey(v.keys, keyID)
-	hasKeys := len(v.keys) > 0
-	lastRefresh := v.lastRefresh
-	lastFailedRefresh := v.lastFailedRefresh
-	lastUnknownKeyRefresh := v.lastUnknownKeyRefresh
+	key, done, err := v.cachedKey(keyID, now)
 	v.mu.RUnlock()
-	if key != nil && now.Sub(lastRefresh) < jwksRefreshInterval {
-		return key.PublicKey, nil
-	}
-	if !lastFailedRefresh.IsZero() && now.Sub(lastFailedRefresh) < jwksRefreshRetryInterval {
-		if key != nil {
-			return key.PublicKey, nil
-		}
-		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
-	}
-	if key == nil && hasKeys && !lastUnknownKeyRefresh.IsZero() && now.Sub(lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
-		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	if done {
+		return key, err
 	}
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	key = findKey(v.keys, keyID)
-	if key != nil && now.Sub(v.lastRefresh) < jwksRefreshInterval {
-		return key.PublicKey, nil
+	// Another call may have fetched since the check above.
+	if key, done, err = v.cachedKey(keyID, now); done {
+		return key, err
 	}
-	if !v.lastFailedRefresh.IsZero() && now.Sub(v.lastFailedRefresh) < jwksRefreshRetryInterval {
-		if key != nil {
-			return key.PublicKey, nil
-		}
-		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
-	}
-	if key == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
-		return nil, fmt.Errorf("unknown key ID %q", keyID)
-	}
-	if key == nil && len(v.keys) > 0 {
+	cached := findKey(v.keys, keyID)
+	if cached == nil && len(v.keys) > 0 {
+		// Set before the fetch so a caller that cancels it still counts, and
+		// made-up key IDs cannot each trigger a fetch.
 		v.lastUnknownKeyRefresh = now
 	}
 	keys, err := v.source.Keys(ctx)
 	if err != nil {
-		v.lastFailedRefresh = now
-		if key != nil {
-			slog.WarnContext(ctx, "Could not refresh JWT signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
-			return key.PublicKey, nil
+		// A caller that gave up says nothing about the issuer, so without a
+		// cached key it starts no failure backoff. With one, it does, so later
+		// calls serve that key and do not each wait on a hung issuer. The HTTP
+		// client's own timeout always backs off.
+		if ctx.Err() == nil || cached != nil {
+			v.lastFailedRefresh = now
 		}
-		return nil, fmt.Errorf("while loading signing keys for issuer: %w", err)
+		if cached != nil {
+			slog.WarnContext(ctx, "Could not refresh JWT signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
+			return cached.PublicKey, nil
+		}
+		return nil, fmt.Errorf("%w from %s: %w", ErrSigningKeysUnavailable, v.issuer, err)
 	}
 	v.keys = keys
 	v.lastRefresh = now
 	v.lastFailedRefresh = time.Time{}
-	key = findKey(keys, keyID)
-	if key == nil {
+	k := findKey(keys, keyID)
+	if k == nil {
 		return nil, fmt.Errorf("unknown key ID %q", keyID)
 	}
-	return key.PublicKey, nil
+	return k.PublicKey, nil
+}
+
+// cachedKey answers from the cached keys when no fetch is due: the key is
+// fresh, a fetch failed less than jwksRefreshRetryInterval ago, or a fetch for
+// another unknown key ID ran that recently. done is false when the caller
+// must fetch. v.mu must be held.
+func (v *Verifier) cachedKey(keyID string, now time.Time) (key crypto.PublicKey, done bool, err error) {
+	k := findKey(v.keys, keyID)
+	if k != nil && now.Sub(v.lastRefresh) < jwksRefreshInterval {
+		return k.PublicKey, true, nil
+	}
+	if !v.lastFailedRefresh.IsZero() && now.Sub(v.lastFailedRefresh) < jwksRefreshRetryInterval {
+		if k != nil {
+			return k.PublicKey, true, nil
+		}
+		// A key ID missing from the cache may be one the issuer rotated in.
+		// The error names the outage so callers report it as retryable.
+		return nil, true, fmt.Errorf("%w from %s: the last attempt failed less than %v ago", ErrSigningKeysUnavailable, v.issuer, jwksRefreshRetryInterval)
+	}
+	if k == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
+		return nil, true, fmt.Errorf("unknown key ID %q", keyID)
+	}
+	return nil, false, nil
 }
 
 func findKey(keys []*KeyAndID, keyID string) *KeyAndID {
