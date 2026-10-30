@@ -31,10 +31,16 @@ permissions:
   contents: read
 jobs:
   upgrade:
-    name: Upgrade e2e (gVisor)
+    name: Upgrade e2e (${{ matrix.sandbox }})
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        sandbox: [gvisor, microvm]
     env:
+      # Points the suite at the counter-microvm fixture. Empty means gVisor.
+      E2E_SANDBOX_CLASS: ${{ matrix.sandbox == 'microvm' && 'microvm' || '' }}
       # Where the previous release's ate-setup writes its install record.
       ATE_RECORD_DIR: ${{ github.workspace }}/ate-records
       # deploy ate-system requires a credential provider selection. The
@@ -92,18 +98,33 @@ jobs:
         cache-dependency-path: |
           new/go.sum
           old/go.sum
+    - name: Enable KVM
+      if: steps.from.outputs.tag != '' && matrix.sandbox == 'microvm'
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it
+      # into the node.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Create cluster
       if: steps.from.outputs.tag != ''
       working-directory: new
       run: hack/create-kind-cluster.sh
     - name: Install ${{ steps.from.outputs.tag }}
-      if: steps.from.outputs.tag != ''
+      if: steps.from.outputs.tag != '' && matrix.sandbox == 'gvisor'
       # The old release's own installer, so the cluster starts out exactly as
       # that release left it. The suite's actors run on the counter demo.
       working-directory: old
       run: |
         go run ./cmd/ate-setup --kind deploy ate-system
         go run ./cmd/ate-setup --kind deploy demo counter
+    - name: Install ${{ steps.from.outputs.tag }} with microVM
+      if: steps.from.outputs.tag != '' && matrix.sandbox == 'microvm'
+      # The old release's own script installs the control plane, its microVM
+      # dependencies and the counter-microvm demo.
+      working-directory: old
+      run: hack/run-microvm-demo-kind.sh
     - name: Upgrade to ${{ github.ref_name }}
       if: steps.from.outputs.tag != ''
       # The suite performs the upgrade with this checkout's ate-setup, in the
@@ -112,12 +133,12 @@ jobs:
       working-directory: new
       env:
         E2E_ATE_SETUP_CONFIG: ${{ github.workspace }}/new.yaml
-        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-upgrade.xml
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-upgrade-${{ matrix.sandbox }}.xml
       # The previous release is installed with no preview gates, and CI has to
       # say so.
       run: |
         cp "${ATE_RECORD_DIR}"/installs/*.yaml "${E2E_ATE_SETUP_CONFIG}"
-        hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 60m -v -args --no-color --preview=""
+        hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 90m -v -args --no-color --preview=""
     # A suite that stops matching would otherwise leave the run green and empty.
     - name: Require the suite to have run tests
       if: always() && steps.from.outputs.tag != ''
@@ -127,7 +148,7 @@ jobs:
       if: always() && steps.from.outputs.tag != ''
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-results-upgrade-e2e
+        name: test-results-upgrade-e2e-${{ matrix.sandbox }}
         # The install records carry no secrets.
         path: |
           ${{ env.ARTIFACTS }}

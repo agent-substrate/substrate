@@ -23,10 +23,10 @@
 // resumes on a new worker with its memory.
 //
 // The suite upgrades the cluster it runs on, so it lives outside
-// internal/e2e/suites and the default e2e run leaves it out. It runs on gVisor
-// only. The actors run on the counter demo the previous release installed
-// (go run ./cmd/ate-setup --kind deploy demo counter, from that checkout). From
-// this checkout:
+// internal/e2e/suites and the default e2e run leaves it out. The actors run on
+// the counter demo the previous release installed (go run ./cmd/ate-setup
+// --kind deploy demo counter, from that checkout), or on counter-microvm with
+// E2E_SANDBOX_CLASS=microvm. From this checkout:
 //
 //	hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 60m
 //
@@ -60,6 +60,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/portforward"
 	"go.ate.dev/substrate/internal/resources"
@@ -127,10 +128,6 @@ func (a *actor) routerRef() resources.ActorRef {
 }
 
 func TestRollingUpgrade(t *testing.T) {
-	// The microVM counter pool has two workers, and the suite needs three.
-	if e2e.IsMicroVM() {
-		t.Fatal("the upgrade suite runs on gVisor only")
-	}
 	ctx := context.Background()
 	suffix := strconv.FormatUint(uint64(rand.Uint32()), 36)
 	api := &api{c: e2e.GetClients()}
@@ -140,17 +137,22 @@ func TestRollingUpgrade(t *testing.T) {
 	pool := types.NamespacedName{Namespace: fixture.PoolNamespace, Name: fixture.PoolName}
 
 	installed := describeInstall(ctx, t, api.get(), fixture)
-	t.Logf("installed: atelet %s, worker image %s", installed.atelet, installed.workerImage)
+	t.Logf("installed: atelet %s, %d %s workers on %s", installed.atelet, installed.workers, installed.sandboxClass, installed.workerImage)
+	if installed.workers < 2 {
+		t.Fatalf("WorkerPool %s has %d workers, want at least 2", pool, installed.workers)
+	}
 
 	newActor := func(name string, before startState) *actor {
 		return &actor{name: name + "-" + suffix, atespace: fixture.Atespace, before: before}
 	}
-	actors := []*actor{
-		newActor("running-a", startRunning),
-		newActor("running-b", startRunning),
-		newActor("paused", startPaused),
-		newActor("suspended", startSuspended),
+	// Every worker but one runs an actor, so the suspended actor can resume
+	// onto an old worker after the atelet step.
+	var running []*actor
+	for i := range installed.workers - 1 {
+		running = append(running, newActor(fmt.Sprintf("running-%d", i), startRunning))
 	}
+	suspended := newActor("suspended", startSuspended)
+	actors := append(slices.Clone(running), newActor("paused", startPaused), suspended)
 	router := newRouter(ctx, t)
 	for _, a := range actors {
 		createActor(ctx, t, api, fixture, a)
@@ -166,21 +168,21 @@ func TestRollingUpgrade(t *testing.T) {
 	// The new atelet serves the old workers: the actors that kept running
 	// answer, and a suspended one resumes onto the spare old worker.
 	router = newRouter(ctx, t)
-	for _, a := range actors[:2] {
+	for _, a := range running {
 		if got := state(ctx, t, api, a); got != ateapi.ActorState_ACTOR_STATE_RUNNING {
 			t.Fatalf("actor %q is %v after %s, want it still running", a.name, got, stepAtelet)
 		}
 		callCounter(ctx, t, router, a, "after "+stepAtelet)
 	}
-	resumeActor(ctx, t, api, router, actors[3])
-	callCounter(ctx, t, router, actors[3], "after "+stepAtelet)
+	resumeActor(ctx, t, api, router, suspended)
+	callCounter(ctx, t, router, suspended, "after "+stepAtelet)
 
 	// These run on old workers, so the pool roll has to evict them.
-	onOldWorkers := []*actor{actors[0], actors[1], actors[3]}
+	onOldWorkers := append(slices.Clone(running), suspended)
 	var newImage string
 	ok := t.Run(stepPoolRoll, func(t *testing.T) {
 		harness.setStep(stepPoolRoll)
-		newImage = publishWorkerImage(t)
+		newImage = publishWorkerImage(t, installed.sandboxClass)
 		if newImage == installed.workerImage {
 			t.Fatalf("this checkout's worker image %s is the installed one; nothing to upgrade", newImage)
 		}
@@ -198,7 +200,7 @@ func TestRollingUpgrade(t *testing.T) {
 	// One actor runs through the control plane steps: the old API server
 	// places it on a new worker and the new one has to suspend it later.
 	router = newRouter(ctx, t)
-	resumeActor(ctx, t, api, router, actors[0])
+	resumeActor(ctx, t, api, router, running[0])
 
 	runStep(ctx, t, api, harness, actors, pool, stepAPIServer)
 	templates := workerTemplates(ctx, t, k8s, pool)
@@ -239,7 +241,7 @@ func TestRollingUpgrade(t *testing.T) {
 		verifyActor(ctx, t, api, router, k8s, a, newImage)
 	}
 	// Once more, so a snapshot the new build wrote restores on the new build.
-	verifyActor(ctx, t, api, router, k8s, actors[1], newImage)
+	verifyActor(ctx, t, api, router, k8s, running[0], newImage)
 }
 
 // runStep runs one ate-setup step and checks the actors afterwards. No step may
@@ -636,8 +638,10 @@ func (h *harness) check(ctx context.Context, a *actor) {
 
 // install is what the cluster ran before the upgrade.
 type install struct {
-	atelet      string
-	workerImage string
+	atelet       string
+	workerImage  string
+	sandboxClass atev1.SandboxClass
+	workers      int
 }
 
 func describeInstall(ctx context.Context, t *testing.T, clients *e2e.Clients, fixture e2e.SubstrateFixture) install {
@@ -651,8 +655,10 @@ func describeInstall(ctx context.Context, t *testing.T, clients *e2e.Clients, fi
 		t.Fatalf("failed to get WorkerPool %s/%s (deploy with: %s): %v", fixture.PoolNamespace, fixture.PoolName, fixture.DeployWith, err)
 	}
 	return install{
-		atelet:      dss.Items[0].Spec.Template.Spec.Containers[0].Image,
-		workerImage: pool.Spec.WorkerImage,
+		atelet:       dss.Items[0].Spec.Template.Spec.Containers[0].Image,
+		workerImage:  pool.Spec.WorkerImage,
+		sandboxClass: pool.Spec.DefaultSandboxClass(),
+		workers:      int(pool.Spec.Replicas),
 	}
 }
 
@@ -740,11 +746,11 @@ func ateSetupCommand(t *testing.T, args ...string) (name string, cmd []string) {
 	return "go", cmd
 }
 
-// publishWorkerImage builds and pushes this checkout's gVisor worker image and
-// returns its ref.
-func publishWorkerImage(t *testing.T) string {
+// publishWorkerImage builds and pushes this checkout's worker image for class
+// and returns its ref.
+func publishWorkerImage(t *testing.T, class atev1.SandboxClass) string {
 	t.Helper()
-	const image = "ateworker-gvisor"
+	image := "ateworker-" + string(class)
 	name, cmd := ateSetupCommand(t, "publish", "worker-images")
 	out := e2e.RunCmdOutput(t, nil, name, cmd...)
 	for line := range strings.Lines(string(out)) {
