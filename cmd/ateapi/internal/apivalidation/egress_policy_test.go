@@ -71,6 +71,15 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 		name: "valid",
 		req:  validReq(),
 	}, {
+		name: "HTTPS client certificate",
+		req: func() *ateapi.CreateActorEgressPolicyRequest {
+			r := validReq()
+			r.EgressPolicy.Rules = []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
+				Hostnames: []string{"api.example.com"}, UpstreamTls: &ateapi.UpstreamTls{ClientCertificate: &ateapi.ClientCertificateSource{ActorCertificate: &ateapi.ActorClientCertificateSource{}}},
+			}}}
+			return r
+		}(),
+	}, {
 		name: "missing actor",
 		req: func() *ateapi.CreateActorEgressPolicyRequest {
 			r := validReq()
@@ -185,6 +194,54 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateCreateActorEgressPolicyRequest(context.Background(), tc.req), tc.want)
+		})
+	}
+}
+
+func TestValidateClientCertificateSource(t *testing.T) {
+	req := func(source *ateapi.ClientCertificateSource) *ateapi.CreateActorEgressPolicyRequest {
+		return &ateapi.CreateActorEgressPolicyRequest{
+			Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor"},
+			EgressPolicy: &ateapi.EgressPolicy{
+				Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: resources.SingletonName},
+				Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{
+					Hostnames:   []string{"api.example.com"},
+					UpstreamTls: &ateapi.UpstreamTls{ClientCertificate: source},
+				}}},
+			},
+		}
+	}
+	for _, tt := range []struct {
+		name    string
+		source  *ateapi.ClientCertificateSource
+		wantErr bool
+	}{
+		{name: "actor certificate", source: &ateapi.ClientCertificateSource{ActorCertificate: &ateapi.ActorClientCertificateSource{}}},
+		{name: "provider certificate", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
+			CertificateUri: "ate-secret://k8s.io/default/ns/cert/tls.crt",
+			PrivateKeyUri:  "ate-secret://k8s.io/default/ns/cert/tls.key",
+		}}},
+		{name: "missing source", source: &ateapi.ClientCertificateSource{}, wantErr: true},
+		{name: "both sources", source: &ateapi.ClientCertificateSource{
+			ActorCertificate: &ateapi.ActorClientCertificateSource{},
+			CredentialProvider: &ateapi.CredentialClientCertificateSource{
+				CertificateUri: "ate-secret://k8s.io/default/ns/cert/tls.crt",
+				PrivateKeyUri:  "ate-secret://k8s.io/default/ns/cert/tls.key",
+			},
+		}, wantErr: true},
+		{name: "missing certificate URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
+			PrivateKeyUri: "ate-secret://k8s.io/default/ns/cert/tls.key",
+		}}, wantErr: true},
+		{name: "invalid provider URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
+			CertificateUri: "https://example.com/cert",
+			PrivateKeyUri:  "ate-secret://k8s.io/default/ns/cert/tls.key",
+		}}, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateCreateActorEgressPolicyRequest(context.Background(), req(tt.source))
+			if got := len(errs) != 0; got != tt.wantErr {
+				t.Fatalf("validation errors = %v, want error = %v", errs, tt.wantErr)
+			}
 		})
 	}
 }

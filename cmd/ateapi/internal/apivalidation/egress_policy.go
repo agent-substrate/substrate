@@ -254,6 +254,14 @@ func ValidateCustom_CredentialHeader_CredentialUri(_ context.Context, _ operatio
 	return nil
 }
 
+func ValidateCustom_CredentialClientCertificateSource_CertificateUri(ctx context.Context, op operation.Operation, p *field.Path, uri, oldURI *string) field.ErrorList {
+	return ValidateCustom_CredentialHeader_CredentialUri(ctx, op, p, uri, oldURI)
+}
+
+func ValidateCustom_CredentialClientCertificateSource_PrivateKeyUri(ctx context.Context, op operation.Operation, p *field.Path, uri, oldURI *string) field.ErrorList {
+	return ValidateCustom_CredentialHeader_CredentialUri(ctx, op, p, uri, oldURI)
+}
+
 func validCredentialURI(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "ate-secret" || u.Host == "" || u.Host != u.Hostname() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(validation.IsDNS1123Subdomain(u.Host)) != 0 {

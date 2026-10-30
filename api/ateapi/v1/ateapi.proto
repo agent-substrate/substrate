@@ -739,6 +739,55 @@ message HttpsRule {
   //
   // +k8s:optional
   HttpRuleEffects effects = 3;
+
+  // TLS settings for the gateway-to-destination connection.
+  //
+  // +k8s:optional
+  UpstreamTls upstream_tls = 4;
+}
+
+// UpstreamTls configures TLS originated by the egress gateway.
+message UpstreamTls {
+  // Selects the client certificate the gateway presents when it originates TLS
+  // to the request's destination.
+  //
+  // +k8s:optional
+  ClientCertificateSource client_certificate = 1;
+}
+
+message ClientCertificateSource {
+  // Dynamically mint a client certificate for the actor.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ActorClientCertificateSource actor_certificate = 1;
+
+  // Resolve the certificate chain and private key from a credential.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  CredentialClientCertificateSource credential_provider = 2;
+}
+
+// ActorClientCertificateSource has ateapi sign a gateway-generated CSR.
+message ActorClientCertificateSource {}
+
+// CredentialClientCertificateSource identifies a certificate and private key
+// through the configured credential provider.
+message CredentialClientCertificateSource {
+  // URI for the certificate chain.
+  // The certificate chain must be in PEM format.
+  //
+  // +k8s:required
+  // +k8s:customValidation # format
+  string certificate_uri = 1;
+
+  // URI for the private key matching certificate_uri.
+  // The private key must be in PEM format.
+  //
+  // +k8s:required
+  // +k8s:customValidation # format
+  string private_key_uri = 2;
 }
 
 // TlsPassthroughRule allows TLS that the gateway forwards without decryption.

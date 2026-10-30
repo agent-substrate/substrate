@@ -1805,6 +1805,91 @@ func Validate_Capabilities(
 	return errs
 }
 
+var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ClientCertificateSource_ = validate.NewUnionMembership(validate.NewUnionMember("actor_certificate"), validate.NewUnionMember("credential_provider"))
+
+// Validate_ClientCertificateSource validates an instance of ClientCertificateSource according
+// to declarative validation rules in the API schema.
+func Validate_ClientCertificateSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.ClientCertificateSource) (errs field.ErrorList) {
+
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ClientCertificateSource_,
+		func(obj *v1.ClientCertificateSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.ActorCertificate != nil
+		},
+		func(obj *v1.ClientCertificateSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.CredentialProvider != nil
+		}); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
+	{ // field v1.ClientCertificateSource.ActorCertificate
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ActorClientCertificateSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ClientCertificateSource) *v1.ActorClientCertificateSource {
+				return oldObj.ActorCertificate
+			})
+		errs = append(errs, fn(fldPath.Child("actor_certificate"), obj.ActorCertificate, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.ClientCertificateSource.CredentialProvider
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.CredentialClientCertificateSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_CredentialClientCertificateSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ClientCertificateSource) *v1.CredentialClientCertificateSource {
+				return oldObj.CredentialProvider
+			})
+		errs = append(errs, fn(fldPath.Child("credential_provider"), obj.CredentialProvider, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_Container validates an instance of Container according
 // to declarative validation rules in the API schema.
 func Validate_Container(
@@ -2569,6 +2654,81 @@ func Validate_CreateWorkerRequest(
 				return oldObj.Worker
 			})
 		errs = append(errs, fn(fldPath.Child("worker"), obj.Worker, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_CredentialClientCertificateSource validates an instance of CredentialClientCertificateSource according
+// to declarative validation rules in the API schema.
+func Validate_CredentialClientCertificateSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.CredentialClientCertificateSource) (errs field.ErrorList) {
+
+	{ // field v1.CredentialClientCertificateSource.CertificateUri
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_CredentialClientCertificateSource_CertificateUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CredentialClientCertificateSource) *string {
+				return &oldObj.CertificateUri
+			})
+		errs = append(errs, fn(fldPath.Child("certificate_uri"), &obj.CertificateUri, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.CredentialClientCertificateSource.PrivateKeyUri
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_CredentialClientCertificateSource_PrivateKeyUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CredentialClientCertificateSource) *string {
+				return &oldObj.PrivateKeyUri
+			})
+		errs = append(errs, fn(fldPath.Child("private_key_uri"), &obj.PrivateKeyUri, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -5262,6 +5422,36 @@ func Validate_HttpsRule(
 				return oldObj.Effects
 			})
 		errs = append(errs, fn(fldPath.Child("effects"), obj.Effects, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.HttpsRule.UpstreamTls
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.UpstreamTls,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_UpstreamTls(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.HttpsRule) *v1.UpstreamTls {
+				return oldObj.UpstreamTls
+			})
+		errs = append(errs, fn(fldPath.Child("upstream_tls"), obj.UpstreamTls, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -9632,6 +9822,45 @@ func Validate_UpdateWorkerRequest(
 				return oldObj.Worker
 			})
 		errs = append(errs, fn(fldPath.Child("worker"), obj.Worker, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_UpstreamTls validates an instance of UpstreamTls according
+// to declarative validation rules in the API schema.
+func Validate_UpstreamTls(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.UpstreamTls) (errs field.ErrorList) {
+
+	{ // field v1.UpstreamTls.ClientCertificate
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ClientCertificateSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ClientCertificateSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.UpstreamTls) *v1.ClientCertificateSource {
+				return oldObj.ClientCertificate
+			})
+		errs = append(errs, fn(fldPath.Child("client_certificate"), obj.ClientCertificate, oldVal, oldObj != nil)...)
 	}
 
 	return errs
