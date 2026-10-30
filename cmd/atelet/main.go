@@ -235,10 +235,7 @@ func main() {
 		}()
 	}
 
-	// stopped on SIGTERM because the replacement pod starts while we drain and
-	// registers the same socket, and kubelet can wedge the resource when two
-	// registrations for one socket overlap
-	startDevicePlugins(shutdownCtx)
+	startDevicePlugins(ctx)
 
 	workerDialer := newWorkerDialer(256)
 

@@ -24,6 +24,7 @@ package deviceplugin
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -108,9 +109,10 @@ func Available(devs []HostDevice, devRoot string) []HostDevice {
 type Plugin struct {
 	pluginapi.UnimplementedDevicePluginServer
 
-	dev     HostDevice
-	socket  string
-	devices []*pluginapi.Device
+	dev HostDevice
+	// each socket is socketPrefix plus a random suffix
+	socketPrefix string
+	devices      []*pluginapi.Device
 }
 
 var _ pluginapi.DevicePluginServer = (*Plugin)(nil)
@@ -126,17 +128,44 @@ func New(dev HostDevice) *Plugin {
 	}
 	return &Plugin{
 		dev: dev,
-		// One socket per resource, in the directory kubelet watches. The name is
-		// derived from the resource so two plugins never collide.
-		socket:  filepath.Join(pluginapi.DevicePluginPath, socketName(dev.ResourceName)),
-		devices: devices,
+		// in the directory kubelet watches, named after the resource so two
+		// plugins never collide
+		socketPrefix: filepath.Join(pluginapi.DevicePluginPath, socketPrefix(dev.ResourceName)),
+		devices:      devices,
 	}
 }
 
-// socketName maps a resource name to a socket filename ("ate.dev/kvm" ->
-// "ate.dev-kvm.sock").
-func socketName(resourceName string) string {
-	return filepath.Base(filepath.Dir(resourceName)) + "-" + filepath.Base(resourceName) + ".sock"
+// socketPrefix maps a resource name to a socket filename prefix
+// ("ate.dev/kvm" -> "ate.dev-kvm-").
+func socketPrefix(resourceName string) string {
+	return filepath.Base(filepath.Dir(resourceName)) + "-" + filepath.Base(resourceName) + "-"
+}
+
+// newSocket returns a fresh socket path. Since 1.37 kubelet rejects a Register
+// for a socket it still has connected, and can wedge the resource as "already
+// connected" if two Registers for one socket overlap.
+// https://github.com/kubernetes/kubernetes/blob/v1.37.0/pkg/kubelet/cm/devicemanager/plugin/v1beta1/handler.go#L82-L86
+func (p *Plugin) newSocket() string {
+	return p.socketPrefix + rand.Text() + ".sock"
+}
+
+// removeSockets removes the sockets newSocket made for prefix. The random part
+// is base32 and has no "-", which tells them apart from the sockets of a
+// resource named like ours plus a "-" suffix, e.g. "ate.dev/kvm-gpu".
+func removeSockets(prefix string) error {
+	matches, err := filepath.Glob(prefix + "*.sock")
+	if err != nil {
+		return fmt.Errorf("while listing sockets: %w", err)
+	}
+	for _, path := range matches {
+		if strings.Contains(strings.TrimPrefix(path, prefix), "-") {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("while removing socket %q: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // Run serves the plugin and keeps it registered until ctx is cancelled. Kubelet
@@ -150,6 +179,11 @@ func (p *Plugin) Run(ctx context.Context) error {
 	defer watcher.Close()
 	if err := watcher.Add(pluginapi.DevicePluginPath); err != nil {
 		return fmt.Errorf("while watching %q: %w", pluginapi.DevicePluginPath, err)
+	}
+
+	// earlier atelets leave their socket behind, as the server runs until exit
+	if err := removeSockets(p.socketPrefix); err != nil {
+		return err
 	}
 
 	for ctx.Err() == nil {
@@ -174,16 +208,13 @@ func (p *Plugin) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// serveAndRegister starts the gRPC server on the plugin socket and registers it
-// with kubelet. The returned server is stopped by the caller.
+// serveAndRegister starts the gRPC server on a new plugin socket and registers
+// it with kubelet. The returned server is stopped by the caller.
 func (p *Plugin) serveAndRegister(ctx context.Context) (*grpc.Server, error) {
-	// A leftover socket from a previous run would make Listen fail with EADDRINUSE.
-	if err := os.Remove(p.socket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("while removing stale socket %q: %w", p.socket, err)
-	}
-	lis, err := net.Listen("unix", p.socket)
+	socket := p.newSocket()
+	lis, err := net.Listen("unix", socket)
 	if err != nil {
-		return nil, fmt.Errorf("while listening on %q: %w", p.socket, err)
+		return nil, fmt.Errorf("while listening on %q: %w", socket, err)
 	}
 
 	srv := grpc.NewServer()
@@ -195,15 +226,15 @@ func (p *Plugin) serveAndRegister(ctx context.Context) (*grpc.Server, error) {
 		}
 	}()
 
-	if err := p.register(ctx); err != nil {
+	if err := p.register(ctx, socket); err != nil {
 		srv.Stop()
 		return nil, err
 	}
 	return srv, nil
 }
 
-// register tells kubelet which resource this plugin's socket serves.
-func (p *Plugin) register(ctx context.Context) error {
+// register tells kubelet which resource socket serves.
+func (p *Plugin) register(ctx context.Context, socket string) error {
 	ctx, cancel := context.WithTimeout(ctx, registerTimeout)
 	defer cancel()
 
@@ -216,7 +247,7 @@ func (p *Plugin) register(ctx context.Context) error {
 
 	_, err = pluginapi.NewRegistrationClient(conn).Register(ctx, &pluginapi.RegisterRequest{
 		Version:      pluginapi.Version,
-		Endpoint:     filepath.Base(p.socket),
+		Endpoint:     filepath.Base(socket),
 		ResourceName: p.dev.ResourceName,
 	})
 	if err != nil {
@@ -253,9 +284,10 @@ func (p *Plugin) waitForKubeletRestart(ctx context.Context, watcher *fsnotify.Wa
 }
 
 // kubeletRestarted reports whether event is kubelet recreating socket since we
-// stat'd it as registered. Re-registering on a stale event can wedge the
-// resource in kubelet as "already connected", if the second Register for our
-// socket arrives while kubelet is still closing the first stream.
+// stat'd it as registered. We don't re-register on a stale event, because
+// kubelet before 1.37 disconnects the new registration if it handles our old
+// stream closing after the new Register.
+// https://github.com/kubernetes/kubernetes/blob/v1.36.0/pkg/kubelet/cm/devicemanager/plugin/v1beta1/handler.go#L122-L134
 func kubeletRestarted(event fsnotify.Event, socket string, registered os.FileInfo) bool {
 	if event.Name != socket || !event.Has(fsnotify.Create) {
 		return false
