@@ -28,6 +28,8 @@
 // fleet had no room for its actor (--agentsession-resume-retry-budget).
 // --agentsession-phase-in staggers session starts so a fleet spawned in one
 // ramp does not reach every later step in a single wave.
+// --agentsession-awake runs the sessions in turnover mode instead, where a
+// conductor parks and wakes them at --target-rps (see turnover.go).
 package agentsession
 
 import (
@@ -41,6 +43,7 @@ import (
 	"log/slog"
 	mathrand "math/rand/v2"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +51,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/myzhan/boomer"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
@@ -146,6 +150,10 @@ type knobs struct {
 	// fleet had no room for before it gives up on the step; 0 gives the
 	// wake one attempt. Unset, it is defaultResumeRetryBudget.
 	ResumeRetryBudget dynconfig.Seconds `json:"agentsession_resume_retry_budget"`
+	// Awake > 0 enables turnover mode (turnover.go) with this many awake sessions.
+	Awake int `json:"agentsession_awake"`
+	// TargetRPS is the swaps/s in turnover mode.
+	TargetRPS float64 `json:"target_rps"`
 }
 
 var knobsCodec = dynconfig.Typed[knobs]{
@@ -163,10 +171,24 @@ var knobsCodec = dynconfig.Typed[knobs]{
 		if k.ResumeRetryBudget < 0 {
 			return fmt.Errorf("agentsession_resume_retry_budget cannot be negative: %v", k.ResumeRetryBudget)
 		}
-		if steps, err := parseSnapshotSteps(k.SnapshotSteps); err != nil {
+		if k.Awake < 0 {
+			return fmt.Errorf("agentsession_awake cannot be negative: %d", k.Awake)
+		}
+		if k.TargetRPS < 0 {
+			return fmt.Errorf("target_rps cannot be negative: %v", k.TargetRPS)
+		}
+		steps, err := parseSnapshotSteps(k.SnapshotSteps)
+		if err != nil {
 			return err
-		} else if len(steps) > 0 && k.LifecycleMode == dynconfig.LifecycleModeNone {
+		}
+		if len(steps) > 0 && k.LifecycleMode == dynconfig.LifecycleModeNone {
 			return fmt.Errorf("agentsession_snapshot_steps cannot be used with lifecycle_mode %q", dynconfig.LifecycleModeNone)
+		}
+		if k.Awake > 0 && k.LifecycleMode == dynconfig.LifecycleModeNone {
+			return fmt.Errorf("agentsession_awake cannot be used with lifecycle_mode %q", dynconfig.LifecycleModeNone)
+		}
+		if k.Awake > 0 && len(steps) > 0 {
+			return fmt.Errorf("agentsession_awake cannot be used with agentsession_snapshot_steps")
 		}
 		return nil
 	},
@@ -190,11 +212,40 @@ func parseSnapshotSteps(raw string) (map[int]bool, error) {
 	return steps, nil
 }
 
+func newRuntime(cfg *userclass.Config) *runtime {
+	rt := &runtime{
+		cfg:          cfg,
+		conductor:    newConductor(time.Now),
+		turnStartSem: make(chan struct{}, turnoverStartConcurrency),
+	}
+	rt.conductor.starting = rt.startingCount.Load
+	return rt
+}
+
+func (r *runtime) conduct() {
+	t := time.NewTicker(swapTick)
+	defer t.Stop()
+	for range t.C {
+		if r.stopping.Load() {
+			return
+		}
+		if dyn := dynconfig.Get[knobs](r.cfg.Dyn); dyn.Awake > 0 {
+			r.conductor.tick(dyn.Awake, dyn.TargetRPS)
+		}
+	}
+}
+
 func initAgentSession(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("substrate-boomer/agentsession")
 	}
-	rt := &runtime{cfg: cfg}
+	rt := newRuntime(cfg)
+	// boomer cancels every session's goroutine on a stop from the master.
+	if err := boomer.Events.Subscribe(boomer.EVENT_STOP, rt.conductor.halt); err != nil {
+		slog.Error("fatal: agentsession cannot subscribe to boomer stop", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	go rt.conduct()
 	return rt.iterate, rt.shutdown
 }
 
@@ -238,8 +289,9 @@ type runtime struct {
 	// not yet stored or cleaned up, so shutdown can wait for them: main
 	// exits when it returns. startMu orders setting stopping against
 	// joining the count, so no start slips in between the two.
-	startMu  sync.Mutex
-	starting sync.WaitGroup
+	startMu       sync.Mutex
+	starting      sync.WaitGroup
+	startingCount atomic.Int64
 
 	// loaded is what the knobs currently select, resolved by loadScript when
 	// a session starts and re-resolved when the knobs name something else or
@@ -257,6 +309,9 @@ type runtime struct {
 	templateErr    error
 	templateErrAt  time.Time
 	templateErrFor *Script
+
+	conductor    *conductor
+	turnStartSem chan struct{}
 }
 
 // templateRecheckInterval is how long a template memory refusal stands
@@ -453,6 +508,7 @@ func (r *runtime) iterate() {
 			}
 		}
 		// The start is complete, cleanup included; shutdown may return.
+		r.startingCount.Add(-1)
 		r.starting.Done()
 		if stopping {
 			return
@@ -460,16 +516,16 @@ func (r *runtime) iterate() {
 	}
 	u := val.(*sessionUser)
 
-	step := u.steps[u.stepIndex]
+	if dyn := dynconfig.Get[knobs](r.cfg.Dyn); dyn.Awake > 0 {
+		r.conductor.step(context.Background(), u, dyn)
+	} else {
+		step := u.steps[u.stepIndex]
 
-	// The LLM is "thinking": the actor stays suspended for the gap.
-	time.Sleep(r.think(step))
+		// The LLM is "thinking": the actor stays suspended for the gap.
+		time.Sleep(r.think(step))
 
-	if u.runStep(context.Background(), step) {
-		u.stepIndex = (u.stepIndex + 1) % len(u.steps)
-		if u.stepIndex == 0 {
-			slog.Info("agent session completed the full script; starting over",
-				slog.String("actor", u.actorName))
+		if u.runStep(context.Background(), step) {
+			u.advance()
 		}
 	}
 
@@ -505,10 +561,12 @@ func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript
 		r.startMu.Unlock()
 		return nil, errStopping
 	}
+	r.startingCount.Add(1)
 	r.starting.Add(1)
 	r.startMu.Unlock()
 	u, err := r.createSession(ctx, dyn, loaded)
 	if err != nil {
+		r.startingCount.Add(-1)
 		r.starting.Done()
 		return nil, err
 	}
@@ -519,6 +577,17 @@ func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript
 // the actor, waits for it to serve, and parks it unless the session stays
 // resident.
 func (r *runtime) createSession(ctx context.Context, dyn knobs, loaded *loadedScript) (*sessionUser, error) {
+	if dyn.Awake > 0 {
+		select {
+		case r.turnStartSem <- struct{}{}:
+			defer func() { <-r.turnStartSem }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if r.stopping.Load() {
+			return nil, errStopping
+		}
+	}
 	u := &sessionUser{
 		cfg:       r.cfg,
 		actorName: "agent-" + uuid.NewString(),
@@ -542,10 +611,18 @@ func (r *runtime) createSession(ctx context.Context, dyn knobs, loaded *loadedSc
 		return nil, fmt.Errorf("waitServing: %w", err)
 	}
 	u.awake = true
-	// Park the fresh actor so step 01 wakes it like any other step, unless
-	// the session stays resident (--lifecycle-mode none or
+	if dyn.Awake > 0 {
+		// Run step 1 so the initial actor/snapshot holds real memory and disk state.
+		if !u.runStep(ctx, u.steps[0]) {
+			u.suspendAndDelete(ctx)
+			return nil, fmt.Errorf("initial step %s failed", u.steps[0].Name)
+		}
+		u.advance()
+	}
+	// Park the fresh actor so the next step wakes it like any other step,
+	// unless the session stays resident (--lifecycle-mode none or
 	// --agentsession-snapshot-steps). A failed park is re-driven at the top
-	// of the first step.
+	// of the next step.
 	if u.shouldHibernateAtStart(dyn) {
 		u.hibernate(ctx)
 	}
@@ -646,6 +723,19 @@ type sessionUser struct {
 	// otherwise stuck actor never recovers on its own, and without
 	// replacement it would wedge its VU for the rest of the run.
 	broken bool
+	// Turnover-mode state (see turnover.go).
+	joined  bool
+	cmdCh   chan turnCmd
+	stepDue bool
+}
+
+// advance moves the session to its next step, wrapping to the first.
+func (u *sessionUser) advance() {
+	u.stepIndex = (u.stepIndex + 1) % len(u.steps)
+	if u.stepIndex == 0 {
+		slog.Info("agent session completed the full script; starting over",
+			slog.String("actor", u.actorName))
+	}
 }
 
 // httpError is a router reply with a status of 400 or above. It keeps the
@@ -724,9 +814,10 @@ func (u *sessionUser) shouldHibernateAtStart(dyn knobs) bool {
 }
 
 // shouldHibernateAfterStep reports whether the actor should be parked after
-// completing the current step (1-based index u.stepIndex+1).
+// completing the current step (1-based index u.stepIndex+1). It is false in
+// turnover mode, where the conductor parks the actors.
 func (u *sessionUser) shouldHibernateAfterStep(dyn knobs) bool {
-	if dyn.LifecycleMode == dynconfig.LifecycleModeNone {
+	if dyn.LifecycleMode == dynconfig.LifecycleModeNone || dyn.Awake > 0 {
 		return false
 	}
 	steps, err := parseSnapshotSteps(dyn.SnapshotSteps)
@@ -755,51 +846,24 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 
 	dyn := dynconfig.Get[knobs](u.cfg.Dyn)
 	wasParked := !u.awake && dyn.LifecycleMode != dynconfig.LifecycleModeNone
-	// A parked actor's wake, from the first attempt to the ping that finds it
-	// serving, is one TimeToWake sample. A fleet with no room for the actor
-	// is retried within the budget, so the wait for a slot lands in that row
-	// as latency instead of vanishing into failed rows and a skipped step.
-	wakeStart := time.Now()
-	deadline := wakeStart.Add(dyn.ResumeRetryBudget.Duration())
-	if wasParked && dyn.ResumeMode == dynconfig.ResumeModeExplicit {
-		if err := retryWhileFull(ctx, deadline, func() error { return u.resume(ctx) }); err != nil {
-			u.noteFailure(err)
-			u.recordTimeToWake(wakeStart, err)
-			if isCapacityError(err) {
-				slog.Warn("agent session found no room within the retry budget",
-					slog.String("actor", u.actorName),
-					slog.String("step", step.Name),
-					slog.Duration("waited", time.Since(wakeStart)),
-					slog.String("err", err.Error()))
+	if wasParked {
+		if pinged, err := u.wakeParked(ctx, dyn, step.Name); err != nil {
+			if pinged {
+				u.hibernate(ctx)
 			}
 			return false
 		}
-	}
-
-	var err error
-	if wasParked {
-		err = retryWhileFull(ctx, deadline, func() error { return u.wakePing(ctx) })
 	} else {
-		err = u.execOp(ctx, ping())
-	}
-	if err != nil {
-		u.noteFailure(err)
-		if wasParked {
-			u.recordTimeToWake(wakeStart, err)
+		start := time.Now()
+		if err := u.execOp(ctx, ping()); err != nil {
+			u.noteFailure(err)
+			warnWakeFailed(u.actorName, step.Name, start, err)
+			if u.shouldHibernateAfterStep(dyn) {
+				u.hibernate(ctx)
+			}
+			return false
 		}
-		slog.Warn("agent session wake failed",
-			slog.String("actor", u.actorName),
-			slog.String("step", step.Name),
-			slog.Duration("waited", time.Since(wakeStart)),
-			slog.String("err", err.Error()))
-		if wasParked || u.shouldHibernateAfterStep(dyn) {
-			u.hibernate(ctx)
-		}
-		return false
-	}
-	u.awake = true
-	if wasParked {
-		u.recordTimeToWake(wakeStart, nil)
+		u.awake = true
 	}
 
 	metricName := "Step_" + step.Name
@@ -850,6 +914,45 @@ func (u *sessionUser) recordTimeToWake(start time.Time, err error) {
 		return
 	}
 	bmetrics.RecordSuccess("summary", "TimeToWake", agentSessionUserClass, time.Since(start), 0)
+}
+
+// wakeParked wakes a parked actor (ResumeActor in explicit mode + wakePing),
+// retrying capacity errors within ResumeRetryBudget. pinged is true once it
+// reaches wakePing, after which the actor may be running even on error.
+func (u *sessionUser) wakeParked(ctx context.Context, dyn knobs, step string) (pinged bool, err error) {
+	wakeStart := time.Now()
+	deadline := wakeStart.Add(dyn.ResumeRetryBudget.Duration())
+	if dyn.ResumeMode == dynconfig.ResumeModeExplicit {
+		if err := retryWhileFull(ctx, deadline, func() error { return u.resume(ctx) }); err != nil {
+			u.noteFailure(err)
+			u.recordTimeToWake(wakeStart, err)
+			if isCapacityError(err) {
+				slog.Warn("agent session found no room within the retry budget",
+					slog.String("actor", u.actorName),
+					slog.String("step", step),
+					slog.Duration("waited", time.Since(wakeStart)),
+					slog.String("err", err.Error()))
+			}
+			return false, err
+		}
+	}
+	if err := retryWhileFull(ctx, deadline, func() error { return u.wakePing(ctx) }); err != nil {
+		u.noteFailure(err)
+		u.recordTimeToWake(wakeStart, err)
+		warnWakeFailed(u.actorName, step, wakeStart, err)
+		return true, err
+	}
+	u.awake = true
+	u.recordTimeToWake(wakeStart, nil)
+	return true, nil
+}
+
+func warnWakeFailed(actor, step string, start time.Time, err error) {
+	slog.Warn("agent session wake failed",
+		slog.String("actor", actor),
+		slog.String("step", step),
+		slog.Duration("waited", time.Since(start)),
+		slog.String("err", err.Error()))
 }
 
 // retryWhileFull runs call and, while it fails with a capacity error and
