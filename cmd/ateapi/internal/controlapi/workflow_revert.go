@@ -67,11 +67,12 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	var finalAttrs []attribute.KeyValue
 
 	defer func() {
+		err = actorOpError(err, actorRef)
 		attrs := finalAttrs
 		if attrs == nil {
 			attrs = lifecycleOpAttrs(actor, "", "")
 		}
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationRevert, start, actorOpError(err, actorRef), attrs...)
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationRevert, start, err, attrs...)
 	}()
 
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
