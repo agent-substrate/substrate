@@ -138,6 +138,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
+	configVars["ATE_API_ACTOR_JWT_ISSUER_CA_FILE"] = actorJWTIssuerCAFile(e.Cfg.ActorJWTIssuer, e.Namespace())
 	// Written empty on kind, so the sidecar's argument is never the literal
 	// $(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT).
 	configVars["ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT"] = e.Cfg.TransferServiceAccount()
@@ -152,6 +153,19 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		return err
 	}
 	return e.applyPostgresServerCA(ctx)
+}
+
+// actorJWTIssuerCAFile returns the CA file the objectstore-plugin sidecar
+// verifies issuer's serving certificate with. The default issuer is this
+// install's ate-idp-server, which serves a service DNS certificate. A custom
+// issuer gets "", which selects the system roots. The caller writes the key
+// either way, so the sidecar's argument is never the literal
+// $(ATE_API_ACTOR_JWT_ISSUER_CA_FILE).
+func actorJWTIssuerCAFile(issuer, namespace string) string {
+	if issuer == installdefaults.ActorJWTIssuer(namespace) {
+		return "/run/servicedns.podcert.ate.dev/trust-bundle.pem"
+	}
+	return ""
 }
 
 // UpdateAPIServerEnvVars is CreateAPIServerEnvVars for an install that is not
