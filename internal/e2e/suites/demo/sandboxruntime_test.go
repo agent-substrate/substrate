@@ -51,6 +51,106 @@ var gvisorSecondReleaseAssets = map[string]map[string]atev1.AssetFile{
 	},
 }
 
+// TestSandboxConfigEdit covers what a suspended actor's MEMORY snapshot
+// restores at after its pool's SandboxConfig is edited. Each case starts from
+// its own pool on a SandboxConfig holding one version, v1, with an actor
+// suspended on it (memory=2, file=2, rootfs=2). After the edit the worker
+// re-registers, the actor resumes, and its next suspend stamps the snapshot
+// with the runtime it resumed under.
+func TestSandboxConfigEdit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		// edit returns the defaultVersion and versions to apply to a config
+		// that starts with v1 alone.
+		edit func(v1, v2 atev1.SandboxVersionConfig) (string, []atev1.SandboxVersionConfig)
+		// wantFidelity is the fidelity the actor restores at after the edit.
+		wantFidelity ateapi.SnapshotFidelity
+		// wantOnV1 says the actor still restores under v1's runtime, which
+		// the worker then lists in restorable_runtimes. Otherwise it restores
+		// under the worker's new default_runtime.
+		wantOnV1 bool
+		// repoint moves the actor to a copy of its template before the edit.
+		repoint bool
+		// checkWorker, if set, inspects the worker after it re-registered.
+		checkWorker func(t *testing.T, status *ateapi.WorkerStatus)
+	}{{
+		name: "new default keeps old version restorable",
+		edit: func(v1, v2 atev1.SandboxVersionConfig) (string, []atev1.SandboxVersionConfig) {
+			return v2.Name, []atev1.SandboxVersionConfig{v1, v2}
+		},
+		wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		wantOnV1:     true,
+	}, {
+		name: "disabled version falls back to ROOTFS",
+		edit: func(v1, v2 atev1.SandboxVersionConfig) (string, []atev1.SandboxVersionConfig) {
+			return v2.Name, []atev1.SandboxVersionConfig{withState(v1, atev1.SandboxVersionStateDisabled), v2}
+		},
+		wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+	}, {
+		// The snapshot was taken under another template, which forces VOLUMES
+		// on its own; the runtime fallback alone would keep ROOTFS.
+		name:    "replaced template on disabled version falls back to VOLUMES",
+		repoint: true,
+		edit: func(v1, v2 atev1.SandboxVersionConfig) (string, []atev1.SandboxVersionConfig) {
+			return v2.Name, []atev1.SandboxVersionConfig{withState(v1, atev1.SandboxVersionStateDisabled), v2}
+		},
+		wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	}, {
+		// Compatibility keys on sandbox_bundle_hash, not on version names:
+		// "v1" now carries v2's assets as the default and "v2" carries v1's,
+		// each with a duplicate alias. The worker lists v1's hash once and
+		// does not repeat the default in restorable_runtimes.
+		name: "swapped version names keep the bundle restorable",
+		edit: func(v1, v2 atev1.SandboxVersionConfig) (string, []atev1.SandboxVersionConfig) {
+			return v1.Name, []atev1.SandboxVersionConfig{
+				withName(v2, v1.Name), withName(v2, v1.Name+"-alias"),
+				withName(v1, v2.Name), withName(v1, v2.Name+"-alias"),
+			}
+		},
+		wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		wantOnV1:     true,
+		checkWorker: func(t *testing.T, status *ateapi.WorkerStatus) {
+			if classes := status.GetSandboxClasses(); len(classes) != 1 || len(classes[0].GetRestorableRuntimes()) != 1 {
+				t.Fatalf("restorable_runtimes did not deduplicate identical bundle hashes: %v", classes)
+			}
+		},
+	}, {
+		// The version keeps its name but its assets change, so its hash
+		// changes and no worker can restore the snapshot's memory.
+		name: "asset edit under the same version name falls back to ROOTFS",
+		edit: func(v1, v2 atev1.SandboxVersionConfig) (string, []atev1.SandboxVersionConfig) {
+			return v1.Name, []atev1.SandboxVersionConfig{withName(v2, v1.Name)}
+		},
+		wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := setupSuspendedV1Actor(t, "config-edit")
+			if tt.repoint {
+				f.repoint(t)
+			}
+			defaultVersion, versions := tt.edit(f.v1, f.v2)
+			f.updateVersions(t, defaultVersion, versions)
+			// The worker matched v1 as its default before the edit, so also
+			// wait for the default to move off v1's hash.
+			status := f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
+				defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
+				return defHash != "" && defHash != f.v1Hash && hardware.WorkerMatches(status, f.v1Runtime) == tt.wantOnV1
+			})
+			if tt.checkWorker != nil {
+				tt.checkWorker(t, status)
+			}
+			wantRuntime := f.v1Runtime
+			if !tt.wantOnV1 {
+				wantRuntime = hardware.ColdBootRuntime(status)
+			}
+			f.resumeAndCheck(t, tt.wantFidelity, wantRuntime)
+		})
+	}
+}
+
 // sandboxRuntimeFixture is a suspended actor on a pool whose SandboxConfig
 // the test owns, so the test can edit versions and watch the worker
 // re-register and the actor resume.
@@ -322,6 +422,43 @@ func (f *sandboxRuntimeFixture) suspend(t *testing.T, wantRuntime *ateapi.ActorS
 		t.Fatalf("snapshot sandbox_runtime of %s (-want +got):\n%s", f.actorName, diff)
 	}
 	f.generation = snap.GetGeneration()
+}
+
+// repoint creates a copy of the fixture's ActorTemplate under another name
+// and moves the actor to it with UpdateActor, so the actor's snapshot no
+// longer matches its template.
+func (f *sandboxRuntimeFixture) repoint(t *testing.T) {
+	t.Helper()
+	name := "tmpl-b-" + f.actorName
+	ref := &ateapi.ObjectRef{Atespace: demoAtespace, Name: name}
+	if _, err := f.clients.SubstrateAPI.CreateActorTemplate(f.ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: name},
+		WorkerSelector: f.tmpl.GetWorkerSelector(),
+		Containers:     f.tmpl.GetContainers(),
+		Resources:      f.tmpl.GetResources(),
+		Volumes:        f.tmpl.GetVolumes(),
+		SnapshotConfig: f.tmpl.GetSnapshotConfig(),
+	}}); err != nil {
+		t.Fatalf("failed to create ActorTemplate %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _ = f.clients.SubstrateAPI.DeleteActorTemplate(cleanupCtx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref})
+	})
+	actor, err := f.clients.SubstrateAPI.GetActor(f.ctx, &ateapi.GetActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to get Actor %s: %v", f.actorName, err)
+	}
+	if _, err := f.clients.SubstrateAPI.UpdateActor(f.ctx, &ateapi.UpdateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata:      actor.GetMetadata(),
+			ActorTemplate: ref,
+			SourceTag:     actor.GetSourceTag(),
+		},
+	}); err != nil {
+		t.Fatalf("failed to update Actor %s to template %s: %v", f.actorName, name, err)
+	}
 }
 
 // newestClassDefault returns the cluster's installed class-default
