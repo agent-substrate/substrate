@@ -126,26 +126,31 @@ func TestLdflagsStampTheCommit(t *testing.T) {
 	}
 }
 
-// fakeKo writes a ko stand-in that records its arguments, one per line, and
-// prints stdout.
-func fakeKo(t *testing.T, stdout string) (binary, argsFile string) {
+// testdataScript returns the absolute path of a ko stand-in in testdata/.
+func testdataScript(t *testing.T, name string) string {
 	t.Helper()
-	dir := t.TempDir()
-	argsFile = filepath.Join(dir, "args")
-	binary = filepath.Join(dir, "ko")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\nprintf '" + stdout + "'\n"
-	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+	path, err := filepath.Abs(filepath.Join("testdata", name))
+	if err != nil {
 		t.Fatal(err)
 	}
-	return binary, argsFile
+	return path
+}
+
+// fakeKo returns testdata/fake-ko.sh and the environment it needs to record
+// its arguments, one per line, in argsFile and print stdout.
+func fakeKo(t *testing.T, stdout string) (binary string, env []string, argsFile string) {
+	t.Helper()
+	argsFile = filepath.Join(t.TempDir(), "args")
+	env = []string{"FAKE_KO_ARGS=" + argsFile, "FAKE_KO_STDOUT=" + stdout}
+	return testdataScript(t, "fake-ko.sh"), env, argsFile
 }
 
 // A release is only installable if every image carries the tag and the
 // --base-import-paths name that --image-repo looks it up by.
 func TestBuildTagged(t *testing.T) {
 	t.Setenv("VERSION", "v1.2.3")
-	binary, argsFile := fakeKo(t, "repo/ateapi:v1.2.3@sha256:a\\nrepo/atelet:v1.2.3@sha256:b\\n")
-	r := &Runner{Root: t.TempDir(), Stderr: os.Stderr, binary: binary}
+	binary, env, argsFile := fakeKo(t, "repo/ateapi:v1.2.3@sha256:a\nrepo/atelet:v1.2.3@sha256:b\n")
+	r := &Runner{Root: t.TempDir(), Env: env, Stderr: os.Stderr, binary: binary}
 
 	refs, err := r.BuildTagged(t.Context(), "v1.2.3", []string{"org.example/source=https://example.com"}, "./cmd/ateapi", "./cmd/atelet")
 	if err != nil {
@@ -172,30 +177,26 @@ func TestBuildTagged(t *testing.T) {
 // A ref missing from ko's output would leave a release short an image, so it
 // fails the build rather than printing an incomplete list.
 func TestBuildTaggedRejectsMissingRefs(t *testing.T) {
-	binary, _ := fakeKo(t, "repo/ateapi:v1@sha256:a\\n")
-	r := &Runner{Root: t.TempDir(), Stderr: os.Stderr, binary: binary}
+	binary, env, _ := fakeKo(t, "repo/ateapi:v1@sha256:a\n")
+	r := &Runner{Root: t.TempDir(), Env: env, Stderr: os.Stderr, binary: binary}
 
 	if _, err := r.BuildTagged(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet"); err == nil {
 		t.Error("BuildTagged() error = nil, want one for 1 ref from 2 packages")
 	}
 }
 
-// flakyKo writes a ko stand-in that fails the first failures builds of each
-// package, printing stderr, then prints a ref for it. It returns the
-// directory where it counts builds per package.
-func flakyKo(t *testing.T, failures int, stderr string) (binary, dir string) {
+// flakyKo returns testdata/flaky-ko.sh and the environment it needs to fail
+// the first failures builds of each package, printing stderr, then print a ref
+// for it. It returns the directory where the script counts builds per package.
+func flakyKo(t *testing.T, failures int, stderr string) (binary string, env []string, dir string) {
 	t.Helper()
 	dir = t.TempDir()
-	binary = filepath.Join(dir, "ko")
-	script := "#!/bin/sh\n" +
-		"pkg=$(basename \"$2\")\n" +
-		"echo run >> " + dir + "/runs-$pkg\n" +
-		"if [ $(wc -l < " + dir + "/runs-$pkg) -le " + strconv.Itoa(failures) + " ]; then echo '" + stderr + "' >&2; exit 1; fi\n" +
-		"echo repo/$pkg:v1@sha256:a\n"
-	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	env = []string{
+		"FLAKY_KO_DIR=" + dir,
+		"FLAKY_KO_FAILURES=" + strconv.Itoa(failures),
+		"FLAKY_KO_STDERR=" + stderr,
 	}
-	return binary, dir
+	return testdataScript(t, "flaky-ko.sh"), env, dir
 }
 
 // koRuns returns how many times flakyKo built pkg.
@@ -223,8 +224,8 @@ const deniedStderr = "PATCH https://ghcr.io/v2/agent-substrate/substrate/ateapi/
 
 func TestBuildEachRetriesEachImage(t *testing.T) {
 	fastBackoff(t)
-	binary, dir := flakyKo(t, 2, deniedStderr)
-	r := &Runner{Root: t.TempDir(), binary: binary}
+	binary, env, dir := flakyKo(t, 2, deniedStderr)
+	r := &Runner{Root: t.TempDir(), Env: env, binary: binary}
 
 	refs, err := r.BuildEach(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet")
 	if err != nil {
@@ -242,8 +243,8 @@ func TestBuildEachRetriesEachImage(t *testing.T) {
 
 func TestBuildEachStopsAfterAttempts(t *testing.T) {
 	fastBackoff(t)
-	binary, dir := flakyKo(t, 100, deniedStderr)
-	r := &Runner{Root: t.TempDir(), binary: binary}
+	binary, env, dir := flakyKo(t, 100, deniedStderr)
+	r := &Runner{Root: t.TempDir(), Env: env, binary: binary}
 
 	_, err := r.BuildEach(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet")
 	if err == nil {
