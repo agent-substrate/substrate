@@ -58,6 +58,7 @@ const (
 	// snapshot-restore (REPLY_ACK) fix.
 	defaultKataVersion            = "4.3.1"
 	defaultCloudHypervisorVersion = "v53.0"
+	defaultMicroVMReleaseBaseURL  = "https://github.com"
 
 	assetStampFile               = ".asset-versions"
 	defaultKindMicroVMBucket     = "ate-snapshots"
@@ -91,9 +92,6 @@ var (
 		"kata-image":       "rootfs.img",
 	}
 )
-
-// microvmReleaseBaseURL is overridden in unit tests to point at an httptest.Server.
-var microvmReleaseBaseURL = "https://github.com"
 
 // ValidateSandboxClasses reports whether classes is a valid --sandbox-classes value.
 func ValidateSandboxClasses(classes string) error {
@@ -156,13 +154,16 @@ func (e *Env) prepareMicroVMDeps(ctx context.Context) (*microVMPrepared, error) 
 	for _, arch := range e.microVMArches() {
 		outDir := e.Cfg.Path("bin", microvmAssetsPrefix, arch)
 		wantStamp := microvmAssetStamp(arch, defaultKataVersion, defaultCloudHypervisorVersion)
-		needAssemble, stale := microvmAssetsNeedAssemble(outDir, wantStamp, digests[arch])
+		needAssemble, stale, err := microvmAssetsNeedAssemble(outDir, wantStamp, digests[arch])
+		if err != nil {
+			return nil, err
+		}
 		if stale {
 			log.Infof("Asset set in %s is stale; re-assembling.", outDir)
 		}
 		if needAssemble {
 			log.Infof("Assembling microVM assets into %s (arch=%s)...", outDir, arch)
-			if err := assembleMicroVMAssets(ctx, outDir, arch, defaultKataVersion, defaultCloudHypervisorVersion, digests[arch]); err != nil {
+			if err := assembleMicroVMAssets(ctx, defaultMicroVMReleaseBaseURL, outDir, arch, defaultKataVersion, defaultCloudHypervisorVersion, digests[arch]); err != nil {
 				return nil, err
 			}
 		} else {
@@ -374,24 +375,24 @@ func fileSHA256(path string) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
-func microvmAssetsNeedAssemble(outDir, wantStamp string, digests map[string]string) (needAssemble, stale bool) {
+func microvmAssetsNeedAssemble(outDir, wantStamp string, digests map[string]string) (needAssemble, stale bool, err error) {
 	if err := checkMicroVMAssets(outDir); err != nil {
-		return true, false
+		return true, false, nil
 	}
 	got, err := os.ReadFile(filepath.Join(outDir, assetStampFile))
 	if err != nil || string(got) != wantStamp {
-		return true, true
+		return true, true, nil
 	}
 	if err := verifyMicroVMAssetDigests(outDir, digests); err != nil {
-		return true, true
+		return false, false, err
 	}
-	return false, false
+	return false, false, nil
 }
 
 // assembleMicroVMAssets downloads the Kata static tarball and Cloud Hypervisor
-// binary for arch into outDir, verifies the SHA-256 digests against digests,
-// and writes the .asset-versions stamp last.
-func assembleMicroVMAssets(ctx context.Context, outDir, arch, kataVer, chVer string, digests map[string]string) error {
+// binary for arch from releaseBaseURL into outDir, verifies the SHA-256 digests
+// against digests, and writes the .asset-versions stamp last.
+func assembleMicroVMAssets(ctx context.Context, releaseBaseURL, outDir, arch, kataVer, chVer string, digests map[string]string) error {
 	chAsset, err := cloudHypervisorAssetName(arch)
 	if err != nil {
 		return err
@@ -411,7 +412,7 @@ func assembleMicroVMAssets(ctx context.Context, outDir, arch, kataVer, chVer str
 	}
 	defer func() { _ = os.RemoveAll(workDir) }()
 
-	baseURL := strings.TrimSuffix(microvmReleaseBaseURL, "/")
+	baseURL := strings.TrimSuffix(releaseBaseURL, "/")
 	kataURL := fmt.Sprintf("%s/kata-containers/kata-containers/releases/download/%s/kata-static-%s-%s.tar.zst",
 		baseURL, kataVer, kataVer, arch)
 	log.Infof(">> Downloading kata-static %s (%s)...", kataVer, arch)
@@ -525,10 +526,11 @@ func extractKataTarZst(ctx context.Context, r io.Reader, workDir string) (map[st
 			return nil, err
 		}
 
-		name := strings.TrimPrefix(path.Clean(hdr.Name), "/")
-		if name == "." || name == "" {
+		raw := strings.TrimPrefix(strings.TrimPrefix(hdr.Name, "./"), "/")
+		if !strings.HasPrefix(raw, kataSharePrefix) && raw != kataLibexecVirtiofsd {
 			continue
 		}
+		name := strings.TrimPrefix(path.Clean(raw), "/")
 		if !filepath.IsLocal(filepath.FromSlash(name)) {
 			return nil, fmt.Errorf("tar entry %q escapes the extraction directory", hdr.Name)
 		}
@@ -634,9 +636,10 @@ func (e *Env) stageMicroVMAssetsToRustfs(ctx context.Context, bucket string, dig
 		return e.runCmd(ctx, stdin, "docker", awsCLIArgs(args...)...)
 	}
 
-	// rustfs-bucket-init creates only defaultKindMicroVMBucket.
+	// rustfs-bucket-init creates only defaultKindMicroVMBucket. Run head-bucket
+	// via runCmdOutput so an expected 404 miss does not print to stderr.
 	if bucket != defaultKindMicroVMBucket {
-		if err := awsCLI(nil, "s3api", "head-bucket", "--bucket", bucket); err != nil {
+		if _, err := e.runCmdOutput(ctx, "docker", awsCLIArgs("s3api", "head-bucket", "--bucket", bucket)...); err != nil {
 			if err := awsCLI(nil, "s3api", "create-bucket", "--bucket", bucket); err != nil {
 				return fmt.Errorf("while creating bucket %s in rustfs: %w", bucket, err)
 			}

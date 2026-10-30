@@ -57,8 +57,8 @@ patches:
             - name: image-credential-provider-config
               $patch: delete
             # The object-store plugin transfers atelet's external snapshots and
-            # fetches its private sandbox assets (the micro-VM assets
-            # stage-to-rustfs.sh uploads), so it points at rustfs.
+            # fetches its private sandbox assets (the microVM assets
+            # ate-setup deploy ate-system uploads), so it points at rustfs.
             initContainers:
             - name: objectstore-plugin
               env:

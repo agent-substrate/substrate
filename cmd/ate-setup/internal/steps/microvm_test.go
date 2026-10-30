@@ -146,18 +146,18 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
-		if !need || stale {
-			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, false)", need, stale)
+		need, stale, err := microvmAssetsNeedAssemble(dir, stamp, digests)
+		if err != nil || !need || stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v, %v), want (true, false, nil)", need, stale, err)
 		}
 	})
 
 	t.Run("missing stamp with all files present reports stale", func(t *testing.T) {
 		dir := t.TempDir()
 		writeValidTestAssets(t, dir)
-		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
-		if !need || !stale {
-			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
+		need, stale, err := microvmAssetsNeedAssemble(dir, stamp, digests)
+		if err != nil || !need || !stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v, %v), want (true, true, nil)", need, stale, err)
 		}
 	})
 
@@ -168,13 +168,13 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(oldStamp), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
-		if !need || !stale {
-			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
+		need, stale, err := microvmAssetsNeedAssemble(dir, stamp, digests)
+		if err != nil || !need || !stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v, %v), want (true, true, nil)", need, stale, err)
 		}
 	})
 
-	t.Run("matching stamp with corrupted file digest reports stale", func(t *testing.T) {
+	t.Run("matching stamp with mismatched file digest returns digest error", func(t *testing.T) {
 		dir := t.TempDir()
 		writeValidTestAssets(t, dir)
 		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(stamp), 0o644); err != nil {
@@ -183,9 +183,13 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "vmlinux"), []byte("corrupted"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
-		if !need || !stale {
-			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (true, true)", need, stale)
+		need, stale, err := microvmAssetsNeedAssemble(dir, stamp, digests)
+		wantSubstr := "vmlinux: got " + sha256HexString("corrupted") + ", want " + digests["vmlinux"]
+		if err == nil || !strings.Contains(err.Error(), wantSubstr) {
+			t.Fatalf("microvmAssetsNeedAssemble() err = %v, want substring %q", err, wantSubstr)
+		}
+		if need || stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v, %v), want (false, false, err)", need, stale, err)
 		}
 	})
 
@@ -195,9 +199,9 @@ func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, assetStampFile), []byte(stamp), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		need, stale := microvmAssetsNeedAssemble(dir, stamp, digests)
-		if need || stale {
-			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v), want (false, false)", need, stale)
+		need, stale, err := microvmAssetsNeedAssemble(dir, stamp, digests)
+		if err != nil || need || stale {
+			t.Errorf("microvmAssetsNeedAssemble() = (%v, %v, %v), want (false, false, nil)", need, stale, err)
 		}
 	})
 }
@@ -250,44 +254,50 @@ func buildKataTarZst(t *testing.T, entries []tarTestEntry) []byte {
 
 func validKataArchive(t *testing.T, virtiofsdScript string) []byte {
 	t.Helper()
-	// Place the vmlinux.container symlink BEFORE its target file to verify
-	// extraction does not depend on entry order in the tar stream.
+	// Match the ./-prefixed paths and directory entries in the real kata-static
+	// release archive, and place the vmlinux.container symlink BEFORE its target
+	// file to verify extraction does not depend on entry order.
 	return buildKataTarZst(t, []tarTestEntry{
 		{
-			name:     "opt/kata/share/kata-containers/vmlinux.container",
+			name:     "./opt/kata/share/kata-containers/",
+			typeflag: tar.TypeDir,
+			mode:     0o755,
+		},
+		{
+			name:     "./opt/kata/share/kata-containers/vmlinux.container",
 			typeflag: tar.TypeSymlink,
 			linkname: "vmlinux-6.12.47-173",
 		},
 		{
-			name:     "opt/kata/share/kata-containers/vmlinux-6.12.47-173",
+			name:     "./opt/kata/share/kata-containers/vmlinux-6.12.47-173",
 			typeflag: tar.TypeReg,
 			body:     "fake-kernel-bytes",
 		},
 		{
-			name:     "opt/kata/share/kata-containers/kata-containers-ubuntu.img",
+			name:     "./opt/kata/share/kata-containers/kata-containers-ubuntu.img",
 			typeflag: tar.TypeReg,
 			body:     "fake-rootfs-bytes",
 		},
 		{
-			name:     "opt/kata/share/kata-containers/kata-containers.img",
+			name:     "./opt/kata/share/kata-containers/kata-containers.img",
 			typeflag: tar.TypeSymlink,
 			linkname: "kata-containers-ubuntu.img",
 		},
 		{
-			name:     "opt/kata/libexec/virtiofsd",
+			name:     "./opt/kata/libexec/virtiofsd",
 			typeflag: tar.TypeReg,
 			body:     virtiofsdScript,
 			mode:     0o755,
 		},
 		{
-			name:     "opt/kata/bin/qemu-system-x86_64",
+			name:     "./opt/kata/bin/qemu-system-x86_64",
 			typeflag: tar.TypeReg,
 			body:     "ignored-qemu-binary",
 		},
 	})
 }
 
-func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool) {
+func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -308,9 +318,7 @@ func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	origURL := microvmReleaseBaseURL
-	microvmReleaseBaseURL = srv.URL
-	t.Cleanup(func() { microvmReleaseBaseURL = origURL })
+	return srv.URL
 }
 
 func TestAssembleMicroVMAssets(t *testing.T) {
@@ -325,10 +333,10 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 		"rootfs.img":       sha256HexString("fake-rootfs-bytes"),
 	}
 
-	serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
+	baseURL := serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
 
 	outDir := t.TempDir()
-	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0", digests); err != nil {
+	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", digests); err != nil {
 		t.Fatalf("assembleMicroVMAssets() = %v", err)
 	}
 
@@ -369,7 +377,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 	silenceStepLog(t)
 
-	serveFakeReleases(t, validKataArchive(t, "fake-virtiofsd-binary"), "", true)
+	baseURL := serveFakeReleases(t, validKataArchive(t, "fake-virtiofsd-binary"), "", true)
 
 	outDir := t.TempDir()
 	stampPath := filepath.Join(outDir, assetStampFile)
@@ -377,7 +385,7 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0", testAssetDigests()); err == nil {
+	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", testAssetDigests()); err == nil {
 		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download aborted mid-stream")
 	}
 	if _, err := os.Stat(stampPath); !errors.Is(err, os.ErrNotExist) {
@@ -391,10 +399,10 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 func TestAssembleMicroVMAssetsRejectsDigestMismatchBeforeStamping(t *testing.T) {
 	silenceStepLog(t)
 
-	serveFakeReleases(t, validKataArchive(t, "bad-virtiofsd-bytes"), "ch", false)
+	baseURL := serveFakeReleases(t, validKataArchive(t, "bad-virtiofsd-bytes"), "ch", false)
 
 	outDir := t.TempDir()
-	err := assembleMicroVMAssets(t.Context(), outDir, "amd64", "4.3.1", "v53.0", testAssetDigests())
+	err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", testAssetDigests())
 	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 		t.Fatalf("assembleMicroVMAssets() = %v, want sha256 mismatch error", err)
 	}
@@ -441,6 +449,16 @@ func TestExtractKataTarZstRejectsTraversal(t *testing.T) {
 			}
 		})
 	}
+	t.Run("out-of-prefix dotdot entry is ignored", func(t *testing.T) {
+		data := buildKataTarZst(t, []tarTestEntry{{
+			name:     "opt/kata/bin/../../etc/ignored",
+			typeflag: tar.TypeReg,
+			body:     "ignored",
+		}})
+		if _, err := extractKataTarZst(t.Context(), bytes.NewReader(data), t.TempDir()); err != nil {
+			t.Fatalf("extractKataTarZst() on out-of-prefix entry = %v, want nil", err)
+		}
+	})
 }
 
 func TestMicroVMSandboxConfigTemplate(t *testing.T) {
