@@ -15,10 +15,18 @@
 package oidcjwt
 
 import (
+	"crypto/tls"
+	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
+
+	"go.ate.dev/substrate/internal/testcert"
 )
 
 func TestIssuerScopedURL(t *testing.T) {
@@ -186,4 +194,80 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+// TestNewHTTPClientTrustsRotatedCA swaps the CA file between key fetches, the
+// way kubelet updates a projected trust bundle, and breaks it in between.
+func TestNewHTTPClientTrustsRotatedCA(t *testing.T) {
+	ti := &testIssuer{}
+	ti.addRSA("key", &testRSAKey(t).PublicKey)
+	ti.server = httptest.NewUnstartedServer(ti.handler(t))
+	// Each fetch dials anew, so it can't pass on a connection verified earlier.
+	ti.server.Config.SetKeepAlivesEnabled(false)
+	var serving atomic.Pointer[tls.Config]
+	ti.server.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return serving.Load(), nil }}
+	serve := func(s testcert.ServerTLS) {
+		cert, err := tls.X509KeyPair(s.Certificate, s.PrivateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serving.Store(&tls.Config{Certificates: []tls.Certificate{cert}})
+	}
+	ip := net.ParseIP("127.0.0.1")
+	before, after := testcert.NewServerTLS(t, ip), testcert.NewServerTLS(t, ip)
+	serve(before)
+	ti.server.StartTLS()
+	t.Cleanup(ti.server.Close)
+
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "ca.pem")
+	writeCA := func(pemBytes []byte) {
+		tmp := filepath.Join(dir, "ca.pem.tmp")
+		if err := os.WriteFile(tmp, pemBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, caFile); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCA(before.RootCA)
+	client, err := NewHTTPClient(ti.issuer(), caFile, "")
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error = %v", err)
+	}
+	keys := HTTPKeySource(ti.issuer(), client)
+
+	if _, err := keys.Keys(t.Context()); err != nil {
+		t.Fatalf("Keys() with the first CA error = %v", err)
+	}
+	serve(after)
+	var certErr *tls.CertificateVerificationError
+	if _, err := keys.Keys(t.Context()); !errors.As(err, &certErr) {
+		t.Fatalf("Keys() after the server rotated error = %v, want a CertificateVerificationError", err)
+	}
+	writeCA(after.RootCA)
+	if _, err := keys.Keys(t.Context()); err != nil {
+		t.Fatalf("Keys() after the CA file rotated error = %v", err)
+	}
+
+	// A CA file that can't be read keeps the last pool.
+	if err := os.Remove(caFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keys.Keys(t.Context()); err != nil {
+		t.Fatalf("Keys() without the CA file error = %v", err)
+	}
+	writeCA([]byte("not a certificate\n"))
+	if _, err := keys.Keys(t.Context()); err != nil {
+		t.Fatalf("Keys() with an invalid CA file error = %v", err)
+	}
+	third := testcert.NewServerTLS(t, ip)
+	serve(third)
+	if _, err := keys.Keys(t.Context()); !errors.As(err, &certErr) {
+		t.Fatalf("Keys() with the last pool after the server rotated error = %v, want a CertificateVerificationError", err)
+	}
+	writeCA(third.RootCA)
+	if _, err := keys.Keys(t.Context()); err != nil {
+		t.Fatalf("Keys() after a valid CA file returned error = %v", err)
+	}
 }

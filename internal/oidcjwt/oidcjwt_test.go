@@ -25,6 +25,8 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +58,12 @@ type testIssuer struct {
 func newTestIssuer(t *testing.T) *testIssuer {
 	t.Helper()
 	ti := &testIssuer{}
+	ti.server = httptest.NewServer(ti.handler(t))
+	t.Cleanup(ti.server.Close)
+	return ti
+}
+
+func (ti *testIssuer) handler(t *testing.T) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		ti.discoveryRequests.Add(1)
@@ -70,9 +78,7 @@ func newTestIssuer(t *testing.T) *testIssuer {
 		}
 		writeJSON(t, w, ti.jwks)
 	})
-	ti.server = httptest.NewServer(mux)
-	t.Cleanup(ti.server.Close)
-	return ti
+	return mux
 }
 
 func TestVerifierRetriesInitialDiscoveryFailure(t *testing.T) {
@@ -84,17 +90,52 @@ func TestVerifierRetriesInitialDiscoveryFailure(t *testing.T) {
 	token := mintJWT(t, "RS256", "key", key, validClaims(ti.issuer()))
 	now := time.Now()
 
-	if _, err := verifier.Verify(t.Context(), token, now); err == nil {
-		t.Fatal("first Verify() succeeded, want discovery failure")
+	if _, err := verifier.Verify(t.Context(), token, now); !errors.Is(err, ErrSigningKeysUnavailable) {
+		t.Fatalf("first Verify() error = %v, want ErrSigningKeysUnavailable", err)
 	}
-	if _, err := verifier.Verify(t.Context(), token, now); err == nil {
-		t.Fatal("second Verify() succeeded during retry cooldown")
+	if _, err := verifier.Verify(t.Context(), token, now); !errors.Is(err, ErrSigningKeysUnavailable) {
+		t.Fatalf("Verify() during retry cooldown error = %v, want ErrSigningKeysUnavailable", err)
 	}
 	if got := ti.jwksRequests.Load(); got != 1 {
 		t.Fatalf("JWKS requests during retry cooldown = %d, want 1", got)
 	}
 	if _, err := verifier.Verify(t.Context(), token, now.Add(jwksRefreshRetryInterval)); err != nil {
 		t.Fatalf("Verify() after retry cooldown error = %v", err)
+	}
+}
+
+func TestVerifierRefresh(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		jwksFailures int32
+		// wantRequests is the JWKS request count after Refresh and one Verify.
+		wantRequests int32
+	}{
+		{"success fills the cache", 0, 1},
+		{"failure starts no backoff", 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ti := newTestIssuer(t)
+			key := testRSAKey(t)
+			ti.addRSA("key", &key.PublicKey)
+			ti.jwksFailures.Store(tc.jwksFailures)
+			verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
+			now := time.Now()
+
+			err := verifier.Refresh(t.Context(), now)
+			if tc.jwksFailures == 0 && err != nil {
+				t.Fatalf("Refresh() error = %v", err)
+			}
+			if tc.jwksFailures > 0 && !errors.Is(err, ErrSigningKeysUnavailable) {
+				t.Fatalf("Refresh() error = %v, want ErrSigningKeysUnavailable", err)
+			}
+			if _, err := verifier.Verify(t.Context(), mintJWT(t, "RS256", "key", key, validClaims(ti.issuer())), now); err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if got := ti.jwksRequests.Load(); got != tc.wantRequests {
+				t.Fatalf("JWKS requests = %d, want %d", got, tc.wantRequests)
+			}
+		})
 	}
 }
 
@@ -118,6 +159,146 @@ func TestVerifierUsesCachedKeyWhenRefreshFails(t *testing.T) {
 	}
 	if got := ti.jwksRequests.Load(); got != 2 {
 		t.Fatalf("JWKS requests after failed refresh = %d, want 2", got)
+	}
+}
+
+func TestVerifierUnknownKeyFetchFails(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("key-1", &key.PublicKey)
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
+	now := time.Now()
+	if _, err := verifier.Verify(t.Context(), mintJWT(t, "RS256", "key-1", key, validClaims(ti.issuer())), now); err != nil {
+		t.Fatal(err)
+	}
+
+	ti.jwksFailures.Store(1)
+	if _, err := verifier.Verify(t.Context(), mintJWT(t, "RS256", "key-2", key, validClaims(ti.issuer())), now); !errors.Is(err, ErrSigningKeysUnavailable) {
+		t.Fatalf("Verify(key-2) with a failed fetch error = %v, want ErrSigningKeysUnavailable", err)
+	}
+}
+
+// errTransport fails every request with err and counts them.
+type errTransport struct {
+	err   error
+	calls atomic.Int32
+}
+
+func (e *errTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	e.calls.Add(1)
+	return nil, e.err
+}
+
+// TestVerifierCallerCancelStartsNoBackoff checks that a first fetch the
+// caller canceled does not hold back the next caller's fetch.
+func TestVerifierCallerCancelStartsNoBackoff(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("key-1", &key.PublicKey)
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
+	token := mintJWT(t, "RS256", "key-1", key, validClaims(ti.issuer()))
+	now := time.Now()
+
+	if _, err := verifier.Verify(canceled, token, now); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Verify() with a canceled context error = %v, want context.Canceled", err)
+	}
+	if _, err := verifier.Verify(t.Context(), token, now); err != nil {
+		t.Fatalf("Verify() after a canceled call error = %v", err)
+	}
+}
+
+// cancelingKeySource returns keys on the first call. Later calls cancel the
+// caller's context as the fetch starts and return its error.
+type cancelingKeySource struct {
+	keys   []*KeyAndID
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (c *cancelingKeySource) Keys(ctx context.Context) ([]*KeyAndID, error) {
+	if c.calls.Add(1) == 1 {
+		return c.keys, nil
+	}
+	c.cancel()
+	return nil, ctx.Err()
+}
+
+// TestVerifierCanceledUnknownKeyFetchIsRateLimited checks that a fetch for an
+// unknown key ID that the caller cancels still counts against the unknown key
+// ID rate limit, so repeated made-up key IDs with short deadlines do not each
+// fetch.
+func TestVerifierCanceledUnknownKeyFetchIsRateLimited(t *testing.T) {
+	key := testRSAKey(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	source := &cancelingKeySource{
+		keys:   []*KeyAndID{{KeyID: "key-1", PublicKey: &key.PublicKey}},
+		cancel: cancel,
+	}
+	const issuer = "https://idp.example.com"
+	verifier := NewVerifier(issuer, []string{testAudience}, source)
+	now := time.Now()
+	if _, err := verifier.Verify(t.Context(), mintJWT(t, "RS256", "key-1", key, validClaims(issuer)), now); err != nil {
+		t.Fatal(err)
+	}
+	unknown := mintJWT(t, "RS256", "made-up", key, validClaims(issuer))
+
+	if _, err := verifier.Verify(ctx, unknown, now); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Verify() with a fetch canceled by the caller error = %v, want context.Canceled", err)
+	}
+	if _, err := verifier.Verify(t.Context(), unknown, now.Add(time.Second)); err == nil || !strings.Contains(err.Error(), "unknown key ID") {
+		t.Fatalf("Verify() after a canceled fetch error = %v, want unknown key ID", err)
+	}
+	if got := source.calls.Load(); got != 2 {
+		t.Fatalf("key fetches = %d, want 2: the canceled fetch must start the unknown key ID backoff", got)
+	}
+}
+
+// TestVerifierCallerCancelWithCachedKeyBacksOff checks that a canceled refresh
+// of a stale cached key serves that key through the retry backoff, so a hung
+// issuer is not fetched again on every call.
+func TestVerifierCallerCancelWithCachedKeyBacksOff(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("key", &key.PublicKey)
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, HTTPKeySource(ti.issuer(), ti.server.Client()))
+	token := mintJWT(t, "RS256", "key", key, validClaims(ti.issuer()))
+	now := time.Now()
+	if _, err := verifier.Verify(t.Context(), token, now); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	stale := now.Add(jwksRefreshInterval)
+
+	if _, err := verifier.Verify(canceled, token, stale); err != nil {
+		t.Fatalf("Verify() with a canceled refresh error = %v", err)
+	}
+	if _, err := verifier.Verify(t.Context(), token, stale.Add(time.Second)); err != nil {
+		t.Fatalf("Verify() during retry backoff error = %v", err)
+	}
+	if got := ti.discoveryRequests.Load(); got != 1 {
+		t.Fatalf("discovery requests = %d, want 1: the canceled refresh must start the retry backoff", got)
+	}
+}
+
+// TestVerifierClientTimeoutBacksOff checks that the HTTP client's own timeout
+// counts as a failed fetch even though it wraps context.DeadlineExceeded.
+func TestVerifierClientTimeoutBacksOff(t *testing.T) {
+	const issuer = "https://idp.example.com"
+	transport := &errTransport{err: fmt.Errorf("client timeout: %w", context.DeadlineExceeded)}
+	verifier := NewVerifier(issuer, []string{testAudience}, HTTPKeySource(issuer, &http.Client{Transport: transport}))
+	token := mintJWT(t, "RS256", "key", testRSAKey(t), validClaims(issuer))
+	now := time.Now()
+
+	for range 2 {
+		if _, err := verifier.Verify(t.Context(), token, now); !errors.Is(err, ErrSigningKeysUnavailable) {
+			t.Fatalf("Verify() error = %v, want ErrSigningKeysUnavailable", err)
+		}
+	}
+	if got := transport.calls.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1: the timeout must start the retry backoff", got)
 	}
 }
 
