@@ -194,3 +194,27 @@ Rotate with the `kubectl ate admin` commands, against the pool Secret
 
 `list-jwt-keys` shows each key's ID and algorithm and marks the one that
 signs. `add-jwt-key` takes `--alg` and `--key-id` like `make-jwt-pool`.
+
+## Known limitations
+
+- **No revocation.** A token stays valid until `exp`, up to an hour after it
+  was minted, even if its actor is deleted. Removing a key from the pool stops
+  every token that key signed, for every actor, once relying parties refetch
+  the key set.
+- **Tokens are bearer tokens.** Whoever receives one can present it to any
+  relying party that accepts its audience until it expires. Atespace editors
+  write the egress policy, so they choose both the audience and the host that
+  receives the token. An upstream that echoes request headers hands the token
+  back to the actor. A relying party should check `sub` or `actor.ate.dev` as
+  well as `aud`.
+- **No cloud token exchange.** Cloud token exchange endpoints take the JWT as
+  a request parameter, and the gateway only replaces headers, so Substrate
+  can't yet trade an actor JWT for cloud credentials
+  ([#1661](https://github.com/agent-substrate/substrate/issues/1661)).
+- **A recreated actor can get a stale UID.** The gateway caches tokens by actor
+  name. For up to two thirds of a token's lifetime after an actor is recreated,
+  the gateway can inject a token whose `actorUID` names the old actor
+  ([#2208](https://github.com/agent-substrate/substrate/issues/2208)).
+- **Rotation is manual.** Keys don't expire, and nothing rotates them on a
+  schedule. An operator runs the steps under
+  [Signing keys and rotation](#signing-keys-and-rotation).
