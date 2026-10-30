@@ -185,6 +185,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
 	}, {
+		"storage_location under another actor's prefix",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d", "")},
+	}, {
+		"storage_location with a dot in a path segment",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots.v1"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots.v1", "")},
+	}, {
 		// preferred_fidelity has no default of its own at this layer, so leaving it
 		// unset is a required violation.
 		"preferred_fidelity unset",
