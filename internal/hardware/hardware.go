@@ -121,13 +121,10 @@ func (r Requirement) Matches(rt *ateapi.ActorSandboxRuntime) bool {
 }
 
 // matchesCompat reports whether worker can restore the snapshot: the same
-// non-empty schema version, and every attribute on the snapshot satisfied by
-// worker. AttrCPUFeatures is satisfied when the snapshot's feature bitmask is
-// a subset of the worker's; every other attribute must be present on worker
-// with an equal value. Keys only the worker has are ignored, so a worker can
-// start reporting a new key under the same schema version without
-// invalidating the snapshots taken before it; removing or recomputing a key
-// is a new schema version, under which older snapshots no longer match.
+// non-empty schema version, the same set of attribute keys, and every
+// attribute on the snapshot satisfied by worker. AttrCPUFeatures is satisfied
+// when the snapshot's feature bitmask is a subset of the worker's; every other
+// attribute must have an equal value.
 func (r Requirement) matchesCompat(worker *ateapi.VersionedSandboxCompat) bool {
 	if worker == nil || r.compat == nil {
 		return false
@@ -139,9 +136,13 @@ func (r Requirement) matchesCompat(worker *ateapi.VersionedSandboxCompat) bool {
 		return false
 	}
 	wAttrs := worker.GetAttributes()
+	sAttrs := r.compat.GetAttributes()
+	if len(wAttrs) != len(sAttrs) {
+		return false
+	}
 	// API validation bounds attributes to at most 32 entries with unique keys,
 	// so the nested scan is small and avoids map allocation on the hot path.
-	for _, sa := range r.compat.GetAttributes() {
+	for _, sa := range sAttrs {
 		found := false
 		for _, wa := range wAttrs {
 			if wa.GetKey() != sa.GetKey() {
