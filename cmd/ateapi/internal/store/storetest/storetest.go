@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
@@ -74,6 +75,9 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 
 	config := admin.Config().Copy()
 	config.ConnConfig.Database = databaseName
+	// pgxpool defaults to max(4, NumCPU) connections. Cap each test at 4 so
+	// parallel tests stay under the container's max_connections.
+	config.MaxConns = 4
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatalf("connecting to PostgreSQL test database: %v", err)
@@ -85,6 +89,7 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 	}
 	pools.Store(persistence, pool)
 	t.Cleanup(func() {
+		persistence.Close()
 		pools.Delete(persistence)
 		pool.Close()
 		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+databaseName); err != nil {
@@ -260,6 +265,9 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("postgres"),
 			postgres.WithPassword("postgres"),
+			// Allow a large number of connections so that parallel tests
+			// can accommodate their connections.
+			testcontainers.WithCmdArgs("-c", "max_connections=1000"),
 		)
 		if containerErr != nil {
 			return
