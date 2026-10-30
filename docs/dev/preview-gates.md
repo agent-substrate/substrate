@@ -121,9 +121,11 @@ Test gated code both with and without the gate.
   gate names, so they don't depend on real gates.
 - `apivalidation` tables: `assertValidate` takes `want` (gates off) and
   `wantWithPreview`, keyed by a `--preview` value such as `"ALL"`.
-- Functional tests (`controlapi/functionaltest`): `setupPreviewTest` gives a
-  client that sends the header, and `tc.noOptInClient` one that does not.
-  Neither enables a gate; call `preview.InitForTest` for that.
+- Functional tests (`cmd/ateapi/internal/functionaltest`): ate-api runs with
+  every gate on. A test that uses a preview feature creates its harness with
+  `harness.New(t, harness.WithPreviewClient())`, whose clients send the
+  header; `h.ControlWithoutPreview()` is one that does not. A test cannot turn
+  a gate off.
 - E2E tests: start a test of a preview feature with
   `e2e.RequirePreview(t, preview.GateMyFeature)`. It skips unless the suite
   was run with `--preview` naming that gate, which must match what the
