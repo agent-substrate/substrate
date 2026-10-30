@@ -418,6 +418,58 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 	}
 }
 
+// overlayfsMagic is OVERLAYFS_SUPER_MAGIC. With an upper disk the guest
+// mounts the container's overlay itself. Without one, the container's / is
+// the virtio-fs share.
+const overlayfsMagic = "0x794c7630"
+
+// TestRootfsUpperDiskLifecycle checks that a microVM container's rootfs upper
+// is on its upper disk, and that MEMORY and ROOTFS snapshots keep its writes.
+func TestRootfsUpperDiskLifecycle(t *testing.T) {
+	e2e.RequirePreview(t, preview.GateRootfsUpperDisks)
+	if !e2e.IsMicroVM() {
+		t.Skip("upper disks are a microVM feature")
+	}
+	t.Parallel()
+	tests := []struct {
+		name string
+		tc   actorLifecycleTestCase
+	}{
+		{
+			name: "preferredFidelity:MEMORY",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				wantMemoryAfterPause:   2,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 3,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				wantRootfsFstype:       overlayfsMagic,
+			},
+		},
+		{
+			name: "preferredFidelity:ROOTFS",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				wantRootfsFstype:       overlayfsMagic,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			runActorLifecycleTestCase(t, "upperdisk-lifecycle", createActorTemplate, test.tc)
+		})
+	}
+}
+
 func TestExternalVolumeLifecycle(t *testing.T) {
 	e2e.RequirePreview(t, preview.GateExternalVolumes)
 	t.Parallel()
@@ -630,6 +682,10 @@ type actorLifecycleTestCase struct {
 	// wantSnapshotFidelity, when set, asserts the content scope recorded
 	// on the ActorSnapshot the suspend produced.
 	wantSnapshotFidelity ateapi.SnapshotFidelity
+
+	// wantRootfsFstype, when set, asserts the statfs f_type of the
+	// workload's / after creation and after every resume.
+	wantRootfsFstype string
 }
 
 // backgroundSnapshotTimeout bounds the wait for atelet's background upload or
@@ -699,6 +755,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.wantRootfsAfterPause != 0 {
 		validateRootfsCounter(t, resp, "after creation", 1)
 	}
+	validateRootfsFstype(t, actorID, "after creation", tc.wantRootfsFstype)
 
 	//
 	// Pausing the actor
@@ -746,6 +803,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.wantRootfsAfterPause != 0 {
 		validateRootfsCounter(t, resp, "after pause", tc.wantRootfsAfterPause)
 	}
+	validateRootfsFstype(t, actorID, "after pause", tc.wantRootfsFstype)
 
 	//
 	// Suspending the actor
@@ -794,6 +852,23 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	if tc.wantRootfsAfterSuspend != 0 {
 		validateRootfsCounter(t, resp, "after suspend", tc.wantRootfsAfterSuspend)
+	}
+	validateRootfsFstype(t, actorID, "after suspend", tc.wantRootfsFstype)
+}
+
+// validateRootfsFstype asserts the statfs f_type the counter reports for its
+// /. An empty want skips the check.
+func validateRootfsFstype(t *testing.T, actorID, stage, want string) {
+	t.Helper()
+	if want == "" {
+		return
+	}
+	got, err := callActorPath(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID}, "GET", "/rootfs-fstype")
+	if err != nil {
+		t.Fatalf("%s: failed to read the rootfs fstype: %v", stage, err)
+	}
+	if got = strings.TrimSpace(got); got != want {
+		t.Errorf("%s: rootfs f_type = %s, want %s", stage, got, want)
 	}
 }
 

@@ -120,6 +120,16 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
 	})
+	// /rootfs-fstype reports the filesystem type of / as statfs's f_type in
+	// hex, so a test can tell which filesystem holds the rootfs writes.
+	defaultMux.HandleFunc("/rootfs-fstype", func(w http.ResponseWriter, _ *http.Request) {
+		var st syscall.Statfs_t
+		if err := syscall.Statfs("/", &st); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "%#x\n", st.Type)
+	})
 	// /readyz is the endpoint the ateworker-gvisor wakeup probe polls. It returns
 	// 200 only once initialization (the random-file write) has completed.
 	// After a checkpoint+restore the atomic flag is part of the snapshot, so
