@@ -1289,9 +1289,10 @@ func expectRows(t *testing.T, name string, wantTotal, wantFailed float64, fn fun
 	}
 }
 
-// TestLifecycleModeNone: in resident mode, startUser and runStep never park
-// or explicitly resume the actor, never record WakeFirstTouch, and
-// suspendAndDelete still suspends before deleting on teardown.
+// TestLifecycleModeNone: in resident mode, startUser runs step 1, and
+// startUser and runStep never park or explicitly resume the actor, never
+// record WakeFirstTouch, and suspendAndDelete still suspends before deleting
+// on teardown.
 func TestLifecycleModeNone(t *testing.T) {
 	ctl := &fakeControlClient{templateMemory: 1 << 30}
 	u := newTestUser(t, &fake.Server{}, ctl, knobs{
@@ -1300,7 +1301,7 @@ func TestLifecycleModeNone(t *testing.T) {
 			ResumeMode:    dynconfig.ResumeModeExplicit,
 		},
 	})
-	rt := &runtime{cfg: u.cfg}
+	rt := newRuntime(u.cfg)
 	loaded, err := rt.loadScript()
 	if err != nil {
 		t.Fatal(err)
@@ -1309,8 +1310,9 @@ func TestLifecycleModeNone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !session.awake {
-		t.Error("session.awake = false after startUser in LifecycleModeNone")
+	if !session.awake || session.stepIndex != 1 {
+		t.Errorf("after startUser in LifecycleModeNone: awake=%v stepIndex=%d, want true/1",
+			session.awake, session.stepIndex)
 	}
 	wakesBefore := wakeFirstTouchCount(t)
 	// A resident step is no wake, so it records no TimeToWake either.
