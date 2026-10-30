@@ -16,6 +16,15 @@ Agent Substrate enforces that all outbound traffic from an actor, except traffic
 
 ## Transport
 
+Each actor has one private Linux network namespace. For gVisor, both ends of
+the `eth0`–`atside` veth pair live there. During sandbox setup, `eth0` has
+`169.254.17.2/30`, while `atside` stays addressless with IPv6 disabled.
+After runsc imports `eth0` into its network stack, ateworker assigns
+`169.254.17.1/30` to `atside`. This happens before application containers
+start or restore. The actor address then lives in gVisor's network stack;
+Linux retains the gateway address, DNS relay, and redirected egress sockets.
+MicroVMs use a TAP device in their actor namespace.
+
 At present, actor TCP traffic exits the sandbox through [`atunnel`](../reference/glossary.md#components) and is forwarded on to the PEP. The exception is DNS: TCP and UDP traffic to port 53 on the sandbox's gateway bypasses the PEP and is answered by the sandbox's DNS relay, which forwards a query to the worker pod's resolvers only when the queried hostname matches a host or host wildcard in the actor's egress policy; queries from an actor without a policy, or for a hostname not matched by any rule, are answered `NXDOMAIN`. All other protocols are blocked. `atunnel` is configured with the PEP's network address and port at startup and uses that address to open an mTLS HTTP/1.1 or HTTP/2 CONNECT tunnel to the PEP, as negotiated by ALPN. The CONNECT request target and HTTP/1.1 `Host` header (HTTP/2 `:authority`) are set to the original destination IP and port that `atunnel` derived from the actor's TCP connection. Actor networking is currently IPv4-only.
 
 Before traffic reaches the egress PEP, ateworker rejects packets destined for the IPv4 link-local range `169.254.0.0/16` or the IPv6 link-local range `fe80::/10`. The internal actor network `169.254.17.0/30` is exempt because it carries traffic for the actor gateway, DNS relay, ingress, and wakeup probes. Localhost traffic remains inside the actor sandbox and does not traverse the PEP. Access to non-link-local destinations remains controlled by substrate egress policy and, at the `WorkerPool` boundary, Kubernetes NetworkPolicy.

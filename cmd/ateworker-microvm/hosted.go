@@ -217,7 +217,7 @@ func (s *AteWorkerService) sandboxNetNS(actorUID string) netns.Handle {
 	if hosted.network == nil {
 		return -1
 	}
-	return hosted.network.Network.GatewayNetNS
+	return hosted.network.Network.NetNS
 }
 
 // sandboxDialer connects through the actor's gateway namespace.
