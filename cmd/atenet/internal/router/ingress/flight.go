@@ -72,10 +72,12 @@ func (f *resumeActorFlight) retryErr() error {
 // be called after f.done is closed.
 //
 // Only a resume that completed without an error says whether an activation
-// ran, so the three activation labels are reserved for that case. A flight
-// that waited out its budget reports "parked_exhausted"; any other failure
-// reports "unknown", since the gRPC code alone does not carry the fact.
-func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapi.Actor, ResumeOutcome, error) {
+// ran, so the three activation labels are reserved for that case. With parking
+// enabled, a flight that waited out the budget reports "budget_exhausted". Any
+// other failure reports "unknown", since the gRPC code alone does not carry
+// the fact; so does a spent fail-fast budget, which retried only Aborted
+// conflicts and parked nothing.
+func (f *resumeActorFlight) callerResult(reqID uint64, parkEnabled bool) (*ateapi.Actor, ResumeOutcome, error) {
 	res := f.result
 	if res == nil {
 		return nil, ResumeOutcomeUnknown, status.Error(codes.Internal, "resume call returned nil result")
@@ -83,8 +85,8 @@ func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapi.Actor, ResumeOut
 
 	if res.err != nil {
 		var budget *budgetExhaustedError
-		if errors.As(res.err, &budget) {
-			return nil, ResumeOutcomeParkedExhausted, res.err
+		if parkEnabled && errors.As(res.err, &budget) {
+			return nil, ResumeOutcomeBudgetExhausted, res.err
 		}
 		return nil, ResumeOutcomeUnknown, res.err
 	}
