@@ -43,6 +43,9 @@ var (
 	// ignoreCreatedMetadata skips what ate-api assigns when it creates a
 	// resource, for comparing a new resource against a literal.
 	ignoreCreatedMetadata = protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "uid", "version", "create_time", "update_time")
+	// ignoreExecutionUID skips the UID ate-api assigns each execution it
+	// starts.
+	ignoreExecutionUID = protocmp.IgnoreFields(&ateapi.WorkerAssignment{}, "actor_execution_uid")
 )
 
 // foreignUID is a valid UID no resource has, for preconditions that must miss.
