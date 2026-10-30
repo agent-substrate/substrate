@@ -211,8 +211,10 @@ func (s *AteWorkerService) readFinal(ctx context.Context, h *hostedActor) {
 // readDeadFinal reads the cgroup of h's sandbox, which has died, for the final
 // record. The cgroup keeps its CPU counter and memory peak until the teardown
 // removes it, but the memory went with the processes, so memory usage and
-// working set are left unset: no one measured them at the death. A failed
-// read leaves the newest sample to stand in, as in readFinal.
+// working set are left unset: no one measured them at the death. measure does
+// the same for any empty cgroup; this also covers a kernel that does not
+// report cgroup.events. A failed read leaves the newest sample to stand in, as
+// in readFinal.
 func (s *AteWorkerService) readDeadFinal(ctx context.Context, h *hostedActor) {
 	sample, _, err := s.measure(ctx, h)
 	if err != nil {
@@ -284,6 +286,12 @@ func (s *AteWorkerService) measure(ctx context.Context, h *hostedActor) (*atewor
 		raw = r
 		return sample, nil, err
 	})
+	if err == nil && raw.Empty {
+		// No process is left in the cgroup, as after the sandbox died: its
+		// memory went with them, so none was measured. The CPU counter stays.
+		sample.MemoryCurrentBytes = nil
+		sample.MemoryWorkingSetBytes = nil
+	}
 	return sample, raw, err
 }
 

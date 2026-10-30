@@ -100,12 +100,35 @@ func crashFixture(t *testing.T) (*AteWorkerService, *hostedActor, string) {
 	h := hostWithEpoch(s, time.Now(), true)
 	s.sweepUsage(context.Background())
 	leaf := filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer))
-	for name, content := range map[string]string{"cpu.stat": "usage_usec 2000000\n", "memory.current": "16384\n", "memory.stat": ""} {
+	for name, content := range map[string]string{"cpu.stat": "usage_usec 2000000\n", "memory.current": "16384\n", "memory.stat": "", "cgroup.events": "populated 0\n"} {
 		if err := os.WriteFile(filepath.Join(leaf, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return s, h, leaf
+}
+
+// TestSweepAfterDeathLeavesMemoryOut pins that a sweep reading the empty cgroup
+// of a sandbox that died, before the crash path removes it, writes its CPU but
+// no memory usage or working set, and stores no memory for the final record.
+func TestSweepAfterDeathLeavesMemoryOut(t *testing.T) {
+	s, h, _ := crashFixture(t)
+	rec := withUsageRecorder(s)
+	s.sweepUsage(context.Background())
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindPeriodic {
+		t.Fatalf("records = %v, want one periodic", got)
+	}
+	if got := rec.Value(0, string(ateattr.StatsCPUTimeKey)); got != "2" {
+		t.Errorf("periodic cpu.time = %q, want 2", got)
+	}
+	for _, key := range []attribute.Key{ateattr.StatsMemoryUsageKey, ateattr.StatsMemoryWorkingSetKey} {
+		if got := rec.Value(0, string(key)); got != "" {
+			t.Errorf("periodic %s = %q, want absent", key, got)
+		}
+	}
+	if got := h.usage.Latest(); got.MemoryCurrentBytes != nil || got.MemoryWorkingSetBytes != nil {
+		t.Errorf("stored memory = %d/%d, want both unset", got.GetMemoryCurrentBytes(), got.GetMemoryWorkingSetBytes())
+	}
 }
 
 func TestReadDeadFinal(t *testing.T) {
