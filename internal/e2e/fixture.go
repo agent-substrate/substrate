@@ -17,15 +17,13 @@ package e2e
 import (
 	"context"
 	"maps"
-	"strings"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/manifest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
-	"sigs.k8s.io/yaml"
 )
 
 // substrateTemplateSubstitutions is the placeholder set the protojson-shaped
@@ -60,29 +58,14 @@ func substrateTemplateSubstitutions(name string, trustBundles []string) (inline,
 }
 
 // decodeSubstrateTemplates strict-decodes a rendered manifest of one or more
-// ---separated protojson-shaped ActorTemplate documents. Strict, so a block
-// placeholder landing at the wrong depth or a misspelled field fails here
-// rather than applying cleanly and doing nothing — the same contract
-// `kubectl ate create actor-template` enforces.
+// protojson-shaped ActorTemplate documents, so a block placeholder landing at
+// the wrong depth or a misspelled field fails here rather than applying cleanly
+// and doing nothing.
 func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapi.ActorTemplate {
 	t.Helper()
-	var templates []*ateapi.ActorTemplate
-	for doc := range strings.SplitSeq(string(rendered), "\n---") {
-		jsonData, err := yaml.YAMLToJSON([]byte(doc))
-		if err != nil {
-			t.Fatalf("invalid YAML in ActorTemplate manifest: %v", err)
-		}
-		if string(jsonData) == "null" {
-			continue
-		}
-		tmpl := &ateapi.ActorTemplate{}
-		if err := protojson.Unmarshal(jsonData, tmpl); err != nil {
-			t.Fatalf("decoding protojson ActorTemplate: %v", err)
-		}
-		templates = append(templates, tmpl)
-	}
-	if len(templates) == 0 {
-		t.Fatalf("ActorTemplate manifest holds no documents")
+	templates, err := manifest.Parse[ateapi.ActorTemplate](rendered)
+	if err != nil {
+		t.Fatalf("decoding ActorTemplate manifest: %v", err)
 	}
 	return templates
 }
