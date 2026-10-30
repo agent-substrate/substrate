@@ -16,6 +16,7 @@ package e2e
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,6 +44,9 @@ type SubstrateTemplateOptions struct {
 	// k8s namespace.
 	PoolName     string
 	PoolReplicas int32
+	// SandboxConfigName, when set, pins the pool's sandbox class to that
+	// SandboxConfig via configRef instead of following the class default.
+	SandboxConfigName string
 	// Labels tie the template's workerSelector to the pool, keeping this
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
@@ -80,6 +84,12 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		t.Fatalf("failed to get ActorTemplate %s/%s (deploy with: %s): %v", src.Atespace, src.Name, src.DeployWith, err)
 	}
 
+	sandboxClasses := slices.Clone(existingWp.Spec.SandboxClasses)
+	if opts.SandboxConfigName != "" {
+		for i := range sandboxClasses {
+			sandboxClasses[i].ConfigRef = &atev1.SandboxConfigReference{Name: opts.SandboxConfigName}
+		}
+	}
 	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.PoolName,
@@ -89,7 +99,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		Spec: atev1.WorkerPoolSpec{
 			Replicas:       opts.PoolReplicas,
 			WorkerImage:    existingWp.Spec.WorkerImage,
-			SandboxClasses: existingWp.Spec.SandboxClasses,
+			SandboxClasses: sandboxClasses,
 		},
 	}
 	if _, err := clients.SubstrateK8s.AteV1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
