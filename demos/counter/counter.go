@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command counter is a simple HTTP server that listens on port 80 and increments
-// counters in memory, on a durable volume, and on the root filesystem.
+// Command counter is a simple HTTP server that increments counters in memory,
+// on a durable volume, and on the root filesystem. It listens on port 80 by
+// default, with optional listeners on --extra-port (HTTP) and --tcp-port (TCP
+// echo).
 package main
 
 import (

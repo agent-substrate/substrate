@@ -17,8 +17,8 @@ with a `503`.
 
 The setup is deliberately **oversubscribed**: a 2-worker pool with several
 actors running the `counter` binary from the counter demo. Run
-`kubectl ate get actors -a ate-demo-parking` (or `kubectl ate get workers`) to
-see which worker pod each actor is assigned to.
+`kubectl ate get actors -a ate-demo-parking` to see which worker pod each actor
+is assigned to.
 
 See [docs/concepts/request-parking.md](../../docs/concepts/request-parking.md) for the design.
 
