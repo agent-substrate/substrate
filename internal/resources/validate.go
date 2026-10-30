@@ -437,7 +437,11 @@ func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) fie
 		case strings.HasPrefix(c, "CAP_"):
 			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
 		case !linuxCapabilities.Has(c):
-			errs = append(errs, field.Invalid(p, c, "must be a Linux capability name like 'NET_BIND_SERVICE'"))
+			supported := sets.List(linuxCapabilities)
+			if allowAll {
+				supported = append(supported, "ALL")
+			}
+			errs = append(errs, field.NotSupported(p, c, supported))
 		}
 	}
 	return errs
