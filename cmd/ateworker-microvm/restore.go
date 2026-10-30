@@ -94,9 +94,12 @@ func reseedGuestCRNG(ctx context.Context, ac randomDevReseeder) error {
 	return ac.ReseedRandomDev(rctx, nonce)
 }
 
-// newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
+// reseedNonceBytes matches runtime-rs's reseed_rng (virt_container/src/sandbox.rs).
+const reseedNonceBytes = 512
+
+// newReseedNonce returns reseedNonceBytes of fresh entropy to mix into the guest CRNG.
 func newReseedNonce() ([]byte, error) {
-	nonce := make([]byte, 32)
+	nonce := make([]byte, reseedNonceBytes)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generating reseed nonce: %w", err)
 	}

@@ -487,8 +487,8 @@ func TestNewReseedNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReseedNonce: %v", err)
 	}
-	if len(a) != 32 {
-		t.Fatalf("nonce length = %d, want 32", len(a))
+	if len(a) != reseedNonceBytes {
+		t.Fatalf("nonce length = %d, want %d", len(a), reseedNonceBytes)
 	}
 	// The reseed only makes clones of one snapshot diverge if each restore mixes in
 	// distinct bytes, so two nonces must never be equal.
@@ -525,8 +525,8 @@ func TestReseedGuestCRNG(t *testing.T) {
 		if calls != 1 {
 			t.Errorf("calls = %d, want 1", calls)
 		}
-		if len(gotNonce) != 32 {
-			t.Errorf("nonce length = %d, want 32", len(gotNonce))
+		if len(gotNonce) != reseedNonceBytes {
+			t.Errorf("nonce length = %d, want %d", len(gotNonce), reseedNonceBytes)
 		}
 		if gotDeadline.IsZero() || gotDeadline.Before(start.Add(reseedTimeout)) || gotDeadline.After(time.Now().Add(reseedTimeout)) {
 			t.Errorf("call deadline = %v, want about %v after the call started at %v", gotDeadline, reseedTimeout, start)
