@@ -55,17 +55,19 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   certificate against the ATE API and rejects it unless the certified **UID** matches a real,
   `RUNNING` actor.
 5. **Policy authorization.** What goes through the tunnel is checked against the Actor's
-  `EgressPolicy`. A request the gateway can read (cleartext HTTP, or TLS it terminates) is
-  decided per request: the rules in order, over its `Host` and the address the Actor dialed,
-  first match wins, and the request is sent to what that rule checked. TLS to a name no `https`
-  rule covers is allowed only by a matching `tls_passthrough` rule. An Actor with no policy
+  `EgressPolicy`. Rules form an unordered set matched by hostname and dialed port specificity
+  (never list position or dialed IP): exact hostnames beat suffix wildcards (`*.example.com`),
+  which beat `"*"`, and an explicit port list beats `ports.all`. A request the gateway can read
+  (cleartext HTTP, or TLS it terminates under an `https` rule) is checked per request against the
+  HTTP `Host` header (which must match the TLS SNI on `https`) and dialed port. TLS to a name no
+  `https` rule covers is allowed only by a matching `tlsPassthrough` rule. An Actor with no policy
   gets no tunnel at all.
 
 ## Choose a dataplane
 
 The dataplane is selected when installing `ate-system`, not when installing this demo. Install as
-in the [Quickstart](../../README.md#quickstart-development) or
-[GKE Quickstart](../../README.md#gke-quickstart-development); for agentgateway, add
+in the [Quickstart](../../docs/get-started/quickstart.md) or
+[Operator Install Guide](../../docs/guides/operator-install.md); for agentgateway, add
 `--atenet-dataplane=agentgateway` to `deploy ate-system`. The Actor, ActorTemplate, worker pool,
 test, and manual walkthrough are otherwise the same.
 
@@ -82,29 +84,35 @@ rejects that option with agentgateway rather than silently omitting it.
 
 ## Components
 
-- **Egress app (`main.go`)** — the Actor: `POST /` fetches an HTTP(S) URL and returns the status,
+- **Egress app (`main.go`)**: the Actor. `POST /` fetches an HTTP(S) URL and returns the status,
   body, and observed protocol. `POST /websocket` probes a `ws` or `wss` origin; `POST /grpc` makes
   unary and streaming gRPC calls, described below; `POST /connect` sends a forward proxy an HTTP
-  CONNECT, in the clear or over TLS, and returns its answer.
-- **Egress gateway** — the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
+  CONNECT, in the clear or over TLS, and returns its answer. `atenet-egress` denies WebSocket
+  upgrades (`403 WebSocket egress is not supported`) and inner HTTP `CONNECT` (`403 CONNECT egress
+  is not supported`) on cleartext `http` and terminated `https` chains, so `/websocket` and
+  `/connect` only reach the upstream through a `tlsPassthrough` tunnel.
+- **Egress gateway**: the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
   container started with `--mode=egress`; agentgateway uses its built-in `substrateEgress` policy
   and does not need that sidecar. The installer renders the matching configuration and container.
-- **Egress opt-in** — `ate-api-server --default-egress-gateway-address=atenet-egress.ate-system.svc:443`
+- **Egress opt-in**: `ate-api-server --default-egress-gateway-address=atenet-egress.ate-system.svc:443`
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
-- **Egress policy** — the gateway denies by default, so the demo Actor needs an `EgressPolicy`
+- **Egress policy**: the gateway denies by default, so the demo Actor needs an `EgressPolicy`
   before its fetches succeed. `kubectl ate create egress-policy` creates one from a manifest
   (step 3 below) and `kubectl ate get egress-policy` reads it back; the e2e suites create theirs
-  with `e2e.EnsureEgressPolicy`. An `all` rule reproduces the pre-policy behavior.
-- **Actor-identity trust** — the gateway mounts the `actor-id-ca-certs` Secret, a cert-only copy of
+  with `e2e.EnsureEgressPolicy`. Wildcard `http` and `https` rules (`hostnames: ["*"]`) allow
+  cleartext HTTP and intercepted HTTPS to any hostname.
+- **Actor-identity trust**: the gateway mounts the `actor-id-ca-certs` Secret, a cert-only copy of
   the actor-identity CA root that `ate-setup` derives from `actor-id-ca-pool` (which also
   holds the CA signing key and is deliberately *not* mounted here).
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development), with the dataplane
+- A Kubernetes cluster with Agent Substrate installed as in the [Quickstart](../../docs/get-started/quickstart.md)
+  (with `ATE_INSTALL_KIND=true` exported in your shell on [kind](https://kind.sigs.k8s.io/)) or [Operator Install Guide](../../docs/guides/operator-install.md), with the dataplane
   [chosen above](#choose-a-dataplane). Egress is enabled by the ateapi flag above.
+- `atenet-router` configured with `--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client`
+  (`ATE_INGRESS_ALLOWED_SPIFFE_IDS`, see [Ingress to actors](../../docs/guides/operator-install.md#ingress-to-actors)) so `kubectl ate proxy actor` and the automated test can reach the demo actor.
 - `kubectl` and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
 
 ## Deploy the demo fixture
@@ -112,6 +120,8 @@ rejects that option with agentgateway rather than silently omitting it.
 ```bash
 go run ./cmd/ate-setup deploy demo egress
 ```
+
+For the microVM runtime, deploy `egress-microvm` instead (`go run ./cmd/ate-setup deploy demo egress-microvm`).
 
 The install applies the worker pool, creates the `ate-demo-egress` atespace and
 the `egress` ActorTemplate (a substrate resource, not a CRD) through the ate
@@ -137,7 +147,8 @@ then asserts:
   tunnel at all: the gateway trusts the actor-identity CA, so the mTLS handshake is
   refused before any CONNECT is answered.
 
-Add `--cleanup` to remove everything the script created.
+The script cleans up its test resources on exit unless `KEEP=1` is set in the
+environment. Pass `--cleanup` to remove resources left behind by a `KEEP=1` run.
 
 ### HTTPS and WebSocket E2E tests
 
@@ -152,7 +163,7 @@ and runs the HTTP, HTTPS, WebSocket, and delayed-restore tests.
 ```bash
 # 1. An in-cluster target the Actor will fetch (any HTTP server works).
 kubectl create namespace egress-target
-kubectl -n egress-target create deployment whoami --image=traefik/whoami
+kubectl -n egress-target create deployment whoami --image=traefik/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
 kubectl -n egress-target expose deployment whoami --port=80
 TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterIP}')
 
@@ -162,8 +173,8 @@ kubectl ate create actor egress-demo -a ate-demo-egress --template egress
 kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
 # 3. Allow the Actor's egress; without a policy the gateway denies everything.
-#    Any host or address: cleartext HTTP on any port, and HTTPS on 443,
-#    intercepted by the gateway.
+#    Wildcard hostnames allow cleartext HTTP on any port and HTTPS on 443
+#    (intercepted by the gateway).
 kubectl ate create egress-policy egress-demo -a ate-demo-egress -f - <<'EOF'
 rules:
 - http: {hostnames: ["*"], ports: {all: {}}}
@@ -174,6 +185,7 @@ EOF
 #    missing policy as deny for 10s (--egress-policy-cache-ttl), so a fetch tried
 #    before step 3 keeps failing for up to that long after the policy appears.
 kubectl ate proxy actor egress-demo 8000:80 -a ate-demo-egress &
+PROXY_PID=$!
 curl -s -X POST http://localhost:8000/ \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
@@ -190,9 +202,9 @@ With Envoy:
 kubectl -n ate-system logs deploy/atenet-egress -c envoy | grep '\[egress\]'
 #   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/worker-for-actor/ate-demo-egress/egress-demo … code=200 …
 
-# The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
+# The co-located ext_proc sidecar logs the tunnel decision and per-request HTTP inspection:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress tunnel opened\|egress denied'
-#   egress tunnel opened: an address rule allows the destination  leg=egress actor=ate-demo-egress/egress-demo actorUid=… destination=<TARGET_IP>:80 rule=0
+#   egress tunnel opened: requests inside it are decided one by one  leg=egress actor=ate-demo-egress/egress-demo destination=<TARGET_IP>:80 sniRules=0
 ```
 
 With agentgateway:
@@ -254,6 +266,8 @@ from the cluster, works for a manual run.
 ## Cleanup
 
 ```bash
+kill "$PROXY_PID" 2>/dev/null || true
+kubectl delete namespace egress-target --ignore-not-found
 ./demos/egress/test-egress.sh --cleanup
 go run ./cmd/ate-setup delete demo egress
 ```
