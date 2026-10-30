@@ -32,8 +32,16 @@ The JWT is the one ate-api-server mints for atelet through
 `WorkerService.MintWorkerActorJwt`, with the audience named on the
 `actor_jwt` proto field. Its shape is defined in `internal/actoridjwt`, and
 the exchange accepts only the worker-for-actor kind, never an actor's own
-token. Its public keys come from the `jwks` key of the `actor-id-jwt-pool`
-Secret, read through `oidcjwt.FileKeySource`.
+token. The exchange fetches the issuer's public keys through OpenID Connect
+discovery at `<issuer>/.well-known/openid-configuration`, at sidecar start
+and then as `oidcjwt.Verifier` refreshes them. An issuer it cannot reach
+fails the exchange with `UNAVAILABLE`.
+`--actor-jwt-issuer-ca-file` names the CA bundle that verifies the issuer, or
+the system roots when empty. The sidecar re-reads it when it changes, so a
+rotated bundle takes effect without a restart. If a re-read fails, it keeps
+the last bundle and logs a warning. If the issuer's certificate
+does not verify at start, the sidecar exits. Any other error at start is
+logged, and the sidecar serves and fetches again on the next exchange.
 
 Four packages behind the exchange know no storage provider and are what a
 provider's own plugin binary reuses. The rest is this binary's.
@@ -42,7 +50,7 @@ Reusable by every provider:
 
 - `internal/objectstoreplugin/actorauthz`: the checks every exchange applies
   before it issues a credential, built on the three below.
-- `internal/oidcjwt`: verifies the JWT against the `jwks` file.
+- `internal/oidcjwt`: verifies the JWT against the issuer's published keys.
 - `internal/objectstoreplugin/actorlookup`: fetches the actor over the
   loopback, refuses a recreated one.
 - `internal/objectstoreplugin/actorscope`: turns the actor's status into

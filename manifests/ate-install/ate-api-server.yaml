@@ -100,13 +100,18 @@ spec:
         # a token scoped to that actor's snapshots. On S3 it answers
         # UNIMPLEMENTED and the node plugins never call it. It serves over TLS
         # on its own port with the pod's service DNS certificate, verifies
-        # JWTs with the public keys mounted below, and reaches ate-api-server
-        # over the loopback with the pod identity certificate. The issuer must
-        # be the one ate-api-server mints with, so both read it from the same
-        # ConfigMap key. On GCS it downscopes a token for the snapshot
-        # transfer service account, which it impersonates.
+        # JWTs with the keys it fetches from the issuer through OIDC
+        # discovery, and reaches ate-api-server over the loopback with the pod
+        # identity certificate. The issuer must be the one ate-api-server
+        # mints with, so both read it from the same ConfigMap key. The issuer
+        # CA file is the service DNS trust bundle for ate-idp-server, and
+        # empty, the system roots, for a custom issuer. An issuer certificate
+        # that does not verify stops the sidecar at start. On GCS it
+        # downscopes a token for the snapshot transfer service account, which
+        # it impersonates.
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
+        - --actor-jwt-issuer-ca-file=$(ATE_API_ACTOR_JWT_ISSUER_CA_FILE)
         - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
         ports:
         - name: exchange
@@ -142,6 +147,11 @@ spec:
             configMapKeyRef:
               name: ate-api-server-envvars
               key: ATE_API_ACTOR_JWT_ISSUER
+        - name: ATE_API_ACTOR_JWT_ISSUER_CA_FILE
+          valueFrom:
+            configMapKeyRef:
+              name: ate-api-server-envvars
+              key: ATE_API_ACTOR_JWT_ISSUER_CA_FILE
         - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
           valueFrom:
             configMapKeyRef:
@@ -159,18 +169,14 @@ spec:
         volumeMounts:
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
-        # For the exchange: its serving certificate, the client certificate it
-        # dials ate-api-server with, and the public keys of the actor JWT
-        # pool. Only the jwks item is projected, never the pool itself, so the
-        # sidecar cannot mint JWTs.
+        # For the exchange: its serving certificate, the trust bundle it
+        # verifies ate-api-server and ate-idp-server with, and the client
+        # certificate it dials ate-api-server with.
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
           readOnly: true
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
-          readOnly: true
-        - name: "actor-id-jwt-jwks"
-          mountPath: "/run/actor-id-jwt-jwks"
           readOnly: true
       containers:
       - name: ate-api-server
@@ -368,17 +374,6 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
-      # The same Secret's public keys alone, for the objectstore-plugin
-      # sidecar's JWT verification. ate-setup and kubectl ate admin keep the
-      # jwks key in step with pool.
-      - name: "actor-id-jwt-jwks"
-        projected:
-          sources:
-          - secret:
-              name: "actor-id-jwt-pool"
-              items:
-              - key: "jwks"
-                path: "jwks.json"
       - name: "actor-id-ca-pool"
         projected:
           sources:
