@@ -100,14 +100,13 @@ func SpecToAgentPB(s *specs.Spec) *agentpb.Spec {
 		// Process.ApparmorProfile / Process.SelinuxLabel above. The MVP runs the
 		// actor with kata's defaults for these.
 		for _, ns := range s.Linux.Namespaces {
-			// Mirror the kata shim (kata_agent.go constrainGRPCSpec): the
-			// network/cgroup/time namespaces are handled on the host / unsupported
-			// in the guest agent, so DROP them (dropping the network ns makes the
-			// container share the guest sandbox network = eth0/actor IP). Every
-			// other namespace's host Path MUST be emptied, else the agent tries to
-			// join a host namespace path inside the guest and fails ENOENT.
+			// As runtime-rs's amend_spec: drop pid, network and time (the agent adds
+			// a pid namespace of its own; no network entry means the container
+			// shares the guest's eth0) and send the rest without a path, since a
+			// host namespace path does not exist in the guest. Dropping cgroup as
+			// well is this client's choice, kept from the Go shim's constrainGRPCSpec.
 			switch ns.Type {
-			case specs.NetworkNamespace, specs.CgroupNamespace, specs.TimeNamespace:
+			case specs.NetworkNamespace, specs.CgroupNamespace, specs.TimeNamespace, specs.PIDNamespace:
 				continue
 			}
 			l.Namespaces = append(l.Namespaces, &agentpb.LinuxNamespace{Type: string(ns.Type)})
