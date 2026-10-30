@@ -31,16 +31,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
-	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apiauthn"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apiconfig"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/server"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
-	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
-	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
-	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
@@ -53,22 +50,13 @@ import (
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
-	"go.ate.dev/substrate/pkg/client/informers/externalversions"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/reflection"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
-
-// maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
-const maxRPCDeadline = 10 * time.Minute
 
 const minResyncInterval = 250 * time.Millisecond
 
@@ -277,39 +265,8 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to build server credentials", err)
 	}
 
-	workerCache := workercache.New(persistence, 5*time.Minute)
-	if err := workerCache.Start(ctx); err != nil {
-		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
-	}
-
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	workerPoolLister := ateFactory.Ate().V1().WorkerPools().Lister()
-	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
-
-	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
-	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
-	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
-
-	stopCh := make(chan struct{})
-	defer close(stopCh)
-	ateletPodInformerFactory.Start(stopCh)
-	ateFactory.Start(stopCh)
-	scInformerFactory.Start(stopCh)
-
-	ateletPodInformerFactory.WaitForCacheSync(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
-	scInformerFactory.WaitForCacheSync(stopCh)
-
-	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
-		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
-	}
 	if err := controlapi.RegisterActorCrashes(otel.Meter("ateapi")); err != nil {
 		serverboot.Fatal(ctx, "Failed to register actor-crashes metric", err)
-	}
-
-	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"))
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
 	objectStorePluginConn, err := pluginsocket.Dial(*objectStorePluginSocket, pluginsocket.ReadyWait)
@@ -326,13 +283,6 @@ func main() {
 		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
-	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), ateletSPIFFEID, *ateletClientCredBundle, *podIdentityCACerts,
-		controlapi.WithNodeGetter(func(ctx context.Context, nodeName string) error {
-			_, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-			return err
-		}))
-
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "while loading the Actor ID certificate authority pool", err)
@@ -343,68 +293,40 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
-	controlSrv := controlapi.NewRPCService(
-		persistence,
-		workerCache,
-		csiDriverConfigLister,
-		storageClassLister,
-		ateletDialer,
-		instruments,
-		*defaultEgressGatewayAddress,
-		volPlugins,
-		objectstore.NewControlProviderClient(objectStorePluginConn),
-		*actorJWTIssuer,
-		actorIDJWTAuthorityPool,
-		*snapshotLocation,
-	)
-
-	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
-	templateReconciler.Start(shutdownCtx)
-
-	// Crash the Actors lost when a Worker's worker restarts.
-	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
-	workerAssignmentReconciler.Start(shutdownCtx)
+	cacheCtx, stopCaches := context.WithCancel(ctx)
+	defer stopCaches()
+	srv, err := server.New(cacheCtx, server.Config{
+		Store:                       persistence,
+		KubeClient:                  clientset,
+		SubstrateCRDClient:          ateClient,
+		AteletNamespace:             ateletNamespace,
+		AteletSPIFFEID:              ateletSPIFFEID,
+		AteletClientCredBundle:      *ateletClientCredBundle,
+		PodIdentityCACerts:          *podIdentityCACerts,
+		ServerCreds:                 serverCreds,
+		Authn:                       authCfg,
+		Authorizer:                  authorizer,
+		ObjectStorePlugin:           objectstore.NewControlProviderClient(objectStorePluginConn),
+		VolumePlugins:               make(map[string]volume.VolumePluginControlPlane),
+		SnapshotLocation:            *snapshotLocation,
+		ActorJWTIssuer:              *actorJWTIssuer,
+		ActorJWTAuthorities:         actorIDJWTAuthorityPool,
+		ActorIDCAs:                  actorIDCAPool,
+		DefaultEgressGatewayAddress: *defaultEgressGatewayAddress,
+		TemplateResyncInterval:      *templateResyncInterval,
+		Meter:                       otel.Meter("ateapi"),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build the server", err)
+	}
+	srv.StartReconcilers(shutdownCtx)
+	mux := srv.GRPC
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
-
-	if err := apiauthn.ValidateServerConfig(authCfg); err != nil {
-		serverboot.Fatal(ctx, "Invalid auth config", err)
-	}
-
-	unaryInterceptors := []grpc.UnaryServerInterceptor{
-		apiauthn.UnaryServerInterceptor(authCfg),
-		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
-		ateinterceptors.ServerUnaryInterceptor,
-		authz.UnaryServerInterceptor(authorizer),
-		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-		preview.UnaryServerInterceptor,
-	}
-
-	mux := grpc.NewServer(
-		grpc.Creds(serverCreds),
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		// Close connections after an hour to allow for any
-		// client that doesn't use Kubernetes endpoint resolvers
-		// to eventually reobtain backend IPs. https://github.com/grpc/grpc/issues/12295
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionAge:      1 * time.Hour,
-			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
-		}),
-		grpc.ChainUnaryInterceptor(unaryInterceptors...),
-		grpc.ChainStreamInterceptor(
-			apiauthn.StreamServerInterceptor(authCfg),
-			authz.StreamServerInterceptor(),
-			preview.StreamServerInterceptor,
-		),
-	)
-	reflection.Register(mux)
-	ateapi.RegisterControlServer(mux, controlSrv)
-	ateapi.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool, *actorJWTIssuer, actorIDJWTAuthorityPool))
 
 	// Every RPC needs the store, so a replica that cannot reach it leaves the
 	// Service until it can. Liveness stays green: the pool reconnects on its own.
