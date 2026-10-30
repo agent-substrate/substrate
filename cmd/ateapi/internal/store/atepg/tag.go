@@ -26,7 +26,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapi.Tag, error) {
+func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (_ *ateapi.Tag, err error) {
+	defer mapSerializationFailure(&err)
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
@@ -44,8 +45,9 @@ func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ate
 	return tag, nil
 }
 
-func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Tag], error) {
-	opts, err := store.NormalizeListOptions(opts)
+func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.ListOptions) (_ store.ListResponse[*ateapi.Tag], err error) {
+	defer mapSerializationFailure(&err)
+	opts, err = store.NormalizeListOptions(opts)
 	if err != nil {
 		return store.ListResponse[*ateapi.Tag]{}, err
 	}
@@ -154,7 +156,8 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 	return result, nextToken, nil
 }
 
-func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.Tag, error) {
+func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (_ *ateapi.Tag, err error) {
+	defer mapSerializationFailure(&err)
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()
 	dbTag := proto.CloneOf(tag)
@@ -220,14 +223,16 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapi.Tag) error {
 	return nil
 }
 
-func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapi.Tag) error) (_ *ateapi.Tag, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateTag(ctx, tagRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
+func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error) (_ *ateapi.Tag, err error) {
+	defer mapSerializationFailure(&err)
 	return p.updateTag(ctx, tagRef, precondition, mutate, true)
 }
 
@@ -297,10 +302,11 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	return dbTag, nil
 }
 
-func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error) {
+func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapi.Tag, err error) {
+	defer mapSerializationFailure(&err)
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = p.pool.QueryRow(ctx, `
 		DELETE FROM tags
 		WHERE atespace = $1 AND name = $2
 		  AND ($3::text = '' OR uid = $3::text)

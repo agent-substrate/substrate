@@ -26,7 +26,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapi.ActorTemplate) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapi.ActorTemplate) (_ *ateapi.ActorTemplate, err error) {
+	defer mapSerializationFailure(&err)
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
 	dbTemplate := proto.Clone(template).(*ateapi.ActorTemplate)
 	if dbTemplate.Metadata == nil {
@@ -53,9 +54,10 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapi.
 	return dbTemplate, nil
 }
 
-func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (_ *ateapi.ActorTemplate, err error) {
+	defer mapSerializationFailure(&err)
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+	err = p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -79,14 +81,16 @@ func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi
 	return nil
 }
 
-func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (_ *ateapi.ActorTemplate, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateActorTemplate(ctx, templateRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (_ *ateapi.ActorTemplate, err error) {
+	defer mapSerializationFailure(&err)
 	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, true)
 }
 
@@ -149,8 +153,9 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	return dbTemplate, nil
 }
 
-func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorTemplate], error) {
-	opts, err := store.NormalizeListOptions(opts)
+func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (_ store.ListResponse[*ateapi.ActorTemplate], err error) {
+	defer mapSerializationFailure(&err)
+	opts, err = store.NormalizeListOptions(opts)
 	if err != nil {
 		return store.ListResponse[*ateapi.ActorTemplate]{}, err
 	}
@@ -221,9 +226,10 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	return store.ListResponse[*ateapi.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapi.ActorTemplate, error) {
+func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (_ *ateapi.ActorTemplate, err error) {
+	defer mapSerializationFailure(&err)
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = p.pool.QueryRow(ctx, `
 		DELETE FROM actor_templates AS t
 		WHERE t.atespace = $1 AND t.name = $2
 		  AND ($3::text = '' OR t.uid = $3::text)

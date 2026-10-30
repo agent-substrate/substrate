@@ -27,7 +27,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error) {
+func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapi.EgressPolicy) (_ *ateapi.EgressPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	dbPolicy := proto.Clone(policy).(*ateapi.EgressPolicy)
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -49,13 +50,15 @@ func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapi.EgressPolicy, error) {
+func (p *Persistence) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.EgressPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	return getEgressPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM actor_egress_policies
 		WHERE atespace = $1 AND actor_name = $2`, actorRef.Atespace, actorRef.Name)
 }
 
-func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.EgressPolicy) error) (*ateapi.EgressPolicy, error) {
+func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.EgressPolicy) error) (_ *ateapi.EgressPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -96,11 +99,12 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.EgressPolicy, error) {
+func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (_ *ateapi.EgressPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	var version int64
 	var uid string
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = p.pool.QueryRow(ctx, `
 		DELETE FROM actor_egress_policies
 		WHERE atespace = $1 AND actor_name = $2
 		  AND ($3::text = '' OR uid = $3::text)

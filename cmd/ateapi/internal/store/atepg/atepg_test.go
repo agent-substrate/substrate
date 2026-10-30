@@ -16,9 +16,12 @@ package atepg
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
@@ -78,6 +81,31 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 			err := tc.list()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("list error = %v, want one naming %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMapSerializationFailure(t *testing.T) {
+	serialization := &pgconn.PgError{Code: "40001"}
+	unique := &pgconn.PgError{Code: "23505"}
+	for _, tc := range []struct {
+		name         string
+		err          error
+		wantConflict bool
+	}{
+		{name: "nil", err: nil},
+		{name: "serialization failure", err: fmt.Errorf("committing: %w", serialization), wantConflict: true},
+		{name: "other PostgreSQL error", err: fmt.Errorf("inserting: %w", unique)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.err
+			mapSerializationFailure(&err)
+			if got := errors.Is(err, store.ErrVersionConflict); got != tc.wantConflict {
+				t.Errorf("errors.Is(%v, ErrVersionConflict) = %v, want %v", err, got, tc.wantConflict)
+			}
+			if !errors.Is(err, tc.err) {
+				t.Errorf("mapped error %v no longer wraps %v", err, tc.err)
 			}
 		})
 	}
