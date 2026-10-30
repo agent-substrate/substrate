@@ -18,12 +18,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
+
+var sandboxConfigGVK = atev1.GroupVersion.WithKind("SandboxConfig")
 
 // The benchmark stack is still driven by shell. It orchestrates image builds
 // and load-test deployment that are out of scope for this command, so
@@ -65,6 +67,16 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	if err := e.RequireControlPlane(ctx); err != nil {
 		return err
 	}
+	if opts.SandboxClass == config.SandboxClassMicrovm {
+		ok, err := e.Kube.Exists(ctx, sandboxConfigGVK, "", microvmSandboxConfigName)
+		if err != nil {
+			return fmt.Errorf("while checking sandboxconfig/%s: %w", microvmSandboxConfigName, err)
+		}
+		if !ok {
+			return fmt.Errorf("benchmarks with --sandbox-class=microvm require sandboxconfig/%s; install it with:\n  go run ./cmd/ate-setup deploy sandboxconfig --sandbox-classes=microvm",
+				microvmSandboxConfigName)
+		}
+	}
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
 	return e.runScript(ctx, deployLocustScript, deployLocustArgs(opts, e.Cfg.OtlpEndpoint, e.Cfg.BenchmarkActorMemory)...)
 }
@@ -103,13 +115,7 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 // runScript executes a repository script from the repository root with the
 // environment the shell installer would have given it.
 func (e *Env) runScript(ctx context.Context, relPath string, args ...string) error {
-	cmd := exec.CommandContext(ctx, e.Cfg.Path(relPath), args...)
-	cmd.Dir = e.Cfg.Root
-	cmd.Env = e.Cfg.ScriptEnv()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
+	if err := e.runCmd(ctx, os.Stdin, e.Cfg.Path(relPath), args...); err != nil {
 		return fmt.Errorf("while running %s: %w", relPath, err)
 	}
 	return nil

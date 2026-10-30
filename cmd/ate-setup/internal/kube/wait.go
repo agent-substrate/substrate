@@ -193,9 +193,6 @@ func (c *Client) WaitJobComplete(ctx context.Context, namespace, name string, ti
 	err := poll(ctx, timeout, func(ctx context.Context) (bool, error) {
 		job, err := c.Typed.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
 			return false, err
 		}
 		for _, cond := range job.Status.Conditions {

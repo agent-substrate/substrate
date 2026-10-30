@@ -52,6 +52,10 @@ const (
 	// DefaultSandboxClasses is the default value of --sandbox-classes.
 	DefaultSandboxClasses = "gvisor,microvm"
 
+	// Keep defaultKataVersion at 4.1.0 or later. Cloud Hypervisor's restore
+	// handshake hangs against virtiofsd v1.13.3 (bundled through Kata 4.0.0),
+	// and Kata 4.1.0 is the first release with virtiofsd v1.14.0's vhost-user
+	// snapshot-restore (REPLY_ACK) fix.
 	defaultKataVersion            = "4.3.1"
 	defaultCloudHypervisorVersion = "v53.0"
 

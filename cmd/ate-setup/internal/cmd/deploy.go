@@ -88,6 +88,12 @@ dataplane, the default gVisor and microVM SandboxConfigs (staging the microVM
 guest assets to the cluster object store), and the atelet DaemonSet, then waits
 for each to roll out.
 
+When microvm is in --sandbox-classes (the default is gvisor,microvm), ate-setup
+downloads the Kata and Cloud Hypervisor release assets from GitHub and uploads
+them to the asset bucket (in-cluster rustfs on Kind, or gs://<bucket>-assets via
+gcloud on GKE). Pass --sandbox-classes=gvisor on gVisor-only clusters to skip
+this step.
+
 The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database.

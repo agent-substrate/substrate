@@ -74,9 +74,10 @@ The manifests still come from the checkout, so this needs one; what it removes
 is the build and write access to a registry. Releases ship no `ate-setup`
 binary, so running it from the checkout still needs Go. On non-Kind clusters,
 the default `--sandbox-classes=gvisor,microvm` also downloads the microVM guest
-assets from GitHub and uploads them to `<BUCKET>-assets` with `gcloud`; pass
-`--sandbox-classes=gvisor` to install gVisor only without `--storage-bucket-name`
-or `gcloud`.
+assets from GitHub and uploads them with `gcloud` to `<BUCKET>-assets` (created
+with `atelet` read access by `go run ./tools/setup-gcp create bucket` and
+`create iam`); pass `--sandbox-classes=gvisor` to install gVisor only without
+`--storage-bucket-name` or `gcloud`.
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including
 `envoy-dataplane`, which a build from source builds from a Dockerfile with

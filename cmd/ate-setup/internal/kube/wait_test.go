@@ -193,33 +193,41 @@ func TestWaitJobComplete(t *testing.T) {
 	shortPollInterval(t)
 	jobsResource := schema.GroupResource{Group: "batch", Resource: "jobs"}
 
-	t.Run("retries transient error and NotFound until JobComplete", func(t *testing.T) {
+	t.Run("retries transient error until JobComplete", func(t *testing.T) {
 		kc := kubefake.NewSimpleClientset()
 		calls := 0
 		kc.PrependReactor("get", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
 			calls++
-			switch calls {
-			case 1:
+			if calls == 1 {
 				return true, nil, apierrors.NewServiceUnavailable("apiserver is starting")
-			case 2:
-				return true, nil, apierrors.NewNotFound(jobsResource, "rustfs-bucket-init")
-			default:
-				return true, &batchv1.Job{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "rustfs-bucket-init"},
-					Status: batchv1.JobStatus{
-						Conditions: []batchv1.JobCondition{
-							{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
-						},
-					},
-				}, nil
 			}
+			return true, &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "rustfs-bucket-init"},
+				Status: batchv1.JobStatus{
+					Conditions: []batchv1.JobCondition{
+						{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+					},
+				},
+			}, nil
 		})
 		c := &Client{Typed: kc}
 		if err := c.WaitJobComplete(t.Context(), "ate-system", "rustfs-bucket-init", time.Minute); err != nil {
 			t.Fatalf("WaitJobComplete() = %v, want nil", err)
 		}
-		if calls != 3 {
-			t.Errorf("Get called %d times, want 3", calls)
+		if calls != 2 {
+			t.Errorf("Get called %d times, want 2", calls)
+		}
+	})
+
+	t.Run("aborts immediately on NotFound", func(t *testing.T) {
+		kc := kubefake.NewSimpleClientset()
+		c := &Client{Typed: kc}
+		err := c.WaitJobComplete(t.Context(), "ate-system", "rustfs-bucket-init", time.Minute)
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("WaitJobComplete() = %v, want wrapped NotFound error", err)
+		}
+		if got := len(kc.Actions()); got != 1 {
+			t.Errorf("got %d API actions, want 1", got)
 		}
 	})
 

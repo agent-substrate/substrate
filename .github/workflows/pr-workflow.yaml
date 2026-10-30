@@ -245,13 +245,13 @@ jobs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         # Assembling the assets (download kata-static + cloud-hypervisor) is
-        # pinned by cmd/ate-setup/internal/steps/microvm.go and
+        # pinned by the SHA-256 digests in
         # manifests/ate-install/sandboxconfig-microvm.yaml.tmpl, so key the
-        # cache on their hashes. The push-to-main run populates the
-        # default-branch cache PRs inherit; the weekly schedule refreshes it.
-        # ate-setup skips assembling when these are present.
+        # cache on its hash. The push-to-main run populates the default-branch
+        # cache PRs inherit; the weekly schedule refreshes it. ate-setup skips
+        # assembling when these are present.
         path: bin/microvm-assets
-        key: microvm-assets-${{ hashFiles('cmd/ate-setup/internal/steps/microvm.go', 'manifests/ate-install/sandboxconfig-microvm.yaml.tmpl') }}
+        key: microvm-assets-${{ hashFiles('manifests/ate-install/sandboxconfig-microvm.yaml.tmpl') }}
     - name: Enable KVM
       # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
       # the node and labels it for the micro-VM sandbox class.
@@ -276,14 +276,7 @@ jobs:
     - name: Install CSI NFS driver
       run: go run ./cmd/ate-setup --kind setup csi nfs
     - name: Deploy micro-VM counter demo
-      env:
-        NO_DEV_ENV: "true"
-        KO_DOCKER_REPO: "localhost:5001"
-        ATE_INSTALL_KIND: "true"
-        BUCKET_NAME: "ate-snapshot"
-        KIND_CLUSTER_NAME: "kind"
-        KUBECTL_CONTEXT: "kind-kind"
-      run: go run ./cmd/ate-setup deploy demo counter-microvm
+      run: go run ./cmd/ate-setup --kind deploy demo counter-microvm
     - name: Deploy gVisor counter demo
       run: go run ./cmd/ate-setup --kind deploy demo counter
     - name: Deploy egress demos
