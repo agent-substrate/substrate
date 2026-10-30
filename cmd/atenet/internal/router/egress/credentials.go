@@ -141,12 +141,6 @@ func (h *Handler) actorJWT(ctx context.Context, ref resources.ActorRef, dest egr
 // providerCredential fetches the secret uri names from the credential
 // provider. Every error it returns is already a client-facing denial.
 func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, uri string) ([]byte, error) {
-	if len(h.providers) == 0 {
-		slog.ErrorContext(ctx, "egress denied: policy requires credential injection but no credential provider is configured",
-			slog.Any("actor", ref), slog.String("host", dest.Hostname))
-		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
-	}
-
 	// When h.providers has exactly one entry and its key is "", that provider
 	// serves every URI. Otherwise look up the provider named by the URI's host,
 	// and fail closed if none matches.
