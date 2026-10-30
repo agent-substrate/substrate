@@ -66,6 +66,29 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 // SetupPostgresPersistence returns an isolated atepg persistence instance.
 func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 	t.Helper()
+	persistence := SetupPostgresPersistenceWithoutAuthz(t)
+	pool := persistence.Pool()
+	// The server always wires a PolicyManager, so test stores do too.
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("creating OpenFGA server: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	_, policyManager, err := authz.New(context.Background(), pool, fgaServer, nil, DefaultSystemPrincipals())
+	if err != nil {
+		t.Fatalf("initializing OpenFGA authz: %v", err)
+	}
+	persistence.SetPolicyManager(policyManager)
+	return persistence
+}
+
+// SetupPostgresPersistenceWithoutAuthz returns an isolated atepg persistence
+// instance with no PolicyManager. The caller must set one, as ate-api's main
+// does, before the store deletes an atespace or writes an access policy.
+//
+// TODO(#4041): Remove once atepg takes the PolicyManager in its constructor.
+func SetupPostgresPersistenceWithoutAuthz(t *testing.T) *atepg.Persistence {
+	t.Helper()
 	ctx := context.Background()
 	admin := requireAdminPool(t)
 	databaseName := fmt.Sprintf("ateapi_test_%d", databaseCount.Add(1))
@@ -96,17 +119,6 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 			t.Errorf("dropping PostgreSQL test database: %v", err)
 		}
 	})
-	// The server always wires a PolicyManager, so test stores do too.
-	fgaServer, err := authz.NewOpenFGAServer(pool)
-	if err != nil {
-		t.Fatalf("creating OpenFGA server: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, pool, fgaServer, nil, DefaultSystemPrincipals())
-	if err != nil {
-		t.Fatalf("initializing OpenFGA authz: %v", err)
-	}
-	persistence.SetPolicyManager(policyManager)
 	return persistence
 }
 
