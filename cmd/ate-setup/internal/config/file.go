@@ -39,6 +39,9 @@ const (
 type File struct {
 	// Path is where the document was read from, for error messages.
 	Path string
+	// SubstrateVersion is the release recorded in cluster metadata. It is
+	// empty in a configuration that is not an install record.
+	SubstrateVersion string
 
 	values map[string]string
 }
@@ -97,6 +100,10 @@ func ParseFile(path string) (*File, error) {
 	if err := flatten("", doc, flat); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	metadata := make(map[string]string)
+	if err := flatten(documentMetadataKey, mappingField(doc, documentMetadataKey), metadata); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 
 	var unknown []string
 	for k := range flat {
@@ -110,7 +117,11 @@ func ParseFile(path string) (*File, error) {
 			plural(len(unknown)), strings.Join(quoteAll(unknown), ", "))
 	}
 
-	return &File{Path: path, values: flat}, nil
+	return &File{
+		Path:             path,
+		SubstrateVersion: metadata[documentMetadataKey+".substrateVersion"],
+		values:           flat,
+	}, nil
 }
 
 // Get returns the raw value for a canonical key.
@@ -143,6 +154,20 @@ func headerField(doc *yaml.Node, name string) string {
 	return ""
 }
 
+// mappingField reads a top-level mapping. A field of another kind is absent
+// to readers here; ParseFile still skips reserved metadata as configuration.
+func mappingField(doc *yaml.Node, name string) *yaml.Node {
+	if doc == nil {
+		return nil
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		if doc.Content[i].Value == name && doc.Content[i+1].Kind == yaml.MappingNode {
+			return doc.Content[i+1]
+		}
+	}
+	return nil
+}
+
 // flatten walks the document into dotted keys, carrying each scalar's text
 // through unchanged so the file and the environment feed the resolver
 // identical input.
@@ -159,9 +184,6 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 	seen := make(map[string]bool, len(node.Content)/2)
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		name, value := node.Content[i].Value, node.Content[i+1]
-		if prefix == "" && reserved[name] {
-			continue
-		}
 		key := name
 		if prefix != "" {
 			key = prefix + "." + name
@@ -170,6 +192,9 @@ func flatten(prefix string, node *yaml.Node, out map[string]string) error {
 			return fmt.Errorf("setting %q is set twice", key)
 		}
 		seen[name] = true
+		if prefix == "" && reserved[name] {
+			continue
+		}
 
 		switch value.Kind {
 		case yaml.MappingNode:
