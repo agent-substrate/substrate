@@ -275,6 +275,12 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 				t.Fatalf("failed to publish Tag: %v", err)
 			}
 
+			if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{
+				Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
+			}); err != nil {
+				t.Fatalf("failed to delete source Actor: %v", err)
+			}
+
 			cloned, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
 				Actor: &ateapi.Actor{
 					Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
@@ -302,9 +308,38 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 			}
 			validateCounterResponse(t, response, "clone", 2, 2)
 
+			// The clone's first suspend writes a snapshot of its own, so the clone
+			// still resumes after DeleteTag collects the tag's snapshot.
+			cloneSuspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+				Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName},
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			})
+			if err != nil {
+				t.Fatalf("failed to suspend cloned Actor: %v", err)
+			}
+			cloneSnap := snapshotAtLatestGeneration(cloneSuspended.GetActor().GetStatus())
+			if got := cloneSnap.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
+				t.Fatalf("cloned Actor snapshot DurableSnapshot.State = %v, want COMPLETED", got)
+			}
+			t.Run("BackgroundDetach", func(t *testing.T) {
+				e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
+				waitForActorDetached(ctx, t, clients, cloneName, cloneSnap.GetUuid())
+			})
+
 			if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
 				t.Fatalf("failed to delete Tag: %v", err)
 			}
+			// Resuming restores the clone's snapshot from object storage after the
+			// detach, or from its node-local copy when BackgroundDetach is skipped.
+			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
+				t.Fatalf("failed to resume cloned Actor after DeleteTag: %v", err)
+			}
+			waitForActorState(ctx, t, clients, cloneName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+			response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
+			if err != nil {
+				t.Fatalf("failed to call cloned Actor after DeleteTag: %v", err)
+			}
+			validateCounterResponse(t, response, "clone after DeleteTag", 3, 3)
 		})
 	}
 }
