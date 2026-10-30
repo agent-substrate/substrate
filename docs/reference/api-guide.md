@@ -496,10 +496,11 @@ a `Snapshot` with the following fields:
     case.
 
   A snapshot without `sandboxRuntime` or with `SNAPSHOT_FIDELITY_ROOTFS` or
-  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime placement constraint. On gVisor,
-  such a restore runs under the worker's default `runsc`, which may not be the
-  version that wrote its files (see the
-  [Version Skew Policy](version-skew-policy.md#sandboxconfig)). Because a
+  `SNAPSHOT_FIDELITY_VOLUMES` imposes no runtime-version placement constraint.
+  On gVisor, such a restore runs under the worker's default `runsc`, which may
+  not be the version that wrote its files (see the
+  [Version Skew Policy](version-skew-policy.md#sandboxconfig)). A snapshot that
+  records a sandbox class always restores on a worker of that class. Because a
   `ROOTFS` restore reuses the container's rootfs upper layer over the template's
   image, pools selected by an `ActorTemplate` must share a CPU architecture.
 
