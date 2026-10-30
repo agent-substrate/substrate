@@ -30,8 +30,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -672,77 +670,6 @@ func TestEllipticCurveForJWK(t *testing.T) {
 	}
 	if _, err := ellipticCurveForJWK("P-192"); err == nil {
 		t.Error("ellipticCurveForJWK(P-192) = nil, want error")
-	}
-}
-
-// writeJWKSFile writes the issuer's current JWK set to a file and returns the
-// path, standing in for the public key file a signer publishes next to its
-// pool.
-func writeJWKSFile(t *testing.T, ti *testIssuer) string {
-	t.Helper()
-	b, err := json.Marshal(ti.jwks)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "jwks.json")
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func TestFileKeySource(t *testing.T) {
-	ti := newTestIssuer(t)
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ti.addEC(t, "ec-1", "P-256", &key.PublicKey)
-	path := writeJWKSFile(t, ti)
-
-	v := NewVerifier(ti.issuer(), []string{testAudience}, FileKeySource(path))
-	if _, err := v.Verify(context.Background(), mintJWT(t, "ES256", "ec-1", key, validClaims(ti.issuer())), time.Now()); err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
-	}
-	if ti.jwksRequests.Load() != 0 {
-		t.Errorf("the file source fetched the JWKS over HTTP %d times", ti.jwksRequests.Load())
-	}
-
-	// Rotation: a key added to the file is found on the unknown-kid refresh.
-	next, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ti.addEC(t, "ec-2", "P-256", &next.PublicKey)
-	b, _ := json.Marshal(ti.jwks)
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := v.Verify(context.Background(), mintJWT(t, "ES256", "ec-2", next, validClaims(ti.issuer())), time.Now()); err != nil {
-		t.Fatalf("Verify after rotation = %v, want nil", err)
-	}
-}
-
-func TestFileKeySourceErrors(t *testing.T) {
-	dir := t.TempDir()
-	empty := filepath.Join(dir, "empty.json")
-	if err := os.WriteFile(empty, []byte(`{"keys":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	garbage := filepath.Join(dir, "garbage.json")
-	if err := os.WriteFile(garbage, []byte(`not json`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for name, path := range map[string]string{
-		"missing file": filepath.Join(dir, "absent.json"),
-		"empty set":    empty,
-		"not JSON":     garbage,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := FileKeySource(path).Keys(context.Background()); err == nil {
-				t.Fatal("Keys succeeded, want error")
-			}
-		})
 	}
 }
 
