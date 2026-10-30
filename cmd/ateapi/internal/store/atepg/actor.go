@@ -26,7 +26,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*ateapi.Actor, error) {
+func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (_ *ateapi.Actor, err error) {
+	defer mapSerializationFailure(&err)
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
@@ -63,9 +64,10 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*at
 	return dbActor, nil
 }
 
-func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, error) {
+func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, err error) {
+	defer mapSerializationFailure(&err)
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
+	err = p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -79,14 +81,20 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	return out, nil
 }
 
-func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (_ *ateapi.Actor, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("in precondition.Validate: %w", err)
 	}
-	return p.updateActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
+	actor, err := p.updateActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
+	if err != nil {
+		return actor, fmt.Errorf("in updateActor: %w", err)
+	}
+	return actor, nil
 }
 
-func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (_ *ateapi.Actor, err error) {
+	defer mapSerializationFailure(&err)
 	return p.updateActor(ctx, actorRef, precondition, mutate, true)
 }
 
@@ -151,10 +159,11 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 	return dbActor, nil
 }
 
-func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
+func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (_ *ateapi.Actor, err error) {
+	defer mapSerializationFailure(&err)
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = p.pool.QueryRow(ctx, `
 		DELETE FROM actors
 		WHERE atespace = $1 AND name = $2
 		  AND ($3::text = '' OR uid = $3::text)
@@ -176,8 +185,9 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return out, nil
 }
 
-func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Actor], error) {
-	opts, err := store.NormalizeListOptions(opts)
+func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (_ store.ListResponse[*ateapi.Actor], err error) {
+	defer mapSerializationFailure(&err)
+	opts, err = store.NormalizeListOptions(opts)
 	if err != nil {
 		return store.ListResponse[*ateapi.Actor]{}, err
 	}

@@ -25,7 +25,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapi.Worker) (*ateapi.Worker, error) {
+func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapi.Worker) (_ *ateapi.Worker, err error) {
+	defer mapSerializationFailure(&err)
 	dbWorker := proto.Clone(worker).(*ateapi.Worker)
 	if dbWorker.Metadata == nil {
 		dbWorker.Metadata = &ateapi.ResourceMetadata{}
@@ -72,7 +73,8 @@ func getWorkerRow(ctx context.Context, q querier, name string) (*ateapi.Worker, 
 	return out, nil
 }
 
-func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapi.Worker, error) {
+func (p *Persistence) GetWorker(ctx context.Context, name string) (_ *ateapi.Worker, err error) {
+	defer mapSerializationFailure(&err)
 	return getWorkerRow(ctx, p.pool, name)
 }
 
@@ -99,14 +101,16 @@ func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi
 // interleaving. That is what makes an occupancy test inside mutate a
 // compare-and-set. The predicate cannot be pushed into SQL: the row stores an
 // opaque marshaled proto, so assignment is not addressable in a WHERE clause.
-func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
+func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.Worker) error) (_ *ateapi.Worker, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
 	return p.updateWorker(ctx, name, store.DeletePreconditions(precondition), mutate, false)
 }
 
-func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error) (*ateapi.Worker, error) {
+func (p *Persistence) MarkWorkerForDeletion(ctx context.Context, name string, precondition store.DeletePreconditions, mutate func(*ateapi.Worker) error) (_ *ateapi.Worker, err error) {
+	defer mapSerializationFailure(&err)
 	return p.updateWorker(ctx, name, precondition, mutate, true)
 }
 
@@ -156,7 +160,8 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Worker, error) {
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapi.Worker, err error) {
+	defer mapSerializationFailure(&err)
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		// Locked rather than plainly read so the incarnation precondition was evaluated
 		// against is the one the DELETE removes.
@@ -178,8 +183,9 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Worker], error) {
-	opts, err := store.NormalizeListOptions(opts)
+func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (_ store.ListResponse[*ateapi.Worker], err error) {
+	defer mapSerializationFailure(&err)
+	opts, err = store.NormalizeListOptions(opts)
 	if err != nil {
 		return store.ListResponse[*ateapi.Worker]{}, err
 	}

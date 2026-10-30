@@ -69,7 +69,8 @@ func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker) error {
 	return nil
 }
 
-func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error) error {
+func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error) (err error) {
+	defer mapSerializationFailure(&err)
 	actorUID := assignment.GetActorUid()
 	if actorUID == "" {
 		return fmt.Errorf("binding an assignment with no actor_uid to worker %s", workerName)
@@ -80,7 +81,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	assignment.Metadata = &ateapi.ResourceMetadata{Name: actorUID}
 	setCreateMetadata(assignment.Metadata)
 
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
 			return nil, err
@@ -172,9 +173,10 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	return err
 }
 
-func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error) {
+func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (_ *ateapi.Worker, err error) {
+	defer mapSerializationFailure(&err)
 	var released *ateapi.Worker
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
 		released = nil
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
@@ -235,7 +237,8 @@ func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.
 	return assignment, workerName, nil
 }
 
-func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error) {
+func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (_ *ateapi.ActorAssignment, err error) {
+	defer mapSerializationFailure(&err)
 	assignment, holder, err := getAssignmentRow(ctx, p.pool, actorUID)
 	if err != nil {
 		return nil, err
@@ -246,8 +249,9 @@ func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actor
 	return assignment, nil
 }
 
-func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorAssignment], error) {
-	opts, err := store.NormalizeListOptions(opts)
+func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (_ store.ListResponse[*ateapi.ActorAssignment], err error) {
+	defer mapSerializationFailure(&err)
+	opts, err = store.NormalizeListOptions(opts)
 	if err != nil {
 		return store.ListResponse[*ateapi.ActorAssignment]{}, err
 	}
@@ -300,9 +304,10 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 	return store.ListResponse[*ateapi.ActorAssignment]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error) {
+func (p *Persistence) FindWorkerHostingActor(ctx context.Context, actorUID string) (_ string, err error) {
+	defer mapSerializationFailure(&err)
 	var workerName string
-	err := p.pool.QueryRow(ctx, `SELECT worker_name FROM worker_assignments WHERE actor_uid = $1`, actorUID).Scan(&workerName)
+	err = p.pool.QueryRow(ctx, `SELECT worker_name FROM worker_assignments WHERE actor_uid = $1`, actorUID).Scan(&workerName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", store.ErrNotFound

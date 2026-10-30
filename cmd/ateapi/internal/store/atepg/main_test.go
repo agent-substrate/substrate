@@ -79,7 +79,12 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 			return
 		}
 		containerDSN = dsn
-		pool, err := pgxpool.New(ctx, dsn)
+		cfg, err := poolConfig(dsn, "atepg")
+		if err != nil {
+			containerErr = err
+			return
+		}
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
 			containerErr = err
 			return
