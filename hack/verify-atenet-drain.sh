@@ -178,7 +178,7 @@ run_kubectl_ate suspend actor "${ACTOR_BUSY}" -a "${ATESPACE}" >/dev/null
 
 wait "${CURL_PID}" || true
 grep -q "HTTP=200" "${CURL_OUT}" || fail "parked request did not return 200 through the Terminating pod: $(cat "${CURL_OUT}")"
-grep -q "hello from" "${CURL_OUT}" || fail "parked request body missing the counter greeting: $(cat "${CURL_OUT}")"
+grep -q "preserved memory count:" "${CURL_OUT}" || fail "parked request body missing the counter response: $(cat "${CURL_OUT}")"
 echo "parked request served by the Terminating pod:"
 sed 's/^/  /' "${CURL_OUT}"
 

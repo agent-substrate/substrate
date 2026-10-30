@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command counter is a simple server that will be used as a worker pod. It listens on ports 80
-// and returns a greeting with the IP of the pod where it is running.
+// Command counter is a simple HTTP server that listens on port 80 and increments
+// counters in memory, on a durable volume, and on the root filesystem.
 package main
 
 import (
@@ -92,7 +92,6 @@ func main() {
 		fileCounter := incrementFileCounter(filepath.Join(*fileCounterDirectory, "a.txt"))
 		rootfsCounter := incrementFileCounter(*rootfsCounterFile)
 		memoryCounter := requestCount.Add(1)
-		currentIP := getCurrentIP()
 
 		fileContentStr := ""
 		if *validateExistingFilePath != "" {
@@ -114,7 +113,7 @@ func main() {
 			secondFileCounterStr = fmt.Sprintf(" | preserved second file counter: %d", secondFileCounter)
 		}
 
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d | preserved rootfs counter: %d%s%s\n", currentIP, memoryCounter, fileCounter, rootfsCounter, secondFileCounterStr, fileContentStr)
+		response := fmt.Sprintf("preserved memory count: %d | preserved file counter: %d | preserved rootfs counter: %d%s%s\n", memoryCounter, fileCounter, rootfsCounter, secondFileCounterStr, fileContentStr)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
 
 		w.WriteHeader(http.StatusOK)
@@ -165,7 +164,7 @@ func main() {
 	if *extraPort > 0 {
 		extraMux := http.NewServeMux()
 		extraMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			response := fmt.Sprintf("hello from extra port %d on pod %s\n", *extraPort, getCurrentIP())
+			response := fmt.Sprintf("hello from extra port %d\n", *extraPort)
 			slog.InfoContext(r.Context(), "Handled extra-port request", slog.String("response", response))
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(response))
@@ -247,20 +246,4 @@ func hashRandomFile() string {
 
 	hash := sha256.Sum256(rfBytes)
 	return base64.RawStdEncoding.EncodeToString(hash[:])
-}
-
-func getCurrentIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		slog.Error("Error getting interface addresses", slog.Any("err", err))
-		return "x.x.x.x"
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return "y.y.y.y"
 }

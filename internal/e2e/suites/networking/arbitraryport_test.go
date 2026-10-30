@@ -23,7 +23,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -75,27 +74,6 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		if !strings.Contains(body, "extra port 9090") {
 			t.Fatalf("tunneled response body = %q, want it to mention extra port 9090", body)
 		}
-
-		// Cross-check against the default port's own response, both self-reported
-		// by the same counter binary via getCurrentIP() -- either sandbox has its
-		// own network stack (the gVisor sentry's, or the micro-VM guest's), so
-		// this address is not the pod's Kubernetes IP, but it is consistent
-		// between the two ports on one actor. Asserting they match proves the
-		// tunnel reached the same actor's extra port rather than some other,
-		// unrelated open port.
-		defaultResp, err := router.Get(ctx, actorRef, "/")
-		if err != nil {
-			t.Fatalf("GET the actor's default port through ingress: %v", err)
-		}
-		defaultBody, err := io.ReadAll(defaultResp.Body)
-		defaultResp.Body.Close()
-		if err != nil {
-			t.Fatalf("reading default-port response body: %v", err)
-		}
-		wantIP := selfReportedIP(t, string(defaultBody))
-		if !strings.Contains(body, wantIP) {
-			t.Fatalf("tunneled response body = %q, want it to mention the same self-reported IP as the default port (%s): %q", body, wantIP, defaultBody)
-		}
 		t.Logf("arbitrary-port access through CONNECT succeeded; body: %s", body)
 	})
 
@@ -112,7 +90,7 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 
 		held := connectH2(t, ctx, cc, actorRef, 80)
 		defer held.Close()
-		if body := getThroughTunnel(t, held, actorRef.Name); !counterDefaultPortIPPattern.MatchString(body) {
+		if body := getThroughTunnel(t, held, actorRef.Name); !strings.Contains(body, "preserved memory count:") {
 			t.Fatalf("tunnel to port 80 got %q, want the default port's response", body)
 		}
 
@@ -321,19 +299,4 @@ func requestTunneled(conn interface {
 		return resp, "", fmt.Errorf("reading tunneled response body (HTTP %d): %w", resp.StatusCode, err)
 	}
 	return resp, string(body), nil
-}
-
-// counterDefaultPortIPPattern matches the "hello from: <IP> | ..." response
-// counter.go's default (port 80) handler returns.
-var counterDefaultPortIPPattern = regexp.MustCompile(`^hello from: (\S+)`)
-
-// selfReportedIP extracts the IP counter.go's getCurrentIP() reported in a
-// default-port response body.
-func selfReportedIP(t *testing.T, body string) string {
-	t.Helper()
-	m := counterDefaultPortIPPattern.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("default-port response body = %q, want it to match %q", body, counterDefaultPortIPPattern)
-	}
-	return m[1]
 }
