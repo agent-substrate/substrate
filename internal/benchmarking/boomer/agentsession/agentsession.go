@@ -217,6 +217,7 @@ func newRuntime(cfg *userclass.Config) *runtime {
 		cfg:          cfg,
 		conductor:    newConductor(time.Now),
 		turnStartSem: make(chan struct{}, turnoverStartConcurrency),
+		parkRetry:    turnoverParkRetry,
 	}
 	rt.conductor.starting = rt.startingCount.Load
 	return rt
@@ -312,6 +313,7 @@ type runtime struct {
 
 	conductor    *conductor
 	turnStartSem chan struct{}
+	parkRetry    time.Duration
 }
 
 // templateRecheckInterval is how long a template memory refusal stands
@@ -517,7 +519,7 @@ func (r *runtime) iterate() {
 	u := val.(*sessionUser)
 
 	if dyn := dynconfig.Get[knobs](r.cfg.Dyn); dyn.Awake > 0 {
-		r.conductor.step(context.Background(), u, dyn)
+		r.iterateTurnover(context.Background(), u, dyn)
 	} else {
 		step := u.steps[u.stepIndex]
 
@@ -535,6 +537,81 @@ func (r *runtime) iterate() {
 			slog.Int("consecutive_failures", u.consecutiveFailures))
 		u.suspendAndDelete(context.Background())
 		r.users.Delete(gid)
+	}
+}
+
+// iterateTurnover is iterate's body in turnover mode. A session first joins
+// the conductor; after that, each call carries out the conductor's next
+// wake or park command, or runs the step a wake left due.
+func (r *runtime) iterateTurnover(ctx context.Context, u *sessionUser, dyn knobs) {
+	if !u.joined {
+		if u.hibernatePending && !u.broken {
+			u.hibernate(ctx)
+		}
+		switch {
+		case u.broken:
+			return
+		case u.hibernatePending:
+			time.Sleep(r.parkRetry)
+			return
+		}
+		u.joined = true
+		u.cmdCh = make(chan turnCmd, 1)
+		r.conductor.join(u)
+		return
+	}
+	select {
+	case cmd := <-u.cmdCh:
+		runTurnCmd(ctx, u, dyn, cmd)
+		r.conductor.settle(u)
+		return
+	default:
+	}
+	if u.awake && u.stepDue && !u.hibernatePending {
+		if !r.conductor.claim(u) {
+			return
+		}
+		u.stepDue = false
+		if u.runStep(ctx, u.steps[u.stepIndex]) {
+			u.advance()
+		}
+		r.conductor.settle(u)
+		return
+	}
+	var retry <-chan time.Time
+	if u.hibernatePending {
+		timer := time.NewTimer(r.parkRetry)
+		defer timer.Stop()
+		retry = timer.C
+	}
+	select {
+	case cmd := <-u.cmdCh:
+		runTurnCmd(ctx, u, dyn, cmd)
+	case <-retry:
+		if r.conductor.claim(u) {
+			u.hibernate(ctx)
+		} else {
+			runTurnCmd(ctx, u, dyn, <-u.cmdCh)
+		}
+	}
+	r.conductor.settle(u)
+}
+
+// runTurnCmd carries out one conductor command on the session.
+func runTurnCmd(ctx context.Context, u *sessionUser, dyn knobs, cmd turnCmd) {
+	switch cmd {
+	case cmdWake:
+		pinged, err := u.wakeParked(ctx, dyn, "turnover")
+		switch {
+		case err == nil:
+			u.stepDue = true
+		case u.broken:
+		case pinged || !isCapacityError(err):
+			u.hibernate(ctx)
+		}
+	case cmdPark:
+		u.stepDue = false
+		u.hibernate(ctx)
 	}
 }
 
@@ -574,8 +651,8 @@ func (r *runtime) startUser(ctx context.Context, gid int64, loaded *loadedScript
 }
 
 // createSession is the part of a start that touches the cluster: it creates
-// the actor, waits for it to serve, and parks it unless the session stays
-// resident.
+// the actor, waits for it to serve, runs step 1 in turnover or resident mode,
+// and parks it unless the session stays resident.
 func (r *runtime) createSession(ctx context.Context, dyn knobs, loaded *loadedScript) (*sessionUser, error) {
 	if dyn.Awake > 0 {
 		select {
@@ -611,8 +688,11 @@ func (r *runtime) createSession(ctx context.Context, dyn knobs, loaded *loadedSc
 		return nil, fmt.Errorf("waitServing: %w", err)
 	}
 	u.awake = true
-	if dyn.Awake > 0 {
-		// Run step 1 so the initial actor/snapshot holds real memory and disk state.
+	if dyn.Awake > 0 || dyn.LifecycleMode == dynconfig.LifecycleModeNone {
+		// Run step 1 so the initial actor/snapshot holds real memory and disk
+		// state. A resident session would otherwise stay empty until step 1's
+		// think gap elapses, which at think scale 1 can outlast the whole run
+		// (55m for personal-assistant-light's gateway start).
 		if !u.runStep(ctx, u.steps[0]) {
 			u.suspendAndDelete(ctx)
 			return nil, fmt.Errorf("initial step %s failed", u.steps[0].Name)
@@ -1194,19 +1274,27 @@ func (u *sessionUser) resume(ctx context.Context) error {
 // failure leaves hibernatePending set so the next step re-drives it instead of
 // waking a stranded actor.
 func (u *sessionUser) hibernate(ctx context.Context) {
-	mode := dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode
+	dyn := dynconfig.Get[knobs](u.cfg.Dyn)
+	mode := dyn.LifecycleMode
 	if mode == dynconfig.LifecycleModeNone {
 		u.hibernatePending = false
 		return
 	}
+	// A turnover session parks once as it registers, while the fleet is still
+	// being created and before the conductor runs it. A row of its own keeps
+	// those parks out of the turnover's.
+	suffix := ""
+	if dyn.Awake > 0 && !u.joined {
+		suffix = "_Register"
+	}
 	var err error
 	if mode == dynconfig.LifecycleModeSync {
-		err = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+		err = u.tracedCall(ctx, "SuspendActor"+suffix, func(callCtx context.Context, tr *metadata.MD) error {
 			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{Actor: u.ref(), Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})
 	} else {
-		err = u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
+		err = u.tracedCall(ctx, "SuspendActorAsync"+suffix, func(callCtx context.Context, tr *metadata.MD) error {
 			_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{Actor: u.ref(), Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}, grpc.Trailer(tr))
 			return err
 		})

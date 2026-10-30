@@ -15,7 +15,6 @@
 package agentsession
 
 import (
-	"context"
 	"log/slog"
 	mathrand "math/rand/v2"
 	"slices"
@@ -56,9 +55,8 @@ const (
 
 // conductor coordinates session wakes and parks.
 type conductor struct {
-	now       func() time.Time
-	starting  func() int64
-	parkRetry time.Duration
+	now      func() time.Time
+	starting func() int64
 
 	mu         sync.Mutex
 	parked     []*sessionUser
@@ -73,12 +71,7 @@ type conductor struct {
 }
 
 func newConductor(now func() time.Time) *conductor {
-	return &conductor{
-		now:       now,
-		parkRetry: turnoverParkRetry,
-		busy:      map[*sessionUser]bool{},
-		inFlight:  map[*sessionUser]turnCmd{},
-	}
+	return &conductor{now: now, busy: map[*sessionUser]bool{}, inFlight: map[*sessionUser]turnCmd{}}
 }
 
 func (c *conductor) join(u *sessionUser) {
@@ -221,76 +214,4 @@ func (c *conductor) export() {
 	turnoverSessions.WithLabelValues("parked").Set(float64(len(c.parked)))
 	turnoverSessions.WithLabelValues("waking").Set(float64(wakes))
 	turnoverSessions.WithLabelValues("parking").Set(float64(len(c.inFlight) - wakes))
-}
-
-// step runs one iteration of a turnover-mode session.
-func (c *conductor) step(ctx context.Context, u *sessionUser, dyn knobs) {
-	if !u.joined {
-		if u.hibernatePending && !u.broken {
-			u.hibernate(ctx)
-		}
-		switch {
-		case u.broken:
-			return
-		case u.hibernatePending:
-			time.Sleep(c.parkRetry)
-			return
-		}
-		u.joined = true
-		u.cmdCh = make(chan turnCmd, 1)
-		c.join(u)
-		return
-	}
-	select {
-	case cmd := <-u.cmdCh:
-		runTurnCmd(ctx, u, dyn, cmd)
-		c.settle(u)
-		return
-	default:
-	}
-	if u.awake && u.stepDue && !u.hibernatePending {
-		if !c.claim(u) {
-			return
-		}
-		u.stepDue = false
-		if u.runStep(ctx, u.steps[u.stepIndex]) {
-			u.advance()
-		}
-		c.settle(u)
-		return
-	}
-	var retry <-chan time.Time
-	if u.hibernatePending {
-		timer := time.NewTimer(c.parkRetry)
-		defer timer.Stop()
-		retry = timer.C
-	}
-	select {
-	case cmd := <-u.cmdCh:
-		runTurnCmd(ctx, u, dyn, cmd)
-	case <-retry:
-		if c.claim(u) {
-			u.hibernate(ctx)
-		} else {
-			runTurnCmd(ctx, u, dyn, <-u.cmdCh)
-		}
-	}
-	c.settle(u)
-}
-
-func runTurnCmd(ctx context.Context, u *sessionUser, dyn knobs, cmd turnCmd) {
-	switch cmd {
-	case cmdWake:
-		pinged, err := u.wakeParked(ctx, dyn, "turnover")
-		switch {
-		case err == nil:
-			u.stepDue = true
-		case u.broken:
-		case pinged || !isCapacityError(err):
-			u.hibernate(ctx)
-		}
-	case cmdPark:
-		u.stepDue = false
-		u.hibernate(ctx)
-	}
 }

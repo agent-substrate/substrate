@@ -163,6 +163,18 @@ def get_steady_state_window(
     return start_ts, end_ts
 
 
+def start_steady_window_at(
+    window: tuple[int, int], not_before: int | None
+) -> tuple[int, int]:
+    """The steady-state window, started at not_before when that falls inside
+    it. A turnover run is measured from the end of its fill
+    (turnover_window.py), which comes after all its users have started."""
+    start, end = window
+    if not_before is not None and start < not_before < end:
+        return not_before, end
+    return start, end
+
+
 def _parse_instant_float(res: list[dict[str, Any]]) -> float | None:
     if res and "value" in res[0]:
         try:
@@ -802,12 +814,14 @@ def extract_and_record_server_telemetry(
     logs: TextIO | None = None,
     lag_s: int = 70,
     worker_pods: dict[str, int | None] | None = None,
+    steady_not_before: int | None = None,
 ) -> None:
     """Entry point called by runner.py to query Prometheus and persist artifacts.
 
     Waits until `end_ts + lag_s` first, so the atelet's last export of the run
     has been scraped; lag_s must cover its export interval plus one scrape.
     `worker_pods` (WORKER_POD_FIELDS) joins `oom_events`; null when not given.
+    `steady_not_before`, when inside the steady-state window, starts it.
     """
     def log(msg: str) -> None:
         if logs:
@@ -820,8 +834,9 @@ def extract_and_record_server_telemetry(
         time.sleep(wait_s)
 
     log(f"Harvesting Prometheus metrics from {prom_url} over [{start_ts}, {end_ts}]...")
-    steady_start, steady_end = get_steady_state_window(
-        stats_history_csv, start_ts, end_ts
+    steady_start, steady_end = start_steady_window_at(
+        get_steady_state_window(stats_history_csv, start_ts, end_ts),
+        steady_not_before,
     )
     log(
         f"Detected steady-state window: [{steady_start}, {steady_end}] "

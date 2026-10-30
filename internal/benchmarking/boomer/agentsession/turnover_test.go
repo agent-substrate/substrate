@@ -223,7 +223,7 @@ func TestTurnoverSessionCarriesOutCommands(t *testing.T) {
 	rt := newRuntime(u.cfg)
 	ctx := context.Background()
 
-	rt.conductor.step(ctx, u, dyn)
+	rt.iterateTurnover(ctx, u, dyn)
 	if !u.joined || len(rt.conductor.parked) != 1 {
 		t.Fatalf("after the first iteration: joined %v, %d parked; want true, 1", u.joined, len(rt.conductor.parked))
 	}
@@ -231,7 +231,7 @@ func TestTurnoverSessionCarriesOutCommands(t *testing.T) {
 	rt.conductor.mu.Lock()
 	rt.conductor.send(&rt.conductor.parked, cmdWake)
 	rt.conductor.mu.Unlock()
-	expectRows(t, "TimeToWake", 1, 0, func() { rt.conductor.step(ctx, u, dyn) })
+	expectRows(t, "TimeToWake", 1, 0, func() { rt.iterateTurnover(ctx, u, dyn) })
 	if !u.awake || countCalls(ctl.recordedCalls(), "ResumeActor") != 1 || len(rt.conductor.idle) != 1 {
 		t.Fatalf("after the wake: awake %v, ResumeActor calls %d, %d idle; want true, 1, 1",
 			u.awake, countCalls(ctl.recordedCalls(), "ResumeActor"), len(rt.conductor.idle))
@@ -240,7 +240,7 @@ func TestTurnoverSessionCarriesOutCommands(t *testing.T) {
 	rt.conductor.mu.Lock()
 	rt.conductor.send(&rt.conductor.idle, cmdPark)
 	rt.conductor.mu.Unlock()
-	rt.conductor.step(ctx, u, dyn)
+	rt.iterateTurnover(ctx, u, dyn)
 	reqs := ctl.recordedSuspendReqs()
 	if u.awake || len(reqs) != 1 || len(rt.conductor.parked) != 1 {
 		t.Fatalf("after the park: awake %v, %d SuspendActor calls, %d parked; want false, 1, 1", u.awake, len(reqs), len(rt.conductor.parked))
@@ -248,6 +248,37 @@ func TestTurnoverSessionCarriesOutCommands(t *testing.T) {
 	if got := reqs[0].GetOptions().GetMode(); got != ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
 		t.Errorf("SuspendActor mode = %v, want asynchronous", got)
 	}
+}
+
+// TestTurnoverRegistrationParkHasItsOwnRow: the park a session makes as it
+// registers is recorded as SuspendActorAsync_Register, and only the parks
+// after it joins the conductor as SuspendActorAsync.
+func TestTurnoverRegistrationParkHasItsOwnRow(t *testing.T) {
+	ctl := &fakeControlClient{}
+	dyn := knobs{Awake: 1, Lifecycle: dynconfig.Lifecycle{ResumeMode: dynconfig.ResumeModeExplicit, LifecycleMode: dynconfig.LifecycleModeAsync}}
+	u := newTestUser(t, &fake.Server{}, ctl, dyn)
+	u.steps = []Step{turnStep}
+	rt := newRuntime(u.cfg)
+	ctx := context.Background()
+
+	expectRows(t, "SuspendActorAsync_Register", 1, 0, func() {
+		expectRows(t, "SuspendActorAsync", 0, 0, func() { u.hibernate(ctx) })
+	})
+	rt.iterateTurnover(ctx, u, dyn)
+	if !u.joined {
+		t.Fatal("the registered session did not join the conductor")
+	}
+
+	rt.conductor.mu.Lock()
+	rt.conductor.send(&rt.conductor.parked, cmdWake)
+	rt.conductor.mu.Unlock()
+	rt.iterateTurnover(ctx, u, dyn)
+	rt.conductor.mu.Lock()
+	rt.conductor.send(&rt.conductor.idle, cmdPark)
+	rt.conductor.mu.Unlock()
+	expectRows(t, "SuspendActorAsync", 1, 0, func() {
+		expectRows(t, "SuspendActorAsync_Register", 0, 0, func() { rt.iterateTurnover(ctx, u, dyn) })
+	})
 }
 
 const twoStepTurnScript = `
@@ -307,16 +338,16 @@ func TestTurnoverRegistrationBuildsStateAndRunsNextStepOnWake(t *testing.T) {
 			srv.RecordedPaths(), ctl.recordedCalls())
 	}
 
-	rt.conductor.step(ctx, u, dyn)
+	rt.iterateTurnover(ctx, u, dyn)
 	rt.conductor.mu.Lock()
 	rt.conductor.send(&rt.conductor.parked, cmdWake)
 	rt.conductor.mu.Unlock()
-	expectRows(t, "Step_02_work", 0, 0, func() { rt.conductor.step(ctx, u, dyn) })
+	expectRows(t, "Step_02_work", 0, 0, func() { rt.iterateTurnover(ctx, u, dyn) })
 	if !u.stepDue {
 		t.Fatal("after wake: stepDue = false, want true")
 	}
 
-	expectRows(t, "Step_02_work", 1, 0, func() { rt.conductor.step(ctx, u, dyn) })
+	expectRows(t, "Step_02_work", 1, 0, func() { rt.iterateTurnover(ctx, u, dyn) })
 	if u.stepIndex != 0 || u.stepDue {
 		t.Errorf("after due step: stepIndex %d, stepDue %v; want 0, false", u.stepIndex, u.stepDue)
 	}
@@ -397,14 +428,14 @@ func TestTurnoverSessionParksAfterFailedWake(t *testing.T) {
 			u.steps = []Step{turnStep}
 			u.joined, u.cmdCh = true, make(chan turnCmd, 1)
 			rt := newRuntime(u.cfg)
-			rt.conductor.parkRetry = 0
+			rt.parkRetry = 0
 			rt.conductor.settle(u)
 			rt.conductor.mu.Lock()
 			rt.conductor.send(&rt.conductor.parked, cmdWake)
 			rt.conductor.mu.Unlock()
 			ctx := context.Background()
 
-			rt.conductor.step(ctx, u, dyn)
+			rt.iterateTurnover(ctx, u, dyn)
 			suspends := countCalls(ctl.recordedCalls(), "SuspendActor")
 			if suspends != tc.suspends || len(rt.conductor.parked) != tc.parked || len(rt.conductor.idle) != tc.idle {
 				t.Fatalf("after the wake: %d SuspendActor calls, %d parked, %d idle; want %d, %d, %d",
@@ -413,7 +444,7 @@ func TestTurnoverSessionParksAfterFailedWake(t *testing.T) {
 			if tc.idle == 0 {
 				return
 			}
-			rt.conductor.step(ctx, u, dyn)
+			rt.iterateTurnover(ctx, u, dyn)
 			suspends = countCalls(ctl.recordedCalls(), "SuspendActor")
 			if suspends != tc.suspends+1 || u.hibernatePending || len(rt.conductor.parked) != 1 || len(rt.conductor.idle) != 0 {
 				t.Errorf("after the due step: %d SuspendActor calls, hibernatePending %v, %d parked, %d idle; want %d, false, 1, 0",
@@ -434,7 +465,7 @@ func TestTurnoverSessionRunsDueSteps(t *testing.T) {
 	ctx := context.Background()
 
 	u.stepDue = true
-	expectRows(t, "Step_"+turnStep.Name, 1, 0, func() { rt.conductor.step(ctx, u, dyn) })
+	expectRows(t, "Step_"+turnStep.Name, 1, 0, func() { rt.iterateTurnover(ctx, u, dyn) })
 	if !u.awake || u.stepDue || countCalls(ctl.recordedCalls(), "SuspendActor") != 0 || len(rt.conductor.idle) != 1 {
 		t.Fatalf("after the step: awake %v, stepDue %v, SuspendActor calls %d, %d idle; want true, false, 0, 1",
 			u.awake, u.stepDue, countCalls(ctl.recordedCalls(), "SuspendActor"), len(rt.conductor.idle))
@@ -445,7 +476,7 @@ func TestTurnoverSessionRunsDueSteps(t *testing.T) {
 	rt.conductor.mu.Unlock()
 	u.stepDue = true
 	expectRows(t, "Step_"+turnStep.Name, 0, 0, func() {
-		rt.conductor.step(ctx, u, dyn)
+		rt.iterateTurnover(ctx, u, dyn)
 	})
 	if u.awake || u.stepDue || countCalls(ctl.recordedCalls(), "SuspendActor") != 1 {
 		t.Errorf("after the park: awake %v, stepDue %v, SuspendActor calls %d; want false, false, 1", u.awake, u.stepDue, countCalls(ctl.recordedCalls(), "SuspendActor"))

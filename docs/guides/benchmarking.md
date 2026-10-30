@@ -389,7 +389,8 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 * `--lifecycle-mode sync|async|none` — synchronous suspend (`sync`,
   uploads the snapshot before returning), asynchronous suspend (`async`,
   default, uploads the snapshot in the background), or `none` to keep actors
-  resident in memory between steps without hibernating.
+  resident in memory between steps without hibernating. A resident session
+  runs step 1 as soon as its actor serves, before step 1's think gap.
 * `--agentsession-snapshot-steps` — comma-separated 1-based step numbers after
   which the actor is hibernated (for example, `3,10,20,30,40,50,61`); between
   all other steps the actor stays resident.
@@ -414,7 +415,31 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   (both per worker; tracked in `agentsession_turnover_sessions`). Each woken
   session runs its next step immediately (ignoring the script's think times).
   Requires a fixed user count, and a stop from the master ends turnover for
-  that worker process until it restarts.
+  that worker process until it restarts. See
+  [Analyzing a Turnover Run](#analyzing-a-turnover-run) for its results.
+
+#### Analyzing a Turnover Run
+
+A turnover run registers its whole fleet before it swaps, so `stats.csv` and
+the whole-run rows of `stats.jsonl` would blend the registration into the
+turnover. Three things keep them apart:
+
+* The park each session makes as it registers is recorded as
+  `SuspendActor_Register` (`SuspendActorAsync_Register` in async mode), so
+  the `SuspendActor` and `SuspendActorAsync` rows hold only the turnover's
+  parks.
+* The runner finds the end of the fill in boomer's log line
+  `agentsession: turnover fill done` and adds a `turnover_window` row to
+  `stats.jsonl` ([`locust/turnover_window.py`](../../benchmarking/locust/turnover_window.py)).
+  It holds each request's count (`requests_<name>`), failures
+  (`failures_<name>`) and rate (`rps_<name>`) from there to the end of the run
+  (`window_start`, `window_end`), read from `stats_history.csv`. Read the swap
+  rate from `rps_ResumeActor` against `--target-rps`.
+* The server telemetry's steady-state window starts at the same point, so the
+  memory, PSI and snapshot figures cover the turnover only.
+
+The fill's wakes stay in the `ResumeActor` and `TimeToWake` rows: there are
+`--agentsession-awake` of them, at most 8 at a time.
 
 #### Writing an agent-session script
 
@@ -961,7 +986,9 @@ actually did, independent of what the load generator reported.
 Every distribution reports p50, p90, p95 and p99 over the steady-state window.
 The steady-state window runs from the first to the last Locust sample at 90% or
 more of the run's peak user count, so ramp-up and teardown are left out. Under
-a step-ladder load shape it covers only the top step.
+a step-ladder load shape it covers only the top step. In a turnover run it
+starts when the fill ends instead (see
+[Analyzing a Turnover Run](#analyzing-a-turnover-run)).
 Counts, means and `checkpoint_mb_s` come from the growth of the histogram's sum
 and count across the window, and the size, restore and checkpoint percentiles
 are interpolated inside its buckets. PSI is a one-minute rolling average read
