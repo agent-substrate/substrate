@@ -29,7 +29,8 @@ within about 5 seconds.
 > the actor's egress policy has a rule for it with
 > `kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml`.
 
-Other UDP and other traffic is filtered by nftables and never reaches the gateway.
+Other UDP and other traffic is rejected by nftables and never reaches the egress
+gateway.
 
 This applies to an actor's own telemetry too: an OpenTelemetry SDK inside the actor
 cannot reach the collector until the actor has an `http` egress rule for it. See
@@ -39,11 +40,12 @@ cannot reach the collector until the actor has an `http` egress rule for it. See
 
 | Port | Traffic | Behavior | Path | What the actor sees when refused |
 | :---- | :---- | :---- | :---- | :---- |
-| any | HTTP(S) 1.1 / 2 | Supported with policy controls | atunnel -> egress gateway -> origin | `403 Forbidden` |
-| any | WebSocket | Blocked | n/a | `403 Forbidden` |
-| any | Standard HTTP(S) CONNECT (forward-proxy tunnel) | Blocked | n/a | `403 Forbidden` |
+| any | HTTP(S) 1.1 / 2 | Supported with policy controls | atunnel -> egress gateway -> origin | `403 Forbidden`. For HTTPS whose SNI matches no `https` or `tls_passthrough` rule, the gateway closes the connection during the TLS handshake, without an HTTP response. |
+| any | TLS whose SNI matches a `tls_passthrough` rule | Relayed to the SNI hostname without inspection, so WebSocket, CONNECT, and other TCP inside it get through | atunnel -> egress gateway -> origin | Closed during the TLS handshake. |
+| any | WebSocket | Blocked | atunnel -> egress gateway | `403 Forbidden` |
+| any | Standard HTTP(S) CONNECT (forward-proxy tunnel) | Blocked | atunnel -> egress gateway | `403 Forbidden` |
 | 53 | DNS to the sandbox's gateway | Allowed for hostnames matching the actor's egress policy | sandbox DNS relay -> worker pod's resolvers | `NXDOMAIN` |
-| any | Any other TCP | Blocked | n/a | The connection is accepted and then closed with no bytes returned. There is no status code. atunnel logs the failure. |
+| any | Any other TCP | Blocked | atunnel -> egress gateway | A client that sends first gets `400 Bad Request` before the connection closes. If the client waits for the server to speak first, the connection closes after about 1 second with no data. Only the gateway logs the refusal. |
 
 See the [Network Egress Contract](network-egress.md#refusal-responses-and-policy-changes)
 for refusal status codes, policy-refresh semantics, and the distinction between DNS
@@ -59,7 +61,8 @@ refusals and HTTP policy denials.
 
 ## Other protocols
 
-Everything that is neither TCP nor UDP is blocked. Packets are dropped, not rejected: no ICMP port-unreachable is sent, so the client hangs until its own timeout.
+Everything that is neither TCP nor UDP is rejected with ICMP network
+unreachable.
 
 ## Requesting support
 
