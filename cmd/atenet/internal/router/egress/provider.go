@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This file connects the egress gateway to the credential provider it resolves
-// egress credential injections through: dialing it, reducing the configured
-// provider prefix to the provider name the handler enforces, and the small
+// This file connects the egress gateway to the credential providers it resolves
+// egress credential injections through: dialing them, validating the configured
+// provider names the handler routes on, and the small
 // validators the injection path shares. The gateway's atenet router wires
 // DialProvider and ProviderName in when it builds the egress handler (see
 // cmd/atenet/internal/router).
@@ -97,7 +97,7 @@ func ProviderName(name string) (string, error) {
 // providerNameFromURI returns the provider name of a ate-secret:// URI —
 // the URI host, e.g. "k8s.io" in
 // ate-secret://k8s.io/default/<namespace>/<secret>/<key>. The gateway reads only the host,
-// to confirm a URI targets the provider it is configured to serve.
+// to pick the provider a URI targets.
 func providerNameFromURI(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
