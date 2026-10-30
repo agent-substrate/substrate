@@ -177,19 +177,18 @@ curl -X POST -i http://localhost:8000/
    gcloud auth application-default login --project=${PROJECT_ID}
    ```
 
-3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings):
-   ```bash
-   go run ./tools/setup-gcp bootstrap
-   ```
+3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings)
+   with [`tools/setup-gcp`](https://github.com/ai-on-gke/substrate-gke/tree/main/tools/setup-gcp) in the
+   [substrate-gke](https://github.com/ai-on-gke/substrate-gke) repository, which holds the GKE
+   setup and teardown tooling. Its `bootstrap` command also creates the Workload
+   Identity IAM grants that ate-api-server and atelet depend on. See
+   [what `create iam` actually grants](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#what-create-iam-actually-grants)
+   to audit them or apply them manually.
 
-   On a fresh project this step also creates the Workload Identity IAM grants
-   that ate-api-server and atelet depend on. See
-   [what `create iam` actually grants](tools/setup-gcp/README.md#what-create-iam-actually-grants)
-   to audit them or apply them manually. If you bring your own cluster instead,
-   it needs the PodCertificateRequest and ClusterTrustBundle APIs, which GKE
-   1.37 and higher serve by default. On 1.36, enable them as beta APIs, then
-   replace any 1.36 node pools created before that. See the
-   [Create Cluster warning](tools/setup-gcp/README.md#2-create-cluster).
+   If you bring your own cluster instead, it needs the PodCertificateRequest and
+   ClusterTrustBundle APIs, which GKE 1.37 and higher serve by default. On 1.36,
+   enable them as beta APIs, then replace any 1.36 node pools created before
+   that. See the [Create Cluster warning](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#2-create-cluster).
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
@@ -220,17 +219,11 @@ curl -X POST -i http://localhost:8000/
 
 #### Custom Setup and Deployment
 
-You can run individual setup steps to create GCP resources as needed. See `go run ./tools/setup-gcp --help` for available options. For example:
-```bash
-go run ./tools/setup-gcp create cluster
-go run ./tools/setup-gcp create bucket
-```
+To create individual GCP resources, or to run the PostgreSQL store backend on
+Cloud SQL, see [`tools/setup-gcp`](https://github.com/ai-on-gke/substrate-gke/tree/main/tools/setup-gcp) in substrate-gke.
 
-To run the PostgreSQL store backend on Cloud SQL — with IAM database
-authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
-
-Similarly, you can deploy or clean up specific Agent Substrate components with
-`ate-setup`. See `go run ./cmd/ate-setup --help` for all options.
+You can deploy or cleanup specific Agent Substrate components using
+the installation script. See `go run ./cmd/ate-setup` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system
 go run ./cmd/ate-setup deploy apiserver
@@ -241,16 +234,12 @@ go run ./cmd/ate-setup delete all
 
 #### Tearing down resources (GCP)
 
-If you need to delete the resources created by the setup script, you can use the provided script `hack/teardown.sh`. This script will delete resources in the reverse order of creation and handles partial failures gracefully.
-
-```bash
-./hack/teardown.sh [--all|--cluster-scoped]
-```
+To delete the GCP resources, run substrate-gke's
+[`tools/setup-gcp/teardown.sh`](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#teardown). It deletes resources
+in the reverse order of creation and handles partial failures.
 
 * `--all` deletes everything, including the dashboards, the snapshot transfer service account and the project-level IAM bindings, which every Substrate cluster in the project shares.
 * `--cluster-scoped` deletes only this cluster, its buckets and the bindings on them. Use it while other Substrate clusters still use the project.
-
-Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 
 #### Tearing down local `kind` resources
 
@@ -303,5 +292,4 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
   will eventually ship in upstream Kubernetes (with different names).
 * `cmd/kubectl-ate`: A CLI tool for managing Agent Substrate resources. See its [README](docs/reference/kubectl-ate.md).
 * `cmd/benchmarking`: Synthetic workloads used by the load tests, including `glutton`, which consumes RAM, disk, and file descriptors on demand.
-* `tools/setup-gcp`: A provisioning utility to set up the necessary GCP infrastructure resources (GKE, GCS, IAM).
 * `demos/`: Sample applications demonstrating Agent Substrate capabilities.

@@ -85,7 +85,7 @@ Operators using ordinary PostgreSQL login users may run [`pkg/postgressetup/setu
 
 The login users come from the database provider: they may be ordinary PostgreSQL users, IAM identities, or another provider-managed identity. Substrate does not create them or require specific login names.
 
-Create an owner role with schema ownership and a read/write role with schema usage. Grant the runtime role SELECT, INSERT, UPDATE, and DELETE on tables; USAGE, SELECT, and UPDATE on sequences; EXECUTE on routines; and USAGE on types. Configure the owner's default privileges so newly migrated objects receive these grants. Grant the respective roles to the login users. The [Cloud SQL setup example](../../tools/setup-gcp/cloud-sql.md#2-one-time-roles-and-schema-privileges) shows the SQL for one login with both roles; use separate logins for stronger isolation.
+Create an owner role with schema ownership and a read/write role with schema usage. Grant the runtime role SELECT, INSERT, UPDATE, and DELETE on tables; USAGE, SELECT, and UPDATE on sequences; EXECUTE on routines; and USAGE on types. Configure the owner's default privileges so newly migrated objects receive these grants. Grant the respective roles to the login users. The [Cloud SQL setup example](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/cloud-sql.md#2-one-time-roles-and-schema-privileges) in substrate-gke shows the SQL for one login with both roles; use separate logins for stronger isolation.
 
 Apply these grants before the first `ateapi` startup. The owner connection creates and updates tables through migrations; the read/write connection cannot create schema objects.
 
@@ -98,4 +98,4 @@ User credentials are passed as connection strings through `ATE_API_POSTGRES_OWNE
 `ateapi` uses the same `@env` flag pattern for role names and schema.
 
 ### CloudSQL Configuration
-CloudSQL setup information can be found in the dedicated guide [here](../../tools/setup-gcp/cloud-sql.md).
+CloudSQL setup information can be found in the dedicated guide [here](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/cloud-sql.md) in substrate-gke.

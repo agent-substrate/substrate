@@ -41,7 +41,7 @@
 # Env (most come from .ate-dev-env.sh):
 #   BUCKET_NAME      object store bucket for snapshots (default: ate-snapshots). On
 #                    kind the assets share it. On GKE they go to BUCKET_NAME-assets,
-#                    which tools/setup-gcp creates, so nodes can read assets
+#                    which substrate-gke's tools/setup-gcp creates, so nodes can read assets
 #                    without being able to read snapshots.
 #   KUBECTL_CONTEXT  (optional) kube context; threaded into kubectl.
 #   PROJECT_ID       (optional) GCP project for the GCS asset upload (GKE path).

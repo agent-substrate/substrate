@@ -54,5 +54,5 @@ it as a device, which is what places microVM workers there.
   `snapshotConfig.location` followed by `/atespaces/`): the node's object-store plugin
   refuses to serve anything there as an asset. The staging scripts use `kata-assets/`,
   which is outside it. On GKE they stage into the asset bucket, `BUCKET_NAME-assets`,
-  the only bucket setup-gcp lets nodes read. On kind they share the rustfs bucket.
+  the only bucket substrate-gke's setup-gcp lets nodes read. On kind they share the rustfs bucket.
 - `assets` is single-arch (unlike runsc's amd64/arm64): stage assets matching the node arch.

@@ -3,7 +3,6 @@
 cel.dev/expr
 # cloud.google.com/go v0.123.0
 ## explicit; go 1.24.0
-cloud.google.com/go
 cloud.google.com/go/internal
 cloud.google.com/go/internal/optional
 cloud.google.com/go/internal/trace
@@ -36,38 +35,15 @@ cloud.google.com/go/auth/oauth2adapt
 # cloud.google.com/go/compute/metadata v0.9.0
 ## explicit; go 1.24.0
 cloud.google.com/go/compute/metadata
-# cloud.google.com/go/container v1.49.0
-## explicit; go 1.25.0
-cloud.google.com/go/container/apiv1
-cloud.google.com/go/container/apiv1/containerpb
-cloud.google.com/go/container/internal
 # cloud.google.com/go/iam v1.9.0
 ## explicit; go 1.25.0
 cloud.google.com/go/iam
 cloud.google.com/go/iam/apiv1/iampb
-# cloud.google.com/go/longrunning v0.9.0
-## explicit; go 1.25.0
-cloud.google.com/go/longrunning
-cloud.google.com/go/longrunning/autogen
-cloud.google.com/go/longrunning/autogen/longrunningpb
-cloud.google.com/go/longrunning/internal
 # cloud.google.com/go/monitoring v1.24.3
 ## explicit; go 1.24.0
 cloud.google.com/go/monitoring/apiv3/v2
 cloud.google.com/go/monitoring/apiv3/v2/monitoringpb
-cloud.google.com/go/monitoring/dashboard/apiv1
-cloud.google.com/go/monitoring/dashboard/apiv1/dashboardpb
 cloud.google.com/go/monitoring/internal
-# cloud.google.com/go/resourcemanager v1.13.0
-## explicit; go 1.25.0
-cloud.google.com/go/resourcemanager/apiv3
-cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb
-cloud.google.com/go/resourcemanager/internal
-# cloud.google.com/go/serviceusage v1.14.0
-## explicit; go 1.25.0
-cloud.google.com/go/serviceusage/apiv1
-cloud.google.com/go/serviceusage/apiv1/serviceusagepb
-cloud.google.com/go/serviceusage/internal
 # cloud.google.com/go/storage v1.62.1
 ## explicit; go 1.25.0
 cloud.google.com/go/storage
@@ -1387,7 +1363,6 @@ gonum.org/v1/gonum/stat/distuv
 ## explicit; go 1.25.0
 google.golang.org/api/googleapi
 google.golang.org/api/googleapi/transport
-google.golang.org/api/iam/v1
 google.golang.org/api/iamcredentials/v1
 google.golang.org/api/internal
 google.golang.org/api/internal/cert
@@ -1398,8 +1373,6 @@ google.golang.org/api/internal/third_party/uritemplates
 google.golang.org/api/iterator
 google.golang.org/api/option
 google.golang.org/api/option/internaloption
-google.golang.org/api/servicenetworking/v1
-google.golang.org/api/sqladmin/v1
 google.golang.org/api/storage/v1
 google.golang.org/api/transport
 google.golang.org/api/transport/grpc
@@ -1409,7 +1382,6 @@ google.golang.org/api/transport/http
 google.golang.org/genproto/googleapis/type/calendarperiod
 google.golang.org/genproto/googleapis/type/date
 google.golang.org/genproto/googleapis/type/expr
-google.golang.org/genproto/googleapis/type/interval
 google.golang.org/genproto/googleapis/type/timeofday
 # google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d
 ## explicit; go 1.25.0
@@ -1421,7 +1393,6 @@ google.golang.org/genproto/googleapis/api/httpbody
 google.golang.org/genproto/googleapis/api/label
 google.golang.org/genproto/googleapis/api/metric
 google.golang.org/genproto/googleapis/api/monitoredres
-google.golang.org/genproto/googleapis/api/serviceconfig
 google.golang.org/genproto/googleapis/api/visibility
 # google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d
 ## explicit; go 1.25.0
@@ -1639,14 +1610,11 @@ google.golang.org/protobuf/types/descriptorpb
 google.golang.org/protobuf/types/dynamicpb
 google.golang.org/protobuf/types/gofeaturespb
 google.golang.org/protobuf/types/known/anypb
-google.golang.org/protobuf/types/known/apipb
 google.golang.org/protobuf/types/known/durationpb
 google.golang.org/protobuf/types/known/emptypb
 google.golang.org/protobuf/types/known/fieldmaskpb
-google.golang.org/protobuf/types/known/sourcecontextpb
 google.golang.org/protobuf/types/known/structpb
 google.golang.org/protobuf/types/known/timestamppb
-google.golang.org/protobuf/types/known/typepb
 google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/evanphx/json-patch.v4 v4.13.0
 ## explicit

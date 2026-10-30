@@ -6,11 +6,6 @@ toolchain go1.27.3
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
-	cloud.google.com/go/container v1.49.0
-	cloud.google.com/go/iam v1.9.0
-	cloud.google.com/go/monitoring v1.24.3
-	cloud.google.com/go/resourcemanager v1.13.0
-	cloud.google.com/go/serviceusage v1.14.0
 	cloud.google.com/go/storage v1.62.1
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/aws/aws-sdk-go-v2 v1.41.7
@@ -92,7 +87,8 @@ require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.19.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
-	cloud.google.com/go/longrunning v0.9.0 // indirect
+	cloud.google.com/go/iam v1.9.0 // indirect
+	cloud.google.com/go/monitoring v1.24.3 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.33.0 // indirect

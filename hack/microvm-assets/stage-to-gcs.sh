@@ -33,7 +33,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/amd64}"
 BUCKET="${BUCKET:?set BUCKET to the asset bucket, BUCKET_NAME-assets}"
 
-# Pass --project only when PROJECT_ID is set (mirrors hack/teardown.sh); otherwise
+# Pass --project only when PROJECT_ID is set; otherwise
 # gcloud uses its active config project. ${PROJECT_ID:+...} elides the flag entirely
 # when unset (same idiom as KUBECTL_CONTEXT in hack/run-microvm-demo.sh).
 echo ">> Uploading assets to gs://${BUCKET}/kata-assets/ ..."
