@@ -19,7 +19,28 @@ import (
 	"testing"
 
 	"k8s.io/utils/ptr"
+
+	"go.ate.dev/substrate/internal/preview"
 )
+
+func TestSnapshotLocation(t *testing.T) {
+	t.Setenv("BUCKET_NAME", "test-bucket")
+	for _, tc := range []struct {
+		name  string
+		gates []string
+		want  string
+	}{
+		{name: "gate off"},
+		{name: "gate on", gates: []string{string(preview.GatePerTemplateSnapshotLocation)}, want: "gs://test-bucket/ate-e2e-probe/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preview.InitForTest(t, tc.gates...)
+			if got := SnapshotLocation(t, "ate-e2e-probe"); got != tc.want {
+				t.Errorf("SnapshotLocation() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestPreviewGates(t *testing.T) {
 	for _, tc := range []struct {

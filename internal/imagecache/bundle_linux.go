@@ -59,19 +59,25 @@ func SetupBundleRootfs(bundlePath string) error {
 	rootfs := filepath.Join(bundlePath, "rootfs")
 	upper := filepath.Join(bundlePath, "upper")
 	work := filepath.Join(bundlePath, "work")
-	for _, d := range []string{rootfs, work} {
+	for _, d := range []string{rootfs, upper, work} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return fmt.Errorf("while creating %q: %w", d, err)
 		}
-	}
-	if err := mkdirUpper(upper); err != nil {
-		return fmt.Errorf("while creating %q: %w", upper, err)
 	}
 
 	// Detach any stale mount left by a previous incarnation of this bundle
 	// path (e.g. a run that failed between mount and teardown). EINVAL just
 	// means nothing was mounted there.
 	_ = unix.Unmount(rootfs, unix.MNT_DETACH)
+
+	// upper (with an overlay) or rootfs (without) becomes the container's "/".
+	// At 0700 a non-root container cannot search its own root. Chmod after the
+	// unmount, explicitly: MkdirAll applies the umask and skips existing dirs.
+	for _, d := range []string{rootfs, upper} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			return fmt.Errorf("while setting mode of %q: %w", d, err)
+		}
+	}
 
 	if len(spec.Layers) == 0 {
 		// Degenerate zero-layer image: the empty rootfs dir plus ExtraDirs is
@@ -102,19 +108,6 @@ func SetupBundleRootfs(bundlePath string) error {
 		return fmt.Errorf("while setting up image volumes: %w", err)
 	}
 	return nil
-}
-
-// The upper dir becomes / in the container, so non-root users must be able to
-// traverse it.
-const upperDirMode = 0o755
-
-// mkdirUpper creates dir with upperDirMode. The chmod covers the umask and a
-// dir that already exists.
-func mkdirUpper(dir string) error {
-	if err := os.MkdirAll(dir, upperDirMode); err != nil {
-		return err
-	}
-	return os.Chmod(dir, upperDirMode)
 }
 
 // setupImageVolumes exposes each image volume's contents read-only at its

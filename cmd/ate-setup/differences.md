@@ -3,17 +3,13 @@
 `ate-setup` is a Go port of `hack/install-ate.sh`, the seven
 `hack/install-demo-*.sh` scripts it sourced, and `hack/setup-csi-*-kind.sh`.
 
-The port has replaced them. The demo scripts are deleted, and
-`hack/install-ate.sh` is a shim holding no install logic of its own: it
-translates the flags and environment variables the installer has always
-accepted onto `ate-setup` commands, so existing command lines keep working. See
-[`commands.md`](commands.md) for the flag-by-flag mapping.
+The port has replaced them. `hack/install-ate.sh`, the demo scripts, and
+`hack/setup-csi-hostpath-kind.sh` are deleted. See
+[`commands.md`](commands.md) for the commands.
 
-This document covers what changed *behind* that mapping: the design decisions
-of the port, against the shell it replaced. For what a user of
-`hack/install-ate.sh` can observe after the switch, see
-[`cli-diff.md`](cli-diff.md). For anything listed in neither, the port is
-intended to be behavior-preserving.
+This document covers the design decisions of the port, against the shell it
+replaced. For anything not listed here, the port is intended to be
+behavior-preserving.
 
 ## What is deliberately unchanged
 
@@ -21,8 +17,7 @@ These were treated as contracts and reproduced exactly:
 
 - **Step log lines.** `log.Step` prints the same cyan `[step]: name` and the
   same step names (`deploy_ate_system`, `create_api_server_env_vars`,
-  `demo-counter_deploy`), so CI log scrapers keep working. Two lines lost a
-  parenthesized qualifier; see [`cli-diff.md`](cli-diff.md).
+  `demo-counter_deploy`), so CI log scrapers keep working.
 - **Manifest ordering.** Applying a directory is non-recursive and lexical, as
   `kubectl apply -f <dir>` was. `delete_ate_system` depends on that ordering
   and the shell comments called out specific filename hazards, so
@@ -58,8 +53,7 @@ These were treated as contracts and reproduced exactly:
 | Repository root | `git rev-parse --show-toplevel`, then `cd` | walk up for `go.mod`; no `chdir`, all paths absolute |
 
 The one-action-per-run change is the most visible: a line that passed
-`--deploy-ate-system --deploy-demo-counter` becomes two `ate-setup` calls. That
-is what the shim does with it, so the combined form keeps working.
+`--deploy-ate-system --deploy-demo-counter` becomes two `ate-setup` calls.
 
 Invalid input now fails before any cluster mutation. `--atenet-dataplane=nginx`
 used to be caught by a pre-scan validation pass; `--worker-count 0` was not
@@ -146,8 +140,9 @@ to publish the new image under the same repository and tag as the rest, and
 until it does, an install has to build it or take it from a registry that
 holds it.
 
-Releases publish only `images.ReleaseComponents`, an allowlist: a component is
-published only once it is added to it, so a new entry in `images.Components`
+Releases publish `images.ReleaseComponents` and
+`images.ReleaseDockerfileImages`, both allowlists: an image is published only
+once it is added to one, so a new entry in `images.Components`
 stays out of releases until someone adds it on purpose. See
 [`docs/dev/releasing.md`](../../docs/dev/releasing.md#release-images) for what
 releases cover. Under `--image-repo`, a component that is not on the allowlist
@@ -184,11 +179,12 @@ model, so NotFound is ignored — and so is a kind that no longer resolves, sinc
 teardown after the CRDs are gone must not fail. Beyond that, deletes are
 strict.
 
-**Cluster profiles are new.** `--cluster-size` and `--cordon-control-plane`
-postdate the shell installer, which the shim forwards them to. `size10`
+**Cluster profiles are new.** `--cluster-size` and `--cordon-system-infra-components`
+postdate the shell installer. `size10`
 renders the `podcert-size10` overlay and resizes the bundled PostgreSQL from
-`postgres-size10/postgres-config-patch.yaml`; `--cordon-control-plane`
-composes the `cordon-control-plane` component over every control plane apply
+`postgres-size10/postgres-config-patch.yaml`;
+`--cordon-system-infra-components` composes the
+`cordon-system-infra-components` component over every system infra apply
 path. The size10 PostgreSQL changes are made to the decoded objects before the
 one server-side apply, not patched on afterwards: one rollout, the rollout wait
 sees the resized pod, and there is no second field manager for a later apply to
@@ -258,8 +254,9 @@ through `ListActors`. The tolerances are preserved: no `ate-api-server`, or an a
 that cannot be reached, skips cleanup rather than failing, because `delete all`
 runs this for every demo.
 
-**`docker buildx imagetools inspect` output is parsed as JSON**, not piped
-through `jq -r '.manifest.digest'`. Build output still goes to stderr so the
+**The pushed digest comes from `docker buildx build --metadata-file`**, not
+from piping `docker buildx imagetools inspect` of the tag through
+`jq -r '.manifest.digest'`. Build output still goes to stderr so the
 stdout/stderr split matches under CI log capture.
 
 ## Errors and diagnostics

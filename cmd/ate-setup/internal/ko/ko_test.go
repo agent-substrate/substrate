@@ -15,12 +15,17 @@
 package ko
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // Without --base-import-paths ko publishes cmd/atelet as "atelet-<md5>", and
@@ -172,5 +177,82 @@ func TestBuildTaggedRejectsMissingRefs(t *testing.T) {
 
 	if _, err := r.BuildTagged(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet"); err == nil {
 		t.Error("BuildTagged() error = nil, want one for 1 ref from 2 packages")
+	}
+}
+
+// flakyKo writes a ko stand-in that fails the first failures builds of each
+// package, printing stderr, then prints a ref for it. It returns the
+// directory where it counts builds per package.
+func flakyKo(t *testing.T, failures int, stderr string) (binary, dir string) {
+	t.Helper()
+	dir = t.TempDir()
+	binary = filepath.Join(dir, "ko")
+	script := "#!/bin/sh\n" +
+		"pkg=$(basename \"$2\")\n" +
+		"echo run >> " + dir + "/runs-$pkg\n" +
+		"if [ $(wc -l < " + dir + "/runs-$pkg) -le " + strconv.Itoa(failures) + " ]; then echo '" + stderr + "' >&2; exit 1; fi\n" +
+		"echo repo/$pkg:v1@sha256:a\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binary, dir
+}
+
+// koRuns returns how many times flakyKo built pkg.
+func koRuns(t *testing.T, dir, pkg string) int {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "runs-"+pkg))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(raw), "run")
+}
+
+// fastBackoff shortens buildBackoff for the test.
+func fastBackoff(t *testing.T) {
+	t.Helper()
+	original := buildBackoff
+	buildBackoff = wait.Backoff{Steps: original.Steps, Duration: time.Millisecond, Factor: 1}
+	t.Cleanup(func() { buildBackoff = original })
+}
+
+const deniedStderr = "PATCH https://ghcr.io/v2/agent-substrate/substrate/ateapi/blobs/upload/1: DENIED: permission_denied: write_package"
+
+func TestBuildEachRetriesEachImage(t *testing.T) {
+	fastBackoff(t)
+	binary, dir := flakyKo(t, 2, deniedStderr)
+	r := &Runner{Root: t.TempDir(), binary: binary}
+
+	refs, err := r.BuildEach(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet")
+	if err != nil {
+		t.Fatalf("BuildEach() error = %v", err)
+	}
+	if want := []string{"repo/ateapi:v1@sha256:a", "repo/atelet:v1@sha256:a"}; !slices.Equal(refs, want) {
+		t.Errorf("BuildEach() = %q, want %q", refs, want)
+	}
+	for _, pkg := range []string{"ateapi", "atelet"} {
+		if got := koRuns(t, dir, pkg); got != 3 {
+			t.Errorf("ko built %s %d times, want 3", pkg, got)
+		}
+	}
+}
+
+func TestBuildEachStopsAfterAttempts(t *testing.T) {
+	fastBackoff(t)
+	binary, dir := flakyKo(t, 100, deniedStderr)
+	r := &Runner{Root: t.TempDir(), binary: binary}
+
+	_, err := r.BuildEach(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet")
+	if err == nil {
+		t.Error("BuildEach() error = nil, want one after 3 failed attempts")
+	}
+	if got := koRuns(t, dir, "ateapi"); got != 3 {
+		t.Errorf("ko built ateapi %d times, want 3", got)
+	}
+	if got := koRuns(t, dir, "atelet"); got != 0 {
+		t.Errorf("ko built atelet %d times, want 0", got)
 	}
 }

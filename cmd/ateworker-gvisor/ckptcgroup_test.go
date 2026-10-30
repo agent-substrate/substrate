@@ -106,7 +106,7 @@ func mustRead(t *testing.T, path string) string {
 func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
 	f := newCkptFixture(t, "101")
 
-	c, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID)
+	c, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0)
 	if err != nil {
 		t.Fatalf("isolateCheckpointCache: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestIsolateCheckpointCacheMovesOnlyTheSentry(t *testing.T) {
 func TestIsolateCheckpointCacheWithoutPIDFile(t *testing.T) {
 	f := newCkptFixture(t, "")
 
-	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID); err == nil {
+	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0); err == nil {
 		t.Fatal("isolateCheckpointCache succeeded with no sandbox pid file")
 	}
 	if _, err := os.Stat(checkpointCgroupDir(f.root, testActorUID)); !os.IsNotExist(err) {
@@ -147,7 +147,7 @@ func TestIsolateCheckpointCacheRejectsPIDOutsideSandboxLeaf(t *testing.T) {
 	f := newCkptFixture(t, "101")
 	mustWrite(t, filepath.Join(f.leaf, "cgroup.procs"), "100\n")
 
-	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID); err == nil {
+	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0); err == nil {
 		t.Fatal("isolateCheckpointCache succeeded with the pid outside the sandbox leaf")
 	}
 	if _, err := os.Stat(checkpointCgroupDir(f.root, testActorUID)); !os.IsNotExist(err) {
@@ -160,7 +160,7 @@ func TestIsolateCheckpointCacheRejectsPIDOutsideSandboxLeaf(t *testing.T) {
 
 func TestCheckpointCgroupRestoreAfterLeafGone(t *testing.T) {
 	f := newCkptFixture(t, "101")
-	c, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID)
+	c, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0)
 	if err != nil {
 		t.Fatalf("isolateCheckpointCache: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestCheckpointCgroupRestoreAfterLeafGone(t *testing.T) {
 
 func TestCheckpointCgroupRestoreSkipsExitedSentry(t *testing.T) {
 	f := newCkptFixture(t, "101")
-	c, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID)
+	c, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0)
 	if err != nil {
 		t.Fatalf("isolateCheckpointCache: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs,
 			func(context.Context) error {
 				if got := mustRead(t, filepath.Join(ckptDir, "cgroup.procs")); got != "101" {
 					t.Errorf("checkpoint cgroup.procs during checkpoint = %q, want 101", got)
@@ -253,7 +253,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs,
 			func(context.Context) error {
 				if _, err := os.Stat(ckptDir); !os.IsNotExist(err) {
 					t.Errorf("checkpoint cgroup should not be created without a sandbox pid: %v", err)
@@ -280,7 +280,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs,
 			func(context.Context) error {
 				return errors.New("checkpoint boom")
 			},
@@ -310,7 +310,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs,
 			func(context.Context) error {
 				movePID = func(string, int) error { return unix.EACCES }
 				return errors.New("checkpoint boom")
@@ -339,7 +339,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs,
 			func(context.Context) error {
 				if err := os.RemoveAll(f.leaf); err != nil {
 					t.Fatal(err)
@@ -369,7 +369,7 @@ func TestCheckpointIsolated(t *testing.T) {
 
 		err := checkpointIsolated(
 			context.Background(),
-			f.root, testActorUID, f.actorDirs,
+			f.root, testActorUID, 0, f.actorDirs,
 			func(context.Context) error { return nil },
 			func() error {
 				// Non-empty ckptDir emulates a sentry still alive in the cgroup.
@@ -615,4 +615,25 @@ func TestEvictPreservedRestoreDir(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	})
+}
+
+func TestIsolateCheckpointCacheLimitsTheCache(t *testing.T) {
+	f := newCkptFixture(t, "101")
+	// cgroupfs provides memory.high itself
+	dir := checkpointCgroupDir(f.root, testActorUID)
+	mustMkdir(t, dir)
+	mustWrite(t, filepath.Join(dir, "memory.high"), "max\n")
+	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 64<<20); err != nil {
+		t.Fatalf("isolateCheckpointCache: %v", err)
+	}
+	if got := mustRead(t, filepath.Join(dir, "memory.high")); got != "67108864" {
+		t.Errorf("checkpoint memory.high = %q, want 67108864", got)
+	}
+	// a leftover cgroup reused without a limit drops the old one
+	if _, err := isolateCheckpointCache(f.root, f.actorDirs, testActorUID, 0); err != nil {
+		t.Fatalf("isolateCheckpointCache: %v", err)
+	}
+	if got := mustRead(t, filepath.Join(dir, "memory.high")); got != "max" {
+		t.Errorf("checkpoint memory.high = %q, want max", got)
+	}
 }

@@ -23,15 +23,45 @@ import (
 )
 
 func TestDockerBuildArgs(t *testing.T) {
-	got := dockerBuildArgs("linux/amd64", []string{"--cache-from", "type=gha"}, "repo/img:build-1", "ctx")
-	want := []string{"buildx", "build", "--platform=linux/amd64", "--push", "--cache-from", "type=gha", "-t", "repo/img:build-1", "ctx"}
+	got := dockerBuildArgs("linux/amd64", []string{"--cache-from", "type=gha"}, "repo/img:build-1", "meta.json", "ctx")
+	want := []string{"buildx", "build", "--platform=linux/amd64", "--push", "--metadata-file", "meta.json", "--cache-from", "type=gha", "-t", "repo/img:build-1", "ctx"}
 	if !slices.Equal(got, want) {
 		t.Errorf("dockerBuildArgs() = %q, want %q", got, want)
 	}
-	got = dockerBuildArgs("linux/amd64", nil, "repo/img:build-1", "ctx")
-	want = []string{"buildx", "build", "--platform=linux/amd64", "--push", "-t", "repo/img:build-1", "ctx"}
+	got = dockerBuildArgs("linux/amd64", nil, "repo/img:build-1", "meta.json", "ctx")
+	want = []string{"buildx", "build", "--platform=linux/amd64", "--push", "--metadata-file", "meta.json", "-t", "repo/img:build-1", "ctx"}
 	if !slices.Equal(got, want) {
 		t.Errorf("dockerBuildArgs() without flags = %q, want %q", got, want)
+	}
+}
+
+// The digest comes from what buildx pushed, so a tag that names another push
+// cannot stand in for it.
+func TestPushedDigest(t *testing.T) {
+	const digest = "sha256:bab239626dc054856e882a2ef022dfa845834113d213697e1dccd27dfbfac1a5"
+	for _, tc := range []struct {
+		name     string
+		metadata string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:     "multi-platform push",
+			metadata: `{"buildx.build.ref":"ate-release/ate-release0/x","containerimage.digest":"` + digest + `","image.name":"localhost:5000/substrate/envoy-dataplane:v1"}`,
+			want:     digest,
+		},
+		{name: "no digest", metadata: `{"buildx.build.ref":"ate-release/ate-release0/x"}`, wantErr: true},
+		{name: "not JSON", metadata: ``, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pushedDigest([]byte(tc.metadata))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("pushedDigest() error = %v, want error %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("pushedDigest() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

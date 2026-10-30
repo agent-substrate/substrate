@@ -22,7 +22,7 @@ setup in [Running the microVM runtime locally](microvm-local.md).
 ```bash
 ./hack/create-kind-cluster.sh
 kubectl config use-context kind-kind
-ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-ate-system
+ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' go run ./cmd/ate-setup --kind deploy ate-system
 ```
 
 For microVM, install its assets before deploying the fixture:
@@ -36,8 +36,8 @@ Deploy both egress ActorTemplates and add local-origin trust to the current
 gateway:
 
 ```bash
-ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-demo-egress
-ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-demo-egress-microvm
+ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' go run ./cmd/ate-setup --kind deploy demo egress
+ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' go run ./cmd/ate-setup --kind deploy demo egress-microvm
 ./hack/setup-e2e-egress-tls-kind.sh
 ```
 
@@ -78,3 +78,11 @@ kubectl --context kind-kind -n ate-system logs deploy/atenet-egress -c envoy --t
 For AgentGateway, use `-c agentgateway` for the last command. For a local TLS
 failure, check that `setup-e2e-egress-tls-kind.sh` completed and that the test
 URL uses the origin's Service DNS name.
+
+If the AgentGateway ingress router returns HTTP 503 with `dynamic backend
+resolved to a loopback or link-local address`, check its
+`config.backend.allowDynamicLoopback` setting. The router enables this because
+actor-local destinations are reached through authenticated atunnel connections,
+not on the router itself. The egress gateway leaves this setting disabled.
+Changes to this startup setting require restarting the router; a ConfigMap
+reload alone does not apply it.

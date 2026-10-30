@@ -19,7 +19,7 @@
 # plugin (per manifests/microvm/sandboxconfig-microvm.yaml.tmpl). The plugin
 # refuses assets stored under a snapshot location
 # (<snapshotConfig.location>/atespaces/), so keep them outside it.
-# Run after the cluster is up (hack/install-ate-kind.sh) and assemble.sh has produced $OUT.
+# Run after the cluster is up (ate-setup --kind deploy ate-system) and assemble.sh has produced $OUT.
 #
 # The S3 client runs in a throwaway container (the same pinned amazon/aws-cli
 # image as the rustfs-bucket-init Job), so developers don't need the `aws` CLI

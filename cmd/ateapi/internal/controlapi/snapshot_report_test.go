@@ -51,12 +51,12 @@ func ownedURI(t *testing.T, actorUID string, gen int32) string {
 }
 
 // withDurable returns a Snapshot held on locality ("" for none) with a durable
-// copy in the given storage status.
-func withDurable(t *testing.T, gen int32, locality string, storage ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+// copy in the given storage state.
+func withDurable(t *testing.T, gen int32, locality string, storage ateapi.SnapshotStorageState) *ateapi.Snapshot {
 	t.Helper()
 	snap := &ateapi.Snapshot{Uuid: snapName(gen), Generation: gen, Locality: locality, Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
 	snap.DurableSnapshot = &ateapi.SnapshotStorage{
-		Status: storage,
+		State:  storage,
 		Object: &ateapi.ObjectSnapshot{SnapshotUri: ownedURI(t, reportActorUID, gen)},
 	}
 	return snap
@@ -79,8 +79,8 @@ func reportedAt(t *testing.T, gen int32, uri string) *ateapi.SnapshotReport {
 
 func TestApplyActorSnapshotState(t *testing.T) {
 	const (
-		pending   = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-		completed = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		pending   = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+		completed = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		suspended = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		running   = ateapi.ActorState_ACTOR_STATE_RUNNING
 	)
@@ -325,8 +325,8 @@ func TestApplyActorSnapshotState(t *testing.T) {
 // and one that is applied, aren't logged.
 func TestApplyLatestDurableLogsStaleReports(t *testing.T) {
 	const (
-		pending   = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-		completed = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		pending   = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+		completed = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	)
 	tests := []struct {
 		name      string
@@ -433,7 +433,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.AssignedNode = reportNode
 		s.LastAssignedGeneration = 2
-		snap := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", pending.Name(), pending.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+		snap := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", pending.Name(), pending.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
 		snap.Locality = reportNode
 		s.Snapshots = []*ateapi.Snapshot{snap}
 	})
@@ -509,7 +509,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 		t.Run("applied to a "+st.String()+" actor", func(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.State = st
-				s.Snapshots[0].DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+				s.Snapshots[0].DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 			})
 			if err := w.ApplyReportedSnapshotState(ctx, actorRef, uid, reportNode, state); err != nil {
 				t.Fatalf("ApplyReportedSnapshotState() failed: %v", err)
@@ -518,7 +518,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if st := got.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetStatus(); st != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			if st := got.GetStatus().GetSnapshots()[0].GetDurableSnapshot().GetState(); st != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 				t.Errorf("durable snapshot status = %v, want COMPLETED", st)
 			}
 
@@ -533,7 +533,7 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 
 	// A suspend that crashed before it finalized leaves its snapshot on no node.
 	older := mustActorSnapshotURI(t, tmpl, actor, "snap-1")
-	snapshot := func(gen int32, uri resources.SnapshotURI, locality string, storage ateapi.SnapshotStorageStatus) *ateapi.Snapshot {
+	snapshot := func(gen int32, uri resources.SnapshotURI, locality string, storage ateapi.SnapshotStorageState) *ateapi.Snapshot {
 		snap := newDurableSnapshot(gen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri.Name(), uri.String(), storage)
 		snap.Locality = locality
 		return snap
@@ -546,35 +546,35 @@ func TestApplyReportedSnapshotState(t *testing.T) {
 	}{{
 		name: "a crashed suspend's upload stays pending",
 		snapshots: []*ateapi.Snapshot{
-			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		},
 		state: state,
 		want: []*ateapi.Snapshot{
-			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		},
 	}, {
 		name: "a crashed suspend's detach releases the older snapshot",
 		snapshots: []*ateapi.Snapshot{
-			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		},
 		state: &ateapi.ActorSnapshotState{LatestDurable: uploaded},
 		want: []*ateapi.Snapshot{
-			snapshot(1, older, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(1, older, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+			snapshot(2, pending, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		},
 	}, {
 		name: "a crashed suspend's detach releases an older snapshot that isn't durable",
 		snapshots: []*ateapi.Snapshot{
-			snapshot(1, older, reportNode, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
-			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(1, older, reportNode, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
+			snapshot(2, pending, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		},
 		state: &ateapi.ActorSnapshotState{LatestDurable: uploaded},
 		want: []*ateapi.Snapshot{
-			snapshot(1, older, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
-			snapshot(2, pending, "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			snapshot(1, older, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
+			snapshot(2, pending, "", ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -601,7 +601,7 @@ func TestActorOnNode(t *testing.T) {
 	actor := func(assigned string, localities ...string) *ateapi.Actor {
 		status := &ateapi.ActorStatus{AssignedNode: assigned}
 		for i, l := range localities {
-			status.Snapshots = append(status.Snapshots, withDurable(t, int32(i+1), l, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING))
+			status.Snapshots = append(status.Snapshots, withDurable(t, int32(i+1), l, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING))
 		}
 		return &ateapi.Actor{Status: status}
 	}
@@ -635,8 +635,8 @@ func ateletReported(t *testing.T, gen int32) *ateletpb.SnapshotReport {
 
 func TestApplyAteletResponseState(t *testing.T) {
 	const (
-		pending    = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
-		completed  = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		pending    = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+		completed  = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		suspended  = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		suspending = ateapi.ActorState_ACTOR_STATE_SUSPENDING
 

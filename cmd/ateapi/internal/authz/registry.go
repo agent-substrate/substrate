@@ -298,9 +298,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapi.Control_MintActorJwt_FullMethodName: rule(checksOf(func(r *ateapi.MintActorJwtRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanMintActorJWT, r.GetActor(), field.NewPath("actor"))
 	})),
-	ateapi.Control_MintActorCertificate_FullMethodName: rule(checksOf(func(r *ateapi.MintActorCertificateRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanMintActorCertificate, r.GetActor(), field.NewPath("actor"))
-	})),
 
 	// Tags. CreateTag stores the tag in its source actor's atespace, so that is
 	// the atespace checked. Validation also requires metadata.atespace to

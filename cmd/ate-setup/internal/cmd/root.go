@@ -216,10 +216,7 @@ func recordRun(cmd *cobra.Command, runErr error) {
 	}
 }
 
-// Root is the command tree, for callers that need to inspect it rather than
-// run it. hack/install-ate.sh translates the historical installer flags into
-// ate-setup command lines, and its test resolves each one against this to check
-// it still names a command that exists.
+// Root is the command tree, for tests that run it in-process.
 func Root() *cobra.Command { return rootCmd }
 
 // Execute runs the command tree.
@@ -234,6 +231,11 @@ func Execute() {
 	// ExecuteC reports which command ran, which the failure record needs and
 	// Execute does not return.
 	executed, err := rootCmd.ExecuteC()
+	// Cobra rejects an unknown command only at the root. Below it, a command
+	// that only groups others prints its help for any argument and succeeds.
+	if err == nil && !executed.Runnable() && executed.Flags().NArg() > 0 {
+		err = fmt.Errorf("unknown command %q for %q", executed.Flags().Arg(0), executed.CommandPath())
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		// After the error, so the retry line is the last thing on screen:

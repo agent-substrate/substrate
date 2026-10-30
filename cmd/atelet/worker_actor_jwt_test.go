@@ -27,7 +27,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/objectstore/v1"
-	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
+	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 )
 
 // testActor is the actor the transfer tests act for.
@@ -81,7 +81,7 @@ func TestWorkerActorJWTs_MintsOncePerActorUntilNearExpiry(t *testing.T) {
 	if req.GetActor().GetAtespace() != testActor.atespace || req.GetActor().GetName() != testActor.name || req.GetActorUid() != testActor.uid {
 		t.Errorf("mint request names %v uid=%s", req.GetActor(), req.GetActorUid())
 	}
-	if len(req.GetAudiences()) != 1 || req.GetAudiences()[0] != exchange.ActorJWTAudience {
+	if len(req.GetAudiences()) != 1 || req.GetAudiences()[0] != actorauthz.Audience {
 		t.Errorf("mint audiences = %v, want the exchange's", req.GetAudiences())
 	}
 

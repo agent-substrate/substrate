@@ -101,7 +101,7 @@ func TestCheckResourceEnvelope(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkResourceEnvelope(tc.ctrs, guestEnvelope{memMiB: 2048, vcpus: 1, declaredBytes: (2048 + 256) * 1024 * 1024, reserveMiB: 256})
+			err := checkResourceEnvelope(tc.ctrs, guestEnvelope{memMiB: 2048, vcpus: 1})
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("checkResourceEnvelope() = %v, want nil", err)
@@ -121,25 +121,22 @@ func TestCheckResourceEnvelope(t *testing.T) {
 	}
 }
 
-// When the actor declared its own size, the guest ceiling comes from that limit
-// minus the VMM reserve, so the error must point at the actor's limit rather
-// than at the SandboxConfig the user cannot usefully change.
+// The guest ceiling is the actor's own memory limit, so the error must point at
+// that rather than at the SandboxConfig the user cannot usefully change.
 func TestCheckResourceEnvelope_ErrorNamesActorLimitWhenDeclared(t *testing.T) {
 	const mib = 1024 * 1024
 	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
 		Resources: &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: ptr.To(int64(2048 * mib))}},
 	}}}
 
-	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{
-		memMiB: 768, vcpus: 1, declaredBytes: 1024 * mib, reserveMiB: 256,
-	})
+	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{memMiB: 1024, vcpus: 1})
 	if err == nil {
 		t.Fatal("checkResourceEnvelope() = nil, want an error")
 	}
 	if got := apierror.Code(err); got != codes.InvalidArgument {
 		t.Errorf("code = %v, want InvalidArgument", got)
 	}
-	for _, want := range []string{"hog", "1024", "256", "spec.resources.limits.memory"} {
+	for _, want := range []string{"hog", "1024", "spec.resources.limits.memory"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err.Error(), want)
 		}
@@ -150,16 +147,13 @@ func TestCheckResourceEnvelope_ErrorNamesActorLimitWhenDeclared(t *testing.T) {
 // spec.resources.limits.memory, even when the actor also declares a memory
 // limit: raising memory cannot change the vCPU count.
 func TestCheckResourceEnvelope_CPUErrorNamesCPULimitEvenWithDeclaredMemory(t *testing.T) {
-	const mib = 1024 * 1024
 	period := uint64(kata.DefaultCPUPeriodUS)
 	quota := int64(2000 * kata.DefaultCPUPeriodUS / 1000) // 2000m
 	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
 		Resources: &specs.LinuxResources{CPU: &specs.LinuxCPU{Quota: &quota, Period: &period}},
 	}}}
 
-	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{
-		memMiB: 2048, vcpus: 1, declaredBytes: 2048 * mib, reserveMiB: 256,
-	})
+	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{memMiB: 2048, vcpus: 1})
 	if err == nil {
 		t.Fatal("checkResourceEnvelope() = nil, want an error")
 	}
@@ -174,30 +168,22 @@ func TestCheckResourceEnvelope_CPUErrorNamesCPULimitEvenWithDeclaredMemory(t *te
 	}
 }
 
-// The ceiling containers are measured against is the post-reserve guest, not the
-// declared limit and not the SandboxConfig default. RunWorkload gets there by
-// calling resolveGuestMemMiB before checkResourceEnvelope; this pins the
-// arithmetic those two steps compose into, which nothing else asserts.
-func TestCheckResourceEnvelope_MeasuresAgainstPostReserveGuest(t *testing.T) {
+// A container may ask for the actor's whole memory limit, since the guest gets
+// all of it. RunWorkload gets there by calling resolveGuestMemMiB before
+// checkResourceEnvelope; this pins the arithmetic those two steps compose into.
+func TestCheckResourceEnvelope_ContainerMayUseWholeLimit(t *testing.T) {
 	const mib = 1024 * 1024
-	const declaredMiB, reserveMiB = 1024, 256
+	const declaredMiB = 1024
 
-	guestMiB, err := resolveGuestMemMiB(int64(declaredMiB)*mib, reserveMiB)
+	guestMiB, err := resolveGuestMemMiB(int64(declaredMiB) * mib)
 	if err != nil {
 		t.Fatalf("resolveGuestMemMiB() = %v", err)
 	}
-	if guestMiB != declaredMiB-reserveMiB {
-		t.Fatalf("guest = %dMiB, want %dMiB (declared minus reserve)", guestMiB, declaredMiB-reserveMiB)
-	}
-
-	// A container asking for the full declared limit does not fit the guest,
-	// because the reserve is not the container's to spend.
-	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
+	ctr := actorContainer{name: "whole", spec: &specs.Spec{Linux: &specs.Linux{
 		Resources: &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: ptr.To(int64(declaredMiB) * mib)}},
 	}}}
-	env := guestEnvelope{memMiB: guestMiB, vcpus: 1, declaredBytes: int64(declaredMiB) * mib, reserveMiB: reserveMiB}
-	if err := checkResourceEnvelope([]actorContainer{ctr}, env); err == nil {
-		t.Error("checkResourceEnvelope() = nil, want an error: the declared limit does not fit once the reserve is held back")
+	if err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{memMiB: guestMiB, vcpus: 1}); err != nil {
+		t.Errorf("checkResourceEnvelope() = %v, want nil", err)
 	}
 }
 

@@ -40,8 +40,7 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 		t.Fatalf("RepoRoot: %v", err)
 	}
 
-	// The values benchmarking/workloads/deploy.sh substitutes, beyond the
-	// ${BUCKET_NAME} every installer provides.
+	// The values benchmarking/workloads/deploy.sh substitutes.
 	benchmarkValues := map[string]string{
 		"${ACTOR_CPU_MILLICORES}": "1000",
 		"${ACTOR_MEMORY_BYTES}":   "268435456",
@@ -113,7 +112,7 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile: %v", err)
 			}
-			manifest := strings.ReplaceAll(string(data), "${BUCKET_NAME}", "ate-snapshots")
+			manifest := string(data)
 			for placeholder, value := range tc.values {
 				manifest = strings.ReplaceAll(manifest, placeholder, value)
 			}
@@ -126,6 +125,10 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			}
 			if got := resources.ActorTemplateRefFromActorTemplate(template); got != tc.want {
 				t.Errorf("manifest names template %s, want %s", got, tc.want)
+			}
+			// The API rejects storageLocation without its preview gate.
+			if got := template.GetSnapshotConfig().GetStorageLocation(); got != "" {
+				t.Errorf("manifest sets storageLocation %q, want none", got)
 			}
 		})
 	}

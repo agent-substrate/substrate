@@ -922,6 +922,8 @@ func Validate_ContainerSpec(
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
 	}
 
+	// field ateworkerpb.ContainerSpec.User has no validation
+	// field ateworkerpb.ContainerSpec.Cwd has no validation
 	return errs
 }
 

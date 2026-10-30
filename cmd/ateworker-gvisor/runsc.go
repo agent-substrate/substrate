@@ -46,6 +46,8 @@ type runsc struct {
 	containers []*ateworkerpb.Container
 	// flags holds the configured flags; must not be nil.
 	flags *flagStore
+	// enableCoreTags enables Linux core scheduling tags (--enable-core-tags).
+	enableCoreTags bool
 }
 
 // buildArgs constructs the runsc argument vector for command, appending
@@ -58,8 +60,11 @@ func (r *runsc) buildArgs(command, containerName string, extraArgs ...string) []
 	subcommandFlags := cfg.subcommandFlags(command)
 
 	args := make([]string, 0,
-		len(globalFlags)+2+1+len(subcommandFlags)+len(extraArgs)+1)
+		len(globalFlags)+1+2+1+len(subcommandFlags)+len(extraArgs)+1)
 	args = append(args, globalFlags...)
+	if r.enableCoreTags {
+		args = append(args, "--enable-core-tags")
+	}
 	args = append(args, "-root", runscStateDir(r.actorDirs))
 	args = append(args, command)
 	args = append(args, subcommandFlags...)

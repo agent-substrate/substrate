@@ -40,8 +40,6 @@ class GenerateTest(unittest.TestCase):
         self.assertIn("name: sweperf-django-11099", content)
         self.assertIn(f'image: "{PINNED}"', content)
         self.assertIn('value: "15"', content)
-        # deploy.sh fills these, so they must survive rendering.
-        self.assertIn("${BUCKET_NAME}", content)
 
     def test_check_reports_missing_stale_and_orphaned_files(self):
         rendered = gen.render([{"name": n, "image": PINNED, "steps": 1}

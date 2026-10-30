@@ -26,16 +26,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -80,6 +84,7 @@ type capabilitiesResponse struct {
 	Permitted   []string `json:"permitted"`
 	Inheritable []string `json:"inheritable"`
 	Ambient     []string `json:"ambient"`
+	NoNewPrivs  bool     `json:"noNewPrivs"`
 	// Error carries a read/parse failure so a failing assertion explains itself
 	// instead of just showing empty sets.
 	Error string `json:"error,omitempty"`
@@ -128,6 +133,10 @@ func readProcCapabilities() (*capabilitiesResponse, error) {
 	for scanner.Scan() {
 		key, value, found := strings.Cut(scanner.Text(), "\t")
 		if !found {
+			continue
+		}
+		if key == "NoNewPrivs:" {
+			out.NoNewPrivs = strings.TrimSpace(value) == "1"
 			continue
 		}
 		dst, ok := targets[strings.TrimSpace(key)]
@@ -210,6 +219,36 @@ func readfile(w http.ResponseWriter, r *http.Request) {
 		resp["content"] = string(b)
 	} else {
 		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
+// statResponse is the /stat payload: path's numeric owner and mode as the
+// actor sees them, without following a final-component symlink.
+type statResponse struct {
+	Path string `json:"path"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
+	// Mode is the os.FileMode string, e.g. "drwx------".
+	Mode  string `json:"mode"`
+	Error string `json:"error,omitempty"`
+}
+
+// stat reports a path's owner and mode inside the actor, so a test can assert
+// on the ownership the image's layers gave it.
+func stat(w http.ResponseWriter, r *http.Request) {
+	resp := statResponse{Path: r.URL.Query().Get("path")}
+	fi, err := os.Lstat(resp.Path)
+	if err != nil {
+		resp.Error = err.Error()
+		writeJSON(w, resp)
+		return
+	}
+	resp.Mode = fi.Mode().String()
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		resp.UID, resp.GID = st.Uid, st.Gid
+	} else {
+		resp.Error = "no owner information for " + resp.Path
 	}
 	writeJSON(w, resp)
 }
@@ -350,6 +389,7 @@ func parseFetchHeaders(params []string) (http.Header, error) {
 // injected credential echoed back by a headers-echo endpoint). Failures land
 // in "error" rather than the HTTP status: a TLS verification failure is a
 // result for the suite to assert on, not a broken probe.
+// "tls_handshake" reports "complete", "closed", or "failed" when TLS was tried.
 //
 // Redirects are not followed — a cross-scheme redirect would silently hop
 // between the gateway's cleartext and TLS legs, flipping the very behavior
@@ -450,7 +490,24 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 	for name, values := range headers {
 		req.Header[name] = values
 	}
+	var handshake atomic.Value
+	// An HTTP failure alone can pass a denial test because of an unrelated
+	// certificate error or a close after TLS. Report handshake closure separately.
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			result := "complete"
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
+				result = "closed"
+			} else if err != nil {
+				result = "failed"
+			}
+			handshake.Store(result)
+		},
+	}))
 	res, err := client.Do(req)
+	if result, ok := handshake.Load().(string); ok {
+		resp["tls_handshake"] = result
+	}
 	if err != nil {
 		resp["error"] = err.Error()
 		writeJSON(w, resp)
@@ -602,6 +659,7 @@ func main() {
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/lookup", lookup)
+	mux.HandleFunc("/stat", stat)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
 	mux.HandleFunc("/healthz", healthz)

@@ -61,10 +61,6 @@ func TestActorLifecycle(t *testing.T) {
 			f:    createActor,
 		},
 		{
-			name: "PauseResumeActor",
-			f:    pauseActor,
-		},
-		{
 			name: "SuspendResumeActor",
 			f:    suspendActor,
 		},
@@ -90,6 +86,23 @@ func TestActorLifecycle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPauseResumeActor gives its actor a pool of its own. Between a pause and
+// its resume the actor is pinned to its node. In a shared pool, its resume
+// could wait for a worker there longer than atelet's detach delay, and the
+// detach would unpin the actor from its node before the resume.
+func TestPauseResumeActor(t *testing.T) {
+	t.Parallel()
+	nsObj := e2e.CreateNamespace(t)
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+	pauseActor(ctx, t, clients, nsObj, at)
 }
 
 func TestActorSnapshotLifecycle(t *testing.T) {
@@ -118,142 +131,181 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Errorf("golden snapshot stamp %v has no %q attribute", goldenStamp, hardware.AttrArchitecture)
 	}
 
-	sourceName := "snapshot-source-" + nsObj.Name
-	cloneName := "snapshot-clone-" + nsObj.Name
-	for _, name := range []string{sourceName, cloneName} {
-		t.Cleanup(func() {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: name}})
-			_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: name}})
+	tests := []struct {
+		name string
+		mode ateapi.DurabilityMode
+		// wantStorage is the state of the snapshot's upload when the suspend
+		// returns.
+		wantStorage ateapi.SnapshotStorageState
+	}{
+		{
+			name:        "sync",
+			mode:        ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS,
+			wantStorage: ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
+		},
+		{
+			name:        "async",
+			mode:        ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS,
+			wantStorage: ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sourceName := "snapshot-source-" + tc.name + "-" + nsObj.Name
+			cloneName := "snapshot-clone-" + tc.name + "-" + nsObj.Name
+			for _, name := range []string{sourceName, cloneName} {
+				t.Cleanup(func() {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					defer cancel()
+					_, _ = e2e.RetryAborted(t, cleanupCtx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{
+						Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: name},
+					})
+				})
+			}
+
+			sourceCreated, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
+				ActorTemplate: e2e.TemplateRef(at),
+			}})
+			if err != nil {
+				t.Fatalf("failed to create source Actor: %v", err)
+			}
+			if diff := cmp.Diff(goldenStamp, durableSnapshot(sourceCreated.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Fatalf("golden snapshot stamp mismatch (-golden +actor):\n%s", diff)
+			}
+			sourceResumed, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName}})
+			if err != nil {
+				t.Fatalf("failed to resume source Actor: %v", err)
+			}
+			waitForActorState(ctx, t, clients, sourceName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+			assignment := sourceResumed.GetActor().GetStatus().GetWorkerAssignment()
+			worker, err := clients.SubstrateAPI.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: assignment.GetWorker()})
+			if err != nil {
+				t.Fatalf("failed to get assigned Worker %s: %v", assignment.GetWorker().GetName(), err)
+			}
+			if diff := cmp.Diff(hardware.ColdBootRuntime(worker.GetStatus()), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default runtime +assignment):\n%s", diff)
+			}
+			if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
+				t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)
+			}
+			response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
+			if err != nil {
+				t.Fatalf("failed to call source Actor: %v", err)
+			}
+			validateCounterResponse(t, response, "source", 1, 1)
+
+			tagRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + tc.name + "-" + nsObj.Name}
+			t.Cleanup(func() {
+				_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
+			})
+			suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+				Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
+				Options: &ateapi.SuspendOptions{Mode: tc.mode},
+			})
+			if err != nil {
+				t.Fatalf("failed to suspend source Actor: %v", err)
+			}
+			suspendedSnap := snapshotAtLatestGeneration(suspended.GetActor().GetStatus())
+			if got := suspendedSnap.GetDurableSnapshot().GetState(); got != tc.wantStorage {
+				t.Fatalf("suspended snapshot DurableSnapshot.State = %v, want %v", got, tc.wantStorage)
+			}
+			snapshotURI := suspendedSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+			if snapshotURI == "" {
+				t.Fatal("suspended Actor has no external snapshot URI")
+			}
+			snapshotStamp := suspendedSnap.GetSandboxRuntime()
+			if diff := cmp.Diff(assignment.GetSandboxRuntime(), snapshotStamp, protocmp.Transform()); diff != "" {
+				t.Fatalf("suspended snapshot stamp mismatch (-assignment +snapshot):\n%s", diff)
+			}
+			assertSnapshotUnderLocation(t, snapshotURI, wantSnapshotLocation(t, at))
+			// The tag is given its own copy of the snapshot the suspend just took, so
+			// it survives the Actor being suspended again or deleted. A PENDING
+			// snapshot, which an asynchronous suspend leaves until atelet uploads it,
+			// is first promoted to durable storage.
+			tagToUpdate, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.CreateTag, &ateapi.CreateTagRequest{
+				Tag: &ateapi.Tag{
+					Metadata:    &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: tagRef.GetName()},
+					Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
+					SourceActor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
+				},
+			})
+			if err != nil {
+				t.Fatalf("failed to create the Tag: %v", err)
+			}
+			sourceAfterTag, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+				Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
+			})
+			if err != nil {
+				t.Fatalf("failed to get source Actor after CreateTag: %v", err)
+			}
+			if got := durableSnapshotURI(sourceAfterTag.GetStatus()); got != snapshotURI {
+				t.Errorf("source Actor durable snapshot URI after CreateTag = %q, want %q", got, snapshotURI)
+			}
+			if got := tagSnapshotURI(tagToUpdate); got == "" || got == snapshotURI {
+				t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
+			}
+			if _, err := resources.ParseSnapshotURI(tagSnapshotURI(tagToUpdate)); err != nil {
+				t.Errorf("ParseSnapshotURI(%q): %v", tagSnapshotURI(tagToUpdate), err)
+			}
+			if diff := cmp.Diff(snapshotStamp, tagToUpdate.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Fatalf("tag snapshot stamp mismatch (-actor snapshot +tag):\n%s", diff)
+			}
+			assertSnapshotUnderLocation(t, tagSnapshotURI(tagToUpdate), wantSnapshotLocation(t, at))
+			listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapi.ListTagsRequest{Atespace: demoAtespace})
+			if err != nil {
+				t.Fatalf("failed to list Tags: %v", err)
+			}
+			found := false
+			for _, candidate := range listed.GetTags() {
+				if candidate.GetMetadata().GetName() == tagRef.GetName() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("tag %q missing from ListTags", tagRef.GetName())
+			}
+
+			tagToUpdate.Scope = ateapi.TagScope_TAG_SCOPE_PUBLISHED
+			if _, err := clients.SubstrateAPI.UpdateTag(ctx, &ateapi.UpdateTagRequest{
+				Tag: tagToUpdate,
+			}); err != nil {
+				t.Fatalf("failed to publish Tag: %v", err)
+			}
+
+			cloned, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
+				Actor: &ateapi.Actor{
+					Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
+					ActorTemplate: e2e.TemplateRef(at),
+					SourceTag:     tagRef,
+				},
+			})
+			if err != nil {
+				t.Fatalf("failed to create Actor from Tag: %v", err)
+			}
+			if diff := cmp.Diff(snapshotStamp, durableSnapshot(cloned.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Fatalf("cloned actor snapshot stamp mismatch (-tag +clone):\n%s", diff)
+			}
+			cloneResumed, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName}})
+			if err != nil {
+				t.Fatalf("failed to resume cloned Actor: %v", err)
+			}
+			if diff := cmp.Diff(snapshotStamp, cloneResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Errorf("cloned actor assignment stamp mismatch (-tag +assignment):\n%s", diff)
+			}
+			waitForActorState(ctx, t, clients, cloneName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+			response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
+			if err != nil {
+				t.Fatalf("failed to call cloned Actor: %v", err)
+			}
+			validateCounterResponse(t, response, "clone", 2, 2)
+
+			if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
+				t.Fatalf("failed to delete Tag: %v", err)
+			}
 		})
-	}
-
-	sourceCreated, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
-		ActorTemplate: e2e.TemplateRef(at),
-	}})
-	if err != nil {
-		t.Fatalf("failed to create source Actor: %v", err)
-	}
-	if diff := cmp.Diff(goldenStamp, durableSnapshot(sourceCreated.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("golden snapshot stamp mismatch (-golden +actor):\n%s", diff)
-	}
-	sourceResumed, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName}})
-	if err != nil {
-		t.Fatalf("failed to resume source Actor: %v", err)
-	}
-	waitForActorState(ctx, t, clients, sourceName, ateapi.ActorState_ACTOR_STATE_RUNNING)
-	assignment := sourceResumed.GetActor().GetStatus().GetWorkerAssignment()
-	worker, err := clients.SubstrateAPI.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: assignment.GetWorker()})
-	if err != nil {
-		t.Fatalf("failed to get assigned Worker %s: %v", assignment.GetWorker().GetName(), err)
-	}
-	if diff := cmp.Diff(hardware.ColdBootRuntime(worker.GetStatus()), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default runtime +assignment):\n%s", diff)
-	}
-	if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
-		t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)
-	}
-	response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
-	if err != nil {
-		t.Fatalf("failed to call source Actor: %v", err)
-	}
-	validateCounterResponse(t, response, "source", 1, 1)
-
-	tagRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
-	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapi.DeleteTagRequest{Tag: tagRef})
-	})
-	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
-		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
-		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-	})
-	if err != nil {
-		t.Fatalf("failed to suspend source Actor: %v", err)
-	}
-	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
-	if snapshotURI == "" {
-		t.Fatal("suspended Actor has no external snapshot")
-	}
-	snapshotStamp := durableSnapshot(suspended.GetActor().GetStatus()).GetSandboxRuntime()
-	if diff := cmp.Diff(assignment.GetSandboxRuntime(), snapshotStamp, protocmp.Transform()); diff != "" {
-		t.Fatalf("suspended snapshot stamp mismatch (-assignment +snapshot):\n%s", diff)
-	}
-	assertSnapshotUnderLocation(t, snapshotURI, wantSnapshotLocation(t, at))
-	// The tag is given its own copy of the snapshot the suspend just wrote, so
-	// it survives the Actor being suspended again or deleted.
-	tagToUpdate, err := clients.SubstrateAPI.CreateTag(ctx, &ateapi.CreateTagRequest{
-		Tag: &ateapi.Tag{
-			Metadata:    &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: tagRef.GetName()},
-			Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
-			SourceActor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: sourceName},
-		},
-	})
-	if err != nil {
-		t.Fatalf("failed to create the Tag: %v", err)
-	}
-	if got := tagSnapshotURI(tagToUpdate); got == "" || got == snapshotURI {
-		t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
-	}
-	if _, err := resources.ParseSnapshotURI(tagSnapshotURI(tagToUpdate)); err != nil {
-		t.Errorf("ParseSnapshotURI(%q): %v", tagSnapshotURI(tagToUpdate), err)
-	}
-	if diff := cmp.Diff(snapshotStamp, tagToUpdate.GetStatus().GetSnapshot().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("tag snapshot stamp mismatch (-actor snapshot +tag):\n%s", diff)
-	}
-	assertSnapshotUnderLocation(t, tagSnapshotURI(tagToUpdate), wantSnapshotLocation(t, at))
-	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapi.ListTagsRequest{Atespace: demoAtespace})
-	if err != nil {
-		t.Fatalf("failed to list Tags: %v", err)
-	}
-	found := false
-	for _, candidate := range listed.GetTags() {
-		if candidate.GetMetadata().GetName() == tagRef.GetName() {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("tag %q missing from ListTags", tagRef.GetName())
-	}
-
-	tagToUpdate.Scope = ateapi.TagScope_TAG_SCOPE_PUBLISHED
-	if _, err := clients.SubstrateAPI.UpdateTag(ctx, &ateapi.UpdateTagRequest{
-		Tag: tagToUpdate,
-	}); err != nil {
-		t.Fatalf("failed to publish Tag: %v", err)
-	}
-
-	cloned, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
-		Actor: &ateapi.Actor{
-			Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
-			ActorTemplate: e2e.TemplateRef(at),
-			SourceTag:     tagRef,
-		},
-	})
-	if err != nil {
-		t.Fatalf("failed to create Actor from Tag: %v", err)
-	}
-	if diff := cmp.Diff(snapshotStamp, durableSnapshot(cloned.GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Fatalf("cloned actor snapshot stamp mismatch (-tag +clone):\n%s", diff)
-	}
-	cloneResumed, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName}})
-	if err != nil {
-		t.Fatalf("failed to resume cloned Actor: %v", err)
-	}
-	if diff := cmp.Diff(snapshotStamp, cloneResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Errorf("cloned actor assignment stamp mismatch (-tag +assignment):\n%s", diff)
-	}
-	waitForActorState(ctx, t, clients, cloneName, ateapi.ActorState_ACTOR_STATE_RUNNING)
-	response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
-	if err != nil {
-		t.Fatalf("failed to call cloned Actor: %v", err)
-	}
-	validateCounterResponse(t, response, "clone", 2, 2)
-
-	if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
-		t.Fatalf("failed to delete Tag: %v", err)
 	}
 }
 
@@ -551,7 +603,8 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 // Test case:
 //  1. Create actor.
 //  2. Call to actor and validate memory and file counters.
-//  3. Async Suspend & Resume actor.
+//  3. Async Suspend & Resume actor. Its local checkpoint stays on the node
+//     while atelet uploads it.
 //  4. Call to actor and validate memory and file counters.
 //  5. Sync Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
@@ -578,6 +631,15 @@ type actorLifecycleTestCase struct {
 	// on the ActorSnapshot the suspend produced.
 	wantSnapshotFidelity ateapi.SnapshotFidelity
 }
+
+// backgroundSnapshotTimeout bounds the wait for atelet's background upload or
+// detach of an actor's snapshot to show in the API.
+const backgroundSnapshotTimeout = 2 * time.Minute
+
+// maxSnapshotDelay is the longest atelet --snapshot-upload-delay and
+// --snapshot-detach-delay that the BackgroundUpload and BackgroundDetach checks
+// run with, so backgroundSnapshotTimeout also covers the work after the delay.
+const maxSnapshotDelay = 30 * time.Second
 
 func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapi.SnapshotFidelity) (*ateapi.ActorTemplate, error), tc actorLifecycleTestCase) {
 	// Create namespace
@@ -607,7 +669,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	t.Logf("Successfully created Actor: %s", createResp.GetMetadata().GetName())
 	defer func() {
-		clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{
+		_, _ = e2e.RetryAborted(t, ctx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{
 			Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 		})
 	}()
@@ -649,12 +711,13 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorPaused(ctx, t, clients, actorID)
-	if diff := cmp.Diff(assignedRuntime, localSnapshot(paused.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+	firstPause := getLocalSnapshotFromActor(t, paused.GetActor())
+	if diff := cmp.Diff(assignedRuntime, firstPause.snap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("local pause snapshot stamp mismatch (-assignment +local):\n%s", diff)
 	}
 
-	// Resuming the actor
+	// Resuming the actor keeps its local checkpoint on disk and lets the
+	// background upload finish.
 	t.Logf("Resuming Actor %q again...", actorID)
 	resumed2, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -667,6 +730,10 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if diff := cmp.Diff(assignedRuntime, assignedRuntime2, protocmp.Transform()); diff != "" {
 		t.Errorf("resume-from-paused assignment stamp mismatch (-first +second):\n%s", diff)
 	}
+	t.Run("BackgroundUpload", func(t *testing.T) {
+		e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
+		waitForSnapshotUploaded(ctx, t, clients, actorID, firstPause.uuid)
+	})
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -684,7 +751,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	// Suspending the actor
 	//
 	t.Logf("Suspending Actor %q...", actorID)
-	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+	suspended, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
 		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorID},
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 	})
@@ -692,12 +759,20 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
-	if diff := cmp.Diff(assignedRuntime2, durableSnapshot(suspended.GetActor().GetStatus()).GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+	durableSnap := durableSnapshot(suspended.GetActor().GetStatus())
+	if diff := cmp.Diff(assignedRuntime2, durableSnap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 		t.Errorf("durable snapshot stamp after suspend mismatch (-assignment +snapshot):\n%s", diff)
 	}
 
 	if tc.wantSnapshotFidelity != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		validateSnapshotFidelity(ctx, t, clients, actorID, tc.wantSnapshotFidelity)
+	}
+
+	// atelet keeps a local copy of the uploaded snapshot in place of the first
+	// pause's, so the actor stays pinned to its node until atelet detaches it.
+	syncLocal := getLocalSnapshotFromActor(t, suspended.GetActor())
+	if syncLocal.uuid != durableSnap.GetUuid() {
+		t.Errorf("sync suspend kept local snapshot %q, want the uploaded %q", syncLocal.uuid, durableSnap.GetUuid())
 	}
 
 	// Resuming the actor
@@ -744,7 +819,7 @@ func durableSnapshot(status *ateapi.ActorStatus) *ateapi.Snapshot {
 	var best *ateapi.Snapshot
 	for _, snap := range status.GetSnapshots() {
 		st := snap.GetDurableSnapshot()
-		if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+		if st.GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED &&
 			st.GetObject().GetSnapshotUri() != "" {
 			if best == nil || snap.GetGeneration() > best.GetGeneration() {
 				best = snap
@@ -776,6 +851,114 @@ func localSnapshot(status *ateapi.ActorStatus) *ateapi.Snapshot {
 
 func hasLocalSnapshot(status *ateapi.ActorStatus) bool {
 	return localSnapshot(status) != nil
+}
+
+// snapshotAtLatestGeneration returns the snapshot at the actor's
+// last_assigned_generation, the one its latest suspend took, or nil if none
+// exists.
+func snapshotAtLatestGeneration(status *ateapi.ActorStatus) *ateapi.Snapshot {
+	for _, snap := range status.GetSnapshots() {
+		if snap.GetGeneration() == status.GetLastAssignedGeneration() {
+			return snap
+		}
+	}
+	return nil
+}
+
+// localSnapshotRecord is where the API says a suspended actor's local snapshot
+// lives: its UUID and its node.
+type localSnapshotRecord struct {
+	uuid string
+	node string
+	snap *ateapi.Snapshot
+}
+
+// getLocalSnapshotFromActor extracts the local snapshot record from a
+// suspended Actor proto, failing the test unless the actor is SUSPENDED on a
+// node with exactly one local snapshot entry.
+func getLocalSnapshotFromActor(t *testing.T, actor *ateapi.Actor) localSnapshotRecord {
+	t.Helper()
+	actorName := actor.GetMetadata().GetName()
+	if got := actor.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("Actor %q state = %v, want SUSPENDED", actorName, got)
+	}
+	if actor.GetStatus().GetAssignedNode() == "" {
+		t.Fatalf("Actor %q is SUSPENDED with a local snapshot but not pinned to a node: %v", actorName, actor.GetStatus())
+	}
+	var local []*ateapi.Snapshot
+	for _, snap := range actor.GetStatus().GetSnapshots() {
+		if snap.GetLocality() != "" {
+			local = append(local, snap)
+		}
+	}
+	if len(local) != 1 || local[0].GetUuid() == "" {
+		t.Fatalf("Actor %q local snapshots = %v, want exactly one with a uuid", actorName, local)
+	}
+	if got, want := local[0].GetLocality(), actor.GetStatus().GetAssignedNode(); got != want {
+		t.Fatalf("Actor %q local snapshot locality = %q, want assigned node %q", actorName, got, want)
+	}
+	return localSnapshotRecord{
+		uuid: local[0].GetUuid(),
+		node: local[0].GetLocality(),
+		snap: local[0],
+	}
+}
+
+// waitForSnapshotUploaded polls GetActor until wantUUID is reported as the
+// actor's COMPLETED durable snapshot.
+func waitForSnapshotUploaded(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName, wantUUID string) *ateapi.Snapshot {
+	t.Helper()
+	deadline := time.Now().Add(backgroundSnapshotTimeout)
+	var last *ateapi.ActorStatus
+	var lastErr error
+	for time.Now().Before(deadline) {
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		})
+		lastErr = err
+		if err == nil {
+			last = actor.GetStatus()
+			if snap := durableSnapshot(last); snap != nil && snap.GetUuid() == wantUUID {
+				return snap
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for actor %q snapshot %q to finish uploading: %v (last status: %v, last err: %v)", actorName, wantUUID, ctx.Err(), last, lastErr)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	t.Fatalf("timed out waiting for actor %q snapshot %q to finish uploading; last status: %v, last err: %v", actorName, wantUUID, last, lastErr)
+	return nil
+}
+
+// waitForActorDetached polls GetActor until wantUUID is durable and background
+// detach has cleared the actor's local snapshot and node assignment.
+func waitForActorDetached(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName, wantUUID string) *ateapi.Actor {
+	t.Helper()
+	deadline := time.Now().Add(backgroundSnapshotTimeout)
+	var last *ateapi.Actor
+	var lastErr error
+	for time.Now().Before(deadline) {
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		})
+		lastErr = err
+		if err == nil {
+			last = actor
+			st := actor.GetStatus()
+			if durableSnapshot(st).GetUuid() == wantUUID && !hasLocalSnapshot(st) && st.GetAssignedNode() == "" {
+				return actor
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for actor %q snapshot %q to detach from node: %v (last status: %v, last err: %v)", actorName, wantUUID, ctx.Err(), last.GetStatus(), lastErr)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	t.Fatalf("timed out waiting for actor %q snapshot %q to detach from node; last status: %v, last err: %v", actorName, wantUUID, last.GetStatus(), lastErr)
+	return nil
 }
 
 func goldenSnapshotRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients, at *ateapi.ActorTemplate) *ateapi.ActorSandboxRuntime {
@@ -931,8 +1114,14 @@ func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	return nil
 }
 
-func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapi.ActorTemplate) error {
+func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapi.ActorTemplate) {
 	actorName := "pause-actor-" + nsObj.Name
+	actorRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = e2e.RetryAborted(t, cleanupCtx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{Actor: actorRef})
+	})
 
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -947,7 +1136,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
-		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		Actor: actorRef,
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
@@ -957,59 +1146,126 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
-
 	validateCounterResponse(t, resp, "after creation", 1, 1)
 
-	// Pausing the actor
-	t.Logf("Pausing Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
-		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	// First async suspend: returns immediately with a node-local snapshot whose
+	// durable upload is still PENDING. Resuming right away restores from the
+	// local checkpoint on the node, which stays there while the background
+	// upload finishes.
+	t.Logf("Pausing Actor %q (first async suspend)...", actorName)
+	paused1, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor:   actorRef,
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorPaused(ctx, t, clients, actorName)
+	pause1 := getLocalSnapshotFromActor(t, paused1.GetActor())
+	if got := pause1.snap.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING {
+		t.Errorf("first async suspend DurableSnapshot.State = %v, want PENDING", got)
+	}
+	if pause1.snap.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
+		t.Error("first async suspend DurableSnapshot.Object.SnapshotUri is empty, want set")
+	}
 
-	// Resuming the actor again
-	t.Logf("Resuming Actor %q again...", actorName)
+	t.Logf("Resuming Actor %q from first async suspend...", actorName)
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
-		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		Actor: actorRef,
 	}); err != nil {
-		t.Fatalf("failed to resume Actor again: %v", err)
+		t.Fatalf("failed to resume Actor after first pause: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	t.Run("BackgroundUpload", func(t *testing.T) {
+		e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
+		waitForSnapshotUploaded(ctx, t, clients, actorName, pause1.uuid)
+	})
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after first pause: %v", err)
+	}
+	validateCounterResponse(t, resp, "after first pause", 2, 2)
+
+	// Second async suspend: replaces pause1 on the same node.
+	t.Logf("Pausing Actor %q (second async suspend)...", actorName)
+	paused2, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to pause Actor a second time: %v", err)
+	}
+	pause2 := getLocalSnapshotFromActor(t, paused2.GetActor())
+	if pause2.uuid == pause1.uuid {
+		t.Errorf("second async suspend reused local snapshot %q, want a new one", pause2.uuid)
+	}
+	if pause2.node != pause1.node {
+		t.Fatalf("second async suspend stored its local snapshot on node %q, want %q where the actor resumed from", pause2.node, pause1.node)
+	}
+
+	t.Logf("Resuming Actor %q from second async suspend...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: actorRef,
+	}); err != nil {
+		t.Fatalf("failed to resume Actor after second pause: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
-		t.Fatalf("failed to call actor again: %v", err)
+		t.Fatalf("failed to call actor after second pause: %v", err)
 	}
-	validateCounterResponse(t, resp, "after pause", 2, 2)
+	validateCounterResponse(t, resp, "after second pause", 3, 3)
 
-	// Suspending the actor before deletion
-	t.Logf("Suspending Actor %q before deletion...", actorName)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
-		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-	}); err != nil {
-		t.Fatalf("failed to suspend Actor: %v", err)
+	// Third async suspend: leave the actor SUSPENDED so atelet uploads the
+	// snapshot in the background and then detaches the actor from the node.
+	t.Logf("Pausing Actor %q (third async suspend)...", actorName)
+	paused3, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to pause Actor a third time: %v", err)
 	}
-	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+	pause3 := getLocalSnapshotFromActor(t, paused3.GetActor())
+	t.Run("BackgroundDetach", func(t *testing.T) {
+		e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
+		uploaded3 := waitForSnapshotUploaded(ctx, t, clients, actorName, pause3.uuid)
+		if uploaded3.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
+			t.Fatal("uploaded async snapshot has no URI")
+		}
+		waitForActorDetached(ctx, t, clients, actorName, pause3.uuid)
+	})
+
+	// Resuming restores the snapshot from object storage after the detach, or
+	// from its node-local copy when BackgroundDetach is skipped.
+	t.Logf("Resuming Actor %q from third async suspend...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: actorRef,
+	}); err != nil {
+		t.Fatalf("failed to resume Actor after third pause: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after third pause: %v", err)
+	}
+	validateCounterResponse(t, resp, "after third pause", 4, 4)
 
 	// Deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{
-		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{
+		Actor: actorRef,
 	}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
 	}
-	// Verify deletion
 	if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
-		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
-	}); err == nil {
-		t.Fatalf("expected actor %q to be deleted, but it still exists", actorName)
+		Actor: actorRef,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("expected actor %q to be NotFound after delete, got err: %v", actorName, err)
 	}
-
-	return nil
 }
 
 func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapi.ActorTemplate) error {
@@ -1098,7 +1354,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: actorRef})
+		_, _ = e2e.RetryAborted(t, cleanupCtx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{Actor: actorRef})
 	})
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
@@ -1169,16 +1425,20 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 	validateCounterResponse(t, resp, "after revert from RUNNING", 2, 2)
 
-	// Revert from async suspend (local snapshot). Resume prefers a local
-	// snapshot over the external one, so clearing the local snapshot is what
-	// prevents this async suspend's count=2 checkpoint from restoring on the
-	// next resume.
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}}); err != nil {
+	// Revert from async suspend (local snapshot). The revert drops the local
+	// snapshot and keeps the latest durable one: the count=1 snapshot, or this
+	// pause's count=2 snapshot if atelet has already reported uploading it.
+	paused, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS}})
+	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorPaused(ctx, t, clients, actorName)
+	asyncSnap := getLocalSnapshotFromActor(t, paused.GetActor())
+	pausedURI := asyncSnap.snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if pausedURI == "" {
+		t.Fatal("pause wrote no durable snapshot URI on local snapshot")
+	}
 
-	reverted, err = clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: actorRef})
+	reverted, err = e2e.RetryAborted(t, ctx, clients.SubstrateAPI.RevertActor, &ateapi.RevertActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("RevertActor from paused: %v", err)
 	}
@@ -1188,8 +1448,14 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if hasLocalSnapshot(reverted.GetActor().GetStatus()) {
 		t.Fatal("local snapshot pointer survived revert from paused")
 	}
-	if got := durableSnapshotURI(reverted.GetActor().GetStatus()); got != snapshotURI {
-		t.Fatalf("snapshot URI after revert from paused = %q, want %q", got, snapshotURI)
+	var wantCount int
+	switch kept := durableSnapshotURI(reverted.GetActor().GetStatus()); kept {
+	case snapshotURI:
+		wantCount = 2
+	case pausedURI:
+		wantCount = 3
+	default:
+		t.Fatalf("snapshot URI after revert from paused = %q, want %q or the pause's %q", kept, snapshotURI, pausedURI)
 	}
 
 	// SUSPENDED is rejected with FailedPrecondition rather than no-oping.
@@ -1197,8 +1463,8 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 		t.Fatalf("RevertActor from SUSPENDED: got %v, want FailedPrecondition", err)
 	}
 
-	// Final resume: if the local checkpoint had been restored, the counter
-	// would advance from 2 to 3. Expecting 2 proves the external snapshot won.
+	// Final resume restores the snapshot the revert kept, so this call takes
+	// the counters to 2 from the count=1 snapshot, or to 3 from the pause's.
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to resume Actor after paused revert: %v", err)
 	}
@@ -1208,9 +1474,9 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	if err != nil {
 		t.Fatalf("failed to call actor after paused revert: %v", err)
 	}
-	validateCounterResponse(t, resp, "after revert from paused", 2, 2)
+	validateCounterResponse(t, resp, "after revert from paused", wantCount, wantCount)
 
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
+	if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
 	}
 	return nil
@@ -1301,17 +1567,18 @@ func deletePausedActor(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 
 	// 3. Suspending the actor asynchronously
 	t.Logf("Pausing Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+	pausedResp, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 		Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
 		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorPaused(ctx, t, clients, actorName)
+	getLocalSnapshotFromActor(t, pausedResp.GetActor())
 
 	// 4. Delete the asynchronously suspended actor
 	t.Logf("Deleting paused Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{
+	if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to delete Actor: %v", err)
@@ -1328,11 +1595,6 @@ func deletePausedActor(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 }
 
 func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, fidelity ateapi.SnapshotFidelity, modifyTemplate func(*ateapi.ActorTemplate)) (*ateapi.ActorTemplate, error) {
-	env, err := e2e.CheckEnv("BUCKET_NAME")
-	if err != nil {
-		t.Fatalf("CheckEnv failed: %v", err)
-	}
-
 	// The whole suite shares demoAtespace, so the per-test suffix keeps
 	// template names unique.
 	name := base + "-" + nsObj.Name
@@ -1341,15 +1603,22 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		Name:     name,
 		PoolName: base,
 		// One actor at a time, plus a spare for the worker-deletion tests.
-		PoolReplicas: 2,
-		Labels:       map[string]string{"demo": nsObj.Name},
-		SnapshotConfig: &ateapi.SnapshotConfig{
-			StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
-			PreferredFidelity: fidelity,
-		},
-		Modify: modifyTemplate,
+		PoolReplicas:   2,
+		Labels:         map[string]string{"demo": nsObj.Name},
+		SnapshotConfig: templateSnapshotConfig(t, fidelity, "ate-demo-"+name),
+		Modify:         modifyTemplate,
 	})
 	return at, nil
+}
+
+// templateSnapshotConfig returns a SnapshotConfig that captures at fidelity,
+// stored under e2e.SnapshotLocation(prefix).
+func templateSnapshotConfig(t *testing.T, fidelity ateapi.SnapshotFidelity, prefix string) *ateapi.SnapshotConfig {
+	t.Helper()
+	return &ateapi.SnapshotConfig{
+		PreferredFidelity: fidelity,
+		StorageLocation:   e2e.SnapshotLocation(t, prefix),
+	}
 }
 
 func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapi.SnapshotFidelity) (*ateapi.ActorTemplate, error) {
@@ -1779,13 +2048,33 @@ func TestRevertCrashedActor(t *testing.T) {
 	}
 	validateCounterResponse(t, resp, "before snapshot", 1, 1)
 
+	suspended1, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
+	if err != nil {
+		t.Fatalf("failed to suspend Actor (generation 1): %v", err)
+	}
+	gen1URI := durableSnapshotURI(suspended1.GetActor().GetStatus())
+	if gen1URI == "" {
+		t.Fatal("suspend (generation 1) wrote no external snapshot")
+	}
+
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("failed to resume Actor after generation 1 suspend: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor before generation 2 snapshot: %v", err)
+	}
+	validateCounterResponse(t, resp, "before generation 2 snapshot", 2, 2)
+
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef, Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})
 	if err != nil {
-		t.Fatalf("failed to suspend Actor: %v", err)
+		t.Fatalf("failed to suspend Actor (generation 2): %v", err)
 	}
 	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
-	if snapshotURI == "" {
-		t.Fatal("suspend wrote no external snapshot")
+	if snapshotURI == "" || snapshotURI == gen1URI {
+		t.Fatalf("generation 2 snapshot URI = %q, want non-empty and distinct from generation 1 %q", snapshotURI, gen1URI)
 	}
 
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef}); err != nil {
@@ -1797,7 +2086,7 @@ func TestRevertCrashedActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to call actor before crash: %v", err)
 	}
-	validateCounterResponse(t, resp, "before crash", 2, 2)
+	validateCounterResponse(t, resp, "before crash", 3, 3)
 
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef})
 	if err != nil {
@@ -1852,5 +2141,240 @@ func TestRevertCrashedActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to call actor after recovery: %v", err)
 	}
-	validateCounterResponse(t, resp, "after recovery from CRASHED", 2, 2)
+	validateCounterResponse(t, resp, "after recovery from CRASHED", 3, 3)
+}
+
+// TestRevertActorToMostRecentDurableSnapshot verifies that RevertActor returns
+// the actor to its most recent completed durable snapshot across origin states
+// and multiple snapshot generations.
+func TestRevertActorToMostRecentDurableSnapshot(t *testing.T) {
+	t.Parallel()
+	nsObj := e2e.CreateNamespace(t)
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		actorPrefix string
+		// setup drives the actor into the state from which RevertActor is
+		// called, returning the durable snapshot URI and counter value the
+		// revert must preserve.
+		setup func(ctx context.Context, t *testing.T, h *revertHarness) (wantURI string, wantCounter int)
+	}{
+		{
+			name:        "FromRunningBeforeActorSnapshotRevertsToGolden",
+			actorPrefix: "revert-to-golden",
+			setup: func(ctx context.Context, t *testing.T, h *revertHarness) (string, int) {
+				if h.createdURI == "" {
+					t.Fatal("new actor has no golden snapshot")
+				}
+				h.resumeAndIncrement(ctx, 1)
+				return h.createdURI, 0
+			},
+		},
+		{
+			name:        "FromRunningAfterMultipleDurableSnapshots",
+			actorPrefix: "revert-multi-running",
+			setup: func(ctx context.Context, t *testing.T, h *revertHarness) (string, int) {
+				// Generation 1: synchronous durable snapshot at count=1.
+				h.resumeAndIncrement(ctx, 1)
+				gen1URI := h.suspendSync(ctx)
+
+				// Generation 2: asynchronous suspend at count=2, then wait for
+				// atelet's background upload to complete so generation 2 becomes
+				// the most recent durable snapshot.
+				h.resumeAndIncrement(ctx, 2)
+				gen2URI := h.suspendAsyncAndAwaitUpload(ctx)
+				if gen2URI == gen1URI {
+					t.Fatalf("generation 2 durable URI %q did not advance from generation 1", gen2URI)
+				}
+
+				// Mutate in a third sprint (count=3) that must be discarded.
+				h.resumeAndIncrement(ctx, 3)
+				return gen2URI, 2
+			},
+		},
+		{
+			name:        "FromPausedAfterBackgroundUploadCompleted",
+			actorPrefix: "revert-paused-uploaded",
+			setup: func(ctx context.Context, t *testing.T, h *revertHarness) (string, int) {
+				// Generation 1 durable at count=1.
+				h.resumeAndIncrement(ctx, 1)
+				_ = h.suspendSync(ctx)
+
+				// Generation 2: pause at count=2 and wait for the upload. The
+				// local checkpoint stays on the node, so the revert starts from
+				// a paused actor whose latest snapshot is already durable.
+				h.resumeAndIncrement(ctx, 2)
+				gen2URI := h.suspendAsyncAndAwaitUpload(ctx)
+				waitForActorPaused(ctx, t, h.clients, h.name)
+				return gen2URI, 2
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newRevertHarness(ctx, t, clients, nsObj, at, tc.actorPrefix)
+			wantURI, wantCounter := tc.setup(ctx, t, h)
+
+			reverted := h.revertAndAssert(ctx, wantURI)
+
+			// Calling RevertActor again when already at the durable snapshot
+			// must fail with FailedPrecondition.
+			if _, err := clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: h.ref}); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("RevertActor on already-reverted actor %v: got %v, want FailedPrecondition", reverted.GetMetadata().GetName(), err)
+			}
+
+			// Resuming and calling the actor increments from wantCounter to
+			// wantCounter+1, proving the most recent durable snapshot won.
+			h.resumeAndIncrement(ctx, wantCounter+1)
+		})
+	}
+}
+
+type revertHarness struct {
+	t       *testing.T
+	clients *e2e.Clients
+	name    string
+	ref     *ateapi.ObjectRef
+	// createdURI is the durable snapshot the actor was created from: the
+	// template's golden snapshot.
+	createdURI string
+}
+
+func newRevertHarness(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapi.ActorTemplate, actorPrefix string) *revertHarness {
+	t.Helper()
+	actorName := actorPrefix + "-" + nsObj.Name
+	actorRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapi.DeleteActorRequest{Actor: actorRef})
+	})
+
+	created, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor %q: %v", actorName, err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+
+	return &revertHarness{
+		t:          t,
+		clients:    clients,
+		name:       actorName,
+		ref:        actorRef,
+		createdURI: durableSnapshotURI(created.GetStatus()),
+	}
+}
+
+func (h *revertHarness) resumeAndIncrement(ctx context.Context, wantCount int) {
+	h.t.Helper()
+	if _, err := e2e.ResumeActorAwaitCapacity(h.t, ctx, h.clients, &ateapi.ResumeActorRequest{Actor: h.ref}); err != nil {
+		h.t.Fatalf("ResumeActor %q: %v", h.name, err)
+	}
+	waitForActorState(ctx, h.t, h.clients, h.name, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err := callActor(h.t, resources.ActorRefFromObjectRef(h.ref))
+	if err != nil {
+		h.t.Fatalf("callActor %q: %v", h.name, err)
+	}
+	validateCounterResponse(h.t, resp, h.name, wantCount, wantCount)
+}
+
+func (h *revertHarness) suspendSync(ctx context.Context) string {
+	h.t.Helper()
+	suspended, err := e2e.RetryAborted(h.t, ctx, h.clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
+		Actor:   h.ref,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+	})
+	if err != nil {
+		h.t.Fatalf("SuspendActor(SYNCHRONOUS) %q: %v", h.name, err)
+	}
+	uri := durableSnapshotURI(suspended.GetActor().GetStatus())
+	if uri == "" {
+		h.t.Fatalf("SuspendActor(SYNCHRONOUS) %q wrote no durable snapshot", h.name)
+	}
+	return uri
+}
+
+func (h *revertHarness) suspendAsyncAndAwaitUpload(ctx context.Context) string {
+	h.t.Helper()
+	paused, err := e2e.RetryAborted(h.t, ctx, h.clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
+		Actor:   h.ref,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		h.t.Fatalf("SuspendActor(ASYNCHRONOUS) %q: %v", h.name, err)
+	}
+	waitForActorPaused(ctx, h.t, h.clients, h.name)
+
+	local := localSnapshot(paused.GetActor().GetStatus())
+	wantGen := local.GetGeneration()
+	wantURI := local.GetDurableSnapshot().GetObject().GetSnapshotUri()
+	if wantURI == "" {
+		h.t.Fatalf("async suspend %q recorded no durable snapshot URI on local snapshot %v", h.name, local)
+	}
+
+	// e2e installs set atelet's --snapshot-upload-delay to 2s. With the 5m
+	// default, this wait times out.
+	const uploadWait = time.Minute
+	var lastErr error
+	var lastSnapshots []*ateapi.Snapshot
+	deadline := time.Now().Add(uploadWait)
+	for time.Now().Before(deadline) {
+		actor, err := h.clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: h.ref})
+		lastErr = err
+		if err == nil {
+			lastSnapshots = actor.GetStatus().GetSnapshots()
+			if snap := durableSnapshot(actor.GetStatus()); snap.GetGeneration() == wantGen {
+				gotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+				if gotURI != wantURI {
+					h.t.Fatalf("completed durable URI for %q = %q, want %q", h.name, gotURI, wantURI)
+				}
+				return gotURI
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	h.t.Fatalf("actor %q generation %d not durable after %v: last error %v, snapshots %v", h.name, wantGen, uploadWait, lastErr, lastSnapshots)
+	return ""
+}
+
+func (h *revertHarness) revertAndAssert(ctx context.Context, wantURI string) *ateapi.Actor {
+	h.t.Helper()
+	reverted, err := e2e.RetryAborted(h.t, ctx, h.clients.SubstrateAPI.RevertActor, &ateapi.RevertActorRequest{Actor: h.ref})
+	if err != nil {
+		h.t.Fatalf("RevertActor %q: %v", h.name, err)
+	}
+	actor := reverted.GetActor()
+	st := actor.GetStatus()
+	if got := st.GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		h.t.Fatalf("state after RevertActor %q = %v, want SUSPENDED", h.name, got)
+	}
+	if got := durableSnapshotURI(st); got != wantURI {
+		h.t.Fatalf("durable snapshot URI after RevertActor %q = %q, want %q", h.name, got, wantURI)
+	}
+	if hasLocalSnapshot(st) {
+		h.t.Fatalf("local snapshot survived RevertActor %q: %v", h.name, st.GetSnapshots())
+	}
+	if st.GetWorkerAssignment() != nil {
+		h.t.Fatalf("worker assignment survived RevertActor %q: %v", h.name, st.GetWorkerAssignment())
+	}
+	if got := st.GetAssignedNode(); got != "" {
+		h.t.Fatalf("assigned node after RevertActor %q = %q, want empty", h.name, got)
+	}
+	if st.GetCrash() != nil {
+		h.t.Fatalf("crash status survived RevertActor %q: %v", h.name, st.GetCrash())
+	}
+	return actor
 }

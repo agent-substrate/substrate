@@ -50,7 +50,7 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	objects.PutSnapshot(t, uri, objectNames...)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		snap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		snap := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 		snap.SandboxRuntime = testSandboxRuntime()
 		s.Snapshots = []*ateapi.Snapshot{snap}
 	})
@@ -94,7 +94,7 @@ func TestTagActorSnapshot(t *testing.T) {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
 
-	tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	if tagSnapshot == "" || tagSnapshot == actorSnapshot.String() {
 		t.Fatalf("tag snapshot uri = %q, want a copy of its own rather than the actor's %q", tagSnapshot, actorSnapshot)
 	}
@@ -158,6 +158,34 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 	}
 }
 
+// TestTagActorSnapshot_LocationOutsideSegmentRules verifies that a tag of a
+// template whose stored location breaks the segment rules fails with
+// FailedPrecondition.
+func TestTagActorSnapshot_LocationOutsideSegmentRules(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata:       &ateapi.ResourceMetadata{Atespace: "team-a", Name: "sub-tmpl"},
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: "gs://ate-snapshots/a.b/"},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+	w, objects := newFinalizeWorkflow(persistence)
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json")
+
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	if code := apierror.Code(err); code != codes.FailedPrecondition {
+		t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, codes.FailedPrecondition)
+	}
+	if !strings.Contains(err.Error(), "invalid storage location") {
+		t.Errorf("TagActorSnapshot error = %v, want it to name the invalid storage location", err)
+	}
+	if _, err := persistence.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "v1"}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after failed create: err = %v, want ErrNotFound", err)
+	}
+}
+
 // TestTagActorSnapshot_Preconditions verifies what a tag may be taken from:
 // a suspended actor's finished external snapshot, and nothing else.
 func TestTagActorSnapshot_Preconditions(t *testing.T) {
@@ -214,7 +242,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 					}
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapi.Snapshot{
-						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 					}
 				})
 			}
@@ -274,7 +302,7 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 			uri := mustActorSnapshotURI(t, template, actor, "actor-1-snapshot")
 			objects.PutSnapshot(t, uri, "manifest.json")
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
-				snap := newDurableSnapshot(tt.extGen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+				snap := newDurableSnapshot(tt.extGen, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 				snap.Locality = tt.locality
 				s.LastAssignedGeneration = tt.lastAssigned
 				s.Snapshots = []*ateapi.Snapshot{snap}
@@ -316,7 +344,8 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 		nodeLost bool
 		// nameTaken seeds a tag under the name the create asks for.
 		nameTaken bool
-		// badLocation points the template at an unusable storage location.
+		// badLocation points the template at a storage location with an
+		// atespaces segment.
 		badLocation bool
 		// noTemplateUID records no template the local snapshot was built
 		// under, a broken row.
@@ -354,9 +383,9 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			wantCode:  codes.AlreadyExists,
 		},
 		{
-			name:        "the storage location is unusable",
+			name:        "the template's storage location has an atespaces segment",
 			badLocation: true,
-			wantCode:    codes.Internal,
+			wantCode:    codes.FailedPrecondition,
 		},
 		{
 			name:          "the paused snapshot records no template",
@@ -458,9 +487,9 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			})
 			pausedURI := mustActorSnapshotURI(t, template, actor, "paused")
 			objects.PutSnapshot(t, pausedURI, "manifest.json", "memory.zst")
-			pausedStatus := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING
+			pausedStatus := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
 			if tt.uploaded {
-				pausedStatus = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+				pausedStatus = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 			}
 			paused := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, pausedURI.Name(), pausedURI.String(), pausedStatus)
 			if !tt.nodeLost {
@@ -474,7 +503,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				if tt.olderDurable {
 					olderURI := mustActorSnapshotURI(t, template, actor, "older")
 					objects.PutSnapshot(t, olderURI, "manifest.json")
-					s.Snapshots = append(s.Snapshots, newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, olderURI.Name(), olderURI.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+					s.Snapshots = append(s.Snapshots, newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, olderURI.Name(), olderURI.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED))
 				}
 				s.Snapshots = append(s.Snapshots, proto.CloneOf(paused))
 			})
@@ -494,7 +523,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			}
 			if tt.badLocation {
 				_, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(template), store.PreconditionFrom(template), func(tmpl *ateapi.ActorTemplate) error {
-					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/team-a/?query"
+					tmpl.SnapshotConfig.StorageLocation = "gs://ate-snapshots/root/atespaces/team-b/actors/cc10"
 					return nil
 				})
 				if err != nil {
@@ -554,7 +583,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 				return
 			}
 
-			tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 			if tt.nodeLost {
 				// Nothing to upload from: the actor is left as it was, and the
 				// tag copied the older durable snapshot.
@@ -569,7 +598,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 
 			// The local snapshot is now durable and stays on its node.
 			wantPaused := proto.CloneOf(paused)
-			wantPaused.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			wantPaused.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 			if diff := cmp.Diff(wantPaused, findSnapshotByGeneration(stored.GetStatus().GetSnapshots(), 2), protocmp.Transform()); diff != "" {
 				t.Errorf("the actor's latest snapshot mismatch (-want +got):\n%s", diff)
 			}
@@ -612,7 +641,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTag after the external store failure: %v", err)
 	}
-	if got := tagDurableSnapshotURI(pending, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != "" {
+	if got := tagDurableSnapshotURI(pending, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
 	}
 	strandedURI := mustReservedTagSnapshotURI(t, pending)
@@ -651,7 +680,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
-	recreated := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	recreated := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
 	if recreated == "" || recreated == stranded {
 		t.Fatalf("snapshot uri after the delete = %q, want a fresh prefix rather than the stranded %q", recreated, stranded)
 	}
@@ -732,7 +761,7 @@ func TestTagActorSnapshot_RecreateAfterRecordFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
-	if got, want := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); got != want {
+	if got, want := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED), mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); got != want {
 		t.Errorf("recreated tag snapshot uri = %q, want UID-based URI %q", got, want)
 	}
 }
@@ -782,7 +811,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 
 	// Nothing was collected out from under the copy, and the row in the store it
 	// is still there.
-	if got := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); got != pendingURI {
+	if got := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED); got != pendingURI {
 		t.Errorf("snapshot uri = %q, want the prefix the create reserved, %q", got, pendingURI)
 	}
 	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, pendingURI))); diff != "" {
@@ -967,7 +996,7 @@ func TestDeleteTag_NotFound(t *testing.T) {
 
 func mustReservedTagSnapshotURI(t *testing.T, tag *ateapi.Tag) resources.SnapshotURI {
 	t.Helper()
-	uri, err := resources.ParseSnapshotURI(tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED))
+	uri, err := resources.ParseSnapshotURI(tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED))
 	if err != nil {
 		t.Fatalf("ParseSnapshotURI: %v", err)
 	}
