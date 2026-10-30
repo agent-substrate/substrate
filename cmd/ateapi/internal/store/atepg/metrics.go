@@ -30,7 +30,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/semconv/v1.40.0/dbconv"
+	"go.opentelemetry.io/otel/semconv/v1.43.0/dbconv"
 )
 
 const (
