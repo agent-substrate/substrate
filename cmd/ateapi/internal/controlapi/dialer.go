@@ -67,6 +67,9 @@ type AteletDialer struct {
 	// atelet, keyed on the atelet's expected pod UID. Production wires this to
 	// per-atelet mTLS; tests can override it with insecure credentials.
 	dialCredentials func(expectedPodUID string) (credentials.TransportCredentials, error)
+	// contextDialer, when set, opens the connection to an atelet's address in
+	// place of a TCP dial.
+	contextDialer func(ctx context.Context, addr string) (net.Conn, error)
 }
 
 // DialerOption customizes an AteletDialer built by NewAteletDialer.
@@ -101,6 +104,13 @@ func (d *AteletDialer) NodeGone(ctx context.Context, nodeName string) (bool, err
 		return false, fmt.Errorf("while finding atelet on node %q: %w", nodeName, err)
 	}
 	return len(atelets) == 0, nil
+}
+
+// WithContextDialer replaces the TCP dial to an atelet's address. Tests use it
+// to serve each node's fake atelet in memory while still exercising the real
+// lookup, dial and connection-cache path.
+func WithContextDialer(dial func(ctx context.Context, addr string) (net.Conn, error)) DialerOption {
+	return func(d *AteletDialer) { d.contextDialer = dial }
 }
 
 // NewAteletDialer creates a new AteletDialer. clientBundlePath and serverCAPath
@@ -183,10 +193,16 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 		return nil, fmt.Errorf("while building atelet credentials: %w", err)
 	}
 
-	conn, err := grpc.NewClient(
-		net.JoinHostPort(ateletIP, strconv.Itoa(atelet.DefaultPort)),
+	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	}
+	if d.contextDialer != nil {
+		dialOpts = append(dialOpts, grpc.WithContextDialer(d.contextDialer))
+	}
+	conn, err := grpc.NewClient(
+		net.JoinHostPort(ateletIP, strconv.Itoa(atelet.DefaultPort)),
+		dialOpts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("while creating atelet gRPC client connection: %w", err)
