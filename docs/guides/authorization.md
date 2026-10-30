@@ -3,7 +3,7 @@ title: "Authorization"
 linkTitle: "Authorization"
 weight: 4
 description: >
-  How ate-api checks every call against an OpenFGA model, and how to manage roles and access.
+  How ate-api-server checks every call against an OpenFGA model, and how to manage roles and access.
 ---
 
 # ate-api Authorization
