@@ -354,12 +354,23 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 	}
 }
 
-// TestLifecycleOpRecordsStoreMissAsNotFound asserts an operation on an actor
-// the store lacks is recorded as the NotFound its caller gets, not Internal.
-func TestLifecycleOpRecordsStoreMissAsNotFound(t *testing.T) {
+// getActorErrStore fails GetActor with err.
+type getActorErrStore struct {
+	store.Interface
+	err error
+}
+
+func (s getActorErrStore) GetActor(context.Context, resources.ActorRef) (*ateapi.Actor, error) {
+	return nil, s.err
+}
+
+// TestLifecycleOpRecordsReturnedCode asserts error.type is the code of the
+// error the operation returns, so a store miss records NotFound and a
+// conflict records Aborted, not Internal.
+func TestLifecycleOpRecordsReturnedCode(t *testing.T) {
 	ctx := context.Background()
 	ref := resources.ActorRef{Atespace: "team-a", Name: "missing"}
-	tests := []struct {
+	ops := []struct {
 		op  string
 		run func(*ActorWorkflow) error
 	}{
@@ -367,51 +378,37 @@ func TestLifecycleOpRecordsStoreMissAsNotFound(t *testing.T) {
 		{ateattr.OperationSuspend, func(w *ActorWorkflow) error { _, err := w.SuspendActor(ctx, ref, suspendSync); return err }},
 		{ateattr.OperationRevert, func(w *ActorWorkflow) error { _, err := w.RevertActor(ctx, ref); return err }},
 	}
-	for _, tt := range tests {
-		t.Run(tt.op, func(t *testing.T) {
-			st, cleanup := storetest.SetupTestStore(t)
-			defer cleanup()
-			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
-			inst, reader := newTestInstruments(t)
-			w.instruments = inst
-
-			if err := tt.run(w); err == nil {
-				t.Fatal("operation on a missing actor succeeded")
-			}
-			dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
-			if got, _ := attrString(dp, ateattr.ErrorTypeKey); got != "NotFound" {
-				t.Errorf("error.type = %q, want NotFound", got)
-			}
-		})
-	}
-}
-
-// TestActorOpError asserts store conflicts and misses become the codes the
-// caller gets, and other errors pass through unchanged.
-func TestActorOpError(t *testing.T) {
-	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	other := errors.New("store is down")
-	tests := []struct {
+	causes := []struct {
 		name string
-		err  error
-		want codes.Code
+		// getErr fails GetActor. Nil leaves the actor missing from the store.
+		getErr error
+		want   codes.Code
 	}{
-		{name: "nil", err: nil, want: codes.OK},
-		{name: "version conflict", err: fmt.Errorf("while updating: %w", store.ErrVersionConflict), want: codes.Aborted},
-		{name: "not found", err: fmt.Errorf("while loading: %w", store.ErrNotFound), want: codes.NotFound},
-		{name: "api error", err: apierror.FailedPrecondition("busy"), want: codes.FailedPrecondition},
-		{name: "other", err: other, want: codes.Internal},
+		{name: "store miss", want: codes.NotFound},
+		{name: "version conflict", getErr: store.ErrVersionConflict, want: codes.Aborted},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := actorOpError(tt.err, ref)
-			if code := apierror.Code(got); code != tt.want {
-				t.Errorf("apierror.Code(actorOpError(%v)) = %v, want %v", tt.err, code, tt.want)
-			}
-			if tt.err == other && got != other {
-				t.Errorf("actorOpError(%v) = %v, want the error unchanged", tt.err, got)
-			}
-		})
+	for _, op := range ops {
+		for _, c := range causes {
+			t.Run(op.op+"/"+c.name, func(t *testing.T) {
+				st, cleanup := storetest.SetupTestStore(t)
+				defer cleanup()
+				w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+				if c.getErr != nil {
+					w.store = getActorErrStore{Interface: st, err: c.getErr}
+				}
+				inst, reader := newTestInstruments(t)
+				w.instruments = inst
+
+				err := op.run(w)
+				if got := apierror.Code(err); got != c.want {
+					t.Fatalf("operation returned code %v (%v), want %v", got, err, c.want)
+				}
+				dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
+				if got, _ := attrString(dp, ateattr.ErrorTypeKey); got != apierror.Code(err).String() {
+					t.Errorf("error.type = %q, want %q", got, apierror.Code(err).String())
+				}
+			})
+		}
 	}
 }
 

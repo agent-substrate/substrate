@@ -486,7 +486,7 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 
 	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
 	if err != nil {
-		return nil, actorOpError(err, actorRef)
+		return nil, err
 	}
 
 	setSpanActorAttributes(ctx, actor)
@@ -502,7 +502,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorR
 
 	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
 	if err != nil {
-		return nil, actorOpError(err, actorRef)
+		return nil, err
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapi.SuspendActorResponse{Actor: actor}, nil
@@ -532,7 +532,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapi.RevertActorReq
 
 	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
 	if err != nil {
-		return nil, actorOpError(err, actorRef)
+		return nil, err
 	}
 	setSpanActorAttributes(ctx, actor)
 	return &ateapi.RevertActorResponse{Actor: actor}, nil
