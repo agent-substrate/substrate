@@ -347,3 +347,10 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 - **Any atelet can read any actor's egress policy.** Every node's atelet
   shares one identity, so the `atelet` role isn't limited to actors on its
   node ([#1564](https://github.com/agent-substrate/substrate/issues/1564)).
+- **Atespace roles don't cover actor logs.** `kubectl ate logs actor` calls
+  `GetActor`, then reads the worker pod's log through the Kubernetes API with
+  the caller's kubeconfig. Kubernetes RBAC on the pool namespace decides who
+  can read it. A worker pool is shared across atespaces, so `pods/log` there
+  exposes the logs of every atespace that uses the pool. An atespace viewer
+  without that access can't read their own actor's logs
+  ([#2043](https://github.com/agent-substrate/substrate/issues/2043)).
