@@ -72,7 +72,7 @@ When you send an HTTP request through the proxy, `atenet-router` automatically a
 ```bash
 # counter binary
 curl -s http://localhost:8000
-# -> preserved memory count: 1
+# -> preserved memory count: 1 | preserved file counter: 1 | preserved rootfs counter: 1
 
 # fspersist binary
 curl -s http://localhost:8001
@@ -87,9 +87,7 @@ Confirm both actors landed on workers in the one `shared-pool`:
 kubectl ate get workers
 ```
 
-The `counter` increments its in-memory count on each request, while `fspersist` prepends
-a line to its history file on each request. Suspending and re-requesting an actor
-preserves that state across the snapshot/restore cycle:
+The `counter` actor increments its in-memory, durable-volume (`/home/counter/a.txt`), and rootfs (`/rootfs-counter.txt`) counters on each request, while `fspersist` prepends a line to its history file on each request. Suspending and re-requesting an actor preserves that state across the snapshot/restore cycle:
 
 ```bash
 kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
