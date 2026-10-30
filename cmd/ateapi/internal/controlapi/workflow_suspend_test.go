@@ -36,6 +36,47 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// TestSuspendActor_LifecycleOpNamesWorkerPool checks a successful suspend labels
+// its lifecycle-op datapoint with the pool, which finalize clears from the actor.
+func TestSuspendActor_LifecycleOpNamesWorkerPool(t *testing.T) {
+	for _, mode := range suspendModes {
+		t.Run(mode.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			seedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY})
+			w, _ := newWireCaptureWorkflow(t, persistence)
+			inst, reader := newTestInstruments(t)
+			w.instruments = inst
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: suspendTestTemplateRef(),
+				Status: &ateapi.ActorStatus{
+					State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+					AssignedNode:     wireTestAssignment().GetNodeName(),
+					WorkerAssignment: wireTestAssignment(),
+				},
+			})
+			seedWireWorker(t, ctx, persistence, assignmentOf(actor))
+
+			if _, err := w.SuspendActor(ctx, actorRef, mode.suspendMode); err != nil {
+				t.Fatalf("SuspendActor: %v", err)
+			}
+
+			dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
+			if got, ok := attrString(dp, ateattr.WorkerPoolNamespaceKey); !ok || got != wireTestAssignment().GetWorkerNamespace() {
+				t.Errorf("%s = %q (present %t), want %q", ateattr.WorkerPoolNamespaceKey, got, ok, wireTestAssignment().GetWorkerNamespace())
+			}
+			if got, ok := attrString(dp, ateattr.WorkerPoolNameKey); !ok || got != wireTestAssignment().GetWorkerPool() {
+				t.Errorf("%s = %q (present %t), want %q", ateattr.WorkerPoolNameKey, got, ok, wireTestAssignment().GetWorkerPool())
+			}
+			if got, ok := attrString(dp, ateattr.ErrorTypeKey); ok {
+				t.Errorf("%s = %q on a successful suspend, want none", ateattr.ErrorTypeKey, got)
+			}
+		})
+	}
+}
+
 // TestSuspendActor_CheckpointError exercises checkpoint error policy through
 // the suspend workflow, including retrying the persisted snapshot.
 func TestSuspendActor_CheckpointError(t *testing.T) {
