@@ -31,7 +31,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	"go.opentelemetry.io/otel/semconv/v1.40.0/dbconv"
+	"go.opentelemetry.io/otel/semconv/v1.43.0/dbconv"
 )
 
 func newPoolMetrics(t *testing.T) (*Instruments, *sdkmetric.ManualReader) {
