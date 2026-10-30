@@ -19,9 +19,12 @@
 # this actor and multiplex its worker onto another actor.
 #
 # Env vars:
-#   TASK              — the prompt to pass to claude-code each tick
-#   INTERVAL_SECONDS  — sleep length between ticks (longer = more multiplex headroom)
-#   ANTHROPIC_API_KEY — required; supplied via container env
+#   TASK                 - prompt passed to claude-code each tick
+#   INTERVAL_SECONDS     - sleep length between ticks
+#   WARMUP_SECONDS       - initial delay so golden snapshot warmup (20s)
+#                          checkpoints before the first outbound call
+#   TASK_TIMEOUT_SECONDS - per-tick timeout for claude-code
+#   ANTHROPIC_API_KEY    - placeholder value replaced by atenet-egress
 
 set -u
 
@@ -31,9 +34,18 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
 fi
 
 ACTOR_NAME="${ACTOR_NAME:-$(hostname)}"
+WARMUP_SECONDS="${WARMUP_SECONDS:-21}"
+TASK_TIMEOUT_SECONDS="${TASK_TIMEOUT_SECONDS:-8}"
 TICK=0
 
 echo "[demo-actor:${ACTOR_NAME}] starting; task=\"${TASK}\" interval=${INTERVAL_SECONDS}s"
+
+# Golden actors have no EgressPolicy during the 20s template warmup window.
+# Waiting here lets the golden snapshot capture a clean pre-tick state so a
+# restored actor runs tick 1 right after ResumeActor.
+if [ "${WARMUP_SECONDS}" -gt 0 ]; then
+  sleep "${WARMUP_SECONDS}"
+fi
 
 while true; do
   TICK=$((TICK + 1))
@@ -43,7 +55,7 @@ while true; do
   echo "---"
   # --print runs one prompt and exits; output streams to stdout so kubectl logs
   # picks it up live.
-  claude --print "${TASK}" 2>&1 || echo "[demo-actor:${ACTOR_NAME}] claude exited non-zero"
+  timeout "${TASK_TIMEOUT_SECONDS}" claude --print "${TASK}" 2>&1 || echo "[demo-actor:${ACTOR_NAME}] claude exited non-zero"
   echo "---"
   echo "[demo-actor:${ACTOR_NAME}] tick ${TICK} done; sleeping ${INTERVAL_SECONDS}s"
   sleep "${INTERVAL_SECONDS}"

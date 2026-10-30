@@ -22,10 +22,9 @@ import (
 )
 
 // TestRenderManifests covers this demo's manifests, which the shared render
-// test skips because the agent templates carry deploy-time placeholders
-// (WORKLOAD_IMAGE, ANTHROPIC_API_KEY). The pool manifest must render with no
-// extra values at all — Delete relies on that on a cluster with no
-// credentials in the environment.
+// test skips because the agent templates carry a deploy-time placeholder
+// (WORKLOAD_IMAGE). The pool manifest must render with no extra values at all
+// so Delete works on a cluster with no credentials in the environment.
 func TestRenderManifests(t *testing.T) {
 	e := demotest.Env(t)
 
@@ -36,7 +35,6 @@ func TestRenderManifests(t *testing.T) {
 	demotest.AssertRendered(t, pool)
 
 	values := map[string]string{
-		"ANTHROPIC_API_KEY": "test-api-key",
 		// A digest-shaped stand-in for the buildx-pushed workload image.
 		"WORKLOAD_IMAGE": "registry.example.dev/claude-multiplex-demo-workload@sha256:1111111111111111111111111111111111111111111111111111111111111111",
 	}
