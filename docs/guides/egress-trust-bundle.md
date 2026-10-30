@@ -53,6 +53,15 @@ template (the manifest you pass to `kubectl ate create actor-template -f`),
 and mount it in each container that makes TLS connections:
 
 ```yaml
+metadata:
+  atespace: my-atespace
+  name: my-actor
+containers:
+- name: app
+  image: registry.example.com/app@sha256:<digest>
+  volumeMounts:
+  - name: system-info
+    mountPath: /run/ate/egress-trust-bundle
 volumes:
 - name: system-info
   systemInfo:
@@ -65,19 +74,17 @@ volumes:
         - egress-mitm.ate.dev
         - system-roots.ate.dev
         path: trust-bundle.pem
-containers:
-- name: app
-  # ...
-  volumeMounts:
-  - name: system-info
-    mountPath: /run/ate/egress-trust-bundle
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912
 ```
 
 Substrate only offers a few built-in trust bundles with well-known names:
 * `egress-mitm.ate.dev` — the egress gateway CA.
 * `system-roots.ate.dev` — A selection of public CA root certificates provided
   by Substrate.  In official Substrate images, this is the Mozilla Root Store as
-  shipped on Debian, read from atelet's `distroless/base-debian13` base image.
+  shipped on Debian (consumed via the distroless-static base image).
 
 You then need to configure your application to use the trust-bundle file.  In
 general, this is application specific, but many runtimes respect the
@@ -126,9 +133,7 @@ Note: Do not bake the bundle into the image at build time. It will tie the image
 ## Verify
 
 `demos/egress/egress-template.yaml.tmpl` is a complete working template that
-projects both bundles to `/run/ate/egress-trust-bundle/trust-bundle.pem`, the
-file this recipe uses. Its Go app finds the file through `SSL_CERT_DIR`. Deploy
-it:
+does exactly this. Deploy it:
 
 ```bash
 go run ./cmd/ate-setup deploy demo egress

@@ -202,10 +202,8 @@ no injection says so with `{"enabled":false}`.
 go run ./cmd/ate-setup deploy atenet --credential-provider='{"name":"k8s.io"}'
 ```
 
-The setting can also come from `ATE_CREDENTIAL_PROVIDER` or from
-`atenet.egress.credentialProvider` in the `--config` file (see
-[Precedence](operator-install.md#precedence)). Its value is a JSON object with
-these keys; any other key is an error:
+`--credential-provider` (or `ATE_CREDENTIAL_PROVIDER` when the flag is
+absent) is a JSON object with these keys; any other key is an error:
 
 | Key | Value |
 |---|---|
