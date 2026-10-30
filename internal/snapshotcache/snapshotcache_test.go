@@ -19,7 +19,9 @@ package snapshotcache
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -194,6 +196,89 @@ func TestEvictFiles(t *testing.T) {
 		}
 		if EvictFiles(targets) {
 			t.Errorf("EvictFiles() = true after inode replacement, want false")
+		}
+	})
+}
+
+func TestStartWriteback(t *testing.T) {
+	origCachestat := cachestatFn
+	origSyncFileRange := syncFileRangeFn
+	origDelays := RetryDelays
+	t.Cleanup(func() {
+		cachestatFn = origCachestat
+		syncFileRangeFn = origSyncFileRange
+		RetryDelays = origDelays
+	})
+	RetryDelays = []time.Duration{0, 0}
+
+	dir := t.TempDir()
+	img := filepath.Join(dir, "memory-ranges")
+	if err := os.WriteFile(img, []byte("snapshot pages"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls atomic.Int32
+	var asyncWrites atomic.Int32
+	cachestatFn = func(_ uint, _ *unix.CachestatRange, cstat *unix.Cachestat_t, _ uint) error {
+		if calls.Add(1) <= 2 {
+			*cstat = unix.Cachestat_t{Cache: 16, Dirty: 8}
+			return nil
+		}
+		*cstat = unix.Cachestat_t{Cache: 16, Dirty: 0, Writeback: 0}
+		return nil
+	}
+	syncFileRangeFn = func(_ int, _ int64, _ int64, flags int) error {
+		if flags == unix.SYNC_FILE_RANGE_WRITE {
+			asyncWrites.Add(1)
+		}
+		return nil
+	}
+
+	done := make(chan struct{})
+	if err := StartWriteback([]string{img}, func() { close(done) }); err != nil {
+		t.Fatalf("StartWriteback: %v", err)
+	}
+	<-done
+	if got := asyncWrites.Load(); got != 1 {
+		t.Errorf("asyncWrites = %d, want 1", got)
+	}
+
+	t.Run("stops tracking when file is unlinked or replaced between polls", func(t *testing.T) {
+		unlinked := filepath.Join(dir, "unlinked.img")
+		replaced := filepath.Join(dir, "replaced.img")
+		for _, p := range []string{unlinked, replaced} {
+			if err := os.WriteFile(p, []byte("snapshot pages"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		var pollPass atomic.Int32
+		var syncCalls atomic.Int32
+		cachestatFn = func(_ uint, _ *unix.CachestatRange, cstat *unix.Cachestat_t, _ uint) error {
+			pass := pollPass.Add(1)
+			*cstat = unix.Cachestat_t{Cache: 16, Dirty: 8}
+			if pass == 2 {
+				// Both files were checked on pass 1 and closed; now unlink one
+				// and replace the other before the first retry pass runs.
+				_ = os.Remove(unlinked)
+				tmp := replaced + ".new"
+				_ = os.WriteFile(tmp, []byte("new pages"), 0o600)
+				_ = os.Rename(tmp, replaced)
+			}
+			return nil
+		}
+		syncFileRangeFn = func(_ int, _ int64, _ int64, _ int) error {
+			syncCalls.Add(1)
+			return nil
+		}
+
+		done := make(chan struct{})
+		if err := StartWriteback([]string{unlinked, replaced}, func() { close(done) }); err != nil {
+			t.Fatalf("StartWriteback: %v", err)
+		}
+		<-done
+		if got := syncCalls.Load(); got != 0 {
+			t.Errorf("syncCalls = %d, want 0 after files are unlinked or replaced", got)
 		}
 	})
 }
