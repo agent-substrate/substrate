@@ -224,10 +224,10 @@ type sandboxRuntimeFixture struct {
 // setupSuspendedV1Actor creates a SandboxConfig holding one version, v1,
 // copied from the cluster's class default, a one-worker pool pinned to it, a
 // counter ActorTemplate without a golden snapshot, and an actor. It runs the
-// actor on v1 for two calls
-// (memory=2, file=2, rootfs=2), suspends it synchronously, and checks the
-// MEMORY snapshot is stamped with v1. f.v2 is a second version with a
-// different sandbox_bundle_hash that the config does not hold yet.
+// actor on v1 for two calls (memory=2, file=2, rootfs=2), suspends it
+// synchronously, and checks the MEMORY snapshot is stamped with v1. f.v2 is a
+// second version with a different sandbox_bundle_hash that the config does
+// not hold yet.
 func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
 	t.Helper()
 	nsObj := e2e.CreateNamespace(t)
@@ -341,7 +341,7 @@ func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
 		file:        2,
 		rootfs:      2,
 	}
-	f.suspend(t, v1Runtime)
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, v1Runtime)
 	return f
 }
 
@@ -398,7 +398,7 @@ func (f *sandboxRuntimeFixture) waitForWorker(t *testing.T, pred func(*ateapi.Wo
 func (f *sandboxRuntimeFixture) resumeAndCheck(t *testing.T, want ateapi.SnapshotFidelity, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.ActorStatus {
 	t.Helper()
 	status := f.resume(t, want, wantRuntime)
-	f.suspend(t, wantRuntime)
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, wantRuntime)
 	return status
 }
 
@@ -442,19 +442,27 @@ func (f *sandboxRuntimeFixture) call(t *testing.T, stage string) {
 	validateRootfsCounter(t, resp, stage, f.rootfs)
 }
 
-// suspend suspends the fixture's actor synchronously and checks the new
-// MEMORY snapshot is stamped with wantRuntime.
-func (f *sandboxRuntimeFixture) suspend(t *testing.T, wantRuntime *ateapi.ActorSandboxRuntime) {
+// suspend suspends the fixture's actor with mode and checks that its new
+// MEMORY snapshot advances the generation and is stamped with wantRuntime:
+// the durable snapshot after a synchronous suspend, the node-local
+// checkpoint after an asynchronous one. It returns that snapshot.
+func (f *sandboxRuntimeFixture) suspend(t *testing.T, mode ateapi.DurabilityMode, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
 	t.Helper()
 	suspended, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapi.SuspendActorRequest{
 		Actor:   f.actorRef,
-		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		Options: &ateapi.SuspendOptions{Mode: mode},
 	})
 	if err != nil {
 		t.Fatalf("failed to suspend Actor %s: %v", f.actorName, err)
 	}
-	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
-	snap := durableSnapshot(suspended.GetActor().GetStatus())
+	var snap *ateapi.Snapshot
+	if mode == ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		waitForActorPaused(f.ctx, t, f.clients, f.actorName)
+		snap = localSnapshot(suspended.GetActor().GetStatus())
+	} else {
+		waitForActorState(f.ctx, t, f.clients, f.actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		snap = durableSnapshot(suspended.GetActor().GetStatus())
+	}
 	if snap.GetGeneration() <= f.generation {
 		t.Fatalf("snapshot generation of %s = %d, want > %d", f.actorName, snap.GetGeneration(), f.generation)
 	}
@@ -465,6 +473,7 @@ func (f *sandboxRuntimeFixture) suspend(t *testing.T, wantRuntime *ateapi.ActorS
 		t.Fatalf("snapshot sandbox_runtime of %s (-want +got):\n%s", f.actorName, diff)
 	}
 	f.generation = snap.GetGeneration()
+	return snap
 }
 
 // cloneFromTag creates an actor named name from tag, which holds the
