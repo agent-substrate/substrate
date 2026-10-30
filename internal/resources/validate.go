@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -279,9 +280,9 @@ var snapshotLocationSegmentRE = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // "atespaces" in any letter case, so a location cannot sit inside the
 // <location>/atespaces/... prefix another location builds.
 func ValidateSnapshotLocation(location string) error {
-	u, err := parseStorageURI("snapshot location", location)
+	u, err := parseStorageURI(location)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid snapshot location %q: %w", location, err)
 	}
 	path := u.EscapedPath()
 	if path == "" || path == "/" {
@@ -305,14 +306,14 @@ func ValidateSnapshotLocation(location string) error {
 // parseStorageURI checks the shape every snapshot location, owner prefix and
 // snapshot URI shares: a host (the bucket) and a path that appending names to
 // cannot redirect. It does not check the scheme, which may be empty
-// ("//bucket/path"). kind names the value in errors.
-func parseStorageURI(kind, uri string) (*url.URL, error) {
+// ("//bucket/path"). Errors are bare causes for the caller to wrap.
+func parseStorageURI(uri string) (*url.URL, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s %q: %v", kind, uri, err)
+		return nil, err
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("invalid %s %q: missing bucket", kind, uri)
+		return nil, errors.New("missing bucket")
 	}
 	// Snapshot and object names are appended to the location by string
 	// concatenation. A query, fragment, or userinfo component would swallow
@@ -320,18 +321,18 @@ func parseStorageURI(kind, uri string) (*url.URL, error) {
 	// only host and path), silently redirecting the upload/download to a
 	// different object. A trailing '?' sets ForceQuery with an empty RawQuery.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return nil, fmt.Errorf("invalid %s %q: must contain only a scheme, bucket, and path", kind, uri)
+		return nil, errors.New("must contain only a scheme, bucket, and path")
 	}
 	// url.JoinPath cleans dot segments, and some backends trim spaces from
 	// segments (or windows, trailing dots) and treat '\' as a separator, so
 	// these could move snapshots outside of the location, e.g. into another
 	// atespace's prefix
 	if strings.Contains(u.Path, `\`) {
-		return nil, fmt.Errorf(`invalid %s %q: must not contain '\'`, kind, uri)
+		return nil, errors.New(`must not contain '\'`)
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
 		if segment != "" && strings.Trim(segment, ". ") == "" {
-			return nil, fmt.Errorf("invalid %s %q: must not contain path segments of only '.' and ' '", kind, uri)
+			return nil, errors.New("must not contain path segments of only '.' and ' '")
 		}
 	}
 	return u, nil
