@@ -40,10 +40,9 @@ import (
 const injectionTimeout = 4 * time.Second
 
 // mapCredentialProviderError converts a FetchSecret failure into a
-// client-facing ext_proc denial, mirroring mapEgressIdentityError. A credential
-// the provider does not hold, will not release or rejects (NotFound,
-// PermissionDenied, FailedPrecondition, InvalidArgument) is 403, since retrying
-// cannot succeed. A provider that is
+// client-facing ext_proc denial. A credential the provider does not hold, will
+// not release or rejects (NotFound, PermissionDenied, FailedPrecondition,
+// InvalidArgument) is 403, since retrying cannot succeed. A provider that is
 // down, slow or overloaded (Unavailable, DeadlineExceeded, ResourceExhausted)
 // is a retryable 503. Any other code is a provider fault, not a refusal, and is
 // 502.
