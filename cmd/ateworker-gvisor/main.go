@@ -465,6 +465,20 @@ func (s *AteWorkerService) rejectIfDraining() error {
 	return nil
 }
 
+// drainCanceledError reports err as codes.Unavailable when graceful shutdown
+// canceled the restore (ctx) while its caller (callerCtx) was still waiting.
+// The cancel kills runsc, so err is usually `signal: killed` rather than a
+// context error. The restore failed before ingress opened and its failure
+// cleanup tore down local state, so the control plane can retry it on another
+// worker, as it does a restore that rejectIfDraining refused. If any cleanup
+// step failed, partial state may be left behind and err is returned as is.
+func (s *AteWorkerService) drainCanceledError(callerCtx, ctx context.Context, cleanupFailed bool, err error) error {
+	if err == nil || cleanupFailed || callerCtx.Err() != nil || ctx.Err() == nil || !s.shuttingDown.Load() {
+		return err
+	}
+	return apierror.Unavailable("worker draining: restore canceled: %w", err)
+}
+
 // cancelStartups cancels all boots and restores, leaving checkpoints running.
 func cancelStartups(ctx context.Context, inFlight *actorlock.InFlight) {
 	for _, actorUID := range inFlight.CancelStartups() {
@@ -1129,8 +1143,12 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+	callerCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Runs after the failure cleanup registered below, which sets cleanupFailed.
+	var cleanupFailed bool
+	defer func() { retErr = s.drainCanceledError(callerCtx, ctx, cleanupFailed, retErr) }()
 
 	// Per-phase timing, recorded on the way out so a failed restore still
 	// reports the phases it completed, and the failing step its elapsed time.
@@ -1203,15 +1221,20 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
+				cleanupFailed = true
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", err))
 			}
-			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore")
+			if !deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore") {
+				cleanupFailed = true
+			}
 			// Same overlay detach as the Run-failure path above.
 			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
+				cleanupFailed = true
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
 			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
+				cleanupFailed = true
 				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
 			}
 		}
@@ -1422,11 +1445,14 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	return errors.Join(errs...)
 }
 
-func deleteContainers(ctx context.Context, rcmd *runsc, containers []string, operation string) {
+func deleteContainers(ctx context.Context, rcmd *runsc, containers []string, operation string) bool {
+	ok := true
 	for _, container := range slices.Backward(containers) {
 		if err := rcmd.cmdDelete(ctx, container); err != nil {
+			ok = false
 			slog.WarnContext(ctx, "Failed to delete runsc container after failure",
 				"operation", operation, "container", container, "err", err)
 		}
 	}
+	return ok
 }

@@ -166,6 +166,39 @@ func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 	}
 }
 
+func TestDrainCanceledError(t *testing.T) {
+	killed := fmt.Errorf("while running `runsc restore`: signal: killed")
+	canceledCtx := func() context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+	for _, tc := range []struct {
+		name          string
+		shuttingDown  bool
+		cleanupFailed bool
+		callerCtx     context.Context
+		ctx           context.Context
+		err           error
+		want          codes.Code
+	}{
+		{"canceled by drain", true, false, context.Background(), canceledCtx(), killed, codes.Unavailable},
+		{"no error", true, false, context.Background(), canceledCtx(), nil, codes.OK},
+		{"not draining", false, false, context.Background(), canceledCtx(), killed, codes.Internal},
+		{"restore not canceled", true, false, context.Background(), context.Background(), killed, codes.Internal},
+		{"caller gone", true, false, canceledCtx(), canceledCtx(), killed, codes.Internal},
+		{"cleanup failed", true, true, context.Background(), canceledCtx(), killed, codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &AteWorkerService{}
+			s.shuttingDown.Store(tc.shuttingDown)
+			if got := apierror.Code(s.drainCanceledError(tc.callerCtx, tc.ctx, tc.cleanupFailed, tc.err)); got != tc.want {
+				t.Errorf("code = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestUnbookedMemory(t *testing.T) {
 	const limit = 4 << 30
 	s := &AteWorkerService{actors: map[string]*hostedActor{
