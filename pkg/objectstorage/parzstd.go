@@ -37,9 +37,11 @@ import (
 const (
 	// parZstdChunk is the maximum per-frame chunk size.
 	parZstdChunk = 8 << 20
-	// parZstdMinChunk is the smallest per-frame chunk size, covering a fast
-	// encoder's fixed tables, block buffers, and minimum history.
-	parZstdMinChunk = 1 << 20
+	// parZstdMinChunk is the smallest per-frame chunk size. A chunk is a whole
+	// single-segment frame, so the floor only has to cover the encoder's own
+	// state, not a useful match window: an input below the floor is one frame
+	// either way, and nothing can match past its end.
+	parZstdMinChunk = 64 << 10
 	// parZstdQueue is how many chunks may be outstanding per worker, so the producer
 	// can run ahead while workers compress.
 	parZstdQueue = 2
