@@ -15,9 +15,13 @@
 package controlapi
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"slices"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -45,4 +49,23 @@ func HostingNode(actor *ateapi.Actor) string {
 		return status.GetAssignedNode()
 	}
 	return status.GetWorkerAssignment().GetNodeName()
+}
+
+// ActorLocator reports whether a node hosts an Actor, looking up the Actor in
+// Store and its node with HostingNode. It implements authz.ActorLocator.
+type ActorLocator struct {
+	Store store.Interface
+}
+
+// ActorHostedOnNode reports whether node hosts the Actor named by actorRef. It
+// returns false, not an error, if the Actor does not exist.
+func (l ActorLocator) ActorHostedOnNode(ctx context.Context, actorRef resources.ActorRef, node string) (bool, error) {
+	actor, err := l.Store.GetActor(ctx, actorRef)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("while retrieving actor %s: %w", actorRef, err)
+	}
+	hostingNode := HostingNode(actor)
+	return hostingNode != "" && hostingNode == node, nil
 }

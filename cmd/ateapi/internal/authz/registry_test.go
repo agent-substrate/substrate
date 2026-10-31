@@ -697,6 +697,9 @@ func TestDefaultRPCPermissions_CoversEveryServedRPC(t *testing.T) {
 		if (r.extract == nil) == (r.authorizedInHandler == "") {
 			t.Errorf("%s: want exactly one of a check extractor or authorizedInHandler", fullMethod)
 		}
+		if r.ateletByNode && r.actor == nil {
+			t.Errorf("%s: ateletOnNode needs a rule built by actorRule", fullMethod)
+		}
 	}
 	for fullMethod := range defaultRPCPermissions {
 		if !served[fullMethod] {
