@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -41,11 +42,12 @@ type File struct {
 var (
 	cachestatWarnOnce sync.Once
 
-	// cachestatFn and fadviseFn are seams for unit tests so eviction logic can
-	// be verified deterministically regardless of the backing filesystem (ext4,
-	// tmpfs, overlayfs) or kernel version.
-	cachestatFn = unix.Cachestat
-	fadviseFn   = unix.Fadvise
+	// cachestatFn, fadviseFn, and syncFileRangeFn are seams for unit tests so
+	// eviction and writeback logic can be verified deterministically regardless
+	// of the backing filesystem (ext4, tmpfs, overlayfs) or kernel version.
+	cachestatFn     = unix.Cachestat
+	fadviseFn       = unix.Fadvise
+	syncFileRangeFn = unix.SyncFileRange
 
 	// RetryDelays are the backoff intervals between post-restore eviction
 	// passes when dirty pages are waiting for background kernel writeback.
@@ -111,43 +113,102 @@ func DropFiles(files []File) bool {
 	return dropped
 }
 
-// StartWriteback writes each path's dirty pages to disk in the background and
-// then calls done, if set. Writing can block on a busy disk, and callers don't
-// wait.
+// StartWriteback waits in the background for each path's dirty pages to be
+// written back or unlinked, then calls done. Files are pinned by FileInfo up
+// front and opened one at a time during each check so StartWriteback never
+// holds open file descriptors across backoff sleeps or serial sync waits.
 func StartWriteback(paths []string, done func()) error {
-	var files []*os.File
+	targets := make([]File, 0, len(paths))
 	for _, p := range paths {
-		f, err := os.Open(p)
+		info, err := os.Stat(p)
 		if err != nil {
-			for _, f := range files {
-				_ = f.Close()
-			}
 			return err
 		}
-		files = append(files, f)
+		targets = append(targets, File{Path: p, Info: info})
 	}
 	go func() {
-		for _, f := range files {
-			_ = unix.Fdatasync(int(f.Fd()))
-			_ = f.Close()
-		}
 		if done != nil {
-			done()
+			defer done()
+		}
+		if !pollWritebackFiles(targets, false) {
+			return
+		}
+		for i, delay := range RetryDelays {
+			time.Sleep(delay)
+			// Start asynchronous data-only writeback after the first backoff if
+			// pages are still dirty.
+			if !pollWritebackFiles(targets, i == 0) {
+				return
+			}
+		}
+		for _, t := range targets {
+			if t.Info != nil {
+				syncWritebackFile(t)
+			}
 		}
 	}()
 	return nil
 }
 
-// SyncAndEvict waits for targets to reach disk and then evicts them, so pages
-// still dirty from a recent snapshot get dropped too.
-func SyncAndEvict(targets []File) {
-	for _, t := range targets {
-		if f, err := os.Open(t.Path); err == nil {
-			_ = unix.Fdatasync(int(f.Fd()))
-			_ = f.Close()
+func pollWritebackFiles(targets []File, startAsyncWrite bool) bool {
+	anyRemaining := false
+	for i, t := range targets {
+		if t.Info == nil {
+			continue
 		}
+		if !pollWritebackFile(t, startAsyncWrite) {
+			targets[i].Info = nil
+			continue
+		}
+		anyRemaining = true
 	}
-	EvictWithRetries(targets)
+	return anyRemaining
+}
+
+func pollWritebackFile(t File, startAsyncWrite bool) bool {
+	f, err := os.Open(t.Path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || !os.SameFile(info, t.Info) || isUnlinked(info) {
+		return false
+	}
+	var cstat unix.Cachestat_t
+	if err := cachestatFn(uint(f.Fd()), &unix.CachestatRange{}, &cstat, 0); err != nil {
+		if startAsyncWrite {
+			_ = syncFileRangeFn(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WRITE)
+		}
+		return false
+	}
+	if cstat.Dirty == 0 && cstat.Writeback == 0 {
+		return false
+	}
+	if startAsyncWrite && cstat.Dirty > 0 {
+		_ = syncFileRangeFn(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WRITE)
+	}
+	return true
+}
+
+func syncWritebackFile(t File) {
+	f, err := os.Open(t.Path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || !os.SameFile(info, t.Info) || isUnlinked(info) {
+		return
+	}
+	_ = syncFileRangeFn(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
+}
+
+func isUnlinked(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink == 0
 }
 
 // EvictFiles evicts clean cached pages of targets via POSIX_FADV_DONTNEED and
