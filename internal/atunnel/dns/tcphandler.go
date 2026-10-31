@@ -88,12 +88,11 @@ func (h *tcpHandler) serve(ctx context.Context) error {
 			slog.DebugContext(ctx, "dns relay: refusing connection, at limit")
 			_ = conn.Close()
 			continue
-
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() { h.limiter.connections.release() }()
+			defer h.limiter.connections.release()
 
 			h.onConnect(ctx, conn)
 		}()
