@@ -14,9 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// These integration tests use an external package so that actornet's own test
-// binary does not depend on atunnel.
-package actornet_test
+package actornet
 
 import (
 	"context"
@@ -25,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/linuxsys"
 	"go.ate.dev/substrate/internal/netns"
 	"go.ate.dev/substrate/internal/roottest"
@@ -37,15 +34,14 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	ctx := context.Background()
 	const egressPort = 15001
 
-	n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{
 		ActorUID: "66666666-6666-6666-6666-666666666666", Veth: true, EgressPort: egressPort,
 	})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
-	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
+	listeners, err := netns.Listen(ctx, n.NetNS, []uint16{egressPort})
 	if err != nil {
 		t.Fatalf("netns.Listen: %v", err)
 	}
@@ -71,7 +67,7 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	go accept()
 
 	for _, want := range []string{"93.184.216.34:443", "93.184.216.34:8080", "93.184.216.34:9999"} {
-		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 			c, err := net.Dial("tcp", want)
 			if err != nil {
 				return err
@@ -102,7 +98,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	ctx := context.Background()
 	const egressPort = 15001
 
-	n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{
 		ActorUID:   "99999999-9999-9999-9999-999999999999",
 		Veth:       true,
 		EgressPort: egressPort,
@@ -110,9 +106,8 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
-	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
+	listeners, err := netns.Listen(ctx, n.NetNS, []uint16{egressPort})
 	if err != nil {
 		t.Fatalf("netns.Listen: %v", err)
 	}
@@ -123,7 +118,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 		t.Fatal(err)
 	}
 	var linkLocalDialErr error
-	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 		conn, err := net.DialTimeout("tcp", "169.254.169.254:80", 250*time.Millisecond)
 		linkLocalDialErr = err
 		if conn != nil {
@@ -150,7 +145,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 		t.Fatal(err)
 	}
 	const allowedDestination = "192.0.2.1:443"
-	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 		conn, err := net.Dial("tcp", allowedDestination)
 		if err != nil {
 			return err
