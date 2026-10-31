@@ -48,6 +48,52 @@ syntax.
 metadata; they do not affect actor scheduling. Actor selectors match
 `WorkerPool.metadata.labels`, not `WorkerPool.spec.template.labels`.
 
+#### Worker security
+
+Substrate sets a fixed capability set for each sandbox runtime. Every worker
+drops `ALL` container-runtime default capabilities and adds back only the set
+below: 9 capabilities for gVisor and 11 for microVM. These permissions are not
+configurable per pool. Actor containers are configured separately through
+`ActorTemplate.containers[].securityContext`.
+
+Workers run as UID/GID 0 with `privileged: false` and
+`allowPrivilegeEscalation: false`. They retain `SYS_ADMIN` and `NET_ADMIN` for
+mounts and networking, so they still require trusted nodes and the deployment
+permissions described in [Security](../security/security.md).
+
+| Capability | `gvisor` | `microvm` |
+| --- | --- | --- |
+| `SYS_CHROOT`, `SYS_PTRACE` | Not granted; runsc's sandbox user namespace supplies its own | Not granted |
+| `SETPCAP` | Not granted | Retained so virtiofsd's serving child can drop its bounding set (`PR_CAPBSET_DROP` needs `CAP_SETPCAP`) |
+| `CHOWN`, `FOWNER` | Retained for worker filesystem ownership and mode operations | Same; also used by virtiofsd for guest filesystem operations |
+| `MKNOD` | Not granted; since Linux 5.8, 0:0 overlay whiteouts do not require it | Retained for guest device-node creation |
+| `DAC_READ_SEARCH` | Not granted | Not granted; virtiofsd runs with file handles off (`--inode-file-handles=never`) and needs it only to open them |
+| `FSETID` | Not granted | Retained for virtiofsd's setgid-file behavior |
+| `NET_RAW` | Needed to open the sandbox's raw socket | Not granted |
+| `SETFCAP`, `SETUID` | Needed to start runsc's gofer | Retained in virtiofsd's child set; `SETUID` is needed for non-root guest file creation |
+| `SETGID` | Needed to start runsc's gofer | Needed by virtiofsd to drop supplementary groups |
+| `DAC_OVERRIDE` | Needed to mount the rootfs overlay | Same |
+| `NET_ADMIN` | Needed to set up actor networking | Same |
+| `SYS_ADMIN` | Needed to set up the worker's mounts | Same |
+
+MicroVM workers retain virtiofsd's eight default child capabilities to preserve
+guest filesystem operations. virtiofsd tracks guest inodes with `O_PATH` file
+descriptors instead of file handles, which is also what it falls back to by
+default on the worker's overlayfs rootfs. virtiofsd explicitly uses namespace
+isolation (`pivot_root`, not `chroot`) and its own seccomp filter.
+The outer worker's seccomp and AppArmor profiles remain `Unconfined` so the
+sandbox runtimes can set up their mounts; worker seccomp hardening is separate
+from these capability defaults.
+
+A change to these defaults changes the worker pod template, so the
+`ate-controller` upgrade that brings it rolls every `WorkerPool`. Move each pool
+to the matching worker image first, as in
+[step 3 of the upgrade runbook](../guides/upgrade.md#step-3-move-each-workerpool-to-the-new-worker-image),
+then upgrade `ate-controller`. A microVM worker image that predates
+`--inode-file-handles=never` cannot run without `DAC_READ_SEARCH`: its
+virtiofsd exits with `can't apply the child capabilities`, and actors on that
+pool fail to start or restore.
+
 #### Worker Capacity (`spec.template.resources`)
 
 Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope its actor sandboxes share, taken from the `ateworker` container's limits. The scheduler only places an actor on a worker whose remaining capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).

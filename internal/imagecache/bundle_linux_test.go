@@ -31,11 +31,11 @@ import (
 	"go.ate.dev/substrate/internal/roottest"
 )
 
-// FinalizeLayer materializes whiteout devices (mknod, CAP_MKNOD) and opaque
+// FinalizeLayer materializes 0:0 whiteout devices and opaque
 // xattrs (trusted.*, CAP_SYS_ADMIN); only root has those in a plain test
 // environment. Runs in privileged CI / root shells, skips elsewhere.
 func TestFinalizeLayer_MaterializesWhiteouts(t *testing.T) {
-	roottest.Require(t, "CAP_MKNOD + CAP_SYS_ADMIN for trusted.* xattrs")
+	roottest.Require(t, "CAP_SYS_ADMIN for trusted.* xattrs")
 	dir := t.TempDir()
 	writeLayer(t, dir,
 		map[string]string{"kept.txt": "kept"},
