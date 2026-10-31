@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -95,26 +96,7 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Start()
-	if err == nil {
-		canceled := make(chan error, 1)
-		// Watch until output is drained, even if the command exits first.
-		stop := context.AfterFunc(ctx, func() {
-			canceled <- syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		})
-		err = cmd.Wait()
-		if !stop() {
-			if cancelErr := <-canceled; cancelErr != nil && !errors.Is(cancelErr, syscall.ESRCH) {
-				err = errors.Join(err, fmt.Errorf("kill process group: %w", cancelErr))
-			}
-			if err == nil {
-				err = ctx.Err()
-			}
-		}
-	}
+	err := runCommand(ctx, cmd, &stdout, &stderr)
 
 	resp := ProcessResponse{
 		Stdout: stdout.String(),
@@ -123,7 +105,8 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		resp.Error = err.Error()
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			resp.ExitCode = exitErr.ExitCode()
 		} else {
 			// If it's not an ExitError (e.g. command not found), set exit code to -1 or similar
@@ -135,4 +118,61 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func runCommand(ctx context.Context, cmd *exec.Cmd, stdout, stderr io.Writer) error {
+	out, outWrite, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	defer outWrite.Close()
+	errOut, errWrite, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer errOut.Close()
+	defer errWrite.Close()
+	cmd.Stdout = outWrite
+	cmd.Stderr = errWrite
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	outWrite.Close()
+	errWrite.Close()
+
+	copied := make(chan error, 2)
+	go func() { _, err := io.Copy(stdout, out); copied <- err }()
+	go func() { _, err := io.Copy(stderr, errOut); copied <- err }()
+	canceled := make(chan error, 1)
+	stop := context.AfterFunc(ctx, func() {
+		canceled <- syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	})
+
+	exited, err := processExited(cmd.Process.Pid)
+	if err == nil {
+		err = <-exited
+	}
+	if err != nil {
+		if killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+			err = errors.Join(err, killErr)
+		}
+		out.Close()
+		errOut.Close()
+	}
+	err = errors.Join(err, <-copied, <-copied)
+	if !stop() {
+		if cancelErr := <-canceled; cancelErr != nil && !errors.Is(cancelErr, syscall.ESRCH) {
+			err = errors.Join(err, fmt.Errorf("kill process group: %w", cancelErr))
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+	}
+	// Keep the leader unreaped until group signaling and output collection finish.
+	waitErr := cmd.Wait()
+	if err != nil {
+		return errors.Join(err, waitErr)
+	}
+	return waitErr
 }

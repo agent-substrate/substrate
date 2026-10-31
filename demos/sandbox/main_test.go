@@ -34,11 +34,14 @@ func TestHandleProcessCancellation(t *testing.T) {
 		name    string
 		timeout string
 		parent  string
+		code    int
 	}{
-		{name: "cancel", parent: "parent"},
-		{name: "timeout", timeout: "2s", parent: "parent"},
-		{name: "cancel after parent exit", parent: "parent-exit"},
-		{name: "timeout after parent exit", timeout: "2s", parent: "parent-exit"},
+		{name: "cancel", parent: "parent", code: -1},
+		{name: "cancel after output closes", parent: "parent-closed", code: -1},
+		{name: "timeout", timeout: "5s", parent: "parent", code: -1},
+		{name: "cancel after parent exit", parent: "parent-exit", code: -1},
+		{name: "timeout after parent exit", timeout: "5s", parent: "parent-exit", code: -1},
+		{name: "nonzero parent exit", parent: "parent-exit", code: 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -55,6 +58,7 @@ func TestHandleProcessCancellation(t *testing.T) {
 				EnvVars: map[string]string{
 					"SANDBOX_TEST_PROCESS": tc.parent,
 					"SANDBOX_TEST_ADDR":    listener.Addr().String(),
+					"SANDBOX_TEST_EXIT":    strconv.Itoa(max(tc.code, 0)),
 				},
 				Timeout: tc.timeout,
 			})
@@ -80,8 +84,8 @@ func TestHandleProcessCancellation(t *testing.T) {
 			if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 				t.Fatal(err)
 			}
-			var pid int
-			if _, err := fmt.Fscanln(conn, &pid); err != nil {
+			var pid, parentPID int
+			if _, err := fmt.Fscanln(conn, &pid, &parentPID); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
@@ -94,19 +98,33 @@ func TestHandleProcessCancellation(t *testing.T) {
 				}
 			})
 
+			if tc.parent == "parent-exit" {
+				exited, err := processExited(parentPID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case err := <-exited:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("parent did not exit")
+				}
+			}
 			if tc.timeout == "" {
 				cancel()
 			}
 			select {
 			case <-done:
-			case <-time.After(5 * time.Second):
+			case <-time.After(10 * time.Second):
 				t.Fatal("handler blocked after cancellation")
 			}
 			var resp ProcessResponse
 			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 				t.Fatal(err)
 			}
-			if rec.Code != http.StatusOK || resp.ExitCode != -1 || resp.Error == "" {
+			if rec.Code != http.StatusOK || resp.ExitCode != tc.code || resp.Error == "" {
 				t.Errorf("status = %d, response = %+v", rec.Code, resp)
 			}
 			if _, err := conn.Read(make([]byte, 1)); err != io.EOF {
@@ -147,16 +165,26 @@ func TestHandleProcessResult(t *testing.T) {
 
 func TestProcessHelper(t *testing.T) {
 	switch os.Getenv("SANDBOX_TEST_PROCESS") {
-	case "parent", "parent-exit":
+	case "parent", "parent-exit", "parent-closed":
 		cmd := exec.Command(os.Args[0], "-test.run=^TestProcessHelper$")
-		cmd.Env = append(os.Environ(), "SANDBOX_TEST_PROCESS=child")
+		cmd.Env = append(os.Environ(), "SANDBOX_TEST_PROCESS=child", "SANDBOX_TEST_PARENT="+strconv.Itoa(os.Getpid()))
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		if os.Getenv("SANDBOX_TEST_PROCESS") == "parent-closed" {
+			os.Stdout.Close()
+			os.Stderr.Close()
+			cmd.Stdout = nil
+			cmd.Stderr = nil
+		}
 		if err := cmd.Start(); err != nil {
 			os.Exit(1)
 		}
 		if os.Getenv("SANDBOX_TEST_PROCESS") == "parent-exit" {
-			os.Exit(0)
+			code, err := strconv.Atoi(os.Getenv("SANDBOX_TEST_EXIT"))
+			if err != nil {
+				os.Exit(1)
+			}
+			os.Exit(code)
 		}
 		if err := cmd.Wait(); err != nil {
 			os.Exit(1)
@@ -167,7 +195,7 @@ func TestProcessHelper(t *testing.T) {
 		if err != nil {
 			os.Exit(1)
 		}
-		if _, err := fmt.Fprintln(conn, os.Getpid()); err != nil {
+		if _, err := fmt.Fprintln(conn, os.Getpid(), os.Getenv("SANDBOX_TEST_PARENT")); err != nil {
 			os.Exit(1)
 		}
 		io.Copy(io.Discard, conn)
