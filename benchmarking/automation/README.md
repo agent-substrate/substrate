@@ -40,7 +40,7 @@ To run the cold resume tests from your workstation instead, see
    requests=limits and Envoy's thread count to its own `envoyCpu`, then
    waits for the rollout before deploying workloads. The teardown after
    each test redeploys substrate, so the pin never outlives its run.
-6. For each test in `tests.yaml`:
+6. For each test in `tests.yaml`, or only those named by `--test-name`:
    - Submits a Job using the just-built image for the test's type
      (`runner-job.yaml.tmpl` for locust,
      `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress).
