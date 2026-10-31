@@ -95,16 +95,28 @@ roleRef:
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
 ---
-# 5. Create PriorityClass
-# Prioritize atelet over workers, which need it for actor activation.
-# Use the highest user-defined priority; system-node-critical requires kube-system.
-apiVersion: scheduling.k8s.io/v1
-kind: PriorityClass
+# 5. Allow system-node-critical pods in ate-system
+# atelet runs at system-node-critical because a node can't host actors
+# without it. The kubelet neither evicts it under node pressure nor rejects
+# its replacement. Some clusters, like GKE, admit critical pods outside
+# kube-system only with a quota scoped to their class.
+# https://kubernetes.io/docs/concepts/policy/resource-quotas/#limiting-priorityclass-consumption-by-default
+# The limit matches the upstream kube-system quota for critical pods, so it
+# never blocks atelet.
+# https://github.com/kubernetes/kubernetes/blob/3b323b2ef08f33353973433de269f78751a20061/cluster/gce/addons/admission-resource-quota-critical-pods/resource-quota.yaml
+apiVersion: v1
+kind: ResourceQuota
 metadata:
-  name: ate-node-critical
-value: 1000000000
-globalDefault: false
-description: "Node-local ate components that every actor activation depends on."
+  name: atelet-critical-pods
+  namespace: ate-system
+spec:
+  hard:
+    pods: 1G
+  scopeSelector:
+    matchExpressions:
+    - scopeName: PriorityClass
+      operator: In
+      values: ["system-node-critical"]
 
 ---
 # 6. Create DaemonSet
@@ -128,7 +140,7 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
-      priorityClassName: ate-node-critical
+      priorityClassName: system-node-critical
       # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
       # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
       # multi-GiB snapshots and must not be force-cancelled mid-upload. The sum
@@ -172,8 +184,8 @@ spec:
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
         # atelet's 8 GiB per-asset cap, so any asset fits. Each download
-        # reserves its object's size; ones past the capacity wait their turn,
-        # so the asset-staging volume below never fills up.
+        # reserves its object's size; ones past the capacity wait their turn.
+        # This bounds the asset-staging volume below.
         - --asset-staging-capacity=8Gi
         # The plugin listens on a Unix socket, which a gRPC probe cannot
         # reach, and the image has no shell, so the binary checks itself.
@@ -371,12 +383,10 @@ spec:
       volumes:
       - name: objectstore-plugin
         emptyDir: {}
-      # Holds asset downloads until they are verified. The plugin keeps them
-      # within --asset-staging-capacity; the limit adds 1Gi for filesystem
-      # overhead, since kubelet evicts the pod if the volume exceeds it.
+      # Holds asset downloads until they are verified.
+      # --asset-staging-capacity bounds its size.
       - name: asset-staging
-        emptyDir:
-          sizeLimit: 9Gi
+        emptyDir: {}
       - name: ate-base
         hostPath:
           path: /var/lib/ate
