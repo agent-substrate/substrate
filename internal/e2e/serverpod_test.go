@@ -220,6 +220,45 @@ func TestRenderServerPod(t *testing.T) {
 	}
 }
 
+func TestRenderServerPod_UDPPorts(t *testing.T) {
+	pod, service := renderServerPodDocs(t, ServerPod{
+		Name:       "udpecho",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"udpecho"},
+		Port:       8053,
+		UDPPorts:   []int{53, 443, 9999},
+	})
+
+	ports := service.Spec.Ports
+	if len(ports) != 4 {
+		t.Fatalf("rendered %d service ports, want the TCP one plus three UDP: %+v", len(ports), ports)
+	}
+	if got := ports[0].Port; got != 8053 || ports[0].Protocol == corev1.ProtocolUDP {
+		t.Errorf("first service port = %+v, want TCP 8053", ports[0])
+	}
+	names := map[string]bool{}
+	for _, port := range ports[1:] {
+		if port.Protocol != corev1.ProtocolUDP || port.TargetPort.IntValue() != 8053 {
+			t.Errorf("service port = %+v, want UDP targeting 8053", port)
+		}
+		if port.Name == "" || names[port.Name] {
+			t.Errorf("service port %d has an empty or duplicate name %q", port.Port, port.Name)
+		}
+		names[port.Name] = true
+	}
+	if got := []int32{ports[1].Port, ports[2].Port, ports[3].Port}; !slices.Equal(got, []int32{53, 443, 9999}) {
+		t.Errorf("published UDP ports = %v, want [53 443 9999]", got)
+	}
+
+	containerPorts := pod.Spec.Containers[0].Ports
+	if len(containerPorts) != 2 {
+		t.Fatalf("rendered %d container ports, want the TCP one plus one UDP: %+v", len(containerPorts), containerPorts)
+	}
+	if udp := containerPorts[1]; udp.Protocol != corev1.ProtocolUDP || udp.ContainerPort != 8053 {
+		t.Errorf("UDP container port = %+v, want UDP 8053", udp)
+	}
+}
+
 // TestRenderServerPod_Volumes covers the credential-carrying shape the egressmitm
 // suite deploys, with both volume kinds it needs: a plain Secret and a
 // projection. A projection is the interesting one — it nests three levels, so
@@ -411,5 +450,29 @@ func TestServerEndpointReady(t *testing.T) {
 				t.Fatalf("ready = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRenderServerPod_TCPProbe(t *testing.T) {
+	const banner = "TESTBANNER/1.0\r\n"
+	pod, _ := renderServerPodDocs(t, ServerPod{
+		Name:       "tcpbanner",
+		ImportPath: "go.ate.dev/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho", "--banner=" + banner},
+		Port:       2222,
+		TCPProbe:   true,
+	})
+
+	container := pod.Spec.Containers[0]
+	if got, want := container.Args, []string{"tcpecho", "--banner=" + banner, "--listen=:2222"}; !slices.Equal(got, want) {
+		t.Errorf("container args = %q, want %q", got, want)
+	}
+
+	probe := container.ReadinessProbe
+	if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntValue() != 2222 {
+		t.Fatalf("readinessProbe = %+v, want a tcpSocket probe on 2222", probe)
+	}
+	if probe.HTTPGet != nil || probe.GRPC != nil {
+		t.Errorf("readinessProbe also carries httpGet %+v / gRPC %+v", probe.HTTPGet, probe.GRPC)
 	}
 }
