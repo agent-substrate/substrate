@@ -25,6 +25,7 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
+	networkdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/dynamic_modules/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setfilterstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
@@ -136,9 +137,13 @@ func TestUpstreamConnectFlag(t *testing.T) {
 			for _, r := range rc.GetVirtualHosts()[0].GetRoutes() {
 				routed = append(routed, r.GetRoute().GetCluster())
 			}
+			// The IngressCache preview gate is off, so there are no cached routes.
 			want := []string{OriginalDstClusterName}
 			if tc.wantTunnels {
-				want = []string{ActorTunnelHTTP2ClusterName, ActorTunnelHTTP1ClusterName}
+				want = []string{
+					ActorTunnelHTTP2ClusterName,
+					ActorTunnelHTTP1ClusterName,
+				}
 			}
 			if !slices.Equal(routed, want) {
 				t.Errorf("routes send to %v, want %v", routed, want)
@@ -253,19 +258,39 @@ func TestActorTunnelFilterStateFilter(t *testing.T) {
 func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 	x := NewXdsServer(0)
 	x.SetUpstreamConnect(true)
+	x.SetIngressCache(true, defaultIngressCacheConfig)
 	routes := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()
-	if len(routes) != 2 {
-		t.Fatalf("got %d routes, want 2", len(routes))
+	if len(routes) != 4 {
+		t.Fatalf("got %d routes, want 4", len(routes))
 	}
-	grpc, rest := routes[0], routes[1]
+	grpcCached, grpc, restCached, rest := routes[0], routes[1], routes[2], routes[3]
+	if got := grpcCached.GetRoute().GetCluster(); got != ActorTunnelHTTP2ClusterName {
+		t.Errorf("cached gRPC route sends to %q, want %q", got, ActorTunnelHTTP2ClusterName)
+	}
 	if got := grpc.GetRoute().GetCluster(); got != ActorTunnelHTTP2ClusterName {
 		t.Errorf("gRPC route sends to %q, want %q", got, ActorTunnelHTTP2ClusterName)
+	}
+	if got := restCached.GetRoute().GetCluster(); got != ActorTunnelHTTP1ClusterName {
+		t.Errorf("cached fallback route sends to %q, want %q", got, ActorTunnelHTTP1ClusterName)
 	}
 	if got := rest.GetRoute().GetCluster(); got != ActorTunnelHTTP1ClusterName {
 		t.Errorf("fallback route sends to %q, want %q", got, ActorTunnelHTTP1ClusterName)
 	}
 	if got := rest.GetMatch().GetHeaders(); len(got) != 0 {
 		t.Errorf("fallback route matches headers %v, want none", got)
+	}
+	if got := restCached.GetMatch().GetHeaders(); len(got) != 0 {
+		t.Errorf("cached fallback route matches headers %v, want none", got)
+	}
+	for _, r := range []*routev3.Route{grpcCached, restCached} {
+		if !matchesCacheHit(r) {
+			t.Errorf("cached route to %q doesn't match the cache-hit dynamic metadata", r.GetRoute().GetCluster())
+		}
+	}
+	for _, r := range []*routev3.Route{grpc, rest} {
+		if got := r.GetMatch().GetDynamicMetadata(); len(got) != 0 {
+			t.Errorf("route to %q matches dynamic metadata %v, want none", r.GetRoute().GetCluster(), got)
+		}
 	}
 
 	// Matches atunnel's isGRPC, minus the protocol check a route can't do.
@@ -315,7 +340,7 @@ func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 }
 
 func TestBuildActorConnectListener(t *testing.T) {
-	filters := buildActorConnectListener().GetFilterChains()[0].GetFilters()
+	filters := buildActorConnectListener(false).GetFilterChains()[0].GetFilters()
 	if len(filters) != 2 {
 		t.Fatalf("got %d network filters, want set_filter_state and tcp_proxy", len(filters))
 	}
@@ -356,6 +381,33 @@ func TestBuildActorConnectListener(t *testing.T) {
 	}
 }
 
+// TestBuildActorConnectListenerIngressCache checks that with the ingress cache
+// on, the tunnel_watcher network filter runs ahead of tcp_proxy and
+// loads from the same library as the ingress-cache HTTP filter, whose
+// per-thread cache it marks.
+func TestBuildActorConnectListenerIngressCache(t *testing.T) {
+	filters := buildActorConnectListener(true).GetFilterChains()[0].GetFilters()
+	if len(filters) != 3 {
+		t.Fatalf("got %d network filters, want set_filter_state, tunnel_watcher and tcp_proxy", len(filters))
+	}
+	watcher := filters[1]
+	if got := watcher.GetName(); got != networkDynamicModulesFilterName {
+		t.Errorf("filter[1] name = %q, want %q", got, networkDynamicModulesFilterName)
+	}
+	cfg := &networkdynamicmodulesv3.DynamicModuleNetworkFilter{}
+	if err := watcher.GetTypedConfig().UnmarshalTo(cfg); err != nil {
+		t.Fatalf("unmarshal tunnel_watcher: %v", err)
+	}
+	if got := cfg.GetDynamicModuleConfig().GetName(); got != ingressCacheDynamicModuleName {
+		t.Errorf("tunnel_watcher module = %q, want %q (the HTTP filter's library)", got, ingressCacheDynamicModuleName)
+	}
+	if got := cfg.GetFilterName(); got != ingressCacheTunnelWatcherFilterName {
+		t.Errorf("tunnel_watcher filter name = %q, want %q", got, ingressCacheTunnelWatcherFilterName)
+	}
+	if got := filters[2].GetName(); got != "envoy.filters.network.tcp_proxy" {
+		t.Errorf("last filter = %q, want tcp_proxy", got)
+	}
+}
 func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 	protocolOptions := func(t *testing.T, c *clusterv3.Cluster) *httpv3.HttpProtocolOptions {
 		t.Helper()

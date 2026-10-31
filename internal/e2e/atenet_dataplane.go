@@ -39,6 +39,9 @@ type AtenetDataplane interface {
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
+	// SupportsIngressCache reports whether the dataplane implements the
+	// IngressCache preview gate.
+	SupportsIngressCache() bool
 }
 
 // EgressConnectStats holds the delta of egress CONNECT connections and requests
@@ -86,6 +89,8 @@ func isEgressPolicyDenied(status int, body string) bool {
 }
 
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
+
+func (envoyAtenetDataplane) SupportsIngressCache() bool { return true }
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
@@ -174,6 +179,10 @@ func (agentGatewayAtenetDataplane) ScrapeMetrics(ctx context.Context) (string, e
 func (agentGatewayAtenetDataplane) EgressConnectStats(_, _ string) EgressConnectStats {
 	return EgressConnectStats{Connections: -1, Requests: -1}
 }
+
+// AgentGateway resolves every request through its own routing and has no
+// ingress-cache filter.
+func (agentGatewayAtenetDataplane) SupportsIngressCache() bool { return false }
 
 type agentGatewayParkingObserver struct{}
 

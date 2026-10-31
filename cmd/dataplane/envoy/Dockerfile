@@ -47,7 +47,8 @@ RUN arch="$(cat /target-arch)" \
     fi \
     && cargo build --release --locked --target "${arch}-unknown-linux-gnu" \
     && mkdir -p target/release \
-    && cp "target/${arch}-unknown-linux-gnu/release/libenvoy_substrate_egress_policy.so" target/release/
+    && cp "target/${arch}-unknown-linux-gnu/release/libenvoy_substrate_egress_policy.so" \
+      "target/${arch}-unknown-linux-gnu/release/libenvoy_substrate_ingress_cache.so" target/release/
 
 # Stage 2: Create the runtime image containing Envoy and the built dynamic module shared libraries
 # When changing Envoy version, the version of SDK in the Cargo.toml files SHOULD match.
@@ -56,8 +57,9 @@ RUN arch="$(cat /target-arch)" \
 # otherwise) selects a matching Envoy binary.
 FROM envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
 
-# Copy the built dynamic module shared library from the builder stage
+# Copy the built dynamic module shared libraries from the builder stage
 COPY --from=builder /usr/src/dynamic-modules/target/release/libenvoy_substrate_egress_policy.so /usr/local/lib/libenvoy_substrate_egress_policy.so
+COPY --from=builder /usr/src/dynamic-modules/target/release/libenvoy_substrate_ingress_cache.so /usr/local/lib/libenvoy_substrate_ingress_cache.so
 
 # Set default search path for Envoy dynamic modules
 ENV ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib
