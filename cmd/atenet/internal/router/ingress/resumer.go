@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
@@ -182,7 +181,7 @@ func (r *ActorResumer) retryable(err error) bool {
 // ResumeActor ensures the actor is running.
 // This method will block until the actor is resumed or error.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, ResumeOutcome, error) {
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ResumeActor",
+	ctx, span := otel.Tracer(serviceName).Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 
