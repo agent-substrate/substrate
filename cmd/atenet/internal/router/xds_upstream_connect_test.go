@@ -387,8 +387,22 @@ func TestXdsServer_ActorTunnelClusters(t *testing.T) {
 		}
 		opts := protocolOptions(t, c)
 		explicit := opts.GetExplicitHttpConfig()
-		if http2 && explicit.GetHttp2ProtocolOptions() == nil || !http2 && explicit.GetHttpProtocolOptions() == nil {
-			t.Errorf("http2=%v: tunnel cluster protocol = %v", http2, explicit)
+		if http2 {
+			h2 := explicit.GetHttp2ProtocolOptions()
+			if h2 == nil {
+				t.Fatalf("http2=true: tunnel cluster protocol = %v, want HTTP/2", explicit)
+			}
+			if got := h2.GetMaxConcurrentStreams().GetValue(); got != 100 {
+				t.Errorf("http2=true: max_concurrent_streams = %d, want 100", got)
+			}
+			if got := h2.GetInitialStreamWindowSize().GetValue(); got != 1048576 {
+				t.Errorf("http2=true: initial_stream_window_size = %d, want 1048576", got)
+			}
+			if got := h2.GetInitialConnectionWindowSize().GetValue(); got != 1048576 {
+				t.Errorf("http2=true: initial_connection_window_size = %d, want 1048576", got)
+			}
+		} else if explicit.GetHttpProtocolOptions() == nil {
+			t.Errorf("http2=false: tunnel cluster protocol = %v, want HTTP/1.1", explicit)
 		}
 		if got := opts.GetCommonHttpProtocolOptions().GetIdleTimeout().AsDuration(); got != tunnelIdleTimeout {
 			t.Errorf("http2=%v: tunnel idle timeout = %v, want %v", http2, got, tunnelIdleTimeout)

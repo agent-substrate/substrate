@@ -929,8 +929,14 @@ func buildActorTunnelCluster(name string, http2 bool) *clusterv3.Cluster {
 		},
 	}
 	if http2 {
+		// Configure H/2 options to prevent hotspotting atunnel therads and preventing
+		// gateway from overbuffering without affecting throughput.
 		explicit.ProtocolConfig = &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
-			Http2ProtocolOptions: &corev3.Http2ProtocolOptions{},
+			Http2ProtocolOptions: &corev3.Http2ProtocolOptions{
+				MaxConcurrentStreams:        wrapperspb.UInt32(100),
+				InitialStreamWindowSize:     wrapperspb.UInt32(1048576),
+				InitialConnectionWindowSize: wrapperspb.UInt32(1048576),
+			},
 		}
 	}
 	return &clusterv3.Cluster{
