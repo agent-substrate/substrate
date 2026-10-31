@@ -40,17 +40,30 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestDialOptionsRequiresCAFile(t *testing.T) {
-	_, err := DialOptions(ClientConfig{ClientCredBundle: "bundle.pem"})
-	if err == nil {
-		t.Fatalf("DialOptions() error = nil, want error")
+func TestDialOptionsRequiresConfig(t *testing.T) {
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	writeFile(t, caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: newTestCA(t).certDER}))
+	valid := ClientConfig{CAFile: caFile, ClientCredBundle: "bundle.pem", ServerName: "api.ate-system.svc"}
+	if _, err := DialOptions(valid); err != nil {
+		t.Fatalf("DialOptions(valid) error = %v", err)
 	}
-}
 
-func TestDialOptionsRequiresClientCredential(t *testing.T) {
-	_, err := DialOptions(ClientConfig{K8sClient: fake.NewSimpleClientset(), CAFile: "ca.pem"})
-	if err == nil {
-		t.Fatalf("DialOptions() error = nil, want error")
+	tests := []struct {
+		name   string
+		mutate func(*ClientConfig)
+	}{
+		{"CAFile", func(c *ClientConfig) { c.CAFile = "" }},
+		{"client credential", func(c *ClientConfig) { c.ClientCredBundle = "" }},
+		{"ServerName", func(c *ClientConfig) { c.ServerName = "" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := valid
+			tc.mutate(&cfg)
+			if _, err := DialOptions(cfg); err == nil {
+				t.Fatalf("DialOptions() error = nil, want error")
+			}
+		})
 	}
 }
 
@@ -91,6 +104,7 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 		opts, err := DialOptions(ClientConfig{
 			K8sClient:        fake.NewSimpleClientset(),
 			CAFile:           caFile,
+			ServerName:       "127.0.0.1",
 			ClientCredBundle: clientBundle,
 		})
 		if err != nil {
@@ -98,6 +112,21 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 		}
 		if code := healthCheckCode(ctx, t, lis.Addr().String(), opts); code != codes.OK {
 			t.Fatalf("health check code = %v, want %v", code, codes.OK)
+		}
+	})
+
+	t.Run("certificate for another host is rejected", func(t *testing.T) {
+		opts, err := DialOptions(ClientConfig{
+			K8sClient:        fake.NewSimpleClientset(),
+			CAFile:           caFile,
+			ServerName:       "not-the-api.invalid",
+			ClientCredBundle: clientBundle,
+		})
+		if err != nil {
+			t.Fatalf("DialOptions() error = %v", err)
+		}
+		if code := healthCheckCode(ctx, t, lis.Addr().String(), opts); code == codes.OK {
+			t.Fatalf("health check code = %v, want handshake failure", code)
 		}
 	})
 
@@ -143,6 +172,7 @@ func TestDialOptionsReloadsCAFile(t *testing.T) {
 	opts, err := DialOptions(ClientConfig{
 		K8sClient:        fake.NewSimpleClientset(),
 		CAFile:           caFile,
+		ServerName:       "127.0.0.1",
 		ClientCredBundle: clientBundle,
 	})
 	if err != nil {
