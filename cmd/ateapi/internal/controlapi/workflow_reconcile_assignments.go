@@ -140,24 +140,10 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 // releaseEarlierAssignment clears one assignment whose Actor ran under an epoch
 // of the Worker before epoch, under its Actor's lease so no operation on the
 // Actor is midway. An Actor recorded RUNNING under epoch or later is left
-// alone, and so is a RESUMING Actor, which is left to its resume. An Actor
-// still running on it is crashed first and its row released after, so a
-// failure in between leaves the row for a retry to find, and the Actor already
-// CRASHED. A row whose Actor does not point here names nothing that ran on the
-// Worker, so the restart lost nothing of it and it is left alone: it is a claim
-// a resume is still recording, or one the Actor's next resume recovers.
+// alone, and so is a RESUMING Actor, which is left to its resume. Any other
+// Actor is released by crashBoundActor, in the same write that changes it.
 func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapi.Worker, assignment *ateapi.ActorAssignment, epoch int64) error {
 	name := worker.GetMetadata().GetName()
-	release := func() error {
-		if _, err := w.store.ReleaseActorFromWorker(ctx, name, assignment.GetActorUid()); err != nil {
-			return fmt.Errorf("while releasing actor %s from worker %s: %w", assignment.GetActorUid(), name, err)
-		}
-		return nil
-	}
-
-	if assignment.GetActor() == nil {
-		return release()
-	}
 	actorRef := resources.ActorRefFromObjectRef(assignment.GetActor())
 	lease, err := w.store.AcquireLease(ctx, actorLeaseKey(actorRef))
 	if errors.Is(err, store.ErrLeaseConflict) {
@@ -169,20 +155,21 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 	defer lease.Close()
 	ctx = lease.Context()
 
+	// The assignment was listed before the lease was taken. An Actor deleted,
+	// recreated, or released since then no longer points at this Worker, and
+	// its assignment went with that write.
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return release()
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("while getting actor to release from worker %s: %w", name, err)
 	}
-	if actor.GetMetadata().GetUid() != assignment.GetActorUid() {
-		return release()
-	}
-
-	if actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
+	if actor.GetMetadata().GetUid() != assignment.GetActorUid() ||
+		actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
 		return nil
 	}
+
 	if actor.GetStatus().GetWorkerAssignment().GetWorkerEpoch() >= epoch {
 		return nil
 	}
@@ -193,10 +180,5 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 		// Restore was cut short by the restart.
 		return nil
 	}
-	if actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", crashMessageWorkerRestarted); err != nil {
-			return err
-		}
-	}
-	return release()
+	return w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", crashMessageWorkerRestarted)
 }
