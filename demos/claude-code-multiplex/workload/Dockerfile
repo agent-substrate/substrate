@@ -24,6 +24,6 @@ COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
 ENV TASK="Tell me a fact about the moon."
-ENV INTERVAL_SECONDS=60
+ENV INTERVAL_SECONDS=8
 
 ENTRYPOINT ["/run.sh"]

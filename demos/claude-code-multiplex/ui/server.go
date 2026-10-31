@@ -71,23 +71,25 @@ const (
 	defaultNamespace = "claude-multiplex-demo"
 	maxAssignments   = 50
 	rpcTimeout       = 10 * time.Second
+	actorOpTimeout   = 30 * time.Second
 	logTailLines     = int64(25)
+	rawLogTailLines  = int64(500)
 
-	// Assignment lifecycle states the UI badge logic reads.
-	// queued → running → completed; computeState drives the
-	// transitions from elapsed-since-creation.
+	// Assignment lifecycle states the UI badge logic reads:
+	// queued (waiting for a worker pod or resuming), running (actor is
+	// ACTOR_STATE_RUNNING on a worker pod), and completed (actor suspended).
 	stateQueued    = "queued"
 	stateRunning   = "running"
 	stateCompleted = "completed"
 )
 
 var predefinedTasks = []string{
-	"Review main.py and suggest two improvements",
+	"Review server.js and suggest two reliability improvements",
 	"Explain how a Kubernetes ReplicaSet differs from a Deployment",
-	"Write a Python function to detect duplicate items in a list",
+	"Write a JavaScript function to detect duplicate items in an array",
 	"Summarize the difference between a Pod and a Job in Kubernetes",
-	"List three best practices for writing testable Python code",
-	"Draft a one-paragraph summary of Python garbage collection",
+	"List three best practices for writing testable Node.js services",
+	"Draft a one-paragraph summary of V8 garbage collection",
 	"Suggest two ways to make a Kubernetes Service more resilient",
 	"Write a unit test for a function that returns the max of two integers",
 	"Explain the role of an admission controller in Kubernetes",
@@ -102,8 +104,7 @@ type assignment struct {
 	CreatedAt   float64  `json:"created_at"`
 	StartedAt   *float64 `json:"started_at"`
 	CompletedAt *float64 `json:"completed_at"`
-	QueueFor    float64  `json:"queue_for"`
-	RunFor      float64  `json:"run_for"`
+	dispatched  bool
 }
 
 // podSummary is the per-worker shape the UI's index.html renders. Field
@@ -131,11 +132,14 @@ type actorSummary struct {
 }
 
 var (
-	namespace   = envOr("DEMO_NAMESPACE", defaultNamespace)
-	ateapiAddr  = os.Getenv("ATEAPI_ADDR") // empty → auto port-forward to svc/api in ate-system
-	rootDir     = mustRootDir()
-	mu          sync.Mutex
-	assignments = make([]*assignment, 0, maxAssignments) // newest first
+	namespace       = envOr("DEMO_NAMESPACE", defaultNamespace)
+	ateapiAddr      = os.Getenv("ATEAPI_ADDR") // empty → auto port-forward to svc/api in ate-system
+	rootDir         = mustRootDir()
+	mu              sync.Mutex
+	lifecycleMu     sync.Mutex
+	assignments     = make([]*assignment, 0, maxAssignments) // newest first
+	runningAgents   = make(map[string]bool)
+	taskRunDuration = 10 * time.Second
 
 	ateClient  ateapi.ControlClient
 	ateAPI     *ateclient.Client
@@ -234,14 +238,17 @@ func listActorNames(ctx context.Context) []string {
 	}
 	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{})
+	resp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{Atespace: namespace})
 	if err != nil {
 		log.Printf("[ui] ListActors error: %v", err)
 		return nil
 	}
 	names := make([]string, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
-		if id := a.GetMetadata().GetName(); id != "" {
+		if namespace != "" && a.GetMetadata().GetAtespace() != "" && a.GetMetadata().GetAtespace() != namespace {
+			continue
+		}
+		if id := a.GetMetadata().GetName(); id != "" && !isUUID(id) {
 			names = append(names, id)
 		}
 	}
@@ -249,38 +256,124 @@ func listActorNames(ctx context.Context) []string {
 	return names
 }
 
-// computeState returns the timer-driven UI state for an assignment.
-// queued → running → completed (purely client-time-driven; the
-// substrate side has no concept of these per-task states).
-func computeState(asg *assignment) string {
-	elapsed := nowSec() - asg.CreatedAt
-	if elapsed < asg.QueueFor {
-		return stateQueued
+func countPoolWorkers(ctx context.Context) int {
+	if ateClient == nil {
+		return 2
 	}
-	if elapsed < asg.QueueFor+asg.RunFor {
-		return stateRunning
+	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+	resp, err := ateClient.ListWorkers(rctx, &ateapi.ListWorkersRequest{})
+	if err != nil {
+		return 2
 	}
-	return stateCompleted
+	count := 0
+	for _, w := range resp.GetWorkers() {
+		if namespace == "" || w.GetWorkerNamespace() == "" || w.GetWorkerNamespace() == namespace {
+			count++
+		}
+	}
+	if count <= 0 {
+		return 2
+	}
+	return count
 }
 
-// applyComputedStates walks current assignments and stamps started_at /
-// completed_at as states advance. Caller must NOT hold mu.
-func applyComputedStates() {
+// dispatchQueuedAssignments starts background execution for queued assignments
+// in FIFO order up to the worker pool capacity (one active task per agent).
+func dispatchQueuedAssignments() {
+	if ateClient == nil {
+		return
+	}
+	poolSize := countPoolWorkers(context.Background())
+
+	var toStart []*assignment
 	mu.Lock()
-	defer mu.Unlock()
-	for _, asg := range assignments {
-		newState := computeState(asg)
-		if newState == asg.State {
-			continue
+	for i := len(assignments) - 1; i >= 0 && len(runningAgents) < poolSize; i-- {
+		asg := assignments[i]
+		if asg.State == stateQueued && !asg.dispatched && !runningAgents[asg.Agent] {
+			asg.dispatched = true
+			runningAgents[asg.Agent] = true
+			toStart = append(toStart, asg)
 		}
-		asg.State = newState
-		if newState == stateRunning && asg.StartedAt == nil {
-			v := asg.CreatedAt + asg.QueueFor
-			asg.StartedAt = &v
-		} else if newState == stateCompleted && asg.CompletedAt == nil {
-			v := asg.CreatedAt + asg.QueueFor + asg.RunFor
-			asg.CompletedAt = &v
+	}
+	mu.Unlock()
+
+	for _, asg := range toStart {
+		go runAssignment(asg)
+	}
+}
+
+func runAssignment(asg *assignment) {
+	defer func() {
+		mu.Lock()
+		delete(runningAgents, asg.Agent)
+		mu.Unlock()
+		dispatchQueuedAssignments()
+	}()
+
+	ctx := context.Background()
+	ensureActorResumed(ctx, asg.Agent)
+
+	mu.Lock()
+	started := nowSec()
+	asg.State = stateRunning
+	asg.StartedAt = &started
+	mu.Unlock()
+
+	time.Sleep(taskRunDuration)
+
+	lifecycleMu.Lock()
+	suspendActorByName(ctx, asg.Agent)
+	lifecycleMu.Unlock()
+
+	mu.Lock()
+	completed := nowSec()
+	asg.State = stateCompleted
+	asg.CompletedAt = &completed
+	mu.Unlock()
+}
+
+func ensureActorResumed(ctx context.Context, target string) {
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
+
+	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	actorsResp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{Atespace: namespace})
+	cancel()
+	if err == nil {
+		var running []string
+		for _, a := range actorsResp.GetActors() {
+			if namespace != "" && a.GetMetadata().GetAtespace() != "" && a.GetMetadata().GetAtespace() != namespace {
+				continue
+			}
+			if a.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
+				if a.GetMetadata().GetName() == target {
+					return
+				}
+				running = append(running, a.GetMetadata().GetName())
+			}
 		}
+		for poolSize := countPoolWorkers(ctx); len(running) >= poolSize && len(running) > 0; running = running[1:] {
+			suspendActorByName(ctx, running[0])
+		}
+	}
+
+	resumeCtx, resumeCancel := context.WithTimeout(ctx, actorOpTimeout)
+	defer resumeCancel()
+	if _, err := ateClient.ResumeActor(resumeCtx, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: target},
+	}); err != nil {
+		log.Printf("[ui] ResumeActor(%s/%s) error: %v", namespace, target, err)
+	}
+}
+
+func suspendActorByName(ctx context.Context, name string) {
+	sctx, cancel := context.WithTimeout(ctx, actorOpTimeout)
+	defer cancel()
+	if _, err := ateClient.SuspendActor(sctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: name},
+	}); err != nil {
+		log.Printf("[ui] SuspendActor(%s/%s) error: %v", namespace, name, err)
 	}
 }
 
@@ -288,7 +381,7 @@ func nowSec() float64 {
 	return float64(time.Now().UnixNano()) / 1e9
 }
 
-// giveTask picks a random task + random agent and records the assignment.
+// giveTask picks a random task + idle agent and dispatches the assignment.
 // Returns nil-string error if no agents.
 func giveTask(ctx context.Context) (*assignment, string) {
 	agents := listActorNames(ctx)
@@ -296,26 +389,38 @@ func giveTask(ctx context.Context) (*assignment, string) {
 		return nil, "no agents available in namespace"
 	}
 	now := nowSec()
+
+	mu.Lock()
+	busy := make(map[string]bool, len(agents))
+	for _, a := range assignments {
+		if a.State == stateQueued || a.State == stateRunning {
+			busy[a.Agent] = true
+		}
+	}
+	candidates := make([]string, 0, len(agents))
+	for _, name := range agents {
+		if !busy[name] {
+			candidates = append(candidates, name)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = agents
+	}
 	asg := &assignment{
-		ID:        fmt.Sprintf("asg-%d", time.Now().UnixMilli()),
-		Agent:     agents[rand.Intn(len(agents))],
+		ID:        fmt.Sprintf("asg-%d", time.Now().UnixNano()),
+		Agent:     candidates[rand.Intn(len(candidates))],
 		Task:      predefinedTasks[rand.Intn(len(predefinedTasks))],
 		State:     stateQueued,
 		CreatedAt: now,
-		QueueFor:  roundOne(2.0 + rand.Float64()*3.0), // 2.0–5.0
-		RunFor:    roundOne(9.0 + rand.Float64()*7.0), // 9.0–16.0
 	}
-	mu.Lock()
-	defer mu.Unlock()
 	assignments = append([]*assignment{asg}, assignments...)
 	if len(assignments) > maxAssignments {
 		assignments = assignments[:maxAssignments]
 	}
-	return asg, ""
-}
+	mu.Unlock()
 
-func roundOne(v float64) float64 {
-	return float64(int(v*10+0.5)) / 10
+	dispatchQueuedAssignments()
+	return asg, ""
 }
 
 // writeJSON serializes body as JSON with no-store cache headers.
@@ -372,8 +477,9 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 	}
 	pods := make([]podSummary, 0, len(resp.GetWorkers()))
 	for _, wk := range resp.GetWorkers() {
-		// No demo-namespace filter: a Worker listing does not name the Actors
-		// it holds, so there is no template namespace to compare against.
+		if namespace != "" && wk.GetWorkerNamespace() != "" && wk.GetWorkerNamespace() != namespace {
+			continue
+		}
 		ready := wk.GetStatus().GetAllocated().GetActors() > 0
 		pods = append(pods, podSummary{
 			Name:      wk.GetWorkerPod(),
@@ -397,7 +503,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(ctx, &ateapi.ListActorsRequest{})
+	resp, err := ateClient.ListActors(ctx, &ateapi.ListActorsRequest{Atespace: namespace})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ListActors: " + err.Error()})
 		return
@@ -407,6 +513,9 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 		// The demo's templates live in the atespace named after the demo
 		// namespace, so the template ref's atespace filters foreign actors.
 		if namespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != namespace {
+			continue
+		}
+		if isUUID(a.GetMetadata().GetName()) {
 			continue
 		}
 		// Carry the template name as the meta message so the UI's
@@ -429,6 +538,72 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]actorSummary{"actors": actors})
 }
 
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isRunscLogLine(msg string) bool {
+	t := strings.TrimSpace(msg)
+	if len(t) >= 6 && strings.ContainsRune("IWEF", rune(t[0])) &&
+		t[1] >= '0' && t[1] <= '9' && t[2] >= '0' && t[2] <= '9' &&
+		t[3] >= '0' && t[3] <= '9' && t[4] >= '0' && t[4] <= '9' && t[5] == ' ' {
+		return true
+	}
+	return strings.Contains(t, "**************** gVisor ****************")
+}
+
+func formatPodLogs(raw, atespace string, maxLines int) string {
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &m); err != nil {
+			continue
+		}
+		var actorName, actorAtespace, containerName string
+		for _, k := range []string{"logging.googleapis.com/labels", "labels"} {
+			if l, ok := m[k].(map[string]any); ok {
+				actorName, _ = l["ate.actor.name"].(string)
+				actorAtespace, _ = l["ate.atespace"].(string)
+				containerName, _ = l["ate.actor.container.name"].(string)
+				if actorName != "" {
+					break
+				}
+			}
+		}
+		if actorName == "" || isUUID(actorName) || containerName == "_sandbox" || (atespace != "" && actorAtespace != "" && actorAtespace != atespace) {
+			continue
+		}
+		msg, _ := m["message"].(string)
+		if msg == "" {
+			msg, _ = m["msg"].(string)
+		}
+		if msg == "" || isRunscLogLine(msg) {
+			continue
+		}
+		if containerName == "" {
+			out = append(out, fmt.Sprintf("[substrate:%s] %s", actorName, msg))
+		} else {
+			out = append(out, msg)
+		}
+	}
+	if maxLines > 0 && len(out) > maxLines {
+		out = out[len(out)-maxLines:]
+	}
+	return strings.Join(out, "\n")
+}
+
 // handleLogs streams the last N lines of a pod's logs via the typed
 // k8s client. Replaces the prior `kubectl logs --tail=25` shellout.
 func handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -444,7 +619,7 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	tail := logTailLines
+	tail := rawLogTailLines
 	opts := &corev1.PodLogOptions{TailLines: &tail}
 	req := kubeClient.CoreV1().Pods(namespace).GetLogs(pod, opts)
 	stream, err := req.Stream(ctx)
@@ -458,14 +633,17 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error(), "logs": string(data)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"logs": string(data), "stderr": ""})
+	writeJSON(w, http.StatusOK, map[string]string{"logs": formatPodLogs(string(data), namespace, int(logTailLines)), "stderr": ""})
 }
 
 func handleTaskStatus(w http.ResponseWriter, _ *http.Request) {
-	applyComputedStates()
+	dispatchQueuedAssignments()
 	mu.Lock()
 	snapshot := make([]*assignment, len(assignments))
-	copy(snapshot, assignments)
+	for i, a := range assignments {
+		cp := *a
+		snapshot[i] = &cp
+	}
 	mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string][]*assignment{"assignments": snapshot})
 }

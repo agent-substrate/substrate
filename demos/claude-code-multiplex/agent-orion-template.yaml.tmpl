@@ -30,9 +30,25 @@ containers:
   - name: TASK
     value: "Suggest one healthy meal that takes under 15 minutes to prepare. One sentence."
   - name: INTERVAL_SECONDS
-    value: "45"
+    value: "8"
   - name: ANTHROPIC_API_KEY
-    value: "${ANTHROPIC_API_KEY}"
+    value: "egress-injected"
+  - name: NODE_EXTRA_CA_CERTS
+    value: /run/ate/egress-trust-bundle/trust-bundle.pem
+  - name: SSL_CERT_FILE
+    value: /run/ate/egress-trust-bundle/trust-bundle.pem
+  volumeMounts:
+  - name: system-info
+    mountPath: /run/ate
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        - system-roots.ate.dev
+        path: egress-trust-bundle/trust-bundle.pem
 # Sandbox size: see agent-luna-template.yaml.tmpl.
 resources:
   limits:
