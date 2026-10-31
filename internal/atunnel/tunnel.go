@@ -48,6 +48,7 @@ var resolvConfPath = "/etc/resolv.conf"
 // FlagSet is the registration surface that flag.FlagSet and pflag.FlagSet share.
 type FlagSet interface {
 	StringVar(p *string, name, value, usage string)
+	IntVar(p *int, name string, value int, usage string)
 }
 
 // Config is the atunnel setup a worker takes from its flags.
@@ -73,6 +74,10 @@ type Config struct {
 	EgressTrustBundle string
 	// DNSEgressPolicy selects the DNS egress policy enforcement mode.
 	DNSEgressPolicy string
+	// TCPNotSentLowat is the TCP_NOTSENT_LOWAT, in bytes, of every TCP
+	// connection atunnel holds: with the router, with actors, and with the
+	// egress gateway. 0 leaves the kernel default.
+	TCPNotSentLowat int
 }
 
 // RegisterFlags registers the atunnel flags on fs and returns the Config they
@@ -90,8 +95,15 @@ func RegisterFlags(fs FlagSet) *Config {
 	fs.StringVar(&c.EgressListenAddress, "atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	fs.StringVar(&c.EgressTrustBundle, "atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+")")
+	fs.IntVar(&c.TCPNotSentLowat, "atunnel-tcp-notsent-lowat", DefaultTCPNotSentLowat, "TCP_NOTSENT_LOWAT in bytes on atunnel's TCP connections; 0 leaves the kernel default")
 	return c
 }
+
+// DefaultTCPNotSentLowat keeps a slow reader's backlog upstream instead of in
+// atunnel's kernel send queues. In a benchmark sweep, 4 KiB saved little more
+// memory and 64 KiB held about twice as much. SO_SNDBUF and SO_RCVBUF stay
+// unset: a fixed size turns off autotuning and caps throughput.
+const DefaultTCPNotSentLowat = 16384
 
 // Tunnel is the atunnel state one worker shares across its actors.
 type Tunnel struct {
@@ -117,6 +129,9 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	if err := egresspolicy.ValidateDNSEgressPolicy(cfg.DNSEgressPolicy); err != nil {
 		return nil, err
 	}
+	if cfg.TCPNotSentLowat < 0 {
+		return nil, fmt.Errorf("--atunnel-tcp-notsent-lowat must not be negative, got %d", cfg.TCPNotSentLowat)
+	}
 	upstreamURL, err := url.Parse(upstream)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing atunnel upstream: %w", err)
@@ -141,15 +156,17 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring ingress: %w", err)
 	}
-	if err := serve(ctx, "atunnel", cfg.ListenAddress, ingressServer.Serve); err != nil {
+	if err := serve(ctx, "atunnel", cfg.ListenAddress, cfg.TCPNotSentLowat, ingressServer.Serve); err != nil {
 		return nil, err
 	}
-	if err := serve(ctx, "atunnel CONNECT", cfg.ConnectListenAddress, ingressServer.ServeConnect); err != nil {
+	if err := serve(ctx, "atunnel CONNECT", cfg.ConnectListenAddress, cfg.TCPNotSentLowat, ingressServer.ServeConnect); err != nil {
 		return nil, err
 	}
 
 	// Egress
-	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination)
+	egressProxy, err := egress.New(linuxsys.TCPOriginalDestination, egress.WithConfigureAcceptedSock(func(conn net.Conn) error {
+		return linuxsys.SetTCPNotSentLowat(conn, cfg.TCPNotSentLowat)
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("configuring egress: %w", err)
 	}
@@ -169,11 +186,15 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 }
 
 // serve listens on address and runs serveFn on it, exiting the process if it
-// fails.
-func serve(ctx context.Context, name, address string, serveFn func(context.Context, net.Listener) error) error {
-	lis, err := net.Listen("tcp", address)
+// fails. Every connection it accepts gets TCP_NOTSENT_LOWAT notSentLowat.
+func serve(ctx context.Context, name, address string, notSentLowat int, serveFn func(context.Context, net.Listener) error) error {
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("while opening %s listener: %w", name, err)
+	}
+	if notSentLowat != 0 {
+		lis = &listenerWithOptions{Listener: lis, notSentLowat: notSentLowat}
 	}
 	go func() {
 		if err := serveFn(ctx, lis); err != nil {
@@ -182,6 +203,31 @@ func serve(ctx context.Context, name, address string, serveFn func(context.Conte
 	}()
 	slog.InfoContext(ctx, name+" serving", slog.String("address", address))
 	return nil
+}
+
+// listenerWithOptions sets TCP_NOTSENT_LOWAT on every connection it accepts. A
+// connection it can't be set on is closed, and the next one accepted. Setting
+// it on the listening socket isn't enough: Go opens MPTCP listeners by default
+// where the kernel enables MPTCP, and an MPTCP listener doesn't pass
+// TCP_NOTSENT_LOWAT to the TCP connections it accepts.
+type listenerWithOptions struct {
+	net.Listener
+	notSentLowat int
+}
+
+func (l *listenerWithOptions) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if err := linuxsys.SetTCPNotSentLowat(conn, l.notSentLowat); err != nil {
+			slog.Warn("atunnel failed to set TCP_NOTSENT_LOWAT on an accepted connection", slog.Any("err", err))
+			_ = conn.Close()
+			continue
+		}
+		return conn, nil
+	}
 }
 
 // ActorEgress is an actor's tunneled egress, ready to activate.
@@ -229,6 +275,7 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 		ServerName:           serverName,
 		GetClientCertificate: certificateSource.GetClientCertificate,
 		TrustBundlePath:      t.cfg.EgressTrustBundle,
+		DialControl:          linuxsys.TCPNotSentLowatControl(t.cfg.TCPNotSentLowat),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor egress client: %w", err)
@@ -252,7 +299,7 @@ func (t *Tunnel) ActivateEgress(actor resources.ActorAttribution, actorEgress *A
 // ActivateIngress starts admitting the actor's inbound traffic through dial.
 // Call it once the workload is ready to serve.
 func (t *Tunnel) ActivateIngress(actor resources.ActorAttribution, dial ingress.DialFunc) error {
-	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, dial); err != nil {
+	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, tunedDial(dial, t.cfg.TCPNotSentLowat)); err != nil {
 		return fmt.Errorf("while activating actor ingress: %w", err)
 	}
 	return nil
@@ -270,4 +317,24 @@ func (t *Tunnel) Deactivate(ctx context.Context, actor resources.ActorAttributio
 		return fmt.Errorf("while deactivating actor networking: %w", err)
 	}
 	return nil
+}
+
+// tunedDial sets TCP_NOTSENT_LOWAT notSentLowat on every connection dial
+// opens. The sandbox dialer creates the socket inside the actor's namespace,
+// so the option goes on after connect.
+func tunedDial(dial ingress.DialFunc, notSentLowat int) ingress.DialFunc {
+	if notSentLowat == 0 {
+		return dial
+	}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		if err := linuxsys.SetTCPNotSentLowat(conn, notSentLowat); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
 }

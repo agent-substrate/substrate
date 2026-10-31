@@ -109,6 +109,8 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.Float64Var(&cfg.ParkedRequest.RetryJitter, "parked-request-retry-jitter", ingress.DefaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
 	fs.IntVar(&cfg.ExtProcMaxRequests, "extproc-max-requests", 0, "Circuit-breaker max_requests for Envoy's ext_proc cluster; 0 (the default) derives it as twice --parked-request-max (minimum 1024). Explicit values must be >= --parked-request-max: every parked request holds one slot for its full wait, and the excess is fast-path headroom")
 
+	fs.IntVar(&cfg.TCPNotSentLowat, "router-tcp-notsent-lowat", defaultTCPNotSentLowat, "TCP_NOTSENT_LOWAT in bytes on Envoy's client and atunnel sockets, so a slow reader backs data up behind Envoy's buffer limits instead of in the kernel. 0 leaves the kernel default")
+
 	// Graceful shutdown knobs. The router sits behind a Service, so
 	// route-drain window is needed: after SIGTERM the readiness flip
 	// must propagate to the Service endpoints before the drain starts.
