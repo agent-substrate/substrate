@@ -88,7 +88,7 @@ func TestVirtiofsdArgs(t *testing.T) {
 	if !slices.Contains(args, "--cache=auto") {
 		t.Errorf("args %v do not contain --cache=auto", args)
 	}
-	for _, required := range []string{"--sandbox=namespace", "--seccomp=kill"} {
+	for _, required := range []string{"--sandbox=namespace", "--seccomp=kill", "--inode-file-handles=never"} {
 		if !slices.Contains(args, required) {
 			t.Errorf("args %v do not contain %s", args, required)
 		}
@@ -103,10 +103,9 @@ func TestVirtiofsdArgs(t *testing.T) {
 	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
 	}
-	// The worker's capability set is sized to virtiofsd's normal child set, so
-	// the arguments must never add a capability back (--modcaps=+...). The
-	// file-handle mode stays at the default (prefer), under which virtiofsd
-	// requires DAC_READ_SEARCH and exits if --modcaps drops it.
+	// The worker's capability set is sized to virtiofsd's default child set,
+	// which --inode-file-handles=never keeps free of DAC_READ_SEARCH, so the
+	// arguments must never add a capability back (--modcaps=+...).
 	for _, arg := range args {
 		if value, ok := strings.CutPrefix(arg, "--modcaps="); ok {
 			for _, entry := range strings.Split(value, ":") {
@@ -114,9 +113,6 @@ func TestVirtiofsdArgs(t *testing.T) {
 					t.Errorf("args %v add a capability back to virtiofsd", args)
 				}
 			}
-		}
-		if strings.HasPrefix(arg, "--inode-file-handles") {
-			t.Errorf("args %v change virtiofsd's file-handle mode", args)
 		}
 	}
 }
