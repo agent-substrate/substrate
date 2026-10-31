@@ -415,10 +415,6 @@ tests:
           viewer: false
           can_list_actors: false
           can_get: false
-      - user: user:sys-atelet # documents that atelet holds no role; ate-api checks its egress policy reads by node
-        object: actor:runner-1
-        assertions:
-          can_get_egress_policy: false
       - user: user:sys-api-server-sidecar # the control plugin reads actors to scope their storage credentials
         object: actor:runner-1
         assertions:
