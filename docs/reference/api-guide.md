@@ -85,9 +85,14 @@ The outer worker's seccomp and AppArmor profiles remain `Unconfined` so the
 sandbox runtimes can set up their mounts; worker seccomp hardening is separate
 from these capability defaults.
 
-Upgrading to a controller with different worker security defaults changes the
-managed Deployment's pod template and rolls its workers. Follow the
-[worker-pool rollout guidance](../guides/upgrade.md#step-3-move-each-workerpool-to-the-new-worker-image).
+A change to these defaults changes the worker pod template, so the
+`ate-controller` upgrade that brings it rolls every `WorkerPool`. Move each pool
+to the matching worker image first, as in
+[step 3 of the upgrade runbook](../guides/upgrade.md#step-3-move-each-workerpool-to-the-new-worker-image),
+then upgrade `ate-controller`. A microVM worker image that predates
+`--inode-file-handles=never` cannot run without `DAC_READ_SEARCH`: its
+virtiofsd exits with `can't apply the child capabilities`, and actors on that
+pool fail to start or restore.
 
 #### Worker Capacity (`spec.template.resources`)
 
