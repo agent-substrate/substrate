@@ -145,7 +145,8 @@ var (
 
 // ErrSigningKeysUnavailable is wrapped by Verify errors that come from not
 // having the issuer's keys, rather than from the token: a failed fetch with no
-// cached key for the token, or the backoff that follows one.
+// cached key for the token, the backoff that follows one, or the backoff after
+// a fetch for an unknown key ID that did not complete.
 var ErrSigningKeysUnavailable = errors.New("could not fetch signing keys")
 
 // KeySource supplies the public keys a Verifier checks signatures with. The
@@ -186,6 +187,9 @@ type Verifier struct {
 	lastRefresh           time.Time
 	lastFailedRefresh     time.Time
 	lastUnknownKeyRefresh time.Time
+	// unknownKeyFetchFailed says the fetch that set lastUnknownKeyRefresh
+	// did not complete. Any successful fetch clears it.
+	unknownKeyFetchFailed bool
 }
 
 // Option configures a Verifier.
@@ -220,6 +224,7 @@ func (v *Verifier) Refresh(ctx context.Context, now time.Time) error {
 	v.keys = keys
 	v.lastRefresh = now
 	v.lastFailedRefresh = time.Time{}
+	v.unknownKeyFetchFailed = false
 	return nil
 }
 
@@ -414,6 +419,7 @@ func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto
 		// Set before the fetch so a caller that cancels it still counts, and
 		// made-up key IDs cannot each trigger a fetch.
 		v.lastUnknownKeyRefresh = now
+		v.unknownKeyFetchFailed = true
 	}
 	keys, err := v.source.Keys(ctx)
 	if err != nil {
@@ -433,6 +439,7 @@ func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto
 	v.keys = keys
 	v.lastRefresh = now
 	v.lastFailedRefresh = time.Time{}
+	v.unknownKeyFetchFailed = false
 	k := findKey(keys, keyID)
 	if k == nil {
 		return nil, fmt.Errorf("unknown key ID %q", keyID)
@@ -458,6 +465,11 @@ func (v *Verifier) cachedKey(keyID string, now time.Time) (key crypto.PublicKey,
 		return nil, true, fmt.Errorf("%w from %s: the last attempt failed less than %v ago", ErrSigningKeysUnavailable, v.issuer, jwksRefreshRetryInterval)
 	}
 	if k == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
+		if v.unknownKeyFetchFailed {
+			// The issuer may have rotated this key in, and no fetch since
+			// says otherwise.
+			return nil, true, fmt.Errorf("%w from %s: a fetch for an unknown key ID did not complete less than %v ago", ErrSigningKeysUnavailable, v.issuer, jwksRefreshRetryInterval)
+		}
 		return nil, true, fmt.Errorf("unknown key ID %q", keyID)
 	}
 	return nil, false, nil

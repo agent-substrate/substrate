@@ -207,8 +207,8 @@ func TestVerifierCallerCancelStartsNoBackoff(t *testing.T) {
 	}
 }
 
-// cancelingKeySource returns keys on the first call. Later calls cancel the
-// caller's context as the fetch starts and return its error.
+// cancelingKeySource returns keys, except that the second call cancels the
+// caller's context as the fetch starts and returns its error.
 type cancelingKeySource struct {
 	keys   []*KeyAndID
 	cancel context.CancelFunc
@@ -216,7 +216,7 @@ type cancelingKeySource struct {
 }
 
 func (c *cancelingKeySource) Keys(ctx context.Context) ([]*KeyAndID, error) {
-	if c.calls.Add(1) == 1 {
+	if c.calls.Add(1) != 2 {
 		return c.keys, nil
 	}
 	c.cancel()
@@ -226,7 +226,8 @@ func (c *cancelingKeySource) Keys(ctx context.Context) ([]*KeyAndID, error) {
 // TestVerifierCanceledUnknownKeyFetchIsRateLimited checks that a fetch for an
 // unknown key ID that the caller cancels still counts against the unknown key
 // ID rate limit, so repeated made-up key IDs with short deadlines do not each
-// fetch.
+// fetch. Until a fetch completes, the key ID may be one the issuer rotated in,
+// so Verify reports the keys as unavailable rather than the token as invalid.
 func TestVerifierCanceledUnknownKeyFetchIsRateLimited(t *testing.T) {
 	key := testRSAKey(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -245,11 +246,21 @@ func TestVerifierCanceledUnknownKeyFetchIsRateLimited(t *testing.T) {
 	if _, err := verifier.Verify(ctx, unknown, now); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Verify() with a fetch canceled by the caller error = %v, want context.Canceled", err)
 	}
-	if _, err := verifier.Verify(t.Context(), unknown, now.Add(time.Second)); err == nil || !strings.Contains(err.Error(), "unknown key ID") {
-		t.Fatalf("Verify() after a canceled fetch error = %v, want unknown key ID", err)
+	if _, err := verifier.Verify(t.Context(), unknown, now.Add(time.Second)); !errors.Is(err, ErrSigningKeysUnavailable) {
+		t.Fatalf("Verify() after a canceled fetch error = %v, want ErrSigningKeysUnavailable", err)
 	}
 	if got := source.calls.Load(); got != 2 {
 		t.Fatalf("key fetches = %d, want 2: the canceled fetch must start the unknown key ID backoff", got)
+	}
+
+	later := now.Add(jwksRefreshRetryInterval)
+	for _, at := range []time.Time{later, later.Add(time.Second)} {
+		if _, err := verifier.Verify(t.Context(), unknown, at); err == nil || errors.Is(err, ErrSigningKeysUnavailable) || !strings.Contains(err.Error(), "unknown key ID") {
+			t.Fatalf("Verify() at %v after a fetch without the key error = %v, want unknown key ID", at.Sub(now), err)
+		}
+	}
+	if got := source.calls.Load(); got != 3 {
+		t.Fatalf("key fetches = %d, want 3: a completed fetch must start the unknown key ID backoff", got)
 	}
 }
 
