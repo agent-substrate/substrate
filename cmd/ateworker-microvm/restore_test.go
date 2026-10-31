@@ -501,54 +501,6 @@ func TestNewReseedNonce(t *testing.T) {
 	}
 }
 
-type fakeReseeder func(ctx context.Context, data []byte) error
-
-func (f fakeReseeder) ReseedRandomDev(ctx context.Context, data []byte) error {
-	return f(ctx, data)
-}
-
-func TestReseedGuestCRNG(t *testing.T) {
-	t.Run("sends a fresh nonce once, bounded by reseedTimeout", func(t *testing.T) {
-		var calls int
-		var gotNonce []byte
-		var gotDeadline time.Time
-		start := time.Now()
-		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(ctx context.Context, data []byte) error {
-			calls++
-			gotNonce = append([]byte(nil), data...)
-			gotDeadline, _ = ctx.Deadline()
-			return nil
-		}))
-		if err != nil {
-			t.Fatalf("reseedGuestCRNG: %v", err)
-		}
-		if calls != 1 {
-			t.Errorf("calls = %d, want 1", calls)
-		}
-		if len(gotNonce) != 32 {
-			t.Errorf("nonce length = %d, want 32", len(gotNonce))
-		}
-		if gotDeadline.IsZero() || gotDeadline.Before(start.Add(reseedTimeout)) || gotDeadline.After(time.Now().Add(reseedTimeout)) {
-			t.Errorf("call deadline = %v, want about %v after the call started at %v", gotDeadline, reseedTimeout, start)
-		}
-	})
-
-	t.Run("returns the agent's error without retrying", func(t *testing.T) {
-		wantErr := errors.New("agent busy")
-		var calls int
-		err := reseedGuestCRNG(t.Context(), fakeReseeder(func(context.Context, []byte) error {
-			calls++
-			return wantErr
-		}))
-		if !errors.Is(err, wantErr) {
-			t.Errorf("reseedGuestCRNG error = %v, want %v", err, wantErr)
-		}
-		if calls != 1 {
-			t.Errorf("calls = %d, want 1", calls)
-		}
-	})
-}
-
 func TestRestoreGuestReadyError(t *testing.T) {
 	// Child timeouts in dialAgentRetry and reseedGuestCRNG wrap a real
 	// context.DeadlineExceeded.
@@ -584,6 +536,14 @@ func TestRestoreGuestReadyError(t *testing.T) {
 		}
 		if !errors.Is(err, errGuestStopped) {
 			t.Errorf("err = %v, want it to wrap errGuestStopped", err)
+		}
+	})
+
+	t.Run("guest stopped during the reseed reports Unavailable", func(t *testing.T) {
+		reseedErr := guestStoppedReseedErr(t)
+		err := restoreGuestReadyError(t.Context(), "reseeding guest CRNG", reseedErr)
+		if got := apierror.Code(err); got != codes.Unavailable {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Unavailable, err)
 		}
 	})
 }

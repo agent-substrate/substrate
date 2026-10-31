@@ -69,31 +69,6 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 	return ch.MemRestoreEager
 }
 
-// reseedTimeout bounds ReseedRandomDev. It needs to cover a whole resume wave, not a
-// single quiet guest.
-const reseedTimeout = 60 * time.Second
-
-// randomDevReseeder is the part of *kata.AgentClient that reseedGuestCRNG
-// uses, so tests can fake it.
-type randomDevReseeder interface {
-	ReseedRandomDev(ctx context.Context, data []byte) error
-}
-
-// reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
-// CRNG through the kata-agent (see the call site in restoreMemoryFidelity for why a restore
-// needs this). The nonce is a throwaway; its only job is to differ between restores so
-// that clones of one snapshot diverge instead of producing identical randomness. The
-// caller owns ac: it stays open for log forwarding and guest stats.
-func reseedGuestCRNG(ctx context.Context, ac randomDevReseeder) error {
-	nonce, err := newReseedNonce()
-	if err != nil {
-		return err
-	}
-	rctx, cancel := context.WithTimeout(ctx, reseedTimeout)
-	defer cancel()
-	return ac.ReseedRandomDev(rctx, nonce)
-}
-
 // newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
 func newReseedNonce() ([]byte, error) {
 	nonce := make([]byte, 32)
@@ -472,7 +447,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	// failed reseed is still safe to retry (see restoreGuestReadyError). The
 	// restored workload is past its boot, so it needs egress only from the wakeup
 	// probe on. Ingress follows the wakeup probe, as in coldBootActor.
-	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
+	if err := reseedGuestCRNG(ctx, actorUID, guestAC, agentDialer(kata.VsockSocketPath(actorUID))); err != nil {
 		return restoreGuestReadyError(ctx, "reseeding guest CRNG", err)
 	}
 	if err := s.tunnel.ActivateEgress(p.attribution(), egress); err != nil {
