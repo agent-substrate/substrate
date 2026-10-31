@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"slices"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -45,6 +46,9 @@ func TestK8sCredentialProviderManifestsAgree(t *testing.T) {
 	}
 	if got := mountedConfigMaps(dep); len(got) != 1 || got[0] != k8sCredentialProviderPolicyConfigMap {
 		t.Errorf("deployment/%s mounts ConfigMaps %v, want only %q", k8sCredentialProviderDeployment, got, k8sCredentialProviderPolicyConfigMap)
+	}
+	if !slices.Contains(envFromConfigMaps(dep), otelConfigMap) {
+		t.Errorf("deployment/%s does not load configmap/%s through envFrom, so its metrics go to localhost:4317", k8sCredentialProviderDeployment, otelConfigMap)
 	}
 	svc := findObject(provider, "Service", k8sCredentialProviderDeployment)
 	if svc == nil {
@@ -198,6 +202,23 @@ func mountedConfigMaps(dep *unstructured.Unstructured) []string {
 		name, found, _ := unstructured.NestedString(v.(map[string]any), "configMap", "name")
 		if found {
 			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// envFromConfigMaps returns the names of the ConfigMaps a Deployment's
+// containers load through envFrom.
+func envFromConfigMaps(dep *unstructured.Unstructured) []string {
+	containers, _, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+	var names []string
+	for _, c := range containers {
+		sources, _, _ := unstructured.NestedSlice(c.(map[string]any), "envFrom")
+		for _, src := range sources {
+			name, found, _ := unstructured.NestedString(src.(map[string]any), "configMapRef", "name")
+			if found {
+				names = append(names, name)
+			}
 		}
 	}
 	return names
