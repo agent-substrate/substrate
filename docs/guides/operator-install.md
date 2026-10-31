@@ -22,6 +22,8 @@ kind: SubstrateInstall
 namespace: ate-system
 atenet:
   dataplane: envoy
+  egress:
+    credentialProvider: '{"name":"k8s.io"}'
 images:
   repo: registry.example.com/substrate
   tag: v0.4.1
@@ -35,6 +37,16 @@ ATE_CONFIG=substrate-install.yaml ate-setup deploy ate-system
 ```
 
 A worked example is at [docs/examples/substrate-install.yaml](../examples/substrate-install.yaml).
+
+`atenet.egress.credentialProvider` must select a provider or explicitly disable
+credential injection with `'{"enabled":false}'`. The example selects the
+bundled Kubernetes Secrets provider with a default-deny namespace policy.
+Grant its allowed namespaces before injecting credentials. See
+[Egress Credential Injection](egress-credential-injection.md#enable-it).
+
+`deploy ate-system` applies manifests that name `ate-system` literally. Keep
+`namespace: ate-system` for this command. Changing this setting does not
+relocate those manifests.
 
 ### Keys are nested; the table below is flat
 
@@ -120,7 +132,7 @@ configuration: 6 set, 35 default
   benchmark.workerCount                       7             (from config.benchmark.workerCount)
   clusterSize                                 size0         (from default)
   context                                     kind-kind     (from the --kind profile)
-  namespace                                   ate-prod      (from config.namespace)
+  namespace                                   ate-system    (from config.namespace)
 ```
 
 An install that succeeds with the wrong value never produces an error, so this
@@ -147,7 +159,7 @@ configuration: 6 set, 35 default
   benchmark.sandboxClass                      microvm       (from --sandbox-class)
   benchmark.workerCount                       7             (from config.benchmark.workerCount)
   context                                     kind-kind     (from the --kind profile)
-  namespace                                   ate-prod      (from config.namespace)
+  namespace                                   ate-system    (from config.namespace)
 ```
 
 ## Errors name the channel
@@ -251,8 +263,10 @@ cluster:
   writtenBy: ate-setup v0.4.1
 atenet:
   dataplane: agentgateway
+  egress:
+    credentialProvider: '{"name":"k8s.io"}'
 context: prod
-namespace: ate-prod
+namespace: ate-system
 ```
 
 `cluster.substrateVersion` is the Substrate release the run installed: the
