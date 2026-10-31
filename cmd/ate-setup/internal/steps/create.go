@@ -158,6 +158,16 @@ func (e *Env) CreateAPIConfig(ctx context.Context) error {
 	})
 }
 
+// UpdateAPIConfig is CreateAPIConfig for an install that is not being
+// redeployed: it also stamps the new digest on the running Deployment,
+// which rolls ate-api-server onto the new config.
+func (e *Env) UpdateAPIConfig(ctx context.Context) error {
+	if err := e.CreateAPIConfig(ctx); err != nil {
+		return err
+	}
+	return e.annotateAPIServerEnvHash(ctx)
+}
+
 // buildAPIConfig renders apiconfig.textproto.
 func buildAPIConfig(logLevel string) (string, error) {
 	b, err := prototext.MarshalOptions{Multiline: true}.Marshal(&ateconfigpb.APIConfig{
@@ -187,6 +197,16 @@ func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 	return e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIAuthn, map[string]string{
 		"authentication.yaml": authnConfig,
 	})
+}
+
+// UpdateAPIAuthenticationConfig is CreateAPIAuthenticationConfig for an install
+// that is not being redeployed: it also stamps the new digest on the running
+// Deployment, which rolls ate-api-server onto the new config.
+func (e *Env) UpdateAPIAuthenticationConfig(ctx context.Context) error {
+	if err := e.CreateAPIAuthenticationConfig(ctx); err != nil {
+		return err
+	}
+	return e.annotateAPIServerEnvHash(ctx)
 }
 
 // jwtIssuer determines the service account token issuer to trust.

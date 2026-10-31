@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/apiconfig"
+	"go.ate.dev/substrate/internal/ateapiauth"
 )
 
 // trustBundleNames are the ClusterTrustBundles the podcertificate controller
@@ -58,28 +60,53 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 		return err
 	}
 
-	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIAuthn)
+	if err := e.ensureAPIAuthenticationConfig(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureAPIAuthenticationConfig writes the ate-api-server authentication config
+// when it is missing, when an expected JWT issuer was asked for explicitly, or
+// when the stored configuration fails schema validation (e.g. after an upgrade
+// changes the config schema or a rollback leaves unsupported fields).
+// Otherwise an existing valid config, possibly configured with additional JWT
+// providers or a custom issuer, is kept.
+func (e *Env) ensureAPIAuthenticationConfig(ctx context.Context) error {
+	if e.Cfg.ExpectedJWTIssuer != "" {
+		return e.CreateAPIAuthenticationConfig(ctx)
+	}
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIAuthn)
 	if err != nil {
 		return err
 	}
-	if !exists {
+	if cm == nil {
+		return e.CreateAPIAuthenticationConfig(ctx)
+	}
+	if _, err := ateapiauth.ParseAuthenticationConfig([]byte(cm.Data["authentication.yaml"])); err != nil {
+		log.Warnf("Rewriting %s/%s: existing authentication.yaml is invalid (%v)", e.Namespace(), ConfigMapAPIAuthn, err)
 		return e.CreateAPIAuthenticationConfig(ctx)
 	}
 	return nil
 }
 
-// ensureAPIConfig writes the ate-api-server config file when it is missing or
-// a log level was asked for explicitly. Otherwise an existing config, possibly
+// ensureAPIConfig writes the ate-api-server config file when it is missing,
+// when a log level was asked for explicitly, or when the stored configuration
+// fails schema or log-level validation. Otherwise an existing config, possibly
 // edited by hand, is kept.
 func (e *Env) ensureAPIConfig(ctx context.Context) error {
 	if e.Cfg.APILogLevel != "" {
 		return e.CreateAPIConfig(ctx)
 	}
-	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIConfig)
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIConfig)
 	if err != nil {
 		return err
 	}
-	if !exists {
+	if cm == nil {
+		return e.CreateAPIConfig(ctx)
+	}
+	if _, err := apiconfig.ParseTextProto([]byte(cm.Data["apiconfig.textproto"])); err != nil {
+		log.Warnf("Rewriting %s/%s: existing apiconfig.textproto is invalid (%v)", e.Namespace(), ConfigMapAPIConfig, err)
 		return e.CreateAPIConfig(ctx)
 	}
 	return nil

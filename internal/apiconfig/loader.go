@@ -24,6 +24,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ParseTextProto strictly parses prototext bytes into an APIConfig and validates its settings.
+func ParseTextProto(configBytes []byte) (*ateconfigpb.APIConfig, error) {
+	config := &ateconfigpb.APIConfig{}
+	if err := prototext.Unmarshal(configBytes, config); err != nil {
+		return nil, fmt.Errorf("while unmarshaling prototext: %w", err)
+	}
+	if err := validateConfig(config); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// LoadConfig reads and strictly parses an APIConfig from a file (.pb, .textproto, or .textpb).
 func LoadConfig(configFile string) (*ateconfigpb.APIConfig, error) {
 	configBytes, err := os.ReadFile(configFile)
 	if err != nil {
@@ -37,20 +50,23 @@ func LoadConfig(configFile string) (*ateconfigpb.APIConfig, error) {
 			return nil, fmt.Errorf("while unmarshaling protobuf: %w", err)
 		}
 	case ".textproto", ".textpb":
-		if err := prototext.Unmarshal(configBytes, config); err != nil {
-			return nil, fmt.Errorf("while unmarshaling prototext: %w", err)
-		}
+		return ParseTextProto(configBytes)
 	default:
 		return nil, fmt.Errorf("unrecognized config extension %q", ext)
 	}
 
-	// Validate log level
-	switch config.GetLogging().GetLevel() {
-	case "debug", "info", "warn", "error":
-		// Do nothing
-	default:
-		return nil, fmt.Errorf("logging.level: invalid value %q", config.GetLogging().GetLevel())
+	if err := validateConfig(config); err != nil {
+		return nil, err
 	}
 
 	return config, nil
+}
+
+func validateConfig(config *ateconfigpb.APIConfig) error {
+	switch config.GetLogging().GetLevel() {
+	case "debug", "info", "warn", "error":
+		return nil
+	default:
+		return fmt.Errorf("logging.level: invalid value %q", config.GetLogging().GetLevel())
+	}
 }

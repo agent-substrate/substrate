@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package apiauthn
+package ateapiauth
 
 import (
 	"fmt"
@@ -36,12 +36,8 @@ type JWTProviderConfig struct {
 	DiscoveryTokenFile       string   `json:"discoveryTokenFile,omitempty"`
 }
 
-// LoadAuthenticationConfig strictly parses and validates a YAML or JSON file.
-func LoadAuthenticationConfig(path string) (*AuthenticationConfig, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read authentication config: %w", err)
-	}
+// ParseAuthenticationConfig strictly parses and validates authentication configuration YAML or JSON bytes.
+func ParseAuthenticationConfig(b []byte) (*AuthenticationConfig, error) {
 	var cfg AuthenticationConfig
 	if err := yaml.UnmarshalStrict(b, &cfg); err != nil {
 		return nil, fmt.Errorf("parse authentication config: %w", err)
@@ -50,6 +46,15 @@ func LoadAuthenticationConfig(path string) (*AuthenticationConfig, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// LoadAuthenticationConfig strictly parses and validates a YAML or JSON file.
+func LoadAuthenticationConfig(path string) (*AuthenticationConfig, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read authentication config: %w", err)
+	}
+	return ParseAuthenticationConfig(b)
 }
 
 // ValidateAuthenticationConfig validates fields that do not require I/O.

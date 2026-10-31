@@ -20,6 +20,31 @@ import (
 	"testing"
 )
 
+func TestParseTextProto(t *testing.T) {
+	testCases := []struct {
+		name    string
+		content string
+		wantErr bool
+	}{
+		{name: "debug", content: `logging { level: "debug" }`},
+		{name: "info", content: `logging { level: "info" }`},
+		{name: "warn", content: `logging { level: "warn" }`},
+		{name: "error", content: `logging { level: "error" }`},
+		{name: "invalid level", content: `logging { level: "verbose" }`, wantErr: true},
+		{name: "missing level", content: ``, wantErr: true},
+		{name: "unknown field", content: "logging { level: \"info\" }\nfuture_field: true", wantErr: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseTextProto([]byte(tc.content))
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Errorf("ParseTextProto() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadConfigValidatesLogLevel(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -32,6 +57,7 @@ func TestLoadConfigValidatesLogLevel(t *testing.T) {
 		{name: "error", content: `logging { level: "error" }`},
 		{name: "invalid level", content: `logging { level: "verbose" }`, wantErr: true},
 		{name: "missing level", content: ``, wantErr: true},
+		{name: "unknown field", content: "logging { level: \"info\" }\nfuture_field: true", wantErr: true},
 	}
 
 	for _, tc := range testCases {

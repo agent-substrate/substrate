@@ -34,12 +34,13 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apiauthn"
-	"go.ate.dev/substrate/cmd/ateapi/internal/apiconfig"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
+	"go.ate.dev/substrate/internal/apiconfig"
+	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -214,7 +215,7 @@ func main() {
 	}
 
 	logFlagValues(ctx)
-	authenticationConfig, err := apiauthn.LoadAuthenticationConfig(*authenticationConfigFile)
+	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to load authentication config", err)
 	}
@@ -664,7 +665,7 @@ func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath strin
 	}, nil
 }
 
-func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {
+func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (apiauthn.ServerConfig, error) {
 	var serverCfg apiauthn.ServerConfig
 	for _, providerCfg := range cfg.JWTProviders {
 		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
