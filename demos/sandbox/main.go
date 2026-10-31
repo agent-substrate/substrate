@@ -16,12 +16,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -78,6 +80,8 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = nil
 
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
@@ -94,7 +98,23 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		canceled := make(chan error, 1)
+		// Watch until output is drained, even if the command exits first.
+		stop := context.AfterFunc(ctx, func() {
+			canceled <- syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		})
+		err = cmd.Wait()
+		if !stop() {
+			if cancelErr := <-canceled; cancelErr != nil && !errors.Is(cancelErr, syscall.ESRCH) {
+				err = errors.Join(err, fmt.Errorf("kill process group: %w", cancelErr))
+			}
+			if err == nil {
+				err = ctx.Err()
+			}
+		}
+	}
 
 	resp := ProcessResponse{
 		Stdout: stdout.String(),
