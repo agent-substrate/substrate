@@ -52,7 +52,7 @@ type fakeControl struct {
 
 	// createHook, when set, decides CreateWorker's outcome: a non-nil error is
 	// returned and nothing is registered.
-	createHook func(*ateapi.Worker) error
+	createHook func(context.Context, *ateapi.Worker) error
 	// listHook, when set, runs before each ListWorkers and can fail the call.
 	listHook func(*ateapi.ListWorkersRequest) error
 	// updateHook, when set, runs once before an UpdateWorker applies, so a test
@@ -113,7 +113,7 @@ func (f *fakeControl) storeLocked(w *ateapi.Worker) {
 	f.workers[w.GetMetadata().GetName()] = w
 }
 
-func (f *fakeControl) setCreateHook(hook func(*ateapi.Worker) error) {
+func (f *fakeControl) setCreateHook(hook func(context.Context, *ateapi.Worker) error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createHook = hook
@@ -150,12 +150,12 @@ func (f *fakeControl) GetWorker(_ context.Context, in *ateapi.GetWorkerRequest, 
 	return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 }
 
-func (f *fakeControl) CreateWorker(_ context.Context, in *ateapi.CreateWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
+func (f *fakeControl) CreateWorker(ctx context.Context, in *ateapi.CreateWorkerRequest, _ ...grpc.CallOption) (*ateapi.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if f.createHook != nil {
-		if err := f.createHook(in.GetWorker()); err != nil {
+		if err := f.createHook(ctx, in.GetWorker()); err != nil {
 			return nil, err
 		}
 	}
