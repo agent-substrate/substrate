@@ -153,12 +153,9 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	if config.OwnerDSN == "" {
 		return nil, fmt.Errorf("PostgreSQL owner connection string must not be empty")
 	}
-	readWriteConfig, err := poolConfig(config.ReadWriteDSN, config.ReadWriteRole)
+	readWriteConfig, err := readWritePoolConfig(config.ReadWriteDSN, config.ReadWriteRole, config.PoolMaxConns)
 	if err != nil {
 		return nil, err
-	}
-	if config.PoolMaxConns > 0 {
-		readWriteConfig.MaxConns = config.PoolMaxConns
 	}
 	readWriteConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
 	ownerConfig, err := poolConfig(config.OwnerDSN, config.OwnerRole)
@@ -256,6 +253,19 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
 	}
 	return nil
+}
+
+// readWritePoolConfig parses dsn for the read/write pool. A positive maxConns
+// replaces a pool_max_conns in dsn; zero keeps the DSN or pgxpool default.
+func readWritePoolConfig(dsn, role string, maxConns int32) (*pgxpool.Config, error) {
+	cfg, err := poolConfig(dsn, role)
+	if err != nil {
+		return nil, err
+	}
+	if maxConns > 0 {
+		cfg.MaxConns = maxConns
+	}
+	return cfg, nil
 }
 
 // poolConfig parses a DSN, assumes the configured role, and refreshes TLS

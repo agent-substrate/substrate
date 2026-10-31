@@ -169,6 +169,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		applyKindDefaults(r)
 	}
 
+	if r.Int("ateapi.postgres.poolMaxConns") < 1 {
+		v, _ := r.Value("ateapi.postgres.poolMaxConns")
+		return nil, &InvalidError{Value: v, Want: "a positive integer"}
+	}
+
 	rolloutTimeout := r.Duration("rolloutTimeout")
 	if r.Supplied("rolloutTimeout") && rolloutTimeout <= 0 {
 		// kubectl reads --timeout=0 as "wait forever"; ate-setup does not offer
@@ -199,6 +204,17 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ownerConnectionString = readWriteConnectionString
 	}
 	instance, _ := r.Value("ateapi.postgres.cloudsql.instance")
+
+	// The bundled size10 PostgreSQL is provisioned for a larger pool; an
+	// external database keeps the default. Written into the resolved set, like
+	// the Kind defaults, so the report and the record show the limit the
+	// install applies. An adopted Cloud SQL install names no database here;
+	// the deploy tells it apart and keeps its recorded limit.
+	poolMaxConnsSet := r.Supplied("ateapi.postgres.poolMaxConns")
+	bundledPostgres := readWriteConnectionString == "" && instance.Raw == ""
+	if !poolMaxConnsSet && bundledPostgres && r.String("clusterSize") == ClusterSizeSize10 {
+		r.set("ateapi.postgres.poolMaxConns", Size10PostgresPoolMaxConns, OriginSizeProfile)
+	}
 	actorJWTIssuer := r.String("actorJWT.issuer")
 	if actorJWTIssuer == "" {
 		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
@@ -241,8 +257,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		Router:               r.String("atenet.dataplane"),
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
-		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
-		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
+		// Whether a channel supplied the limit, which lets an adopted Cloud
+		// SQL install keep its recorded limit.
+		PostgresPoolMaxConnsSet: poolMaxConnsSet,
+		PostgresServerCAFile:    r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass:    r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
