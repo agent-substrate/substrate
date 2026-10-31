@@ -174,23 +174,25 @@ func TestDrainCanceledError(t *testing.T) {
 		return ctx
 	}
 	for _, tc := range []struct {
-		name         string
-		shuttingDown bool
-		callerCtx    context.Context
-		ctx          context.Context
-		err          error
-		want         codes.Code
+		name          string
+		shuttingDown  bool
+		cleanupFailed bool
+		callerCtx     context.Context
+		ctx           context.Context
+		err           error
+		want          codes.Code
 	}{
-		{"canceled by drain", true, context.Background(), canceledCtx(), killed, codes.Unavailable},
-		{"no error", true, context.Background(), canceledCtx(), nil, codes.OK},
-		{"not draining", false, context.Background(), canceledCtx(), killed, codes.Internal},
-		{"restore not canceled", true, context.Background(), context.Background(), killed, codes.Internal},
-		{"caller gone", true, canceledCtx(), canceledCtx(), killed, codes.Internal},
+		{"canceled by drain", true, false, context.Background(), canceledCtx(), killed, codes.Unavailable},
+		{"no error", true, false, context.Background(), canceledCtx(), nil, codes.OK},
+		{"not draining", false, false, context.Background(), canceledCtx(), killed, codes.Internal},
+		{"restore not canceled", true, false, context.Background(), context.Background(), killed, codes.Internal},
+		{"caller gone", true, false, canceledCtx(), canceledCtx(), killed, codes.Internal},
+		{"cleanup failed", true, true, context.Background(), canceledCtx(), killed, codes.Internal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &AteWorkerService{}
 			s.shuttingDown.Store(tc.shuttingDown)
-			if got := apierror.Code(s.drainCanceledError(tc.callerCtx, tc.ctx, tc.err)); got != tc.want {
+			if got := apierror.Code(s.drainCanceledError(tc.callerCtx, tc.ctx, tc.cleanupFailed, tc.err)); got != tc.want {
 				t.Errorf("code = %v, want %v", got, tc.want)
 			}
 		})
