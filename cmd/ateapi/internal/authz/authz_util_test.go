@@ -42,6 +42,9 @@ func TestFormatMember(t *testing.T) {
 	}{
 		{name: "plain", member: "user:alice@example.com", want: "user:alice@example.com"},
 		{name: "encodes reserved characters", member: "user:a:b#c d*%", want: "user:a%3Ab%23c%20d%2A%25"},
+		{name: "encoded exactly 512 bytes", member: "user:" + strings.Repeat("a:", 126) + "abc", want: "user:" + strings.Repeat("a%3A", 126) + "abc"},
+		{name: "encoded 513 bytes", member: "user:" + strings.Repeat("a:", 127), wantErr: true},
+		{name: "encoded exceeds 512 bytes", member: "user:" + strings.Repeat("a:", 128), wantErr: true},
 		{name: "missing prefix", member: "alice", wantErr: true},
 		{name: "empty id", member: "user:", wantErr: true},
 		{name: "whitespace id", member: "user:   ", wantErr: true},
@@ -68,6 +71,37 @@ func TestFormatMember(t *testing.T) {
 				t.Errorf("FormatMember(%q) = %q, want %q", tc.member, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFormatMemberEncodedLengthBoundary checks the encoded-length guard at
+// exactly maxTupleUserLength and one byte over. The fixtures' encoded lengths
+// are asserted so the boundary arithmetic is self-checking: each "a:" expands
+// to "a%3A" (4 bytes encoded, 2 bytes raw).
+func TestFormatMemberEncodedLengthBoundary(t *testing.T) {
+	atLimit := "user:" + strings.Repeat("a:", 126) + "abc" // 5 + 126*4 + 3 = 512 encoded
+	overLimit := "user:" + strings.Repeat("a:", 127)       // 5 + 127*4 = 513 encoded
+	for _, tc := range []struct {
+		member     string
+		wantLen    int
+		wantAccept bool
+	}{
+		{member: atLimit, wantLen: maxTupleUserLength, wantAccept: true},
+		{member: overLimit, wantLen: maxTupleUserLength + 1, wantAccept: false},
+	} {
+		if id, _ := strings.CutPrefix(tc.member, "user:"); len(formatUser(id)) != tc.wantLen {
+			t.Fatalf("fixture %q encodes to %d bytes, want %d", tc.member, len(formatUser(id)), tc.wantLen)
+		}
+		got, err := FormatMember(tc.member)
+		if tc.wantAccept && got != formatUser(strings.TrimPrefix(tc.member, "user:")) {
+			t.Fatalf("FormatMember(...) = %q, want the encoded member", got)
+		}
+		if tc.wantAccept && err != nil {
+			t.Errorf("FormatMember(%d-byte encoded member) failed: %v", tc.wantLen, err)
+		}
+		if !tc.wantAccept && err == nil {
+			t.Errorf("FormatMember(%d-byte encoded member) succeeded, want error", tc.wantLen)
+		}
 	}
 }
 
