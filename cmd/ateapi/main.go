@@ -624,8 +624,8 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 }
 
 // buildServerTLSConfig loads the server bundle and, if caCertsPath is set,
-// the pod-identity CA pool (if not, client certs stay optional), and
-// composes the TLS config for the ateapi gRPC server.
+// the pod-identity CA pool (if not, client certs are not requested at all),
+// and composes the TLS config for the ateapi gRPC server.
 func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath string) (*tls.Config, error) {
 	serverCert := credbundle.Loader(credBundlePath)
 	// Client certs stay optional at the transport level: certless clients
@@ -634,9 +634,16 @@ func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath strin
 	const clientAuth = tls.VerifyClientCertIfGiven
 
 	if caCertsPath == "" {
+		// Without a pod-identity CA there is nothing to verify a client
+		// certificate against, so do not ask for one. Keeping clientAuth here
+		// would not mean "unverified": crypto/x509 substitutes the host's
+		// system roots when VerifyOptions.Roots is nil, so the handshake would
+		// accept any publicly trusted certificate, and mtlsPeerIdentity would
+		// read its first URI SAN as an authenticated principal. Leaving the
+		// certificate unrequested keeps every client on the Bearer-token path.
 		return &tls.Config{
 			GetCertificate: serverCert,
-			ClientAuth:     clientAuth,
+			ClientAuth:     tls.NoClientCert,
 		}, nil
 	}
 

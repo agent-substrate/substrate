@@ -20,11 +20,13 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -249,6 +251,140 @@ func TestBuildServerTLSConfigWithoutCACertsAllowsCertlessClients(t *testing.T) {
 	if cfg.GetConfigForClient != nil {
 		t.Fatalf("buildServerTLSConfig() with no CA path set GetConfigForClient, want nil (no client-cert verification configured)")
 	}
+}
+
+// TestBuildServerTLSConfigWithoutCACertsDoesNotRequestClientCerts drives a
+// real handshake to check that the server asks for no client certificate when
+// no pod-identity CA is configured.
+//
+// The risk being covered is not that an unverified certificate is accepted.
+// It is that tls.VerifyClientCertIfGiven with a nil ClientCAs verifies against
+// the host's system roots, because crypto/x509 substitutes them when
+// VerifyOptions.Roots is nil. Any certificate a public CA has issued with a
+// URI SAN would then finish the handshake, and mtlsPeerIdentity reads the
+// first URI SAN of PeerCertificates[0] as the caller's identity.
+//
+// The client here offers a self-signed certificate, which no system root
+// trusts. Requesting client certificates therefore fails the handshake, and
+// not requesting them leaves PeerCertificates empty, which is what the
+// Bearer-token path in ateapiauth expects.
+func TestBuildServerTLSConfigWithoutCACertsDoesNotRequestClientCerts(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "server-bundle.pem")
+	writeServerBundle(t, bundlePath)
+
+	cfg, err := buildServerTLSConfig(context.Background(), bundlePath, "")
+	if err != nil {
+		t.Fatalf("buildServerTLSConfig() error = %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	defer listener.Close()
+
+	type handshake struct {
+		peerCerts int
+		err       error
+	}
+	served := make(chan handshake, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			served <- handshake{err: err}
+			return
+		}
+		defer conn.Close()
+		server := tls.Server(conn, cfg)
+		if err := server.HandshakeContext(context.Background()); err != nil {
+			served <- handshake{err: err}
+			return
+		}
+		served <- handshake{peerCerts: len(server.ConnectionState().PeerCertificates)}
+	}()
+
+	// InsecureSkipVerify because the server bundle written above is
+	// self-signed; this test is about the client's certificate, not the
+	// server's.
+	client, err := tls.Dial("tcp", listener.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true,
+		Certificates:       []tls.Certificate{clientCertificate(t, "spiffe://example.test/unverified")},
+	})
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer client.Close()
+
+	got := <-served
+	if got.err != nil {
+		t.Fatalf("server handshake error = %v, want success: the server asked for a client certificate it has no CA to verify", got.err)
+	}
+	if got.peerCerts != 0 {
+		t.Fatalf("server handshake saw %d peer certificate(s), want 0: a certificate the server cannot verify reached mtlsPeerIdentity", got.peerCerts)
+	}
+}
+
+// writeServerBundle writes a self-signed serving certificate for 127.0.0.1 to
+// path in credential-bundle order: the PKCS8 private key first, then the
+// certificate.
+func writeServerBundle(t *testing.T, path string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ateapi-test-server"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate() error = %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey() error = %v", err)
+	}
+	bundle := append(
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...,
+	)
+	if err := os.WriteFile(path, bundle, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+}
+
+// clientCertificate returns a self-signed client certificate carrying spiffeID
+// as its only URI SAN, the shape mtlsPeerIdentity reads an identity from.
+func clientCertificate(t *testing.T, spiffeID string) tls.Certificate {
+	t.Helper()
+	uri, err := url.Parse(spiffeID)
+	if err != nil {
+		t.Fatalf("Parse(%q) error = %v", spiffeID, err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "ateapi-test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		URIs:         []*url.URL{uri},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate() error = %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 func TestBuildServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
