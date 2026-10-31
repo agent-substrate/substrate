@@ -17,6 +17,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,11 +97,17 @@ func egressPolicyFromManifest(data []byte) (*ateapi.EgressPolicy, error) {
 	return policy, nil
 }
 
-// manifestToJSON converts a YAML or JSON manifest to JSON. YAML is a superset
-// of JSON, so one decoder parses both. The manifest must hold exactly one
-// document, counted the way the YAML spec counts them: an empty document, such
-// as the one a trailing "---" opens, is a document too, and is rejected.
+// manifestToJSON preserves JSON input and converts YAML to JSON. The manifest
+// must hold exactly one document, counted the way the YAML spec counts them:
+// an empty document, such as the one a trailing "---" opens, is rejected.
 func manifestToJSON(data []byte) ([]byte, error) {
+	if json.Valid(data) {
+		if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+			return nil, errors.New("manifest is empty")
+		}
+		// Keep the original line and column numbers for protojson errors.
+		return data, nil
+	}
 	dec := yamlv3.NewDecoder(bytes.NewReader(data))
 	if err := dec.Decode(&yamlv3.Node{}); err != nil {
 		if errors.Is(err, io.EOF) {

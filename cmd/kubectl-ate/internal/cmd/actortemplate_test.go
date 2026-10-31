@@ -114,10 +114,23 @@ snapshot_config:
 
 func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	tests := []struct {
-		name     string
-		manifest string
+		name            string
+		manifest        string
+		wantErrContains string
 	}{
 		{name: "empty", manifest: ""},
+		{name: "JSON null", manifest: " \nnull\n ", wantErrContains: "manifest is empty"},
+		{name: "multiple documents", manifest: "metadata: {name: first}\n---\nmetadata: {name: second}\n", wantErrContains: "more than one document"},
+		{
+			name:            "JSON resources limits list",
+			manifest:        "{\n  \"resources\": {\n    \"limits\": [{\"name\": \"cpu\", \"quantity\": \"1\"}]\n  }\n}\n",
+			wantErrContains: "(line 3:15): unexpected token [",
+		},
+		{
+			name:            "JSON unknown field",
+			manifest:        "{\n  \"metadata\": {\"atespace\": \"a\", \"name\": \"n\"},\n  \"sandboxClass\": \"gvisor\"\n}\n",
+			wantErrContains: "(line 3:3): unknown field \"sandboxClass\"",
+		},
 		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
 		{name: "bad enum", manifest: "snapshotConfig: {preferredFidelity: memory}\n"},
 		{name: "resources limits list", manifest: "resources: {limits: [{name: cpu, quantity: \"1\"}]}\n"},
@@ -126,8 +139,12 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got, err := actorTemplateFromManifest([]byte(test.manifest)); err == nil {
+			got, err := actorTemplateFromManifest([]byte(test.manifest))
+			if err == nil {
 				t.Fatalf("actorTemplateFromManifest succeeded: %v", got)
+			}
+			if !strings.Contains(err.Error(), test.wantErrContains) {
+				t.Errorf("error = %v, want substring %q", err, test.wantErrContains)
 			}
 		})
 	}
