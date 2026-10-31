@@ -29,7 +29,7 @@ const maxMembersPerPolicy = 1500
 
 var (
 	validGlobalRoles   = []string{authz.RoleOwner, authz.RoleViewer}
-	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer}
+	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleOperator, authz.RoleViewer}
 
 	bindingsPath = field.NewPath("access_policy", "bindings")
 )
