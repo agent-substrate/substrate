@@ -129,7 +129,16 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
 | `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for microVM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
-| `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
+| `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default, or `hyperdisk-balanced` when provisioned IOPS/throughput are set). | `BOOT_DISK_TYPE` | None |
+| `--boot-disk-provisioned-iops` | Provisioned IOPS for the node pool boot disk (`hyperdisk-balanced` only; must be set together with `--boot-disk-provisioned-throughput`). | `BOOT_DISK_PROVISIONED_IOPS` | None |
+| `--boot-disk-provisioned-throughput` | Provisioned throughput in MiB/s for the node pool boot disk (`hyperdisk-balanced` only; must be set together with `--boot-disk-provisioned-iops`). | `BOOT_DISK_PROVISIONED_THROUGHPUT_MBPS` | None |
+
+The `--boot-disk-*` flags apply only to a cluster this command creates. On an
+existing cluster it warns when no node pool has the requested boot disk; change
+an existing pool's boot disk with `gcloud container node-pools update`, which
+moves the pool's nodes onto the new boot disk. Provisioned IOPS and throughput
+must also fit the [Hyperdisk Balanced limits](https://cloud.google.com/compute/docs/disks/hd-types/hyperdisk-balanced)
+for the disk size, which GCE checks when it creates the nodes.
 
 `NODE_MACHINE_TYPE` was named `GVISOR_NODE_MACHINE_TYPE`. The old name still
 works and warns; rename it in your `.ate-dev-env.sh`.
@@ -383,7 +392,9 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--machine-type` | Machine type for the node pool. | `NODE_MACHINE_TYPE` | `c3-standard-4` |
 | `--enable-nested-virtualization` | Create the node pool with nested virtualization, exposing `/dev/kvm` for microVM workers. | `ENABLE_NESTED_VIRTUALIZATION` | `true` |
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
-| `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
+| `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default, or `hyperdisk-balanced` when provisioned IOPS/throughput are set). | `BOOT_DISK_TYPE` | None |
+| `--boot-disk-provisioned-iops` | Provisioned IOPS for the node pool boot disk (`hyperdisk-balanced` only; must be set together with `--boot-disk-provisioned-throughput`). | `BOOT_DISK_PROVISIONED_IOPS` | None |
+| `--boot-disk-provisioned-throughput` | Provisioned throughput in MiB/s for the node pool boot disk (`hyperdisk-balanced` only; must be set together with `--boot-disk-provisioned-iops`). | `BOOT_DISK_PROVISIONED_THROUGHPUT_MBPS` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
 | `--transfer-gsa-name` | Name of the snapshot transfer service account to create. ate-setup and `hack/teardown.sh` read the same variable. | `SNAPSHOT_TRANSFER_GSA_NAME` | `ate-snapshot-transfer` |
@@ -392,7 +403,8 @@ go run ./tools/setup-gcp bootstrap [flags]
 
 `--enable-nested-virtualization` is on by default and needs a `--machine-type`
 that supports the feature; pass `--enable-nested-virtualization=false` to turn
-it off. It applies only to a cluster this command creates.
+it off. It applies only to a cluster this command creates, as do the
+`--boot-disk-*` flags.
 
 ## Examples
 
