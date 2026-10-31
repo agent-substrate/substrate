@@ -195,3 +195,16 @@ func TestShapeMicroVM_AllowsLowPortsInTheGuest(t *testing.T) {
 		t.Errorf("%s = %q, want the caller's value kept", portStart, v)
 	}
 }
+
+func TestShapeMicroVM_MasksProcAndSys(t *testing.T) {
+	spec := Build(parityOptions)
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	if !slices.Contains(spec.Linux.ReadonlyPaths, "/proc/sys") {
+		t.Errorf("ReadonlyPaths = %v, want /proc/sys", spec.Linux.ReadonlyPaths)
+	}
+	if !slices.Contains(spec.Linux.MaskedPaths, "/proc/kcore") {
+		t.Errorf("MaskedPaths = %v, want /proc/kcore", spec.Linux.MaskedPaths)
+	}
+}

@@ -57,9 +57,10 @@ type MicroVMOptions struct {
 }
 
 // ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
-// bind mounts to guest share paths, fills in kata's default resources, and
-// lifts the guest's privileged-port limit. It must run on an unshaped spec,
-// and errors on a bind it cannot place in the guest.
+// bind mounts to guest share paths, sets containerd's default masked and
+// read-only paths, fills in kata's default resources, and lifts the guest's
+// privileged-port limit. It must run on an unshaped spec, and errors on a
+// bind it cannot place in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	// Translate volume bind mounts into guest share paths.
 	volumes := make([]specs.Mount, 0, len(spec.Mounts))
@@ -93,6 +94,10 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	if _, ok := spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"]; !ok {
 		spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"] = "0"
 	}
+	// gVisor needs neither list: its procfs and sysfs leave out the masked
+	// files and keep most of /proc/sys read-only.
+	spec.Linux.MaskedPaths = guestMaskedPaths()
+	spec.Linux.ReadonlyPaths = guestReadonlyPaths()
 	// The container's own declared limits survive the merge; StartRootfsContainer
 	// sets CgroupsPath.
 	spec.Linux.Resources = mergeKataResources(spec.Linux.Resources)
@@ -152,6 +157,32 @@ func guestSystemMounts() []specs.Mount {
 		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
 		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
 		{Destination: "/run", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+	}
+}
+
+// guestMaskedPaths returns containerd's default masked paths that are files.
+// kata-agent masks by bind-mounting /dev/null and skips directories.
+// https://github.com/containerd/containerd/blob/v2.4.2/pkg/oci/spec.go#L262-L276
+func guestMaskedPaths() []string {
+	return []string{
+		"/proc/interrupts",
+		"/proc/kcore",
+		"/proc/keys",
+		"/proc/latency_stats",
+		"/proc/timer_list",
+		"/proc/timer_stats",
+		"/proc/sched_debug",
+	}
+}
+
+// guestReadonlyPaths returns containerd's default read-only paths.
+func guestReadonlyPaths() []string {
+	return []string{
+		"/proc/bus",
+		"/proc/fs",
+		"/proc/irq",
+		"/proc/sys",
+		"/proc/sysrq-trigger",
 	}
 }
 
