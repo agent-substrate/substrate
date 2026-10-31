@@ -50,6 +50,29 @@ This command will:
 Inspect the template with:
 ```bash
 kubectl ate get actor-template sandbox-template -a ate-demo-sandbox
+# micro-VM variant:
+kubectl ate get actor-template sandbox-microvm -a ate-demo-sandbox-microvm
+```
+
+#### Micro-VM variant
+
+The default template runs on gVisor. Where gVisor cannot start a sandbox on the
+host kernel, deploy the micro-VM variant instead:
+
+```bash
+go run ./cmd/ate-setup deploy demo sandbox-microvm
+```
+
+It installs the same server into the `ate-demo-sandbox-microvm` namespace and
+atespace, with the pool's workers on microVM (`ateworker-microvm`).
+`deploy ate-system` already stages the microVM guest assets and applies the
+cluster-wide `microvm` `SandboxConfig`. Only the sandbox class and the template
+name differ: the client, the commands, and the suspend/resume behavior are the
+same. Where the walkthrough below names `sandbox-template` or `ate-demo-sandbox`,
+use `sandbox-microvm` in `ate-demo-sandbox-microvm`. For example, step 2 becomes:
+
+```bash
+kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox-microvm --template sandbox-microvm
 ```
 
 ### 2. Create a Sandbox Actor
@@ -103,4 +126,10 @@ To remove the sandbox demo resources (actors, template, atespace, workerpool, an
 
 ```bash
 go run ./cmd/ate-setup delete demo sandbox
+```
+
+The micro-VM variant is removed the same way:
+
+```bash
+go run ./cmd/ate-setup delete demo sandbox-microvm
 ```
