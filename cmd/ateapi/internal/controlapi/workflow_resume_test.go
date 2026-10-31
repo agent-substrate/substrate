@@ -2181,7 +2181,7 @@ type contentionStore struct {
 func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, _ *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
 	worker, ok := s.workers[workerName]
 	if !ok {
-		return nil, store.ErrNotFound
+		return nil, store.ErrWorkerNotFound
 	}
 	if admit != nil {
 		if err := admit(worker); err != nil {
