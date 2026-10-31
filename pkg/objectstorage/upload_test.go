@@ -78,6 +78,7 @@ func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
 		{"all_holes", 0, uploadPlan{1, 1, 8<<20 + 512<<10}, uploadPlan{1, 1, 168 << 20}},
 		{"small", 1, uploadPlan{1, 1, 8<<20 + 2560<<10}, uploadPlan{1, 1, 168 << 20}},
 		{"two_chunks", 9, uploadPlan{2, 1, 146<<20 + 512<<10}, uploadPlan{2, 1, 288 << 20}},
+		{"two_ranges", 80, uploadPlan{3, 2, 96 << 20}, uploadPlan{5, 2, 480 << 20}},
 		{"multiple_ranges", 192, uploadPlan{3, 3, 144 << 20}, uploadPlan{5, 3, 480 << 20}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

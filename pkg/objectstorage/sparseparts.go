@@ -102,13 +102,15 @@ func planSparseParts(exts []extentRange, populated int64, n int) [][]extentRange
 	return groups
 }
 
-// sparsePartCount picks how many parts to split a snapshot into.
+// sparsePartCount picks how many parts to split a snapshot into. A snapshot
+// whose encoded stream can reach uploadCompositeMin (64 MiB) splits into at
+// least two range parts so it does not fall back to a single-stream composite
+// upload.
 func sparsePartCount(populated int64) int {
-	n := int(populated / sparsePartTarget)
-	if n < 1 {
-		n = 1
+	if populated < sparsePartTarget && sparseEncodedBound(populated, 1) < uploadCompositeMin {
+		return 1
 	}
-	return min(n, sparseMaxParts)
+	return min(max(int(populated/sparsePartTarget), 2), sparseMaxParts)
 }
 
 // sparseCopyPool holds the 1 MiB buffers parts read the source through.
