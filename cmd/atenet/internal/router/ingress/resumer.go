@@ -37,6 +37,12 @@ import (
 // conflicts are retried; capacity errors fail immediately.
 const failFastResumeBudget = 15 * time.Second
 
+// attemptCeiling bounds a ResumeActor RPC independently of the retry budget.
+// It leaves a minute beyond ateapi's 10-minute handler deadline (maxRPCDeadline)
+// before the client stops waiting. The server deadline alone cannot bound a
+// stalled RPC or guarantee that the handler has stopped.
+const attemptCeiling = 11 * time.Minute
+
 // resumeBackoff builds the backoff between resume attempts while a request is
 // parked, from the configured retry parameters.
 //
@@ -217,7 +223,6 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 	// the shared resume. Only cancellation is detached; the trace context is kept.
 	bgCtx, bgCancel := context.WithTimeout(trace.ContextWithSpanContext(context.Background(), callerSpanCtx), r.budget)
 	defer bgCancel()
-	attemptCtx := context.WithoutCancel(bgCtx)
 
 	backoff := r.backoff
 
@@ -225,6 +230,13 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 	var lastRetryErr error
 
 	err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
+		// WithoutCancel drops the budget's deadline together with its
+		// cancellation, so an attempt may outlive the budget while it
+		// completes server-side. Give each attempt its own ceiling so a
+		// wedged connection cannot hang the loop — and the flight's publish —
+		// forever.
+		attemptCtx, cancelAttempt := context.WithTimeout(context.WithoutCancel(bgCtx), attemptCeiling)
+		defer cancelAttempt()
 		var err error
 		resumeResp, err = r.apiClient.ResumeActor(attemptCtx, &ateapi.ResumeActorRequest{
 			Actor: actorRef.ToObjectRef(),
