@@ -29,6 +29,7 @@ import (
 	ateenvv1alpha "go.ate.dev/substrate/internal/proto/ateenv/v1alpha"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/proto/clientsideboundarypb"
 	"go.ate.dev/substrate/internal/proto/glutton"
 	"go.ate.dev/substrate/internal/proto/grpcechopb"
 	"go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
@@ -364,6 +365,7 @@ var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateletpb.File_internal_proto_ateletpb_atelet_proto,
 	ateworkerpb.File_internal_proto_ateworkerpb_ateworker_proto,
 	ateconfigpb.File_pkg_proto_ateconfigpb_apiconfig_proto,
+	clientsideboundarypb.File_internal_proto_clientsideboundarypb_boundary_proto,
 	credprovider.File_api_credprovider_v1_credprovider_proto,
 	glutton.File_internal_proto_glutton_glutton_proto,
 	grpcechopb.File_internal_proto_grpcechopb_grpcecho_proto,
