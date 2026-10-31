@@ -29,6 +29,7 @@ Provider names and issuers must be unique. `issuer` must be an HTTPS URL and
 `audiences` must be non-empty; a token is accepted when any configured audience
 matches. `certificateAuthorityFile` and `discoveryTokenFile` are optional and
 are needed for OIDC discovery against some private Kubernetes API servers.
+ate-api-server re-reads both files when they change.
 
 What an authenticated caller may do is decided by authorization; see
 [authorization.md](authorization.md). Its principal ID does not record which

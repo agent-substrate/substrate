@@ -36,9 +36,7 @@ var trustBundleNames = []string{
 func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	log.Step("ensure_apiserver_prerequisites")
 
-	// Not through ensureSecret: an existing pool Secret may still need its
-	// public keys published, which CreateJWTAuthorityPoolSecret handles.
-	if err := e.CreateJWTAuthorityPoolSecret(ctx); err != nil {
+	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDJWTPool, e.CreateJWTAuthorityPoolSecret); err != nil {
 		return err
 	}
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCAPool, e.CreateActorIDCAPoolSecret); err != nil {

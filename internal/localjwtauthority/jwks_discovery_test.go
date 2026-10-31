@@ -15,8 +15,10 @@
 package localjwtauthority
 
 import (
-	"os"
-	"path/filepath"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,24 +26,42 @@ import (
 	"go.ate.dev/substrate/internal/oidcjwt"
 )
 
-const fileSourceTestIssuer = "https://idp.ate-system.svc"
-
-func writeJWKS(t *testing.T, path string, pool *ConcretePool) {
+// discoveryServer serves pool's discovery document and JWK set the way
+// ate-idp-server does, reading pool on every request so a rotation shows.
+func discoveryServer(t *testing.T, mu *sync.Mutex, pool *ConcretePool) *httptest.Server {
 	t.Helper()
-	b, err := pool.JWKS()
-	if err != nil {
-		t.Fatalf("JWKS: %v", err)
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatalf("write JWKS: %v", err)
-	}
+	srv := httptest.NewUnstartedServer(nil)
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "jwks_uri": srv.URL + "/jwks"})
+		case "/jwks":
+			mu.Lock()
+			keys, err := pool.VerificationKeys()
+			mu.Unlock()
+			var b []byte
+			if err == nil {
+				b, err = JWKS(keys)
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(b)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
 }
 
-func signTestJWT(t *testing.T, pool *ConcretePool, now time.Time) string {
+func signTestJWT(t *testing.T, pool *ConcretePool, issuer string, now time.Time) string {
 	t.Helper()
 	jwt, err := pool.SignJWT(&actoridjwt.Claims{
 		Kind:       actoridjwt.KindWorkerForActor,
-		Issuer:     fileSourceTestIssuer,
+		Issuer:     issuer,
 		Subject:    "worker-for-actor/a/b",
 		Audiences:  []string{"aud"},
 		Expiration: now.Add(time.Hour),
@@ -55,21 +75,22 @@ func signTestJWT(t *testing.T, pool *ConcretePool, now time.Time) string {
 	return jwt
 }
 
-// TestJWKS_FeedsFileKeySource proves the pool's published JWKS is what the
-// verifier's file source needs: tokens the pool signs verify against it,
-// across a rotation, and tokens from a stranger do not.
-func TestJWKS_FeedsFileKeySource(t *testing.T) {
+// TestJWKS_ServedOverDiscovery proves the pool's published JWKS is what a
+// verifier fetching it through OIDC discovery needs: tokens the pool signs
+// verify against it, across a rotation, and tokens from a stranger do not.
+func TestJWKS_ServedOverDiscovery(t *testing.T) {
 	first, err := GenerateAuthority("ES256", "first")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var mu sync.Mutex
 	pool := &ConcretePool{Authorities: []*Authority{first}, ActiveForSigning: "first"}
-	path := filepath.Join(t.TempDir(), "jwks.json")
-	writeJWKS(t, path, pool)
+	srv := discoveryServer(t, &mu, pool)
+	issuer := srv.URL
 
 	now := time.Now()
-	verifier := oidcjwt.NewVerifier(fileSourceTestIssuer, []string{"aud"}, oidcjwt.FileKeySource(path), oidcjwt.WithSubstrateClaims())
-	claims, err := verifier.Verify(t.Context(), signTestJWT(t, pool, now), now)
+	verifier := oidcjwt.NewVerifier(issuer, []string{"aud"}, oidcjwt.HTTPKeySource(issuer, srv.Client()), oidcjwt.WithSubstrateClaims())
+	claims, err := verifier.Verify(t.Context(), signTestJWT(t, pool, issuer, now), now)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -84,10 +105,11 @@ func TestJWKS_FeedsFileKeySource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mu.Lock()
 	pool.Authorities = append(pool.Authorities, next)
 	pool.ActiveForSigning = "next"
-	writeJWKS(t, path, pool)
-	if _, err := verifier.Verify(t.Context(), signTestJWT(t, pool, now), now); err != nil {
+	mu.Unlock()
+	if _, err := verifier.Verify(t.Context(), signTestJWT(t, pool, issuer, now), now); err != nil {
 		t.Fatalf("Verify after rotation: %v", err)
 	}
 
@@ -96,7 +118,8 @@ func TestJWKS_FeedsFileKeySource(t *testing.T) {
 		t.Fatal(err)
 	}
 	strangerPool := &ConcretePool{Authorities: []*Authority{stranger}, ActiveForSigning: "stranger"}
-	if _, err := verifier.Verify(t.Context(), signTestJWT(t, strangerPool, now.Add(2*time.Minute)), now.Add(2*time.Minute)); err == nil {
+	later := now.Add(2 * time.Minute)
+	if _, err := verifier.Verify(t.Context(), signTestJWT(t, strangerPool, issuer, later), later); err == nil {
 		t.Fatal("Verify of a token from an unknown authority succeeded, want error")
 	}
 }

@@ -22,9 +22,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,7 +44,6 @@ import (
 )
 
 const (
-	issuer   = "https://idp.ate-system.svc"
 	audience = "objectstore-plugin.ate.dev"
 	atespace = "team-a"
 	name     = "bot"
@@ -49,31 +51,56 @@ const (
 	tagURI   = "gs://snaps/root/atespaces/ate-golden/tags/7a3c0b2a-9e4f-4c3d-8a6b-5f2e1d0c9b8a"
 )
 
-// signer mints real JWTs from a pool whose public keys the verifier reads.
+// signer mints real JWTs from a pool whose public keys its issuer serves.
 type signer struct {
 	pool *localjwtauthority.ConcretePool
 	now  time.Time
 	// node is the node the signed tokens are minted for.
 	node string
+	// issuer is the URL of a TLS server that serves OIDC discovery and the
+	// pool's JWKS, the way ate-idp-server does. client trusts it.
+	issuer string
+	client *http.Client
+	srv    *httptest.Server
+	// down makes the issuer answer 503.
+	down *atomic.Bool
 }
 
-func newSigner(t *testing.T) (*signer, *oidcjwt.Verifier) {
+func newPool(t *testing.T) *localjwtauthority.ConcretePool {
 	t.Helper()
 	auth, err := localjwtauthority.GenerateAuthority("ES256", "k1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
-	jwks, err := pool.JWKS()
+	return &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
+}
+
+func newSigner(t *testing.T) (*signer, *oidcjwt.Verifier) {
+	t.Helper()
+	pool := newPool(t)
+	keys, err := pool.VerificationKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "jwks.json")
-	if err := os.WriteFile(path, jwks, 0o600); err != nil {
+	jwks, err := localjwtauthority.JWKS(keys)
+	if err != nil {
 		t.Fatal(err)
 	}
-	v := oidcjwt.NewVerifier(issuer, []string{audience}, oidcjwt.FileKeySource(path), oidcjwt.WithSubstrateClaims())
-	return &signer{pool: pool, now: time.Now(), node: "node-1"}, v
+	down := &atomic.Bool{}
+	mux := http.NewServeMux()
+	var srv *httptest.Server
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		if down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "jwks_uri": srv.URL + "/jwks"})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(jwks) })
+	srv = httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	s := &signer{pool: pool, now: time.Now(), node: "node-1", issuer: srv.URL, client: srv.Client(), srv: srv, down: down}
+	return s, NewVerifier(s.issuer, s.client)
 }
 
 func (s *signer) jwt(t *testing.T, kind actoridjwt.Kind, aud string, actorUID string) string {
@@ -85,7 +112,7 @@ func (s *signer) jwt(t *testing.T, kind actoridjwt.Kind, aud string, actorUID st
 	}
 	jwt, err := s.pool.SignJWT(&actoridjwt.Claims{
 		Kind:       kind,
-		Issuer:     issuer,
+		Issuer:     s.issuer,
 		Subject:    kind.SubjectPrefix() + "/" + atespace + "/" + name,
 		Audiences:  []string{aud},
 		Expiration: s.now.Add(time.Hour),
@@ -128,7 +155,7 @@ func (s *signer) rawJWT(t *testing.T, claims map[string]any) string {
 func (s *signer) rawClaims() map[string]any {
 	substrate := map[string]string{"atespace": atespace, "actorName": name, "actorUID": uid, "node": s.node}
 	return map[string]any{
-		"iss": issuer, "sub": "worker-for-actor/" + atespace + "/" + name, "aud": audience,
+		"iss": s.issuer, "sub": "worker-for-actor/" + atespace + "/" + name, "aud": audience,
 		"exp": s.now.Add(time.Hour).Unix(), "nbf": s.now.Add(-time.Minute).Unix(), "iat": s.now.Unix(),
 		"worker-for-actor.ate.dev": substrate,
 	}
@@ -141,6 +168,11 @@ func (s *signer) rawJWTWithout(t *testing.T, field string) string {
 	delete(claims["worker-for-actor.ate.dev"].(map[string]string), field)
 	return s.rawJWT(t, claims)
 }
+
+// errTransport fails every request with err.
+type errTransport struct{ err error }
+
+func (e errTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, e.err }
 
 // fakeVerifier returns fixed claims, for claim sets oidcjwt never produces.
 type fakeVerifier struct {
@@ -253,8 +285,16 @@ func TestAuthorize(t *testing.T) {
 
 func TestAuthorize_Refusals(t *testing.T) {
 	s, v := newSigner(t)
-	stranger, _ := newSigner(t)
+	// stranger signs for the same issuer with a key the issuer does not
+	// publish.
+	stranger := &signer{pool: newPool(t), now: s.now, node: s.node, issuer: s.issuer}
 	good := s.jwt(t, actoridjwt.KindWorkerForActor, audience, uid)
+	dead, deadVerifier := newSigner(t)
+	dead.srv.Close()
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancelExpired()
 	noClaim := s.rawClaims()
 	delete(noClaim, "worker-for-actor.ate.dev")
 	bothClaims := s.rawClaims()
@@ -268,7 +308,11 @@ func TestAuthorize_Refusals(t *testing.T) {
 		// verifier replaces the real one when set.
 		verifier Verifier
 		lookup   *fakeLookup
-		want     codes.Code
+		// ctx is the caller's context, t.Context() when nil.
+		ctx  context.Context
+		want codes.Code
+		// msg is a substring the error message must hold, when set.
+		msg string
 		// lookedUp says whether the refusal comes after the lookup.
 		lookedUp bool
 	}{
@@ -276,6 +320,11 @@ func TestAuthorize_Refusals(t *testing.T) {
 		{name: "verifier refuses", jwt: good, verifier: fakeVerifier{err: errors.New("expired")}, want: codes.Unauthenticated},
 		{name: "bad signature", jwt: badSignature, want: codes.Unauthenticated},
 		{name: "wrong audience", jwt: wrongAudience, want: codes.Unauthenticated},
+		{name: "issuer unreachable", jwt: dead.jwt(t, actoridjwt.KindWorkerForActor, audience, uid), verifier: deadVerifier, want: codes.Unavailable, msg: "could not fetch signing keys from " + dead.issuer},
+		{name: "issuer's certificate not trusted", jwt: good, verifier: NewVerifier(s.issuer, &http.Client{}), want: codes.Unavailable, msg: "x509"},
+		{name: "HTTP client timeout", jwt: good, verifier: NewVerifier(s.issuer, &http.Client{Transport: errTransport{fmt.Errorf("client timeout: %w", context.DeadlineExceeded)}}), want: codes.Unavailable, msg: "client timeout"},
+		{name: "caller gave up during the key fetch", jwt: good, verifier: NewVerifier(s.issuer, s.client), ctx: canceled, want: codes.Canceled},
+		{name: "caller's deadline passed during the key fetch", jwt: good, verifier: NewVerifier(s.issuer, s.client), ctx: expired, want: codes.DeadlineExceeded},
 		{name: "both substrate claims", jwt: bothKinds, want: codes.Unauthenticated},
 		{name: "actor's own token", jwt: s.jwt(t, actoridjwt.KindActor, audience, uid), want: codes.PermissionDenied},
 		{name: "no substrate claim", jwt: s.rawJWT(t, noClaim), want: codes.PermissionDenied},
@@ -310,18 +359,49 @@ func TestAuthorize_Refusals(t *testing.T) {
 			if lookup == nil {
 				lookup = &fakeLookup{actor: actorWithTag()}
 			}
+			ctx := tc.ctx
+			if ctx == nil {
+				ctx = t.Context()
+			}
 			a := New(verifier, lookup)
 			a.now = func() time.Time { return s.now }
-			got, err := a.Authorize(t.Context(), tc.jwt)
+			got, err := a.Authorize(ctx, tc.jwt)
 			if got != nil {
 				t.Errorf("decision = %+v, want nil", got)
 			}
 			if status.Code(err) != tc.want {
 				t.Errorf("code = %v (%v), want %v", status.Code(err), err, tc.want)
 			}
+			if !strings.Contains(status.Convert(err).Message(), tc.msg) {
+				t.Errorf("message = %q, want it to hold %q", status.Convert(err).Message(), tc.msg)
+			}
 			if wantCalls := map[bool]int{true: 1, false: 0}[tc.lookedUp]; lookup.calls != wantCalls {
 				t.Errorf("lookup was called %d times, want %d", lookup.calls, wantCalls)
 			}
 		})
+	}
+}
+
+// TestAuthorize_IssuerRecovers checks that an exchange that started while the
+// issuer was down serves once it is back and the one-minute retry backoff
+// has passed.
+func TestAuthorize_IssuerRecovers(t *testing.T) {
+	s, v := newSigner(t)
+	jwt := s.jwt(t, actoridjwt.KindWorkerForActor, audience, uid)
+	a := New(v, &fakeLookup{actor: actorWithTag()})
+	now := s.now
+	a.now = func() time.Time { return now }
+
+	s.down.Store(true)
+	if _, err := a.Authorize(t.Context(), jwt); status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "non-200 response code 503") {
+		t.Fatalf("Authorize while the issuer is down = %v, want UNAVAILABLE naming the 503", err)
+	}
+	s.down.Store(false)
+	if _, err := a.Authorize(t.Context(), jwt); status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "the last attempt failed") {
+		t.Fatalf("Authorize within the backoff = %v, want UNAVAILABLE naming the backoff", err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := a.Authorize(t.Context(), jwt); err != nil {
+		t.Fatalf("Authorize after the issuer recovered = %v", err)
 	}
 }

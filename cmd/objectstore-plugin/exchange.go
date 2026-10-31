@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -44,7 +45,7 @@ type exchangeConfig struct {
 	listen          string
 	credBundle      string
 	issuer          string
-	jwksFile        string
+	issuerCAFile    string
 	transferAccount string
 	ateapi          actorlookup.Config
 }
@@ -63,19 +64,13 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if cfg.issuer == "" {
 		return nil, nil, errors.New("--actor-jwt-issuer is required to serve the exchange on GCS")
 	}
-	if cfg.jwksFile == "" {
-		return nil, nil, errors.New("--actor-jwt-jwks-file is required to serve the exchange on GCS")
-	}
 	if cfg.transferAccount == "" {
 		return nil, nil, errors.New("--transfer-service-account is required to serve the exchange on GCS")
 	}
-	// Read the key set once now, so a wrong path fails the start rather
-	// than the first exchange.
-	keys := oidcjwt.FileKeySource(cfg.jwksFile)
-	if _, err := keys.Keys(ctx); err != nil {
-		return nil, nil, fmt.Errorf("while reading the actor JWT key set: %w", err)
+	verifier, err := newActorVerifier(ctx, cfg.issuer, cfg.issuerCAFile)
+	if err != nil {
+		return nil, nil, err
 	}
-	verifier := oidcjwt.NewVerifier(cfg.issuer, []string{actorauthz.Audience}, keys, oidcjwt.WithSubstrateClaims())
 	lookup, err := actorlookup.New(cfg.ateapi)
 	if err != nil {
 		return nil, nil, err
@@ -86,6 +81,40 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 		return nil, nil, fmt.Errorf("while setting up the GCS credential issuer: %w", err)
 	}
 	return exchange.New(actorauthz.New(verifier, lookup), issuer), func() { _ = lookup.Close() }, nil
+}
+
+// newActorVerifier returns the exchange's actor JWT verifier, with the
+// issuer's keys already fetched by checkIssuerCertificate.
+func newActorVerifier(ctx context.Context, issuer, caFile string) (*oidcjwt.Verifier, error) {
+	client, err := oidcjwt.NewHTTPClient(issuer, caFile, "")
+	if err != nil {
+		return nil, fmt.Errorf("while setting up the actor JWT issuer client: %w", err)
+	}
+	verifier := actorauthz.NewVerifier(issuer, client)
+	if err := checkIssuerCertificate(ctx, issuer, verifier); err != nil {
+		return nil, err
+	}
+	return verifier, nil
+}
+
+// issuerCheckTimeout bounds the start-time fetch from the actor JWT issuer.
+const issuerCheckTimeout = 10 * time.Second
+
+// checkIssuerCertificate fetches the issuer's keys into verifier's cache so a
+// certificate the client does not trust fails the start instead of every
+// exchange. Other errors may be transient, such as an issuer that is not up
+// yet, so they are logged and the exchange serves.
+func checkIssuerCertificate(ctx context.Context, issuer string, verifier *oidcjwt.Verifier) error {
+	ctx, cancel := context.WithTimeout(ctx, issuerCheckTimeout)
+	defer cancel()
+	err := verifier.Refresh(ctx, time.Now())
+	if certErr := (*tls.CertificateVerificationError)(nil); errors.As(err, &certErr) {
+		return fmt.Errorf("actor JWT issuer serves a certificate that does not verify against --actor-jwt-issuer-ca-file, or the system roots when it is empty: %w", err)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "Could not fetch actor JWT signing keys at start; exchanges retry the fetch", slog.String("issuer", issuer), slog.Any("err", err))
+	}
+	return nil
 }
 
 // exchangeTransportCredentials serves the pod's service DNS certificate,

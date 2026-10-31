@@ -299,26 +299,46 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 }
 
 func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
-	cfg := config.Config{
-		TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
-		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
-		ActorJWTIssuer:                    "https://idp.example.com/prod",
-	}
-	cfg.SnapshotLocation = "gs://ate-snapshots/"
-	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
-	)}
-	if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cm.Data["ATE_API_ACTOR_JWT_ISSUER"]; got != cfg.ActorJWTIssuer {
-		t.Errorf("ATE_API_ACTOR_JWT_ISSUER = %q, want %q", got, cfg.ActorJWTIssuer)
+	const bundle = "/run/servicedns.podcert.ate.dev/trust-bundle.pem"
+	for _, tc := range []struct {
+		name       string
+		namespace  string
+		issuer     string
+		wantCAFile string
+	}{
+		{name: "default issuer", namespace: NamespaceAteSystem, issuer: "https://idp.ate-system.svc", wantCAFile: bundle},
+		{name: "default issuer of a relocated install", namespace: "ate-dev", issuer: "https://idp.ate-dev.svc", wantCAFile: bundle},
+		{name: "custom issuer", namespace: NamespaceAteSystem, issuer: "https://idp.example.com/prod"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
+				PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
+				ActorJWTIssuer:                    tc.issuer,
+			}
+			cfg.Namespace = tc.namespace
+			cfg.SnapshotLocation = "gs://ate-snapshots/"
+			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tc.namespace}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: tc.namespace}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: tc.namespace}},
+			)}
+			if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			cm, err := e.Kube.GetConfigMap(t.Context(), tc.namespace, ConfigMapAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cm.Data["ATE_API_ACTOR_JWT_ISSUER"]; got != tc.issuer {
+				t.Errorf("ATE_API_ACTOR_JWT_ISSUER = %q, want %q", got, tc.issuer)
+			}
+			// The key must be present even when empty, or the sidecar gets
+			// the literal $(ATE_API_ACTOR_JWT_ISSUER_CA_FILE).
+			if got, ok := cm.Data["ATE_API_ACTOR_JWT_ISSUER_CA_FILE"]; !ok || got != tc.wantCAFile {
+				t.Errorf("ATE_API_ACTOR_JWT_ISSUER_CA_FILE = %q (present: %v), want %q", got, ok, tc.wantCAFile)
+			}
+		})
 	}
 }
 

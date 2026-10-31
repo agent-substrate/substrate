@@ -355,6 +355,14 @@ and the account needs object admin and bucket viewer on every snapshot bucket.
 `ate-snapshot-transfer` by default, with both grants.
 kind does not use it.
 
+The exchange verifies the actor JWT with keys it fetches from `actorJWT.issuer`
+through OpenID Connect discovery. The default issuer is the install's
+ate-idp-server. A custom issuer must route to that ate-idp-server, which
+serves the keys the install signs actor JWTs with. It must also be reachable
+from the ate-api-server pod and serve a certificate the system roots trust.
+The exchange fetches the keys once at start, and exits if the issuer's
+certificate does not verify. Then ate-api-server does not start either.
+
 With `--kind`, ate-setup defaults `storage.snapshotLocation` to
 `gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster
 rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`. On GKE, ate-setup

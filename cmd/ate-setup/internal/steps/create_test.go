@@ -195,16 +195,13 @@ func TestNewJWTPoolSecretData(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newJWTPoolSecretData() error = %v", err)
 			}
-			if diff := cmp.Diff([]string{"jwks", "pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
+			if diff := cmp.Diff([]string{"pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
 				t.Errorf("secret keys differ (-want +got):\n%s", diff)
 			}
 
 			pool, err := localjwtauthority.Unmarshal(data["pool"])
 			if err != nil {
 				t.Fatalf("Unmarshal() error = %v", err)
-			}
-			if jwks, err := pool.JWKS(); err != nil || !bytes.Equal(jwks, data["jwks"]) {
-				t.Errorf("jwks = %s, want the pool's public keys (%v)", data["jwks"], err)
 			}
 			if len(pool.Authorities) != 1 {
 				t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
@@ -259,23 +256,19 @@ func TestEnsurePodCertificateCAs(t *testing.T) {
 	}
 }
 
-func TestCreateJWTPoolPublishesKeysOfExistingPool(t *testing.T) {
+// TestCreateJWTPoolKeepsExistingPool checks that an existing pool Secret is
+// left as it is, including a "jwks" key that earlier versions wrote.
+func TestCreateJWTPoolKeepsExistingPool(t *testing.T) {
 	poolBytes, _, err := localjwtauthority.GeneratePool("ES256", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantJWKS, err := localjwtauthority.PublicJWKS(poolBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range []struct {
-		name        string
-		data        map[string][]byte
-		wantUpdates int
+		name string
+		data map[string][]byte
 	}{
-		{"pool from before jwks", map[string][]byte{"pool": poolBytes}, 1},
-		{"pool with a stale jwks", map[string][]byte{"pool": poolBytes, "jwks": []byte(`{"keys":[]}`)}, 1},
-		{"pool with jwks", map[string][]byte{"pool": poolBytes, "jwks": wantJWKS}, 0},
+		{"pool", map[string][]byte{"pool": poolBytes}},
+		{"pool with a stale jwks", map[string][]byte{"pool": poolBytes, "jwks": []byte(`{"keys":[]}`)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			kc := fake.NewSimpleClientset(&corev1.Secret{
@@ -295,11 +288,11 @@ func TestCreateJWTPoolPublishesKeysOfExistingPool(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(got.Data["pool"], poolBytes) || !bytes.Equal(got.Data["jwks"], wantJWKS) {
-				t.Errorf("secret data = %v keys, want the same pool and its jwks", slices.Sorted(maps.Keys(got.Data)))
+			if diff := cmp.Diff(tc.data, got.Data); diff != "" {
+				t.Errorf("secret data differs (-want +got):\n%s", diff)
 			}
-			if updates != tc.wantUpdates {
-				t.Errorf("updates = %d, want %d", updates, tc.wantUpdates)
+			if updates != 0 {
+				t.Errorf("updates = %d, want 0", updates)
 			}
 		})
 	}
