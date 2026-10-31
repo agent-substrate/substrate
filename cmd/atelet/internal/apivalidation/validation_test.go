@@ -1810,7 +1810,11 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "capabilities: lowercase rejected",
 			obj:  caps(nil, []string{"net_bind_service"}),
-			want: field.ErrorList{field.Invalid(capsPath.Child("drop").Index(0), nil, "")},
+			want: field.ErrorList{field.NotSupported[string](capsPath.Child("drop").Index(0), nil, nil)},
+		}, {
+			name: "capabilities: unknown name rejected",
+			obj:  caps(nil, []string{"NET_ADIMN"}),
+			want: field.ErrorList{field.NotSupported[string](capsPath.Child("drop").Index(0), nil, nil)},
 		}, {
 			name: "capabilities: duplicate rejected by the set",
 			obj:  caps([]string{"SYS_TIME", "SYS_TIME"}, nil),

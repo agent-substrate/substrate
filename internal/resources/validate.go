@@ -38,6 +38,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -370,10 +371,20 @@ func ValidatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
 	return nil
 }
 
-// capabilityRE constrains Linux capability names: uppercase, without the
-// "CAP_" prefix (which is added when the OCI spec is written; the prefixed
-// spelling would silently grant nothing).
-var capabilityRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+// linuxCapabilities are the Linux capability names, in bit order, without the
+// "CAP_" prefix (which is added when the OCI spec is written). runsc and
+// kata-agent accept exactly these, and kata-agent panics on any other name.
+var linuxCapabilities = sets.New(
+	"CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID",
+	"KILL", "SETGID", "SETUID", "SETPCAP", "LINUX_IMMUTABLE",
+	"NET_BIND_SERVICE", "NET_BROADCAST", "NET_ADMIN", "NET_RAW", "IPC_LOCK",
+	"IPC_OWNER", "SYS_MODULE", "SYS_RAWIO", "SYS_CHROOT", "SYS_PTRACE",
+	"SYS_PACCT", "SYS_ADMIN", "SYS_BOOT", "SYS_NICE", "SYS_RESOURCE",
+	"SYS_TIME", "SYS_TTY_CONFIG", "MKNOD", "LEASE", "AUDIT_WRITE",
+	"AUDIT_CONTROL", "SETFCAP", "MAC_OVERRIDE", "MAC_ADMIN", "SYSLOG",
+	"WAKE_ALARM", "BLOCK_SUSPEND", "AUDIT_READ", "PERFMON", "BPF",
+	"CHECKPOINT_RESTORE",
+)
 
 // ValidateCapabilities checks each capability name. "ALL" is accepted only
 // when allowAll is set, which is the case for drop but not add.
@@ -389,8 +400,12 @@ func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) fie
 			errs = append(errs, field.TooLong(p, nil, 63))
 		case strings.HasPrefix(c, "CAP_"):
 			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
-		case !capabilityRE.MatchString(c):
-			errs = append(errs, field.Invalid(p, c, "must be an uppercase capability name like 'NET_BIND_SERVICE'"))
+		case !linuxCapabilities.Has(c):
+			supported := sets.List(linuxCapabilities)
+			if allowAll {
+				supported = append(supported, "ALL")
+			}
+			errs = append(errs, field.NotSupported(p, c, supported))
 		}
 	}
 	return errs

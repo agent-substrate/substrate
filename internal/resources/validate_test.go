@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -539,6 +540,9 @@ func TestValidateCapabilities(t *testing.T) {
 		{"lowercase", []string{"net_admin"}, false, 1},
 		{"too long", []string{strings.Repeat("A", 64)}, false, 1},
 		{"each bad entry reported", []string{"CAP_X", "ok", "NET_ADMIN"}, false, 2},
+		{"unknown name", []string{"NET_ADIMN"}, false, 1},
+		{"unknown name in drop", []string{"NET_ADIMN"}, true, 1},
+		{"every known name", sets.List(linuxCapabilities), false, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

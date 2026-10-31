@@ -859,13 +859,13 @@ message Capabilities {
   // +k8s:optional
   // +k8s:maxItems=64
   // +k8s:listType=set
-  // +k8s:customValidation # capability grammar; "ALL" not accepted
+  // +k8s:customValidation # a Linux capability name; "ALL" not accepted
   repeated string add = 1;
 
   // +k8s:optional
   // +k8s:maxItems=64
   // +k8s:listType=set
-  // +k8s:customValidation # capability grammar
+  // +k8s:customValidation # a Linux capability name or "ALL"
   repeated string drop = 2;
 }
 
