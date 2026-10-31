@@ -1,0 +1,41 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapi.ActorTemplate) for the micro-VM
+# sandbox demo. Applied with `kubectl ate create actor-template -f -` after
+# `ko resolve` replaces the ko:// image reference; the
+# ate-demo-sandbox-microvm atespace must exist.
+metadata:
+  atespace: ate-demo-sandbox-microvm
+  name: sandbox-microvm
+workerSelector:
+  matchLabels:
+    workload: sandbox-microvm
+containers:
+- name: sandbox
+  image: ko://go.ate.dev/substrate/demos/sandbox
+  env:
+  - name: PORT
+    value: "80"
+# Sandbox size: vCPUs + guest RAM, which with the microVM overhead has to
+# fit the pool's per-worker capacity (see sandbox-microvm.yaml.tmpl and
+# internal/sizing).
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 536870912 # 512Mi
+snapshotConfig:
+  # MEMORY, matching the gVisor variant: the sandbox preserves live process
+  # state across a suspend, so a resume continues the same shell session.
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
