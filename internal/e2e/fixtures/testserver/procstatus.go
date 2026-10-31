@@ -15,142 +15,190 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
+
+	"go.ate.dev/substrate/internal/e2e/procstatus"
 )
 
-// ProcessStatus is what the kernel reports for one process in /proc/<pid>/status,
-// reduced to the fields the worker security tests compare. The capability sets
-// are the raw 64-bit masks.
-type ProcessStatus struct {
-	PID     int    `json:"pid"`
-	Cmdline string `json:"cmdline"`
-	// NSPID lists the process's PID in each nested PID namespace it belongs
-	// to, outermost first, so len(NSPID) is its PID namespace depth as seen
-	// from the reader.
-	NSPID          []int  `json:"nspid"`
-	CapPrm         uint64 `json:"capPrm"`
-	CapEff         uint64 `json:"capEff"`
-	CapBnd         uint64 `json:"capBnd"`
-	CapAmb         uint64 `json:"capAmb"`
-	NoNewPrivs     int    `json:"noNewPrivs"`
-	Seccomp        int    `json:"seccomp"`
-	SeccompFilters int    `json:"seccompFilters"`
-}
-
 func newProcStatusCmd() *cobra.Command {
-	var contains []string
+	var names []string
 	cmd := &cobra.Command{
 		Use:   "procstatus",
-		Short: "Print the capability, no_new_privs and seccomp state of PID 1 and of every process whose command line contains a string, as JSON.",
+		Short: "Print the capabilities, no_new_privs and per-thread seccomp modes of PID 1 and of every process with a given name, as JSON.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			rows, err := processStatuses("/proc", contains, os.Getpid())
+			procs, err := readProcesses("/proc", names, os.Getpid())
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(os.Stdout).Encode(rows)
+			return json.NewEncoder(os.Stdout).Encode(procs)
 		},
 	}
-	cmd.Flags().StringArrayVar(&contains, "cmdline-contains", nil, "also report processes whose command line contains this (repeatable)")
+	cmd.Flags().StringArrayVar(&names, "name", nil, "also report processes whose argv[0] has this base name (repeatable)")
 	return cmd
 }
 
-// processStatuses reads PID 1 and every process under procDir, other than
-// self, whose command line contains one of contains. A process that exits
-// between listing and reading is skipped.
-func processStatuses(procDir string, contains []string, self int) ([]ProcessStatus, error) {
+// readProcesses reads PID 1 and every process under procDir, other than self,
+// whose name is one of names. A process or thread that exits while it is read
+// is skipped.
+func readProcesses(procDir string, names []string, self int) ([]procstatus.Process, error) {
 	entries, err := os.ReadDir(procDir)
 	if err != nil {
 		return nil, err
 	}
-	var rows []ProcessStatus
+	var procs []procstatus.Process
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid == self {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(procDir, e.Name(), "cmdline"))
+		dir := filepath.Join(procDir, e.Name())
+		cmdline, err := os.ReadFile(filepath.Join(dir, "cmdline"))
+		if exited(err) {
+			continue
+		}
 		if err != nil {
+			return nil, err
+		}
+		name := processName(cmdline)
+		if pid != 1 && !slices.Contains(names, name) {
 			continue
 		}
-		cmdline := strings.TrimSpace(strings.ReplaceAll(string(raw), "\x00", " "))
-		matched := pid == 1
-		for _, c := range contains {
-			if c != "" && strings.Contains(cmdline, c) {
-				matched = true
-			}
-		}
-		if !matched {
+		p, err := readProcess(dir)
+		if exited(err) {
 			continue
 		}
-		status, err := os.ReadFile(filepath.Join(procDir, e.Name(), "status"))
-		if err != nil {
-			continue
-		}
-		row, err := parseProcessStatus(string(status))
 		if err != nil {
 			return nil, fmt.Errorf("pid %d: %w", pid, err)
 		}
-		row.PID, row.Cmdline = pid, cmdline
-		rows = append(rows, row)
+		p.PID, p.Name = pid, name
+		procs = append(procs, p)
 	}
-	return rows, nil
+	return procs, nil
 }
 
-// parseProcessStatus reads the fields this command reports out of a
-// /proc/<pid>/status document. A missing field is an error: every kernel this
-// repo supports reports all of them.
-func parseProcessStatus(status string) (ProcessStatus, error) {
-	fields := map[string]string{}
+// processName is the base name of argv[0]. It names the sandbox processes
+// where /proc/<pid>/comm cannot: runsc re-executes /proc/self/exe, so its gofer
+// and sandbox are both "exe" there, and comm truncates cloud-hypervisor to 15
+// bytes.
+func processName(cmdline []byte) string {
+	argv0, _, _ := bytes.Cut(cmdline, []byte{0})
+	return filepath.Base(string(argv0))
+}
+
+// readProcess reads the status of the process at dir and of each of its
+// threads.
+func readProcess(dir string) (procstatus.Process, error) {
+	status, err := os.ReadFile(filepath.Join(dir, "status"))
+	if err != nil {
+		return procstatus.Process{}, err
+	}
+	p, err := parseProcessStatus(string(status))
+	if err != nil {
+		return p, err
+	}
+	tasks, err := os.ReadDir(filepath.Join(dir, "task"))
+	if err != nil {
+		return p, err
+	}
+	for _, task := range tasks {
+		tid, err := strconv.Atoi(task.Name())
+		if err != nil {
+			return p, fmt.Errorf("task %q: %w", task.Name(), err)
+		}
+		status, err := os.ReadFile(filepath.Join(dir, "task", task.Name(), "status"))
+		if exited(err) {
+			continue
+		}
+		if err != nil {
+			return p, err
+		}
+		thread, err := parseThreadStatus(string(status))
+		if err != nil {
+			return p, fmt.Errorf("thread %d: %w", tid, err)
+		}
+		thread.TID = tid
+		p.Threads = append(p.Threads, thread)
+	}
+	return p, nil
+}
+
+// exited reports whether err comes from reading a process or thread that has
+// exited since it was listed.
+func exited(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH)
+}
+
+// parseProcessStatus reads the fields procstatus.Process reports out of a
+// /proc/<pid>/status document.
+func parseProcessStatus(status string) (procstatus.Process, error) {
+	fields := parseStatusFields(status)
+	var errs []error
+	hex := func(name string) uint64 {
+		n, err := fields.number(name, 16)
+		errs = append(errs, err)
+		return n
+	}
+	dec := func(name string) int {
+		n, err := fields.number(name, 10)
+		errs = append(errs, err)
+		return int(n)
+	}
+	p := procstatus.Process{
+		PPID:       dec("PPid"),
+		CapPrm:     hex("CapPrm"),
+		CapEff:     hex("CapEff"),
+		CapBnd:     hex("CapBnd"),
+		CapAmb:     hex("CapAmb"),
+		NoNewPrivs: dec("NoNewPrivs"),
+		Seccomp:    dec("Seccomp"),
+	}
+	return p, errors.Join(errs...)
+}
+
+// parseThreadStatus reads a thread's name and seccomp mode out of a
+// /proc/<pid>/task/<tid>/status document.
+func parseThreadStatus(status string) (procstatus.Thread, error) {
+	fields := parseStatusFields(status)
+	seccomp, err := fields.number("Seccomp", 10)
+	return procstatus.Thread{Name: fields["Name"], Seccomp: int(seccomp)}, err
+}
+
+// statusFields are the "Key:\tvalue" lines of a /proc status document.
+type statusFields map[string]string
+
+func parseStatusFields(status string) statusFields {
+	fields := statusFields{}
 	for _, line := range strings.Split(status, "\n") {
 		if k, v, ok := strings.Cut(line, ":"); ok {
 			fields[k] = strings.TrimSpace(v)
 		}
 	}
-	var row ProcessStatus
-	var err error
-	hex := func(name string) uint64 {
-		v, ok := fields[name]
-		if !ok {
-			err = fmt.Errorf("no %s in status", name)
-			return 0
-		}
-		n, perr := strconv.ParseUint(v, 16, 64)
-		if perr != nil {
-			err = fmt.Errorf("%s: %w", name, perr)
-		}
-		return n
+	return fields
+}
+
+// number parses the named field in base. A missing field is an error: every
+// kernel this repo supports reports all the fields procstatus reads.
+func (f statusFields) number(name string, base int) (uint64, error) {
+	v, ok := f[name]
+	if !ok {
+		return 0, fmt.Errorf("no %s in status", name)
 	}
-	dec := func(name string) int {
-		v, ok := fields[name]
-		if !ok {
-			err = fmt.Errorf("no %s in status", name)
-			return 0
-		}
-		n, perr := strconv.Atoi(v)
-		if perr != nil {
-			err = fmt.Errorf("%s: %w", name, perr)
-		}
-		return n
+	n, err := strconv.ParseUint(v, base, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
 	}
-	row.CapPrm, row.CapEff, row.CapBnd, row.CapAmb = hex("CapPrm"), hex("CapEff"), hex("CapBnd"), hex("CapAmb")
-	row.NoNewPrivs, row.Seccomp, row.SeccompFilters = dec("NoNewPrivs"), dec("Seccomp"), dec("Seccomp_filters")
-	for _, f := range strings.Fields(fields["NSpid"]) {
-		n, perr := strconv.Atoi(f)
-		if perr != nil {
-			return row, fmt.Errorf("NSpid: %w", perr)
-		}
-		row.NSPID = append(row.NSPID, n)
-	}
-	if len(row.NSPID) == 0 {
-		return row, fmt.Errorf("no NSpid in status")
-	}
-	return row, err
+	return n, nil
 }

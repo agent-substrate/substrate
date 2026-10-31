@@ -26,6 +26,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/e2e/procstatus"
 	"go.ate.dev/substrate/internal/resources"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -65,58 +66,120 @@ func capabilityMask(caps []corev1.Capability) uint64 {
 
 // assertWorkerProcessState checks what the kernel enforces on the running
 // worker, not what the PodSpec requested: the worker's permitted, effective and
-// bounding sets are exactly the fixed set, nothing is ambient, no_new_privs is
-// on, and the sandbox children it has started are confined by their own
-// seccomp filters. On micro-VM the virtiofsd serving child must hold exactly
-// its normal nine capabilities and have dropped its whole bounding set, which
-// it can only do while the worker grants SETPCAP.
+// bounding sets are exactly the fixed set, nothing is ambient, and no_new_privs
+// is on. Each process that serves the guest must exist and run under its own
+// seccomp filter. On gVisor these are runsc's gofer and sandbox. On microVM
+// they are virtiofsd's serving child and cloud-hypervisor.
 func assertWorkerProcessState(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, podName string, wantMask uint64) {
 	t.Helper()
-	rows := e2e.ReadWorkerProcessStatus(ctx, t, clients, namespace, podName, "runsc-gofer", "runsc-sandbox", "--shared-dir=", "--api-socket")
-	var worker *e2e.WorkerProcessStatus
-	for i := range rows {
-		if rows[i].PID == 1 {
-			worker = &rows[i]
-		}
+	// runsc sets these as the argv[0] of its gofer and sandbox
+	names := []string{"runsc-gofer", "runsc-sandbox"}
+	if e2e.IsMicroVM() {
+		names = []string{"virtiofsd", "cloud-hypervisor"}
 	}
-	if worker == nil {
-		t.Fatalf("procstatus did not report the worker (PID 1): %+v", rows)
+	procs := e2e.ReadWorkerProcessStatus(ctx, t, clients, namespace, podName, names...)
+	i := slices.IndexFunc(procs, func(p procstatus.Process) bool { return p.PID == 1 })
+	if i < 0 {
+		t.Fatalf("procstatus did not report the worker (PID 1): %+v", procs)
 	}
+	worker := procs[i]
 	if worker.CapPrm != wantMask || worker.CapEff != wantMask || worker.CapBnd != wantMask || worker.CapAmb != 0 {
 		t.Errorf("worker capabilities prm=%#x eff=%#x bnd=%#x amb=%#x, want all %#x and no ambient", worker.CapPrm, worker.CapEff, worker.CapBnd, worker.CapAmb, wantMask)
 	}
 	if worker.NoNewPrivs != 1 {
 		t.Errorf("worker NoNewPrivs = %d, want 1", worker.NoNewPrivs)
 	}
-	children := 0
-	for _, row := range rows {
-		if row.PID == 1 {
-			continue
+	if e2e.IsMicroVM() {
+		assertVirtiofsdChild(t, procs)
+		assertCloudHypervisor(t, procs)
+		return
+	}
+	// runsc installs its filters with SECCOMP_FILTER_FLAG_TSYNC, so the main
+	// thread's mode is every thread's
+	for _, name := range names {
+		for _, p := range processesNamed(t, procs, name) {
+			if p.NoNewPrivs != 1 || p.Seccomp != 2 {
+				t.Errorf("%s %d NoNewPrivs=%d Seccomp=%d, want 1 and 2", name, p.PID, p.NoNewPrivs, p.Seccomp)
+			}
 		}
-		// The processes serving a guest are PID 1 of their own PID namespace,
-		// nested below the worker's; a runsc or virtiofsd parent that has not
-		// unshared yet is not one of them.
-		if len(row.NSPID) <= len(worker.NSPID) || row.NSPID[len(row.NSPID)-1] != 1 {
+	}
+}
+
+// processesNamed returns the processes called name, and fails the test if
+// there are none.
+func processesNamed(t *testing.T, procs []procstatus.Process, name string) []procstatus.Process {
+	t.Helper()
+	var named []procstatus.Process
+	for _, p := range procs {
+		if p.Name == name {
+			named = append(named, p)
+		}
+	}
+	if len(named) == 0 {
+		t.Errorf("no %s process in the worker's PID namespace", name)
+	}
+	return named
+}
+
+// assertVirtiofsdChild checks virtiofsd's serving child. virtiofsd forks it
+// into new namespaces and then only waits for it, so the child is the
+// virtiofsd whose parent is also virtiofsd. The child keeps its nine
+// capabilities in the permitted and effective sets and clears its bounding set
+// with PR_CAPBSET_DROP, which libcap-ng only issues while CAP_SETPCAP is
+// effective. A worker without SETPCAP leaves the child's bounding set at the
+// worker's own.
+func assertVirtiofsdChild(t *testing.T, procs []procstatus.Process) {
+	t.Helper()
+	virtiofsd := map[int]bool{}
+	for _, p := range procs {
+		if p.Name == "virtiofsd" {
+			virtiofsd[p.PID] = true
+		}
+	}
+	want := capabilityMask(virtiofsdChildCapabilities)
+	children := 0
+	for _, p := range procs {
+		if !virtiofsd[p.PID] || !virtiofsd[p.PPID] {
 			continue
 		}
 		children++
-		if row.NoNewPrivs != 1 || row.Seccomp != 2 {
-			t.Errorf("sandbox process %d (%s) NoNewPrivs=%d Seccomp=%d, want 1 and 2", row.PID, row.Cmdline, row.NoNewPrivs, row.Seccomp)
+		if p.NoNewPrivs != 1 || p.Seccomp != 2 {
+			t.Errorf("virtiofsd child %d NoNewPrivs=%d Seccomp=%d, want 1 and 2", p.PID, p.NoNewPrivs, p.Seccomp)
 		}
-		if !strings.Contains(row.Cmdline, "--shared-dir=") {
-			continue
-		}
-		// virtiofsd keeps its nine in the permitted and effective sets and
-		// clears its bounding set with PR_CAPBSET_DROP, which libcap-ng only
-		// issues while CAP_SETPCAP is effective. A worker without SETPCAP
-		// leaves the child's bounding set at the worker's own.
-		want := capabilityMask(virtiofsdChildCapabilities)
-		if row.CapPrm != want || row.CapEff != want || row.CapBnd != 0 {
-			t.Errorf("virtiofsd child capabilities prm=%#x eff=%#x bnd=%#x, want prm and eff %#x and an empty bounding set", row.CapPrm, row.CapEff, row.CapBnd, want)
+		if p.CapPrm != want || p.CapEff != want || p.CapBnd != 0 {
+			t.Errorf("virtiofsd child %d capabilities prm=%#x eff=%#x bnd=%#x, want prm and eff %#x and an empty bounding set", p.PID, p.CapPrm, p.CapEff, p.CapBnd, want)
 		}
 	}
 	if children == 0 {
-		t.Errorf("no sandbox child process found in the worker's PID namespace: %+v", rows)
+		t.Errorf("no virtiofsd serving child, a virtiofsd whose parent is also virtiofsd, in the worker's PID namespace")
+	}
+}
+
+// assertCloudHypervisor checks that every thread cloud-hypervisor starts runs
+// under seccomp. It installs a filter on each of those threads but never on
+// its main thread, which only waits for the vmm thread to exit.
+func assertCloudHypervisor(t *testing.T, procs []procstatus.Process) {
+	t.Helper()
+	for _, p := range processesNamed(t, procs, "cloud-hypervisor") {
+		if p.NoNewPrivs != 1 {
+			t.Errorf("cloud-hypervisor %d NoNewPrivs = %d, want 1", p.PID, p.NoNewPrivs)
+		}
+		vcpus := 0
+		for _, thread := range p.Threads {
+			if thread.TID == p.PID {
+				continue
+			}
+			if strings.HasPrefix(thread.Name, "vcpu") {
+				vcpus++
+			}
+			if thread.Seccomp != 2 {
+				t.Errorf("cloud-hypervisor %d thread %d (%s) Seccomp = %d, want 2", p.PID, thread.TID, thread.Name, thread.Seccomp)
+			}
+		}
+		// the vcpu threads run the guest; a VMM without any has no VM to check
+		if vcpus == 0 {
+			t.Errorf("cloud-hypervisor %d has no vcpu thread: %+v", p.PID, p.Threads)
+		}
 	}
 }
 
