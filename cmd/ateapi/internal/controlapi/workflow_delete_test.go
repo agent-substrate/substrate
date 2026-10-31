@@ -139,10 +139,16 @@ func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
 }
 
 // detachDeletePlugin is a volume plugin for a whole delete: it records
-// detaches like mockDetachVolumePlugin and accepts the volume delete.
-type detachDeletePlugin struct{ mockDetachVolumePlugin }
+// detaches like mockDetachVolumePlugin and records volume deletes.
+type detachDeletePlugin struct {
+	mockDetachVolumePlugin
+	deleteCalls []string
+}
 
-func (*detachDeletePlugin) DeleteVolume(context.Context, string) error { return nil }
+func (p *detachDeletePlugin) DeleteVolume(_ context.Context, volumeID string) error {
+	p.deleteCalls = append(p.deleteCalls, volumeID)
+	return nil
+}
 
 // TestRevertAndDelete_AssignedNodeGone runs the whole revert and delete
 // workflows for a paused actor with a PENDING upload and a crashed actor whose
@@ -185,7 +191,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 				}
 				w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
 					WithNodeGetter(nodeGetter(nil, nodes...)))
-				plugin := &detachDeletePlugin{mockDetachVolumePlugin{detachErrs: map[string]error{"storage-vol-1": tc.detachErr}}}
+				plugin := &detachDeletePlugin{mockDetachVolumePlugin: mockDetachVolumePlugin{detachErrs: map[string]error{"storage-vol-1": tc.detachErr}}}
 				w.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
 				tmpl := &ateapi.ActorTemplate{
 					Metadata:       &ateapi.ResourceMetadata{Atespace: "ns", Name: "tmpl-vol"},
@@ -242,6 +248,13 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 				if tc.volume {
 					if want := []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}}; !slices.Equal(plugin.detachCalls, want) {
 						t.Errorf("detach calls = %v, want %v", plugin.detachCalls, want)
+					}
+					var wantDeletes []string
+					if verb == "delete" && tc.wantErr == nil && !tc.wantDetachErr {
+						wantDeletes = []string{"storage-vol-1"}
+					}
+					if !slices.Equal(plugin.deleteCalls, wantDeletes) {
+						t.Errorf("delete calls = %v, want %v", plugin.deleteCalls, wantDeletes)
 					}
 				}
 
@@ -702,5 +715,64 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	}
 	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); apierror.Code(err) != codes.NotFound {
 		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
+	}
+}
+
+func TestDeleteActor_FailedTerminateSkipsVolumeDeleteUntilRetry(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+	atelet := &capturingTerminator{err: apierror.Unavailable("atelet unavailable")}
+	w.dialer = newNodeAteletDialer(t, atelet)
+	plugin := &detachDeletePlugin{}
+	w.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
+	if _, err := st.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl-vol"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"},
+		Volumes:        []*ateapipb.Volume{{Name: "vol1"}},
+		Containers:     []*ateapipb.Container{{VolumeMounts: []*ateapipb.VolumeMount{{Name: "vol1"}}}},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl-vol", ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+		a.Status.AssignedNode = "node-1"
+		a.Status.WorkerAssignment = wireTestAssignment()
+		a.Status.ExternalVolumes = &ateapipb.ExternalVolumes{Volumes: []*ateapipb.ExternalVolumeStatus{
+			{Name: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
+		}}
+	})
+	actor := mustReadActor(t, ctx, st, actorRef)
+	seedWireWorker(t, ctx, st, assignmentOf(actor))
+
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("first DeleteActor = %v, want Unavailable", err)
+	}
+	if len(plugin.deleteCalls) != 0 {
+		t.Fatalf("delete calls after failed Terminate = %v, want none", plugin.deleteCalls)
+	}
+	afterFail := mustReadActor(t, ctx, st, actorRef)
+	if got := afterFail.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("state after failed Terminate = %v, want DELETING", got)
+	}
+	if afterFail.GetStatus().GetWorkerAssignment() == nil {
+		t.Errorf("worker assignment was cleared despite failed Terminate")
+	}
+
+	atelet.mu.Lock()
+	atelet.err = nil
+	atelet.mu.Unlock()
+
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("retried DeleteActor: %v", err)
+	}
+	if want := []string{"storage-vol-1"}; !slices.Equal(plugin.deleteCalls, want) {
+		t.Errorf("delete calls after retry = %v, want %v", plugin.deleteCalls, want)
+	}
+	if _, err := st.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetActor after retry = %v, want ErrNotFound", err)
 	}
 }
