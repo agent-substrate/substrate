@@ -284,7 +284,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Request Parking](docs/concepts/request-parking.md): How the router parks requests through transient worker-pool saturation.
 * [Sandbox Asset Cache](docs/concepts/sandbox-asset-cache.md): How a node caches the sandbox binaries actors run on, decides which runtimes it needs, and evicts to a budget.
 * [Upgrade Runbook](docs/guides/upgrade.md): Upgrade a running install to a newer supported release, and roll back if needed.
-* [Node Storage](docs/guides/node-storage.md): How to give snapshot I/O its own disk.
+* [Node Storage](docs/guides/node-storage.md): How to size the node disk for snapshots, give snapshot I/O its own disk, and read DiskPressure on a node.
 * [Security Guide](docs/security/security.md): Security overview, security principles, and threat modeling.
 * [Benchmarking Guide](docs/guides/benchmarking.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
 
