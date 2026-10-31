@@ -60,37 +60,48 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
 	}
 
-	var atletTerminatedErr, volumesDetachedErr error
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
-		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
-		errs = append(errs, atletTerminatedErr)
-	}
-	if err := w.ensureVolumesDetachedForDelete(ctx, actor, actorTemplate); err != nil {
-		volumesDetachedErr = fmt.Errorf("while detaching volumes: %w", err)
-		errs = append(errs, volumesDetachedErr)
+	var externalSnapshotsReleasedErr error
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
+		externalSnapshotsReleasedErr = fmt.Errorf("while releasing external snapshots: %w", err)
+		errs = append(errs, externalSnapshotsReleasedErr)
 	}
 
-	// Release worker if atelet termination and volume detachment did not fail.
-	if atletTerminatedErr == nil && volumesDetachedErr == nil {
-		if actor, err = w.ensureWorkerReleased(ctx, actorRef, actor); err != nil {
-			errs = append(errs, fmt.Errorf("while releasing worker: %w", err))
+	var atletTerminatedErr, volumesDetachedErr error
+	if externalSnapshotsReleasedErr == nil {
+		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
+			atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
+			errs = append(errs, atletTerminatedErr)
+		}
+		if err := w.ensureVolumesDetachedForDelete(ctx, actor, actorTemplate); err != nil {
+			volumesDetachedErr = fmt.Errorf("while detaching volumes: %w", err)
+			errs = append(errs, volumesDetachedErr)
+		}
+
+		// Release worker if atelet termination and volume detachment did not fail.
+		if atletTerminatedErr == nil && volumesDetachedErr == nil {
+			if actor, err = w.ensureWorkerReleased(ctx, actorRef, actor); err != nil {
+				errs = append(errs, fmt.Errorf("while releasing worker: %w", err))
+			}
+		} else {
+			slog.WarnContext(ctx, "skipping releasing worker due to atelet termination or volume detachment failure",
+				slog.Any("actor", actorRef),
+				slog.Any("atletTerminatedErr", atletTerminatedErr),
+				slog.Any("volumesDetachedErr", volumesDetachedErr))
 		}
 	} else {
-		slog.WarnContext(ctx, "skipping releasing worker due to atelet termination or volume detachment failure",
+		slog.WarnContext(ctx, "skipping atelet termination and worker release due to external snapshot release failure",
 			slog.Any("actor", actorRef),
-			slog.Any("atletTerminatedErr", atletTerminatedErr),
-			slog.Any("volumesDetachedErr", volumesDetachedErr))
+			slog.Any("externalSnapshotsReleasedErr", externalSnapshotsReleasedErr))
 	}
 
 	if err := w.ensureVolumesDeleted(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
 	}
 
-	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
-		errs = append(errs, fmt.Errorf("while releasing external snapshots: %w", err))
-	}
-
 	if len(errs) > 0 {
+		if w.gcNotifier != nil {
+			w.gcNotifier.Enqueue(actorRef)
+		}
 		return nil, errors.Join(errs...)
 	}
 	return w.finalizeDeleted(ctx, actor)
@@ -398,7 +409,42 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 		markSkipped(ctx, "the actor owns no external snapshot")
 		return nil
 	}
-	return w.cleanupSnapshot(ctx, prefix)
+	err = w.cleanupSnapshot(ctx, prefix)
+	if err != nil {
+		if !actorHasCompletedExternalSnapshot(actor) && isIgnorableSnapshotCleanupError(err) {
+			slog.WarnContext(ctx, "ignoring snapshot cleanup failure for actor with no completed external snapshot",
+				slog.Any("actor", resources.ActorRefFromActor(actor)),
+				slog.String("prefix", prefix.String()),
+				slog.Any("error", err))
+			markSkipped(ctx, "uncommitted snapshot cleanup ignored")
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// actorHasCompletedExternalSnapshot returns whether the actor ever recorded a
+// COMPLETED durable snapshot owned by the actor.
+func actorHasCompletedExternalSnapshot(actor *ateapi.Actor) bool {
+	actorOwner := actorSnapshotOwner(actor)
+	for _, snap := range actor.GetStatus().GetSnapshots() {
+		if snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
+			snapshotURI := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
+			uri, err := resources.ParseSnapshotURI(snapshotURI)
+			if err == nil && uri.OwnedBy(actorOwner) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isIgnorableSnapshotCleanupError returns whether a cleanup error can be safely ignored
+// for an actor that has never committed a completed external snapshot.
+func isIgnorableSnapshotCleanupError(err error) bool {
+	code := status.Code(err)
+	return code == codes.PermissionDenied || code == codes.NotFound
 }
 
 // actorSnapshotStoragePrefix returns the prefix holding every object the actor wrote:

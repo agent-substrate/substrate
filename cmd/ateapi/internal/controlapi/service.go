@@ -107,6 +107,13 @@ func NewRPCService(
 	return s
 }
 
+// SetGCNotifier wires an actor GC notifier into the actor workflow.
+func (s *RPCService) SetGCNotifier(n actorGCNotifier) {
+	if s.actorWorkflow != nil {
+		s.actorWorkflow.gcNotifier = n
+	}
+}
+
 // serviceStore enumerates the exact storage methods needed by
 // the control API and nothing more.
 type serviceStore interface {

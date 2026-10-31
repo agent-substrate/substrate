@@ -704,3 +704,138 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
 	}
 }
+
+// TestDeleteActor_ObjectStoreFailurePreservesWorkerAndNode verifies that when
+// external snapshot release fails, atelet termination and worker release are skipped,
+// preserving the actor's assigned worker and node-local snapshots.
+func TestDeleteActor_ObjectStoreFailurePreservesWorkerAndNode(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-preserves"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status: &ateapi.ActorStatus{
+			State:        ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+			AssignedNode: "node-1",
+			WorkerAssignment: &ateapi.WorkerAssignment{
+				Worker:       &ateapi.ObjectRef{Atespace: "team-a", Name: "worker-1"},
+				WorkerPodUid: "pod-1",
+			},
+		},
+	})
+
+	inFlight := mustActorSnapshotURI(t, &ateapi.ActorTemplate{
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
+	}, actor, "abandoned")
+	objects.PutSnapshot(t, inFlight, "manifest.json")
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+		}
+	})
+
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err == nil {
+		t.Fatal("DeleteActor succeeded, want failure due to object store delete error")
+	}
+
+	persisted, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if persisted.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("actor state = %v, want ACTOR_STATE_DELETING", persisted.GetStatus().GetState())
+	}
+	if persisted.GetStatus().GetAssignedNode() != "node-1" {
+		t.Errorf("assigned node = %q, want %q preserved", persisted.GetStatus().GetAssignedNode(), "node-1")
+	}
+	if persisted.GetStatus().GetWorkerAssignment() == nil {
+		t.Errorf("worker assignment was cleared, want preserved")
+	}
+}
+
+// TestDeleteActor_UncommittedSnapshotToleratesPermissionDenied verifies that an actor
+// with no completed external snapshots tolerates PermissionDenied during cleanup.
+func TestDeleteActor_UncommittedSnapshotToleratesPermissionDenied(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-uncommitted"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_CRASHED},
+	})
+
+	inFlight := mustActorSnapshotURI(t, &ateapi.ActorTemplate{
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
+	}, actor, "abandoned")
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
+		}
+	})
+
+	// Simulate PermissionDenied (e.g. bucket roles revoked)
+	objects.OnDelete = func(string, string) error {
+		return status.Error(codes.PermissionDenied, "storage.objects.list 403 PermissionDenied")
+	}
+
+	// Deletion should succeed despite PermissionDenied because no completed external snapshot was committed
+	deleted, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v, want success tolerating PermissionDenied", err)
+	}
+	if deleted == nil {
+		t.Fatal("expected non-nil deleted actor")
+	}
+	if _, err := persistence.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("actor still in store: %v, want ErrNotFound", err)
+	}
+}
+
+// TestDeleteActor_CompletedSnapshotFailsOnPermissionDenied verifies that an actor
+// with a completed external snapshot fails deletion when cleanup gets PermissionDenied.
+func TestDeleteActor_CompletedSnapshotFailsOnPermissionDenied(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-completed"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+
+	completed := mustActorSnapshotURI(t, &ateapi.ActorTemplate{
+		SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: testStorageLocation},
+	}, actor, "snap-completed")
+	objects.PutSnapshot(t, completed, "manifest.json")
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", completed.Name(), completed.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+		}
+	})
+
+	// Simulate PermissionDenied
+	objects.OnDelete = func(string, string) error {
+		return status.Error(codes.PermissionDenied, "storage.objects.list 403 PermissionDenied")
+	}
+
+	// Deletion MUST fail because completed external data exists and couldn't be deleted
+	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err == nil {
+		t.Fatal("DeleteActor succeeded, want failure due to PermissionDenied on completed snapshot")
+	}
+}

@@ -114,6 +114,7 @@ var (
 	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the PerTemplateSnapshotLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
+	actorGCResyncInterval  = pflag.Duration("actor-gc-resync-interval", 20*time.Second, "Interval between actor GC sweeps for stuck deleting actors.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
@@ -365,6 +366,11 @@ func main() {
 	// Crash the Actors lost when a Worker's worker restarts.
 	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
 	workerAssignmentReconciler.Start(shutdownCtx)
+
+	// Reconcile and retry actors stuck in ACTOR_STATE_DELETING.
+	actorGCReconciler := controlapi.NewActorGCReconciler(persistence, controlSrv, *actorGCResyncInterval)
+	controlSrv.SetGCNotifier(actorGCReconciler)
+	actorGCReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
