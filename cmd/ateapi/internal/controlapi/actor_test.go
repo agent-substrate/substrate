@@ -1023,6 +1023,18 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
 			if err != nil {
+				if scenario == "wrong template" {
+					// The error must name the target template's UID (the one the
+					// caller asked for), not the tag's own UID.
+					s, ok := apierror.FromError(err)
+					if !ok {
+						t.Fatalf("CreateActor error is not an API status: %v", err)
+					}
+					wantMsg := fmt.Sprintf("source Tag must be taken from an actor with ActorTemplate uid %q (tag has %q)", tmpl.GetMetadata().GetUid(), "other")
+					if s.Message() != wantMsg {
+						t.Fatalf("CreateActor error message = %q, want %q", s.Message(), wantMsg)
+					}
+				}
 				return
 			}
 			gotSnap := findLatestDurableSnapshot(created.GetStatus(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
