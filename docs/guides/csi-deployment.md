@@ -185,6 +185,10 @@ data:
 
 #### 2. Envoy Sidecar in `csi-nfs-controller` Deployment
 
+The `nfs` container needs privileged mode to mount the NFS share while creating
+and deleting volume directories, as in the
+[vendored controller manifest](../../hack/third_party/csi-driver-nfs/deploy/csi-nfs-controller.yaml).
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -205,9 +209,16 @@ spec:
       # Upstream CSI NFS driver container listening on local Unix socket
       - name: nfs
         image: registry.k8s.io/sig-storage/nfsplugin:v4.13.4
+        securityContext:
+          privileged: true
         args:
         - "--nodeid=$(NODE_ID)"
         - "--endpoint=unix:///csi/csi.sock"
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         volumeMounts:
         - name: socket-dir
           mountPath: /csi
