@@ -160,14 +160,11 @@ func guestSystemMounts() []specs.Mount {
 	}
 }
 
-// guestMaskedPaths returns containerd's default masked paths, without the
-// per-CPU thermal_throttle paths it adds for the host's CPUs. kata-agent masks
-// by bind-mounting /dev/null and skips paths that are directories.
+// guestMaskedPaths returns containerd's default masked paths that are files.
+// kata-agent masks by bind-mounting /dev/null and skips directories.
 // https://github.com/containerd/containerd/blob/v2.4.2/pkg/oci/spec.go#L262-L276
 func guestMaskedPaths() []string {
 	return []string{
-		"/proc/acpi",
-		"/proc/asound",
 		"/proc/interrupts",
 		"/proc/kcore",
 		"/proc/keys",
@@ -175,9 +172,6 @@ func guestMaskedPaths() []string {
 		"/proc/timer_list",
 		"/proc/timer_stats",
 		"/proc/sched_debug",
-		"/sys/firmware",
-		"/sys/devices/virtual/powercap",
-		"/proc/scsi",
 	}
 }
 
