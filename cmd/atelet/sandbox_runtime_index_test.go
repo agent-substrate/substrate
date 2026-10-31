@@ -33,9 +33,15 @@ import (
 // its one asset's digest.
 func hashedTestVersion(t *testing.T, name string, isDefault bool, sha string) hashedVersion {
 	t.Helper()
+	return hashedTestVersionAt(t, name, isDefault, "gs://bucket/"+name, sha)
+}
+
+// hashedTestVersionAt is hashedTestVersion with the asset at url.
+func hashedTestVersionAt(t *testing.T, name string, isDefault bool, url, sha string) hashedVersion {
+	t.Helper()
 	rec := &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
-		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/" + name, SHA256: sha}},
+		Assets:       map[string]assetEntry{gvisorAssetName: {URL: url, SHA256: sha}},
 	}
 	return hashedVersion{versionPlan: versionPlan{name: name, isDefault: isDefault, rec: rec}, hash: bundleHash(rec)}
 }
@@ -69,15 +75,15 @@ func TestRuntimeIndex(t *testing.T) {
 	}
 
 	// Another config with the same binaries under another name shares the
-	// runtime; the entry keeps the record it was first registered with,
-	// which is the one the first worker's file was built from.
+	// runtime. Its record names the bytes at another URL, so it replaces
+	// the entry: the latest spec says where to fetch them from.
 	same := hashedTestVersion(t, "release-1", true, shaA)
 	x.register("pod-2", advertisedClass{class: gvisor, config: "config-y", hashed: []hashedVersion{same}})
 	if same.hash != v1.hash {
 		t.Fatal("identical binaries hashed differently")
 	}
-	if rt, _ := x.lookup(v1.hash); rt.config != "config-x" || rt.version != "v1" {
-		t.Errorf("shared runtime provenance = %s/%s, want the first registration's config-x/v1", rt.config, rt.version)
+	if rt, _ := x.lookup(v1.hash); rt.rec != same.rec || rt.config != "config-y" || rt.version != "release-1" {
+		t.Errorf("shared runtime = %s/%s, want the latest registration's config-y/release-1 with its record", rt.config, rt.version)
 	}
 	if wr, _ := x.worker("pod-2"); wr.classes[gvisor].defaultHash != same.hash {
 		t.Error("pod-2 does not advertise the shared runtime as its default")
@@ -136,6 +142,68 @@ func TestRuntimeIndexRegisterRuntimes(t *testing.T) {
 	x.registerRuntimes("config-y", []hashedVersion{hashedTestVersion(t, "v1", true, shaC)})
 	if _, ok := x.worker("pod-2"); ok {
 		t.Error("registerRuntimes created a worker entry")
+	}
+}
+
+// TestRuntimeIndexTakesLatestRecord pins that a version registered again
+// with its assets at another URL replaces the entry, in memory and on disk,
+// so a URL fixed in a SandboxConfig is the one its hash resolves to. A
+// version registered again unchanged rewrites nothing, and within one
+// registration the first version under a hash wins, as in buildFile.
+func TestRuntimeIndexTakesLatestRecord(t *testing.T) {
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sandbox-runtime-index.json")
+	x, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typo := hashedTestVersionAt(t, "v4", false, "gs://bucket/v4-typo", sha)
+	fixed := hashedTestVersionAt(t, "v4", false, "gs://bucket/v4", sha)
+	if typo.hash != fixed.hash {
+		t.Fatal("the URL changed the hash")
+	}
+	urlOf := func(x *runtimeIndex) string {
+		t.Helper()
+		rt, ok := x.lookup(fixed.hash)
+		if !ok {
+			t.Fatal("runtime not indexed")
+		}
+		return rt.rec.Assets[gvisorAssetName].URL
+	}
+
+	if err := x.registerRuntimes("config-x", []hashedVersion{typo}); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.registerRuntimes("config-x", []hashedVersion{fixed}); err != nil {
+		t.Fatal(err)
+	}
+	if got := urlOf(x); got != "gs://bucket/v4" {
+		t.Errorf("URL after re-registering the fixed version = %s, want gs://bucket/v4", got)
+	}
+	reopened, err := openRuntimeIndex(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := urlOf(reopened); got != "gs://bucket/v4" {
+		t.Errorf("URL after a restart = %s, want gs://bucket/v4", got)
+	}
+
+	// With the file unwritable, only a registration that changes the entry
+	// fails: an unchanged version, or a duplicate hash behind one, writes
+	// nothing. The pod's registration dedupes the same way.
+	reopened.path = filepath.Join(t.TempDir(), "missing", "sandbox-runtime-index.json")
+	if err := reopened.registerRuntimes("config-x", []hashedVersion{fixed, typo}); err != nil {
+		t.Errorf("registerRuntimes with the indexed version first = %v, want no write", err)
+	}
+	if err := reopened.register("pod-1", advertisedClass{class: atev1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{fixed, typo}}); err != nil {
+		t.Errorf("register with the indexed version first = %v, want no write", err)
+	}
+	if err := reopened.registerRuntimes("config-x", []hashedVersion{typo}); err == nil {
+		t.Error("registerRuntimes with another URL = nil, want the failed write")
+	}
+	if got := urlOf(reopened); got != "gs://bucket/v4" {
+		t.Errorf("URL after a failed write = %s, want the entry unchanged", got)
 	}
 }
 

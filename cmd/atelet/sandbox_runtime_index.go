@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"sync"
 
@@ -45,7 +46,7 @@ import (
 // from eviction comes from.
 //
 // runtimes is also kept on disk, as one file that is the map serialized,
-// rewritten durably before a new entry is added and loaded again by
+// rewritten durably before an entry is added or replaced and loaded again by
 // openRuntimeIndex. A worker registers a hash with the control plane only
 // after atelet wrote its file, which happens after the index was written,
 // so every hash a worker registered before an atelet restart resolves as
@@ -186,19 +187,19 @@ func (x *runtimeIndex) writeIndex(extraHash string, extra *indexedRuntime) error
 // advertised before, and makes each runtime resolvable by its hash. The
 // syncer calls it once the pod's file is written, so a worker's entry says
 // what the file the worker registers from says; the hashes themselves are
-// registered earlier through registerRuntimes. It fails only if a runtime
-// not yet indexed cannot be persisted.
+// registered earlier through registerRuntimes. It fails only if the index
+// cannot be persisted.
 func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	wr := &workerRuntime{classes: make(map[atev1.SandboxClass]*classRuntime, len(advertised))}
 	for _, a := range advertised {
+		if err := x.addRuntimes(a.config, a.hashed); err != nil {
+			return err
+		}
 		cr := &classRuntime{config: a.config}
 		seen := make(map[string]bool, len(a.hashed))
 		for _, v := range a.hashed {
-			if err := x.addRuntime(a.config, v); err != nil {
-				return err
-			}
 			if v.isDefault {
 				cr.defaultHash = v.hash
 			}
@@ -218,12 +219,24 @@ func (x *runtimeIndex) register(podUID string, advertised ...advertisedClass) er
 // SandboxConfig or WorkerPool changes, ahead of the jittered sync that
 // rewrites the files, so the index knows a config's runtimes as soon as the
 // listers do, and a request for the new default that arrives within that
-// delay resolves (see enqueuePool). It fails only if a runtime not yet
-// indexed cannot be persisted; the ones before it are indexed.
+// delay resolves (see enqueuePool). It fails only if the index cannot be
+// persisted; the runtimes before the failing one are indexed.
 func (x *runtimeIndex) registerRuntimes(config string, hashed []hashedVersion) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	return x.addRuntimes(config, hashed)
+}
+
+// addRuntimes records the first version of hashed under each hash: the one
+// buildFile builds the file from, where later versions with the same hash
+// are skipped. Called with mu held.
+func (x *runtimeIndex) addRuntimes(config string, hashed []hashedVersion) error {
+	seen := make(map[string]bool, len(hashed))
 	for _, v := range hashed {
+		if seen[v.hash] {
+			continue
+		}
+		seen[v.hash] = true
 		if err := x.addRuntime(config, v); err != nil {
 			return err
 		}
@@ -231,13 +244,14 @@ func (x *runtimeIndex) registerRuntimes(config string, hashed []hashedVersion) e
 	return nil
 }
 
-// addRuntime records v under its hash, unless the hash is already known,
-// persisting the index first when it has a path. The hash covers every
-// asset's name and digest, so two versions with one hash differ at most in
-// where identical bytes are fetched from; keeping the first keeps the version
-// the file was built from. Called with mu held.
+// addRuntime records v under its hash, replacing an entry whose record
+// differs, persisting the index first when it has a path. The hash covers
+// every asset's name and digest, so two records with one hash fetch the same
+// bytes and differ only in where from. The latest record is the current
+// SandboxConfig's, so a URL corrected in the spec is the one Run, Restore
+// and the prewarmer fetch from. Called with mu held.
 func (x *runtimeIndex) addRuntime(config string, v hashedVersion) error {
-	if _, ok := x.runtimes[v.hash]; ok {
+	if cur, ok := x.runtimes[v.hash]; ok && cur.rec.SandboxClass == v.rec.SandboxClass && maps.Equal(cur.rec.Assets, v.rec.Assets) {
 		return nil
 	}
 	rt := &indexedRuntime{rec: v.rec, config: config, version: v.name}
