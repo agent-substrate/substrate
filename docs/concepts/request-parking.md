@@ -95,6 +95,17 @@ validated `>= --parked-request-max` at startup, because a breaker below the lot
 would silently truncate it — Envoy would reject the overflow itself, with 503s
 that never reach the lot and never count in `parking.rejected`.
 
+### Synchronized bursts
+
+The breaker counts every ext_proc stream, parked or not. A burst of requests
+to running actors larger than the headroom gets Envoy's `503 "upstream connect
+error or disconnect/reset before headers. reset reason: overflow"`, which the
+router never sees: no `ate-error-reason`, no parking metric. Envoy's admin
+stats count it (`upstream_rq_overflow`, `upstream_rq_pending_overflow`,
+`upstream_cx_overflow`). The router sets `max_requests` only; `max_connections`
+and `max_pending_requests` keep Envoy's default of `1024`. Size
+`--extproc-max-requests` for the largest synchronized burst plus the lot.
+
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
 per-actor flight registry: they share a single in-flight `ResumeActor` call and
 all park on its result, so a hot actor consumes N parking slots but only one
