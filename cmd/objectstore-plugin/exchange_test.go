@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
+	"go.ate.dev/substrate/internal/testcert"
 )
 
 func TestNewExchangeService(t *testing.T) {
@@ -56,6 +57,10 @@ func TestNewExchangeService(t *testing.T) {
 	tlsIssuer := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(tlsIssuer.Close)
 	tlsIssuerCA := writeServerCA(t, tlsIssuer)
+	otherCA := filepath.Join(t.TempDir(), "other-ca.pem")
+	if err := os.WriteFile(otherCA, testcert.NewServerTLS(t, net.ParseIP("127.0.0.1")).RootCA, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// The httptest certificate is for 127.0.0.1, not localhost.
 	_, tlsIssuerPort, err := net.SplitHostPort(tlsIssuer.Listener.Addr().String())
 	if err != nil {
@@ -70,8 +75,9 @@ func TestNewExchangeService(t *testing.T) {
 		{"GCS needs the transfer account", exchangeConfig{issuer: issuer}, "--transfer-service-account"},
 		{"GCS needs a readable issuer CA file", exchangeConfig{issuer: issuer, issuerCAFile: filepath.Join(t.TempDir(), "absent.pem"), transferAccount: xfer}, "absent.pem"},
 		{"GCS needs certificates in the issuer CA file", exchangeConfig{issuer: issuer, issuerCAFile: emptyCA, transferAccount: xfer}, "contains no certificates"},
-		{"GCS needs an issuer certificate the CA file trusts", exchangeConfig{issuer: tlsIssuer.URL, transferAccount: xfer}, "--actor-jwt-issuer-ca-file"},
-		{"GCS needs an issuer certificate for the issuer's host", exchangeConfig{issuer: "https://localhost:" + tlsIssuerPort, issuerCAFile: tlsIssuerCA, transferAccount: xfer}, "--actor-jwt-issuer-ca-file"},
+		{"GCS needs the issuer CA file", exchangeConfig{issuer: issuer, transferAccount: xfer}, "--actor-jwt-issuer-ca-file"},
+		{"GCS needs an issuer certificate the CA file or system roots trust", exchangeConfig{issuer: tlsIssuer.URL, issuerCAFile: otherCA, transferAccount: xfer}, "the system roots or " + otherCA},
+		{"GCS needs an issuer certificate for the issuer's host", exchangeConfig{issuer: "https://localhost:" + tlsIssuerPort, issuerCAFile: tlsIssuerCA, transferAccount: xfer}, "the system roots or " + tlsIssuerCA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ATE_STORAGE_BACKEND", "gcs")
@@ -99,7 +105,7 @@ func TestCheckIssuerCertificate(t *testing.T) {
 		{"issuer without discovery", trusted.URL, trusted.Client()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := checkIssuerCertificate(t.Context(), tc.issuer, actorauthz.NewVerifier(tc.issuer, tc.client)); err != nil {
+			if err := checkIssuerCertificate(t.Context(), tc.issuer, "ca.pem", actorauthz.NewVerifier(tc.issuer, tc.client)); err != nil {
 				t.Fatalf("checkIssuerCertificate() = %v, want nil", err)
 			}
 		})

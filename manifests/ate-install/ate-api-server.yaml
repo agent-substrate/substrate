@@ -104,14 +104,12 @@ spec:
         # discovery, and reaches ate-api-server over the loopback with the pod
         # identity certificate. The issuer must be the one ate-api-server
         # mints with, so both read it from the same ConfigMap key. The issuer
-        # CA file is the service DNS trust bundle for ate-idp-server, and
-        # empty, the system roots, for a custom issuer. An issuer certificate
-        # that does not verify stops the sidecar at start. On GCS it
-        # downscopes a token for the snapshot transfer service account, which
-        # it impersonates.
+        # certificate is verified against the system roots and the service
+        # DNS trust bundle. One that does not verify stops the sidecar at
+        # start. On GCS it downscopes a token for the snapshot transfer
+        # service account, which it impersonates.
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
-        - --actor-jwt-issuer-ca-file=$(ATE_API_ACTOR_JWT_ISSUER_CA_FILE)
         - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)
         ports:
         - name: exchange
@@ -147,11 +145,6 @@ spec:
             configMapKeyRef:
               name: ate-api-server-envvars
               key: ATE_API_ACTOR_JWT_ISSUER
-        - name: ATE_API_ACTOR_JWT_ISSUER_CA_FILE
-          valueFrom:
-            configMapKeyRef:
-              name: ate-api-server-envvars
-              key: ATE_API_ACTOR_JWT_ISSUER_CA_FILE
         - name: ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT
           valueFrom:
             configMapKeyRef:

@@ -36,12 +36,13 @@ token. The exchange fetches the issuer's public keys through OpenID Connect
 discovery at `<issuer>/.well-known/openid-configuration`, at sidecar start
 and then as `oidcjwt.Verifier` refreshes them. An issuer it cannot reach
 fails the exchange with `UNAVAILABLE`.
-`--actor-jwt-issuer-ca-file` names the CA bundle that verifies the issuer, or
-the system roots when empty. The sidecar re-reads it when it changes, so a
-rotated bundle takes effect without a restart. If a re-read fails, it keeps
-the last bundle and logs a warning. If the issuer's certificate
-does not verify at start, the sidecar exits. Any other error at start is
-logged, and the sidecar serves and fetches again on the next exchange.
+The issuer's certificate must verify against the system roots or the CA
+bundle `--actor-jwt-issuer-ca-file` names, by default the service DNS trust
+bundle. The sidecar re-reads the bundle when it changes, so a rotated bundle
+takes effect without a restart. If a re-read fails, it keeps the last bundle
+and logs a warning. If the issuer's certificate does not verify at start, the
+sidecar exits. Any other error at start is logged, and the sidecar serves and
+fetches again on the next exchange.
 
 Four packages behind the exchange know no storage provider and are what a
 provider's own plugin binary reuses. The rest is this binary's.

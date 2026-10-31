@@ -15,7 +15,9 @@
 package oidcjwt
 
 import (
+	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -25,7 +27,11 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/testcert"
 )
 
@@ -269,5 +275,61 @@ func TestNewHTTPClientTrustsRotatedCA(t *testing.T) {
 	writeCA(third.RootCA)
 	if _, err := keys.Keys(t.Context()); err != nil {
 		t.Fatalf("Keys() after a valid CA file returned error = %v", err)
+	}
+}
+
+// TestSystemRootsTrustServiceDNSIssuer checks that a client trusting the
+// system roots plus a service DNS trust bundle accepts an in-cluster issuer
+// however it is spelled, and that the system roots alone do not.
+func TestSystemRootsTrustServiceDNSIssuer(t *testing.T) {
+	const issuer = "https://idp.ate-system.svc:443"
+	if err := actoridjwt.ValidateIssuer(issuer); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := localca.GenerateCA("servicedns", localca.KeyTypeECDSAP256, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serving := testcert.ServerTLSWithCA(t, ca, net.ParseIP("127.0.0.1"), "idp.ate-system.svc")
+	cert, err := tls.X509KeyPair(serving.Certificate, serving.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti := &testIssuer{}
+	ti.addRSA("key", &testRSAKey(t).PublicKey)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, oidcConfigT{Issuer: issuer, JWKSURI: issuer + "/jwks"})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) { writeJSON(t, w, ti.jwks) })
+	srv := httptest.NewUnstartedServer(mux)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	bundle := filepath.Join(t.TempDir(), "trust-bundle.pem")
+	if err := os.WriteFile(bundle, serving.RootCA, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Only the dial goes to the test server. TLS still checks the name in
+	// the URL.
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	keys := func(loadRoots func() (*x509.CertPool, error)) error {
+		transport, err := newRootsTransport(base, loadRoots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = HTTPKeySource(issuer, newHTTPClient(transport)).Keys(t.Context())
+		return err
+	}
+
+	if err := keys(credbundle.SystemPoolLoader(bundle)); err != nil {
+		t.Fatalf("Keys() with the system roots and the bundle error = %v", err)
+	}
+	var certErr *tls.CertificateVerificationError
+	if err := keys(x509.SystemCertPool); !errors.As(err, &certErr) {
+		t.Fatalf("Keys() with the system roots alone error = %v, want a CertificateVerificationError", err)
 	}
 }
