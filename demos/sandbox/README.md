@@ -89,10 +89,10 @@ sandbox> cat test.txt
 
 Type `exit` to leave. This will automatically trigger the suspension of the actor.
 
-To run commands non-interactively without waiting on stdin, pipe commands into `sandbox-client`:
+To resume the actor non-interactively and verify `test.txt` persisted across the snapshot, pipe commands into `sandbox-client`:
 
 ```bash
-printf 'echo "Hello" > test.txt\ncat test.txt\nexit\n' | \
+printf 'cat test.txt\nexit\n' | \
   ./bin/sandbox-client --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
 
