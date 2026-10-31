@@ -164,6 +164,29 @@ func TestSpecToAgentPB_NonPositiveCPUValuesAreDropped(t *testing.T) {
 	}
 }
 
+// Only ipc, uts and mount reach the agent, with no host path.
+func TestSpecToAgentPB_DropsNamespacesTheAgentOwns(t *testing.T) {
+	got := SpecToAgentPB(&specs.Spec{Linux: &specs.Linux{Namespaces: []specs.LinuxNamespace{
+		{Type: specs.PIDNamespace},
+		{Type: specs.NetworkNamespace, Path: "/run/netns/actor"},
+		{Type: specs.IPCNamespace},
+		{Type: specs.UTSNamespace, Path: "/proc/1/ns/uts"},
+		{Type: specs.MountNamespace},
+		{Type: specs.CgroupNamespace},
+		{Type: specs.TimeNamespace},
+	}}})
+	var types []string
+	for _, ns := range got.GetLinux().GetNamespaces() {
+		types = append(types, ns.GetType())
+		if ns.GetPath() != "" {
+			t.Errorf("namespace %s carries path %q, want none", ns.GetType(), ns.GetPath())
+		}
+	}
+	if want := []string{"ipc", "uts", "mount"}; !slices.Equal(types, want) {
+		t.Errorf("namespaces = %v, want %v", types, want)
+	}
+}
+
 // The agent applies sysctls from the spec it is sent; a dropped map leaves
 // the guest at its defaults.
 func TestSpecToAgentPB_ForwardsSysctl(t *testing.T) {
