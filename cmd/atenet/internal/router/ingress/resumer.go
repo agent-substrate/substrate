@@ -37,6 +37,15 @@ import (
 // conflicts are retried; capacity errors fail immediately.
 const failFastResumeBudget = 15 * time.Second
 
+// ExtProcTimeoutMargin is how much longer than the park budget Envoy waits for
+// the router's reply.
+const ExtProcTimeoutMargin = 5 * time.Second
+
+// routerExtProcTimeout is how much longer than the park budget the router
+// waits before answering. It must be less than ExtProcTimeoutMargin: if
+// Envoy's timeout fires first, Envoy sends the client an empty 504.
+const routerExtProcTimeout = ExtProcTimeoutMargin - time.Second
+
 // resumeBackoff builds the backoff between resume attempts while a request is
 // parked, from the configured retry parameters.
 //
@@ -272,12 +281,19 @@ func flightResult(bgCtx context.Context, resumeResp *ateapi.ResumeActorResponse,
 // flight is retrying (or already was), the caller must hold a parking-lot slot
 // to keep waiting and is shed with a 503 when the lot is full.
 func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, actorRef resources.ActorRef, reqID uint64) (*ateapi.Actor, ResumeOutcome, error) {
+	// If the flight is still running just before Envoy's ext_proc timeout, the
+	// router ends the wait itself and sends the client a 503. Without this,
+	// Envoy would end the request with a 504 and no useful error message. The flight
+	// keeps going, and later requests join it.
+	maxWait := r.budget + routerExtProcTimeout
+	waitCtx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+
 	select {
-	case <-ctx.Done():
-		// The caller's request context was canceled before the shared resume
-		// completed. The flight continues and may still activate the actor, so
-		// the outcome is "unknown", not "none".
-		return nil, ResumeOutcomeUnknown, ctx.Err()
+	case <-waitCtx.Done():
+		// The caller stopped waiting, but the flight may still resume the
+		// actor, so the outcome is "unknown".
+		return nil, ResumeOutcomeUnknown, waitErr(ctx, actorRef)
 	case <-f.done:
 		// Fast path: the flight finished without ever retrying, or before this
 		// caller saw retrying. The lot is never touched.
@@ -304,14 +320,23 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	defer func() { release(parkOutcomeFor(finalErr)) }()
 
 	select {
-	case <-ctx.Done():
-		finalErr = ctx.Err()
+	case <-waitCtx.Done():
+		finalErr = waitErr(ctx, actorRef)
 		return nil, ResumeOutcomeUnknown, finalErr
 	case <-f.done:
 		actor, outcome, err := f.callerResult(reqID)
 		finalErr = err
 		return actor, outcome, err
 	}
+}
+
+// waitErr returns ctx's error if the request itself ended, or stillResumingErr
+// if the router stopped waiting first.
+func waitErr(ctx context.Context, actorRef resources.ActorRef) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return stillResumingErr(actorRef)
 }
 
 // enterLot admits the caller to the parking lot, treating a nil lot as
