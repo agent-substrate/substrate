@@ -419,6 +419,9 @@ func TestWorkerPoolRunsWorkersAsWorkerServiceAccount(t *testing.T) {
 	if len(sa.OwnerReferences) != 0 {
 		t.Errorf("worker ServiceAccount has owners %v, want none", sa.OwnerReferences)
 	}
+	if sa.AutomountServiceAccountToken == nil || *sa.AutomountServiceAccountToken {
+		t.Errorf("worker ServiceAccount automountServiceAccountToken = %v, want false", sa.AutomountServiceAccountToken)
+	}
 }
 
 // TestWorkerPoolWithServiceAccountSkipsDefault checks that a pool naming its own

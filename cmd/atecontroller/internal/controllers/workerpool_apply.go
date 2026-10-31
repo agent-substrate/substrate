@@ -571,6 +571,9 @@ func applyWorkerPoolPodTemplate(
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
 	podSpecAC.WithServiceAccountName(installdefaults.WorkerServiceAccount)
+	// Workers never call the Kubernetes API. Set here, not only on the
+	// ServiceAccount, so a template serviceAccountName can't bring the token back.
+	podSpecAC.WithAutomountServiceAccountToken(false)
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	resourcesAC := corev1ac.ResourceRequirements()
 	containerAC.WithResources(resourcesAC)
