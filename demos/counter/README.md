@@ -188,10 +188,12 @@ kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 The snapshot stays on the worker's node and is uploaded to snapshot storage in
 the background. Add `--mode=sync` to wait for the upload instead.
 
-Repeat the `curl` from step 1 and the actor resumes from its snapshot —
-possibly on a different worker — with **both** counters continuing from where
+Repeat the `curl` from step 1 and the actor resumes from its snapshot,
+possibly on a different worker, with **both** counters continuing from where
 they left off: the memory count comes back from the `MEMORY` snapshot's process
-memory, the file counter from the durable volume.
+memory, the file counter from the durable volume. Run `kubectl ate get actor`
+from step 2 again and check the `WORKER POD` column to see which worker pod it
+resumed on.
 
 4. To permanently delete the suspended actor:
 <details>
