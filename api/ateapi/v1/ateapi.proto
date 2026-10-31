@@ -3100,7 +3100,7 @@ message AccessPolicy {
 // Binding associates a list of principals (members) with a single role.
 message Binding {
   // The role name for the parent resource type (e.g., "owner", "editor",
-  // "viewer").
+  // "operator", "viewer").
   //
   // +k8s:required
   // +k8s:maxLength=64

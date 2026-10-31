@@ -9363,7 +9363,7 @@ func (x *AccessPolicy) GetBindings() []*Binding {
 type Binding struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The role name for the parent resource type (e.g., "owner", "editor",
-	// "viewer").
+	// "operator", "viewer").
 	//
 	// +k8s:required
 	// +k8s:maxLength=64
