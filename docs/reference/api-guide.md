@@ -479,11 +479,10 @@ a `Snapshot` with the following fields:
   (`SNAPSHOT_FIDELITY_MEMORY`) first schedules onto
   an eligible worker whose `status.sandboxClasses` entry for the snapshot's
   `sandboxClass` has a `defaultRuntime` or `restorableRuntimes` entry whose
-  `version` is compatible with `sandboxRuntime.version` (same schema version, and every
-  attribute recorded on the snapshot present on the worker with the same
-  value, except `cpu_features`, whose hexadecimal bitmask on the snapshot must be
-  a bitwise subset of the worker's; attributes only the worker reports are
-  ignored). When no compatible worker has
+  `version` is compatible with `sandboxRuntime.version` (same schema version, the
+  same set of attribute keys, and every attribute value equal except
+  `cpu_features`, whose hexadecimal bitmask on the snapshot must be a bitwise
+  subset of the worker's). When no compatible worker has
   capacity:
   - A durable snapshot — the actor's own, a `sourceTag` clone, or the
     template's golden snapshot a new actor starts from — falls back to any eligible
