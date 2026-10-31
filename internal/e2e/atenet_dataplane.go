@@ -35,11 +35,16 @@ type AtenetDataplane interface {
 	IsRetryableParkingBudgetExhaustion(status int, body string) bool
 	ParkingBudgetStatus() int
 	IsEgressPolicyDenied(status int, body string) bool
+	IsWebSocketEgressDenied(status int, body string) bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
 }
+
+// webSocketEgressDeniedBody is the body both dataplanes are configured to
+// answer a WebSocket upgrade from an actor with.
+const webSocketEgressDeniedBody = "WebSocket egress is not supported"
 
 // EgressConnectStats holds the delta of egress CONNECT connections and requests
 // observed between two metric scrapes. A value of -1 indicates that the
@@ -83,6 +88,10 @@ func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 func isEgressPolicyDenied(status int, body string) bool {
 	return (status == http.StatusForbidden && (strings.Contains(body, "egress denied") || strings.Contains(body, "actor egress policy denied"))) ||
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
+}
+
+func (envoyAtenetDataplane) IsWebSocketEgressDenied(status int, body string) bool {
+	return status == http.StatusForbidden && body == webSocketEgressDeniedBody
 }
 
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
@@ -147,6 +156,14 @@ func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.Statu
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return isEgressPolicyDenied(status, body)
+}
+
+// IsWebSocketEgressDenied also accepts agentgateway's own denial: it applies
+// its request policies before the route's direct response, so an upgrade
+// without a substrate egress policy is refused with this body instead.
+func (agentGatewayAtenetDataplane) IsWebSocketEgressDenied(status int, body string) bool {
+	return status == http.StatusForbidden &&
+		(body == webSocketEgressDeniedBody || strings.Contains(body, "missing substrate egress request policy"))
 }
 
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
