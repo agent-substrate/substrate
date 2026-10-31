@@ -20,9 +20,12 @@ package cgroup
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -34,6 +37,12 @@ const Root = "/sys/fs/cgroup"
 // workerLeaf holds the worker's own processes, since a cgroup that delegates
 // controllers may not hold processes itself.
 const workerLeaf = "worker"
+
+// workerCPUWeight is the worker leaf's cpu.weight. The actor leaves keep the
+// default 100, so the worker's own processes (probe, atunnel, atelet RPCs,
+// restore steps) win the pod's CPU quota when every actor restores at once,
+// instead of holding one share in N+1 of it.
+const workerCPUWeight = "10000"
 
 // Delegate prepares the worker pod's cgroup so the runtime can create per-actor
 // leaves under it with real cpu/memory/pids accounting. A worker outside a
@@ -104,8 +113,22 @@ func delegate(ctx context.Context, procSelfCgroup, root string) error {
 		}
 		enabled = append(enabled, c)
 	}
+	// After the controllers: the leaf has a cpu.weight only once cpu is delegated.
+	if err := setWorkerCPUWeight(root); err != nil {
+		slog.WarnContext(ctx, "could not set the worker leaf's cpu.weight", slog.Any("err", err))
+	}
 	slog.InfoContext(ctx, "cgroup delegation ready", slog.Any("controllers", enabled))
 	return nil
+}
+
+// setWorkerCPUWeight writes workerCPUWeight to the worker leaf under root; a
+// node that did not delegate the cpu controller has no cpu.weight there.
+func setWorkerCPUWeight(root string) error {
+	err := writeExisting(filepath.Join(root, workerLeaf, "cpu.weight"), workerCPUWeight)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // cgroupPath returns the cgroup v2 path from a /proc/<pid>/cgroup file
