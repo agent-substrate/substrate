@@ -50,15 +50,9 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapi.Actor) (*at
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		if isForeignKeyViolation(err) {
-			// The atespace referenced by this actor doesn't exist (or was
-			// deleted concurrently with the control API's own pre-check).
-			return nil, store.ErrFailedPrecondition
-		}
-		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
+		// A foreign key violation means the actor's atespace doesn't exist (or
+		// was deleted concurrently with the control API's own pre-check).
+		return nil, mapToStoreError(err, "inserting actor %s/%s", atespace, name)
 	}
 	return dbActor, nil
 }
@@ -67,10 +61,7 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
+		return nil, mapToStoreError(err, "getting actor %s/%s", actorRef.Atespace, actorRef.Name)
 	}
 	out := &ateapi.Actor{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
@@ -98,10 +89,7 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 	if err := p.pool.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actors
 			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
+		return nil, mapToStoreError(err, "getting actor %s/%s for update", atespace, name)
 	}
 
 	dbActor := &ateapi.Actor{}
