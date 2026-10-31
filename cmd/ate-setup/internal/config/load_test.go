@@ -128,9 +128,8 @@ func TestLoadFlagsRejectsBadConfigPath(t *testing.T) {
 	}
 }
 
-// The file channel must cross hack/install-ate.sh, which forwards only a fixed
-// set of flags but passes the whole environment through. ATE_CONFIG is how it
-// gets there without a shim change.
+// ATE_CONFIG names the document when --config is absent, and the flag
+// outranks it.
 func TestConfigPathFromEnvironment(t *testing.T) {
 	loadEnv(t)
 	path := filepath.Join(t.TempDir(), "install.yaml")
@@ -191,9 +190,8 @@ func TestConfigPathFromEnvironment(t *testing.T) {
 	})
 }
 
-// A relative path means different files from different working directories,
-// and the shell installer changes to the repository root. The error names the
-// absolute path so that is visible rather than silent.
+// A relative path means different files from different working directories.
+// The error names the absolute path so that is visible rather than silent.
 func TestMissingConfigErrorNamesAbsolutePath(t *testing.T) {
 	loadEnv(t)
 	t.Setenv(ConfigPathEnv, "no-such-config.yaml")

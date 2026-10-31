@@ -33,7 +33,8 @@
 # the e2e runner executes suites in parallel, so this check must run alone.
 #
 # Prerequisites: a cluster with the ate system and the counter demo installed
-# (hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' --deploy-demo-counter),
+# (go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}', then
+# go run ./cmd/ate-setup --kind deploy demo counter),
 # and no actors currently running on the counter demo pool (the pool is scaled
 # to 1 for the duration of the check and restored afterwards).
 #
@@ -177,7 +178,7 @@ run_kubectl_ate suspend actor "${ACTOR_BUSY}" -a "${ATESPACE}" >/dev/null
 
 wait "${CURL_PID}" || true
 grep -q "HTTP=200" "${CURL_OUT}" || fail "parked request did not return 200 through the Terminating pod: $(cat "${CURL_OUT}")"
-grep -q "hello from" "${CURL_OUT}" || fail "parked request body missing the counter greeting: $(cat "${CURL_OUT}")"
+grep -q "preserved memory count:" "${CURL_OUT}" || fail "parked request body missing the counter response: $(cat "${CURL_OUT}")"
 echo "parked request served by the Terminating pod:"
 sed 's/^/  /' "${CURL_OUT}"
 

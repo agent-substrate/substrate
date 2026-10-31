@@ -221,7 +221,19 @@ func toAteAPISandboxRuntime(in *ateletpb.WorkerSandboxRuntime) *ateapi.WorkerSan
 	if in == nil {
 		return nil
 	}
-	return &ateapi.WorkerSandboxRuntime{Version: toAteAPICompat(in.GetVersion())}
+	return &ateapi.WorkerSandboxRuntime{
+		Version:       toAteAPICompat(in.GetVersion()),
+		ActorOverhead: toAteAPIOverhead(in.GetActorOverhead()),
+	}
+}
+
+// toAteAPIOverhead converts atelet's RuntimeOverhead to the control plane's,
+// which it mirrors field for field.
+func toAteAPIOverhead(in *ateletpb.RuntimeOverhead) *ateapi.RuntimeOverhead {
+	if in == nil {
+		return nil
+	}
+	return &ateapi.RuntimeOverhead{MemoryBytes: in.GetMemoryBytes(), MemoryBytesPerGib: in.GetMemoryBytesPerGib()}
 }
 
 func toAteAPISandboxRuntimes(in []*ateletpb.WorkerSandboxRuntime) []*ateapi.WorkerSandboxRuntime {

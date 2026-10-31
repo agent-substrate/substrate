@@ -184,7 +184,7 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 
 	// Verify the server before attaching the bearer token below: the token
 	// must never be sent over an unauthenticated channel.
-	tlsCfg, err := serverTLSConfig(ctx, clientset)
+	tlsCfg, err := serverTLSConfig(ctx, clientset, apiServerName())
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +246,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 	}
 	localEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
 
-	tlsCfg, err := serverTLSConfig(ctx, clientset)
+	tlsCfg, err := serverTLSConfig(ctx, clientset, apiServerName())
 	if err != nil {
 		stopForward()
 		return nil, err
@@ -280,7 +280,9 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 	}, nil
 }
 
-func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
+// serverTLSConfig verifies a Service's servicedns serving certificate for
+// serverName.
+func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface, serverName string) (*tls.Config, error) {
 	bundles, err := clustertrustbundle.NewClient(clientset, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover ClusterTrustBundle API: %w", err)
@@ -310,7 +312,7 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	return &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		RootCAs:    pool,
-		ServerName: apiServerName(),
+		ServerName: serverName,
 	}, nil
 }
 

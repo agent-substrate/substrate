@@ -33,6 +33,9 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
+
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -138,10 +141,15 @@ func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
 }
 
 // BuildTagged builds and publishes the images for importPaths in one ko
-// invocation, tagging each with tag, and returns their pushed references.
-func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...string) ([]string, error) {
+// invocation, tagging each with tag and setting each "key=value" in labels as
+// an image label, and returns their pushed references.
+func (r *Runner) BuildTagged(ctx context.Context, tag string, labels []string, importPaths ...string) ([]string, error) {
 	defer log.Elapsed(time.Now(), "ko build --tags="+tag)
-	cmd := exec.CommandContext(ctx, r.binary, append(r.args("build", importPaths...), "--tags="+tag)...)
+	args := append(r.args("build", importPaths...), "--tags="+tag)
+	for _, label := range labels {
+		args = append(args, "--image-label="+label)
+	}
+	cmd := exec.CommandContext(ctx, r.binary, args...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)
 	var stdout bytes.Buffer
@@ -153,6 +161,37 @@ func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...str
 	refs := strings.Fields(stdout.String())
 	if len(refs) != len(importPaths) {
 		return nil, fmt.Errorf("ko build printed %d image references for %d packages", len(refs), len(importPaths))
+	}
+	return refs, nil
+}
+
+// buildBackoff paces the retries of an image that fails to build or push: 3
+// attempts, 10s then 20s apart. ghcr.io can briefly deny pushes to a package it
+// has just created.
+var buildBackoff = wait.Backoff{Steps: 3, Duration: 10 * time.Second, Factor: 2}
+
+// BuildEach runs BuildTagged once per import path, retrying each failure per
+// buildBackoff. It returns the refs in importPaths order.
+func (r *Runner) BuildEach(ctx context.Context, tag string, labels []string, importPaths ...string) ([]string, error) {
+	refs := make([]string, 0, len(importPaths))
+	for _, path := range importPaths {
+		var ref string
+		logAndRetry := func(err error) bool {
+			log.Warnf("%s: %v", path, err)
+			return true
+		}
+		err := retry.OnError(buildBackoff, logAndRetry, func() error {
+			built, err := r.BuildTagged(ctx, tag, labels, path)
+			if err != nil {
+				return err
+			}
+			ref = built[0]
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
 	}
 	return refs, nil
 }
@@ -175,7 +214,38 @@ func (r *Runner) args(subcommand string, target ...string) []string {
 
 // ldflags returns the version stamp ko should bake into binaries.
 func (r *Runner) ldflags() []string {
-	return []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(r.Root))}
+	return Ldflags(r.Root)
+}
+
+// Ldflags returns the -X flags that stamp a binary built from root with
+// internal/version's Version, and with Commit and BuildDate when root has a
+// commit checked out. internal/version replaces a stamped Version with the
+// module's build info unless Commit is stamped too. BuildDate is the commit's
+// time, so rebuilding one commit gives the same binary.
+func Ldflags(root string) []string {
+	flags := []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(root))}
+	if commit, date, ok := CommitStamp(root); ok {
+		flags = append(flags,
+			fmt.Sprintf("-X=%s.Commit=%s", versionPkg, commit),
+			fmt.Sprintf("-X=%s.BuildDate=%s", versionPkg, date))
+	}
+	return flags
+}
+
+// CommitStamp returns the commit checked out at root and its committer date in
+// RFC 3339 form. ok is false when root has no commit, as in a source tarball.
+func CommitStamp(root string) (commit, date string, ok bool) {
+	cmd := exec.Command("git", "show", "-s", "--format=%H %cI", "HEAD")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", false
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return "", "", false
+	}
+	return fields[0], fields[1], true
 }
 
 // BuildVersion is the VERSION environment variable, else `git describe`, or

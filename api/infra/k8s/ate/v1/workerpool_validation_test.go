@@ -58,6 +58,19 @@ func TestWorkerPoolValidation(t *testing.T) {
 		mutate:  func(wp *WorkerPool) {},
 		wantErr: false,
 	}, {
+		name: "name of 63 characters",
+		mutate: func(wp *WorkerPool) {
+			wp.Name = strings.Repeat("a", 63)
+		},
+		wantErr: false,
+	}, {
+		name: "name of 64 characters",
+		mutate: func(wp *WorkerPool) {
+			wp.Name = strings.Repeat("a", 64)
+		},
+		wantErr: true,
+		errMsg:  "metadata.name must be at most 63 characters",
+	}, {
 		name: "replicas below minimum",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.Replicas = -1

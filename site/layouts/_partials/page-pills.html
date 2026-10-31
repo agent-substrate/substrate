@@ -1,0 +1,35 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Pills shown next to a link to .page: its status, and, when .new is true,
+"New" if its repo_source was added since the previous release (from
+data/release.json). Deprecated pages are never marked new.
+*/ -}}
+
+{{- $page := .page -}}
+{{- $params := partialCached "page-params.html" $page $page.Path -}}
+{{- with $params.status -}}
+<span class="as-pill as-pill--{{ . }}">{{ title . }}</span>
+{{- end -}}
+{{- if and .new $page.Params.repo_source (ne $params.status "deprecated") -}}
+  {{- $release := site.Data.release | default dict -}}
+  {{- if in ($release.added | default slice) $page.Params.repo_source -}}
+    {{- $tip := printf "New since %s" $release.previous -}}
+    {{- with $release.version }}{{ $tip = printf "New in %s" . }}{{ end -}}
+<span class="as-pill as-pill--new" title="{{ $tip }}">New</span>
+  {{- end -}}
+{{- end -}}

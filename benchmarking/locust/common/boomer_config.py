@@ -81,6 +81,7 @@ _FLAGS = {
     "--agentsession-snapshot-steps": str,
     "--agentsession-phase-in": float,
     "--agentsession-resume-retry-budget": float,
+    "--agentsession-awake": int,
     "--total-actors": int,
     "--spawn-concurrency": int,
     "--actor-deadline": float,

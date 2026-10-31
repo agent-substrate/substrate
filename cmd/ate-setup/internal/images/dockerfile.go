@@ -15,7 +15,6 @@
 package images
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,11 +68,27 @@ func dockerfilePlatforms(rootDir, koDefaultPlatforms string) (string, error) {
 }
 
 // dockerBuildArgs returns the docker arguments that build contextPath for
-// platforms and push it as tag. extraFlags go before the context.
-func dockerBuildArgs(platforms string, extraFlags []string, tag, contextPath string) []string {
-	args := []string{"buildx", "build", "--platform=" + platforms, "--push"}
+// platforms, push it as tag, and write the build metadata to metadataFile.
+// extraFlags go before the context.
+func dockerBuildArgs(platforms string, extraFlags []string, tag, metadataFile, contextPath string) []string {
+	args := []string{"buildx", "build", "--platform=" + platforms, "--push", "--metadata-file", metadataFile}
 	args = append(args, extraFlags...)
 	return append(args, "-t", tag, contextPath)
+}
+
+// pushedDigest returns the digest buildx pushed, from the file written by
+// --metadata-file.
+func pushedDigest(metadata []byte) (string, error) {
+	var parsed struct {
+		Digest string `json:"containerimage.digest"`
+	}
+	if err := json.Unmarshal(metadata, &parsed); err != nil {
+		return "", fmt.Errorf("while parsing the buildx metadata: %w", err)
+	}
+	if parsed.Digest == "" {
+		return "", errors.New("the buildx metadata has no containerimage.digest")
+	}
+	return parsed.Digest, nil
 }
 
 // BuildDockerfileImage builds a Dockerfile-based image from contextPath, pushes
@@ -97,8 +112,17 @@ func PublishDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName,
 	if err != nil {
 		return "", err
 	}
+	metadata, err := os.CreateTemp("", "buildx-metadata-*.json")
+	if err != nil {
+		return "", err
+	}
+	if err := metadata.Close(); err != nil {
+		return "", err
+	}
+	defer os.Remove(metadata.Name())
+
 	build := exec.CommandContext(ctx, "docker",
-		dockerBuildArgs(platforms, extraFlags, stageTag, contextPath)...)
+		dockerBuildArgs(platforms, extraFlags, stageTag, metadata.Name(), contextPath)...)
 	build.Dir = rootDir
 	// The shell version sent build output to stderr so it could capture the
 	// image reference on stdout; keeping that split makes the two behave the
@@ -109,26 +133,13 @@ func PublishDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName,
 		return "", fmt.Errorf("while building the %s image: %w", imageName, err)
 	}
 
-	inspect := exec.CommandContext(ctx, "docker", "buildx", "imagetools", "inspect",
-		stageTag, "--format", "{{json .}}")
-	inspect.Dir = rootDir
-	inspect.Stderr = os.Stderr
-	var out bytes.Buffer
-	inspect.Stdout = &out
-	if err := inspect.Run(); err != nil {
-		return "", fmt.Errorf("while inspecting %s: %w", stageTag, err)
+	raw, err := os.ReadFile(metadata.Name())
+	if err != nil {
+		return "", err
 	}
-
-	var inspected struct {
-		Manifest struct {
-			Digest string `json:"digest"`
-		} `json:"manifest"`
+	digest, err := pushedDigest(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", stageTag, err)
 	}
-	if err := json.Unmarshal(out.Bytes(), &inspected); err != nil {
-		return "", fmt.Errorf("while parsing the image manifest of %s: %w", stageTag, err)
-	}
-	if inspected.Manifest.Digest == "" {
-		return "", fmt.Errorf("failed to resolve the image digest from %s", stageTag)
-	}
-	return repo + "@" + inspected.Manifest.Digest, nil
+	return repo + "@" + digest, nil
 }

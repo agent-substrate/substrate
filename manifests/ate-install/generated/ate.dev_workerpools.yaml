@@ -625,6 +625,10 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: metadata.name must be at most 63 characters, because worker pods
+            use it as a label value
+          rule: size(self.metadata.name) <= 63
     served: true
     storage: true
     subresources:

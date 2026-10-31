@@ -153,7 +153,7 @@ func (*detachDeletePlugin) DeleteVolume(context.Context, string) error { return 
 // count as detached, and any other error fails the step as before.
 func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	for _, tc := range []struct {
 		name      string
 		state     ateapi.ActorState
@@ -261,7 +261,7 @@ func TestRevertAndDelete_AssignedNodeGone(t *testing.T) {
 					if s := got.GetStatus(); s.GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || s.GetAssignedNode() != "" {
 						t.Errorf("after revert: state %v, assigned node %q, want SUSPENDED with no node", s.GetState(), s.GetAssignedNode())
 					}
-					if snaps := got.GetStatus().GetSnapshots(); len(snaps) != 1 || snaps[0].GetGeneration() != 1 || snaps[0].GetDurableSnapshot().GetStatus() != completed {
+					if snaps := got.GetStatus().GetSnapshots(); len(snaps) != 1 || snaps[0].GetGeneration() != 1 || snaps[0].GetDurableSnapshot().GetState() != completed {
 						t.Errorf("after revert: snapshots %v, want only the completed durable snapshot at generation 1", snaps)
 					}
 				default:
@@ -384,8 +384,8 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.LastAssignedGeneration = 2
 				s.Snapshots = []*ateapi.Snapshot{
-					newDurableSnapshot(1, currentType, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+					newDurableSnapshot(1, currentType, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
+					newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 				}
 			})
 
@@ -433,7 +433,7 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.Name(), currentSnapshot.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.Name(), currentSnapshot.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 		}
 	})
 
@@ -473,7 +473,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		}
 	})
 
@@ -506,7 +506,7 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 		}
 	})
 
@@ -584,7 +584,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapi.Snapshot{
-						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED),
 					}
 				})
 			}
@@ -656,7 +656,7 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	observed := mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING),
 		}
 	})
 	// The guards a client sends after reading the actor.
@@ -702,5 +702,51 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	}
 	if _, err := w.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); apierror.Code(err) != codes.NotFound {
 		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
+	}
+}
+
+// TestEnsureWorkerReleased_RecreatedActorKeepsAssignment runs the release of a
+// delete that lost its lease after another delete finished and the name was
+// recreated and resumed. The stale delete must leave the new Actor bound.
+func TestEnsureWorkerReleased_RecreatedActorKeepsAssignment(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+	bound := func(uid string) *ateapi.Actor {
+		return &ateapi.Actor{
+			Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1", Uid: uid},
+			ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
+			Status: &ateapi.ActorStatus{
+				State:            ateapi.ActorState_ACTOR_STATE_RUNNING,
+				AssignedNode:     wireTestAssignment().GetNodeName(),
+				WorkerAssignment: wireTestAssignment(),
+			},
+		}
+	}
+
+	deleted := storetest.MustCreateActor(t, ctx, persistence, bound(""))
+	actorRef := resources.ActorRefFromActor(deleted)
+	// The delete that finished released the Actor's worker before removing it.
+	if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, func(a *ateapi.Actor) error {
+		a.Status.WorkerAssignment = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
+	}
+	if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteActor: %v", err)
+	}
+	recreated := storetest.MustCreateActor(t, ctx, persistence, bound(""))
+	seedWireWorker(t, ctx, persistence, assignmentOf(recreated))
+
+	if _, err := w.ensureWorkerReleased(ctx, actorRef, deleted); apierror.Code(err) != codes.Aborted {
+		t.Fatalf("ensureWorkerReleased = %v, want ABORTED", err)
+	}
+	wantWorker := wireTestAssignment().GetWorker().GetName()
+	if got := storetest.WorkerHostingActor(t, ctx, persistence, recreated.GetMetadata().GetUid()); got != wantWorker {
+		t.Errorf("worker hosting the recreated actor = %q, want %q", got, wantWorker)
+	}
+	if got := mustReadActor(t, ctx, persistence, actorRef).GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != wantWorker {
+		t.Errorf("status.worker_assignment names %q, want %q", got, wantWorker)
 	}
 }

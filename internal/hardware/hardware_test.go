@@ -320,3 +320,46 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 		}
 	})
 }
+
+func TestWorkerRuntimeFor(t *testing.T) {
+	compat := func(hash string) *ateapi.VersionedSandboxCompat {
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: []*ateapi.AttributeEntry{
+			{Key: AttrArchitecture, Value: "amd64"},
+			{Key: AttrSandboxBundleHash, Value: hash},
+		}}
+	}
+	def := &ateapi.WorkerSandboxRuntime{Version: compat("new"), ActorOverhead: &ateapi.RuntimeOverhead{MemoryBytes: 4 << 20}}
+	old := &ateapi.WorkerSandboxRuntime{Version: compat("old"), ActorOverhead: &ateapi.RuntimeOverhead{MemoryBytes: 16 << 20}}
+	status := &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
+		SandboxClass:       "microvm",
+		DefaultRuntime:     def,
+		RestorableRuntimes: []*ateapi.WorkerSandboxRuntime{old},
+	}}}
+	stamp := func(c *ateapi.VersionedSandboxCompat) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{SandboxClass: "microvm", Version: c}
+	}
+	for _, tc := range []struct {
+		name string
+		snap *ateapi.ActorSandboxRuntime
+		want *ateapi.WorkerSandboxRuntime
+	}{
+		{name: "cold boot runs the default", want: def},
+		{name: "a restore runs the matching runtime", snap: stamp(compat("old")), want: old},
+		{name: "a snapshot nothing restores cold boots on the default", snap: stamp(compat("gone")), want: def},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRequirement(tc.snap)
+			got := r.WorkerRuntimeFor(status)
+			if got != tc.want {
+				t.Errorf("WorkerRuntimeFor() = %v, want %v", got, tc.want)
+			}
+			// it is the runtime RuntimeFor stamps
+			if stamped := r.RuntimeFor(status); !proto.Equal(stamped.GetVersion(), got.GetVersion()) {
+				t.Errorf("RuntimeFor() = %v, which is not WorkerRuntimeFor()'s %v", stamped, got)
+			}
+		})
+	}
+	if got := NewRequirement(nil).WorkerRuntimeFor(&ateapi.WorkerStatus{}); got != nil {
+		t.Errorf("WorkerRuntimeFor() before registration = %v, want nil", got)
+	}
+}

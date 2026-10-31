@@ -21,7 +21,6 @@ import (
 	"time"
 
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,20 +28,13 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
-// ServiceName is the OpenTelemetry service name and instrumentation scope
-// shared by every part of the atenet router process — the ext_proc mux here,
-// the direction handlers, and the router's own servers. It lives in this
-// package because it is the one package all of them already depend on.
-const ServiceName = "atenet-router"
-
 // atenet.router.route.duration measures the latency from when the ext_proc handler receives a request
 // (dataplane -> EPP) until the target worker endpoint is resolved
 const routeDurationMetricName = "atenet.router.route.duration"
 
-// NewRouteDurationHistogram creates the atenet.router.route.duration histogram from
-// the global MeterProvider.
-func NewRouteDurationHistogram() (metric.Float64Histogram, error) {
-	h, err := otel.Meter(ServiceName).Float64Histogram(
+// NewRouteDurationHistogram creates the atenet.router.route.duration histogram on meter.
+func NewRouteDurationHistogram(meter metric.Meter) (metric.Float64Histogram, error) {
+	h, err := meter.Float64Histogram(
 		routeDurationMetricName,
 		metric.WithUnit("s"),
 		metric.WithDescription(
@@ -95,6 +87,8 @@ func classifyOutcome(err error) string {
 		return ateattr.RouterOutcomeNotFound
 	case codes.Unavailable:
 		return ateattr.RouterOutcomeUnavailable
+	case codes.PermissionDenied:
+		return ateattr.RouterOutcomeDenied
 	}
 	var re *ReqError
 	if errors.As(err, &re) {
@@ -106,13 +100,15 @@ func classifyOutcome(err error) string {
 			// ResourceExhausted cause, since status.Code unwraps through
 			// ReqError.Cause. A 503 that reaches here has no such cause: a
 			// shed request whose resume did not fail with ResourceExhausted,
-			// a denied egress request, or a failed policy or credential
-			// lookup. None of these mean the fleet is full.
+			// or a failed policy or credential lookup. None of these mean
+			// the fleet is full.
 			return ateattr.RouterOutcomeUnavailable
 		case envoy_type.StatusCode_GatewayTimeout:
 			return ateattr.RouterOutcomeTimeout
 		case envoy_type.StatusCode_TooManyRequests:
 			return ateattr.RouterOutcomeRateLimited
+		case envoy_type.StatusCode_Forbidden:
+			return ateattr.RouterOutcomeDenied
 		}
 	}
 	return ateattr.RouterOutcomeResumeError
