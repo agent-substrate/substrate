@@ -395,6 +395,11 @@ func main() {
 			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
+		// Clients ping every minute while an RPC waits. The default
+		// MinTime of 5 minutes would close their connections during long RPCs.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime: 30 * time.Second,
+		}),
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
