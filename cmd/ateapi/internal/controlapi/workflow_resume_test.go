@@ -306,6 +306,44 @@ func TestRecordRestoredUpload(t *testing.T) {
 	}
 }
 
+// TestFinalizeRunning_RejectsOutOfBandTransition verifies the finalize step
+// does not overwrite an out-of-band transition: when the syncer crashed the
+// actor after its worker died mid-resume, finalizeRunning must fail instead
+// of committing a RUNNING actor whose worker assignment is gone.
+func TestFinalizeRunning_RejectsOutOfBandTransition(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
+		Status: &ateapi.ActorStatus{
+			// What crashBoundActor leaves behind: CRASHED, assignment cleared.
+			State:                  ateapi.ActorState_ACTOR_STATE_CRASHED,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapi.Snapshot{
+				newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+			},
+		},
+	})
+	w := &ActorWorkflow{store: persistence}
+
+	_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1)
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("finalizeRunning error = %v, want FailedPrecondition", err)
+	}
+	stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED preserved", got)
+	}
+	if stored.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment = %v, want nil preserved", stored.GetStatus().GetWorkerAssignment())
+	}
+}
+
 // bindErrorStore fails every claim, standing in for a worker that moved or
 // vanished between the pick and the write.
 type bindErrorStore struct {
