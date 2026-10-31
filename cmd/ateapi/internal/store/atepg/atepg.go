@@ -38,8 +38,10 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -77,6 +79,7 @@ type Persistence struct {
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
 	maintenanceDone       chan struct{}
+	poolMetrics           metric.Registration
 	// watchMu guards watchers, the live WatchWorkers channels.
 	watchMu  sync.Mutex
 	watchers map[chan store.WorkerEvent]struct{}
@@ -133,6 +136,7 @@ type ConnectConfig struct {
 	OwnerRole     string
 	Schema        string
 	PoolMaxConns  int32
+	Instruments   *Instruments
 }
 
 // Connect opens the read/write, owner, watch, and probe pools. It creates the
@@ -170,6 +174,13 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	ownerConfig.MinConns = 0
 	ownerConfig.MinIdleConns = 0
 
+	watchCfg := resizedPoolConfig(readWriteConfig, watchPoolMaxConns, watchPoolMinConns)
+	probeCfg := resizedPoolConfig(readWriteConfig, probePoolMaxConns, probePoolMinConns)
+	config.Instruments.configurePool(readWriteConfig, ateattr.DBConnectionPoolMain)
+	config.Instruments.configurePool(watchCfg, ateattr.DBConnectionPoolWatch)
+	config.Instruments.configurePool(ownerConfig, ateattr.DBConnectionPoolOwner)
+	config.Instruments.configurePool(probeCfg, ateattr.DBConnectionPoolProbe)
+
 	pool, err := pgxpool.NewWithConfig(ctx, readWriteConfig)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
@@ -195,13 +206,13 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 		return nil, err
 	}
 
-	watchPool, err := pgxpool.NewWithConfig(ctx, resizedPoolConfig(readWriteConfig, watchPoolMaxConns, watchPoolMinConns))
+	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
 	if err != nil {
 		ownerPool.Close()
 		pool.Close()
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
-	probePool, err := pgxpool.NewWithConfig(ctx, resizedPoolConfig(readWriteConfig, probePoolMaxConns, probePoolMinConns))
+	probePool, err := pgxpool.NewWithConfig(ctx, probeCfg)
 	if err != nil {
 		watchPool.Close()
 		ownerPool.Close()
@@ -220,6 +231,17 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	p.ownsWatchPool = true
 	p.ownsOwnerPool = true
 	p.ownsProbePool = true
+	p.poolMetrics, err = config.Instruments.registerPools(
+		namedPool{ateattr.DBConnectionPoolMain, pool},
+		namedPool{ateattr.DBConnectionPoolWatch, watchPool},
+		namedPool{ateattr.DBConnectionPoolOwner, ownerPool},
+		namedPool{ateattr.DBConnectionPoolProbe, probePool},
+	)
+	if err != nil {
+		p.Close()
+		pool.Close()
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -345,6 +367,11 @@ func newPersistence(ctx context.Context, pool, watchPool, ownerPool, probePool *
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
+	if p.poolMetrics != nil {
+		if err := p.poolMetrics.Unregister(); err != nil {
+			slog.Error("unregistering PostgreSQL pool metrics failed", slog.Any("err", err))
+		}
+	}
 	if p.ownsWatchPool {
 		p.watchPool.Close()
 	}
