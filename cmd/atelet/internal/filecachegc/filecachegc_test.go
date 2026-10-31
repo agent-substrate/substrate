@@ -15,8 +15,11 @@
 package filecachegc
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,6 +260,33 @@ func TestPassShortfall(t *testing.T) {
 	g.runPass(context.Background())
 	if g.consecutiveShortfalls != 0 {
 		t.Errorf("consecutiveShortfalls after a quiet pass = %d, want 0", g.consecutiveShortfalls)
+	}
+}
+
+// TestPassShortfallLogsEviction pins that, past the warn limit, a shortfall
+// pass is quiet unless it evicts.
+func TestPassShortfallLogsEviction(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	fake := &fakeStore{size: 1500, stats: filecache.EvictStats{FreedBytes: 100, SkippedLinked: 4}}
+	g, _ := newTestGC(t, fake, 1000)
+	for range shortfallWarnLimit + 1 {
+		g.runPass(context.Background())
+	}
+
+	buf.Reset()
+	g.runPass(context.Background())
+	if buf.Len() != 0 {
+		t.Errorf("quiet shortfall pass logged %q, want nothing", buf.String())
+	}
+
+	fake.stats.Retired = 1
+	g.runPass(context.Background())
+	if got := buf.String(); !strings.Contains(got, "evicted=1") {
+		t.Errorf("evicting shortfall pass logged %q, want a line with evicted=1", got)
 	}
 }
 
