@@ -131,6 +131,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 			}
 		}
 	}
+	if poolMaxConns == "" && e.Cfg.Size100() {
+		poolMaxConns = "192"
+	}
 	configVars := cloudSQLEnvVars(cloudsql)
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
@@ -363,6 +366,7 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
 		log.Warnf("%s", msg)
 	}
+	applyWorkloadScaleOverrides(objs, e.Cfg.Size100(), e.Cfg.FakeDataPlane)
 	return e.Kube.Apply(ctx, objs)
 }
 
