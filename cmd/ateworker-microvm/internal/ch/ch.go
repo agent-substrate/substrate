@@ -26,10 +26,27 @@ package ch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 )
+
+// ErrNotReady matches the error WaitReady returns when the api-socket did not
+// answer before its deadline.
+var ErrNotReady = errors.New("cloud-hypervisor api socket not ready")
+
+// notReadyError is WaitReady's deadline error. It matches ErrNotReady.
+type notReadyError struct {
+	apiSocket string
+	deadline  time.Duration
+}
+
+func (e *notReadyError) Error() string {
+	return fmt.Sprintf("cloud-hypervisor api socket %q not ready after %s", e.apiSocket, e.deadline)
+}
+
+func (e *notReadyError) Is(target error) bool { return target == ErrNotReady }
 
 // Client talks to one cloud-hypervisor VMM over its unix api-socket.
 type Client struct {
@@ -80,7 +97,7 @@ func (c *Client) WaitReady(ctx context.Context, deadline time.Duration) (VMMInfo
 			return info, nil
 		}
 		if !time.Now().Before(end) {
-			return VMMInfo{}, fmt.Errorf("cloud-hypervisor api socket %q not ready after %s", c.apiSocket, deadline)
+			return VMMInfo{}, &notReadyError{apiSocket: c.apiSocket, deadline: deadline}
 		}
 		select {
 		case <-ctx.Done():
