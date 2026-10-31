@@ -115,10 +115,6 @@ func TestGetDirToMissThenHit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.dataPath(key), "gvisor-bin", "mine")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("consumer's file leaked into the cache tree: %v", err)
 	}
-	// But not write through a link: the shared bytes are protected.
-	if err := os.WriteFile(filepath.Join(dst1, "runsc"), []byte("mutated"), 0o755); err == nil {
-		t.Error("write through consumer link succeeded, want permission error")
-	}
 
 	tmpChildren, err := os.ReadDir(s.tmpDir())
 	if err != nil {
@@ -136,6 +132,23 @@ func TestGetDirToMissThenHit(t *testing.T) {
 		if e.Name() != filepath.Base(dst1) && e.Name() != filepath.Base(dst2) {
 			t.Errorf("link-out left %q beside the destination", e.Name())
 		}
+	}
+}
+
+func TestGetDirToLinkedFilesAreWriteProtected(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions, so the write cannot fail")
+	}
+	s := newTestStore(t)
+	key := URIKey("test://release")
+	fetch, _ := treeFetcher(releaseTree)
+	dst := dstPath(t, s, "d")
+	if err := s.GetDirTo(context.Background(), key, dst, fetch); err != nil {
+		t.Fatal(err)
+	}
+	// Writing through a linked file must fail, not poison the shared bytes.
+	if err := os.WriteFile(filepath.Join(dst, "runsc"), []byte("mutated"), 0o755); err == nil {
+		t.Error("write through consumer link succeeded, want permission error")
 	}
 }
 
