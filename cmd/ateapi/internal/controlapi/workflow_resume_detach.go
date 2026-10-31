@@ -202,7 +202,8 @@ func latestLocalNotDurable(actor *ateapi.Actor) bool {
 }
 
 func canDetachWithoutAtelet(ctx context.Context, actor *ateapi.Actor, err error) bool {
-	if ctx.Err() != nil || actor.GetStatus().GetWorkerAssignment() != nil {
+	// The caller's ended context is not atelet being unreachable.
+	if contextEnded(ctx) != nil || actor.GetStatus().GetWorkerAssignment() != nil {
 		return false
 	}
 	// A failed restore can leave a live workload after its assignment is cleared.
@@ -222,9 +223,10 @@ func canDetachWithoutAtelet(ctx context.Context, actor *ateapi.Actor, err error)
 
 // detachActorError maps a DetachActor error to the one the resume fails with.
 func detachActorError(ctx context.Context, err error) error {
-	// The caller went away or the lease was lost: report that, not atelet's error.
-	if ctx.Err() != nil {
-		return fmt.Errorf("while calling atelet DetachActor: %w: %w", err, ctx.Err())
+	// The caller went away, its deadline passed or the lease was lost: report
+	// that, not atelet's error.
+	if ctxErr := contextEnded(ctx); ctxErr != nil {
+		return fmt.Errorf("while calling atelet DetachActor: %w: %w", err, ctxErr)
 	}
 	switch status.Code(err) {
 	case codes.Unavailable, codes.Canceled, codes.DeadlineExceeded:

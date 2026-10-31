@@ -355,6 +355,12 @@ func TestAteletCrashMessage(t *testing.T) {
 	}
 }
 
+// deadlinePassedContext has a deadline in the past and an Err that has not fired:
+// the window between gRPC's clock check and the context's timer.
+type deadlinePassedContext struct{ context.Context }
+
+func (deadlinePassedContext) Deadline() (time.Time, bool) { return time.Unix(0, 0), true }
+
 func TestHandleAteletError(t *testing.T) {
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -417,6 +423,22 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       expired,
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.DeadlineExceeded, "restore reply timed out")),
+			wantCode:  codes.DeadlineExceeded,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "caller deadline passed by the clock before its timer fired gets DeadlineExceeded",
+			ctx:       deadlinePassedContext{context.Background()},
+			rpc:       "Restore",
+			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.DeadlineExceeded, "stream terminated by RST_STREAM with error code: CANCEL")),
+			wantCode:  codes.DeadlineExceeded,
+			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "caller deadline passed by the clock keeps an Internal from crashing the actor",
+			ctx:       deadlinePassedContext{context.Background()},
+			rpc:       "Restore",
+			err:       status.Error(codes.Internal, "context deadline exceeded"),
 			wantCode:  codes.DeadlineExceeded,
 			wantState: ateapi.ActorState_ACTOR_STATE_RUNNING,
 		},
