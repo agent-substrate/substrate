@@ -33,7 +33,6 @@ import (
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsissuer"
-	"go.ate.dev/substrate/internal/oidcjwt"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/pkg/objectstorage"
@@ -69,13 +68,10 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if cfg.transferAccount == "" {
 		return nil, nil, errors.New("--transfer-service-account is required to serve the exchange on GCS")
 	}
-	// Read the key set once now, so a wrong path fails the start rather
-	// than the first exchange.
-	keys := oidcjwt.FileKeySource(cfg.jwksFile)
-	if _, err := keys.Keys(ctx); err != nil {
-		return nil, nil, fmt.Errorf("while reading the actor JWT key set: %w", err)
+	verifier, err := actorauthz.NewVerifier(ctx, cfg.issuer, cfg.jwksFile)
+	if err != nil {
+		return nil, nil, err
 	}
-	verifier := oidcjwt.NewVerifier(cfg.issuer, []string{actorauthz.Audience}, keys, oidcjwt.WithSubstrateClaims())
 	lookup, err := actorlookup.New(cfg.ateapi)
 	if err != nil {
 		return nil, nil, err

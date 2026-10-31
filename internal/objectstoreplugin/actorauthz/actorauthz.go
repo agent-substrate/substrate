@@ -22,6 +22,7 @@ package actorauthz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -53,6 +54,18 @@ type Verifier interface {
 	Verify(ctx context.Context, jwt string, now time.Time) (*oidcjwt.Claims, error)
 }
 
+// NewVerifier returns the verifier every exchange checks JWTs with: tokens
+// from issuer for Audience, with Substrate's claims, verified with the keys
+// in the JWK set file jwksFile. It reads the file once, so a bad path fails
+// here rather than on the first exchange.
+func NewVerifier(ctx context.Context, issuer, jwksFile string) (*oidcjwt.Verifier, error) {
+	keys := oidcjwt.FileKeySource(jwksFile)
+	if _, err := keys.Keys(ctx); err != nil {
+		return nil, fmt.Errorf("while reading the actor JWT key set: %w", err)
+	}
+	return oidcjwt.NewVerifier(issuer, []string{Audience}, keys, oidcjwt.WithSubstrateClaims()), nil
+}
+
 // Decision is what Authorize allowed: the UID of the actor a credential may
 // be issued for, and the storage grants the credential must be limited to.
 type Decision struct {
@@ -67,7 +80,8 @@ type Authorizer struct {
 	now      func() time.Time
 }
 
-// New returns an Authorizer. The verifier must accept only Audience.
+// New returns an Authorizer. The verifier must accept only Audience, as one
+// from NewVerifier does.
 func New(v Verifier, l Lookup) *Authorizer {
 	return &Authorizer{verifier: v, lookup: l, now: time.Now}
 }
