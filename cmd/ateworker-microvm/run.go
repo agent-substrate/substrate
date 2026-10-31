@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -584,14 +585,16 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// goroutines (started below) read over it for the actor's lifetime. It is stored
 	// on the runningActor and closed by teardownActor. Close it here only if Run
 	// fails after this point (no runningActor recorded).
+	var logWG sync.WaitGroup
 	defer func() {
 		if retErr != nil {
-			_ = ac.Close()
+			s.closeAgentOnFailure(ac, &logWG)
 		}
 	}()
 
+	attribution := p.actorAttribution()
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
-	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
+	if err := s.startActorContainers(ctx, ac, attribution, vsockPath, ctrs, &logWG); err != nil {
 		return err
 	}
 	tContainers := time.Now()
@@ -618,22 +621,12 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
-	// Forward each container's stdout/stderr into the pod logs, keyed by the
-	// container id (see StartRootfsContainer). The goroutines read over ac for
-	// the actor's lifetime and exit (io.EOF) when teardownActor closes ac.
-	workloadIDs := make([]string, 0, len(ctrs))
-	attribution := p.actorAttribution()
-	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, attribution, c.id, c.name)
-		workloadIDs = append(workloadIDs, c.id)
-	}
-
 	// Publish the guest to GetWorkloadStats, past every error return above: a
 	// failing attempt closes ac on its way out (and coldBootActorRetrying may
 	// then try the whole boot again), so a target published earlier would leave
 	// the handler polling a connection nobody owns. Same client the forwarding
 	// above reads over — ttrpc multiplexes, and teardownActor ends both.
-	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
+	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: ra.workloadIDs})
 	// Looked up while the caller holds the actor's lock, so it is this
 	// activation even if the read below outlives the RPC.
 	if hosted := s.lookupActor(actorUID); hosted != nil {
@@ -857,7 +850,8 @@ func buildFsConfigs(id string) []ch.FsConfig {
 // does at boot: establish the sandbox once (mounting the kataShared virtio-fs base),
 // configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
 // container on its own overlay rootfs. On failure it dumps guest diagnostics.
-func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
+func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, attribution resources.ActorAttribution, vsockPath string, ctrs []actorContainer, logWG *sync.WaitGroup) error {
+	id := attribution.UID
 	// Establish the agent sandbox + the kataShared virtio-fs mount (every
 	// container's merged rootfs, durable volumes, CSI volumes, and system-info
 	// volumes). All containers share it, so use the first container's hostname.
@@ -889,7 +883,7 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, attribution, vsockPath, c, logWG); err != nil {
 			return err
 		}
 	}
@@ -902,11 +896,12 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<id>/rootfs). On failure it
-// dumps the guest's view of the shared tree.
+// stock kata flow: create + start against shared/<id>/rootfs) and starts
+// forwarding its stdout and stderr. On failure it dumps the guest's view of the
+// shared tree.
 //
 // Its spec binds every declared volume at its mount path.
-func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, attribution resources.ActorAttribution, vsockPath string, c actorContainer, logWG *sync.WaitGroup) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
 	cancel()
@@ -920,26 +915,29 @@ func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.Ag
 		}
 		return fmt.Errorf("while starting rootfs container %q: %w", c.name, err)
 	}
+	s.startActorLogForwarding(ac, attribution, c.id, c.name, logWG)
 	return nil
 }
 
 // startActorLogForwarding spawns two goroutines that pump the actor container's
-// stdout and stderr (read over the kata-agent ttrpc client ac via repeated
-// ReadStdout/ReadStderr) through the shared actorlog forwarder, which annotates
-// each line with the actor's ate.dev/* labels and writes it to the pod's stdout.
-//
-// The streams are keyed by streamID == the kata containerID==execID (the overlay
-// workload id); lines are tagged with actorName + containerName
-// (ate.actor.container.name) so a multi-container actor demultiplexes.
-// The reader contexts are context.Background() — the goroutines are NOT bound to the
-// RPC that started them; they terminate when ac is closed (by teardownActor), which
-// makes the in-flight ReadStdout/ReadStderr fail and the StreamReader return io.EOF,
-// ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
-// concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
-// the connection.
-func (s *AteWorkerService) startActorLogForwarding(ac *kata.AgentClient, a resources.ActorAttribution, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), a, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), a, containerName)
+// stdout and stderr over ac through actorLogger. The readers use
+// context.Background() so they outlive the RPC that started them. They exit at
+// stdio EOF or when ac is closed (by teardownActor, or closeAgentOnFailure).
+func (s *AteWorkerService) startActorLogForwarding(ac *kata.AgentClient, a resources.ActorAttribution, streamID, containerName string, logWG *sync.WaitGroup) {
+	for _, stderr := range []bool{false, true} {
+		logWG.Add(1)
+		go func(stderr bool) {
+			defer logWG.Done()
+			s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, stderr), a, containerName)
+		}(stderr)
+	}
+}
+
+// closeAgentOnFailure closes ac to unblock live streams and waits for the
+// forwarding goroutines to exit.
+func (s *AteWorkerService) closeAgentOnFailure(ac *kata.AgentClient, logWG *sync.WaitGroup) {
+	_ = ac.Close()
+	logWG.Wait()
 }
 
 // errGuestStopped reports that the micro-VM stopped before the kata-agent

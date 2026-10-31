@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -443,9 +444,10 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	if err != nil {
 		return restoreGuestReadyError(ctx, "dialing kata-agent after resume", err)
 	}
+	var logWG sync.WaitGroup
 	defer func() {
 		if retErr != nil {
-			_ = guestAC.Close()
+			s.closeAgentOnFailure(guestAC, &logWG)
 		}
 	}()
 
@@ -479,6 +481,13 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		return err
 	}
 	tReseeded := time.Now()
+
+	// Re-attach stdout/stderr forwarding after CRNG reseed (the last retryable
+	// step) and before the wakeup probe so pre-probe logs are captured.
+	attribution := p.actorAttribution()
+	for _, c := range ctrs {
+		s.startActorLogForwarding(guestAC, attribution, c.id, c.name, &logWG)
+	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
@@ -531,14 +540,6 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
 		workloadIDs: workloadIDs(ctrs),
 		guestAgent:  guestAC,
-	}
-
-	// Re-attach stdout/stderr forwarding for each container over the agent
-	// connection dialed after resume: the restored guest's containers are alive, so
-	// ReadStdout/ReadStderr pick up where they left off.
-	attribution := p.actorAttribution()
-	for _, c := range ctrs {
-		s.startActorLogForwarding(guestAC, attribution, c.id, c.name)
 	}
 
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {

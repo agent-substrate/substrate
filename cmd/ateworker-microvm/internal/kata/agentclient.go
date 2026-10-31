@@ -242,10 +242,9 @@ func (a *AgentClient) WaitProcess(ctx context.Context, containerID, execID strin
 }
 
 // ReadStdout reads up to max bytes from the container process's stdout. It is a
-// unary RPC (NOT a server stream): each call returns whatever bytes the agent has
-// buffered (up to max), so callers loop until it returns an error — the agent
-// returns an error/EOF-like status once the stream ends (container exit / connection
-// close). Mirrors grpc.AgentService/ReadStdout. The kata-agent keys the stream by
+// unary RPC (NOT a server stream): each call returns whatever bytes the agent
+// has buffered (up to max), and returns empty data once the stream reaches EOF.
+// Mirrors grpc.AgentService/ReadStdout. The kata-agent keys the stream by
 // ExecId, which ateworker sets equal to ContainerId.
 func (a *AgentClient) ReadStdout(ctx context.Context, containerID, execID string, max uint32) ([]byte, error) {
 	resp := &agentpb.ReadStreamResponse{}
@@ -257,8 +256,7 @@ func (a *AgentClient) ReadStdout(ctx context.Context, containerID, execID string
 }
 
 // ReadStderr reads up to max bytes from the container process's stderr. Same
-// semantics as ReadStdout (unary, loop-until-error). Mirrors
-// grpc.AgentService/ReadStderr.
+// semantics as ReadStdout. Mirrors grpc.AgentService/ReadStderr.
 func (a *AgentClient) ReadStderr(ctx context.Context, containerID, execID string, max uint32) ([]byte, error) {
 	resp := &agentpb.ReadStreamResponse{}
 	req := &agentpb.ReadStreamRequest{ContainerId: containerID, ExecId: execID, Len: max}
@@ -292,13 +290,9 @@ func (a *AgentClient) StatsContainer(ctx context.Context, containerID string) (*
 	return resp.GetCgroupStats(), nil
 }
 
-// StreamReader adapts the agent's repeated ReadStdout/ReadStderr unary calls into
-// an io.Reader, so the consumer can pump the container's output through the shared
-// actorlog forwarder like any other stream. Each Read issues one RPC with Len set
-// to len(p); on RPC error (the agent signals EOF/container-exit via an error
-// status) it returns io.EOF so the consuming goroutine terminates cleanly. The
-// reader stops when its context is cancelled OR the underlying ttrpc connection is
-// closed (both surface as RPC errors), so it never outlives the AgentClient.
+// StreamReader adapts ReadStdout/ReadStderr unary calls into an io.Reader for
+// actorlog. It returns io.EOF when kata-agent returns empty data on container
+// stdio EOF or when an RPC errors (context cancellation or connection close).
 type StreamReader struct {
 	ctx         context.Context
 	ac          *AgentClient
@@ -314,10 +308,15 @@ func NewStdioReader(ctx context.Context, ac *AgentClient, containerID, execID st
 	return &StreamReader{ctx: ctx, ac: ac, containerID: containerID, execID: execID, stderr: stderr}
 }
 
-// Read issues a single ReadStdout/ReadStderr RPC for up to len(p) bytes, copying
-// the returned data into p. It returns io.EOF on any RPC error so the consumer
-// stops cleanly when the container exits or the connection closes.
+// Read issues one ReadStdout or ReadStderr RPC for up to len(p) bytes. kata-agent
+// answers with empty data at stdio EOF (its agent.proto doesn't document this, but
+// kata's own runtime treats it the same way in virtcontainers readProcessStream),
+// so an empty response returns io.EOF, as does an RPC error. A zero-length p
+// returns without an RPC, since that request would also come back empty.
 func (r *StreamReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	var (
 		data []byte
 		err  error
@@ -328,6 +327,9 @@ func (r *StreamReader) Read(p []byte) (int, error) {
 		data, err = r.ac.ReadStdout(r.ctx, r.containerID, r.execID, uint32(len(p)))
 	}
 	if err != nil {
+		return 0, io.EOF
+	}
+	if len(data) == 0 {
 		return 0, io.EOF
 	}
 	n := copy(p, data)
