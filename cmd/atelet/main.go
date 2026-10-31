@@ -1135,7 +1135,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 
 	s.systemInfoVolumes.Deregister(actorUID)
 
-	sandboxRec.SnapshotFiles, sandboxRec.DataSnapshotFiles, err = checkpointSnapshotFiles(resp, shouldHaveSnapshots(req))
+	sandboxRec.SnapshotFiles, sandboxRec.DataSnapshotFiles, err = checkpointSnapshotFiles(resp, shouldHaveSnapshots(req.GetSnapshot().GetFidelity(), spec))
 	if err != nil {
 		return nil, err
 	}
@@ -1375,14 +1375,13 @@ func (s *Atelet) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Checkpoi
 	return nil
 }
 
-// shouldHaveSnapshots returns true if the checkpoint request is expected to produce snapshot files.
-func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
-	if req.GetSnapshot().GetFidelity() != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+// shouldHaveSnapshots reports whether the worker should write snapshot files.
+func shouldHaveSnapshots(fidelity ateletpb.SnapshotFidelity, spec *ateworkerpb.WorkloadSpec) bool {
+	if fidelity != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		return true
 	}
-
-	for _, vol := range req.GetSpec().GetVolumes() {
-		if vol.GetDurableDir() != nil {
+	for _, ctr := range spec.GetContainers() {
+		if len(ctr.GetDurableDirVolumeMounts()) > 0 {
 			return true
 		}
 	}
