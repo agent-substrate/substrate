@@ -50,13 +50,13 @@ var (
 // SetupTestStore returns a real PostgreSQL-backed store with a database unique
 // to this test. A shared container keeps this suitable for packages that run
 // subtests in parallel; databases are dropped during cleanup.
-func SetupTestStore(t *testing.T) (store.Interface, func()) {
+func SetupTestStore(t testing.TB) (store.Interface, func()) {
 	t.Helper()
 	return SetupPostgresPersistence(t), func() {}
 }
 
 // SetupPostgresPersistence returns an isolated atepg persistence instance.
-func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
+func SetupPostgresPersistence(t testing.TB) *atepg.Persistence {
 	t.Helper()
 	ctx := context.Background()
 	admin := requireAdminPool(t)
@@ -172,7 +172,7 @@ func Shutdown() {
 	}
 }
 
-func requireAdminPool(t *testing.T) *pgxpool.Pool {
+func requireAdminPool(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()

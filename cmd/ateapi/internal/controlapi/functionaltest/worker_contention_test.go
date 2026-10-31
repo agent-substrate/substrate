@@ -135,7 +135,7 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 // The ceiling is the Worker's, reported by its worker, so a test that wants more
 // than the unset default of one writes it where the reporter would. Waits for
 // the scheduler's cache to see it, since placement reads that and not the store.
-func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors int32) {
+func setWorkerActorCapacity(t testing.TB, tc *testContext, pool string, actors int32) {
 	t.Helper()
 	page, err := tc.persistence.ListWorkers(context.Background(), store.ListOptions{PageSize: 1000})
 	if err != nil {
@@ -195,7 +195,7 @@ func workerSandboxClasses(def *ateapi.ActorSandboxRuntime, restorable ...*ateapi
 // registered gets reportedEpoch, an IP and a default runtime; one already
 // registered keeps them. It waits for the worker cache, which placement reads,
 // to catch up.
-func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int32) {
+func reportWorkerCapacity(t testing.TB, tc *testContext, name string, actors int32) {
 	t.Helper()
 	ctx := context.Background()
 	worker, err := tc.persistence.GetWorker(ctx, name)

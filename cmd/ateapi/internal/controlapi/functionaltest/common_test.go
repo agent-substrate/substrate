@@ -104,7 +104,7 @@ type testContext struct {
 }
 
 // setupTest sets up a fully isolated test environment.
-func setupTest(t *testing.T, ns string) *testContext {
+func setupTest(t testing.TB, ns string) *testContext {
 	t.Helper()
 	return setupTestWithOptions(t, ns, testOptions{})
 }
@@ -130,7 +130,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	return setupTestWithOptions(t, ns, testOptions{volumePlugins: plugins, allowPreview: true})
 }
 
-func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testContext {
+func setupTestWithOptions(t testing.TB, ns string, options testOptions) *testContext {
 	t.Helper()
 
 	var dialOpts []grpc.DialOption
@@ -359,7 +359,7 @@ func assertSnapshotCollected(t *testing.T, tc *testContext, snapshotURI string) 
 const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 
 // goldenSnapshotURI is the snapshot owned by the test template's golden tag.
-func goldenSnapshotURI(t *testing.T) string {
+func goldenSnapshotURI(t testing.TB) string {
 	t.Helper()
 	uri, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, goldenSnapshotName)
 	if err != nil {
@@ -405,7 +405,7 @@ func namespaceForTest(baseName string) string {
 	return fmt.Sprintf("%s-%d", baseName, time.Now().UnixNano())
 }
 
-func createTemplate(t *testing.T, tc *testContext, ns string) *ateapi.ActorTemplate {
+func createTemplate(t testing.TB, tc *testContext, ns string) *ateapi.ActorTemplate {
 	t.Helper()
 	return createTemplateWithContainers(t, tc, ns, []*ateapi.Container{
 		{
@@ -426,7 +426,7 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 
 const poolLabelKey = "pool"
 
-func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []*ateapi.Container) *ateapi.ActorTemplate {
+func createTemplateWithContainers(t testing.TB, tc *testContext, ns string, containers []*ateapi.Container) *ateapi.ActorTemplate {
 	t.Helper()
 	return createTemplateWithContainersAndVolumes(t, tc, ns, containers, nil)
 }
@@ -447,7 +447,7 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 // "tmpl1" in testAtespace, backed by a WorkerPool in ns whose labels match the
 // template's worker selector, and seeds its golden snapshot. ns keys the pool
 // labels, so each test's template still selects only its own pool.
-func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapi.Container, volumes []*ateapi.Volume) *ateapi.ActorTemplate {
+func createTemplateWithContainersAndVolumes(t testing.TB, tc *testContext, ns string, containers []*ateapi.Container, volumes []*ateapi.Volume) *ateapi.ActorTemplate {
 	t.Helper()
 
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
@@ -577,7 +577,7 @@ func tagSnapshotURI(tag *ateapi.Tag) string {
 	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
-func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, labels map[string]string) {
+func createWorkerPool(t testing.TB, tc *testContext, ns string, name string, labels map[string]string) {
 	t.Helper()
 	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
@@ -627,7 +627,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 // on, and the pod is what the atelet dialer resolves to reach one. In a real
 // cluster the syncer in ate-controller derives the first from the second; here
 // the test writes both, building the Worker exactly as the syncer would.
-func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) string {
+func createWorkerPod(t testing.TB, tc *testContext, ns string, name string, nodeName string, poolName string) string {
 	t.Helper()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
