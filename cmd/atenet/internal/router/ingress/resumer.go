@@ -26,6 +26,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,10 +71,12 @@ func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 type ResumeOutcome string
 
 const (
-	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
-	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
-	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
-	ResumeOutcomeUnknown   ResumeOutcome = ateattr.RouterResumeUnknown
+	ResumeOutcomeNone            ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered       ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined          ResumeOutcome = ateattr.RouterResumeJoined
+	ResumeOutcomeBudgetExhausted ResumeOutcome = ateattr.RouterResumeBudgetExhausted
+	ResumeOutcomeParkedRejected  ResumeOutcome = ateattr.RouterResumeParkedRejected
+	ResumeOutcomeUnknown         ResumeOutcome = ateattr.RouterResumeUnknown
 )
 
 type resumeCallResult struct {
@@ -206,7 +209,16 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	}
 	r.mu.Unlock()
 
-	return r.awaitFlight(ctx, f, actorRef, reqID)
+	actor, outcome, err := r.awaitFlight(ctx, f, actorRef, reqID)
+	// The span carries what the route metric carries, so a budget_exhausted
+	// spike can be followed to its flights.
+	span.SetAttributes(ateattr.RouterResumeKey.String(string(outcome)))
+	if err != nil {
+		span.SetAttributes(ateattr.ErrorTypeKey.String(resumeErrorType(err)))
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	}
+	return actor, outcome, err
 }
 
 // runFlight runs one shared resume for actorRef and publishes its outcome to
@@ -281,7 +293,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	case <-f.done:
 		// Fast path: the flight finished without ever retrying, or before this
 		// caller saw retrying. The lot is never touched.
-		return f.callerResult(reqID)
+		return f.callerResult(reqID, r.parkEnabled)
 	case <-f.retrying:
 		// A closed channel is always ready, so a caller attaching after the
 		// flight began retrying lands here immediately.
@@ -291,14 +303,14 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	// though done was ready too: serve a published result without charging the lot.
 	select {
 	case <-f.done:
-		return f.callerResult(reqID)
+		return f.callerResult(reqID, r.parkEnabled)
 	default:
 	}
 
 	retryErr := f.retryErr()
 	release, ok := r.enterLot(ctx, shedOutcome(retryErr))
 	if !ok {
-		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String(), retryErr)
+		return nil, ResumeOutcomeParkedRejected, parkingFullErr(actorRef.String(), retryErr)
 	}
 	var finalErr error
 	defer func() { release(parkOutcomeFor(finalErr)) }()
@@ -308,7 +320,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 		finalErr = ctx.Err()
 		return nil, ResumeOutcomeUnknown, finalErr
 	case <-f.done:
-		actor, outcome, err := f.callerResult(reqID)
+		actor, outcome, err := f.callerResult(reqID, r.parkEnabled)
 		finalErr = err
 		return actor, outcome, err
 	}

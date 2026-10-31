@@ -182,8 +182,9 @@ bounds the wait.
   when its resume failed with `ResourceExhausted`, and `unavailable` otherwise.
   The `ate.router.outcome` label of this counter has the same value. Because
   `no_capacity` combines fast shed requests with requests that waited out the
-  parking budget, use `atenet.router.parking.rejected{ate_router_outcome="no_capacity"}`
-  to count the shed requests in it.
+  parking budget, read `ate.router.resume` on the route histogram to separate
+  them: a shed request reports `parked_rejected`, and a request that waited out
+  the budget reports `budget_exhausted`.
 
 **Status page** (`/statusz`): a "Request Parking" card shows whether parking is
 enabled, the current vs. maximum parked count, and the max wait.

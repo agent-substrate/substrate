@@ -46,6 +46,15 @@ func statusDescription(err error) string {
 	return status.Convert(err).Message()
 }
 
+// resumeErrorType is the error.type of a failed resume on its span: the gRPC
+// code name, with the request's own context errors named the same way.
+func resumeErrorType(err error) string {
+	if code := status.Code(err); code != codes.Unknown {
+		return code.String()
+	}
+	return status.FromContextError(err).Code().String()
+}
+
 // shedOutcome returns the route outcome of a request that is shed while its
 // flight retries on retryErr: no_capacity for a ResourceExhausted retryErr,
 // unavailable otherwise. parkingFullErr and the parking.rejected label both

@@ -473,6 +473,21 @@ groups:
                 and the resume activated the actor. This value is separate
                 because it is not a correct sample. One cold start with 50
                 requests is one slow activation and not 51.
+            - id: budget_exhausted
+              stability: development
+              value: budget_exhausted
+              brief: >
+                The parking budget ended while the resume was still blocked on
+                an error the router retries, and the request failed with that
+                error. ate.router.outcome names the error. Every request on
+                that flight has this value. Set only when parking is enabled.
+                Not an activation time.
+            - id: parked_rejected
+              stability: development
+              value: parked_rejected
+              brief: >
+                The parking area was full, thus the router refused the request
+                at once. atenet.router.parking.rejected counts the same requests.
             - id: unknown
               stability: development
               value: unknown
@@ -1519,8 +1534,11 @@ groups:
       ate.router.resume before you read it. The triggered series is the
       activation time. The none series is the usual warm route. A sum across the
       two series puts milliseconds and tens of seconds in one distribution. The
-      unknown series holds the resumes that did not complete, thus it is neither
-      an activation time nor a warm route.
+      budget_exhausted, parked_rejected and unknown series hold the resumes
+      that did not complete, thus they are neither an activation time nor a
+      warm route. A budget_exhausted sample with ate.router.outcome no_capacity
+      is a request that capacity turned away; with unavailable or
+      lock_conflict, a fault or a lock that outlasted the budget.
     annotations:
       substrate:
         emitted_by: [atenet-router]
