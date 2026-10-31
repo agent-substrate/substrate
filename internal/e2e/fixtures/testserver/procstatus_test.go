@@ -24,7 +24,7 @@ import (
 	"go.ate.dev/substrate/internal/e2e/procstatus"
 )
 
-// workerStatus is a microVM worker's status: its twelve capabilities in the
+// workerStatus is a microVM worker's status: its eleven capabilities in the
 // permitted, effective and bounding sets, and no seccomp filter.
 const workerStatus = `Name:	ateworker-micro
 Umask:	0022
@@ -35,9 +35,9 @@ PPid:	0
 NSpid:	1
 Threads:	24
 CapInh:	0000000000000000
-CapPrm:	00000000882011df
-CapEff:	00000000882011df
-CapBnd:	00000000882011df
+CapPrm:	00000000882011db
+CapEff:	00000000882011db
+CapBnd:	00000000882011db
 CapAmb:	0000000000000000
 NoNewPrivs:	1
 Seccomp:	0
@@ -45,7 +45,7 @@ Seccomp_filters:	0
 `
 
 // virtiofsdChildStatus is virtiofsd's serving child, seen from the worker's
-// PID namespace: its nine child capabilities, an empty bounding set and its
+// PID namespace: its eight child capabilities, an empty bounding set and its
 // own seccomp filter.
 const virtiofsdChildStatus = `Name:	virtiofsd
 Umask:	0022
@@ -56,8 +56,8 @@ PPid:	125
 NSpid:	126	1
 Threads:	2
 CapInh:	0000000000000000
-CapPrm:	00000000880000df
-CapEff:	00000000880000df
+CapPrm:	00000000880000db
+CapEff:	00000000880000db
 CapBnd:	0000000000000000
 CapAmb:	0000000000000000
 NoNewPrivs:	1
@@ -75,12 +75,12 @@ func TestParseProcessStatus(t *testing.T) {
 		{
 			name:   "worker",
 			status: workerStatus,
-			want:   procstatus.Process{CapPrm: 0x882011df, CapEff: 0x882011df, CapBnd: 0x882011df, NoNewPrivs: 1},
+			want:   procstatus.Process{CapPrm: 0x882011db, CapEff: 0x882011db, CapBnd: 0x882011db, NoNewPrivs: 1},
 		},
 		{
 			name:   "virtiofsd child",
 			status: virtiofsdChildStatus,
-			want:   procstatus.Process{PPID: 125, CapPrm: 0x880000df, CapEff: 0x880000df, NoNewPrivs: 1, Seccomp: 2},
+			want:   procstatus.Process{PPID: 125, CapPrm: 0x880000db, CapEff: 0x880000db, NoNewPrivs: 1, Seccomp: 2},
 		},
 		{
 			name:    "missing field",

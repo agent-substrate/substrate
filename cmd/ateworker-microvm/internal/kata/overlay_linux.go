@@ -130,6 +130,12 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		// Namespace isolation uses pivot_root, not the separate chroot mode.
 		"--sandbox=namespace",
 		"--seccomp=kill",
+		// Track inodes with O_PATH fds. In any other mode virtiofsd adds
+		// DAC_READ_SEARCH to its child set, which the worker does not grant,
+		// and exits at startup. The default (prefer) would use fds here
+		// anyway: the shared directory is on the worker's overlayfs rootfs,
+		// which cannot produce decodable file handles.
+		"--inode-file-handles=never",
 		"--cache=auto",
 		"--thread-pool-size=1",
 		"--announce-submounts",

@@ -462,7 +462,7 @@ func TestWorkerSecurityContextByClass(t *testing.T) {
 	}{
 		{"gvisor default", "", []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"}, true},
 		{"gvisor explicit", atev1.SandboxClassGvisor, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"}, true},
-		{"microvm", atev1.SandboxClassMicroVM, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "DAC_READ_SEARCH", "SETPCAP"}, true},
+		{"microvm", atev1.SandboxClassMicroVM, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "SETPCAP"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
