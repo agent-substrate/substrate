@@ -81,8 +81,9 @@ with `atelet` read access by `go run ./tools/setup-gcp create bucket` and
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including
 `envoy-dataplane`, which a build from source builds from a Dockerfile with
-`docker buildx` (so that build needs `docker` as well as `ko`). An install that
-needs an image `REPO` lacks fails naming it.
+`docker buildx` (so that build needs `docker` with the buildx plugin as well as
+`ko`). `deploy ate-system` and `deploy atenet` check for the plugin before they
+change anything. An install that needs an image `REPO` lacks fails naming it.
 
 The images a release publishes to `ghcr.io/agent-substrate/substrate`, with
 `publish release-images`, leave out the demos and the benchmarking fakes; see
