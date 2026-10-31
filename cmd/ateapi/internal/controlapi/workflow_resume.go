@@ -132,6 +132,16 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
+// resumeRefusalReason tells a caller whether a refused state changes on its
+// own: CRASHED and DELETING do not.
+func resumeRefusalReason(state ateapi.ActorState) string {
+	switch state {
+	case ateapi.ActorState_ACTOR_STATE_CRASHED, ateapi.ActorState_ACTOR_STATE_DELETING:
+		return apierror.ReasonTerminalState
+	}
+	return apierror.ReasonInTransition
+}
+
 // loadActorForResume fetches the current actor record and its template.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, _ *ateapi.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForResume")
@@ -248,7 +258,8 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return actor, worker, nil
 	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 	default:
-		return nil, nil, apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		err := apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		return nil, nil, apierror.WithReason(err, resumeRefusalReason(actor.GetStatus().GetState()))
 	}
 
 	var assignedActor *ateapi.Actor
@@ -485,7 +496,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+				return nil, nil, apierror.WithReason(apierror.ResourceExhausted("%w", errNoWorkerRoom), apierror.ReasonNoCapacity)
 			}
 			return nil, nil, err
 		}

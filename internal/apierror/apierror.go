@@ -31,13 +31,30 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// ErrorInfoDomain is the domain of the google.rpc.ErrorInfo detail that
+// carries a reason.
+const ErrorInfoDomain = "ate.dev"
+
+// Reasons a status may carry, for callers that act on the cause rather than
+// the code. The set is fixed; the message stays free text.
+const (
+	ReasonNoCapacity     = "NO_CAPACITY"     // no worker has room; retry later
+	ReasonLotFull        = "LOT_FULL"        // the router's parking lot is full
+	ReasonInTransition   = "IN_TRANSITION"   // the actor is between states; retry later
+	ReasonConflict       = "CONFLICT"        // a concurrent write won; retry from a fresh read
+	ReasonAPIUnavailable = "API_UNAVAILABLE" // the control plane did not answer
+	ReasonTerminalState  = "TERMINAL_STATE"  // CRASHED or DELETING; retrying is pointless
+)
+
 type apiError struct {
-	code codes.Code
-	err  error
+	code   codes.Code
+	reason string
+	err    error
 }
 
 func (e *apiError) Error() string { return e.err.Error() }
@@ -117,6 +134,25 @@ func Internal(format string, args ...any) error {
 	return newf(codes.Internal, format, args...)
 }
 
+// WithReason attaches reason to an apierror, which FromError then carries as
+// an ErrorInfo detail. Any other error is returned unchanged.
+func WithReason(err error, reason string) error {
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	return &apiError{code: apiErr.code, reason: reason, err: apiErr.err}
+}
+
+// Reason returns the reason WithReason attached to err, or "".
+func Reason(err error) string {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.reason
+	}
+	return ""
+}
+
 // Code returns the code err reaches the caller with, the same as
 // FromError(err).Code(): codes.OK for nil, and codes.Internal for an error that
 // is neither an apierror nor a context error. It never reads a gRPC status.
@@ -135,7 +171,13 @@ func FromError(err error) (s *status.Status, ok bool) {
 	}
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
-		return status.New(apiErr.code, apiErr.Error()), true
+		st := status.New(apiErr.code, apiErr.Error())
+		if apiErr.reason != "" {
+			if withInfo, err := st.WithDetails(&errdetails.ErrorInfo{Reason: apiErr.reason, Domain: ErrorInfoDomain}); err == nil {
+				st = withInfo
+			}
+		}
+		return st, true
 	}
 	if s := status.FromContextError(err); s.Code() != codes.Unknown {
 		return s, true

@@ -51,6 +51,15 @@ keeps retrying with exponential backoff until either
   underlying capacity error is returned, surfacing as `503 "actor <id>
   unavailable: no worker has room for the actor"`.
 
+**The `ate-error-reason` header.** A `503` from the router names its cause in
+the `ate-error-reason` header, next to the unchanged body text: `NO_CAPACITY`
+(no worker has room), `LOT_FULL` (the parking lot is full), `IN_TRANSITION` (the
+actor is between states), `CONFLICT` (a concurrent operation won),
+`API_UNAVAILABLE` (the control plane did not answer) or `TERMINAL_STATE` (the
+actor is `CRASHED` or `DELETING`). The control plane sends the reason as a
+`google.rpc.ErrorInfo` detail on the `ResumeActor` status; `LOT_FULL` and
+`API_UNAVAILABLE` are the router's own.
+
 **The budget bounds retries, not a committed resume.** When the budget elapses
 the router stops starting new resume attempts, but an attempt already in
 flight is **never canceled**: by then the control plane has committed work to
