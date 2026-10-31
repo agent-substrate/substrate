@@ -25,6 +25,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// roundRobinServiceConfig spreads RPCs across every address the resolver
+// returns, such as each ready pod behind a headless Service.
+const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
+
 // Client wraps the gRPC connection and the individual service clients for a CSI driver.
 type Client struct {
 	conn       *grpc.ClientConn
@@ -71,7 +75,9 @@ func NewCSIClient(endpoint string, tlsCfg *tls.Config) (*Client, error) {
 		creds = insecure.NewCredentials()
 	}
 
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithDefaultServiceConfig(roundRobinServiceConfig))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial CSI endpoint %q: %w", target, err)
 	}
