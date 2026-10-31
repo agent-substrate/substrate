@@ -25,6 +25,21 @@ import orchestrator
 from testtypes import locust
 
 
+class SelectTestsTest(unittest.TestCase):
+    TESTS = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+
+    def test_no_names_runs_all(self):
+        self.assertEqual(orchestrator.select_tests(self.TESTS, []), self.TESTS)
+
+    def test_keeps_file_order(self):
+        got = orchestrator.select_tests(self.TESTS, ["c", "a"])
+        self.assertEqual([t["name"] for t in got], ["a", "c"])
+
+    def test_unknown_name(self):
+        with self.assertRaisesRegex(ValueError, "x, y"):
+            orchestrator.select_tests(self.TESTS, ["a", "y", "x"])
+
+
 class DeployWorkloadsFakeAteletTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_fake_atelet_tuning_goes_to_deploy_sh(self, run):
