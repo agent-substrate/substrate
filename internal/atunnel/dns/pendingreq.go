@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ type pendingRequest struct {
 	clientRequestID uint16
 	// clientAddr identifies the actor UDP endpoint.
 	clientAddr net.Addr
+	// conn is the outbound UDP socket leased from udpConnPool for this query.
+	conn net.PacketConn
 	// question is the canonicalized DNS question used to validate responses
 	// (RFC 5452).
 	question dnsmessage.Question
@@ -64,6 +67,8 @@ type pendingRequests struct {
 	inUse freemap.Map64k
 	// limiter tracks in-flight request slots released when entries are removed.
 	limiter *limiter
+	// pool leases outbound UDP sockets for in-flight requests.
+	pool *udpConnPool
 
 	// exchangeTimeout bounds the total upstream exchange (defaults to
 	// dnsExchangeTimeout).
@@ -74,11 +79,12 @@ type pendingRequests struct {
 }
 
 // newPendingRequests returns an empty pendingRequests table using lim for
-// in-flight slot accounting.
-func newPendingRequests(lim *limiter) *pendingRequests {
+// in-flight slot accounting and pool for outbound UDP sockets.
+func newPendingRequests(lim *limiter, pool *udpConnPool) *pendingRequests {
 	return &pendingRequests{
 		entries:         make(map[uint16]*pendingRequest),
 		limiter:         lim,
+		pool:            pool,
 		exchangeTimeout: dnsExchangeTimeout,
 	}
 }
@@ -110,19 +116,27 @@ func (p *pendingRequests) record(
 	q dnsmessage.Question,
 	clientAddr net.Addr,
 	upstreams []string,
-) (uint16, bool) {
+) (uint16, net.PacketConn, bool) {
 	// Probe from a random starting ID so upstream transaction IDs are not predictable.
 	var buf [2]byte
 	_, _ = rand.Read(buf[:])
 	start := binary.BigEndian.Uint16(buf[:])
+
+	conn, err := p.pool.Get()
+	if err != nil {
+		slog.Warn("dns relay: could not get upstream UDP socket", slog.Any("err", err))
+		p.limiter.inFlight.release()
+		return 0, nil, false
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	upstreamID, ok := p.inUse.FindFirstUnsetFrom(start)
 	if !ok {
+		p.pool.Put(conn)
 		p.limiter.inFlight.release()
-		return 0, false
+		return 0, nil, false
 	}
 
 	// Rewrite the packet's transaction ID in place and clone it for failover retries.
@@ -131,6 +145,7 @@ func (p *pendingRequests) record(
 	p.entries[upstreamID] = &pendingRequest{
 		clientRequestID: clientReqID,
 		clientAddr:      clientAddr,
+		conn:            conn,
 		question:        q,
 		rawQuery:        bytes.Clone(raw),
 		upstreams:       upstreams,
@@ -138,17 +153,20 @@ func (p *pendingRequests) record(
 		expiry:          time.Now().Add(p.timeoutForAttempt(0, len(upstreams))),
 	}
 
-	return upstreamID, true
+	return upstreamID, conn, true
 }
 
-// deleteEntryLocked removes upstreamID from entries, frees its ID in inUse, and
-// releases its in-flight slot if upstreamID was present. p.mu must be held.
+// deleteEntryLocked removes upstreamID from entries, frees its ID in inUse,
+// returns its socket to pool, and releases its in-flight slot if upstreamID
+// was present. p.mu must be held.
 func (p *pendingRequests) deleteEntryLocked(upstreamID uint16) {
-	if _, ok := p.entries[upstreamID]; !ok {
+	entry, ok := p.entries[upstreamID]
+	if !ok {
 		return
 	}
 	delete(p.entries, upstreamID)
 	p.inUse.Clear(upstreamID)
+	p.pool.Put(entry.conn)
 	p.limiter.inFlight.release()
 }
 
@@ -194,6 +212,7 @@ type reqFailover struct {
 	upstreamID  uint16
 	upstreamIdx int
 	query       []byte
+	conn        net.PacketConn
 }
 
 // reqDelivery describes a deferred response to send back to the actor after all
@@ -225,6 +244,7 @@ func (p *pendingRequests) sweep(now time.Time) ([]reqFailover, []reqDelivery) {
 				upstreamID:  upstreamID,
 				upstreamIdx: entry.upstreamIdx,
 				query:       entry.rawQuery,
+				conn:        entry.conn,
 			})
 			continue
 		}

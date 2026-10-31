@@ -14,9 +14,10 @@ Actor DNS relays DNS requests from the actor to the external world.
 `Server` is the per-Actor state for the DNS traffic, including per-Actor concurrency limits (`maxInFlightDNS` and `maxDNSConnections`).
 
 - `Server.pendingRequests` map (UDP only):
-  - Allocates a rewritten `upstreamID` (`uint16`) per in-flight UDP query to avoid transaction ID collisions across different actor source ports on the shared egress socket (and prevent predictable upstream IDs).
+  - Allocates a rewritten `upstreamID` (`uint16`) per in-flight UDP query to avoid transaction ID collisions across actor source ports and prevent predictable upstream IDs.
   - Maps `upstreamID` -> pending request entry:
     - `clientRequestID` (`uint16`) and `clientAddr` (`net.Addr`) to restore the original ID and route the response back.
+    - `conn` (`net.PacketConn`) leased from `udpConnPool` so responses are accepted only on the ephemeral socket that sent the query.
     - Question metadata (`QNAME`, `QTYPE`, `QCLASS`) to validate that the response matches the query (RFC 5452).
     - `upstreamIdx` and `deferredResp` to track multi-upstream failover (`SERVFAIL`, `NOTIMP`, `REFUSED`, or timeout) and return the last failure response if all upstreams fail.
     - `expiry` timestamp for timing out stale entries and triggering failover via a periodic sweep ticker.
@@ -26,10 +27,11 @@ Actor DNS relays DNS requests from the actor to the external world.
 
 #### UDP handling
 
-- `udphandler.go`: `struct udpHandler`
-- Two goroutines per `Server` (plus a sweep ticker for timeouts/failover):
-  - **Ingress reader**: reads datagrams from the actor-facing gateway `net.PacketConn`, runs `onUDPRequest()` (which validates the query, rewrites the transaction ID to `upstreamID`, and records the entry in `pendingRequests`), and sends the query on the egress socket.
-  - **Egress reader**: reads datagrams from an unconnected worker-namespace `net.PacketConn`, runs `onUDPResponse()` to match and validate against `pendingRequests`, either fails over to the next upstream or restores `clientRequestID` and writes the answer back to `clientAddr`.
+- `udphandler.go`: `struct udpHandler`, `udpconnpool.go`: `struct udpConnPool`
+- `udpConnPool` leases worker-namespace `net.PacketConn` sockets bound to ephemeral ports (`:0`), returning a random idle socket when one is available and discarding each socket after `defaultMaxUDPConnUses` queries.
+- Goroutines per `Server` (plus a sweep ticker for timeouts/failover):
+  - **Ingress reader**: reads datagrams from the actor-facing gateway `net.PacketConn`, runs `onUDPRequest()` (which validates the query, leases a socket from `udpConnPool`, rewrites the transaction ID to `upstreamID`, and records the entry in `pendingRequests`), and sends the query on the leased socket.
+  - **Egress readers** (one per open socket in `udpConnPool`): reads datagrams from the worker-namespace `net.PacketConn`, verifies the response arrived on the socket recorded for `upstreamID`, runs `onUDPResponse()` to match and validate against `pendingRequests`, and either fails over to the next upstream or restores `clientRequestID` and writes the answer back to `clientAddr`.
 
 #### TCP handling
 
@@ -49,19 +51,19 @@ Actor DNS relays DNS requests from the actor to the external world.
 
 UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`), which inspects packets and returns transport-agnostic decisions:
 
-- Shared request validation (`validateRequest`):
+- Shared request validation (`onRequestCommon`):
   - **Drop**: packet `< 12` bytes or `QR == 1` (response bit set on a query).
   - **Reply** (synthesized response without upstream round-trip):
     - `FORMERR` (`RCode = 1`): malformed header/question or `QDCOUNT != 1`.
     - `NOTIMP` (`RCode = 4`): `OpCode != 0` (non-standard query) or zone transfer `QTYPE` (`AXFR`, `IXFR`).
     - `NXDOMAIN` (`RCode = 3`): disallowed by the Actor's egress policy (see [Egress policy](#egress-policy)). `NXDOMAIN` rather than `REFUSED` so stub resolvers continue to the next `resolv.conf` search suffix; glibc and musl abort the lookup on `REFUSED`. The authority section carries a root `SOA` record with `TTL` and `MINIMUM` of 0, so resolvers do not cache the denial past a policy change (RFC 2308 §5).
 - `onUDPRequest(raw []byte, clientAddr net.Addr, upstreams []string)` -> `action`:
-  - Acquires an `inFlight` slot, runs `validateRequest()`, and on `actionForward` records the query in `pendingRequests` with a rewritten `upstreamID`.
-- `onUDPResponse(raw []byte, from net.Addr)` -> `action`:
-  - Validates `QR == 1`, parses header + question, and matches against `pendingRequests` (verifying `upstreamID`, expected upstream source, and matching `QNAME`/`QTYPE`/`QCLASS`).
+  - Acquires an `inFlight` slot, runs `onRequestCommon()`, and on `actionForward` records the query in `pendingRequests` with a rewritten `upstreamID` and leased socket from `udpConnPool`.
+- `onUDPResponse(raw []byte, from net.Addr, conn net.PacketConn)` -> `action`:
+  - Validates `QR == 1`, parses header + question, and matches against `pendingRequests` (verifying `upstreamID`, leased `conn`, expected upstream source, and matching `QNAME`/`QTYPE`/`QCLASS`).
   - Returns **Drop**, **Failover** (on `SERVFAIL`, `NOTIMP`, or `REFUSED` when fallback upstreams remain), or **Deliver** (restoring `clientRequestID` and returning `clientAddr`).
 - `onTCPRequest(raw []byte)` -> `action`:
-  - Runs `validateRequest()` and returns **Drop**, **Reply**, or **Forward** (unmodified frame).
+  - Runs `onRequestCommon()` and returns **Drop**, **Reply**, or **Forward** (unmodified frame).
 - `onTCPResponse(raw []byte)` -> `action`:
   - Validates `QR == 1` and parses header + question, returning **Drop** or **Deliver**.
 

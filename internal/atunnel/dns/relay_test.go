@@ -204,9 +204,10 @@ func serveLoopbackWithPolicy(t *testing.T, relay *Relay, policy PolicySource) (*
 		t.Fatal(err)
 	}
 	srv, err := relay.serveOn(context.Background(), &netConn{
-		dialer:      *relay.dialer,
-		udp:         pc,
-		tcpListener: lis,
+		dialer:       *relay.dialer,
+		listenPacket: relay.listenPacket,
+		udp:          pc,
+		tcpListener:  lis,
 	}, policy)
 	if err != nil {
 		pc.Close()

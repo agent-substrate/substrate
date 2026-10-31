@@ -39,6 +39,8 @@ type Relay struct {
 
 	// dialer reaches upstream resolvers from the worker namespace.
 	dialer *net.Dialer
+	// listenPacket opens upstream UDP sockets in the worker namespace.
+	listenPacket func(network, address string) (net.PacketConn, error)
 }
 
 // NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
@@ -90,8 +92,9 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 	slog.Info("DNS relay configured", slog.Any("upstreams", upstreams))
 
 	return &Relay{
-		upstreams: upstreams,
-		dialer:    &net.Dialer{Timeout: dnsExchangeTimeout},
+		upstreams:    upstreams,
+		dialer:       &net.Dialer{Timeout: dnsExchangeTimeout},
+		listenPacket: net.ListenPacket,
 	}, nil
 }
 
