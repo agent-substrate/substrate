@@ -33,6 +33,12 @@ func writeCgroupFiles(t *testing.T, dir string, files map[string]string) {
 	}
 }
 
+// memoryStat is a memory.stat with used bytes outside page cache and cache
+// bytes of page cache, split across both file LRUs.
+func memoryStat(used, cache uint64) string {
+	return fmt.Sprintf("anon %d\nfile %d\nkernel 0\nsock 0\nshmem 0\ninactive_file %d\nactive_file %d\n", used, cache, cache-cache/2, cache/2)
+}
+
 func TestMemoryWatch(t *testing.T) {
 	const limit = 256 << 20
 	type step struct {
@@ -97,6 +103,19 @@ func TestMemoryWatch(t *testing.T) {
 			},
 		},
 		{
+			// e.g. a snapshot write's dirty pages after memory.high comes back
+			name: "far over on page cache is not killed",
+			steps: []step{
+				{0, 2*limit + memoryOvershootMax, limit, 0, false, 0},
+			},
+		},
+		{
+			name: "far over besides page cache is killed at once",
+			steps: []step{
+				{0, 2*limit + memoryOvershootMax + 1, limit, 0, true, 0},
+			},
+		},
+		{
 			name: "stalls age out of the window",
 			steps: []step{
 				{0, limit, 0, 0, false, 0},
@@ -117,7 +136,7 @@ func TestMemoryWatch(t *testing.T) {
 				writeCgroupFiles(t, dir, map[string]string{
 					"memory.events.local": fmt.Sprintf("low 0\nhigh %d\nmax 0\noom 0\noom_kill 0\n", high),
 					"memory.current":      fmt.Sprint(s.current),
-					"memory.stat":         fmt.Sprintf("anon 1\ninactive_file %d\nactive_file 0\n", s.cache),
+					"memory.stat":         memoryStat(s.current-min(s.cache, s.current), s.cache),
 					"memory.pressure":     fmt.Sprintf("some avg10=0.00 avg60=0.00 avg300=0.00 total=%d\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n", s.stallMs*1000),
 				})
 				got, current, err := w.Check(dir, limit, start.Add(s.after))
@@ -145,7 +164,7 @@ func TestMemoryWatchCapsOvershoot(t *testing.T) {
 		dir := t.TempDir()
 		writeCgroupFiles(t, dir, map[string]string{
 			"memory.current":      fmt.Sprint(tc.current),
-			"memory.stat":         "anon 1\ninactive_file 0\nactive_file 0\n",
+			"memory.stat":         memoryStat(tc.current, 0),
 			"memory.pressure":     "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
 			"memory.events.local": "high 0\n",
 		})
@@ -160,5 +179,35 @@ func TestMemoryWatchMissingCgroup(t *testing.T) {
 	var w MemoryWatch
 	if _, _, err := w.Check(filepath.Join(t.TempDir(), "gone"), 1, time.Now()); err == nil {
 		t.Error("Check() on a missing cgroup succeeded")
+	}
+}
+
+// memory.stat is flushed lazily, so right after a big write it can trail
+// memory.current. Fresh page cache counted by memory.current but not yet by
+// memory.stat must not look like used memory.
+func TestMemoryWatchStaleStat(t *testing.T) {
+	const limit = 256 << 20
+	dir := t.TempDir()
+	writeCgroupFiles(t, dir, map[string]string{
+		"memory.current":      fmt.Sprint(2 * limit),
+		"memory.stat":         memoryStat(limit/2, 0),
+		"memory.pressure":     "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+		"memory.events.local": "high 0\n",
+	})
+	var w MemoryWatch
+	if got, _, err := w.Check(dir, limit, time.Now()); err != nil || got {
+		t.Errorf("Check() = %v, %v, want false", got, err)
+	}
+}
+
+// Everything but page cache counts as used: anon, shmem such as a guest's
+// memfd, kernel and sock.
+func TestMemoryUsed(t *testing.T) {
+	dir := t.TempDir()
+	writeCgroupFiles(t, dir, map[string]string{
+		"memory.stat": "anon 1\nfile 104\nkernel 2\nsock 4\nshmem 8\nfile_dirty 16\ninactive_file 32\nactive_file 64\n",
+	})
+	if got, err := memoryUsed(dir); err != nil || got != 1+2+4+8 {
+		t.Errorf("memoryUsed() = %d, %v, want 15", got, err)
 	}
 }
