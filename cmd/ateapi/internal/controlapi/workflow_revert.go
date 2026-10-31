@@ -67,6 +67,7 @@ func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.Acto
 	var finalAttrs []attribute.KeyValue
 
 	defer func() {
+		err = actorOpError(err, actorRef)
 		attrs := finalAttrs
 		if attrs == nil {
 			attrs = lifecycleOpAttrs(actor, "", "")

@@ -1059,3 +1059,32 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 		})
 	}
 }
+
+// TestActorOpError asserts store conflicts and misses become the codes the
+// caller gets, and other errors pass through unchanged.
+func TestActorOpError(t *testing.T) {
+	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	tests := []struct {
+		name     string
+		err      error
+		want     codes.Code
+		wantSame bool
+	}{
+		{name: "nil", err: nil, want: codes.OK, wantSame: true},
+		{name: "version conflict", err: fmt.Errorf("while updating: %w", store.ErrVersionConflict), want: codes.Aborted},
+		{name: "not found", err: fmt.Errorf("while loading: %w", store.ErrNotFound), want: codes.NotFound},
+		{name: "api error", err: apierror.FailedPrecondition("busy"), want: codes.FailedPrecondition, wantSame: true},
+		{name: "other", err: errors.New("store is down"), want: codes.Internal, wantSame: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := actorOpError(tt.err, ref)
+			if code := apierror.Code(got); code != tt.want {
+				t.Errorf("apierror.Code(actorOpError(%v)) = %v, want %v", tt.err, code, tt.want)
+			}
+			if tt.wantSame && got != tt.err {
+				t.Errorf("actorOpError(%v) = %v, want the error unchanged", tt.err, got)
+			}
+		})
+	}
+}
