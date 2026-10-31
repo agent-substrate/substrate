@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package jupyter installs the Jupyter demo, which runs an unmodified
-// jupyter/base-notebook image as an actor that suspends when idle and resumes
-// when the notebook is next opened.
+// quay.io/jupyter/base-notebook image as an actor that checkpoints on suspend
+// and resumes when the notebook is next opened.
 package jupyter
 
 import (
