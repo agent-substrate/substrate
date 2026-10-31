@@ -208,6 +208,7 @@ go run ./cmd/ate-setup setup csi nfs
 
 # 3. Delete any existing counter demo (templates are immutable), then deploy with the external volume
 go run ./cmd/ate-setup delete demo counter
+kubectl wait --for=delete namespace/ate-demo-counter --timeout=60s
 go run ./cmd/ate-setup deploy demo counter \
   --with-external-volume \
   --storage-class=csi-nfs-sc \
