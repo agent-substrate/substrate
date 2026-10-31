@@ -67,6 +67,23 @@ fixture:
 	}
 }
 
+func TestParseFileReadsSubstrateVersion(t *testing.T) {
+	path := writeConfig(t, validHeader+`cluster:
+  context: prod
+  substrateVersion: v1.2.3
+`)
+	f, err := ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile() error = %v", err)
+	}
+	if got := f.SubstrateVersion; got != "v1.2.3" {
+		t.Errorf("SubstrateVersion = %q, want %q", got, "v1.2.3")
+	}
+	if got := f.Keys(); len(got) != 0 {
+		t.Errorf("Keys() = %v, want cluster metadata excluded", got)
+	}
+}
+
 // An integer must not arrive as "6e+06" or "6.0", which is what resolving the
 // scalar to a float before flattening would produce.
 func TestParseFileNumbersAreNotFloatFormatted(t *testing.T) {
@@ -119,17 +136,19 @@ func TestParseFileRejectsDuplicateKeys(t *testing.T) {
 		Kind: KindString, Usage: "a string",
 	})
 
-	for _, tc := range []struct{ name, body string }{
-		{name: "repeated in one map", body: "scratch:\n  str: a\n  str: b\n"},
-		{name: "dotted beside nested", body: "scratch.str: a\nscratch:\n  str: b\n"},
+	for _, tc := range []struct{ name, body, wantKey string }{
+		{name: "repeated in one map", body: "scratch:\n  str: a\n  str: b\n", wantKey: "scratch.str"},
+		{name: "dotted beside nested", body: "scratch.str: a\nscratch:\n  str: b\n", wantKey: "scratch.str"},
+		{name: "repeated cluster metadata", body: "cluster:\n  substrateVersion: v1.2.3\n  substrateVersion: v1.2.4\n", wantKey: "cluster.substrateVersion"},
+		{name: "repeated cluster block", body: "cluster:\n  substrateVersion: v1.2.3\ncluster:\n  substrateVersion: v1.2.4\n", wantKey: "cluster"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseFile(writeConfig(t, validHeader+tc.body))
 			if err == nil {
 				t.Fatal("ParseFile() = nil error, want the duplicate key reported")
 			}
-			if !strings.Contains(err.Error(), "scratch.str") {
-				t.Errorf("ParseFile() = %q, want it to name the duplicated key", err)
+			if !strings.Contains(err.Error(), "set twice") || !strings.Contains(err.Error(), tc.wantKey) {
+				t.Errorf("ParseFile() = %q, want it to report the duplicated key", err)
 			}
 		})
 	}
