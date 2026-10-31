@@ -201,6 +201,7 @@ func (SnapshotFidelity) EnumDescriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{2}
 }
 
+// TagScope is where a Tag may be used to initialize Actors.
 type TagScope int32
 
 const (
@@ -254,6 +255,7 @@ func (TagScope) EnumDescriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{3}
 }
 
+// ActorState is the lifecycle state of an Actor.
 type ActorState int32
 
 const (
@@ -478,6 +480,7 @@ func (DurabilityMode) EnumDescriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{7}
 }
 
+// WorkerState is the lifecycle state of a Worker.
 type WorkerState int32
 
 const (
@@ -4215,6 +4218,8 @@ func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
 // a clean relative Unix path from the root of the volume.
 type ActorMetadataItem struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The identity field to project.
+	//
 	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the ActorMetadataField enum
@@ -4416,6 +4421,7 @@ func (x *VolumeMount) GetMountPath() string {
 	return ""
 }
 
+// Request to create an Atespace.
 type CreateAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The atespace to create.
@@ -4463,8 +4469,12 @@ func (x *CreateAtespaceRequest) GetAtespace() *Atespace {
 	return nil
 }
 
+// Request to get an Atespace.
 type GetAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Atespace to get. atespace is always empty; Atespaces are
+	// global-scoped.
+	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
@@ -4509,6 +4519,7 @@ func (x *GetAtespaceRequest) GetAtespace() *ObjectRef {
 	return nil
 }
 
+// Request to list Atespaces.
 type ListAtespacesRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Pagination controls.
@@ -4556,6 +4567,7 @@ func (x *ListAtespacesRequest) GetOptions() *ListOptions {
 	return nil
 }
 
+// A page of Atespaces.
 type ListAtespacesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The page of atespaces. This list may be empty even if there are more results.
@@ -4610,8 +4622,12 @@ func (x *ListAtespacesResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Request to delete an Atespace.
 type DeleteAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Atespace to delete. atespace is always empty; Atespaces are
+	// global-scoped.
+	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
@@ -4667,6 +4683,7 @@ func (x *DeleteAtespaceRequest) GetOptions() *DeleteOptions {
 	return nil
 }
 
+// Request to create an ActorTemplate.
 type CreateActorTemplateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor template version to create. Server-assigned metadata (uid,
@@ -4716,8 +4733,11 @@ func (x *CreateActorTemplateRequest) GetActorTemplate() *ActorTemplate {
 	return nil
 }
 
+// Request to get an ActorTemplate.
 type GetActorTemplateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The ActorTemplate to get.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	ActorTemplate *ObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
@@ -4762,6 +4782,7 @@ func (x *GetActorTemplateRequest) GetActorTemplate() *ObjectRef {
 	return nil
 }
 
+// Request to list ActorTemplates.
 type ListActorTemplatesRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The atespace to list actor templates from. Empty lists across all
@@ -4822,6 +4843,7 @@ func (x *ListActorTemplatesRequest) GetOptions() *ListOptions {
 	return nil
 }
 
+// A page of ActorTemplates.
 type ListActorTemplatesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The page of actor template versions. This list may be empty even if
@@ -4877,8 +4899,11 @@ func (x *ListActorTemplatesResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Request to delete an ActorTemplate.
 type DeleteActorTemplateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The ActorTemplate to delete.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	ActorTemplate *ObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
@@ -4934,8 +4959,11 @@ func (x *DeleteActorTemplateRequest) GetOptions() *DeleteOptions {
 	return nil
 }
 
+// Request to get an Actor.
 type GetActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Actor to get.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
@@ -5084,8 +5112,11 @@ func (x *UpdateActorRequest) GetActor() *Actor {
 	return nil
 }
 
+// Request to suspend an Actor.
 type SuspendActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Actor to suspend.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
@@ -5141,9 +5172,11 @@ func (x *SuspendActorRequest) GetOptions() *SuspendOptions {
 	return nil
 }
 
+// Response to SuspendActor.
 type SuspendActorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *Actor                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Actor after the suspend.
+	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5236,8 +5269,11 @@ func (x *SuspendOptions) GetMode() DurabilityMode {
 	return DurabilityMode_DURABILITY_MODE_UNSPECIFIED
 }
 
+// Request to resume an Actor.
 type ResumeActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Actor to resume.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
@@ -5282,9 +5318,11 @@ func (x *ResumeActorRequest) GetActor() *ObjectRef {
 	return nil
 }
 
+// Response to ResumeActor.
 type ResumeActorResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Actor *Actor                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	// The Actor after the resume.
+	Actor *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// True if a resume workflow was executed to activate the actor.
 	// False if the actor was already RUNNING.
 	Resumed       bool `protobuf:"varint,2,opt,name=resumed,proto3" json:"resumed,omitempty"`
@@ -5431,8 +5469,11 @@ func (x *RevertActorResponse) GetActor() *Actor {
 	return nil
 }
 
+// Request to delete an Actor.
 type DeleteActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Actor to delete.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
@@ -5749,8 +5790,11 @@ func (x *DeleteActorEgressPolicyRequest) GetOptions() *DeleteOptions {
 	return nil
 }
 
+// Request to get a Tag.
 type GetTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Tag to get.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Tag           *ObjectRef `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
@@ -5946,6 +5990,7 @@ func (x *MintActorJwtResponse) GetExpireTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// Request to list Tags.
 type ListTagsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The atespace to list tags from. Empty lists across all atespaces.
@@ -6005,10 +6050,13 @@ func (x *ListTagsRequest) GetOptions() *ListOptions {
 	return nil
 }
 
+// A page of Tags.
 type ListTagsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tags          []*Tag                 `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page of tags. This list may be empty even if there are more results.
+	Tags []*Tag `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty"`
+	// Pagination token for the next page. Empty if this is the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6175,8 +6223,11 @@ func (x *UpdateTagRequest) GetTag() *Tag {
 	return nil
 }
 
+// Request to delete a Tag.
 type DeleteTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Tag to delete.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Tag *ObjectRef `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
@@ -6476,6 +6527,7 @@ func (x *ListWorkerActorAssignmentsResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Request to list Workers.
 type ListWorkersRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Pagination controls.
@@ -6523,6 +6575,7 @@ func (x *ListWorkersRequest) GetOptions() *ListOptions {
 	return nil
 }
 
+// A page of Workers.
 type ListWorkersResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The page of workers. This list may be empty even if there are more results.
@@ -6577,6 +6630,7 @@ func (x *ListWorkersResponse) GetNextPageToken() string {
 	return ""
 }
 
+// Request to get a Worker.
 type GetWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to fetch. atespace is always empty; Workers are global-scoped.
@@ -6625,6 +6679,7 @@ func (x *GetWorkerRequest) GetWorker() *ObjectRef {
 	return nil
 }
 
+// Request to register a Worker.
 type CreateWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to register.
@@ -6672,6 +6727,7 @@ func (x *CreateWorkerRequest) GetWorker() *Worker {
 	return nil
 }
 
+// Request to update a Worker.
 type UpdateWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to update.
@@ -6732,6 +6788,7 @@ func (x *UpdateWorkerRequest) GetWorker() *Worker {
 	return nil
 }
 
+// Request to deregister a Worker.
 type DeleteWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to deregister.
@@ -6791,6 +6848,7 @@ func (x *DeleteWorkerRequest) GetOptions() *DeleteOptions {
 	return nil
 }
 
+// Request to drain a Worker.
 type DrainWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to mark as terminating.
@@ -7136,6 +7194,7 @@ func (x *ListActorsRequest) GetOptions() *ListOptions {
 	return nil
 }
 
+// A page of Actors.
 type ListActorsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The page of actors. This list may be empty even if there are more results.
@@ -7214,18 +7273,26 @@ type Worker struct {
 	// +k8s:format=k8s-short-name
 	// +k8s:immutable
 	WorkerNamespace string `protobuf:"bytes,2,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
+	// The WorkerPool the pod belongs to, in worker_namespace.
+	//
 	// +k8s:required
 	// +k8s:format=k8s-long-name
 	// +k8s:immutable
 	WorkerPool string `protobuf:"bytes,3,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
+	// The Worker's pod, in worker_namespace.
+	//
 	// +k8s:required
 	// +k8s:format=k8s-long-name
 	// +k8s:immutable
 	WorkerPod string `protobuf:"bytes,4,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
+	// The UID of the Worker's pod.
+	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	// +k8s:immutable
 	WorkerPodUid string `protobuf:"bytes,5,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
+	// The node the Worker's pod runs on.
+	//
 	// +k8s:required
 	// +k8s:format=k8s-long-name
 	// +k8s:immutable
@@ -7352,8 +7419,11 @@ func (x *Worker) GetStatus() *WorkerStatus {
 	return nil
 }
 
+// WorkerStatus is the output-only, server-managed state of a Worker.
 type WorkerStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Worker's lifecycle state.
+	//
 	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the WorkerState enum
@@ -8023,6 +8093,8 @@ type ActorAssignment struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
+	// The UID of the assigned Actor.
+	//
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
