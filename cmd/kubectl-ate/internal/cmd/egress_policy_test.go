@@ -535,10 +535,10 @@ team-a     c1      1       1         5m
 			wantReq:   &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
 			wantOut: `metadata:
   atespace: team-a
-  createTime: "2026-01-01T11:55:00Z"
   name: default
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
   version: "1"
+  createTime: "2026-01-01T11:55:00Z"
 rules:
 - http:
     hostnames:
@@ -673,10 +673,10 @@ team-a     c1      1       1         0s
 			creator:   &fakeEgressPolicyCreator{policy: created},
 			wantOut: `metadata:
   atespace: team-a
-  createTime: "2026-01-01T12:00:00Z"
   name: default
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
   version: "1"
+  createTime: "2026-01-01T12:00:00Z"
 rules:
 - http:
     hostnames:
@@ -799,11 +799,11 @@ team-a     c1      2       2         60s
 			updater:   &fakeEgressPolicyUpdater{policy: updated},
 			wantOut: `metadata:
   atespace: team-a
-  createTime: "2026-01-01T11:59:00Z"
   name: default
   uid: 3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d
-  updateTime: "2026-01-01T12:00:00Z"
   version: "2"
+  createTime: "2026-01-01T11:59:00Z"
+  updateTime: "2026-01-01T12:00:00Z"
 rules:
 - http:
     hostnames:

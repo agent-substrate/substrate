@@ -270,6 +270,60 @@ func TestPrintActorTo_YAML(t *testing.T) {
 	}
 }
 
+// Fields print in proto declaration order, not alphabetical order.
+func TestPrintActorTo_DeclarationOrder(t *testing.T) {
+	actor := &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Name: "id-1"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "tpl"},
+		SourceTag:     &ateapi.ObjectRef{Atespace: "default", Name: "tag"},
+		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
+	}
+	tests := []struct {
+		format string
+		want   string
+	}{
+		{"json", `{
+  "metadata": {
+    "name": "id-1"
+  },
+  "actorTemplate": {
+    "atespace": "default",
+    "name": "tpl"
+  },
+  "sourceTag": {
+    "atespace": "default",
+    "name": "tag"
+  },
+  "status": {
+    "state": "ACTOR_STATE_RUNNING"
+  }
+}
+`},
+		{"yaml", `metadata:
+  name: id-1
+actorTemplate:
+  atespace: default
+  name: tpl
+sourceTag:
+  atespace: default
+  name: tag
+status:
+  state: ACTOR_STATE_RUNNING
+`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := PrintActorTo(&buf, actor, tt.format); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if diff := cmp.Diff(tt.want, buf.String()); diff != "" {
+				t.Errorf("output mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestPrintWorkersTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
@@ -924,11 +978,11 @@ func TestPrintWorkerTopTo_YAML(t *testing.T) {
 	output := buf.String()
 
 	expected := `workers:
-- cpu: 100m
-  memory: 128Mi
-  pod: worker-1
+- pod: worker-1
   pool: pool-1
   status: ASSIGNED
+  cpu: 100m
+  memory: 128Mi
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
