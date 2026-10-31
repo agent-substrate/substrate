@@ -90,7 +90,22 @@ With `kubectl ate proxy actor` running in your first terminal, open a **second t
 curl -X POST -i http://localhost:8000/
 ```
 
-Run the `curl` command several times—each request routes to `my-counter-1` and increments its stateful in-memory counter. When the actor becomes idle, Substrate checkpoints its memory and filesystem state to storage and releases the worker Pod; the next `curl` request automatically resumes the actor in under 500ms with its counter state intact.
+Run the `curl` command several times. Each request routes to `my-counter-1` and increments its in-memory counter.
+
+Suspend the actor explicitly to save its memory and filesystem state and release its worker capacity:
+
+```bash
+kubectl ate suspend actor my-counter-1 -a ate-demo-counter
+kubectl ate get actor my-counter-1 -a ate-demo-counter
+```
+
+The actor is now suspended. Send another request to resume it:
+
+```bash
+curl -X POST -i http://localhost:8000/
+```
+
+The counter continues from its saved value.
 
 > [!TIP]
 > **Running on Google Kubernetes Engine (GKE)?** Follow the official [GKE Installation Guide](https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate).
