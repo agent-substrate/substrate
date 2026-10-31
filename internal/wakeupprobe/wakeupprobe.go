@@ -23,6 +23,7 @@ package wakeupprobe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -67,10 +68,27 @@ func newClient(dial DialFunc) *http.Client {
 	return &http.Client{Transport: tr, Timeout: RequestTimeout}
 }
 
+// ExitFunc blocks until containerName exits and returns the exit error.
+type ExitFunc func(ctx context.Context, containerName string) error
+
+type options struct {
+	waitExit ExitFunc
+}
+
+// Option configures Wait and WaitAll.
+type Option func(*options)
+
+// WithExitFunc configures a function that blocks until a container exits during probing.
+func WithExitFunc(fn ExitFunc) Option {
+	return func(o *options) {
+		o.waitExit = fn
+	}
+}
+
 // WaitAll blocks until every container with a wakeup probe set reports 200 through dial,
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no wakeup gate").
-func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP string, dial DialFunc) error {
+func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP string, dial DialFunc, opts ...Option) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
 		if ac.GetWakeupProbe() == nil {
@@ -78,15 +96,21 @@ func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP s
 		}
 		ac := ac
 		g.Go(func() error {
-			return Wait(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP, dial)
+			return Wait(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP, dial, opts...)
 		})
 	}
 	return g.Wait()
 }
 
 // Wait polls the configured HTTP endpoint through dial until it returns 200,
-// the context is cancelled, or the overall deadline is exceeded.
-func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupProbe, actorIP string, dial DialFunc) error {
+// the context is cancelled, the overall deadline is exceeded, or the container
+// exits prematurely.
+func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupProbe, actorIP string, dial DialFunc, opts ...Option) error {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	url, err := URL(probe, actorIP)
 	if err != nil {
 		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
@@ -102,11 +126,33 @@ func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupPr
 	}
 	defer client.CloseIdleConnections()
 
+	probeCtx, cancelProbe := context.WithCancel(ctx)
+	defer cancelProbe()
+
+	exitErrCh := make(chan error, 1)
+	if o.waitExit != nil {
+		go func() {
+			err := o.waitExit(probeCtx, containerName)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				select {
+				case exitErrCh <- err:
+				default:
+				}
+			}
+		}()
+	}
+
 	start := time.Now()
 	deadline := start.Add(timeout)
 	attempts := 0
 	var lastErr error
 	for {
+		select {
+		case err := <-exitErrCh:
+			return fmt.Errorf("container %q exited during wakeup probe: %w", containerName, err)
+		default:
+		}
+
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("wakeup probe cancelled for %q after %s (%d attempts, last error: %v): %w",
 				containerName, time.Since(start), attempts, lastErr, err)
@@ -136,6 +182,8 @@ func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupPr
 		// per-iteration period is somewhat longer than the sleep alone.
 		select {
 		case <-ctx.Done():
+		case err := <-exitErrCh:
+			return fmt.Errorf("container %q exited during wakeup probe: %w", containerName, err)
 		case <-time.After(PollInterval):
 		}
 	}

@@ -16,12 +16,14 @@ package wakeupprobe
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -234,6 +236,135 @@ func TestWaitAll_SkipsContainersWithoutProbe(t *testing.T) {
 	defer cancel()
 	if err := WaitAll(ctx, containers, "127.0.0.1", nil); err != nil {
 		t.Fatalf("WaitAll with no probes returned error: %v", err)
+	}
+}
+
+func TestWait_ContainerExits(t *testing.T) {
+	tests := []struct {
+		name              string
+		exitAfterFirstTry bool
+		exitErr           error
+		wantSubstring     string
+	}{
+		{
+			name:          "exits immediately before polling",
+			exitErr:       fmt.Errorf("exit status 2: flag provided but not defined: -invalid-flag-exit-immediately"),
+			wantSubstring: `container "counter" exited during wakeup probe: exit status 2: flag provided but not defined`,
+		},
+		{
+			name:              "exits after first non-200 probe attempt",
+			exitAfterFirstTry: true,
+			exitErr:           fmt.Errorf("exit status 137"),
+			wantSubstring:     `container "counter" exited during wakeup probe: exit status 137`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var once sync.Once
+			probed := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				once.Do(func() { close(probed) })
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}))
+			defer srv.Close()
+
+			ip, port := splitHostPort(t, srv.URL)
+			probe := &ateworkerpb.WakeupProbe{
+				HttpGet:        &ateworkerpb.HttpGetAction{Path: "/readyz", Port: int32(port)},
+				TimeoutSeconds: 10,
+			}
+
+			waitExit := func(ctx context.Context, containerName string) error {
+				if tc.exitAfterFirstTry {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-probed:
+					}
+				}
+				return tc.exitErr
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			start := time.Now()
+			err := Wait(ctx, "counter", probe, ip, nil, WithExitFunc(waitExit))
+			elapsed := time.Since(start)
+
+			if err == nil {
+				t.Fatalf("Wait returned nil, want container exit error")
+			}
+			if elapsed > 1*time.Second {
+				t.Errorf("Wait took %v; expected fast failure without waiting for probe timeout", elapsed)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstring) {
+				t.Errorf("Wait error = %q, want substring %q", err.Error(), tc.wantSubstring)
+			}
+		})
+	}
+}
+
+func TestWait_ContainerSucceedsBeforeExit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ip, port := splitHostPort(t, srv.URL)
+	probe := &ateworkerpb.WakeupProbe{HttpGet: &ateworkerpb.HttpGetAction{Path: "/readyz", Port: int32(port)}, TimeoutSeconds: 2}
+
+	watcherDone := make(chan struct{})
+	waitExit := func(ctx context.Context, containerName string) error {
+		<-ctx.Done()
+		close(watcherDone)
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := Wait(ctx, "app", probe, ip, nil, WithExitFunc(waitExit)); err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+
+	select {
+	case <-watcherDone:
+	case <-ctx.Done():
+		t.Errorf("expected exit watcher to be cancelled when probe succeeds")
+	}
+}
+
+func TestWaitAll_ContainerExited(t *testing.T) {
+	port := pickFreePort(t)
+	containers := []*ateworkerpb.Container{
+		{
+			Name: "crash",
+			WakeupProbe: &ateworkerpb.WakeupProbe{
+				HttpGet:        &ateworkerpb.HttpGetAction{Path: "/readyz", Port: int32(port)},
+				TimeoutSeconds: 5,
+			},
+		},
+	}
+
+	waitExit := func(ctx context.Context, containerName string) error {
+		return fmt.Errorf("exit status 1")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := WaitAll(ctx, containers, "127.0.0.1", nil, WithExitFunc(waitExit))
+	if err == nil {
+		t.Fatalf("WaitAll returned nil, want error")
+	}
+	if time.Since(start) > 1*time.Second {
+		t.Errorf("WaitAll took too long: %v", time.Since(start))
+	}
+	if !strings.Contains(err.Error(), `container "crash" exited during wakeup probe: exit status 1`) {
+		t.Errorf("WaitAll error = %q, want container exit error", err.Error())
 	}
 }
 
