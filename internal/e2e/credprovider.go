@@ -49,8 +49,9 @@ const (
 // ConfigureCredentialProvider points the install's k8s-credential-provider at
 // the credinject fixture: the Secret behind CredentialInjectionURI and the
 // authorization policy that lets the probe atespaces resolve it. The provider
-// Deployment is restarted after the policy ConfigMap is applied because it
-// reads the policy once at startup. When the test passes the fixture is
+// Deployment is restarted after the policy ConfigMap is applied, which is
+// quicker than waiting for the kubelet to update the mounted policy the
+// provider rereads. When the test passes the fixture is
 // removed, the shipped policy put back, and the provider restarted again so
 // it drops the fixture's grants.
 //

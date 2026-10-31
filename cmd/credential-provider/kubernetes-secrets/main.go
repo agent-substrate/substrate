@@ -110,7 +110,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("namespace policy: %w", err)
 	}
-	slog.InfoContext(ctx, "loaded namespace authorization policy", slog.String("file", *nsPolicyFile))
 
 	creds, err := buildServerCreds(ctx)
 	if err != nil {

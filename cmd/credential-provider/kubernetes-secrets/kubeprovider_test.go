@@ -16,7 +16,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -453,6 +455,105 @@ func TestLoadNamespaceAuthorizerRejectsUnknownFields(t *testing.T) {
 				t.Fatal("expected an error, got none")
 			}
 		})
+	}
+}
+
+// The provider rereads its policy when the file changes, and keeps the last
+// good policy while the file fails to load.
+func TestLoadNamespaceAuthorizerReloads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.yaml")
+	dataLink := filepath.Join(dir, "..data")
+	// path resolves through the ..data symlink, and each step swaps that
+	// symlink to a new directory, the way the kubelet updates a ConfigMap
+	// volume.
+	if err := os.Symlink(filepath.Join("..data", "policy.yaml"), path); err != nil {
+		t.Fatalf("link policy: %v", err)
+	}
+	version := 0
+	replace := func(t *testing.T, content string) {
+		t.Helper()
+		version++
+		target := fmt.Sprintf("..v%d", version)
+		if err := os.Mkdir(filepath.Join(dir, target), 0o700); err != nil {
+			t.Fatalf("create policy dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, target, "policy.yaml"), []byte(content), 0o600); err != nil {
+			t.Fatalf("write policy: %v", err)
+		}
+		tmp := filepath.Join(dir, "..data_tmp")
+		if err := os.Symlink(target, tmp); err != nil {
+			t.Fatalf("link policy dir: %v", err)
+		}
+		if err := os.Rename(tmp, dataLink); err != nil {
+			t.Fatalf("swap policy dir: %v", err)
+		}
+	}
+	replace(t, "policies:\n- atespace: team-a\n  allowedNamespaces: [ns1]\n")
+	authz, err := LoadNamespaceAuthorizer(path)
+	if err != nil {
+		t.Fatalf("LoadNamespaceAuthorizer: %v", err)
+	}
+
+	steps := []struct {
+		name string
+		// content replaces the file; empty removes it.
+		content     string
+		wantAllowed []string
+		wantRefused []string
+		wantErr     bool
+	}{
+		{
+			name:        "grant moves to another namespace",
+			content:     "policies:\n- atespace: team-a\n  allowedNamespaces: [ns2]\n",
+			wantAllowed: []string{"ns2"},
+			wantRefused: []string{"ns1"},
+		},
+		{
+			name:        "malformed file keeps the previous policy",
+			content:     "policies:\n- atespace: team-a\n  allowedNamespace: [ns3]\n",
+			wantAllowed: []string{"ns2"},
+			wantRefused: []string{"ns3"},
+			wantErr:     true,
+		},
+		{
+			name:        "fixed file loads",
+			content:     "policies:\n- atespace: team-a\n  allowedNamespaces: [ns3]\n",
+			wantAllowed: []string{"ns3"},
+			wantRefused: []string{"ns2"},
+		},
+		{
+			name:        "missing file keeps the previous policy",
+			wantAllowed: []string{"ns3"},
+			wantErr:     true,
+		},
+		{
+			name:        "file comes back",
+			content:     "policies: []\n",
+			wantRefused: []string{"ns3"},
+		},
+	}
+	for _, step := range steps {
+		if step.content == "" {
+			if err := os.Remove(dataLink); err != nil {
+				t.Fatalf("%s: remove policy: %v", step.name, err)
+			}
+		} else {
+			replace(t, step.content)
+		}
+		for _, ns := range step.wantAllowed {
+			if !authz.Allowed("team-a", ns) || !authz.AllowedSecret("team-a", ns, nil) {
+				t.Errorf("%s: team-a/%s refused, want allowed", step.name, ns)
+			}
+		}
+		for _, ns := range step.wantRefused {
+			if authz.Allowed("team-a", ns) || authz.AllowedSecret("team-a", ns, nil) {
+				t.Errorf("%s: team-a/%s allowed, want refused", step.name, ns)
+			}
+		}
+		if err := authz.LoadError(); (err != nil) != step.wantErr {
+			t.Errorf("%s: LoadError() = %v, want error %v", step.name, err, step.wantErr)
+		}
 	}
 }
 
