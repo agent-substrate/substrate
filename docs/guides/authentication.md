@@ -29,6 +29,8 @@ Provider names and issuers must be unique. `issuer` must be an HTTPS URL and
 `audiences` must be non-empty; a token is accepted when any configured audience
 matches. `certificateAuthorityFile` and `discoveryTokenFile` are optional and
 are needed for OIDC discovery against some private Kubernetes API servers.
+`ate-api` sends the discovery token only to URLs under `issuer` and to the
+HTTPS `jwks_uri` that the issuer's discovery document names.
 
 What an authenticated caller may do is decided by authorization; see
 [authorization.md](authorization.md). Its principal ID does not record which
