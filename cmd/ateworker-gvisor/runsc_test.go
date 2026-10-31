@@ -19,12 +19,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
@@ -403,5 +406,177 @@ func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
 				t.Fatalf("RestoreWorkload() = %v, want InvalidArgument naming %s", err, tc.want)
 			}
 		})
+	}
+}
+
+type mockContainerWaiter struct {
+	waitCalls atomic.Int32
+	waitFn    func(ctx context.Context, name string) error
+}
+
+func (m *mockContainerWaiter) cmdWait(ctx context.Context, name string) error {
+	m.waitCalls.Add(1)
+	return m.waitFn(ctx, name)
+}
+
+func TestWaitForWakeupProbesWithLiveness(t *testing.T) {
+	containers := []*ateworkerpb.Container{
+		{Name: "init"},
+		{Name: "glutton"},
+	}
+
+	t.Run("all containers stay running while slow probe completes", func(t *testing.T) {
+		waiter := &mockContainerWaiter{
+			waitFn: func(ctx context.Context, _ string) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		err := waitForWakeupProbesWithLiveness(t.Context(), waiter, containers, 10*time.Millisecond, func(probeCtx context.Context) error {
+			timer := time.NewTimer(30 * time.Millisecond)
+			defer timer.Stop()
+			select {
+			case <-probeCtx.Done():
+				return probeCtx.Err()
+			case <-timer.C:
+				return nil
+			}
+		})
+		if err != nil {
+			t.Fatalf("waitForWakeupProbesWithLiveness() = %v, want nil", err)
+		}
+		if got := waiter.waitCalls.Load(); got != 2 {
+			t.Errorf("waitCalls = %d, want 2 (init + glutton)", got)
+		}
+	})
+
+	t.Run("container exiting early fails fast", func(t *testing.T) {
+		waiter := &mockContainerWaiter{
+			waitFn: func(ctx context.Context, name string) error {
+				if name == "glutton" {
+					return nil // exited immediately
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		err := waitForWakeupProbesWithLiveness(t.Context(), waiter, containers, 0, func(probeCtx context.Context) error {
+			<-probeCtx.Done()
+			return probeCtx.Err()
+		})
+		if err == nil || !strings.Contains(err.Error(), `application container "glutton" exited`) {
+			t.Fatalf("waitForWakeupProbesWithLiveness() = %v, want error mentioning glutton exited", err)
+		}
+	})
+
+	t.Run("fast wakeup probe (<250ms) spawns zero wait subprocesses", func(t *testing.T) {
+		waiter := &mockContainerWaiter{
+			waitFn: func(ctx context.Context, _ string) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		err := waitForWakeupProbesWithLiveness(t.Context(), waiter, containers, wakeupLivenessCheckDelay, func(context.Context) error {
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("waitForWakeupProbesWithLiveness() = %v, want nil", err)
+		}
+		if got := waiter.waitCalls.Load(); got != 0 {
+			t.Errorf("waitCalls = %d, want 0 on fast wakeup probe", got)
+		}
+	})
+
+	t.Run("dead container cancels slow wakeup probe after liveness delay", func(t *testing.T) {
+		waiter := &mockContainerWaiter{
+			waitFn: func(ctx context.Context, name string) error {
+				if name == "init" {
+					return errors.New("container not running")
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		start := time.Now()
+		err := waitForWakeupProbesWithLiveness(t.Context(), waiter, containers, 15*time.Millisecond, func(probeCtx context.Context) error {
+			<-probeCtx.Done()
+			return probeCtx.Err()
+		})
+		elapsed := time.Since(start)
+		if err == nil || !strings.Contains(err.Error(), `application container "init" not running during wakeup probe`) {
+			t.Fatalf("waitForWakeupProbesWithLiveness() = %v, want error when container is not running", err)
+		}
+		if elapsed > 2*time.Second {
+			t.Errorf("elapsed = %v, expected fast cancellation", elapsed)
+		}
+	})
+}
+
+func BenchmarkWaitForWakeupProbesWithLiveness_ExitedContainer(b *testing.B) {
+	const (
+		livenessDelay = 5 * time.Millisecond
+		probeTimeout  = 200 * time.Millisecond
+	)
+	containers := []*ateworkerpb.Container{{Name: "init"}, {Name: "glutton"}}
+	waiter := &mockContainerWaiter{
+		waitFn: func(ctx context.Context, name string) error {
+			if name == "glutton" {
+				return nil
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	probeWait := func(probeCtx context.Context) error {
+		timer := time.NewTimer(probeTimeout)
+		defer timer.Stop()
+		select {
+		case <-probeCtx.Done():
+			return probeCtx.Err()
+		case <-timer.C:
+			return errors.New("wakeup probe timed out")
+		}
+	}
+
+	b.Run("LivenessCheck=true", func(b *testing.B) {
+		ctx := b.Context()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := waitForWakeupProbesWithLiveness(ctx, waiter, containers, livenessDelay, probeWait); err == nil {
+				b.Fatal("expected exited container error, got nil")
+			}
+		}
+	})
+
+	b.Run("LivenessCheck=false", func(b *testing.B) {
+		ctx := b.Context()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := probeWait(ctx); err == nil {
+				b.Fatal("expected probe timeout error, got nil")
+			}
+		}
+	})
+}
+
+func BenchmarkWaitForWakeupProbesWithLiveness_FastPath(b *testing.B) {
+	containers := []*ateworkerpb.Container{{Name: "init"}, {Name: "glutton"}}
+	waiter := &mockContainerWaiter{
+		waitFn: func(ctx context.Context, _ string) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	ctx := b.Context()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := waitForWakeupProbesWithLiveness(ctx, waiter, containers, wakeupLivenessCheckDelay, func(context.Context) error {
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
