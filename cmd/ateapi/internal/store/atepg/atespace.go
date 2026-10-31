@@ -26,7 +26,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapi.Atespace) (*ateapi.Atespace, error) {
+func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapi.Atespace) (_ *ateapi.Atespace, err error) {
+	defer mapSerializationFailure(&err)
 	name := atespace.GetMetadata().GetName()
 
 	dbAtespace := proto.Clone(atespace).(*ateapi.Atespace)
@@ -50,9 +51,10 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapi.Atesp
 	return dbAtespace, nil
 }
 
-func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapi.Atespace, error) {
+func (p *Persistence) GetAtespace(ctx context.Context, name string) (_ *ateapi.Atespace, err error) {
+	defer mapSerializationFailure(&err)
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
+	err = p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -66,8 +68,9 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapi.Ate
 	return out, nil
 }
 
-func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Atespace], error) {
-	opts, err := store.NormalizeListOptions(opts)
+func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (_ store.ListResponse[*ateapi.Atespace], err error) {
+	defer mapSerializationFailure(&err)
+	opts, err = store.NormalizeListOptions(opts)
 	if err != nil {
 		return store.ListResponse[*ateapi.Atespace]{}, err
 	}
@@ -118,7 +121,8 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 	return store.ListResponse[*ateapi.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.Atespace, error) {
+func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapi.Atespace, err error) {
+	defer mapSerializationFailure(&err)
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning atespace delete: %w", err)

@@ -33,7 +33,8 @@ var (
 	ErrAlreadyExists = errors.New("persistence: already exists")
 
 	// ErrVersionConflict indicates a write lost to a concurrent one: either the
-	// write was guarded on a version the stored object is no longer at, or the
+	// write was guarded on a version the stored object is no longer at, the
+	// database aborted the transaction as a serialization failure, or the
 	// store's own retry budget was exhausted losing the same race.
 	ErrVersionConflict = errors.New("persistence: version conflict")
 

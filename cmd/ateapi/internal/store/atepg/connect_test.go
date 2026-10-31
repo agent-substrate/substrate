@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestPoolConfigRereadsRotatedCredentials covers the pod certificate rotation
@@ -356,6 +357,12 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	}
 	if got := p.probePool.Config().MaxConns; got != probePoolMaxConns {
 		t.Fatalf("probe pool MaxConns = %d, want %d", got, probePoolMaxConns)
+	}
+	for name, pool := range map[string]*pgxpool.Pool{"read/write": p.pool, "watch": p.watchPool, "owner": p.ownerPool, "probe": p.probePool} {
+		var isolation string
+		if err := pool.QueryRow(ctx, `SHOW transaction_isolation`).Scan(&isolation); err != nil || isolation != "serializable" {
+			t.Errorf("%s pool transaction_isolation = %q, %v; want serializable", name, isolation, err)
+		}
 	}
 
 	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {

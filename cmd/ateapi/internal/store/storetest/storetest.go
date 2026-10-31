@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
@@ -184,6 +185,8 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("postgres"),
 			postgres.WithPassword("postgres"),
+			// atepg.Connect runs every transaction at SERIALIZABLE.
+			testcontainers.WithCmdArgs("-c", "default_transaction_isolation=serializable"),
 		)
 		if containerErr != nil {
 			return

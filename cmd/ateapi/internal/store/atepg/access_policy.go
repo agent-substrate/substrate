@@ -26,7 +26,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapi.AccessPolicy) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	dbPolicy := proto.Clone(policy).(*ateapi.AccessPolicy)
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -58,13 +59,15 @@ func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 	return dbPolicy, nil
 }
 
-func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) GetGlobalAccessPolicy(ctx context.Context) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM global_access_policy
 		WHERE id = true`)
 }
 
-func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -109,7 +112,8 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 	return dbPolicy, nil
 }
 
-func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapi.AccessPolicy) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	dbPolicy := proto.Clone(policy).(*ateapi.AccessPolicy)
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
@@ -144,13 +148,15 @@ func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 	return dbPolicy, nil
 }
 
-func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) GetAtespaceAccessPolicy(ctx context.Context, name string) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	return getAccessPolicyRow(ctx, p.pool, `
 		SELECT uid, version, proto FROM atespace_access_policies
 		WHERE atespace_name = $1`, name)
 }
 
-func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapi.AccessPolicy) error) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
@@ -195,7 +201,8 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 	return dbPolicy, nil
 }
 
-func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
+func (p *Persistence) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (_ *ateapi.AccessPolicy, err error) {
+	defer mapSerializationFailure(&err)
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning access policy delete for %s: %w", name, err)

@@ -33,7 +33,6 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -238,11 +237,38 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "AssignWorker")
 	defer func() { err = done(err) }()
 
+	// lastAttempt times only the last attempt that ran, as every other record
+	// on the histogram does. The backoff can sleep once more after the last
+	// attempt before it gives up, so the time since that attempt began is too
+	// long. attempted is false if the context ended before the first attempt.
+	var lastAttempt time.Duration
+
+	var assignedActor *ateapi.Actor
+	var assignedWorker *ateapi.Worker
+
+	defer func() {
+		poolNamespace := ""
+		pool := ""
+		if assignedWorker != nil {
+			poolNamespace = assignedWorker.GetWorkerNamespace()
+			pool = assignedWorker.GetWorkerPool()
+		}
+		w.instruments.recordSchedulerAssignment(
+			ctx,
+			lastAttempt,
+			ateattr.SchedulerOutcomeError,
+			poolNamespace,
+			pool,
+			snapshotSandboxClass(actor),
+			err,
+		)
+	}()
+
 	switch actor.GetStatus().GetState() {
 	case ateapi.ActorState_ACTOR_STATE_RESUMING:
 		worker, err := w.validateAssignedWorker(ctx, actorRef, actor, actorTemplate)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("while validating assigned worker: %w", err)
 		}
 		markSkipped(ctx, "actor already RESUMING with a valid worker assignment")
 		return actor, worker, nil
@@ -251,83 +277,35 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return nil, nil, apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
-	var assignedActor *ateapi.Actor
-	var assignedWorker *ateapi.Worker
-	// ctxErr marks the loop ending between attempts, where no attempt ran and
-	// so none recorded.
-	var ctxErr error
-	// lastAttempt times only the last attempt that ran, as every other record
-	// on the histogram does. The backoff can sleep once more after the last
-	// attempt before it gives up, so the time since that attempt began is too
-	// long. attempted is false if the context ended before the first attempt.
-	var lastAttempt time.Duration
-	attempted := false
-	err = wait.ExponentialBackoff(assignmentBackoff, func() (bool, error) {
-		if err := ctx.Err(); err != nil {
-			ctxErr = err
-			return false, err
-		}
+	backoffPolicy := wait.Backoff{
+		Steps:    12,
+		Duration: 1 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   1.0,
+	}
+
+	err = wait.ExponentialBackoffWithContext(ctx, backoffPolicy, func(ctx context.Context) (bool, error) {
 		attemptStart := time.Now()
-		attemptActor, attemptWorker, attemptErr := w.assignWorkerAttempt(ctx, actorRef, actor, actorTemplate)
+		attemptActor, attemptWorker, err := w.assignWorkerAttempt(ctx, actorRef, actor, actorTemplate)
 		lastAttempt = time.Since(attemptStart)
-		attempted = true
-		if attemptErr == nil {
-			assignedActor, assignedWorker = attemptActor, attemptWorker
-			return true, nil
-		}
-		if errors.Is(attemptErr, store.ErrVersionConflict) || errors.Is(attemptErr, errWorkerFilledUp) {
+		if apierror.Code(err) == codes.Aborted || errors.Is(err, store.ErrVersionConflict) || errors.Is(err, errWorkerFilledUp) {
 			if attemptActor != nil {
 				actor = attemptActor // retry with the refreshed actor
 			}
 			return false, nil
+		} else if err != nil {
+			return false, fmt.Errorf("in assignWorkerAttempt: %w", err)
 		}
-		return false, attemptErr
+
+		assignedActor, assignedWorker = attemptActor, attemptWorker
+		return true, nil
 	})
-	// The retried attempts hid their own records, so the resume would leave no
-	// trace on the histogram without one here.
-	//
-	// wait.Interrupted also matches a context error, which an attempt returns
-	// when the context ends inside it; that attempt recorded itself. Only the
-	// timeout of the backoff means that the retries ran out.
-	exhausted := wait.Interrupted(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-	if exhausted && ctx.Err() != nil {
-		// The context ended in the sleep after the last attempt.
-		ctxErr = ctx.Err()
-		err = ctxErr
+	if wait.Interrupted(err) || apierror.Code(err) == codes.Aborted || errors.Is(err, store.ErrVersionConflict) {
+		return nil, nil, apierror.Aborted("while running retry loop for assignment: concurrent update conflict, please retry: %w", store.ErrVersionConflict)
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("while running retry loop for assignment: %w", err)
 	}
-	switch {
-	case err == nil:
-		return assignedActor, assignedWorker, nil
-	case ctxErr != nil:
-		if attempted {
-			w.recordExhaustedAssignment(ctx, lastAttempt, actor, ctxErr)
-		}
-		return nil, nil, err
-	case exhausted:
-		err = apierror.Aborted("concurrent update conflict, please retry: %w", store.ErrVersionConflict)
-		w.recordExhaustedAssignment(ctx, lastAttempt, actor, err)
-		return nil, nil, err
-	default:
-		// assignWorkerAttempt recorded this one itself.
-		return nil, nil, err
-	}
-}
-
-// assignmentBackoff bounds the retries of an assignment attempt that loses a
-// race for a worker. The delay reaches Cap after 5 attempts, which ends the
-// retries before Steps runs out, so the loop takes about 0.5 to 1 s.
-var assignmentBackoff = wait.Backoff{
-	Steps:    12,
-	Duration: 15 * time.Millisecond,
-	Factor:   2.0,
-	Jitter:   1.0,
-	Cap:      250 * time.Millisecond,
-}
-
-// recordExhaustedAssignment writes the one record of an assignment loop that
-// ended without assigning. No worker was assigned, so no pool is named.
-func (w *ActorWorkflow) recordExhaustedAssignment(ctx context.Context, elapsed time.Duration, actor *ateapi.Actor, err error) {
-	w.instruments.recordSchedulerAssignment(ctx, elapsed, ateattr.SchedulerOutcomeError, "", "", snapshotSandboxClass(actor), err)
+	return assignedActor, assignedWorker, nil
 }
 
 // validateAssignedWorker checks a RESUMING actor's persisted assignment
@@ -454,27 +432,16 @@ func schedulerRecordable(err error) bool {
 func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (_ *ateapi.Actor, _ *ateapi.Worker, err error) {
 	// Checked before a worker is claimed.
 	if err := checkSnapshotUpload(actorRef, actor); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("while checking snapshot upload: %w", err)
 	}
-	start := time.Now()
-	outcome := ateattr.SchedulerOutcomeError
-	poolNamespace := ""
-	pool := ""
-	class := ""
-	defer func() {
-		if schedulerRecordable(err) {
-			w.instruments.recordSchedulerAssignment(ctx, time.Since(start), outcome, poolNamespace, pool, class, err)
-		}
-	}()
 
 	constraints := schedulingConstraints(actor, actorTemplate)
 	snapRuntime := constraints.SnapshotRuntime
-	class = constraints.SandboxClass
 	relaxable := canRelaxRuntime(actor, constraints)
 
 	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints, relaxable)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("while releasing stale claim on worker: %w", err)
 	}
 	if assignedWorker == nil {
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
@@ -482,12 +449,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			constraints.RequiredRuntime = hardware.Requirement{}
 			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
 		}
+		if errors.Is(err, scheduling.ErrNoCapacity) {
+			return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
+		}
 		if err != nil {
-			if errors.Is(err, scheduling.ErrNoCapacity) {
-				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
-			}
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("while picking worker: %w", err)
 		}
 
 		assignedWorker = pickedWorker
@@ -536,16 +502,17 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		bound = fresh
 		return nil
 	}
-	if err := w.store.BindActorToWorker(ctx, assignedWorker.GetMetadata().GetName(), assignment, admit); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
-			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
-		}
+	err = w.store.BindActorToWorker(ctx, assignedWorker.GetMetadata().GetName(), assignment, admit)
+	if errors.Is(err, store.ErrNotFound) {
+		w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
+		return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
+	}
+	if err != nil {
 		// errWorkerFilledUp leaves the cache alone: it reports no room for
 		// this actor's size, or an overhead the cache hasn't seen yet, so
 		// forgetting the worker would hide it from every smaller actor until
 		// the next watch event or relist.
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("while binding actor to worker: %w", err)
 	}
 
 	newAssignment := workerAssignmentFrom(bound, snapRuntime)
@@ -555,10 +522,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
 		return nil
 	})
-	if err != nil {
-		if !errors.Is(err, store.ErrVersionConflict) {
-			return nil, nil, err
-		}
+	if errors.Is(err, store.ErrVersionConflict) {
 		// refresh the version of actor to avoid always failure in rest retries.
 		fresh, gerr := w.store.GetActor(ctx, actorRef)
 		if gerr != nil {
@@ -572,11 +536,9 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		default:
 			return nil, nil, apierror.Aborted("actor %s is %s and can no longer be resumed", actorRef, fresh.GetStatus().GetState())
 		}
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("while updating actor to worker assignment: %w", err)
 	}
-	poolNamespace = bound.GetWorkerNamespace()
-	pool = bound.GetWorkerPool()
-	class = hardware.SandboxClass(bound.GetStatus())
-	outcome = ateattr.SchedulerOutcomeAssigned
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, bound, nil
 }
@@ -873,7 +835,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	resp, err := client.Restore(ctx, req)
 	if err != nil {
 		// The snapshot's node is gone, and atelet found no upload of it.
-		if ctx.Err() == nil && status.Code(err) == codes.NotFound && localElsewhere(snap, assignment.GetNodeName()) {
+		if ctx.Err() == nil && apierror.Code(err) == codes.NotFound && localElsewhere(snap, assignment.GetNodeName()) {
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
 			message := fmt.Sprintf("%s: %s", crashMessageLocalSnapshotNodeGone, ateletCrashMessage("Restore", err))
@@ -915,49 +877,75 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
-	latestActor, err := w.store.GetActor(ctx, actorRef)
-	if err != nil {
-		return nil, err
+	var storedActor *ateapi.Actor
+
+	backoffPolicy := wait.Backoff{
+		Steps:    12,
+		Duration: 1 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   1.0,
 	}
 
-	workerName := latestActor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
-	worker, err := w.store.GetWorker(ctx, workerName)
-	if errors.Is(err, store.ErrNotFound) {
-		// Deleting the Worker crashes the Actors bound to it.
-		return nil, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("while getting worker %s: %w", workerName, err)
-	}
-	switch registered := worker.GetStatus().GetRegisteredEpoch(); {
-	case workerEpoch < registered:
-		slog.WarnContext(ctx, "Worker process that ran the actor has been replaced; restoring it again",
-			slog.String("worker", workerName),
-			slog.Int64("worker_epoch", workerEpoch),
-			slog.Int64("registered_epoch", registered))
-		return nil, apierror.Unavailable("worker %s restarted while actor %s was being restored, please retry", workerName, actorRef)
-	case workerEpoch > registered:
-		return nil, apierror.Internal("worker %s reported epoch %d, above its registered epoch %d", workerName, workerEpoch, registered)
-	}
-
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
-		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
-		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
-		// The workload already runs, so a record that can't take the upload
-		// doesn't hold the actor in RESUMING. The next suspend prunes the entry.
-		if err := recordRestoredUpload(ctx, toUpdate.Status); err != nil {
-			slog.WarnContext(ctx, "Restored a snapshot from its upload but could not record the upload",
-				slog.Any("actor", actorRef), slog.Any("err", err))
-		}
-		return nil
-	})
-	if err != nil {
+	err = wait.ExponentialBackoffWithContext(ctx, backoffPolicy, func(ctx context.Context) (bool, error) {
+		latestActor, err := w.store.GetActor(ctx, actorRef)
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
+			return false, nil // Retry on conflict
+		} else if err != nil {
+			return false, fmt.Errorf("while getting actor: %w", err)
 		}
-		return nil, err
+
+		// Has something else happened to the actor?
+		if latestActor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_RESUMING {
+			return true, apierror.Aborted("actor is no longer resuming, conflict")
+		}
+
+		workerName := latestActor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
+		worker, err := w.store.GetWorker(ctx, workerName)
+		if errors.Is(err, store.ErrVersionConflict) {
+			return false, nil // Retry on conflict
+		} else if errors.Is(err, store.ErrNotFound) {
+			// Deleting the Worker crashes the Actors bound to it.
+			return false, apierror.Aborted("worker %s of actor %s is gone", workerName, actorRef)
+		} else if err != nil {
+			return false, fmt.Errorf("while getting worker %s: %w", workerName, err)
+		}
+		switch registered := worker.GetStatus().GetRegisteredEpoch(); {
+		case workerEpoch < registered:
+			slog.WarnContext(ctx, "Worker process that ran the actor has been replaced; restoring it again",
+				slog.String("worker", workerName),
+				slog.Int64("worker_epoch", workerEpoch),
+				slog.Int64("registered_epoch", registered))
+			return false, apierror.Unavailable("worker %s restarted while actor %s was being restored, please retry", workerName, actorRef)
+		case workerEpoch > registered:
+			return false, apierror.Internal("worker %s reported epoch %d, above its registered epoch %d", workerName, workerEpoch, registered)
+		}
+
+		storedActor, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
+			toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+			toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
+			toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
+			// The workload already runs, so a record that can't take the upload
+			// doesn't hold the actor in RESUMING. The next suspend prunes the entry.
+			if err := recordRestoredUpload(ctx, toUpdate.Status); err != nil {
+				slog.WarnContext(ctx, "Restored a snapshot from its upload but could not record the upload",
+					slog.Any("actor", actorRef), slog.Any("err", err))
+			}
+			return nil
+		})
+		if errors.Is(err, store.ErrVersionConflict) {
+			return false, nil // Retry on conflict
+		} else if err != nil {
+			return false, fmt.Errorf("while updating actor in store: %w", err)
+		}
+
+		return true, nil
+	})
+	if wait.Interrupted(err) || apierror.Code(err) == codes.Aborted || errors.Is(err, store.ErrVersionConflict) {
+		return nil, apierror.Aborted("while marking actor running: concurrent update conflict: %w", err)
+	} else if err != nil {
+		return nil, fmt.Errorf("in 'mark running' read-modify-write loop: %w", err)
 	}
+
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, nil
 }

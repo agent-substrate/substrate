@@ -35,7 +35,8 @@ const defaultLeaseTTL = 30 * time.Second
 // one holding many row locks.
 const leaseCleanupBatch = 1000
 
-func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
+func (p *Persistence) AcquireLease(ctx context.Context, key string) (_ *store.Lease, err error) {
+	defer mapSerializationFailure(&err)
 	ttl := p.leaseTTL
 	token := uuid.NewString()
 	// Acquisition runs before any workflow step span opens, so log the

@@ -80,6 +80,8 @@ func startPostgres(t *testing.T) *pgxpool.Pool {
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
 		postgres.BasicWaitStrategies(),
+		// atepg.Connect runs every transaction at SERIALIZABLE.
+		testcontainers.WithCmdArgs("-c", "default_transaction_isolation=serializable"),
 	)
 	if err != nil {
 		unavailable("failed to start postgres container: %v", err)

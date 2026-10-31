@@ -258,8 +258,9 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses a DSN, assumes the configured role, and refreshes TLS
-// material from projected certificate files for each new connection.
+// poolConfig parses a DSN, assumes the configured role, runs every
+// transaction at SERIALIZABLE, and refreshes TLS material from projected
+// certificate files for each new connection.
 func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 	if role == "" {
 		return nil, fmt.Errorf("PostgreSQL role must not be empty")
@@ -268,6 +269,11 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing PostgreSQL connection string: invalid value")
 	}
+	// Set per session so it also covers implicit single-statement
+	// transactions and the OpenFGA datastore, which shares the pool.
+	// SERIALIZABLE only guarantees serializability against other SERIALIZABLE
+	// transactions, so every transaction must use it.
+	cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = "serializable"
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
 			return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
@@ -462,6 +468,15 @@ func mapDeleteError(err error, uid string, version int64, precondition store.Del
 }
 
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
+
+// mapSerializationFailure wraps a PostgreSQL serialization failure (40001) in
+// *err with store.ErrVersionConflict, so callers retry it like any other lost
+// write. Exported methods defer it on their named error result.
+func mapSerializationFailure(err *error) {
+	if pgErrCode(*err) == "40001" {
+		*err = fmt.Errorf("%w: %w", store.ErrVersionConflict, *err)
+	}
+}
 
 // isForeignKeyViolation matches both the insert/update-side violation
 // (23503, foreign_key_violation) and the delete-side violation PostgreSQL 18
