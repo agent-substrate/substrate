@@ -43,6 +43,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/hardware"
@@ -136,13 +137,20 @@ func (r *workerSandboxResolver) config(pool *atev1.WorkerPool) (*atev1.SandboxCo
 	return cfg, nil
 }
 
-// plan resolves pod's SandboxConfig and the versions of it this node can run.
-func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, error) {
+// plan resolves pod's SandboxConfig and the versions of it this node can run,
+// along with the object the sync is acting on (the resolved SandboxConfig, or
+// the WorkerPool when its config has not resolved) for failure Events.
+func (r *workerSandboxResolver) plan(pod *corev1.Pod) (*sandboxPlan, k8sruntime.Object, error) {
 	pool, err := r.pool(pod)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return r.planPool(pool)
+	cfg, err := r.config(pool)
+	if err != nil {
+		return nil, pool, err
+	}
+	plan, err := planConfig(cfg)
+	return plan, cfg, err
 }
 
 // planPool is plan for a pool already in hand: the config its workers run
@@ -152,6 +160,12 @@ func (r *workerSandboxResolver) planPool(pool *atev1.WorkerPool) (*sandboxPlan, 
 	if err != nil {
 		return nil, err
 	}
+	return planConfig(cfg)
+}
+
+// planConfig returns the plan for cfg: its class and the versions of it this
+// node can run.
+func planConfig(cfg *atev1.SandboxConfig) (*sandboxPlan, error) {
 	vers, err := planVersions(cfg)
 	if err != nil {
 		return nil, err
@@ -486,30 +500,32 @@ func bundleHash(rec *sandboxAssetsRecord) string {
 //
 // A file missing restorable runtimes for a transient reason is written all
 // the same, and the errIncomplete from build is returned so finish retries.
-func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) error {
-	plan, err := s.resolver.plan(pod)
+// The returned k8sruntime.Object is the resolved SandboxConfig (or WorkerPool
+// when its config has not resolved), attached as `related` on failure Events.
+func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) (k8sruntime.Object, error) {
+	plan, related, err := s.resolver.plan(pod)
 	if err != nil {
-		return err
+		return related, err
 	}
 	hashed := hashVersions(plan)
 	// Resolvable, and on disk, before the file can let the worker register
 	// any of them.
 	if err := s.index.registerRuntimes(plan.config, hashed); err != nil {
-		return err
+		return related, err
 	}
 	want, buildErr := s.buildFile(ctx, plan, hashed)
 	if buildErr != nil && !errors.Is(buildErr, errIncomplete) {
-		return buildErr
+		return related, buildErr
 	}
 	if err := s.write(ctx, string(pod.UID), plan.config, want); err != nil {
-		return err
+		return related, err
 	}
 	// What the worker advertises is what its file now says: a sync that
 	// failed before the write left the previous entry, and one that wrote
 	// a partial file names only the runtimes in it. One class per pool
 	// today; a pool that runs several will yield one plan per class here.
 	if err := s.index.register(string(pod.UID), advertisedClass{class: plan.sandboxClass, config: plan.config, hashed: writtenVersions(hashed, want)}); err != nil {
-		return err
+		return related, err
 	}
 	// Only now, with the file naming its defaults: a sync that failed above
 	// left the file, and so the directories, as they were. The build staged
@@ -524,13 +540,13 @@ func (s *workerSandboxSyncer) syncPod(ctx context.Context, pod *corev1.Pod) erro
 			}
 		}
 		if err := s.syncDefaultRuntimeDirs(string(pod.UID), defaults); err != nil {
-			return err
+			return related, err
 		}
 		for _, hash := range defaults {
 			s.prewarm.enqueue(hash, s.defaultRuntimeDir(string(pod.UID), hash))
 		}
 	}
-	return buildErr
+	return related, buildErr
 }
 
 // writtenVersions returns the versions of hashed whose runtime file names,

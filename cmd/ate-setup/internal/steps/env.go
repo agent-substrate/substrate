@@ -172,16 +172,16 @@ func (e *Env) koRunner() (*ko.Runner, error) {
 // KO_DOCKER_REPO. A pre-built install builds nothing: --image-repo installs
 // images someone else published, and needs neither docker nor a registry to
 // push to, so the image is pinned from REPO/name:TAG like every ko image.
-// That only works if someone published it there: `ate-setup publish
-// release-images` does not, so an install from release images fails here.
-func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (string, error) {
-	if ref, ok := e.dockerfileImages[name]; ok {
+// That only works if the repository holds it and can be read: releases
+// publish it, but older releases and other mirrors may not.
+func (e *Env) dockerfileImage(ctx context.Context, img images.DockerfileImage) (string, error) {
+	if ref, ok := e.dockerfileImages[img.Name]; ok {
 		return ref, nil
 	}
 	var ref string
 	var err error
 	if !e.Cfg.Images.IsPrebuilt() {
-		ref, err = images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+		ref, err = images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, img.Name, e.Cfg.Path(img.Context), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
 	} else {
 		resolver, rErr := e.imageResolver()
 		if rErr != nil {
@@ -191,11 +191,11 @@ func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (str
 		if !ok {
 			return "", fmt.Errorf("image resolver is %T, not a pre-built resolver", resolver)
 		}
-		ref, err = prebuilt.Pin(ctx, name)
+		ref, err = prebuilt.Pin(ctx, img.Name)
 		if err != nil {
-			return "", fmt.Errorf("%s is built from a Dockerfile, and releases do not publish it; "+
+			return "", fmt.Errorf("%s is built from a Dockerfile, and the image repository has no readable copy; "+
 				"build it from source by dropping --image-repo, or choose --atenet-dataplane=agentgateway, "+
-				"which does not use it: %w", name, err)
+				"which does not use it: %w", img.Name, err)
 		}
 	}
 	if err != nil {
@@ -204,7 +204,7 @@ func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (str
 	if e.dockerfileImages == nil {
 		e.dockerfileImages = make(map[string]string)
 	}
-	e.dockerfileImages[name] = ref
+	e.dockerfileImages[img.Name] = ref
 	return ref, nil
 }
 

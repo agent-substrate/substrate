@@ -232,15 +232,15 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 // such as one the operator published to. When the lookup fails, the error says
 // releases do not publish it; for a released image it does not.
 func TestPrebuiltUnreleasedImages(t *testing.T) {
-	const ref = "image: ko://go.ate.dev/substrate/cmd/credential-provider/kubernetes-secrets\n"
-	const hint = "releases do not publish kubernetes-secrets"
+	const ref = "image: ko://go.ate.dev/substrate/demos/counter\n"
+	const hint = "releases do not publish counter"
 
 	got, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
 		ResolveBytes(context.Background(), []byte(ref))
 	if err != nil {
 		t.Fatalf("ResolveBytes() from a registry that holds it = %v", err)
 	}
-	if want := "image: example.com/substrate/kubernetes-secrets:v1.2.3" + digestSuffix + "\n"; string(got) != want {
+	if want := "image: example.com/substrate/counter:v1.2.3" + digestSuffix + "\n"; string(got) != want {
 		t.Errorf("ResolveBytes() = %q, want %q", got, want)
 	}
 

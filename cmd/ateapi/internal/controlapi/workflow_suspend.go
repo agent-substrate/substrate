@@ -194,7 +194,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 			actorTemplate.GetMetadata().GetUid(),
 			uri.Name(),
 			uri.String(),
-			ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+			ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 		)
 		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
 		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
@@ -224,11 +224,6 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		return "", nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
-	}
-
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return "", nil, fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
@@ -318,9 +313,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // durable snapshot that update replaced.
 // When the latest snapshot cannot be recorded, it commits CRASHED instead and
 // fails the step.
-// It re-reads the actor first so an out-of-band transition (e.g. the syncer
-// crashing the actor after its worker died) is not overwritten: an actor that
-// is no longer SUSPENDING is left as it is and the step fails with
+// It re-reads the actor first so a write that landed after this workflow lost
+// its lease, such as a crash or a delete, is not overwritten: an actor that is
+// no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint, applied in the
 // same update. A state that conflicts with the record crashes the actor.
@@ -333,13 +328,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dUpdateActor, dReleaseSnapshot time.Duration
+	var dGetActor, dUpdateActor, dReleaseSnapshot time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
 			slog.Duration("total", time.Since(start)),
 			slog.Duration("get_actor", dGetActor),
-			slog.Duration("release_worker", dReleaseWorker),
 			slog.Duration("update_actor", dUpdateActor),
 			slog.Duration("release_snapshot", dReleaseSnapshot))
 	}()
@@ -379,31 +373,20 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
 	}
 
-	// 1. Free the worker (if it hasn't been freed yet)
-	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		t = time.Now()
-		_, err := releaseWorker(ctx, w.store, latestActor)
-		dReleaseWorker = time.Since(t)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// 2. Finalize the actor: record its new snapshot and mark it SUSPENDED. This
-	// must run even with no worker assignment (nothing to free), or the actor
-	// would be left SUSPENDING forever with the workflow reporting success.
-	// The precondition pins the version checked above, so an out-of-band write
-	// since then fails the update instead of being overwritten.
+	// 1. Free the worker and finalize the actor in one write: record its new
+	// snapshot and mark it SUSPENDED. The precondition pins the version checked
+	// above, so an out-of-band write since then fails the update instead of
+	// being overwritten.
 	t = time.Now()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
+	storedActor, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)
 		if mode == suspendSync {
-			snap.GetDurableSnapshot().Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+			snap.GetDurableSnapshot().State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		}
-		durable := snap.GetDurableSnapshot().GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+		durable := snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		// Keep the actor on the node that holds its snapshot. atelet holds an
 		// async suspend's snapshot until it detaches it, which it does only
 		// once the snapshot is durable.
@@ -418,14 +401,11 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	})
 	dUpdateActor = time.Since(t)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
 
-	// 3. Release the external snapshots this suspend replaced. Best-effort: the
+	// 2. Release the external snapshots this suspend replaced. Best-effort: the
 	// new snapshot is committed and the worker is gone, so failing the
 	// workflow here would only strand the actor.
 	t = time.Now()
@@ -450,14 +430,14 @@ func ateletKeptLocal(state *ateletpb.ActorSnapshotState, snap *ateapi.Snapshot) 
 // whole prefix. An upload atelet reports can make a newer snapshot COMPLETED
 // outside any workflow, so the next one can drop more than one.
 func (w *ActorWorkflow) releaseDroppedSnapshots(ctx context.Context, before, after *ateapi.Actor) {
-	completed := ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	kept := map[string]bool{}
 	for _, snap := range after.GetStatus().GetSnapshots() {
 		kept[snap.GetDurableSnapshot().GetObject().GetSnapshotUri()] = true
 	}
 	for _, snap := range before.GetStatus().GetSnapshots() {
 		dropped := snap.GetDurableSnapshot().GetObject().GetSnapshotUri()
-		if snap.GetDurableSnapshot().GetStatus() != completed || kept[dropped] {
+		if snap.GetDurableSnapshot().GetState() != completed || kept[dropped] {
 			continue
 		}
 		if err := w.releaseReplacedSnapshot(ctx, before, dropped); err != nil {

@@ -61,12 +61,9 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 	if err := s.checkActorOnNode(ctx, dbActor, caller.NodeName, "certificate"); err != nil {
 		return nil, err
 	}
-	// The status must name the requesting worker. When it names one,
-	// checkActorOnNode has confirmed in the store's worker assignments that
-	// this worker holds the actor. When it names none (a SUSPENDED actor on
-	// assigned_node, or a resume that has bound a worker but not yet recorded
-	// it), checkActorOnNode read assigned_node alone, and no worker runs the
-	// actor yet.
+	// The status must name the requesting worker. A status that names none (a
+	// SUSPENDED actor on assigned_node) passes checkActorOnNode, but no worker
+	// runs the actor.
 	if assigned := dbActor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned == "" || assigned != req.GetWorker().GetName() {
 		slog.WarnContext(ctx, "Refusing a worker-for-actor certificate for an actor not assigned to the calling worker",
 			slog.String("actor", resources.ActorRefFromActor(dbActor).String()),

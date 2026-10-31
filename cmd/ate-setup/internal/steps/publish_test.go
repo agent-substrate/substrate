@@ -120,23 +120,26 @@ func TestPublishReleaseImagesRejectsANonReleaseTag(t *testing.T) {
 	}
 }
 
-// The release covers every released component, each under the name and tag
-// that `deploy --image-repo --image-tag` looks up, and nothing releases leave
-// out.
+// The release covers every released component and envoy-dataplane, each under
+// the name and tag that `deploy --image-repo --image-tag` looks up, and nothing
+// releases leave out.
 func TestReleaseImageRefs(t *testing.T) {
 	refs := releaseImageRefs("example.com/substrate/", "v1")
-	if want := len(images.ReleaseComponents()); len(refs) != want {
+	if want := len(images.ReleaseComponents()) + len(images.ReleaseDockerfileImages()); len(refs) != want {
 		t.Fatalf("releaseImageRefs() returned %d refs, want %d", len(refs), want)
 	}
-	for _, want := range []string{"example.com/substrate/ateapi:v1", "example.com/substrate/objectstore-plugin:v1"} {
+	for _, want := range []string{
+		"example.com/substrate/ateapi:v1",
+		"example.com/substrate/envoy-dataplane:v1",
+		"example.com/substrate/kubernetes-secrets:v1",
+		"example.com/substrate/objectstore-plugin:v1",
+	} {
 		if !slices.Contains(refs, want) {
 			t.Errorf("releaseImageRefs() = %v, want %s", refs, want)
 		}
 	}
 	for _, unwanted := range []string{
 		"example.com/substrate/counter:v1",
-		"example.com/substrate/kubernetes-secrets:v1",
-		"example.com/substrate/envoy-dataplane:v1",
 	} {
 		if slices.Contains(refs, unwanted) {
 			t.Errorf("releaseImageRefs() = %v, want no %s", refs, unwanted)

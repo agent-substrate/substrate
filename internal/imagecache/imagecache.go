@@ -19,10 +19,11 @@
 //
 // The work is split along the existing atelet/worker privilege boundary:
 //
-//   - atelet (plain root, all capabilities dropped) pulls layers and unpacks
-//     them into the pool (Store.EnsureImage), and writes a rootfs-overlay.json
-//     into each bundle (WriteSpec). Whiteout entries are
-//     recorded in per-layer metadata rather than materialized, because
+//   - atelet (root with the capabilities manifests/ate-install/atelet.yaml
+//     grants it) pulls layers and unpacks them into the pool with the
+//     owners their tars record (Store.EnsureImage), and writes a
+//     rootfs-overlay.json into each bundle (WriteSpec). Whiteout entries
+//     are recorded in per-layer metadata rather than materialized, because
 //     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
 //     for opaque dirs (CAP_SYS_ADMIN).
 //   - worker (privileged; it already owns every mount on the node) finalizes
@@ -75,9 +76,10 @@ import (
 )
 
 const (
-	// Version 1 layers may not have been hashed against their diffID, so a
-	// version 1 pool is refused.
-	layoutVersion   = "2"
+	// Version 1 layers may not have been hashed against their diffID, and
+	// version 2 layers are root-owned without setuid, setgid or sticky bits,
+	// so both pools are refused.
+	layoutVersion   = "3"
 	versionFileName = "version"
 
 	layerFSDirName           = "fs"
@@ -347,6 +349,10 @@ func New(root string, opts ...Option) (*Store, error) {
 		}
 	default:
 		return nil, fmt.Errorf("while reading image cache version marker: %w", err)
+	}
+
+	if os.Geteuid() != 0 {
+		slog.Warn("Image cache is not running as root: unpacked layers belong to this user instead of the owners the image records", slog.String("root", root))
 	}
 
 	if err := s.sweepTempDirs(); err != nil {

@@ -85,22 +85,6 @@ jobs:
           --jsonfile "${ARTIFACTS}/junittool.json" \
           --format pkgname-and-test-fails --format-hide-empty-pkg \
           -- -race ./...
-    # Kept apart from the root module so it can move to its own repository.
-    - name: gcp-secret-manager credential provider tests
-      working-directory: internal/plugins/gcp-secret-manager
-      run: |
-        go -C ../../../tools/junittool run . register "${ARTIFACTS}/gcp-secret-manager.xml"
-        ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/gcp-secret-manager.xml" \
-          --jsonfile "${ARTIFACTS}/gcp-secret-manager.json" \
-          --format pkgname-and-test-fails --format-hide-empty-pkg \
-          -- -race ./...
-    # The root verifiers stop at the module's go.mod, so it gets its own run:
-    # gofmt, go vet and the tidy check, then golangci-lint with the root config.
-    - name: gcp-secret-manager credential provider verify
-      working-directory: internal/plugins/gcp-secret-manager
-      run: |
-        make verify
-        ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
     - name: Cache cargo
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
@@ -191,10 +175,12 @@ jobs:
         preview: ['off', 'on']
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      # Apply the e2e test component (short atelet snapshot delays) during the
+      # control-plane install.
+      ATE_INSTALL_E2E_TUNING: "true"
       # The installer requires a credential provider selection, and deploys the
-      # bundled Kubernetes Secrets provider with the control plane. Job-wide
-      # because every ate-setup invocation reads it, including the control
-      # plane redeploy in run-microvm-demo-kind.sh.
+      # bundled Kubernetes Secrets provider with the control plane. Job-wide so
+      # every ate-setup invocation in this job sees the same selection.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
       # Job-wide for the same reason. Empty is an explicit "no preview
       # features", not an unset value. The e2e steps pass it to the suites as
@@ -258,13 +244,14 @@ jobs:
       id: microvm-assets
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        # Assembling the assets (download kata-static + cloud-hypervisor + the
-        # prebuilt virtiofsd — all downloads on amd64) is fully pinned by assemble.sh,
-        # so key the cache on its hash. The push-to-main run populates the
-        # default-branch cache PRs inherit; the weekly schedule refreshes it.
-        # run-microvm-demo-kind.sh skips assembling when these are present.
-        path: bin/microvm-assets/amd64
-        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
+        # Assembling the assets (download kata-static + cloud-hypervisor) is
+        # pinned by the SHA-256 digests in
+        # manifests/ate-install/sandboxconfig-microvm.yaml.tmpl, so key the
+        # cache on its hash. The push-to-main run populates the default-branch
+        # cache PRs inherit; the weekly schedule refreshes it. ate-setup skips
+        # assembling when these are present.
+        path: bin/microvm-assets
+        key: microvm-assets-${{ hashFiles('manifests/ate-install/sandboxconfig-microvm.yaml.tmpl') }}
     - name: Enable KVM
       # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
       # the node and labels it for the micro-VM sandbox class.
@@ -280,58 +267,26 @@ jobs:
       # gateway. ATE_PREVIEW above selects the preview features.
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-        NO_DEV_ENV: "true"
-        KO_DOCKER_REPO: "localhost:5001"
-        ATE_INSTALL_KIND: "true"
-        BUCKET_NAME: "ate-snapshot"
-        KIND_CLUSTER_NAME: "kind"
-        KUBECTL_CONTEXT: "kind-kind"
-      run: go run ./cmd/ate-setup deploy ate-system
+      run: go run ./cmd/ate-setup --kind deploy ate-system
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
       run: |
         sudo modprobe nfs || true
         sudo modprobe nfsd || true
     - name: Install CSI NFS driver
-      env:
-        NO_DEV_ENV: "true"
-        KO_DOCKER_REPO: "localhost:5001"
-        ATE_INSTALL_KIND: "true"
-        BUCKET_NAME: "ate-snapshot"
-        KIND_CLUSTER_NAME: "kind"
-        KUBECTL_CONTEXT: "kind-kind"
-      run: go run ./cmd/ate-setup setup csi nfs
+      run: go run ./cmd/ate-setup --kind setup csi nfs
     - name: Deploy micro-VM counter demo
-      # Stages the (cached) assets into the cluster's rustfs and deploys the
-      # counter-microvm demo onto the control plane installed above. The demo
-      # redeploys the control plane, so retain the selected dataplane.
-      env:
-        ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
-      run: hack/run-microvm-demo-kind.sh
+      run: go run ./cmd/ate-setup --kind deploy demo counter-microvm
     - name: Deploy gVisor counter demo
-      env:
-        NO_DEV_ENV: "true"
-        KO_DOCKER_REPO: "localhost:5001"
-        ATE_INSTALL_KIND: "true"
-        BUCKET_NAME: "ate-snapshot"
-        KIND_CLUSTER_NAME: "kind"
-        KUBECTL_CONTEXT: "kind-kind"
-      run: go run ./cmd/ate-setup deploy demo counter
+      run: go run ./cmd/ate-setup --kind deploy demo counter
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
       # before their respective lane runs. The demo's actors trust the CA the
       # gateway mints its leaves from.
-      env:
-        NO_DEV_ENV: "true"
-        KO_DOCKER_REPO: "localhost:5001"
-        ATE_INSTALL_KIND: "true"
-        BUCKET_NAME: "ate-snapshot"
-        KIND_CLUSTER_NAME: "kind"
-        KUBECTL_CONTEXT: "kind-kind"
       run: |
-        go run ./cmd/ate-setup deploy demo egress
-        go run ./cmd/ate-setup deploy demo egress-microvm
+        go run ./cmd/ate-setup --kind deploy demo egress
+        go run ./cmd/ate-setup --kind deploy demo egress-microvm
     - name: Trust local TLS origins in egress gateway
       run: hack/setup-e2e-egress-tls-kind.sh
     # scale the idle sandbox class's demo pools to zero so each lane has the node

@@ -315,11 +315,11 @@ func labeledNode(name string, labels map[string]string) runtime.Object {
 	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
 }
 
-// Under --cordon-control-plane the StatefulSet's rolling update deletes the
-// running postgres before its replacement schedules, so a cluster with no
-// ate-postgres node must be refused before anything is applied.
+// Under --cordon-system-infra-components the StatefulSet's rolling update
+// deletes the running postgres before its replacement schedules, so a cluster
+// with no ate-postgres node must be refused before anything is applied.
 func TestRequirePostgresPool(t *testing.T) {
-	controlPlane := labeledNode("cp-1", map[string]string{"ate.dev/workloadType": "ate-control-plane"})
+	systemInfra := labeledNode("infra-1", map[string]string{"ate.dev/workloadType": "ate-system-infra"})
 	postgres := labeledNode("pg-1", map[string]string{"ate.dev/workloadType": "ate-postgres"})
 	for _, tc := range []struct {
 		name    string
@@ -327,22 +327,22 @@ func TestRequirePostgresPool(t *testing.T) {
 		nodes   []runtime.Object
 		wantErr bool
 	}{
-		{name: "not cordoned", nodes: []runtime.Object{controlPlane}},
-		{name: "cordoned with a postgres node", cordon: true, nodes: []runtime.Object{controlPlane, postgres}},
-		{name: "cordoned without a postgres node", cordon: true, nodes: []runtime.Object{controlPlane}, wantErr: true},
+		{name: "not cordoned", nodes: []runtime.Object{systemInfra}},
+		{name: "cordoned with a postgres node", cordon: true, nodes: []runtime.Object{systemInfra, postgres}},
+		{name: "cordoned without a postgres node", cordon: true, nodes: []runtime.Object{systemInfra}, wantErr: true},
 		{name: "cordoned with no nodes", cordon: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{
-				Cfg:  &config.Config{CordonControlPlane: tc.cordon},
+				Cfg:  &config.Config{CordonSystemInfraComponents: tc.cordon},
 				Kube: fakeKube(t, tc.nodes...),
 			}
 			err := e.requirePostgresPool(t.Context())
 			if gotErr := err != nil; gotErr != tc.wantErr {
 				t.Fatalf("requirePostgresPool() error = %v, wantErr %v", err, tc.wantErr)
 			}
-			if err != nil && !strings.Contains(err.Error(), "docs/upgrade.md") {
-				t.Errorf("requirePostgresPool() error = %q, want it to point at docs/upgrade.md", err)
+			if err != nil && !strings.Contains(err.Error(), "docs/architecture.md") {
+				t.Errorf("requirePostgresPool() error = %q, want it to point at docs/architecture.md", err)
 			}
 		})
 	}
@@ -352,7 +352,7 @@ func TestRequirePostgresPool(t *testing.T) {
 // take to the StatefulSet, so the pool check has to sit in front of it.
 func TestApplyPostgresRequiresPostgresPool(t *testing.T) {
 	e := &Env{
-		Cfg:  &config.Config{Root: repoRoot(t), CordonControlPlane: true},
+		Cfg:  &config.Config{Root: repoRoot(t), CordonSystemInfraComponents: true},
 		Kube: fakeKube(t),
 	}
 	err := e.applyPostgres(t.Context())

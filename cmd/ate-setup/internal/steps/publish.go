@@ -16,8 +16,6 @@ package steps
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -107,17 +105,12 @@ func (e *Env) publishReleaseBinaries(ctx context.Context, w io.Writer, outDir st
 // its directory so the check runs wherever both are downloaded. It returns
 // the checksum file's path.
 func writeChecksum(path string) (string, error) {
-	f, err := os.Open(path)
+	digest, err := fileSHA256(path)
 	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("while hashing %s: %w", path, err)
 	}
 	sum := path + ".sha256"
-	line := hex.EncodeToString(h.Sum(nil)) + "  " + filepath.Base(path) + "\n"
+	line := digest + "  " + filepath.Base(path) + "\n"
 	if err := os.WriteFile(sum, []byte(line), 0o644); err != nil {
 		return "", fmt.Errorf("while writing %s: %w", sum, err)
 	}
@@ -168,22 +161,24 @@ type PublishReleaseOptions struct {
 }
 
 // releaseImageRefs returns the tagged reference of every image a release
-// publishes to repo: one per images.ReleaseComponents entry.
+// publishes to repo: one per images.ReleaseComponents and
+// images.ReleaseDockerfileImages entry.
 func releaseImageRefs(repo, tag string) []string {
 	repo = strings.TrimSuffix(repo, "/")
-	pkgs := images.ReleaseComponents()
-	refs := make([]string, 0, len(pkgs))
-	for _, pkg := range pkgs {
+	var refs []string
+	for _, pkg := range images.ReleaseComponents() {
 		refs = append(refs, repo+"/"+images.ImageName(pkg)+":"+tag)
+	}
+	for _, img := range images.ReleaseDockerfileImages() {
+		refs = append(refs, repo+"/"+img.Name+":"+tag)
 	}
 	return refs
 }
 
 // PublishReleaseImages builds and pushes every image a release publishes, the
-// ko images in images.ReleaseComponents, all tagged with the build version,
-// and writes their pushed references to w. The version has to be a release
-// tag. Releases do not publish envoy-dataplane, the one Dockerfile-built
-// image, so nothing here needs docker.
+// ko images in images.ReleaseComponents and the images.ReleaseDockerfileImages
+// built with docker buildx, all tagged with the build version, and writes
+// their pushed references to w. The version has to be a release tag.
 //
 // If the registry already holds every image for the tag on every platform,
 // nothing is built unless opts.Overwrite is set, so rerunning a release never
@@ -234,11 +229,29 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts Publis
 	labels := []string{
 		images.SourceLabel + "=" + images.SourceURL,
 		images.RevisionLabel + "=" + revision,
+		images.VersionLabel + "=" + tag,
 	}
-	refs, err := runner.BuildTagged(ctx, tag, labels, pkgs...)
+	// The Dockerfile images are slower to build and likelier to fail, so they
+	// go first: a failure there publishes nothing under the tag. They ignore
+	// DOCKER_BUILD_FLAGS, so a release restores no build cache.
+	var dockerFlags []string
+	for _, label := range labels {
+		dockerFlags = append(dockerFlags, "--label="+label)
+	}
+	var refs []string
+	for _, img := range images.ReleaseDockerfileImages() {
+		ref, err := images.PublishDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, img.Name, tag,
+			e.Cfg.Path(img.Context), e.Cfg.KODefaultPlatforms, dockerFlags)
+		if err != nil {
+			return err
+		}
+		refs = append(refs, ref)
+	}
+	koRefs, err := runner.BuildEach(ctx, tag, labels, pkgs...)
 	if err != nil {
 		return err
 	}
+	refs = append(refs, koRefs...)
 
 	incomplete, err := images.CheckPublished(ctx, tagged, platforms)
 	if err != nil {

@@ -15,31 +15,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
+	"go.ate.dev/substrate/internal/imagecache"
 )
-
-// bootIDPath is where Linux exposes the boot ID: a random UUID generated once
-// per boot, so it changes on every reboot, clean or not, and on nothing else.
-// It is not namespaced, so atelet reads the node's.
-const bootIDPath = "/proc/sys/kernel/random/boot_id"
-
-// readBootID returns the boot ID read from path. It is never empty, so a local
-// snapshot whose manifest records none never matches it.
-func readBootID(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("while reading the boot ID: %w", err)
-	}
-	id := strings.TrimSpace(string(b))
-	if id == "" {
-		return "", fmt.Errorf("boot ID file %s is empty", path)
-	}
-	return id, nil
-}
 
 // localSnapshotBootCheck returns the snapshot tracker's check of whether an
 // actor's local snapshot was written on the boot bootID: whether the
@@ -54,4 +40,76 @@ func localSnapshotBootCheck(bootID string) func(actorUID, snapshotUUID string) b
 		rec, err := unmarshalSandboxRecord(manifest)
 		return err == nil && rec.BootID == bootID
 	}
+}
+
+// clearCachesAfterReboot empties each of cacheDirs, and removes every actor's
+// OCI bundle dir and every worker pod's default-runtime dir, when markerPath
+// records a boot other than bootID. Then it records bootID there. It reports
+// whether it cleared anything.
+//
+// Cache writes aren't synced, so an unclean reboot can leave cache entries
+// and bundle specs empty or truncated. The bundle and default-runtime dirs
+// hold specs naming cached layers and hard links to cached assets, which
+// atelet reuses instead of linking again. No sandbox survives a reboot, so
+// nothing still uses any of them. Run recreates an actor's bundle dir, and the
+// worker sandbox syncer recreates a worker's default-runtime dir.
+//
+// A missing marker only records bootID. atelet may be starting with this
+// check for the first time while actors run on what it would clear.
+func clearCachesAfterReboot(bootID, markerPath, actorsDir, workersDir string, cacheDirs ...string) (bool, error) {
+	b, err := os.ReadFile(markerPath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, writeCacheBootID(markerPath, bootID)
+	case err != nil:
+		return false, fmt.Errorf("while reading the cache boot ID: %w", err)
+	case strings.TrimSpace(string(b)) == bootID:
+		return false, nil
+	}
+	for _, dir := range cacheDirs {
+		if err := removeChildren(dir, ""); err != nil {
+			return false, err
+		}
+	}
+	if err := removeChildren(actorsDir, "bundles"); err != nil {
+		return false, err
+	}
+	if err := removeChildren(workersDir, defaultRuntimeDirsName); err != nil {
+		return false, err
+	}
+	return true, writeCacheBootID(markerPath, bootID)
+}
+
+// removeChildren removes the named entry in each child directory of dir, or
+// each child itself when name is empty. A missing dir has nothing to remove.
+func removeChildren(dir, name string) error {
+	if dir == "" {
+		return nil
+	}
+	children, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while listing %s: %w", dir, err)
+	}
+	for _, child := range children {
+		if name != "" && !child.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, child.Name(), name)
+		// RemoveAllWritable, not os.RemoveAll: unpacked image layers keep
+		// the image's directory modes, which can be read-only.
+		if err := imagecache.RemoveAllWritable(path); err != nil {
+			return fmt.Errorf("while removing %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func writeCacheBootID(path, bootID string) error {
+	if err := atomicfile.WriteSync(path, []byte(bootID+"\n"), 0o600); err != nil {
+		return fmt.Errorf("while recording the cache boot ID: %w", err)
+	}
+	return nil
 }

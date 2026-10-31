@@ -254,7 +254,7 @@ project-level IAM permissions.
 atelet and ate-api authenticate via [GKE Workload Identity
 Federation](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity):
 their Kubernetes ServiceAccounts (`ate-system/atelet` and
-`ate-system/ate-api-server`, created by `install-ate.sh`) are addressed
+`ate-system/ate-api-server`, created by `ate-setup`) are addressed
 directly as IAM principals. The one Google service account `create iam`
 creates is the snapshot transfer account⁴, which ate-api-server's credential
 exchange impersonates and downscopes per actor for every snapshot transfer.
@@ -329,7 +329,7 @@ bucket. Upgrade Substrate first, to a release whose node plugin gets snapshot
 credentials from ate-api-server's credential exchange. On an older release,
 removing these grants makes every suspend and resume fail with `403`. Remove
 those grants after running `create bucket` and `create iam`, and after
-rerunning `hack/install-microvm-deps.sh --install` if you use microVM
+rerunning `go run ./cmd/ate-setup deploy sandboxconfig` if you use microVM
 workers, so the assets are in the asset bucket. `ATELET` is set as in the
 manual equivalent above:
 

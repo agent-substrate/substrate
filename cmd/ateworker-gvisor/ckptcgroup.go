@@ -62,8 +62,9 @@ func checkpointCgroupDir(root, actorUID string) string {
 
 // isolateCheckpointCache moves the actor's sentry from its sandbox leaf into a
 // sibling <uid>-_ckpt cgroup, preserving the sandbox leaf's cpu.max so checkpoint
-// serialization remains capped to the actor's CPU limit.
-func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actorUID string) (*checkpointCgroup, error) {
+// serialization remains capped to the actor's CPU limit. cacheHigh, when set,
+// is the sibling's memory.high.
+func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actorUID string, cacheHigh int64) (*checkpointCgroup, error) {
 	pid, err := readSandboxPID(actorDirs)
 	if err != nil {
 		return nil, err
@@ -82,11 +83,30 @@ func isolateCheckpointCache(root string, actorDirs *ateworkerpb.ActorDirs, actor
 			slog.Debug("Failed to copy cpu.max to checkpoint cgroup", slog.String("cgroup", dir), slog.Any("err", err))
 		}
 	}
+	// written even when unset, so a leftover cgroup does not keep an old limit
+	high := "max"
+	if cacheHigh > 0 {
+		high = strconv.FormatInt(cacheHigh, 10)
+	}
+	if err := writeExisting(filepath.Join(dir, "memory.high"), high); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("while limiting cgroup %q: %w", dir, err)
+	}
 	c := &checkpointCgroup{leaf: leaf, dir: dir, pid: pid}
 	if err := movePID(dir, pid); err != nil {
 		return nil, errors.Join(err, c.remove())
 	}
 	return c, nil
+}
+
+// writeExisting writes a cgroup interface file without creating it, so a node
+// that did not delegate the controller has nothing written.
+func writeExisting(path, value string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(value)
+	return errors.Join(err, f.Close())
 }
 
 func readSandboxPID(actorDirs *ateworkerpb.ActorDirs) (int, error) {
@@ -156,11 +176,12 @@ func (c *checkpointCgroup) remove() error {
 func checkpointIsolated(
 	ctx context.Context,
 	cgroupRoot, actorUID string,
+	cacheHigh int64,
 	actorDirs *ateworkerpb.ActorDirs,
 	checkpoint func(context.Context) error,
 	terminate func() error,
 ) error {
-	ckptCgroup, err := isolateCheckpointCache(cgroupRoot, actorDirs, actorUID)
+	ckptCgroup, err := isolateCheckpointCache(cgroupRoot, actorDirs, actorUID, cacheHigh)
 	if err != nil {
 		slog.WarnContext(ctx, "Checkpointing without page cache isolation",
 			slog.String("actorUID", actorUID), slog.Any("err", err))

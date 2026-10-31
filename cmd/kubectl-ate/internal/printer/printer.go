@@ -359,7 +359,7 @@ func PrintTagsTo(out io.Writer, tags []*ateapi.Tag, format string) error {
 
 func durableSnapshotStorage(snapshot *ateapi.Snapshot) *ateapi.SnapshotStorage {
 	st := snapshot.GetDurableSnapshot()
-	if st.GetStatus() == ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+	if st.GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED &&
 		st.GetObject().GetSnapshotUri() != "" {
 		return st
 	}

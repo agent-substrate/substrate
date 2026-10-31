@@ -20,8 +20,8 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 )
 
-// The codec takes a payload naming every key the class reads and refuses
-// the values it cannot run on.
+// The codec takes a payload naming every key the class reads outside turnover
+// mode and refuses the values it cannot run on.
 func TestKnobsCodec(t *testing.T) {
 	h := dynconfig.NewHolder(knobsCodec)
 	if got := dynconfig.Get[knobs](h); got != knobsCodec.Defaults || got.ResumeRetryBudget.Duration() != defaultResumeRetryBudget {
@@ -58,6 +58,10 @@ func TestKnobsCodec(t *testing.T) {
 		"invalid snapshot steps entry":            `{"agentsession_snapshot_steps": "3,zero,10"}`,
 		"non-positive snapshot steps entry":       `{"agentsession_snapshot_steps": "0,10"}`,
 		"snapshot steps with lifecycle mode none": `{"lifecycle_mode": "none", "agentsession_snapshot_steps": "3,10"}`,
+		"negative awake":                          `{"agentsession_awake": -1}`,
+		"negative target rps":                     `{"target_rps": -1}`,
+		"awake with lifecycle mode none":          `{"lifecycle_mode": "none", "agentsession_awake": 10}`,
+		"awake with snapshot steps":               `{"agentsession_awake": 10, "agentsession_snapshot_steps": "3,10"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := h.Apply([]byte(payload)); err == nil {
@@ -67,5 +71,20 @@ func TestKnobsCodec(t *testing.T) {
 				t.Errorf("a refused payload changed the config to %+v", got)
 			}
 		})
+	}
+}
+
+// Turnover mode reads the awake count and the swap rate.
+func TestKnobsCodecTurnover(t *testing.T) {
+	h := dynconfig.NewHolder(knobsCodec)
+	if _, _, err := h.Apply([]byte(`{"lifecycle_mode": "async", "agentsession_awake": 650, "target_rps": 2.5}`)); err != nil {
+		t.Fatalf("Apply(turnover): %v", err)
+	}
+	want := knobsCodec.Defaults
+	want.LifecycleMode = dynconfig.LifecycleModeAsync
+	want.Awake = 650
+	want.TargetRPS = 2.5
+	if got := dynconfig.Get[knobs](h); got != want {
+		t.Errorf("decoded =\n %+v, want\n %+v", got, want)
 	}
 }

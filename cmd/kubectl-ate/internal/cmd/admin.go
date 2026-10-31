@@ -54,14 +54,9 @@ var makeCaPoolCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		var keyType localca.KeyType
-		switch makeCaPoolKeyTypeFlag {
-		case "ED25519":
-			keyType = localca.KeyTypeED25519
-		case "ECDSAP256":
-			keyType = localca.KeyTypeECDSAP256
-		default:
-			return usageErrorf("unknown key type %q", makeCaPoolKeyTypeFlag)
+		keyType, err := parseCAKeyType(makeCaPoolKeyTypeFlag)
+		if err != nil {
+			return err
 		}
 
 		ca, err := localca.GenerateCA(
@@ -310,6 +305,18 @@ func printJWTKeys(out io.Writer, pool *localjwtauthority.ConcretePool) error {
 	return w.Flush()
 }
 
+// parseCAKeyType maps a make-ca-pool --key-type value to a localca.KeyType.
+func parseCAKeyType(keyType string) (localca.KeyType, error) {
+	switch keyType {
+	case "ECDSAP256":
+		return localca.KeyTypeECDSAP256, nil
+	case "ED25519":
+		return localca.KeyTypeED25519, nil
+	default:
+		return 0, usageErrorf("unknown key type %q", keyType)
+	}
+}
+
 // newKubeClient builds a client from the --kubeconfig and --context flags.
 func newKubeClient(errOut io.Writer) (kubernetes.Interface, error) {
 	kconfig, err := loadKubeConfig(errOut, kubeconfig, k8sContext)
@@ -354,7 +361,7 @@ func init() {
 	makeCaPoolCmd.Flags().StringVar(&makeCaPoolIDFlag, "ca-id", "", "ID of the initial CA in the pool")
 	makeCaPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "namespace of the pool secret")
 	makeCaPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "name of the pool secret")
-	makeCaPoolCmd.Flags().StringVar(&makeCaPoolKeyTypeFlag, "key-type", "ED25519", "CA key type: ED25519 or ECDSAP256")
+	makeCaPoolCmd.Flags().StringVar(&makeCaPoolKeyTypeFlag, "key-type", "ECDSAP256", "CA key type: ECDSAP256 or ED25519. ECDSAP256 is more broadly accepted by external relying parties")
 	makeCaPoolCmd.Flags().DurationVar(&makeCaPoolValidityFlag, "validity", 365*24*time.Hour, "how long the CA certificate is valid for")
 	adminCmd.AddCommand(makeCaPoolCmd)
 

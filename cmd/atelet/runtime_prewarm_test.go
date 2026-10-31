@@ -34,6 +34,7 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	kubeinformers "k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/events"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
@@ -316,7 +317,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err != nil {
+	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod: %v", err)
 	}
 	wr, ok := s.index.worker("pod-a")
@@ -344,7 +345,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err != nil {
+	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod again: %v", err)
 	}
 	if got := rec.items(); len(got) != 2 || got[1] != want[0] {
@@ -370,7 +371,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.MkdirAll(previous, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err == nil {
+	if _, err := s.syncPod(context.Background(), pod); err == nil {
 		t.Fatal("syncPod with the default's probe failing = nil, want an error")
 	}
 	if got := rec.items(); len(got) != 0 {
@@ -459,7 +460,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		ateFactory.Ate().V1().WorkerPools(),
 		ateFactory.Ate().V1().SandboxConfigs(),
 		newScriptAssetFetcher(t), // the syncer's runsc probe; prewarm goes through herder
-		workersDir, index, p)
+		workersDir, index, p, &events.FakeRecorder{})
 	if err != nil {
 		t.Fatalf("startWorkerSandboxSyncer: %v", err)
 	}

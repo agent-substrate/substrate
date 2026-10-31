@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Logs docker in to ghcr.io as GITHUB_ACTOR with the token in TOKEN. ko and
-# ate-setup's registry checks read the credentials docker login stores.
+# Logs docker in to ghcr.io as GITHUB_ACTOR with the token in TOKEN. ko, buildx,
+# and ate-setup's registry checks read the credentials docker login stores.
 #
 #   GITHUB_ACTOR=<user> TOKEN=<token> .github/scripts/release/ghcr-login.sh
 #

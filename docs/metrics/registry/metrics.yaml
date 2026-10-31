@@ -846,13 +846,18 @@ groups:
     brief: The number of workers in each pool, divided by state and by sandbox class.
     note: >
       ateapi reads this value with a callback. Each ateapi replica reports the
-      whole fleet, and the default install runs two replicas. Thus a sum across
-      the replicas counts each worker once for each replica. Take the maximum
-      across the replicas first, by pool namespace, pool, state and sandbox
-      class, and add after that. Within one replica you can add the counts
-      together. The sum across the states is the size of the pool. The sum
-      across the pools is the size of the fleet. Thus this instrument is an
-      UpDownCounter
+      whole fleet from its own worker cache, and the default install runs two
+      replicas. Thus a sum across the replicas counts each worker once for
+      each replica. The caches can disagree for a few seconds, and a worker
+      that changed state then sits under its old state on one replica and
+      under its new state on the other. Take the average across the replicas
+      first, by pool namespace, pool, state and sandbox class, and add after
+      that. A maximum would count that worker twice, once under each state.
+      The average keeps the sum across the states equal to the size of the
+      pool, and the counts can be fractional while the replicas disagree.
+      Within one replica you can add the counts together. The sum across the
+      states is the size of the pool. The sum across the pools is the size of
+      the fleet. Thus this instrument is an UpDownCounter
       and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
@@ -1518,7 +1523,7 @@ groups:
       an activation time nor a warm route.
     annotations:
       substrate:
-        emitted_by: [atenet-router]
+        emitted_by: [atenet-router, atenet-egress]
         golden_signals: [latency, traffic, errors]
         code_anchor: cmd/atenet/internal/router/extproc/metrics.go
         buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
@@ -1612,7 +1617,7 @@ groups:
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm, credprovider]
+        emitted_by: [ateapi, atelet, atenet-router, atenet-egress, ateworker-gvisor, ateworker-microvm, credprovider]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
@@ -1643,7 +1648,7 @@ groups:
       pod.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atecontroller, atenet-router]
+        emitted_by: [ateapi, atelet, atecontroller, atenet-router, atenet-egress]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc

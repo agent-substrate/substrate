@@ -165,7 +165,7 @@ func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reporte
 	if reported == nil {
 		return nil
 	}
-	if latest := findLatestDurableSnapshot(status, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); latest.GetGeneration() >= reported.GetGeneration() {
+	if latest := findLatestDurableSnapshot(status, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED); latest.GetGeneration() >= reported.GetGeneration() {
 		if latest.GetGeneration() > reported.GetGeneration() {
 			slog.InfoContext(ctx, msgDurableOlder,
 				slog.Int("generation", int(reported.GetGeneration())),
@@ -208,7 +208,7 @@ func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reporte
 		return nil
 	}
 	snap.Fidelity = reported.GetFidelity()
-	snap.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 	return nil
 }
 
@@ -222,7 +222,7 @@ func applyLatestDurable(ctx context.Context, status *ateapi.ActorStatus, reporte
 func applyDetach(status *ateapi.ActorStatus, node string, upTo int32) error {
 	deleted := func(s *ateapi.Snapshot) bool { return s.GetLocality() == node && s.GetGeneration() <= upTo }
 	if latest := latestSnapshot(status, deleted); status.GetState() != ateapi.ActorState_ACTOR_STATE_CRASHED && latest != nil &&
-		latest.GetDurableSnapshot().GetStatus() != ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		latest.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 		return apierror.FailedPrecondition("snapshot generation %d on node %s is not durable", latest.GetGeneration(), node)
 	}
 	for _, snap := range status.GetSnapshots() {
