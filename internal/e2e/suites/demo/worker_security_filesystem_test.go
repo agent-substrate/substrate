@@ -269,20 +269,17 @@ func TestWorkerSecurityFilesystem(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertWorkerFilesystem(t, raw)
+		// turn 1 keeps the snapshot on the worker's node; turns 2 and 3
+		// upload it synchronously so the upload path is covered too
+		mode := ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS
 		if turn == 1 {
 			assertWorkerProcessState(ctx, t, clients, worker.Namespace, worker.Name, capabilityMask(wantCaps))
+			mode = ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS
 		}
-		if turn == 1 {
-			// the asynchronous mode keeps the snapshot on the worker's node,
-			// which is what PauseActor used to do
-			_, err = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
-				Actor:   ref,
-				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
-			})
-		} else {
-			_, err = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
-		}
-		if err != nil {
+		if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+			Actor:   ref,
+			Options: &ateapi.SuspendOptions{Mode: mode},
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}

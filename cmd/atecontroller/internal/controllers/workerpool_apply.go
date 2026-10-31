@@ -376,12 +376,12 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 
 // workerGvisorCapabilities is the fixed capability set for gVisor workers.
 // runsc's gofer maps a full-range identity in a user namespace
-// (SETUID/SETGID), worker mounts need SYS_ADMIN, actor networking needs
-// NET_ADMIN/NET_RAW, and rootfs ownership and modes need DAC_OVERRIDE/FOWNER/CHOWN.
-// SETFCAP is needed to start the gofer at all: runsc re-executes itself with
-// ambient capabilities for the gofer child, and raising them needs CAP_SETFCAP
-// (without it, "cannot create gofer process: fork/exec /proc/self/exe:
-// operation not permitted", seen on Linux 6.18).
+// (SETUID/SETGID, plus SETFCAP: since Linux 5.12, writing a uid_map that maps
+// uid 0 needs CAP_SETFCAP over the parent user namespace, and without it the
+// gofer fails with "cannot create gofer process: fork/exec /proc/self/exe:
+// operation not permitted"), worker mounts need SYS_ADMIN, actor networking
+// needs NET_ADMIN/NET_RAW, and rootfs ownership and modes need
+// DAC_OVERRIDE/FOWNER/CHOWN.
 //
 // The sandbox's user namespace supplies its own SYS_CHROOT (gofer) and
 // SYS_PTRACE (systrap); the outer worker needs neither, nor SETPCAP. That user
