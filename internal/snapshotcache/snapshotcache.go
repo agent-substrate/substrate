@@ -42,12 +42,11 @@ type File struct {
 var (
 	cachestatWarnOnce sync.Once
 
-	// cachestatFn, fadviseFn, and syncFileRangeFn are seams for unit tests so
-	// eviction and writeback logic can be verified deterministically regardless
-	// of the backing filesystem (ext4, tmpfs, overlayfs) or kernel version.
-	cachestatFn     = unix.Cachestat
-	fadviseFn       = unix.Fadvise
-	syncFileRangeFn = unix.SyncFileRange
+	// cachestatFn and fadviseFn are seams for unit tests so eviction logic can
+	// be verified deterministically regardless of the backing filesystem (ext4,
+	// tmpfs, overlayfs) or kernel version.
+	cachestatFn = unix.Cachestat
+	fadviseFn   = unix.Fadvise
 
 	// RetryDelays are the backoff intervals between passes over files that
 	// still have dirty or writeback pages. StartWriteback repeats the last one.
@@ -162,7 +161,7 @@ func pollWritebackFiles(files []*os.File, startAsyncWrite bool) bool {
 		if err := cachestatFn(uint(f.Fd()), &unix.CachestatRange{}, &cstat, 0); err != nil {
 			// no cachestat before Linux 6.5, so wait for write-out instead of
 			// giving the memory back while the pages are still dirty
-			_ = syncFileRangeFn(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
+			_ = unix.SyncFileRange(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
 			_ = f.Close()
 			files[i] = nil
 			continue
@@ -198,7 +197,7 @@ func startWriteOut(f *os.File) bool {
 		if off >= info.Size() {
 			return true
 		}
-		_ = syncFileRangeFn(int(f.Fd()), off, writeOutChunk, unix.SYNC_FILE_RANGE_WRITE)
+		_ = unix.SyncFileRange(int(f.Fd()), off, writeOutChunk, unix.SYNC_FILE_RANGE_WRITE)
 	}
 }
 

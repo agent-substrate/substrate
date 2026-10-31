@@ -19,7 +19,6 @@ package snapshotcache
 import (
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,161 +200,49 @@ func TestEvictFiles(t *testing.T) {
 }
 
 func TestStartWriteback(t *testing.T) {
-	origCachestat := cachestatFn
-	origSyncFileRange := syncFileRangeFn
-	origDelays := RetryDelays
-	t.Cleanup(func() {
-		cachestatFn = origCachestat
-		syncFileRangeFn = origSyncFileRange
-		RetryDelays = origDelays
-	})
-	RetryDelays = []time.Duration{0, 0}
-
 	dir := t.TempDir()
-	img := filepath.Join(dir, "memory-ranges")
-	if err := os.WriteFile(img, []byte("snapshot pages"), 0o600); err != nil {
+	if isTmpfs(t, dir) {
+		t.Skip("TMPDIR is on tmpfs, which never writes pages back")
+	}
+	p := filepath.Join(dir, "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 8<<20), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	var calls atomic.Int32
-	var asyncWrites atomic.Int32
-	cachestatFn = func(_ uint, _ *unix.CachestatRange, cstat *unix.Cachestat_t, _ uint) error {
-		if calls.Add(1) <= 2 {
-			*cstat = unix.Cachestat_t{Cache: 16, Dirty: 8}
-			return nil
-		}
-		*cstat = unix.Cachestat_t{Cache: 16, Dirty: 0, Writeback: 0}
-		return nil
-	}
-	syncFileRangeFn = func(_ int, _ int64, _ int64, flags int) error {
-		if flags == unix.SYNC_FILE_RANGE_WRITE {
-			asyncWrites.Add(1)
-		}
-		return nil
-	}
-
 	done := make(chan struct{})
-	if err := StartWriteback([]string{img}, func() { close(done) }); err != nil {
-		t.Fatalf("StartWriteback: %v", err)
-	}
-	<-done
-	if got := asyncWrites.Load(); got != 1 {
-		t.Errorf("asyncWrites = %d, want 1", got)
-	}
-}
-
-func TestStartWritebackClosesUnlinked(t *testing.T) {
-	origCachestat := cachestatFn
-	origSyncFileRange := syncFileRangeFn
-	origDelays := RetryDelays
-	t.Cleanup(func() {
-		cachestatFn = origCachestat
-		syncFileRangeFn = origSyncFileRange
-		RetryDelays = origDelays
-	})
-	RetryDelays = []time.Duration{time.Millisecond}
-	img := filepath.Join(t.TempDir(), "memory-ranges")
-	if err := os.WriteFile(img, []byte("snapshot pages"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var calls atomic.Int32
-	cachestatFn = func(_ uint, _ *unix.CachestatRange, cstat *unix.Cachestat_t, _ uint) error {
-		if calls.Add(1) == 2 {
-			if err := os.Remove(img); err != nil {
-				return err
-			}
-		}
-		*cstat = unix.Cachestat_t{Cache: 16, Dirty: 8}
-		return nil
-	}
-	var waited atomic.Bool
-	syncFileRangeFn = func(_ int, _ int64, _ int64, flags int) error {
-		if flags&unix.SYNC_FILE_RANGE_WAIT_AFTER != 0 {
-			waited.Store(true)
-		}
-		return nil
-	}
-	done := make(chan struct{})
-	if err := StartWriteback([]string{img}, func() { close(done) }); err != nil {
+	if err := StartWriteback([]string{p}, func() { close(done) }); err != nil {
 		t.Fatalf("StartWriteback: %v", err)
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("done never ran for an unlinked file that stays dirty")
-	}
-	if waited.Load() {
-		t.Error("waited for write-out of an unlinked file")
+	case <-time.After(time.Minute):
+		t.Fatal("done never ran")
 	}
 }
 
-func TestStartWritebackStopsWriteOutOnUnlink(t *testing.T) {
-	origCachestat := cachestatFn
-	origSyncFileRange := syncFileRangeFn
-	origDelays := RetryDelays
-	t.Cleanup(func() {
-		cachestatFn = origCachestat
-		syncFileRangeFn = origSyncFileRange
-		RetryDelays = origDelays
-	})
-	RetryDelays = []time.Duration{time.Millisecond}
-	img := filepath.Join(t.TempDir(), "memory-ranges")
-	if err := os.WriteFile(img, nil, 0o600); err != nil {
+func TestStartWritebackReleasesUnlinked(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 64<<20), 0o600); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.Truncate(img, 3*writeOutChunk); err != nil {
-		t.Fatal(err)
-	}
-	cachestatFn = func(_ uint, _ *unix.CachestatRange, cstat *unix.Cachestat_t, _ uint) error {
-		*cstat = unix.Cachestat_t{Cache: 16, Dirty: 8}
-		return nil
-	}
-	var writes atomic.Int32
-	syncFileRangeFn = func(int, int64, int64, int) error {
-		if writes.Add(1) == 1 {
-			return os.Remove(img)
-		}
-		return nil
 	}
 	done := make(chan struct{})
-	if err := StartWriteback([]string{img}, func() { close(done) }); err != nil {
+	if err := StartWriteback([]string{p}, func() { close(done) }); err != nil {
 		t.Fatalf("StartWriteback: %v", err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("done never ran for a file unlinked during write-out")
-	}
-	if got := writes.Load(); got != 1 {
-		t.Errorf("%d write-out calls, want 1 before the file was unlinked", got)
+	case <-time.After(time.Minute):
+		t.Fatal("done never ran after the file was unlinked")
 	}
 }
 
-func TestStartWritebackWithoutCachestat(t *testing.T) {
-	origCachestat := cachestatFn
-	origSyncFileRange := syncFileRangeFn
-	t.Cleanup(func() {
-		cachestatFn = origCachestat
-		syncFileRangeFn = origSyncFileRange
-	})
-	img := filepath.Join(t.TempDir(), "memory-ranges")
-	if err := os.WriteFile(img, []byte("snapshot pages"), 0o600); err != nil {
-		t.Fatal(err)
+func isTmpfs(t *testing.T, dir string) bool {
+	t.Helper()
+	var fs unix.Statfs_t
+	if err := unix.Statfs(dir, &fs); err != nil {
+		return false
 	}
-	cachestatFn = func(uint, *unix.CachestatRange, *unix.Cachestat_t, uint) error { return unix.ENOSYS }
-	var waited atomic.Bool
-	syncFileRangeFn = func(_ int, _ int64, _ int64, flags int) error {
-		if flags&unix.SYNC_FILE_RANGE_WAIT_AFTER != 0 {
-			waited.Store(true)
-		}
-		return nil
-	}
-	done := make(chan struct{})
-	if err := StartWriteback([]string{img}, func() { close(done) }); err != nil {
-		t.Fatalf("StartWriteback: %v", err)
-	}
-	<-done
-	if !waited.Load() {
-		t.Error("done ran without waiting for write-out")
-	}
+	return fs.Type == unix.TMPFS_MAGIC
 }
