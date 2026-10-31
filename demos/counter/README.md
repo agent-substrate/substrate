@@ -31,6 +31,8 @@ The demo creates two resources:
 
 ## How to Run on Agent Substrate
 
+This walkthrough deploys the default `gvisor` sandbox variant (`gvisor-default`). See [Running on microVM](#running-on-microvm) for the `microvm` variant.
+
 The [Quickstart](../../docs/get-started/quickstart.md) already deploys this demo, creates `my-counter-1`, and starts its proxy on port `8000`. If you ran it, skip to [How to Use](#how-to-use).
 
 ### 1. Build and Deploy
@@ -48,7 +50,7 @@ This command:
 - Builds the counter server image using `ko`.
 - Applies [`counter.yaml.tmpl`](counter.yaml.tmpl) to create the `ate-demo-counter` namespace and the `counter` `WorkerPool`, then waits for the worker rollout.
 - Creates the `ate-demo-counter` atespace.
-- Creates the `counter` actor template through `kubectl ate create actor-template` from [`counter-template.yaml.tmpl`](counter-template.yaml.tmpl). The manifest uses the message's protojson form, which matches `kubectl ate get actor-template -o yaml`.
+- Creates the `counter` actor template through the Substrate API from [`counter-template.yaml.tmpl`](counter-template.yaml.tmpl). The manifest uses the message's protojson form, which matches `kubectl ate get actor-template counter -a ate-demo-counter -o yaml`.
 - Waits until the template's golden snapshot is ready.
 
 Inspect the deployed template:
@@ -119,12 +121,6 @@ preserved memory count: 2 | preserved file counter: 2 | preserved rootfs counter
 
 The actor resumes from its snapshot, potentially on a different worker pod, and all three counters continue from `1` to `2`. Run `kubectl ate get actor my-counter-1 -a ate-demo-counter` again and check the `WORKER POD` column to see which worker pod it resumed on.
 
-4. Delete the actor when finished:
-
-```bash
-kubectl ate delete actor my-counter-1 -a ate-demo-counter
-```
-
 ## Reaching a non-default port
 
 `counter.go` also listens on a second configurable port (`--extra-port=9090` in this demo's template) to exercise arbitrary-port ingress through `atenet-router`. Pass `[local-port:]remote-port` arguments to `kubectl ate proxy actor` to forward additional ports. Stop any earlier proxy on port `8000` first:
@@ -149,9 +145,15 @@ This reaches the same actor's second listener and resumes the actor if it is sus
 
 **Current limitation**: only HTTP(S) traffic over the tunnel is supported. Raw TCP or other non-HTTP protocols on a non-default port are not reachable through `atenet-router` yet.
 
+Delete the actor when finished:
+
+```bash
+kubectl ate delete actor my-counter-1 -a ate-demo-counter
+```
+
 ## Running on microVM
 
-You can also run the counter demo on the `microvm` sandbox class (`ateworker-microvm`, which runs a Kata guest on Cloud Hypervisor; worker nodes require `/dev/kvm`). This variant uses:
+You can also run the counter demo on the `microvm` sandbox class (`ateworker-microvm`, which runs a Kata guest on Cloud Hypervisor and requires `/dev/kvm` on worker nodes). This variant uses:
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl): the `WorkerPool` for the `microvm` sandbox class.
 - [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl): the `counter-microvm` `ActorTemplate` in the `ate-demo-counter-microvm` atespace.
 
@@ -187,7 +189,7 @@ kubectl ate delete actor my-counter-1 -a ate-demo-counter-microvm
 
 ## Attaching an External Volume
 
-Pass `--with-external-volume` to attach a CSI-backed external volume mounted at `/external-data` and configure `counter.go` with `--validate-existing-file-path=/external-data/test.txt`. The e2e test harness uses this flag to verify a pre-seeded file on the volume, so on an empty volume `curl` returns `failed to read test file: open /external-data/test.txt: no such file or directory`.
+Pass `--with-external-volume` to attach a CSI-backed external volume mounted at `/external-data`. That flag sets `--validate-existing-file-path=/external-data/test.txt` on `counter.go`, so `curl` returns `failed to read test file: open /external-data/test.txt: no such file or directory` until `/external-data/test.txt` exists on the volume.
 
 External volumes require the `ExternalVolumes` preview feature gate and an adapted CSI driver with a `CSIDriverConfig` (see [CSI Driver Deployment](../../docs/guides/csi-deployment.md)):
 
