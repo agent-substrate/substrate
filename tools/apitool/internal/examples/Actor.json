@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "atespace": "prod",
+    "name": "c0a8012e-4b7d-4f3a-9e21-6d5f8a9b0c1d",
+    "uid": "8f14e45f-ceea-4c3e-9d5b-1a2b3c4d5e6f",
+    "version": "14",
+    "createTime": "2026-08-01T18:22:04Z",
+    "updateTime": "2026-08-13T09:47:31Z"
+  },
+  "actorTemplate": {
+    "atespace": "prod",
+    "name": "a7d3e9f1-2c4b-4e8a-b5d6-7f9e0a1b2c3d"
+  },
+  "workerSelector": {
+    "matchLabels": {
+      "tier": "1"
+    }
+  },
+  "status": {
+    "state": "ACTOR_STATE_RUNNING",
+    "workerAssignment": {
+      "worker": {
+        "name": "3c9e1a2b-6d4f-4b8e-9a71-2c5f0d8b3e94"
+      },
+      "workerNamespace": "substrate-workers",
+      "workerPool": "default-pool",
+      "workerPod": "default-pool-6b9d4f-x2p7q",
+      "workerPodUid": "3c9e1a2b-6d4f-4b8e-9a71-2c5f0d8b3e94",
+      "workerPodIps": [
+        "10.4.12.31"
+      ],
+      "nodeName": "worker-node-1",
+      "workerEpoch": "1",
+      "sandboxRuntime": {
+        "sandboxClass": "gvisor",
+        "version": {
+          "schemaVersion": "v1",
+          "attributes": [
+            {
+              "key": "architecture",
+              "value": "amd64"
+            },
+            {
+              "key": "sandbox_bundle_hash",
+              "value": "b5bb9d8014a0f9b1d61e21e796d78dcc"
+            }
+          ]
+        }
+      },
+      "workerSpiffeId": "spiffe://cluster.local/ns/substrate-workers/sa/ateworker"
+    },
+    "assignedNode": "worker-node-1",
+    "snapshots": [
+      {
+        "uuid": "5d2c7e1a-9b3f-4c8d-a6e2-0f1b2c3d4e5f",
+        "generation": 3,
+        "owner": "SNAPSHOT_OWNER_ACTOR",
+        "fidelity": "SNAPSHOT_FIDELITY_MEMORY",
+        "actorTemplateUid": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f8a",
+        "durableSnapshot": {
+          "state": "SNAPSHOT_STORAGE_STATE_COMPLETED",
+          "object": {
+            "snapshotUri": "objectstore://substrate-snapshots/atespaces/prod/actors/8f14e45f-ceea-4c3e-9d5b-1a2b3c4d5e6f/snapshots/5d2c7e1a-9b3f-4c8d-a6e2-0f1b2c3d4e5f"
+          }
+        },
+        "sandboxRuntime": {
+          "sandboxClass": "gvisor",
+          "version": {
+            "schemaVersion": "v1",
+            "attributes": [
+              {
+                "key": "architecture",
+                "value": "amd64"
+              },
+              {
+                "key": "sandbox_bundle_hash",
+                "value": "b5bb9d8014a0f9b1d61e21e796d78dcc"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "lastAssignedGeneration": 3
+  }
+}

@@ -1,0 +1,57 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Renders one version of the API reference that apitool generate-docs writes to
+assets/api-reference/ (see hack/site.sh content): the page's api_version, or
+latest. The page's own Markdown is not rendered. The sidebar lists the
+version's resources from its nav.json.
+*/ -}}
+
+{{ define "main" -}}
+{{- $version := .Params.api_version | default "latest" -}}
+{{- $files := dict -}}
+{{- range $key, $name := dict "body" (path.Join $version "reference.html") "css" "style.css" "js" "search.js" -}}
+  {{- with resources.Get (path.Join "api-reference" $name) -}}
+    {{- $r := . -}}
+    {{- if and hugo.IsProduction (ne $key "body") -}}
+      {{- $r = $r | minify | fingerprint -}}
+    {{- end -}}
+    {{- $files = merge $files (dict $key $r) -}}
+  {{- else -}}
+    {{- errorf "api-reference: assets/api-reference/%s is missing; run hack/site.sh content" $name -}}
+  {{- end -}}
+{{- end -}}
+{{- $urls := dict -}}
+{{- range where site.RegularPages "Layout" "api-reference" -}}
+  {{- $urls = merge $urls (dict (.Params.api_version | default "latest") .RelPermalink) -}}
+{{- end -}}
+<link rel="stylesheet" href="{{ $files.css.RelPermalink }}"{{ with $files.css.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}>
+{{- with resources.Get "api-reference/versions.json" }}
+{{/* Switching versions keeps the anchor, so the reader stays on the same
+     resource when the other version has it. */ -}}
+<div class="as-apiref-version">
+  <label for="as-apiref-version">Version</label>
+  <select id="as-apiref-version" onchange="window.location.href = this.value + window.location.hash">
+    {{- range transform.Unmarshal . }}
+    <option value="{{ index $urls . }}"{{ if eq . $version }} selected{{ end }}>{{ if eq . "latest" }}latest (main){{ else }}{{ . }}{{ end }}</option>
+    {{- end }}
+  </select>
+</div>
+{{- end }}
+{{ $files.body.Content | safeHTML }}
+<script defer src="{{ $files.js.RelPermalink }}"{{ with $files.js.Data.Integrity }} integrity="{{ . }}" crossorigin="anonymous"{{ end }}></script>
+{{ end -}}

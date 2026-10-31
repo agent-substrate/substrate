@@ -1,0 +1,71 @@
+{
+  "metadata": {
+    "atespace": "prod",
+    "name": "a7d3e9f1-2c4b-4e8a-b5d6-7f9e0a1b2c3d",
+    "uid": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f8a",
+    "version": "3",
+    "createTime": "2026-07-15T10:00:00Z",
+    "updateTime": "2026-07-15T10:04:12Z"
+  },
+  "workerSelector": {
+    "matchLabels": {
+      "tier": "1"
+    }
+  },
+  "containers": [
+    {
+      "name": "agent",
+      "image": "registry.example.com/agents/checkout@sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "args": [
+        "--port=8080"
+      ],
+      "env": [
+        {
+          "name": "LOG_LEVEL",
+          "value": "info"
+        }
+      ],
+      "wakeupProbe": {
+        "httpGet": {
+          "path": "/healthz",
+          "port": 8080
+        },
+        "timeoutSeconds": 30
+      },
+      "volumeMounts": [
+        {
+          "name": "workspace",
+          "mountPath": "/workspace"
+        }
+      ]
+    }
+  ],
+  "volumes": [
+    {
+      "name": "workspace",
+      "durableDir": {}
+    }
+  ],
+  "snapshotConfig": {
+    "storageLocation": "objectstore://substrate-snapshots",
+    "preferredFidelity": "SNAPSHOT_FIDELITY_MEMORY",
+    "goldenSnapshotConfig": {
+      "mode": "GOLDEN_SNAPSHOT_MODE_ENABLED"
+    }
+  },
+  "resources": {
+    "limits": {
+      "cpuMillicores": "2000",
+      "memoryBytes": "4294967296"
+    }
+  },
+  "status": {
+    "goldenSnapshotStatus": {
+      "goldenTag": {
+        "atespace": "ate-golden",
+        "name": "4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f8a"
+      },
+      "snapshotTime": "2026-07-15T10:02:00Z"
+    }
+  }
+}

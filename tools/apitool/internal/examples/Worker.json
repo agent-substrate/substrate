@@ -1,0 +1,57 @@
+{
+  "metadata": {
+    "name": "3c9e1a2b-6d4f-4b8e-9a71-2c5f0d8b3e94",
+    "uid": "5e6f7a8b-9c0d-4e1f-8a3b-4c5d6e7f8a9b",
+    "version": "7",
+    "createTime": "2026-08-01T08:00:00Z",
+    "updateTime": "2026-08-13T09:47:31Z"
+  },
+  "workerNamespace": "substrate-workers",
+  "workerPool": "default-pool",
+  "workerPod": "default-pool-6b9d4f-x2p7q",
+  "workerPodUid": "3c9e1a2b-6d4f-4b8e-9a71-2c5f0d8b3e94",
+  "nodeName": "worker-node-1",
+  "workerSpiffeId": "spiffe://cluster.local/ns/substrate-workers/sa/ateworker",
+  "labels": {
+    "tier": "1"
+  },
+  "status": {
+    "state": "WORKER_STATE_ACTIVE",
+    "capacity": {
+      "cpuMillicores": "4000",
+      "memoryBytes": "17179869184",
+      "actors": 1
+    },
+    "allocated": {
+      "cpuMillicores": "2000",
+      "memoryBytes": "4294967296",
+      "actors": 1
+    },
+    "observedEpoch": "1",
+    "sandboxClasses": [
+      {
+        "sandboxClass": "gvisor",
+        "defaultRuntime": {
+          "version": {
+            "schemaVersion": "v1",
+            "attributes": [
+              {
+                "key": "architecture",
+                "value": "amd64"
+              },
+              {
+                "key": "sandbox_bundle_hash",
+                "value": "b5bb9d8014a0f9b1d61e21e796d78dcc"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "ips": [
+      "10.4.12.31"
+    ],
+    "issuedEpoch": "1",
+    "registeredEpoch": "1"
+  }
+}
