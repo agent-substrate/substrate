@@ -29,6 +29,8 @@
 # Needs git, jq, and an authenticated gh with write access to the repository
 # (the generate-notes API requires it even for --dry-run). GITHUB_REPOSITORY
 # selects the repository; it defaults to agent-substrate/substrate.
+# RELEASE_IMAGES_FILE names the digests file ate-setup publish release-images
+# wrote; when it exists, the notes list the images by digest.
 
 set -o errexit -o nounset -o pipefail
 
@@ -154,6 +156,22 @@ if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+="Container images for this release are published as \`${RELEASE_IMAGE_REPO}/<image>:${tag}\`"
   notes+=" for \`linux/amd64\` and \`linux/arm64\`. The images a release publishes are listed in"
   notes+=" [Release images](https://github.com/${REPO}/blob/${tag}/docs/dev/releasing.md#release-images)."
+  images_file="${RELEASE_IMAGES_FILE:-}"
+  # The example verifies by digest when the digests are known.
+  example="${RELEASE_IMAGE_REPO}/ateapi:${tag}"
+  if [[ -n "${images_file}" && -r "${images_file}" ]]; then
+    notes+=$' By digest:\n\n```\n'
+    while read -r hex image; do
+      notes+="${image}@sha256:${hex}"$'\n'
+      if [[ "${image}" == */ateapi ]]; then
+        example="${image}@sha256:${hex}"
+      fi
+    done <"${images_file}"
+    notes+='```'
+  fi
+  notes+=$'\n\nEach image has a build provenance attestation:\n\n```sh\n'
+  notes+="gh attestation verify oci://${example} --repo ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yaml --source-ref refs/tags/${tag}"$'\n'
+  notes+='```'
   notes+=$'\n\n## Install\n\n'
   notes+="From a checkout of \`${tag}\`, with Go, install the release images into the current kubectl context."
   notes+=" On GKE, the default \`--sandbox-classes=gvisor,microvm\` downloads microVM guest assets from GitHub and uploads them with \`gcloud\` to \`gs://<bucket>-assets\` (created with atelet read access by \`go run ./tools/setup-gcp create bucket\` and \`create iam\`)."
@@ -172,9 +190,10 @@ if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   # "Attach kubectl-ate" step in .github/workflows/release.yaml.
   notes+=$'\n\n## kubectl-ate\n\n'
   notes+="\`kubectl-ate\` is attached for Linux and macOS on amd64 and arm64."
-  notes+=" Download the binary for your platform and its \`.sha256\` file, check it, and put it on your \`PATH\` as \`kubectl-ate\`:"
+  notes+=" Download the binary for your platform and its \`.sha256\` file, check both, and put it on your \`PATH\` as \`kubectl-ate\`:"
   notes+=$'\n\n```sh\n'
   notes+=$'shasum -a 256 -c kubectl-ate-linux-amd64.sha256\n'
+  notes+="gh attestation verify kubectl-ate-linux-amd64 --repo ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yaml --source-ref refs/tags/${tag}"$'\n'
   notes+=$'install -m 0755 kubectl-ate-linux-amd64 ~/.local/bin/kubectl-ate\n'
   notes+='```'
 fi
