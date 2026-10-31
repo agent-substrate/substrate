@@ -92,6 +92,7 @@ func TestMain(m *testing.M) {
 	if err := (&SandboxConfigProtectionReconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
+		Recorder:  mgr.GetEventRecorder("sandboxconfig-protection-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "sandboxconfig protection controller setup failed: %v\n", err)
 		os.Exit(1)

@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -26,6 +29,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+)
+
+const (
+	// eventReasonSandboxConfigInUse is the reason of the Warning event a
+	// SandboxConfig gets when deletion is blocked because WorkerPools still
+	// use it.
+	eventReasonSandboxConfigInUse   = "SandboxConfigInUse"
+	eventActionReleaseSandboxConfig = "ReleaseSandboxConfig"
 )
 
 // workerPoolSandboxConfigIndex names the cache index from a SandboxConfig's
@@ -41,16 +52,21 @@ type SandboxConfigProtectionReconciler struct {
 	// can lag behind a pool that just started using a config, so a finalizer
 	// is only removed after a live list finds no user.
 	APIReader client.Reader
+	// Recorder emits a Warning event when a deleting SandboxConfig cannot
+	// be released because WorkerPools still use it.
+	Recorder events.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch;patch
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile decides whether one SandboxConfig can be released.
 //
 //   - A config that is not being deleted needs nothing.
 //   - A config that is being deleted and still used by a WorkerPool keeps
-//     the finalizer, so it stays Terminating.
+//     the finalizer, so it stays Terminating, and gets a Warning event
+//     naming the pools blocking deletion.
 //   - A config that is being deleted and used by no WorkerPool loses the
 //     finalizer. The API server then finishes the delete.
 //
@@ -69,37 +85,59 @@ func (r *SandboxConfigProtectionReconciler) Reconcile(ctx context.Context, req c
 		// any, decide the rest.
 		return ctrl.Result{}, nil
 	}
-	inUse, err := r.usedByWorkerPool(ctx, sc.Name)
-	if err != nil || inUse {
-		// Still in use. Keep the finalizer, so it stays Terminating.
+	pools, err := r.workerPoolsUsing(ctx, sc.Name)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if len(pools) > 0 {
+		// Still in use. Emit a Warning event and keep the finalizer.
+		r.Recorder.Eventf(sc, nil, corev1.EventTypeWarning, eventReasonSandboxConfigInUse, eventActionReleaseSandboxConfig, "%s", formatWorkerPools(pools))
+		return ctrl.Result{}, nil
 	}
 	// No WorkerPool uses it. Release it.
 	return ctrl.Result{}, removeProtectionFinalizer(ctx, r.Client, sc)
 }
 
-// usedByWorkerPool reports whether any WorkerPool's status names the
-// SandboxConfig. It checks the cache first. Only when the cache finds no user
-// does it list from the API server. That is rare, because a config is deleted
-// far less often than a pool reconciles.
-func (r *SandboxConfigProtectionReconciler) usedByWorkerPool(ctx context.Context, name string) (bool, error) {
+// workerPoolsUsing returns the sorted, unique namespaced names of WorkerPools
+// whose status names the SandboxConfig. It checks the cache first. Only when
+// the cache finds no user does it list from the API server. That is rare,
+// because a config is deleted far less often than a pool reconciles.
+func (r *SandboxConfigProtectionReconciler) workerPoolsUsing(ctx context.Context, name string) ([]string, error) {
 	var cached atev1.WorkerPoolList
 	if err := r.List(ctx, &cached, client.MatchingFields{workerPoolSandboxConfigIndex: name}); err != nil {
-		return false, fmt.Errorf("failed to list WorkerPools using SandboxConfig %q: %w", name, err)
+		return nil, fmt.Errorf("failed to list WorkerPools using SandboxConfig %q: %w", name, err)
 	}
 	if len(cached.Items) > 0 {
-		return true, nil
+		names := make([]string, len(cached.Items))
+		for i := range cached.Items {
+			names[i] = cached.Items[i].Namespace + "/" + cached.Items[i].Name
+		}
+		slices.Sort(names)
+		return slices.Compact(names), nil
 	}
 	var pools atev1.WorkerPoolList
 	if err := r.APIReader.List(ctx, &pools); err != nil {
-		return false, fmt.Errorf("failed to list WorkerPools: %w", err)
+		return nil, fmt.Errorf("failed to list WorkerPools: %w", err)
 	}
+	var names []string
 	for i := range pools.Items {
 		if slices.Contains(sandboxConfigsInUse(&pools.Items[i]), name) {
-			return true, nil
+			names = append(names, pools.Items[i].Namespace+"/"+pools.Items[i].Name)
 		}
 	}
-	return false, nil
+	slices.Sort(names)
+	return slices.Compact(names), nil
+}
+
+func formatWorkerPools(pools []string) string {
+	if len(pools) == 1 {
+		return fmt.Sprintf("deletion blocked by WorkerPool %q", pools[0])
+	}
+	quoted := make([]string, len(pools))
+	for i, p := range pools {
+		quoted[i] = fmt.Sprintf("%q", p)
+	}
+	return fmt.Sprintf("deletion blocked by WorkerPools: %s", strings.Join(quoted, ", "))
 }
 
 // removeProtectionFinalizer removes the protection finalizer from sc. The
