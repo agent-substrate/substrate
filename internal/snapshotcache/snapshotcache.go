@@ -115,6 +115,35 @@ func DropFiles(files []File) bool {
 // StartWriteback waits in the background for each path's dirty pages to be
 // written back or unlinked, then calls done.
 func StartWriteback(paths []string, done func()) error {
+	return startWriteback(kernelPageCache{}, RetryDelays, paths, done)
+}
+
+// pageCache is the page cache state and write-out startWriteback uses
+type pageCache interface {
+	cachestat(f *os.File) (unix.Cachestat_t, error)
+	// startWriteOut starts write-out of [off, off+n) without waiting for it
+	startWriteOut(f *os.File, off, n int64) error
+	// writeOut writes out all of f and waits for it
+	writeOut(f *os.File) error
+}
+
+type kernelPageCache struct{}
+
+func (kernelPageCache) cachestat(f *os.File) (unix.Cachestat_t, error) {
+	var cs unix.Cachestat_t
+	err := unix.Cachestat(uint(f.Fd()), &unix.CachestatRange{}, &cs, 0)
+	return cs, err
+}
+
+func (kernelPageCache) startWriteOut(f *os.File, off, n int64) error {
+	return unix.SyncFileRange(int(f.Fd()), off, n, unix.SYNC_FILE_RANGE_WRITE)
+}
+
+func (kernelPageCache) writeOut(f *os.File) error {
+	return unix.SyncFileRange(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
+}
+
+func startWriteback(pc pageCache, delays []time.Duration, paths []string, done func()) error {
 	var files []*os.File
 	for _, p := range paths {
 		f, err := os.Open(p)
@@ -139,14 +168,14 @@ func StartWriteback(paths []string, done func()) error {
 		}()
 		// poll instead of waiting on write-out, so a file unlinked meanwhile is
 		// closed and its dirty pages dropped instead of written back
-		for i := 0; pollWritebackFiles(files, i == 1); i++ {
-			time.Sleep(RetryDelays[min(i, len(RetryDelays)-1)])
+		for i := 0; pollWritebackFiles(pc, files, i == 1); i++ {
+			time.Sleep(delays[min(i, len(delays)-1)])
 		}
 	}()
 	return nil
 }
 
-func pollWritebackFiles(files []*os.File, startAsyncWrite bool) bool {
+func pollWritebackFiles(pc pageCache, files []*os.File, startAsyncWrite bool) bool {
 	anyRemaining := false
 	for i, f := range files {
 		if f == nil {
@@ -157,11 +186,11 @@ func pollWritebackFiles(files []*os.File, startAsyncWrite bool) bool {
 			files[i] = nil
 			continue
 		}
-		var cstat unix.Cachestat_t
-		if err := cachestatFn(uint(f.Fd()), &unix.CachestatRange{}, &cstat, 0); err != nil {
+		cstat, err := pc.cachestat(f)
+		if err != nil {
 			// no cachestat before Linux 6.5, so wait for write-out instead of
 			// giving the memory back while the pages are still dirty
-			_ = unix.SyncFileRange(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
+			_ = pc.writeOut(f)
 			_ = f.Close()
 			files[i] = nil
 			continue
@@ -171,7 +200,7 @@ func pollWritebackFiles(files []*os.File, startAsyncWrite bool) bool {
 			files[i] = nil
 			continue
 		}
-		if startAsyncWrite && cstat.Dirty > 0 && !startWriteOut(f) {
+		if startAsyncWrite && cstat.Dirty > 0 && !startWriteOut(pc, f) {
 			_ = f.Close()
 			files[i] = nil
 			continue
@@ -188,7 +217,7 @@ const writeOutChunk = 64 << 20
 // still linked. Starting write-out can block for a long time on a busy disk, so
 // it goes a chunk at a time and stops once f is unlinked.
 // https://github.com/torvalds/linux/blob/v6.12/fs/sync.c#L315-L317
-func startWriteOut(f *os.File) bool {
+func startWriteOut(pc pageCache, f *os.File) bool {
 	for off := int64(0); ; off += writeOutChunk {
 		info, err := f.Stat()
 		if err != nil || isUnlinked(info) {
@@ -197,7 +226,7 @@ func startWriteOut(f *os.File) bool {
 		if off >= info.Size() {
 			return true
 		}
-		_ = unix.SyncFileRange(int(f.Fd()), off, writeOutChunk, unix.SYNC_FILE_RANGE_WRITE)
+		_ = pc.startWriteOut(f, off, writeOutChunk)
 	}
 }
 

@@ -19,6 +19,7 @@ package snapshotcache
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,22 +220,84 @@ func TestStartWriteback(t *testing.T) {
 	}
 }
 
-func TestStartWritebackReleasesUnlinked(t *testing.T) {
+type fakePageCache struct {
+	noCachestat bool
+	clean       atomic.Bool
+	written     atomic.Bool
+}
+
+func (c *fakePageCache) cachestat(*os.File) (unix.Cachestat_t, error) {
+	if c.noCachestat {
+		return unix.Cachestat_t{}, unix.ENOSYS
+	}
+	if c.clean.Load() {
+		return unix.Cachestat_t{Cache: 16}, nil
+	}
+	return unix.Cachestat_t{Cache: 16, Dirty: 16}, nil
+}
+
+func (c *fakePageCache) startWriteOut(*os.File, int64, int64) error { return nil }
+
+func (c *fakePageCache) writeOut(*os.File) error {
+	c.written.Store(true)
+	return nil
+}
+
+func startFakeWriteback(t *testing.T, pc pageCache) (string, <-chan struct{}) {
+	t.Helper()
 	p := filepath.Join(t.TempDir(), "memory-ranges")
-	if err := os.WriteFile(p, make([]byte, 64<<20), 0o600); err != nil {
+	if err := os.WriteFile(p, make([]byte, 4<<10), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	if err := StartWriteback([]string{p}, func() { close(done) }); err != nil {
-		t.Fatalf("StartWriteback: %v", err)
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+		t.Fatalf("startWriteback: %v", err)
 	}
+	return p, done
+}
+
+func TestStartWritebackWaitsForDirtyPages(t *testing.T) {
+	pc := &fakePageCache{}
+	_, done := startFakeWriteback(t, pc)
+	select {
+	case <-done:
+		t.Fatal("done ran while the file was still dirty")
+	case <-time.After(100 * time.Millisecond):
+	}
+	pc.clean.Store(true)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran once the file was clean")
+	}
+}
+
+func TestStartWritebackDropsUnlinkedDirtyFile(t *testing.T) {
+	pc := &fakePageCache{}
+	p, done := startFakeWriteback(t, pc)
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-done:
-	case <-time.After(time.Minute):
-		t.Fatal("done never ran after the file was unlinked")
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran for an unlinked file that stays dirty")
+	}
+	if pc.written.Load() {
+		t.Error("wrote out an unlinked file")
+	}
+}
+
+func TestStartWritebackWithoutCachestat(t *testing.T) {
+	pc := &fakePageCache{noCachestat: true}
+	_, done := startFakeWriteback(t, pc)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran")
+	}
+	if !pc.written.Load() {
+		t.Error("done ran without waiting for write-out")
 	}
 }
 
