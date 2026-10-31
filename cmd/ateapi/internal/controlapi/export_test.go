@@ -37,22 +37,22 @@ var (
 	SuspendTestTemplateRef = suspendTestTemplateRef
 )
 
-// TestStorageLocation is the storage location ReleaseWindowWorkflows'
-// durable snapshots are under.
+// TestStorageLocation is the storage location ReleasingWorkflows' durable
+// snapshots are under.
 const TestStorageLocation = testStorageLocation
 
 // ConflictingUpdateStore fails every actor update with a version conflict.
 type ConflictingUpdateStore = conflictingUpdateStore
 
-// ReleaseWindowWorkflow is a workflow step that releases an actor's worker
-// before it records the actor's new state.
-type ReleaseWindowWorkflow struct {
+// ReleasingWorkflow is a workflow step that releases an actor's worker in the
+// write that records the actor's new state.
+type ReleasingWorkflow struct {
 	Name string
 	// State is the actor's state while the worker holds it.
 	State ateapi.ActorState
 	// Snapshot, when set, is the actor's latest snapshot.
 	Snapshot func(t *testing.T) *ateapi.Snapshot
-	// Finalize runs the workflow or step that releases the worker and then
+	// Finalize runs the workflow or step that releases the worker and
 	// records the actor's new state against st. Async and sync suspend reach the
 	// fake atelet newWireCaptureWorkflow serves for the worker
 	// WireTestAssignment names, so the actor must be assigned that worker
@@ -64,18 +64,18 @@ type ReleaseWindowWorkflow struct {
 	WantFinalState ateapi.ActorState
 }
 
-// ReleaseWindowWorkflows returns async suspend ("pause"), sync suspend, crash,
-// and a resume onto an ineligible worker: the workflows that release a worker
-// before rewriting the actor's status while the actor is in a state HostingNode
-// resolves through the worker assignment. Revert and delete release theirs in
-// REVERTING and DELETING, which HostingNode never resolves to a node.
-func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
+// ReleasingWorkflows returns async suspend ("pause"), sync suspend, crash, and
+// a resume onto an ineligible worker: the workflows that release a worker while
+// the actor is in a state HostingNode resolves through the worker assignment.
+// Revert and delete release theirs in REVERTING and DELETING, which HostingNode
+// never resolves to a node.
+func ReleasingWorkflows() []ReleasingWorkflow {
 	// The workers these tests create carry no labels, so a template
 	// selecting a pool makes any of them ineligible.
 	ineligibleTemplate := &ateapi.ActorTemplate{
 		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"pool": "other"}},
 	}
-	return []ReleaseWindowWorkflow{
+	return []ReleasingWorkflow{
 		{
 			Name:  "pause",
 			State: ateapi.ActorState_ACTOR_STATE_SUSPENDING,
@@ -118,9 +118,8 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			WantFinalState: ateapi.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
-			// A resume that finds its worker ineligible releases it, then
-			// crashes the actor. The retry finds the worker no longer hosts
-			// the actor and crashes it.
+			// A resume that finds its worker ineligible crashes the actor,
+			// which releases the worker.
 			Name:  "resume onto an ineligible worker",
 			State: ateapi.ActorState_ACTOR_STATE_RESUMING,
 			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, actor *ateapi.Actor) error {

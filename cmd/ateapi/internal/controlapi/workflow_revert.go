@@ -169,18 +169,9 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 	return storedActor, nil
 }
 
-// ensureWorkerDiscarded tears down whatever the actor is running on and frees
-// the worker it booked — including one the actor does not name.
-//
-// The assignment-backed path mirrors delete's ordering: terminate, detach, and
-// only then release, so a worker is never handed back while a sandbox or a
-// mount may still be live on it. The assignment itself is left on the record
-// for FinalizeReverted to clear, so an interrupted release is rediscoverable.
-//
-// The sweep afterwards runs on every origin, not just when the record names no
-// worker. An assignment commits before the actor is updated to point at it, so
-// a crash in between leaves a row nothing references — and a CRASHED actor is
-// the likeliest holder of one. Absence is the ordinary case, not an error.
+// ensureWorkerDiscarded terminates and detaches whatever the actor is running
+// on. ensureRevertedFinalized releases the worker only after this, so a worker
+// is never handed back while a sandbox or a mount may still be live on it.
 func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
@@ -201,14 +192,8 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 				return err
 			}
 		}
-		if actor.GetStatus().GetWorkerAssignment() != nil {
-			if _, err := releaseWorker(ctx, w.store, actor); err != nil {
-				return fmt.Errorf("while releasing worker: %w", err)
-			}
-		}
 	}
-
-	return w.releaseAssignmentWithoutBacklink(ctx, actor)
+	return nil
 }
 
 // ensureInProgressSnapshotDiscarded removes pending uploads of the discarded execution.
@@ -259,9 +244,9 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 	return nil
 }
 
-// ensureRevertedFinalized commits SUSPENDED and drops every pointer to the
-// execution that was discarded, in a single update, then releases the
-// external snapshots the update dropped.
+// ensureRevertedFinalized commits SUSPENDED, releases the worker, and drops
+// every pointer to the execution that was discarded, in a single update, then
+// releases the external snapshots the update dropped.
 // It re-reads the actor first so an out-of-band transition is not overwritten,
 // and so the version precondition guards what was actually observed.
 func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapi.Actor, err error) {
@@ -276,7 +261,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil, apierror.FailedPrecondition("FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapi.ActorState_ACTOR_STATE_REVERTING)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
+	storedActor, err := w.store.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.AssignedNode = ""
@@ -291,10 +276,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		return nil, err
+		return nil, actorWriteError(actorRef, err)
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationRevert)
 	w.releaseDroppedSnapshots(ctx, latestActor, storedActor)
