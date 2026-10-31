@@ -114,7 +114,7 @@ func readFilesystemFile(path string) (filesystemFile, error) {
 }
 
 // checkNonRootFilesystem also exercises virtiofsd's credential switching and
-// device-node creation. The caller enables it only on the micro-VM lane.
+// device-node creation. The caller enables it only on the microVM lane.
 func checkNonRootFilesystem() error {
 	self, err := os.Executable()
 	if err != nil {

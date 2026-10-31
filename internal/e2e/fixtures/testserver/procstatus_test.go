@@ -15,20 +15,50 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"go.ate.dev/substrate/internal/e2e/procstatus"
 )
 
-const sampleStatus = `Name:	virtiofsd
+// workerStatus is a microVM worker's status: its twelve capabilities in the
+// permitted, effective and bounding sets, and no seccomp filter.
+const workerStatus = `Name:	ateworker-micro
 Umask:	0022
 State:	S (sleeping)
-NSpid:	3056697	126	1
+Tgid:	1
+Pid:	1
+PPid:	0
+NSpid:	1
+Threads:	24
+CapInh:	0000000000000000
+CapPrm:	00000000882011df
+CapEff:	00000000882011df
+CapBnd:	00000000882011df
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	0
+Seccomp_filters:	0
+`
+
+// virtiofsdChildStatus is virtiofsd's serving child, seen from the worker's
+// PID namespace: its nine child capabilities, an empty bounding set and its
+// own seccomp filter.
+const virtiofsdChildStatus = `Name:	virtiofsd
+Umask:	0022
+State:	S (sleeping)
+Tgid:	126
+Pid:	126
+PPid:	125
+NSpid:	126	1
 Threads:	2
 CapInh:	0000000000000000
 CapPrm:	00000000880000df
 CapEff:	00000000880000df
-CapBnd:	00000000882010df
+CapBnd:	0000000000000000
 CapAmb:	0000000000000000
 NoNewPrivs:	1
 Seccomp:	2
@@ -36,56 +66,113 @@ Seccomp_filters:	1
 `
 
 func TestParseProcessStatus(t *testing.T) {
-	row, err := parseProcessStatus(sampleStatus)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if row.CapPrm != 0x880000df || row.CapEff != 0x880000df || row.CapBnd != 0x882010df || row.CapAmb != 0 {
-		t.Errorf("capabilities = %+v", row)
-	}
-	if row.NoNewPrivs != 1 || row.Seccomp != 2 || row.SeccompFilters != 1 {
-		t.Errorf("no_new_privs/seccomp = %+v", row)
-	}
-	if len(row.NSPID) != 3 || row.NSPID[2] != 1 {
-		t.Errorf("NSpid = %v, want [3056697 126 1]", row.NSPID)
+	for _, tc := range []struct {
+		name    string
+		status  string
+		want    procstatus.Process
+		wantErr bool
+	}{
+		{
+			name:   "worker",
+			status: workerStatus,
+			want:   procstatus.Process{CapPrm: 0x882011df, CapEff: 0x882011df, CapBnd: 0x882011df, NoNewPrivs: 1},
+		},
+		{
+			name:   "virtiofsd child",
+			status: virtiofsdChildStatus,
+			want:   procstatus.Process{PPID: 125, CapPrm: 0x880000df, CapEff: 0x880000df, NoNewPrivs: 1, Seccomp: 2},
+		},
+		{
+			name:    "missing field",
+			status:  "Name:\tx\nPPid:\t1\nCapPrm:\t0\n",
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseProcessStatus(tc.status)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseProcessStatus() = %+v, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("parseProcessStatus() = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestParseProcessStatusMissingField(t *testing.T) {
-	if _, err := parseProcessStatus("Name:\tx\nNSpid:\t1\nCapPrm:\t0\n"); err == nil {
-		t.Fatal("missing CapEff accepted")
-	}
+func threadStatus(name string, seccomp int) string {
+	return fmt.Sprintf("Name:\t%s\nState:\tS (sleeping)\nSeccomp:\t%d\n", name, seccomp)
 }
 
-func TestProcessStatusesSelectsPID1AndMatches(t *testing.T) {
+func TestReadProcesses(t *testing.T) {
 	proc := t.TempDir()
-	write := func(pid, cmdline string) {
-		dir := filepath.Join(proc, pid)
-		if err := os.Mkdir(dir, 0o755); err != nil {
+	write := func(path, contents string) {
+		t.Helper()
+		path = filepath.Join(proc, path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmdline), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "status"), []byte(sampleStatus), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("1", "/ko-app/ateworker-microvm\x00--pod-uid=abc")
-	write("20", "virtiofsd\x00--shared-dir=/run/shared")
-	write("30", "sleep\x0030")
-	write("40", "self\x00process")
-	rows, err := processStatuses(proc, []string{"--shared-dir="}, 40)
+	write("1/cmdline", "/ko-app/ateworker-microvm\x00--pod-uid=abc\x00")
+	write("1/status", workerStatus)
+	write("1/task/1/status", threadStatus("ateworker-micro", 0))
+	// runsc sets the gofer's argv[0]; its comm is "exe"
+	write("20/cmdline", "runsc-gofer\x00gofer\x00--bundle\x00/run/bundle\x00")
+	write("20/status", workerStatus)
+	write("20/task/20/status", threadStatus("exe", 2))
+	// names virtiofsd only in an argument
+	write("21/cmdline", "/bin/sh\x00-c\x00virtiofsd --shared-dir=/run/shared\x00")
+	write("21/status", workerStatus)
+	write("21/task/21/status", threadStatus("sh", 0))
+	write("22/cmdline", "testserver\x00procstatus\x00")
+	// listed, then exited
+	if err := os.Mkdir(filepath.Join(proc, "23"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const assets = "/var/lib/ate/actors/abc/sandbox-assets/"
+	write("126/cmdline", assets+"virtiofsd\x00--shared-dir=/run/shared\x00")
+	write("126/status", virtiofsdChildStatus)
+	write("126/task/126/status", threadStatus("virtiofsd", 2))
+	write("126/task/127/status", threadStatus("virtiofsd", 2))
+	write("130/cmdline", assets+"cloud-hypervisor\x00--api-socket\x00/run/vc/vm/abc/clh-api.sock\x00")
+	write("130/status", workerStatus)
+	write("130/task/130/status", threadStatus("cloud-hyperviso", 0))
+	write("130/task/131/status", threadStatus("vmm", 2))
+	write("130/task/132/status", threadStatus("vcpu0", 2))
+	// a thread that exited
+	if err := os.MkdirAll(filepath.Join(proc, "130/task/133"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	procs, err := readProcesses(proc, []string{"runsc-gofer", "virtiofsd", "cloud-hypervisor"}, 22)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %+v, want PID 1 and the virtiofsd match", rows)
+	type row struct {
+		PID     int
+		Name    string
+		Threads []procstatus.Thread
 	}
-	if rows[0].PID != 1 || rows[0].Cmdline != "/ko-app/ateworker-microvm --pod-uid=abc" {
-		t.Errorf("row 0 = %+v", rows[0])
+	var got []row
+	for _, p := range procs {
+		got = append(got, row{p.PID, p.Name, p.Threads})
 	}
-	if rows[1].PID != 20 || rows[1].Cmdline != "virtiofsd --shared-dir=/run/shared" {
-		t.Errorf("row 1 = %+v", rows[1])
+	want := []row{
+		{1, "ateworker-microvm", []procstatus.Thread{{TID: 1, Name: "ateworker-micro"}}},
+		{126, "virtiofsd", []procstatus.Thread{{TID: 126, Name: "virtiofsd", Seccomp: 2}, {TID: 127, Name: "virtiofsd", Seccomp: 2}}},
+		{130, "cloud-hypervisor", []procstatus.Thread{{TID: 130, Name: "cloud-hyperviso"}, {TID: 131, Name: "vmm", Seccomp: 2}, {TID: 132, Name: "vcpu0", Seccomp: 2}}},
+		{20, "runsc-gofer", []procstatus.Thread{{TID: 20, Name: "exe", Seccomp: 2}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("readProcesses() = %+v\nwant %+v", got, want)
 	}
 }

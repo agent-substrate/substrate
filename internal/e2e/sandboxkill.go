@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/e2e/procstatus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
@@ -58,38 +59,23 @@ func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, names
 	t.Logf("Killed the sandbox of actor %s on %s/%s", actorUID, namespace, podName)
 }
 
-// WorkerProcessStatus is the kernel's view of one process on a worker: its
-// capability masks, no_new_privs and seccomp state, read from
-// /proc/<pid>/status. It mirrors the testserver procstatus output.
-type WorkerProcessStatus struct {
-	PID            int    `json:"pid"`
-	Cmdline        string `json:"cmdline"`
-	NSPID          []int  `json:"nspid"`
-	CapPrm         uint64 `json:"capPrm"`
-	CapEff         uint64 `json:"capEff"`
-	CapBnd         uint64 `json:"capBnd"`
-	CapAmb         uint64 `json:"capAmb"`
-	NoNewPrivs     int    `json:"noNewPrivs"`
-	Seccomp        int    `json:"seccomp"`
-	SeccompFilters int    `json:"seccompFilters"`
-}
-
 // ReadWorkerProcessStatus reports the worker process (PID 1 of the worker
-// container) and every process in its PID namespace whose command line contains
-// one of cmdlineContains, as the kernel enforces them. The rendered PodSpec says
-// what was asked for; this says what the container runtime actually granted.
-func ReadWorkerProcessStatus(ctx context.Context, t *testing.T, clients *Clients, namespace, podName string, cmdlineContains ...string) []WorkerProcessStatus {
+// container) and every process in its PID namespace whose name, the base name
+// of argv[0], is one of names, as the kernel enforces them. The rendered
+// PodSpec says what was asked for; this says what the container runtime
+// actually granted.
+func ReadWorkerProcessStatus(ctx context.Context, t *testing.T, clients *Clients, namespace, podName string, names ...string) []procstatus.Process {
 	t.Helper()
 	args := []string{"procstatus"}
-	for _, c := range cmdlineContains {
-		args = append(args, "--cmdline-contains", c)
+	for _, name := range names {
+		args = append(args, "--name", name)
 	}
 	logs := runInWorkerPIDNamespace(ctx, t, clients, namespace, podName, "procstatus", args)
-	var rows []WorkerProcessStatus
-	if err := json.Unmarshal([]byte(logs), &rows); err != nil {
+	var procs []procstatus.Process
+	if err := json.Unmarshal([]byte(logs), &procs); err != nil {
 		t.Fatalf("parsing procstatus output from %s/%s: %v\n%s", namespace, podName, err, logs)
 	}
-	return rows
+	return procs
 }
 
 // runInWorkerPIDNamespace runs one testserver subcommand in an ephemeral

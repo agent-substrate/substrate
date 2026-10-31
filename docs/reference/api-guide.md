@@ -52,7 +52,7 @@ metadata; they do not affect actor scheduling. Actor selectors match
 
 Substrate sets a fixed capability set for each sandbox runtime. Every worker
 drops `ALL` container-runtime default capabilities and adds back only the set
-below: 9 capabilities for gVisor and 12 for micro-VM. These permissions are not
+below: 9 capabilities for gVisor and 12 for microVM. These permissions are not
 configurable per pool. Actor containers are configured separately through
 `ActorTemplate.containers[].securityContext`.
 
@@ -75,7 +75,7 @@ permissions described in [Security](../security/security.md).
 | `NET_ADMIN` | Needed to set up actor networking | Same |
 | `SYS_ADMIN` | Needed to set up the worker's mounts | Same |
 
-Micro-VM workers retain virtiofsd's normal nine child capabilities and its
+MicroVM workers retain virtiofsd's normal nine child capabilities and its
 file-handle mode to preserve guest filesystem operations. virtiofsd explicitly
 uses namespace isolation (`pivot_root`, not `chroot`) and its own seccomp filter.
 The outer worker's seccomp and AppArmor profiles remain `Unconfined` so the

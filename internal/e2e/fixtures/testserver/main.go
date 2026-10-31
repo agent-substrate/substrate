@@ -22,7 +22,7 @@
 //	testserver egressprobe --listen=:8080  a client that drives the egress gateway
 //	testserver websocket --listen=:8080  a websocket server that responds to PINGs
 //	testserver kill --cmdline-contains=X  SIGKILL matching processes, from a worker's PID namespace
-//	testserver procstatus [--cmdline-contains=X]  report PID 1's and matching processes' /proc status
+//	testserver procstatus [--name=X]  report PID 1's and named processes' /proc status
 //
 // Each pod runs exactly one subcommand, so the wire behavior of any given pod is
 // unchanged from when these were separate binaries -- the grpc pod still speaks

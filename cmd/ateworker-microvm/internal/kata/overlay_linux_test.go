@@ -104,10 +104,9 @@ func TestVirtiofsdArgs(t *testing.T) {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
 	}
 	// The worker's capability set is sized to virtiofsd's normal child set, so
-	// the arguments must never add a capability back (--modcaps=+...). Dropping
-	// one (--modcaps=-dac_read_search) is a legitimate hardening step and is
-	// allowed. The file-handle mode stays at the default: changing it changes
-	// which capabilities the child needs.
+	// the arguments must never add a capability back (--modcaps=+...). The
+	// file-handle mode stays at the default (prefer), under which virtiofsd
+	// requires DAC_READ_SEARCH and exits if --modcaps drops it.
 	for _, arg := range args {
 		if value, ok := strings.CutPrefix(arg, "--modcaps="); ok {
 			for _, entry := range strings.Split(value, ":") {
