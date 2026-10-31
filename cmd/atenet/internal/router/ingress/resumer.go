@@ -129,9 +129,7 @@ func withParking(cfg ParkedRequestConfig) resumerOption {
 	cfg = cfg.Normalized()
 	return func(r *ActorResumer) {
 		r.parkEnabled = cfg.Enabled()
-		if r.parkEnabled {
-			r.budget = cfg.Budget
-		}
+		r.budget = cfg.ResumeBudget()
 		r.backoff = resumeBackoff(cfg.RetryInterval, cfg.RetryFactor, cfg.RetryJitter)
 	}
 }
