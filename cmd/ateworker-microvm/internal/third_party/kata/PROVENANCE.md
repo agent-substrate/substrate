@@ -42,7 +42,8 @@ the message types are needed.
 ### RPCs actually used
 
 ateworker drives a small subset of `AgentService`:
-`CreateSandbox`, `CreateContainer`, `StartContainer`, `UpdateInterface`, `UpdateRoutes`,
+`CreateSandbox`, `CreateContainer`, `CloseStdin`, `StartContainer`, `SignalProcess`,
+`WaitProcess`, `StatsContainer`, `ReseedRandomDev`, `UpdateInterface`, `UpdateRoutes`,
 `AddARPNeighbors`, `ReadStdout`, `ReadStderr`.
 
 ### Regenerating
