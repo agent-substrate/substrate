@@ -24,9 +24,10 @@ What it buys, concretely:
   single-digit milliseconds on warm nodes.
 - Layers shared between images are **downloaded and unpacked once per
   node**, not once per image; actors sharing layers also share page cache.
-- The cache is **on disk and survives atelet restarts and node reboots**
-  (the old in-memory cache was lost on every restart, and its unbounded heap
-  retention could OOM atelet — #437).
+- The cache is **on disk and survives atelet restarts** (the old in-memory
+  cache was lost on every restart, and its unbounded heap retention could OOM
+  atelet — #437). Its writes aren't synced, so atelet empties it at startup
+  after a node reboot.
 - **Tag refs are cacheable**: a tag costs one `HEAD` request to resolve to a
   manifest digest (the only safe cache key for mutable tags); digest refs
   hit the cache with zero network I/O.
@@ -36,13 +37,15 @@ What it buys, concretely:
 ## The privilege split
 
 The design is shaped by an existing substrate boundary: **atelet runs as
-plain root with every Linux capability dropped** ("atelet does no mounts" —
-see `manifests/ate-install/atelet.yaml`), while the **worker pods are
-privileged** and own all mounts on the node. The module is split accordingly:
+root with every Linux capability dropped but a few for files other users
+own** ("atelet does no mounts" — see
+[`manifests/ate-install/atelet.yaml`](../../manifests/ate-install/atelet.yaml),
+which gives the reason for each), while the **worker pods hold the mount
+capabilities** and own all mounts on the node. The module is split accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
-| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
+| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | file I/O; `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_FSETID` |
 | Consumer: finalize, mount, unmount | ateworker-gvisor / ateworker-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
@@ -51,14 +54,14 @@ paths resolve in every pod) and a small per-bundle spec file.
 
 Because the consumer mounts the overlay **in its own mount namespace** —
 exactly where the workload resolves it (runsc's gofer for gVisor, virtiofsd
-for the micro-VM) — no Kubernetes mount-propagation configuration is needed
+for the microVM) — no Kubernetes mount-propagation configuration is needed
 anywhere.
 
 ## On-disk layout
 
 ```
 <cache-root>/                        default: /var/lib/ate/image-cache
-  version                            layout version marker ("2")
+  version                            layout version marker ("3")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
@@ -100,12 +103,18 @@ layer diffIDs in order — layers shared by N images exist once.
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
    without `CAP_DAC_OVERRIDE`, and creation of parent directories that the
-   layer tar omits (they may exist only in lower layers). Character and
-   block device nodes are skipped (atelet runs without `CAP_MKNOD` and the
-   runtime mounts `/dev`). Whiteout entries (`.wh.*`) are **not** written
-   into the tree — overlayfs whiteouts are char devices atelet cannot
-   create — they are recorded in `whiteouts.json` for the consumer to
-   materialize.
+   layer tar omits (they may exist only in lower layers). Every entry keeps
+   the numeric owner and the exact mode its tar header records, setuid,
+   setgid and sticky bits included, as containerd and moby apply them
+   (see `unpackLayer` for how a failed chown or chmod is handled). A root
+   atelet inside a user namespace (rootless or userns-remapped nodes) can
+   only give files to uids and gids the namespace maps, so a layer with an
+   owner outside that range fails to unpack, as it does under rootless
+   Docker. Character and block device nodes are skipped (atelet runs
+   without `CAP_MKNOD` and the runtime mounts `/dev`). Whiteout entries
+   (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
+   char devices atelet cannot create — they are recorded in
+   `whiteouts.json` for the consumer to materialize.
 5. **Verify** before the layer enters the pool. Images share layers by
    diffID, but each image's author chooses the diffIDs in its config. So
    the uncompressed stream is hashed as it unpacks and must match the
@@ -116,7 +125,8 @@ layer diffIDs in order — layers shared by N images exist once.
    A layer already in the pool is reused without re-hashing, because it
    was checked when it was written. The reusing image's own blob is never
    downloaded, so it is never checked. atelet refuses a layout version 1
-   pool, whose layers may not have been checked.
+   pool, whose layers may not have been checked, and a version 2 pool,
+   whose layers are root-owned without setuid, setgid or sticky bits.
 6. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
@@ -129,7 +139,7 @@ bundle-local `rootfs/`, `upper/`, and `work/` directories.
 ## Compose path (ateworker: `SetupBundleRootfs`)
 
 Called immediately before `runsc create`/`runsc restore` (gVisor) and before
-staging the virtio-fs lower (micro-VM):
+staging the virtio-fs lower (microVM):
 
 1. **`FinalizeLayer`** for each referenced layer — materializes the recorded
    whiteouts as 0:0 char devices (`mknod`) and opaque dirs as
@@ -170,7 +180,7 @@ rootfs with ExtraDirs and no mount.
 Actor semantics are unchanged from the untar era: the upper is wiped by
 atelet's `resetActorDirs` between runs, so every run still starts from a
 bit-exact, pristine image rootfs — it just costs a mount instead of an
-extraction. The micro-VM path is nearly untouched: it bind-mounts the (now
+extraction. The microVM path is nearly untouched: it bind-mounts the (now
 overlay-composed) bundle rootfs into virtiofsd's shared dir and the guest
 keeps building its own tmpfs upper, as before.
 

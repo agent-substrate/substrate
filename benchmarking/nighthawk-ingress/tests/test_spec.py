@@ -32,7 +32,7 @@ import spec as spec_mod
 
 def build(**overrides):
     kwargs = dict(
-        uri="http://atenet-router.ate-system.svc.cluster.local:80/ping",
+        uri="https://atenet-router.ate-system.svc:443/ping",
         actor_names=[f"sb-{i}" for i in range(3)],
         atespace="benchmark",
         client_concurrency=4,
@@ -64,6 +64,39 @@ def test_traffic_template_shape():
         "benchmark.stream_resets",
         "requestsource.upstream_rq_5xx",
     }
+    assert template["tls_context"] == {
+        "sni": "atenet-router.ate-system.svc",
+        "common_tls_context": {
+            "tls_certificates": [
+                {
+                    "certificate_chain": {
+                        "filename": "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+                    },
+                    "private_key": {
+                        "filename": "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+                    },
+                },
+            ],
+            "validation_context": {
+                "trusted_ca": {"filename": "/run/servicedns-ca/ca.crt"},
+                "match_typed_subject_alt_names": [
+                    {
+                        "san_type": "DNS",
+                        "matcher": {"exact": "atenet-router.ate-system.svc"},
+                    },
+                ],
+            },
+        },
+    }
+
+
+def test_rejects_non_https_uri():
+    try:
+        build(uri="http://atenet-router.ate-system.svc:80/ping")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for plaintext http:// URI")
 
 
 def test_actor_reference_rotation_covers_all_actors():

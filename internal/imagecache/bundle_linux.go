@@ -70,6 +70,15 @@ func SetupBundleRootfs(bundlePath string) error {
 	// means nothing was mounted there.
 	_ = unix.Unmount(rootfs, unix.MNT_DETACH)
 
+	// upper (with an overlay) or rootfs (without) becomes the container's "/".
+	// At 0700 a non-root container cannot search its own root. Chmod after the
+	// unmount, explicitly: MkdirAll applies the umask and skips existing dirs.
+	for _, d := range []string{rootfs, upper} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			return fmt.Errorf("while setting mode of %q: %w", d, err)
+		}
+	}
+
 	if len(spec.Layers) == 0 {
 		// Degenerate zero-layer image: the empty rootfs dir plus ExtraDirs is
 		// all there is.

@@ -106,6 +106,13 @@ spec:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --dns-egress-policy=enforce-in-atunnel
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: POD_NAME
           valueFrom:

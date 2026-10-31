@@ -596,7 +596,7 @@ func TestPrintTagsTo_Table(t *testing.T) {
 				Snapshot: &ateapi.Snapshot{
 					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapi.SnapshotStorage{
-						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
 					},
 				},
@@ -613,7 +613,7 @@ func TestPrintTagsTo_Table(t *testing.T) {
 				Snapshot: &ateapi.Snapshot{
 					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapi.SnapshotStorage{
-						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
 					},
 				},
@@ -632,7 +632,7 @@ func TestPrintTagsTo_Table(t *testing.T) {
 				Snapshot: &ateapi.Snapshot{
 					Fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapi.SnapshotStorage{
-						Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
 					},
 				},

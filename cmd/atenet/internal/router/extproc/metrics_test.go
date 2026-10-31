@@ -102,8 +102,33 @@ func TestClassifyOutcome(t *testing.T) {
 			expected: "rate_limited",
 		},
 		{
+			name:     "PermissionDenied gRPC code maps to denied",
+			err:      status.Error(codes.PermissionDenied, "access denied"),
+			expected: "denied",
+		},
+		{
+			name:     "StatusCode_Forbidden ReqError maps to denied",
+			err:      NewReqError(envoy_type.StatusCode_Forbidden, "egress denied"),
+			expected: "denied",
+		},
+		{
+			name:     "StatusCode_Forbidden ReqError with an uncoded cause maps to denied",
+			err:      WrapReqError(envoy_type.StatusCode_Forbidden, errors.New("invalid actor certificate"), "egress denied"),
+			expected: "denied",
+		},
+		{
 			name:     "Unknown error maps to resume_error",
 			err:      errors.New("internal storage glitch"),
+			expected: "resume_error",
+		},
+		{
+			name:     "Internal gRPC code maps to resume_error",
+			err:      status.Error(codes.Internal, "resume failed"),
+			expected: "resume_error",
+		},
+		{
+			name:     "StatusCode_InternalServerError ReqError maps to resume_error",
+			err:      NewReqError(envoy_type.StatusCode_InternalServerError, "resume failed"),
 			expected: "resume_error",
 		},
 	}
@@ -120,7 +145,7 @@ func TestClassifyOutcome(t *testing.T) {
 func TestRecordRouteDuration_Attributes(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	h, err := mp.Meter("atenet-router").Float64Histogram(routeDurationMetricName)
+	h, err := NewRouteDurationHistogram(mp.Meter("atenet-router"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
@@ -154,7 +179,7 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	h, err := mp.Meter("atenet-router").Float64Histogram(routeDurationMetricName)
+	h, err := NewRouteDurationHistogram(mp.Meter("atenet-router"))
 	if err != nil {
 		t.Fatalf("failed to create histogram: %v", err)
 	}

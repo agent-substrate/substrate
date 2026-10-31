@@ -1068,7 +1068,7 @@ func validObjectSnapshot(mutate ...func(*ateapi.ObjectSnapshot)) *ateapi.ObjectS
 
 func validSnapshotStorage(mutate ...func(*ateapi.SnapshotStorage)) *ateapi.SnapshotStorage {
 	ss := &ateapi.SnapshotStorage{
-		Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+		State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 		Object: validObjectSnapshot(),
 	}
 	for _, m := range mutate {
@@ -1098,7 +1098,7 @@ func badSnapshot(mutate ...func(*ateapi.Snapshot)) *ateapi.Snapshot {
 	breakIt := func(s *ateapi.Snapshot) {
 		s.Fidelity = ateapi.SnapshotFidelity(4)
 		s.DurableSnapshot = &ateapi.SnapshotStorage{
-			Status: ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED,
 			Object: &ateapi.ObjectSnapshot{SnapshotUri: ""},
 		}
 	}
@@ -1113,7 +1113,7 @@ func TestValidateSnapshot(t *testing.T) {
 	fidelityPath := field.NewPath("fidelity")
 	localityPath := field.NewPath("locality")
 	durableSnapshotPath := field.NewPath("durable_snapshot")
-	statusPath := durableSnapshotPath.Child("status")
+	statePath := durableSnapshotPath.Child("state")
 	objectPath := durableSnapshotPath.Child("object")
 	uriPath := objectPath.Child("snapshot_uri")
 
@@ -1185,25 +1185,25 @@ func TestValidateSnapshot(t *testing.T) {
 			obj:  valid(func(s *ateapi.Snapshot) { s.DurableSnapshot = nil }),
 		},
 		{
-			name: "missing durable_snapshot.status",
+			name: "missing durable_snapshot.state",
 			obj: valid(func(s *ateapi.Snapshot) {
-				s.DurableSnapshot.Status = ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
+				s.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_UNSPECIFIED
 			}),
-			want: field.ErrorList{field.Required(statusPath, "")},
+			want: field.ErrorList{field.Required(statePath, "")},
 		},
 		{
-			name: "negative durable_snapshot.status",
+			name: "negative durable_snapshot.state",
 			obj: valid(func(s *ateapi.Snapshot) {
-				s.DurableSnapshot.Status = ateapi.SnapshotStorageStatus(-1)
+				s.DurableSnapshot.State = ateapi.SnapshotStorageState(-1)
 			}),
-			want: field.ErrorList{field.Invalid(statusPath, nil, "").WithOrigin("minimum")},
+			want: field.ErrorList{field.Invalid(statePath, nil, "").WithOrigin("minimum")},
 		},
 		{
-			name: "durable_snapshot.status above the enum",
+			name: "durable_snapshot.state above the enum",
 			obj: valid(func(s *ateapi.Snapshot) {
-				s.DurableSnapshot.Status = ateapi.SnapshotStorageStatus(3)
+				s.DurableSnapshot.State = ateapi.SnapshotStorageState(3)
 			}),
-			want: field.ErrorList{field.Invalid(statusPath, nil, "").WithOrigin("maximum")},
+			want: field.ErrorList{field.Invalid(statePath, nil, "").WithOrigin("maximum")},
 		},
 		{
 			name: "missing durable_snapshot.object",

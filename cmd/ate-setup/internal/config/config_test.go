@@ -61,11 +61,13 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
+		"ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INGRESS_ALLOWED_SPIFFE_IDS",
 		"ATE_INSTALL_CLUSTER_SIZE",
-		"ATE_INSTALL_CORDON_CONTROL_PLANE",
+		"ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS",
+		"ATE_INSTALL_E2E_TUNING",
 		"ATE_INSTALL_FAKE_DATA_PLANE",
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
@@ -129,8 +131,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ClusterSize != ClusterSizeSize0 {
 		t.Errorf("ClusterSize = %q, want %q", cfg.ClusterSize, ClusterSizeSize0)
 	}
-	if cfg.CordonControlPlane {
-		t.Error("CordonControlPlane = true, want false")
+	if cfg.CordonSystemInfraComponents {
+		t.Error("CordonSystemInfraComponents = true, want false")
 	}
 }
 
@@ -191,30 +193,30 @@ func TestLoadClusterSize(t *testing.T) {
 	}
 }
 
-func TestLoadCordonControlPlane(t *testing.T) {
+func TestLoadCordonSystemInfraComponents(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		opts Options
 		env  string
 		want bool
 	}{
-		{name: "flag", opts: Options{CordonControlPlane: true}, want: true},
+		{name: "flag", opts: Options{CordonSystemInfraComponents: true}, want: true},
 		{name: "environment true", env: "true", want: true},
 		{name: "environment false", env: "false", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)
-			t.Setenv("ATE_INSTALL_CORDON_CONTROL_PLANE", tc.env)
+			t.Setenv("ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS", tc.env)
 			cfg, err := Load(tc.opts)
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			if cfg.CordonControlPlane != tc.want {
-				t.Errorf("CordonControlPlane = %v, want %v", cfg.CordonControlPlane, tc.want)
+			if cfg.CordonSystemInfraComponents != tc.want {
+				t.Errorf("CordonSystemInfraComponents = %v, want %v", cfg.CordonSystemInfraComponents, tc.want)
 			}
-			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_CONTROL_PLANE"]
+			_, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS"]
 			if exported != tc.want {
-				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS = %v, want %v", exported, tc.want)
 			}
 		})
 	}
@@ -243,6 +245,34 @@ func TestLoadFakeDataPlane(t *testing.T) {
 			}
 			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_FAKE_DATA_PLANE"]; exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_FAKE_DATA_PLANE = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadE2ETuning(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+		env  string
+		want bool
+	}{
+		{name: "off by default"},
+		{name: "flag", opts: Options{E2ETuning: true}, want: true},
+		{name: "environment", env: "true", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_INSTALL_E2E_TUNING", tc.env)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.E2ETuning != tc.want {
+				t.Errorf("E2ETuning = %v, want %v", cfg.E2ETuning, tc.want)
+			}
+			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_E2E_TUNING"]; exported != tc.want {
+				t.Errorf("ScriptEnv() exports ATE_INSTALL_E2E_TUNING = %v, want %v", exported, tc.want)
 			}
 		})
 	}
@@ -287,29 +317,39 @@ func TestLoadIngressAllowedSPIFFEIDs(t *testing.T) {
 	}
 }
 
-// Only the Envoy router authenticates clients against the allowlist, and it
-// refuses to start without one.
-func TestRequireIngressAllowedSPIFFEIDs(t *testing.T) {
+func TestLoadEgressGatewayExtraSPIFFEIDs(t *testing.T) {
+	const a, b = "spiffe://cluster.local/ns/a/sa/a", "spiffe://cluster.local/ns/b/sa/b"
 	for _, tc := range []struct {
 		name    string
-		cfg     Config
-		wantErr bool
+		env     string
+		want    []string
+		wantErr string
 	}{
-		{name: "envoy without IDs", cfg: Config{Router: RouterEnvoy}, wantErr: true},
-		{name: "envoy with IDs", cfg: Config{Router: RouterEnvoy, IngressAllowedSPIFFEIDs: []string{"spiffe://cluster.local/ns/a/sa/a"}}},
-		{name: "agentgateway without IDs", cfg: Config{Router: RouterAgentgateway}},
+		{name: "unset", want: nil},
+		{name: "several, with stray separators", env: " " + a + ",," + b + ", ", want: []string{a, b}},
+		{name: "not a SPIFFE ID", env: a + ",https://example.com/x", wantErr: "ateapi.authz.egressGatewayExtraSPIFFEIDs must be a comma-separated list of SPIFFE IDs"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.RequireIngressAllowedSPIFFEIDs()
-			if !tc.wantErr {
-				if err != nil {
-					t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want nil", err)
+			loadEnv(t)
+			if tc.env != "" {
+				t.Setenv("ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS", tc.env)
+			}
+			cfg, err := Load(Options{})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
 				}
 				return
 			}
-			var required *RequiredError
-			if !errors.As(err, &required) || required.Setting.Key != "ingressAllowedSPIFFEIDs" {
-				t.Fatalf("RequireIngressAllowedSPIFFEIDs() = %v, want a RequiredError for ingressAllowedSPIFFEIDs", err)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !slices.Equal(cfg.EgressGatewayExtraSPIFFEIDs, tc.want) {
+				t.Errorf("EgressGatewayExtraSPIFFEIDs = %q, want %q", cfg.EgressGatewayExtraSPIFFEIDs, tc.want)
+			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS"]
+			if want := strings.Join(tc.want, ","); exported != (want != "") || got != want {
+				t.Errorf("ScriptEnv() ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS = %q (exported %v), want %q", got, exported, want)
 			}
 		})
 	}
@@ -858,9 +898,8 @@ func TestLoadOtlpEndpoint(t *testing.T) {
 	}
 }
 
-// hack/install-ate-kind.sh exports ATE_INSTALL_KIND rather than passing a flag,
-// so the environment has to select the Kind profile as completely as --kind
-// does; a Kind install that only half-applied would push images to the wrong
+// ATE_INSTALL_KIND has to select the Kind profile as completely as --kind does;
+// a Kind install that only half-applied would push images to the wrong
 // registry.
 func TestLoadKindFromEnvironment(t *testing.T) {
 	loadEnv(t)
@@ -1020,6 +1059,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
 		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
 		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
+		{"provider array empty", Options{CredentialProvider: `[]`}},
+		{"provider array entry disabled", Options{CredentialProvider: `[{"enabled":false}]`}},
+		{"provider array with a repeated name", Options{CredentialProvider: `[{"name":"k8s.io"},{"name":"k8s.io"}]`}},
+		{"provider array entry without an address", Options{CredentialProvider: `[{"name":"k8s.io"},{"name":"vault.example.com"}]`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {
@@ -1030,7 +1073,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 }
 
 // The provider selection is required only where the egress gateway is
-// rendered, so Load accepts an absent value and CredentialProvider refuses it.
+// rendered, so Load accepts an absent value and CredentialProviders refuses it.
 func TestCredentialProvider(t *testing.T) {
 	loadEnv(t)
 
@@ -1098,23 +1141,81 @@ func TestCredentialProvider(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
-			got, err := cfg.CredentialProvider()
+			got, err := cfg.CredentialProviders()
 			if tc.wantErr {
 				if err == nil {
-					t.Fatal("CredentialProvider() succeeded, want an error")
+					t.Fatal("CredentialProviders() succeeded, want an error")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("CredentialProvider() error = %v", err)
+				t.Fatalf("CredentialProviders() error = %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("CredentialProvider() = %+v, want %+v", got, tc.want)
+			var want []CredentialProvider
+			if tc.want.Enabled() {
+				want = []CredentialProvider{tc.want}
 			}
-			if got.Enabled() != (tc.want.Name != "") {
-				t.Errorf("Enabled() = %v, want %v", got.Enabled(), tc.want.Name != "")
+			if !slices.Equal(got, want) {
+				t.Errorf("CredentialProviders() = %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+func TestCredentialProvidersArray(t *testing.T) {
+	loadEnv(t)
+	k8s := CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress}
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		want    []CredentialProvider
+		wantErr string
+	}{
+		{name: "an array of one", raw: `[{"name":"k8s.io"}]`, want: []CredentialProvider{k8s}},
+		{
+			name: "several providers",
+			raw:  `[{"name":"k8s.io"},{"name":"sts.example.com","address":"sts.ate-system.svc:50051"}]`,
+			want: []CredentialProvider{k8s, {Name: "sts.example.com", Address: "sts.ate-system.svc:50051"}},
+		},
+		{name: "a null entry", raw: `[null]`, wantErr: "array entries must be JSON objects"},
+		{name: "a string entry", raw: `["k8s.io"]`, wantErr: "array entries must be JSON objects"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(Options{CredentialProvider: tc.raw})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			got, err := cfg.CredentialProviders()
+			if err != nil {
+				t.Fatalf("CredentialProviders() error = %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("CredentialProviders() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasKubernetesProvider(t *testing.T) {
+	k8s := CredentialProvider{Name: K8sCredentialProviderName}
+	vault := CredentialProvider{Name: "vault.example.com"}
+	for _, tc := range []struct {
+		providers []CredentialProvider
+		want      bool
+	}{
+		{nil, false},
+		{[]CredentialProvider{vault}, false},
+		{[]CredentialProvider{vault, k8s}, true},
+	} {
+		if got := HasKubernetesProvider(tc.providers); got != tc.want {
+			t.Errorf("HasKubernetesProvider(%v) = %v, want %v", tc.providers, got, tc.want)
+		}
 	}
 }
 
@@ -1177,8 +1278,8 @@ func TestLoadEnvoyConcurrency(t *testing.T) {
 	}
 }
 
-// --kind must reproduce the exports in the shell kind installer, including
-// clearing the GKE coordinates and isolating the snapshot bucket name.
+// --kind must apply the whole Kind profile, including clearing the GKE
+// coordinates and isolating the snapshot bucket name.
 func TestLoadKindProfile(t *testing.T) {
 	loadEnv(t)
 	t.Setenv("PROJECT_ID", "some-gke-project")

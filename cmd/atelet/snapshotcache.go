@@ -53,7 +53,7 @@ import (
 )
 
 var (
-	snapshotCacheDir          = pflag.String("snapshot-cache-dir", ateletpath.SnapshotCacheDir, "Directory for the node-local shared snapshot file cache. Empty disables caching: every restore downloads its snapshot files, and the other --snapshot-cache-* flags are validated but not read. Must be under the node state dir, "+nodepath.BasePath+": the object-store plugin writes only there, and cache hits are served as hard links into the per-actor restore dirs on the same mount.")
+	snapshotCacheDir          = pflag.String("snapshot-cache-dir", ateletpath.SnapshotCacheDir, "Directory for the node-local shared snapshot file cache. Empty disables caching: every restore downloads its snapshot files, and the other --snapshot-cache-* flags are validated but not read. Must be under the node state dir, "+nodepath.BasePath+": the object-store plugin writes only there. Cache hits are served as hard links into the per-actor restore dirs, or as copies when those are on another mount.")
 	snapshotCacheMinAge       = pflag.Duration("snapshot-cache-min-age", 10*time.Minute, "Cached snapshot files younger than this are never evicted, protecting files fetched but not yet linked into a restore dir. Read only while the cache is enabled.")
 	snapshotCacheFetchTimeout = pflag.Duration("snapshot-cache-fetch-timeout", 10*time.Minute, "Bound on one cached snapshot file download. Downloads run detached from the restores waiting on them, so this is the only bound on how long one can run; a restore arriving while a download hangs waits on it until then. Sized for multi-GiB memory images on a busy node. Read only while the cache is enabled.")
 	// snapshotCacheGCFlags are --snapshot-cache-gc-period,

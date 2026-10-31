@@ -23,6 +23,7 @@ import (
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -45,7 +46,8 @@ type SubstrateTemplateOptions struct {
 	// Labels tie the template's workerSelector to the pool, keeping this
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
-	// SnapshotConfig for the new template; nil copies the source's.
+	// SnapshotConfig for the new template. nil copies the source's, with its
+	// own SnapshotLocation.
 	SnapshotConfig *ateapi.SnapshotConfig
 	// Modify, when set, edits the template before it is created.
 	Modify func(*ateapi.ActorTemplate)
@@ -101,7 +103,11 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 
 	snapshots := opts.SnapshotConfig
 	if snapshots == nil {
-		snapshots = srcTmpl.GetSnapshotConfig()
+		snapshots = &ateapi.SnapshotConfig{}
+		if src := srcTmpl.GetSnapshotConfig(); src != nil {
+			snapshots = proto.Clone(src).(*ateapi.SnapshotConfig)
+		}
+		snapshots.StorageLocation = SnapshotLocation(t, "ate-e2e-"+opts.Atespace+"-"+opts.Name)
 	}
 	tmpl := &ateapi.ActorTemplate{
 		Metadata:       &ateapi.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},

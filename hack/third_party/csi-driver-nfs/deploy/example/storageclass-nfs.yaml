@@ -1,6 +1,6 @@
 # The csi-nfs-sc StorageClass, backed by the dev NFS server in
-# hack/csi/nfs-server.yaml. `ate-setup setup csi nfs` (hack/install-ate.sh
-# --setup-csi=nfs) and hack/setup-csi-nfs-kind.sh both apply this file, so the
+# hack/csi/nfs-server.yaml. `ate-setup setup csi nfs` and
+# hack/setup-csi-nfs-kind.sh both apply this file, so the
 # e2e tests, demos and benchmarks all provision from the same class.
 #
 # Based on deploy/example/storageclass-nfs.yaml from

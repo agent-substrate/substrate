@@ -37,11 +37,9 @@ type AtenetDataplane interface {
 	IsEgressPolicyDenied(status int, body string) bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
+	EgressCollectorTelemetrySeen(string) bool
 	ScrapeMetrics(context.Context) (string, error)
 	EgressConnectStats(before, after string) EgressConnectStats
-	// AuthenticatesIngressClients reports whether the ingress dataplane
-	// requires an allowlisted client certificate.
-	AuthenticatesIngressClients() bool
 }
 
 // EgressConnectStats holds the delta of egress CONNECT connections and requests
@@ -80,16 +78,22 @@ func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
-	return (status == http.StatusForbidden && strings.Contains(body, "egress denied")) ||
+	return isEgressPolicyDenied(status, body)
+}
+
+func isEgressPolicyDenied(status int, body string) bool {
+	return (status == http.StatusForbidden && (strings.Contains(body, "egress denied") || strings.Contains(body, "actor egress policy denied"))) ||
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
 }
 
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
 
-func (envoyAtenetDataplane) AuthenticatesIngressClients() bool { return true }
-
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
+}
+
+func (envoyAtenetDataplane) EgressCollectorTelemetrySeen(collectorScrape string) bool {
+	return CollectorHasService(collectorScrape, "atenet-egress")
 }
 
 func (envoyAtenetDataplane) ScrapeMetrics(ctx context.Context) (string, error) {
@@ -141,15 +145,13 @@ func (agentGatewayAtenetDataplane) NewParkingObserver(context.Context) (ParkingO
 }
 
 func (agentGatewayAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body string) bool {
-	return status == http.StatusGatewayTimeout && strings.Contains(body, "request timed out")
+	return status == http.StatusServiceUnavailable && strings.Contains(body, "no worker has room for the actor")
 }
 
-func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusGatewayTimeout }
-
-func (agentGatewayAtenetDataplane) AuthenticatesIngressClients() bool { return false }
+func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }
 
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
-	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
+	return isEgressPolicyDenied(status, body)
 }
 
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
@@ -168,6 +170,11 @@ func (agentGatewayAtenetDataplane) RouteDurationSeen(ctx context.Context, _ stri
 		return false, err
 	}
 	return len(MissingPlatformMetrics(scrape, []string{"agentgateway_atenet_router_route_duration_seconds"})) == 0, nil
+}
+
+// AgentGateway egress does not run the ext-proc container and does not push metrics to the OTLP collector.
+func (agentGatewayAtenetDataplane) EgressCollectorTelemetrySeen(_ string) bool {
+	return true
 }
 
 func (agentGatewayAtenetDataplane) ScrapeMetrics(ctx context.Context) (string, error) {

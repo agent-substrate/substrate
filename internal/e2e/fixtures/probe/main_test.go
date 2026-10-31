@@ -15,8 +15,10 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -296,12 +298,39 @@ func TestFetchTrustsOnlyTheGivenCA(t *testing.T) {
 				if resp["error"] != "" || resp["status"] != "200" {
 					t.Errorf("fetch = status %q, error %q; want 200", resp["status"], resp["error"])
 				}
+				if resp["tls_handshake"] != "complete" {
+					t.Errorf("TLS handshake = %q, want complete", resp["tls_handshake"])
+				}
 				return
+			}
+			if resp["tls_handshake"] != "failed" {
+				t.Errorf("TLS handshake = %q, want failed", resp["tls_handshake"])
 			}
 			if !strings.Contains(resp["error"], "certificate") {
 				t.Errorf("error = %q, want a certificate verification failure", resp["error"])
 			}
 		})
+	}
+}
+
+func TestFetchReportsClientHelloClosure(t *testing.T) {
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("denied TLS reached HTTP")
+	}))
+	origin.TLS = &tls.Config{
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			if err := hello.Conn.Close(); err != nil {
+				t.Errorf("closing denied TLS connection: %v", err)
+			}
+			return nil, errors.New("TLS destination denied")
+		},
+	}
+	origin.StartTLS()
+	defer origin.Close()
+
+	resp := doFetch(t, origin.URL)
+	if resp["tls_handshake"] != "closed" || resp["status"] != "" || resp["error"] == "" {
+		t.Fatalf("fetch = %v, want connection closed during TLS with no HTTP response", resp)
 	}
 }
 
@@ -484,5 +513,50 @@ func TestRestoreFetchRetriesOnNextProbe(t *testing.T) {
 			t.Fatal("healthz did not answer 200 after the origin allowed the fetch")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func doStat(t *testing.T, path string) statResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/stat?"+url.Values{"path": {path}}.Encode(), nil)
+	rec := httptest.NewRecorder()
+	stat(rec, req)
+	var resp statResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding /stat response %q: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+// The imagefs e2e suite asserts on /stat's owner and mode, so this pins both
+// against files whose owner and mode the test sets itself.
+func TestStatReportsOwnerAndMode(t *testing.T) {
+	dir := t.TempDir()
+	priv := filepath.Join(dir, "private")
+	if err := os.Mkdir(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Mkdir's mode is clipped by the umask; set it exactly.
+	if err := os.Chmod(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("private", link); err != nil {
+		t.Fatal(err)
+	}
+
+	got := doStat(t, priv)
+	want := statResponse{Path: priv, UID: uint32(os.Getuid()), GID: got.GID, Mode: "drwx------"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("/stat %s mismatch (-want +got):\n%s", priv, diff)
+	}
+
+	// The symlink itself, not its target.
+	if got := doStat(t, link); !strings.HasPrefix(got.Mode, "L") || got.Error != "" {
+		t.Errorf("/stat %s = %+v, want the symlink's own mode", link, got)
+	}
+
+	if got := doStat(t, filepath.Join(dir, "missing")); got.Error == "" {
+		t.Errorf("/stat of a missing path reported no error: %+v", got)
 	}
 }
