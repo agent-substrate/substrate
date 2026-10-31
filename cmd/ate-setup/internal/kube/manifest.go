@@ -25,6 +25,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	sigsyaml "sigs.k8s.io/yaml"
 )
 
 // manifestExtensions are the file suffixes kubectl treats as manifests when
@@ -64,6 +65,20 @@ func DecodeManifest(r io.Reader) ([]*unstructured.Unstructured, error) {
 // DecodeManifestBytes decodes a multi-document YAML stream held in memory.
 func DecodeManifestBytes(data []byte) ([]*unstructured.Unstructured, error) {
 	return DecodeManifest(bytes.NewReader(data))
+}
+
+// EncodeManifest writes objs as a multi-document YAML stream, in order.
+func EncodeManifest(objs []*unstructured.Unstructured) ([]byte, error) {
+	var out bytes.Buffer
+	for _, obj := range objs {
+		doc, err := sigsyaml.Marshal(obj.Object)
+		if err != nil {
+			return nil, fmt.Errorf("while encoding %s: %w", Describe(obj), err)
+		}
+		out.WriteString("---\n")
+		out.Write(doc)
+	}
+	return out.Bytes(), nil
 }
 
 // LoadPath reads a manifest file, or every manifest directly inside a

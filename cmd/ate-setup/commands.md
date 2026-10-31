@@ -125,6 +125,74 @@ Kind, `<BUCKET_NAME>-assets` on GKE). It creates every `create` resource below
 on the way, so those subcommands are only needed to redo one on a running
 cluster.
 
+## Render
+
+| `ate-setup` | `hack/install-ate.sh` |
+|---|---|
+| `render ate-system` | (no shell equivalent) |
+
+`render ate-system` writes the manifests `deploy ate-system` applies to a fresh
+cluster into `--output-dir`, a new or empty directory, without contacting a
+cluster. It needs `--image-repo` and `--image-tag`, and pins every image to a
+digest:
+
+```bash
+ate-setup render ate-system --kind --image-repo REPO --image-tag TAG \
+  --output-dir DIR
+```
+
+Other clusters store snapshots on GCS today, so they also need the snapshot
+location and the snapshot transfer service account:
+
+```bash
+ate-setup render ate-system --image-repo REPO --image-tag TAG \
+  --snapshot-location gs://BUCKET/ \
+  --gcp-project-id PROJECT --snapshot-transfer-gsa-name NAME \
+  --output-dir DIR
+```
+
+The files are numbered in apply order. Create the key pools after the
+namespace, and apply the CRDs and wait for them before the rest, because a
+later file holds a SandboxConfig:
+
+```bash
+kubectl apply -f DIR/00-namespace.yaml
+ate-setup create jwt-authority-pool
+ate-setup create actor-id-ca-pool
+ate-setup create actor-id-ca-certs
+ate-setup create egress-mitm-ca-pool
+ate-setup create podcertificate-controller-cas
+kubectl apply -f DIR/01-crds.yaml
+kubectl wait --for=condition=Established crd --all
+kubectl apply -f DIR
+```
+
+The CA and JWT pool Secrets are not written: `actor-id-jwt-pool`,
+`actor-id-ca-pool`, `egress-mitm-ca-pool`, and the podcertificate controller's
+`service-dns-ca-pool`, `pod-identity-ca-pool` and `postgres-ca-pool`. Each holds
+a private key generated for one cluster. Rendered, the keys would end up
+wherever the output goes, such as a release or a GitOps repository, and every
+apply would replace the pools and invalidate every certificate and token issued
+from them. The `create` commands above, like `deploy ate-system`, create each
+pool only when it is absent. `actor-id-ca-certs` is the root certificate copied
+from the `actor-id-ca-pool` Secret in the cluster, so it is created there too.
+
+The `k8s-credential-provider` namespace policy is not written either. Operators
+edit it, and reapplying it would reset their policy, so create it once with
+`kubectl apply -f manifests/egress-credential-injection/namespace-policy.yaml`.
+The bundled PostgreSQL identities are not created: `deploy ate-system` and
+`deploy postgres` create them by running SQL in the postgres pod, which no
+manifest does yet. The CSI drivers are not written. None of deploy's checks
+against an existing install run, so do not apply the output over a running
+install. The service account issuer is `EXPECTED_JWT_ISSUER`,
+else the GKE issuer when the `--gcp-*` cluster settings are set, else the
+in-cluster default. Without `--credential-provider`, the egress gateway uses
+the bundled Kubernetes Secrets provider, `{"name":"k8s.io"}`, as kind installs
+do. With an external database, `ate-api-server-secret-envvars`
+is not written, so its connection strings stay out of the directory; create it
+with the keys `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`,
+`ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_SCHEMA`.
+
 ## Publish
 
 - `publish worker-images`

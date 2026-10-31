@@ -44,6 +44,7 @@ func TestOnlySystemDeploysRecordTheirRun(t *testing.T) {
 		{path: "delete benchmarks", want: false},
 		{path: "setup csi", want: false},
 		{path: "publish", want: false},
+		{path: "render ate-system", want: false},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			target, _, err := rootCmd.Find(strings.Fields(tc.path))
@@ -60,9 +61,9 @@ func TestOnlySystemDeploysRecordTheirRun(t *testing.T) {
 	}
 }
 
-// The publish commands build and push without a cluster, so the release job
+// The publish and render commands run without a cluster, so the release job
 // runs them with no kubeconfig. Every other command connects to one.
-func TestOnlyPublishSkipsTheCluster(t *testing.T) {
+func TestOnlyPublishAndRenderSkipTheCluster(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want bool
@@ -70,6 +71,7 @@ func TestOnlyPublishSkipsTheCluster(t *testing.T) {
 		{path: "publish release-images", want: false},
 		{path: "publish release-binaries", want: false},
 		{path: "publish worker-images", want: false},
+		{path: "render ate-system", want: false},
 		{path: "deploy ate-system", want: true},
 		{path: "delete ate-system", want: true},
 		{path: "setup csi", want: true},
