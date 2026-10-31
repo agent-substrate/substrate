@@ -24,4 +24,4 @@
 # itself. When bumping this pin, keep the floors in ../requirements.txt and
 # ../../nighthawk-ingress/requirements.txt at or above the versions the new
 # gencode reports.
-grpcio-tools==1.81.1
+grpcio-tools==1.84.1
