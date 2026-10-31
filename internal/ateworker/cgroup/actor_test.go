@@ -187,14 +187,20 @@ func TestLimitLeafGrowthWithoutTheMemoryController(t *testing.T) {
 
 func TestPodMemory(t *testing.T) {
 	root := t.TempDir()
-	for name, content := range map[string]string{"memory.max": "4294967296\n", "memory.current": "1073741824\n"} {
+	for name, content := range map[string]string{
+		"memory.max": "4294967296\n",
+		// memory.stat trails memory.current, so podMemory reads it alone
+		"memory.current": "4294967296\n",
+		// 512MiB of file cache, 64MiB of it dirty or under writeback
+		"memory.stat": "anon 1073741824\nfile 805306368\nkernel 16777216\nsock 0\nshmem 268435456\nactive_file 268435456\ninactive_file 268435456\nfile_dirty 33554432\nfile_writeback 33554432\n",
+	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	limit, current, err := podMemory(root)
-	if err != nil || limit != 4<<30 || current != 1<<30 {
-		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, current, err, int64(4<<30), int64(1<<30))
+	limit, used, err := podMemory(root)
+	if want := int64(1<<30 + 256<<20 + 16<<20 + 64<<20); err != nil || limit != 4<<30 || used != want {
+		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, used, err, int64(4<<30), want)
 	}
 	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("max\n"), 0o644); err != nil {
 		t.Fatal(err)

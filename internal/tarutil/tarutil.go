@@ -83,31 +83,56 @@ func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
 }
 
 // writeBehindChunk is how much of an archive may be dirty in the page cache
-// before we write it out and drop it. Dirty pages can't be reclaimed, and
-// piling up a whole archive of them can run a worker pod out of memory.
+// before we start writing it out, unless WriteBehind says otherwise. Dirty
+// pages can't be reclaimed, and piling up a whole archive of them can run a
+// worker pod out of memory. Written pages stay cached, since they are
+// reclaimable and a local resume reads them back.
 const writeBehindChunk = 8 << 20
 
-// writeBehind writes to f, writing out and dropping each full chunk.
+// writeBehind writes to f, starting write-out of each full chunk and waiting
+// for the one before it, so at most about two chunks are dirty.
 type writeBehind struct {
 	f       *os.File
+	chunk   int64
 	written int64
-	flushed int64
+	// started is where write-out was last started, and waited where the
+	// previous chunk ends
+	started int64
+	waited  int64
 }
 
 func (w *writeBehind) Write(p []byte) (int, error) {
 	n, err := w.f.Write(p)
 	w.written += int64(n)
-	if err != nil || w.written-w.flushed < writeBehindChunk {
+	if err != nil || w.written-w.started < w.chunk {
 		return n, err
 	}
-	fd, off, size := int(w.f.Fd()), w.flushed, w.written-w.flushed
-	if err := unix.SyncFileRange(fd, off, size, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+	fd := int(w.f.Fd())
+	if err := unix.SyncFileRange(fd, w.started, w.written-w.started, unix.SYNC_FILE_RANGE_WRITE); err != nil {
 		return n, fmt.Errorf("while writing out archive: %w", err)
 	}
-	// best effort, the range is on disk already
-	_ = unix.Fadvise(fd, off, size, unix.FADV_DONTNEED)
-	w.flushed = w.written
+	if w.started > w.waited {
+		if err := unix.SyncFileRange(fd, w.waited, w.started-w.waited, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+			return n, fmt.Errorf("while writing out archive: %w", err)
+		}
+		w.waited = w.started
+	}
+	w.started = w.written
 	return n, nil
+}
+
+// Option configures Create and its variants.
+type Option func(*options)
+
+type options struct {
+	writeBehind int64
+}
+
+// WriteBehind sets how much of the archive may be dirty in the page cache
+// before write-out starts, or 0 for no limit, e.g. when the caller has the
+// memory to spare. The default is writeBehindChunk.
+func WriteBehind(chunk int64) Option {
+	return func(o *options) { o.writeBehind = chunk }
 }
 
 type writerOnly struct{ io.Writer }
@@ -122,8 +147,8 @@ type readerOnly struct{ io.Reader }
 // keepXattr allows. A file with multiple links inside srcDir is archived once
 // and referenced as a hardlink thereafter. Sockets and other device nodes are
 // skipped (see writeTree).
-func Create(ctx context.Context, tarPath, srcDir string) error {
-	return CreateFiltered(ctx, tarPath, srcDir, nil)
+func Create(ctx context.Context, tarPath, srcDir string, opts ...Option) error {
+	return CreateFiltered(ctx, tarPath, srcDir, nil, opts...)
 }
 
 // SkipFunc reports whether an archive entry should be omitted, given its
@@ -133,23 +158,27 @@ type SkipFunc func(rel string) bool
 
 // CreateFiltered is Create with entries omitted where skip returns true. A nil
 // skip archives everything.
-func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) error {
-	return create(ctx, tarPath, srcDir, skip, false)
+func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc, opts ...Option) error {
+	return create(ctx, tarPath, srcDir, skip, false, opts)
 }
 
 // CreateWithRoot is Create plus a "./" entry carrying srcDir's own mode,
 // ownership, modification time, and xattrs, which Extract applies to dstDir.
-func CreateWithRoot(ctx context.Context, tarPath, srcDir string) error {
-	return CreateFilteredWithRoot(ctx, tarPath, srcDir, nil)
+func CreateWithRoot(ctx context.Context, tarPath, srcDir string, opts ...Option) error {
+	return CreateFilteredWithRoot(ctx, tarPath, srcDir, nil, opts...)
 }
 
 // CreateFilteredWithRoot is CreateWithRoot with entries omitted where skip
 // returns true. The root entry is never skipped.
-func CreateFilteredWithRoot(ctx context.Context, tarPath, srcDir string, skip SkipFunc) error {
-	return create(ctx, tarPath, srcDir, skip, true)
+func CreateFilteredWithRoot(ctx context.Context, tarPath, srcDir string, skip SkipFunc, opts ...Option) error {
+	return create(ctx, tarPath, srcDir, skip, true, opts)
 }
 
-func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeRoot bool) error {
+func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeRoot bool, opts []Option) error {
+	o := options{writeBehind: writeBehindChunk}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	f, err := os.Create(tarPath)
 	if err != nil {
 		return fmt.Errorf("creating tar %q: %w", tarPath, err)
@@ -157,7 +186,13 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	defer f.Close()
 
 	bw := tarWriterPool.Get().(*bufio.Writer)
-	bw.Reset(&writeBehind{f: f})
+	var wb *writeBehind
+	if o.writeBehind > 0 {
+		wb = &writeBehind{f: f, chunk: o.writeBehind}
+		bw.Reset(wb)
+	} else {
+		bw.Reset(f)
+	}
 	defer func() {
 		bw.Reset(nil)
 		tarWriterPool.Put(bw)
@@ -172,6 +207,13 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	// The end of the archive is still in the buffer; flush it before returning.
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
+	}
+	if wb != nil && wb.written > wb.started {
+		// start on the last, partial chunk too, so it isn't left for the
+		// kernel's own writeback
+		if err := unix.SyncFileRange(int(f.Fd()), wb.started, wb.written-wb.started, unix.SYNC_FILE_RANGE_WRITE); err != nil {
+			return fmt.Errorf("while writing out %q: %w", tarPath, err)
+		}
 	}
 	// No fsync: local-only snapshots aren't guaranteed to survive a node
 	// restart, and atelet doesn't trust a local snapshot written before the

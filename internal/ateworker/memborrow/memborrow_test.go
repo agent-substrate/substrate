@@ -75,8 +75,12 @@ func TestTakeSharesUnbooked(t *testing.T) {
 }
 
 func TestTakeWithoutPodLimit(t *testing.T) {
-	if got := ledger(0, 1<<30, unbookedOf(2<<30)).Take(want); got != 0 {
-		t.Errorf("Take() without a pod limit = %d, want 0", got)
+	l := ledger(0, 1<<30, unbookedOf(0))
+	if got := l.Take(want); got != want {
+		t.Errorf("Take() without a pod limit = %d, want %d", got, int64(want))
+	}
+	if err := l.Wait(context.Background()); err != nil {
+		t.Errorf("Wait() without a pod limit = %v", err)
 	}
 }
 
@@ -105,5 +109,22 @@ func TestWait(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("placement still waiting after the borrow was returned")
+	}
+}
+
+func TestTakeAll(t *testing.T) {
+	l := ledger(4<<30, 1<<30, unbookedOf(64<<20))
+	if l.TakeAll(128 << 20) {
+		t.Error("TakeAll() lent more than is unbooked")
+	}
+	if got := l.Take(want); got != 64<<20 {
+		t.Errorf("Take() after a refused TakeAll = %d, want all %d still unbooked", got, int64(64<<20))
+	}
+	l = ledger(4<<30, 1<<30, unbookedOf(256<<20))
+	if !l.TakeAll(128 << 20) {
+		t.Fatal("TakeAll() refused what is unbooked")
+	}
+	if got := l.Take(want); got != 128<<20 {
+		t.Errorf("Take() after TakeAll = %d, want the %d left", got, int64(128<<20))
 	}
 }

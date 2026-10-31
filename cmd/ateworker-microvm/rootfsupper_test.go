@@ -63,7 +63,7 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpointDir := t.TempDir()
-	if err := tarRootfsUpper(t.Context(), src, checkpointDir, containers); err != nil {
+	if err := (&AteWorkerService{}).tarRootfsUpper(t.Context(), src, checkpointDir, containers); err != nil {
 		t.Fatalf("tarRootfsUpper: %v", err)
 	}
 	// Restore: onto a directory holding a stale previous activation's contents,
@@ -105,7 +105,7 @@ func TestStageRootfsUpper(t *testing.T) {
 	containers := []string{"app_ovl"}
 	src := upperDirWith(t, map[string]string{"app_ovl/fs/home/agent/notes.txt": "rootfs write"})
 	snapshotDir := t.TempDir()
-	if err := tarRootfsUpper(t.Context(), src, snapshotDir, containers); err != nil {
+	if err := (&AteWorkerService{}).tarRootfsUpper(t.Context(), src, snapshotDir, containers); err != nil {
 		t.Fatalf("tarRootfsUpper: %v", err)
 	}
 

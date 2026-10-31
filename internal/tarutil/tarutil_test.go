@@ -771,7 +771,7 @@ func TestCreateWithRootRestoresRootMeta(t *testing.T) {
 
 	for _, tc := range []struct {
 		name     string
-		create   func(ctx context.Context, tarPath, srcDir string) error
+		create   func(ctx context.Context, tarPath, srcDir string, opts ...Option) error
 		wantMode os.FileMode
 		wantAttr bool
 	}{
