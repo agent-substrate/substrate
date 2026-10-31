@@ -324,11 +324,27 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 	} else {
 		l := raw.(*listenerv3.Listener)
 		assertDualStackIngress(t, l, 8443)
+		if got := l.GetPerConnectionBufferLimitBytes().GetValue(); got != ingressPerConnectionBufferLimitBytes {
+			t.Errorf("Expected per_connection_buffer_limit_bytes %d, got %d", ingressPerConnectionBufferLimitBytes, got)
+		}
 
 		// Verify the TLS config references the serving cert via SDS rather
 		// than embedding it: inline filename DataSources are read only once
 		// at listener creation, so rotations would never be picked up.
 		fc := l.GetFilterChains()[0]
+		hcm := &hcmv3.HttpConnectionManager{}
+		if err := fc.GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
+			t.Fatalf("Failed to unmarshal HCM config: %v", err)
+		}
+		if got := hcm.GetCommonHttpProtocolOptions().GetIdleTimeout().AsDuration(); got != 5*time.Minute {
+			t.Errorf("Expected HCM idle_timeout 5m, got %v", got)
+		}
+		if got := hcm.GetRequestHeadersTimeout().AsDuration(); got != 10*time.Second {
+			t.Errorf("Expected HCM request_headers_timeout 10s, got %v", got)
+		}
+		if got := fc.GetTransportSocketConnectTimeout().AsDuration(); got != ingressTransportSocketConnectTimeout {
+			t.Errorf("Expected transport_socket_connect_timeout %v, got %v", ingressTransportSocketConnectTimeout, got)
+		}
 		ts := fc.GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected transport socket 'envoy.transport_sockets.tls', got '%s'", ts.GetName())
@@ -455,7 +471,14 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 		l := raw.(*listenerv3.Listener)
 		assertDualStackIngress(t, l, 8444)
 		assertHCMWebsocketUpgrade(t, l)
-		ts := l.GetFilterChains()[0].GetTransportSocket()
+		if got := l.GetPerConnectionBufferLimitBytes().GetValue(); got != ingressPerConnectionBufferLimitBytes {
+			t.Errorf("Expected per_connection_buffer_limit_bytes %d, got %d", ingressPerConnectionBufferLimitBytes, got)
+		}
+		fc := l.GetFilterChains()[0]
+		if got := fc.GetTransportSocketConnectTimeout().AsDuration(); got != ingressTransportSocketConnectTimeout {
+			t.Errorf("Expected transport_socket_connect_timeout %v, got %v", ingressTransportSocketConnectTimeout, got)
+		}
+		ts := fc.GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected connect_terminate_tls to be TLS-wrapped, got transport socket %q", ts.GetName())
 		}
