@@ -29,6 +29,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	clocktesting "k8s.io/utils/clock/testing"
 )
@@ -611,6 +612,21 @@ func TestTrackerFailedDetach(t *testing.T) {
 			t.Errorf("latest_local = %v after the retried detach, want unset", got)
 		}
 	})
+}
+
+// A detach whose upload attempt ran out of time fails with Unavailable and
+// keeps the snapshot local for the next attempt, so the caller can retry.
+func TestTrackerDetachUploadTimeoutIsUnavailable(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setErr(status.Error(codes.DeadlineExceeded, "object-store plugin upload of gs://bucket/snapshot timed out"))
+	tr := newIdleTestTracker(t, store)
+	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now().Add(-testUploadDelay)))
+	if _, err := tr.Detach(t.Context(), trackedActorUID); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("detach = %v, want Unavailable", err)
+	}
+	if got := uuidOf(tr.State(trackedActorUID).GetLatestLocal()); got != "s1" {
+		t.Errorf("latest_local = %q after the timed-out upload, want s1 kept", got)
+	}
 }
 
 // A detach whose cleanup fails (e.g. because an external volume mount directory

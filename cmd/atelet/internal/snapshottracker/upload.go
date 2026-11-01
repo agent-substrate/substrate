@@ -19,6 +19,10 @@ import (
 	"log/slog"
 	"math"
 	"time"
+
+	"go.ate.dev/substrate/internal/apierror"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // beginUploadLocked begins a background upload of the actor's nextUploadTarget,
@@ -78,7 +82,21 @@ func (t *Tracker) uploadSnapshot(ctx context.Context, actorUID string, target Sn
 	if background {
 		t.instruments.recordUpload(uploadCtx, target, elapsed, uploaded, err)
 	}
-	return uploaded, elapsed, err
+	return uploaded, elapsed, uploadCallError(ctx, uploadCtx, target, elapsed, err)
+}
+
+// uploadCallError returns err, or Unavailable when the attempt ran out of its
+// own time while ctx is live. The local copy stays and the next attempt
+// retries it, so a Detach that waited on this attempt can be retried too
+// instead of failing its resume.
+func uploadCallError(ctx, uploadCtx context.Context, target SnapshotRef, elapsed time.Duration, err error) error {
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	if uploadCtx.Err() == nil && status.Code(err) != codes.DeadlineExceeded {
+		return err
+	}
+	return apierror.Unavailable("upload of snapshot %s timed out after %s: %w", target.uuid(), elapsed.Round(time.Second), err)
 }
 
 // uploadTimeoutFor returns how long an upload attempt of target may
