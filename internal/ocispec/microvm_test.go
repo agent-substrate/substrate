@@ -15,7 +15,9 @@
 package ocispec
 
 import (
+	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -201,10 +203,40 @@ func TestShapeMicroVM_MasksProcAndSys(t *testing.T) {
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
-	if !slices.Contains(spec.Linux.ReadonlyPaths, "/proc/sys") {
-		t.Errorf("ReadonlyPaths = %v, want /proc/sys", spec.Linux.ReadonlyPaths)
+	roTmpfs := []string{"ro", "nr_blocks=1", "nr_inodes=1"}
+	var acpiMount *specs.Mount
+	if runtime.GOARCH == "amd64" {
+		acpiMount = &specs.Mount{Destination: "/proc/acpi", Type: "tmpfs", Source: "tmpfs", Options: roTmpfs}
 	}
-	if !slices.Contains(spec.Linux.MaskedPaths, "/proc/kcore") {
-		t.Errorf("MaskedPaths = %v, want /proc/kcore", spec.Linux.MaskedPaths)
+	for _, tc := range []struct {
+		path     string
+		readonly bool
+		masked   bool
+		mount    *specs.Mount
+	}{
+		{path: "/proc/sys", readonly: true},
+		{path: "/proc/kcore", masked: true},
+		{path: "/sys/firmware", mount: &specs.Mount{Destination: "/sys/firmware", Type: "tmpfs", Source: "tmpfs", Options: roTmpfs}},
+		{path: "/proc/acpi", mount: acpiMount},
+		// Not in the guest kernel, so masking them would fail container start.
+		{path: "/proc/asound"},
+		{path: "/proc/scsi"},
+		{path: "/sys/devices/virtual/powercap"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := slices.Contains(spec.Linux.ReadonlyPaths, tc.path); got != tc.readonly {
+				t.Errorf("in ReadonlyPaths = %v, want %v", got, tc.readonly)
+			}
+			if got := slices.Contains(spec.Linux.MaskedPaths, tc.path); got != tc.masked {
+				t.Errorf("in MaskedPaths = %v, want %v", got, tc.masked)
+			}
+			var got *specs.Mount
+			if i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == tc.path }); i >= 0 {
+				got = &spec.Mounts[i]
+			}
+			if !reflect.DeepEqual(got, tc.mount) {
+				t.Errorf("mount = %+v, want %+v", got, tc.mount)
+			}
+		})
 	}
 }
