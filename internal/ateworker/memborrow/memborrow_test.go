@@ -75,8 +75,12 @@ func TestTakeSharesUnbooked(t *testing.T) {
 }
 
 func TestTakeWithoutPodLimit(t *testing.T) {
-	if got := ledger(0, 1<<30, unbookedOf(2<<30)).Take(want); got != 0 {
-		t.Errorf("Take() without a pod limit = %d, want 0", got)
+	l := ledger(0, 1<<30, unbookedOf(0))
+	if got := l.Take(want); got != want {
+		t.Errorf("Take() without a pod limit = %d, want %d", got, int64(want))
+	}
+	if err := l.Wait(context.Background()); err != nil {
+		t.Errorf("Wait() without a pod limit = %v", err)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -169,13 +170,14 @@ func actorLeafMemory(root, actorUID string) (int64, error) {
 	return current, nil
 }
 
-// PodMemory returns the worker pod's memory limit and usage. limit is 0 when
-// the pod has none.
-func PodMemory() (limit, current int64, err error) {
+// PodMemory returns the worker pod's memory limit and what it uses besides
+// clean page cache, which the kernel can reclaim. limit is 0 when the pod has
+// none.
+func PodMemory() (limit, used int64, err error) {
 	return podMemory(Root)
 }
 
-func podMemory(root string) (limit, current int64, err error) {
+func podMemory(root string) (limit, used int64, err error) {
 	raw, err := os.ReadFile(filepath.Join(root, "memory.max"))
 	if err != nil {
 		return 0, 0, err
@@ -185,14 +187,22 @@ func podMemory(root string) (limit, current int64, err error) {
 			return 0, 0, fmt.Errorf("while parsing memory.max %q: %w", raw, err)
 		}
 	}
-	if raw, err = os.ReadFile(filepath.Join(root, "memory.current")); err != nil {
+	used, err = memoryUnreclaimable(root)
+	if err != nil {
 		return 0, 0, err
 	}
-	if current, err = parseBytes(raw); err != nil {
-		return 0, 0, fmt.Errorf("while parsing memory.current %q: %w", raw, err)
-	}
-	return limit, current, nil
+	return limit, used, nil
 }
+
+// memoryUnreclaimable is memoryUsed plus page cache that is dirty or under
+// writeback, which reclaim can't drop either.
+func memoryUnreclaimable(root string) (int64, error) {
+	used, err := sumMemoryStat(root, memoryUnreclaimableStats...)
+	return int64(used), err
+}
+
+// memoryUnreclaimableStats are the memory.stat keys memoryUnreclaimable sums
+var memoryUnreclaimableStats = slices.Concat(memoryUsedStats, []string{"file_dirty", "file_writeback"})
 
 func parseBytes(raw []byte) (int64, error) {
 	return strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
