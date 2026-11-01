@@ -312,23 +312,26 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 			// still resumes after DeleteTag collects the tag's snapshot.
 			cloneSuspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
 				Actor:   &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName},
-				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+				Options: &ateapi.SuspendOptions{Mode: tc.mode},
 			})
 			if err != nil {
 				t.Fatalf("failed to suspend cloned Actor: %v", err)
 			}
 			cloneSnap := snapshotAtLatestGeneration(cloneSuspended.GetActor().GetStatus())
-			if got := cloneSnap.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
-				t.Fatalf("cloned Actor snapshot DurableSnapshot.State = %v, want COMPLETED", got)
+			if got := cloneSnap.GetDurableSnapshot().GetState(); got != tc.wantStorage {
+				t.Fatalf("cloned Actor snapshot DurableSnapshot.State = %v, want %v", got, tc.wantStorage)
+			}
+			if got := cloneSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got == "" || got == tagSnapshotURI(tagToUpdate) {
+				t.Fatalf("cloned Actor snapshot uri = %q, want a snapshot of its own", got)
+			}
+			if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
+				t.Fatalf("failed to delete Tag: %v", err)
 			}
 			t.Run("BackgroundDetach", func(t *testing.T) {
 				e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
 				waitForActorDetached(ctx, t, clients, cloneName, cloneSnap.GetUuid())
 			})
 
-			if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
-				t.Fatalf("failed to delete Tag: %v", err)
-			}
 			// Resuming restores the clone's snapshot from object storage after the
 			// detach, or from its node-local copy when BackgroundDetach is skipped.
 			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: &ateapi.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
