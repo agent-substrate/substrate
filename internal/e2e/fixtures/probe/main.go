@@ -630,6 +630,13 @@ func fetchOnce(ctx context.Context, client *http.Client, url string) error {
 }
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "filesystem-child" {
+		if err := filesystemChild(os.Args[2], os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	healthz := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	if url := os.Getenv(bootFetchURLEnv); url != "" {
 		booted, err := os.ReadFile(identityFile)
@@ -662,6 +669,7 @@ func main() {
 	mux.HandleFunc("/stat", stat)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
+	mux.HandleFunc("/filesystem", filesystem)
 	mux.HandleFunc("/healthz", healthz)
 
 	const addr = ":80"
