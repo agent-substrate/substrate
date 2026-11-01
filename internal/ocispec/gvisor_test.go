@@ -15,10 +15,12 @@
 package ocispec
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 func TestShapeGVisorGivesEachActorItsOwnCgroupLeaf(t *testing.T) {
@@ -51,5 +53,22 @@ func TestGVisorCgroupLeafMatchesTheShapedPath(t *testing.T) {
 	ShapeGVisor(spec, GVisorOptions{ActorUID: "uid-a", ContainerName: SandboxID})
 	if want := "/" + GVisorCgroupLeaf("uid-a", SandboxID); spec.Linux.CgroupsPath != want {
 		t.Errorf("shaped cgroupsPath = %q, want %q", spec.Linux.CgroupsPath, want)
+	}
+}
+
+// runsc mounts its own filesystems at /dev and /dev/pts and warns about the
+// nodev and strictatime options, so the gVisor spec leaves them out.
+func TestShapeGVisor_SystemMounts(t *testing.T) {
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
+	ShapeGVisor(spec, GVisorOptions{ActorUID: "uid-a", ContainerName: "app"})
+	want := []specs.Mount{
+		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec"}},
+		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "mode=1777", "size=65536k"}},
+		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "ro"}},
+		{Destination: "/run", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "mode=755", "size=65536k"}},
+		{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "mode=1777"}},
+	}
+	if !reflect.DeepEqual(spec.Mounts, want) {
+		t.Errorf("Mounts =\n%+v\nwant\n%+v", spec.Mounts, want)
 	}
 }

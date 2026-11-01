@@ -250,3 +250,37 @@ func TestGuestMaskedDirPaths(t *testing.T) {
 		})
 	}
 }
+
+// runsc skips mqueue mounts, so only the guest gets /dev/mqueue, unless a
+// volume replaces it. kata mounts in order, so it must follow /dev.
+func TestShapeMicroVM_Mqueue(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		volumes  []*ateworkerpb.VolumeMount
+		wantType string
+	}{
+		{"default", nil, "mqueue"},
+		{"volume", []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/dev/mqueue"}}, "bind"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := Build(Options{
+				ActorDirs: parityActorDirs,
+				Container: &ateworkerpb.Container{
+					ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
+					DurableDirVolumeMounts: tc.volumes,
+				},
+			})
+			if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+				t.Fatalf("ShapeMicroVM() = %v", err)
+			}
+			if got := mountFor(t, spec, "/dev/mqueue").Type; got != tc.wantType {
+				t.Errorf("/dev/mqueue type = %q, want %q", got, tc.wantType)
+			}
+			dev := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/dev" })
+			mqueue := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/dev/mqueue" })
+			if dev < 0 || mqueue < dev {
+				t.Errorf("/dev is mount %d and /dev/mqueue is mount %d; want /dev first", dev, mqueue)
+			}
+		})
+	}
+}

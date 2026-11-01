@@ -16,6 +16,7 @@ package ocispec
 
 import (
 	"path/filepath"
+	"slices"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
@@ -46,7 +47,8 @@ func GVisorCgroupLeaf(actorUID, containerName string) string {
 }
 
 // ShapeGVisor adds runsc CRI annotations, durable-dir mount hints, and
-// per-container cgroups to the spec. It is idempotent.
+// per-container cgroups to the spec, and removes the mounts and mount options
+// runsc does not use. It is idempotent.
 func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	if spec.Annotations == nil {
 		spec.Annotations = make(map[string]string)
@@ -62,6 +64,17 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"
 		spec.Annotations["io.kubernetes.cri.sandbox-id"] = SandboxID
+	}
+
+	// runsc mounts its own filesystems at /dev and /dev/pts, and logs a warning
+	// for the nodev and strictatime options, which it does not support.
+	spec.Mounts = slices.DeleteFunc(spec.Mounts, func(m specs.Mount) bool {
+		return m.Destination == "/dev" || m.Destination == "/dev/pts"
+	})
+	for i := range spec.Mounts {
+		spec.Mounts[i].Options = slices.DeleteFunc(slices.Clone(spec.Mounts[i].Options), func(opt string) bool {
+			return opt == "nodev" || opt == "strictatime"
+		})
 	}
 
 	if spec.Linux == nil {

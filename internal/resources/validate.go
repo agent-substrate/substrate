@@ -452,7 +452,7 @@ var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
 
 // ValidateMountPath requires a clean absolute Unix path that starts with '/',
 // is not '/', and contains no ':', '.' or '..' segments, '//', trailing '/',
-// or control characters.
+// or control characters. It also rejects /dev, /dev/pts, /proc and /sys.
 func ValidateMountPath(fldPath *field.Path, p string) field.ErrorList {
 	if p == "" {
 		return nil
@@ -470,6 +470,12 @@ func ValidateMountPath(fldPath *field.Path, p string) field.ErrorList {
 	}
 	if bad {
 		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters")}
+	}
+	switch p {
+	case "/dev", "/dev/pts", "/proc", "/sys":
+		// A volume there hides a filesystem the container needs, and runsc
+		// ignores a volume at /dev or /dev/pts.
+		return field.ErrorList{field.Invalid(fldPath, p, "must not be /dev, /dev/pts, /proc, or /sys")}
 	}
 	return nil
 }

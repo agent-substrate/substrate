@@ -4365,11 +4365,12 @@ type VolumeMount struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// mount_path within the container. Must be a clean absolute Unix path:
 	// must start with '/', not be '/', and contain no ':', '..', '.', '//',
-	// trailing '/', or control characters.
+	// trailing '/', or control characters. Must not be /dev, /dev/pts, /proc,
+	// or /sys.
 	//
 	// +k8s:required
 	// +k8s:maxLength=4096
-	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
+	// +k8s:customValidation # clean absolute path, not /dev, /dev/pts, /proc or /sys
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

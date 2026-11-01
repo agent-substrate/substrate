@@ -500,6 +500,11 @@ func TestValidateMountPath(t *testing.T) {
 		{"dot segment", "/data/./x", true},
 		{"dot-dot segment", "/data/../x", true},
 		{"control character", "/data\x01", true},
+		{"dev", "/dev", true},
+		{"devpts", "/dev/pts", true},
+		{"proc", "/proc", true},
+		{"sys", "/sys", true},
+		{"under dev", "/dev/shm", false},
 	})
 }
 

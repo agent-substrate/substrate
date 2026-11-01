@@ -401,7 +401,7 @@ message VolumeMount {
   //
   // +k8s:required
   // +k8s:maxLength=4096
-  // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
+  // +k8s:customValidation # clean absolute path, not /dev, /dev/pts, /proc or /sys
   string mount_path = 2;
 }
 
