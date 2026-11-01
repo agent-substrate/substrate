@@ -799,9 +799,11 @@ func initParams(agentInit bool) string {
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
 // map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
+//
+// swiotlb=noforce skips the software bounce buffer.
 func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
 	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
-		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
+		"panic=1 no_timer_check noreplace-smp console=hvc0 swiotlb=noforce " +
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams

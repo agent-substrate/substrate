@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -150,25 +151,33 @@ func TestValidateWorkerPodUID(t *testing.T) {
 
 func TestValidateSnapshotLocation(t *testing.T) {
 	tests := []struct {
-		name    string
-		prefix  string
-		wantErr bool
+		name     string
+		location string
+		wantErr  bool
 	}{
 		{"valid with trailing slash", "gs://bucket/actors/1234/snapshots/5678/", false},
 		{"valid without path", "gs://bucket", false},
+		{"valid root path", "gs://bucket/", false},
 		// Scheme is storage-backend policy, not validated here.
 		{"valid alternate scheme", "s3://bucket/path", false},
+		{"valid without scheme", "//bucket/path", false},
+		// Only path segments are restricted.
+		{"dotted bucket", "gs://my.bucket/snaps", false},
+		{"letters, digits, '_' and '-'", "gs://bucket/Team_A-1/snaps_v2", false},
 		{"empty", "", true},
 		{"missing bucket", "gs://", true},
 		{"no scheme or bucket", "bucket/path", true},
 		{"unparseable", "://bucket", true},
 		// Appended object names must not be swallowed by URL components.
 		{"query", "gs://bucket/path?x=1", true},
+		{"empty query", "gs://bucket/path?", true},
 		{"fragment", "gs://bucket/path#frag", true},
 		{"userinfo", "gs://user@bucket/path", true},
 		// Opaque form (no //) parses with an empty host, so it is rejected
 		// on either the bucket or the opaque check.
 		{"opaque", "gs:bucket/path", true},
+
+		{"dot in a segment", "gs://bucket/snaps.v1", true},
 		{"dot dot", "gs://bucket/team-a/../team-b", true},
 		{"trailing dot dot", "gs://bucket/path/..", true},
 		{"escaped dot dot", "gs://bucket/%2e%2e/path", true},
@@ -176,16 +185,38 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"triple dot", "gs://bucket/.../path", true},
 		{"space padded dot dot", "gs://bucket/a/%20..%20/b", true},
 		{"trailing space dot dot", "gs://bucket/a/..%20/b", true},
+		{"empty segment", "gs://bucket/a//b", true},
+		{"double root slash", "gs://bucket//", true},
+		{"space", "gs://bucket/a%20b", true},
+		{"no-break space", "gs://bucket/a%C2%A0b", true},
+		{"non-ASCII letter", "gs://bucket/caf%C3%A9", true},
+		{"escaped letter", "gs://bucket/%61bc", true},
 		{"backslash", `gs://bucket/team-a\..\team-b`, true},
 		{"escaped backslash", "gs://bucket/a%5Cb", true},
-		{"dots in a name", "gs://bucket/a..b/.c/d.", false},
+
+		// Every owner's objects are stored under <location>/atespaces/, so
+		// a location must not contain that segment, or it could sit inside
+		// an atespace's or an owner's prefix.
+		{"under another actor's prefix", "gs://snaps/root/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d", true},
+		{"atespaces at the end", "gs://snaps/root/atespaces/", true},
+		{"mixed-case atespaces", "gs://snaps/root/AteSpaces/team-a", true},
+		{"upper-case atespaces", "gs://snaps/root/ATESPACES/team-a", true},
+		{"escaped atespaces", "gs://snaps/root/%61tespaces/team-a", true},
+		{"escaped separators", "gs://snaps/root%2Fatespaces%2Fteam-a", true},
+		{"atespaces as part of a segment", "gs://snaps/root/my-atespaces/atespaces_old", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateSnapshotLocation(tt.prefix); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateSnapshotLocation(%q) err = %v, wantErr %v", tt.prefix, err, tt.wantErr)
+			if err := ValidateSnapshotLocation(tt.location); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateSnapshotLocation(%q) err = %v, wantErr %v", tt.location, err, tt.wantErr)
 			}
 		})
+	}
+
+	// An empty segment gets its own message, not the allowlist's.
+	const emptySegment = "gs://bucket/a//b"
+	if err := ValidateSnapshotLocation(emptySegment); err == nil || !strings.Contains(err.Error(), "must not contain an empty path segment") {
+		t.Errorf("ValidateSnapshotLocation(%q) err = %v, want an empty path segment error", emptySegment, err)
 	}
 }
 
@@ -539,6 +570,9 @@ func TestValidateCapabilities(t *testing.T) {
 		{"lowercase", []string{"net_admin"}, false, 1},
 		{"too long", []string{strings.Repeat("A", 64)}, false, 1},
 		{"each bad entry reported", []string{"CAP_X", "ok", "NET_ADMIN"}, false, 2},
+		{"unknown name", []string{"NET_ADIMN"}, false, 1},
+		{"unknown name in drop", []string{"NET_ADIMN"}, true, 1},
+		{"every known name", sets.List(linuxCapabilities), false, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

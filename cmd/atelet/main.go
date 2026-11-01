@@ -2262,19 +2262,25 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			img, cwd, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
-			args, err := resolveProcessArgs(imageConfig, ctr.GetCommand(), ctr.GetArgs())
+			args, err := resolveProcessArgs(&img.Config, ctr.GetCommand(), ctr.GetArgs())
 			if err != nil {
 				return fmt.Errorf("while resolving process args for container %q: %w", ctr.GetName(), err)
 			}
+			user, err := resolveImageUser(img)
+			if err != nil {
+				return fmt.Errorf("while resolving user for container %q: %w", ctr.GetName(), err)
+			}
 			containerSpecs[i] = &ateworkerpb.ContainerSpec{
 				Args:         args,
-				Env:          resolveActorEnv(imageConfig, envs),
+				Env:          resolveActorEnv(&img.Config, envs),
 				Capabilities: resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
 				Resources:    toAteworkerResources(ctr.GetResources()),
+				User:         user,
+				Cwd:          cwd,
 			}
 			return nil
 		})

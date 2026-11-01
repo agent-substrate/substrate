@@ -163,9 +163,9 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
 
-// ValidateCustom_SnapshotConfig_StorageLocation ensures an
-// ActorTemplate's snapshotConfig.storageLocation is a well-formed
-// URI with a bucket, so a bad location fails fast.
+// ValidateCustom_SnapshotConfig_StorageLocation checks an ActorTemplate's
+// snapshotConfig.storageLocation with resources.ValidateSnapshotLocation, so a
+// bad location fails fast.
 func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}

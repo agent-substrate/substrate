@@ -22,7 +22,7 @@ For how the pieces fit together, see the [Architecture](../concepts/architecture
   overall platform and runtime, while **`ate`** (originally *Agent Task /
   Execution Engine*) is the internal prefix used across Kubernetes namespaces
   (`ate-system`), control-plane binaries (`ate-api-server`, `atecontroller`),
-  node and pod daemons (`atelet`, `ateom`), networking components (`atenet`,
+  node and pod daemons (`atelet`, `ateworker`), networking components (`atenet`,
   `atunnel`), HTTP routing headers (`ate-target-actor`), and the `kubectl-ate`
   CLI plugin.
 
@@ -45,10 +45,10 @@ For how the pieces fit together, see the [Architecture](../concepts/architecture
 
 - **SandboxConfig** (Kubernetes CRD): a cluster-scoped resource holding the
   sandbox binaries for one runtime family (the gVisor `runsc` binary, or a
-  microVM kernel/firmware/config). An actor resolves its sandbox at first cold
-  boot from the config its `ActorTemplate` names (naming one is currently
-  required; per-class cluster defaults are planned), so one config pins the
-  runtime version for many templates.
+  microVM kernel/firmware/config). Each `WorkerPool` resolves a `SandboxConfig`
+  for its sandbox class, either by explicit `configRef` or via the class
+  default. A new or cold-booted actor gets the config's default version. A
+  memory restore gets the version its snapshot was taken with.
 
 ## Records (dynamic state, in the control-plane store)
 
@@ -58,18 +58,24 @@ for etcd.
 - **Atespace**: the isolation boundary an Actor belongs to, and the first half
   of its identity: an Actor is addressed by `(atespace, name)`, so the same
   name can exist in two atespaces. Atespaces are global-scoped, not Kubernetes
-  namespaces — an `ActorTemplate` also lives in an atespace, while
+  namespaces. `ActorTemplate`s and `Tag`s also live in an atespace, while
   `WorkerPool`s live in Kubernetes namespaces. One must exist before any
-  Actor can be created in it, and it can only be deleted once empty.
+  resource can be created in it, and it can only be deleted once its actors,
+  actor templates, and tags are gone.
 
 - **Actor**: a single instance derived from an `ActorTemplate`, identified by a
   DNS-1123 name. It is the unit that is suspended and resumed, and it moves
   between workers over its lifetime. An Actor record tracks its lifecycle
   status and snapshot references.
 
+- **Tag**: a durable, atespace-scoped snapshot record created from a suspended
+  Actor (or by `ate-api-server` for a template's golden snapshot). Each Tag
+  holds its own copy of the snapshot in object storage and can be scoped to its
+  own atespace or published across atespaces.
+
 - **Worker**: a record representing one worker pod in a `WorkerPool`. A Worker
   hosts several Actors at once, each in its own sandbox, up to its actor limit
-  and its compute capacity; many more are multiplexed across a pool over time.
+  and its compute capacity. Many more are multiplexed across a pool over time.
 
 ## Components
 
@@ -153,8 +159,8 @@ for etcd.
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
   Templates with golden snapshot creation disabled do not create one. By
   default an Actor of that template is first restored from this shared
-  snapshot when it is available; otherwise it cold-boots. It is always a
-  `MEMORY` capture.
+  snapshot when it is available, and otherwise cold-boots. It is captured at
+  the template's `preferredFidelity` (`MEMORY` by default).
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

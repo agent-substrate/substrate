@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -38,6 +39,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -261,45 +263,80 @@ func ValidateSandboxAssetsDir(actorUID, dir string, fldPath *field.Path) field.E
 	return nil
 }
 
-// ValidateSnapshotLocation ensures an ActorTemplate's
-// snapshotConfig.storageLocation is a well-formed URI with a bucket, so a bad
-// location fails fast instead of deep inside an object-storage call. It
-// deliberately does not restrict the scheme: the storage layer only uses the
-// host (bucket) and path, and which schemes are acceptable is a
-// storage-backend policy, not a per-RPC one.
+// snapshotLocationSegmentRE matches a path segment of a snapshot location.
+// Characters outside it, such as dots, white space and '%', are ones an
+// object-storage backend may trim, fold or decode, which could turn a segment
+// into another name.
+var snapshotLocationSegmentRE = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// ValidateSnapshotLocation checks ate-api-server's --snapshot-location, an
+// ActorTemplate's snapshotConfig.storageLocation on create, and the location a
+// tag is created under. The location must be a URI with a bucket, so a bad
+// location fails fast instead of deep inside an object-storage call. It does
+// not restrict the scheme or the bucket: the storage layer uses only the host
+// (bucket) and path, and which schemes are acceptable is a storage-backend
+// policy.
 //
-// This validates the base that many snapshots share, not any one snapshot's
-// URI; SnapshotURI is the type for the latter, and it applies this check when
-// it is built.
+// Each path segment must match snapshotLocationSegmentRE and must not be
+// "atespaces" in any letter case, so a location cannot sit inside the
+// <location>/atespaces/... prefix another location builds.
 func ValidateSnapshotLocation(location string) error {
-	u, err := url.Parse(location)
+	u, err := parseStorageURI(location)
 	if err != nil {
-		return fmt.Errorf("invalid snapshot location %q: %v", location, err)
+		return fmt.Errorf("invalid snapshot location %q: %w", location, err)
+	}
+	path := u.EscapedPath()
+	if path == "" || path == "/" {
+		return nil
+	}
+	path = strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/")
+	for segment := range strings.SplitSeq(path, "/") {
+		if segment == "" {
+			return fmt.Errorf("invalid snapshot location %q: must not contain an empty path segment", location)
+		}
+		if !snapshotLocationSegmentRE.MatchString(segment) {
+			return fmt.Errorf("invalid snapshot location %q: path segment %q must contain only ASCII letters, digits, '_' and '-'", location, segment)
+		}
+		if strings.EqualFold(segment, atespacesPathSegment) {
+			return fmt.Errorf("invalid snapshot location %q: must not contain an %q path segment; snapshots are stored under <location>/%s/", location, atespacesPathSegment, atespacesPathSegment)
+		}
+	}
+	return nil
+}
+
+// parseStorageURI checks the shape every snapshot location, owner prefix and
+// snapshot URI shares: a host (the bucket) and a path that appending names to
+// cannot redirect. It does not check the scheme, which may be empty
+// ("//bucket/path"). Errors are bare causes for the caller to wrap.
+func parseStorageURI(uri string) (*url.URL, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
 	}
 	if u.Host == "" {
-		return fmt.Errorf("invalid snapshot location %q: missing bucket", location)
+		return nil, errors.New("missing bucket")
 	}
 	// Snapshot and object names are appended to the location by string
 	// concatenation. A query, fragment, or userinfo component would swallow
 	// the appended name when the result is re-parsed (the storage layer uses
 	// only host and path), silently redirecting the upload/download to a
-	// different object.
-	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+	// different object. A trailing '?' sets ForceQuery with an empty RawQuery.
+	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, errors.New("must contain only a scheme, bucket, and path")
 	}
 	// url.JoinPath cleans dot segments, and some backends trim spaces from
 	// segments (or windows, trailing dots) and treat '\' as a separator, so
 	// these could move snapshots outside of the location, e.g. into another
 	// atespace's prefix
 	if strings.Contains(u.Path, `\`) {
-		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+		return nil, errors.New(`must not contain '\'`)
 	}
 	for segment := range strings.SplitSeq(u.Path, "/") {
 		if segment != "" && strings.Trim(segment, ". ") == "" {
-			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
+			return nil, errors.New("must not contain path segments of only '.' and ' '")
 		}
 	}
-	return nil
+	return u, nil
 }
 
 // ValidateIP checks that the given string is a valid IP address, is not an
@@ -370,10 +407,20 @@ func ValidatePinnedImage(fldPath *field.Path, value string) field.ErrorList {
 	return nil
 }
 
-// capabilityRE constrains Linux capability names: uppercase, without the
-// "CAP_" prefix (which is added when the OCI spec is written; the prefixed
-// spelling would silently grant nothing).
-var capabilityRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+// linuxCapabilities are the Linux capability names, in bit order, without the
+// "CAP_" prefix (which is added when the OCI spec is written). runsc and
+// kata-agent accept exactly these, and kata-agent panics on any other name.
+var linuxCapabilities = sets.New(
+	"CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID",
+	"KILL", "SETGID", "SETUID", "SETPCAP", "LINUX_IMMUTABLE",
+	"NET_BIND_SERVICE", "NET_BROADCAST", "NET_ADMIN", "NET_RAW", "IPC_LOCK",
+	"IPC_OWNER", "SYS_MODULE", "SYS_RAWIO", "SYS_CHROOT", "SYS_PTRACE",
+	"SYS_PACCT", "SYS_ADMIN", "SYS_BOOT", "SYS_NICE", "SYS_RESOURCE",
+	"SYS_TIME", "SYS_TTY_CONFIG", "MKNOD", "LEASE", "AUDIT_WRITE",
+	"AUDIT_CONTROL", "SETFCAP", "MAC_OVERRIDE", "MAC_ADMIN", "SYSLOG",
+	"WAKE_ALARM", "BLOCK_SUSPEND", "AUDIT_READ", "PERFMON", "BPF",
+	"CHECKPOINT_RESTORE",
+)
 
 // ValidateCapabilities checks each capability name. "ALL" is accepted only
 // when allowAll is set, which is the case for drop but not add.
@@ -389,8 +436,12 @@ func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) fie
 			errs = append(errs, field.TooLong(p, nil, 63))
 		case strings.HasPrefix(c, "CAP_"):
 			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
-		case !capabilityRE.MatchString(c):
-			errs = append(errs, field.Invalid(p, c, "must be an uppercase capability name like 'NET_BIND_SERVICE'"))
+		case !linuxCapabilities.Has(c):
+			supported := sets.List(linuxCapabilities)
+			if allowAll {
+				supported = append(supported, "ALL")
+			}
+			errs = append(errs, field.NotSupported(p, c, supported))
 		}
 	}
 	return errs

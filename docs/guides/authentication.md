@@ -3,7 +3,7 @@ title: "Authentication"
 linkTitle: "Authentication"
 weight: 3
 description: >
-  How clients authenticate to ate-api.
+  How clients authenticate to ate-api-server over SPIFFE mTLS or OIDC JWTs.
 ---
 
 # ate-api Authentication

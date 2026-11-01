@@ -27,8 +27,11 @@ var deployCmd = &cobra.Command{
 	Short:       "Deploy Agent Substrate components",
 }
 
-// deployAteSystemPath is the command path the ate-system settings bind to.
-const deployAteSystemPath = "deploy ate-system"
+// Command paths the deploy subcommands bind their flags to.
+const (
+	deployAteSystemPath     = "deploy ate-system"
+	deploySandboxConfigPath = "deploy sandboxconfig"
+)
 
 // deployOptions reads the settings deploy ate-system owns.
 //
@@ -38,12 +41,40 @@ const deployAteSystemPath = "deploy ate-system"
 // correct for an argument: there is no channel to name.
 func deployOptions() (steps.DeployOptions, error) {
 	r := env.Cfg.Resolved()
-	opts := steps.DeployOptions{SetupCSI: r.String("csi.setup")}
+	opts := steps.DeployOptions{
+		SetupCSI: r.String("csi.setup"),
+	}
 	if err := steps.ValidateCSIDriver(opts.SetupCSI); err != nil {
 		v, _ := r.Value("csi.setup")
 		return opts, &config.InvalidError{Value: v, Want: "nfs, hostpath, both or none"}
 	}
+	classes, err := sandboxClassesOption()
+	if err != nil {
+		return opts, err
+	}
+	opts.SandboxClasses = classes
 	return opts, nil
+}
+
+func sandboxClassesOption() (string, error) {
+	r := env.Cfg.Resolved()
+	classes := r.String("sandboxClasses")
+	if err := steps.ValidateSandboxClasses(classes); err != nil {
+		v, _ := r.Value("sandboxClasses")
+		return "", &config.InvalidError{Value: v, Want: "gvisor, microvm or gvisor,microvm"}
+	}
+	return classes, nil
+}
+
+func validateSandboxClassesFlag(cmd *cobra.Command) error {
+	if !cmd.Flags().Changed("sandbox-classes") {
+		return nil
+	}
+	classes, err := cmd.Flags().GetString("sandbox-classes")
+	if err != nil {
+		return err
+	}
+	return steps.ValidateSandboxClasses(classes)
 }
 
 var deployAteSystemCmd = &cobra.Command{
@@ -53,7 +84,15 @@ var deployAteSystemCmd = &cobra.Command{
 
 This installs the CRDs and RBAC, the podcertificate controller and the secrets
 it signs, PostgreSQL, ate-api-server, ate-idp-server, ate-controller, the atenet
-dataplane, and the atelet DaemonSet, then waits for each to roll out.
+dataplane, the default gVisor and microVM SandboxConfigs (staging the microVM
+guest assets to the cluster object store), and the atelet DaemonSet, then waits
+for each to roll out.
+
+When microvm is in --sandbox-classes (the default is gvisor,microvm), ate-setup
+downloads the Kata and Cloud Hypervisor release assets from GitHub and uploads
+them to the asset bucket (in-cluster rustfs on Kind, or gs://<bucket>-assets via
+gcloud on GKE). Pass --sandbox-classes=gvisor on gVisor-only clusters to skip
+this step.
 
 The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
@@ -68,6 +107,9 @@ Shape the install with the global --atenet-dataplane, --cluster-size,
 	// the resolved settings exist.
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		if err := validateSandboxClassesFlag(cmd); err != nil {
 			return err
 		}
 		if !cmd.Flags().Changed("setup-csi") {
@@ -138,10 +180,19 @@ var deployPodCertControllerCmd = &cobra.Command{
 
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
-	Short: "Deploy the SandboxConfig admission policy and the default gVisor SandboxConfig only",
-	Args:  cobra.NoArgs,
+	Short: "Deploy the SandboxConfig admission policy and the default gVisor and microVM SandboxConfigs only",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.NoArgs(cmd, args); err != nil {
+			return err
+		}
+		return validateSandboxClassesFlag(cmd)
+	},
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeploySandboxConfig(cmd.Context())
+		classes, err := sandboxClassesOption()
+		if err != nil {
+			return err
+		}
+		return env.DeploySandboxConfig(cmd.Context(), classes)
 	},
 }
 
@@ -173,12 +224,21 @@ func init() {
 		deployPostgresCmd,
 	)
 
-	config.RegisterCommand(config.Setting{
-		Key: "csi.setup", Env: "SETUP_CSI", Flag: "setup-csi",
-		Kind: config.KindString, Default: "none",
-		Commands: []string{deployAteSystemPath},
-		Usage:    "Also install CSI driver (nfs, hostpath, both, none; default: none)",
-	})
+	config.RegisterCommand(
+		config.Setting{
+			Key: "csi.setup", Env: "SETUP_CSI", Flag: "setup-csi",
+			Kind: config.KindString, Default: "none",
+			Commands: []string{deployAteSystemPath},
+			Usage:    "Also install CSI driver (nfs, hostpath, both, none; default: none)",
+		},
+		config.Setting{
+			Key: "sandboxClasses", Env: "ATE_INSTALL_SANDBOX_CLASSES", Flag: "sandbox-classes",
+			Kind: config.KindString, Default: steps.DefaultSandboxClasses,
+			Commands: []string{deployAteSystemPath, deploySandboxConfigPath},
+			Usage:    "Default SandboxConfigs to install (comma-separated: gvisor, microvm; default: gvisor,microvm)",
+		},
+	)
 	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
+	config.BindCommandFlags(deploySandboxConfigPath, deploySandboxConfigCmd.Flags())
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
 }
