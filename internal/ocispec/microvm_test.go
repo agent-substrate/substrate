@@ -15,6 +15,7 @@
 package ocispec
 
 import (
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -193,5 +194,59 @@ func TestShapeMicroVM_AllowsLowPortsInTheGuest(t *testing.T) {
 	}
 	if v := preset.Linux.Sysctl[portStart]; v != "1024" {
 		t.Errorf("%s = %q, want the caller's value kept", portStart, v)
+	}
+}
+
+func TestShapeMicroVM_MasksProcAndSys(t *testing.T) {
+	spec := Build(parityOptions)
+	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	roTmpfs := []string{"ro", "nr_blocks=1", "nr_inodes=1"}
+	for _, tc := range []struct {
+		path     string
+		readonly bool
+		masked   bool
+		mount    *specs.Mount
+	}{
+		{path: "/proc/sys", readonly: true},
+		{path: "/proc/kcore", masked: true},
+		{path: "/sys/firmware", mount: &specs.Mount{Destination: "/sys/firmware", Type: "tmpfs", Source: "tmpfs", Options: roTmpfs}},
+		// Not in the guest kernel, so masking them would fail container start.
+		{path: "/proc/asound"},
+		{path: "/proc/scsi"},
+		{path: "/sys/devices/virtual/powercap"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := slices.Contains(spec.Linux.ReadonlyPaths, tc.path); got != tc.readonly {
+				t.Errorf("in ReadonlyPaths = %v, want %v", got, tc.readonly)
+			}
+			if got := slices.Contains(spec.Linux.MaskedPaths, tc.path); got != tc.masked {
+				t.Errorf("in MaskedPaths = %v, want %v", got, tc.masked)
+			}
+			var got *specs.Mount
+			if i := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == tc.path }); i >= 0 {
+				got = &spec.Mounts[i]
+			}
+			if !reflect.DeepEqual(got, tc.mount) {
+				t.Errorf("mount = %+v, want %+v", got, tc.mount)
+			}
+		})
+	}
+}
+
+func TestGuestMaskedDirPaths(t *testing.T) {
+	for _, tc := range []struct {
+		goarch string
+		want   []string
+	}{
+		{goarch: "amd64", want: []string{"/sys/firmware", "/proc/acpi"}},
+		{goarch: "arm64", want: []string{"/sys/firmware"}},
+	} {
+		t.Run(tc.goarch, func(t *testing.T) {
+			if got := guestMaskedDirPaths(tc.goarch); !slices.Equal(got, tc.want) {
+				t.Errorf("guestMaskedDirPaths(%q) = %v, want %v", tc.goarch, got, tc.want)
+			}
+		})
 	}
 }

@@ -19,7 +19,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -47,7 +49,9 @@ type capabilitiesResponse struct {
 // securityContext.capabilities is actually in force inside the sandbox, as the
 // kernel reports it — not merely present in the OCI spec atelet writes. atelet
 // does not spawn containers, so the spec being right and the sandbox applying
-// it are separate claims; only this test covers the second.
+// it are separate claims; only this test covers the second. It also checks
+// that uid 0 cannot write /proc/sys and, on microVM, that masked files read
+// empty and masked directories hide their contents and are read-only.
 //
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gvisor and micro-VM from one suite.
@@ -121,6 +125,53 @@ func TestActorCapabilities(t *testing.T) {
 			if got.NoNewPrivs {
 				t.Error("no_new_privs = 1, want 0")
 			}
+
+			// uid 0 must not write /proc/sys. gVisor's procfs makes this file
+			// 0444. On microVM the container is root in the guest kernel, so
+			// this relies on the read-only path.
+			wantErr := "permission denied"
+			if e2e.IsMicroVM() {
+				wantErr = "read-only file system"
+			}
+			if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/proc/sys/kernel/domainname"); !strings.Contains(got["error"], wantErr) {
+				t.Errorf("writing /proc/sys/kernel/domainname: error %q, want %q", got["error"], wantErr)
+			}
+
+			// gVisor's procfs has no /proc/interrupts. On microVM it reads as
+			// empty only if the /dev/null mask is in force.
+			if e2e.IsMicroVM() {
+				got := probeFile(t, ctx, rc, namespace, actor, "/readfile", "/proc/interrupts")
+				if got["error"] != "" || got["content"] != "" {
+					t.Errorf("reading /proc/interrupts = %q, error %q, want empty content", got["content"], got["error"])
+				}
+
+				// The mask hides /sys/firmware's contents: acpi on amd64,
+				// devicetree on arm64.
+				const enoent = "no such file or directory"
+				for _, p := range []string{"/sys/firmware/acpi", "/sys/firmware/devicetree"} {
+					if got := probeFile(t, ctx, rc, namespace, actor, "/readfile", p); !strings.Contains(got["error"], enoent) {
+						t.Errorf("reading %s: error %q, want %q", p, got["error"], enoent)
+					}
+				}
+				// The mask is read-only. Without ro, nr_inodes=1 gives ENOSPC.
+				// Unmasked /sys also gives EROFS, which the check above rules
+				// out.
+				if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/sys/firmware/x"); !strings.Contains(got["error"], "read-only file system") {
+					t.Errorf("writing /sys/firmware/x: error %q, want read-only file system", got["error"])
+				}
+				// /proc/acpi is a read-only mask on amd64, and missing on arm64,
+				// which has no ACPI. Unmasked, procfs gives permission denied.
+				if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/proc/acpi/x"); !strings.Contains(got["error"], "read-only file system") && !strings.Contains(got["error"], enoent) {
+					t.Errorf("writing /proc/acpi/x: error %q, want read-only file system or %q", got["error"], enoent)
+				}
+				// These have no mask because the guest kernel lacks them. A
+				// kernel that adds them must fail here.
+				for _, dir := range []string{"/proc/asound", "/proc/scsi", "/sys/devices/virtual/powercap"} {
+					if got := probeFile(t, ctx, rc, namespace, actor, "/readfile", dir); !strings.Contains(got["error"], enoent) {
+						t.Errorf("reading %s: error %q, want %q", dir, got["error"], enoent)
+					}
+				}
+			}
 		})
 	}
 }
@@ -188,6 +239,26 @@ func probeCapabilities(t *testing.T, ctx context.Context, rc *e2e.RouterClient, 
 	var out capabilitiesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decoding /capabilities for %q: %v", id, err)
+	}
+	return out
+}
+
+// probeFile runs the probe's /readfile or /writefile on path and returns its
+// response.
+func probeFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, namespace, id, endpoint, path string) map[string]string {
+	t.Helper()
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: namespace, Name: id}, endpoint+"?path="+url.QueryEscape(path))
+	if err != nil {
+		t.Fatalf("GET %s for %q: %v", endpoint, id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET %s for %q: status %d, body %q", endpoint, id, resp.StatusCode, body)
+	}
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding %s for %q: %v", endpoint, id, err)
 	}
 	return out
 }
