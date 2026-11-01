@@ -92,6 +92,7 @@ type FixtureOption func(*fixtureConfig)
 
 type fixtureConfig struct {
 	templateValues map[string]string
+	imageUser      string
 }
 
 // WithTemplateValue replaces the inline placeholder ${name} in the fixture's
@@ -103,6 +104,12 @@ func WithTemplateValue(name, value string) FixtureOption {
 		}
 		c.templateValues["${"+name+"}"] = value
 	}
+}
+
+// WithImageUser sets user as the USER of the images ko builds for the
+// fixture's ActorTemplates, as a Dockerfile USER line would.
+func WithImageUser(user string) FixtureOption {
+	return func(c *fixtureConfig) { c.imageUser = user }
 }
 
 // SubstrateFixtureManifests names the two manifest templates a substrate
@@ -157,7 +164,11 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 
 	tmplInline, tmplBlocks := substrateTemplateSubstitutions(name, trustBundles)
 	maps.Copy(tmplInline, cfg.templateValues)
-	rendered := koResolve(t, renderManifest(t, manifests.Template, tmplInline, tmplBlocks))
+	var resolveArgs []string
+	if cfg.imageUser != "" {
+		resolveArgs = append(resolveArgs, "--image-user", cfg.imageUser)
+	}
+	rendered := koResolve(t, renderManifest(t, manifests.Template, tmplInline, tmplBlocks), resolveArgs...)
 	templates := decodeSubstrateTemplates(t, rendered)
 
 	atespace := templates[0].GetMetadata().GetAtespace()

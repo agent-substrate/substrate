@@ -3138,7 +3138,10 @@ type SnapshotConfig struct {
 	// storage_location is the base object-storage URI snapshots of actors on
 	// this version are stored under. If unset, ate-api-server's
 	// --snapshot-location is used. Requires the PerTemplateSnapshotLocation preview
-	// gate.
+	// gate. Each path segment may contain only ASCII letters, digits, '_' and
+	// '-'. Each owner's snapshots are stored under
+	// <storage_location>/atespaces/..., so no segment may be "atespaces" in any
+	// letter case.
 	//
 	// +ate:preview=PerTemplateSnapshotLocation
 	// +k8s:ifDisabled(PerTemplateSnapshotLocation)=+k8s:forbidden
@@ -3491,7 +3494,7 @@ type Capabilities struct {
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar; "ALL" not accepted
+	// +k8s:customValidation # a Linux capability name; "ALL" not accepted
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
 	// drop lists capabilities to remove from the default set. "ALL" drops the
 	// whole set, so drop+add expresses an exact set rather than a relative one.
@@ -3499,7 +3502,7 @@ type Capabilities struct {
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar
+	// +k8s:customValidation # a Linux capability name or "ALL"
 	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

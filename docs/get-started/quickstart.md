@@ -5,25 +5,34 @@ weight: 2
 aliases:
   - "/docs/getting-started/"
 description: >
-  Deploy Agent Substrate on a local Kind cluster and invoke your first stateful actor.
+  Deploy Agent Substrate on a local kind cluster and invoke your first stateful actor.
 ---
 
 # Quickstart & Installation
 
-Deploy the Agent Substrate control plane and the stateful **Counter** sample application on a local `kind` cluster.
+Deploy the Agent Substrate control plane and the stateful **Counter** sample application on a local [kind](https://kind.sigs.k8s.io/) cluster.
 
 > [!NOTE]
-> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed (`kind` is managed automatically via Go). A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
+> **Prerequisites:** Ensure [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [Docker](https://www.docker.com/) are installed ([`kind`](https://kind.sigs.k8s.io/) is managed automatically via Go). A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
-## 1. Deploy Agent Substrate & Create an Actor
+## 1. Clone the repository
+
+Clone the repository (if you haven't yet) and `cd` to it:
+
+```bash
+git clone https://github.com/agent-substrate/substrate.git
+cd substrate
+```
+
+## 2. Deploy Agent Substrate & Create an Actor
 
 Run the following commands from the repository root to provision a local `kind` cluster, install Agent Substrate, and create a `counter` actor:
 
 ```bash
-# 1. Create a local Kind cluster and image registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
+# 1. Create a local kind cluster and image registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
 hack/create-kind-cluster.sh
 
-# 2. Target the local Kind cluster in every shell that runs ate-setup
+# 2. Target the local kind cluster in every shell that runs ate-setup
 export ATE_INSTALL_KIND=true
 
 # 3. Install Agent Substrate, PostgreSQL, and snapshot storage (rustfs)
@@ -50,7 +59,7 @@ kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 ./hack/delete-kind-cluster.sh
 ```
 
-## 2. Snapshot & Telemetry Configuration
+## 3. Snapshot & Telemetry Configuration
 
 In `kind`, snapshots are stored in the in-cluster S3-compatible `rustfs` service (`BUCKET_NAME=ate-snapshots`), and telemetry exports to the local OpenTelemetry Collector (`manifests/ate-install/kind/ate-otel-config.yaml`):
 
@@ -66,14 +75,14 @@ data:
   OTEL_METRIC_EXPORT_TIMEOUT: "10000"
   OTEL_LOGS_EXPORTER: otlp
 ---
-# ActorTemplate snapshotConfig rendered for Kind (local bucket)
+# ActorTemplate snapshotConfig from the counter demo
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
-  storageLocation: gs://ate-snapshots/ate-demo-counter/
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
 ```
 
-## 3. Verify Your Running Actor
+The template sets no `storageLocation`, so its snapshots go under ate-api-server's `--snapshot-location`. The kind profile points that at the local `rustfs` bucket, `gs://ate-snapshots/`.
+
+## 4. Verify Your Running Actor
 
 With `kubectl ate proxy actor` running in your first terminal, open a **second terminal** and send an HTTP `POST` request to wake and increment your actor:
 

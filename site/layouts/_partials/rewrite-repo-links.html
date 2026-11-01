@@ -17,13 +17,17 @@ limitations under the License.
 {{/*
 Rewrites relative Markdown links in .content, resolved against .dir (the
 directory of the repository file the text came from):
-  - a file that some page includes via repo_source links to that page;
+  - a file that some page includes via repo_source links to that page (or its
+    Markdown output when .markdown is true);
   - a path under params.repo_static_dirs links to the mounted static copy;
   - anything else links to the file on GitHub.
+Set .absolute to emit full URLs instead of site-relative paths.
 */ -}}
 
 {{- $content := .content -}}
 {{- $dir := .dir -}}
+{{- $absolute := .absolute | default false -}}
+{{- $markdown := .markdown | default false -}}
 {{- $repo := site.Params.github_repo -}}
 {{- $branch := site.Params.github_branch | default "main" -}}
 
@@ -43,11 +47,19 @@ directory of the repository file the text came from):
     {{- $url := "" -}}
     {{- $matchedPages := or (where site.Pages "Params.repo_source" $repoPath) (where site.Pages "Params.repo_sources" "intersect" (slice $repoPath)) -}}
     {{- with $matchedPages -}}
-      {{- $url = (index . 0).RelPermalink -}}
+      {{- $p := index . 0 -}}
+      {{- if $markdown -}}
+        {{- with $p.OutputFormats.Get "markdown" -}}
+          {{- $url = cond $absolute .Permalink .RelPermalink -}}
+        {{- end -}}
+      {{- end -}}
+      {{- if not $url -}}
+        {{- $url = cond $absolute $p.Permalink $p.RelPermalink -}}
+      {{- end -}}
     {{- else -}}
       {{- range site.Params.repo_static_dirs -}}
         {{- if and (not $url) (strings.HasPrefix $repoPath (printf "%s/" .)) -}}
-          {{- $url = relURL $repoPath -}}
+          {{- $url = cond $absolute (absURL $repoPath) (relURL $repoPath) -}}
         {{- end -}}
       {{- end -}}
     {{- end -}}

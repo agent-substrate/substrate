@@ -44,12 +44,18 @@ type DeployOptions struct {
 	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
 	// Kind only. The hostpath driver is Kind only.
 	SetupCSI string
+	// SandboxClasses selects the default SandboxConfigs to install
+	// (comma-separated: gvisor, microvm; empty defaults to both).
+	SandboxClasses string
 }
 
 // Validate checks the options that can be checked without configuration or a
 // cluster, so the command can reject them while cobra is still parsing.
 func (o DeployOptions) Validate() error {
-	return ValidateCSIDriver(o.SetupCSI)
+	if err := ValidateCSIDriver(o.SetupCSI); err != nil {
+		return err
+	}
+	return ValidateSandboxClasses(o.SandboxClasses)
 }
 
 // DeployAteSystem installs the whole control plane: CRDs, RBAC, the
@@ -79,6 +85,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
 		return err
 	}
+	gvisor, microvm, err := parseSandboxClasses(opts.SandboxClasses)
+	if err != nil {
+		return err
+	}
 	// The snapshot location is only written into ate-api-server's ConfigMap
 	// partway through, so check it before the cluster is touched.
 	if _, err := clusterSnapshotLocation(e.Cfg.SnapshotLocation, e.Cfg.PreviewGates); err != nil {
@@ -86,6 +96,13 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 	if err := e.requireNoWorkerPods(ctx); err != nil {
 		return err
+	}
+	var microvmPrep *microVMPrepared
+	if microvm {
+		microvmPrep, err = e.prepareMicroVMDeps(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	// The namespace has to exist before RBAC or CRDs are applied.
@@ -99,6 +116,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.DeployCRDs(ctx); err != nil {
 		return err
 	}
+	if err := e.applyInitialSandboxConfigs(ctx, gvisor); err != nil {
+		return err
+	}
 
 	if err := e.EnsureAPIServerPrerequisites(ctx); err != nil {
 		return err
@@ -110,10 +130,6 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 	if err := e.SetupCSI(ctx, opts.SetupCSI); err != nil {
-		return err
-	}
-
-	if err := e.DeploySandboxConfig(ctx); err != nil {
 		return err
 	}
 
@@ -170,6 +186,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 	if err := e.applyAtenetEgress(ctx, providers); err != nil {
 		return err
+	}
+	if microvmPrep != nil {
+		if err := e.applyMicroVMSandboxConfig(ctx, microvmPrep); err != nil {
+			return err
+		}
 	}
 
 	log.Step("Waiting for ATE system components to be ready...")
@@ -582,23 +603,46 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	return nil
 }
 
-// DeploySandboxConfig applies the SandboxConfig admission policy, then the
-// default gVisor SandboxConfig.
-func (e *Env) DeploySandboxConfig(ctx context.Context) error {
+// DeploySandboxConfig applies the SandboxConfig admission policy and the
+// default SandboxConfigs selected by sandboxClasses.
+func (e *Env) DeploySandboxConfig(ctx context.Context, sandboxClasses string) error {
 	log.Step("deploy_sandboxconfig")
+
+	gvisor, microvm, err := parseSandboxClasses(sandboxClasses)
+	if err != nil {
+		return err
+	}
+	var microvmPrep *microVMPrepared
+	if microvm {
+		microvmPrep, err = e.prepareMicroVMDeps(ctx)
+		if err != nil {
+			return err
+		}
+	}
 
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err
 	}
+	if err := e.applyInitialSandboxConfigs(ctx, gvisor); err != nil {
+		return err
+	}
+	if microvmPrep != nil {
+		return e.applyMicroVMSandboxConfig(ctx, microvmPrep)
+	}
+	return nil
+}
 
+// applyInitialSandboxConfigs applies the SandboxConfig ValidatingAdmissionPolicy
+// and, when gvisor is enabled, the cluster-wide default gVisor SandboxConfig.
+func (e *Env) applyInitialSandboxConfigs(ctx context.Context, gvisor bool) error {
 	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the config below is validated too.
+	// before any SandboxConfig so the configs below are validated too.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
 		return err
 	}
-
-	// Install the cluster-wide default gVisor SandboxConfig that gVisor
-	// WorkerPools resolve by default unless they pin their own configRef.
+	if !gvisor {
+		return nil
+	}
 	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 

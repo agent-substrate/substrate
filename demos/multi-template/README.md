@@ -72,7 +72,7 @@ When you send an HTTP request through the proxy, `atenet-router` automatically a
 ```bash
 # counter binary
 curl -s http://localhost:8000
-# -> hello from: <ip> | preserved memory count: 1
+# -> preserved memory count: 1
 
 # fspersist binary
 curl -s http://localhost:8001

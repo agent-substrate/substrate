@@ -156,12 +156,14 @@ if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
   notes+=" [Release images](https://github.com/${REPO}/blob/${tag}/docs/dev/releasing.md#release-images)."
   notes+=$'\n\n## Install\n\n'
   notes+="From a checkout of \`${tag}\`, with Go, install the release images into the current kubectl context."
-  notes+=" Add \`--kind\` for a kind cluster."
+  notes+=" On GKE, the default \`--sandbox-classes=gvisor,microvm\` downloads microVM guest assets from GitHub and uploads them with \`gcloud\` to \`gs://<bucket>-assets\` (created with atelet read access by \`go run ./tools/setup-gcp create bucket\` and \`create iam\`)."
+  notes+=" Add \`--kind\` for a kind cluster, or \`--sandbox-classes=gvisor\` to skip microVM staging."
   notes+=$'\n\n```sh\n'
   notes+="git clone --depth 1 --branch ${tag} https://github.com/${REPO}.git"$'\n'
   notes+=$'cd substrate\n'
   notes+=$'go run ./cmd/ate-setup deploy ate-system \\\n'
   notes+="  --image-repo ${RELEASE_IMAGE_REPO} --image-tag ${tag} \\"$'\n'
+  notes+=$'  --storage-bucket-name=<bucket> \\\n'
   notes+=$'  --credential-provider=\'{"name":"k8s.io"}\' \\\n'
   notes+=$'  --ingress-allowed-spiffe-ids=<SPIFFE IDs of your ingress clients>\n'
   notes+='```'

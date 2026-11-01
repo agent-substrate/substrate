@@ -134,8 +134,8 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
-	// BucketName is the object-storage bucket (BUCKET_NAME) passed to install
-	// scripts such as hack/install-microvm-deps.sh. The kind profile also
+	// BucketName is the object-storage bucket (BUCKET_NAME) used for staging
+	// microVM assets and passed to benchmark scripts. The kind profile also
 	// derives SnapshotLocation from it.
 	BucketName string
 

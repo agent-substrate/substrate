@@ -43,7 +43,7 @@ func TestValidateActorStatusCrash(t *testing.T) {
 		return withActorStatus(func(s *ateapi.ActorStatus) {
 			s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 			s.Crash = &ateapi.ActorCrash{
-				Message:   crashMessageWorkerGone,
+				Message:   crashMessageWorkerDraining,
 				CrashTime: &timestamppb.Timestamp{Seconds: 867},
 			}
 			for _, m := range mutate {
@@ -767,7 +767,11 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+			// A delete releases the Actor's worker before removing it.
+			if _, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, func(a *ateapi.Actor) error {
+				a.Status.WorkerAssignment = nil
+				return nil
+			}); err != nil {
 				t.Fatalf("racing writer: mark for deletion: %v", err)
 			}
 			if _, err := persistence.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {

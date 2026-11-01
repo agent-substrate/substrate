@@ -37,19 +37,17 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// TestMintWorkerActorCertificateAfterWorkerRelease drives each of
-// ReleaseWindowWorkflows into the window between releasing the actor's worker
-// and rewriting its status, by failing the second write. The status still
-// names the worker there, and keeps doing so until the workflow is retried.
-// The worker must not get a worker-for-actor certificate for the actor in that
-// window, nor once it hosts another actor or the status is finalized, and
-// another worker on the node never gets one.
+// TestMintWorkerActorCertificateAfterWorkerRelease fails the write of each of
+// ReleasingWorkflows that releases the actor's worker and rewrites its status.
+// The worker keeps the actor, and so its worker-for-actor certificate, until a
+// retry commits both; it gets none after that, and another worker on the node
+// never gets one.
 func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 	// The worker is the one WireTestAssignment names, so an async or sync suspend
 	// reaches the workflow's fake atelet on its node.
 	wa := controlapi.WireTestAssignment()
 	node := wa.GetNodeName()
-	for _, wf := range controlapi.ReleaseWindowWorkflows() {
+	for _, wf := range controlapi.ReleasingWorkflows() {
 		t.Run(wf.Name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := controlapi.NewTestPersistence(t)
@@ -138,28 +136,19 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 				t.Errorf("certificate mint by another worker on the node: code %v, want NotFound", got)
 			}
 
-			// The release commits; recording the new state fails.
+			// The write that releases the worker and records the new state fails.
 			if err := wf.Finalize(t, ctx, controlapi.ConflictingUpdateStore{Interface: persistence}, actorRef, actor); err == nil {
 				t.Fatal("finalize succeeded through a store that fails every actor update")
 			}
-			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
-				t.Fatalf("worker assignment after release: err %v, want ErrNotFound", err)
+			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); err != nil {
+				t.Fatalf("worker assignment after the failed write: err %v, want the worker to keep the actor", err)
 			}
-			actor, got = mint("released, status not finalized")
+			actor, got = mint("write failed")
 			if actor.GetStatus().GetState() != wf.State || actor.GetStatus().GetWorkerAssignment() == nil {
-				t.Fatalf("actor after the failed update: state %v, worker assignment %v; want %v naming the worker", actor.GetStatus().GetState(), actor.GetStatus().GetWorkerAssignment(), wf.State)
+				t.Fatalf("actor after the failed write: state %v, worker assignment %v; want %v naming the worker", actor.GetStatus().GetState(), actor.GetStatus().GetWorkerAssignment(), wf.State)
 			}
-			if got != codes.NotFound {
-				t.Errorf("certificate mint after the worker was released: code %v, want NotFound", got)
-			}
-
-			// The worker takes another actor.
-			controlapi.SeedAssignment(t, persistence, workerName, &ateapi.ActorAssignment{
-				Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: "actor-2"},
-				ActorUid: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
-			})
-			if _, got := mint("worker rebooked for another actor"); got != codes.NotFound {
-				t.Errorf("certificate mint after the worker was rebooked: code %v, want NotFound", got)
+			if got != codes.OK {
+				t.Errorf("certificate mint after the failed write: code %v, want OK", got)
 			}
 
 			// A retry records the new state.
@@ -173,6 +162,9 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			// No worker runs the actor once finalized, with or without a local snapshot.
 			if got != codes.NotFound {
 				t.Errorf("certificate mint once finalized: code %v, want NotFound", got)
+			}
+			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("worker assignment once finalized: err %v, want ErrNotFound", err)
 			}
 		})
 	}

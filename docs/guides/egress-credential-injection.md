@@ -8,15 +8,18 @@ description: >
 
 # Egress credential injection
 
-Egress credential injection puts a secret into an actor's outbound HTTPS
-requests without the actor ever holding it. It works on HTTPS the egress
-gateway intercepts: an `https` rule in the actor's `EgressPolicy` has the
-gateway terminate the actor's TLS for the names it lists and re-originate it
-(see [egress-trust-bundle.md](egress-trust-bundle.md)). When that rule carries
-a `replace_headers` effect and the actor's request includes a header it names,
-the gateway resolves the referenced credential from a **credential provider**
-and replaces the header's value with it (for example
-`Authorization: Bearer <token>`) before the request leaves the cluster.
+Egress credential injection puts a secret into an actor's outbound HTTP and
+HTTPS requests without the actor ever holding it. It works on requests the
+egress gateway can read: cleartext HTTP that an `http` rule in the actor's
+`EgressPolicy` allows, and HTTPS that an `https` rule allows. An `https` rule
+has the gateway terminate the actor's TLS for the names it lists and
+re-originate it (see [egress-trust-bundle.md](egress-trust-bundle.md)).
+
+When the rule carries a `replaceHeaders` effect and the actor's request
+includes a header it names, the gateway resolves the referenced credential
+from a **credential provider** and replaces the header's value with it (for
+example `Authorization: Bearer <token>`) before the request leaves the
+cluster.
 
 The actor never holds the secret. It sends the header with a placeholder
 value, which the gateway discards, so it cannot read, snapshot, or exfiltrate
@@ -61,7 +64,7 @@ flowchart LR
    terminates the actor's TLS — the actor trusts the gateway CA through a
    projected trust bundle — and decides the decrypted request against the
    actor's `EgressPolicy`.
-2. If the deciding rule has `replace_headers` and the request carries one of
+2. If the deciding rule has `replaceHeaders` and the request carries one of
    those headers, the gateway asks the credential provider for the credential
    that header names.
 3. The provider decides whether that actor may have that credential, reads it
@@ -85,7 +88,7 @@ Injection is declared in the `effects` of an `http` or `https` rule. This policy
 HTTPS to `api.example.com` on port 443, the default, and replaces the actor's
 `Authorization` header with a credential:
 
-```bash
+```yaml
 rules:
 - https:
     hostnames: ["api.example.com"]
@@ -103,9 +106,8 @@ curl -H 'Authorization: placeholder' https://api.example.com/v1/items
 ```
 
 This URI names the sample Secret deployed under [Enable it](#enable-it). The
-sample namespace policy lets only actors in atespace `team-a` resolve it; an
-actor in any other atespace gets a 403 until a cluster admin grants its
-atespace access.
+install's namespace policy grants nothing, so the actor gets a 403 until a
+cluster admin grants its atespace access to the `ns1` namespace.
 
 * `header` names the request header to replace.
 * `prefix` is prepended verbatim to the credential — include the separator,
@@ -114,9 +116,13 @@ atespace access.
 
 ### Credential URIs
 
-A credential URI has the form `ate-secret://<provider-class>/<path>`: the host
-names the provider that resolves it, and the path is that provider's to
-interpret. A URI the provider refuses denies the request with 403.
+A credential URI has the form
+`ate-secret://<provider-class>/<provider-specific-tail>`. The
+host names the provider that resolves it, and the provider interprets the
+path. The API requires the host to be a DNS-1123 subdomain and the path to
+have at least two non-empty segments. It rejects a port, userinfo, query, fragment,
+percent-encoding, or trailing slash. A URI the provider refuses denies the
+request with 403.
 
 * **Kubernetes Secrets** (provider class `k8s.io`) — see
   [The reference provider](#the-reference-provider).
@@ -267,10 +273,11 @@ kubectl apply -f manifests/egress-credential-injection/sample-secret.yaml
 ```
 
 **3. The actors.** Actors can now add `replaceHeaders` effects to their
-`https` rules, as described under [The policy](#the-policy). Each such actor
-also needs the projected egress trust bundle to do TLS through the gateway at
-all — see [egress-trust-bundle.md](egress-trust-bundle.md). Actor JWT entries
-need no provider; ateapi signs them with a key that every install creates.
+`http` or `https` rules, as described under [The policy](#the-policy). An
+actor with `https` rules also needs the projected egress trust bundle to do
+TLS through the gateway at all (see
+[egress-trust-bundle.md](egress-trust-bundle.md)). Actor JWT entries need no
+provider; ateapi signs them with a key that every install creates.
 
 ### Verify
 
@@ -285,7 +292,8 @@ Then give an actor an `https` rule for `httpbin.org` that replaces a header,
 have it request `https://httpbin.org/headers` with that header set to a
 placeholder, and look for the credential in the echoed response.
 
-If the request is denied instead, the gateway logs the reason:
+On the Envoy dataplane, the gateway's `ext-proc` container logs why a request
+was denied:
 
 ```bash
 kubectl -n ate-system logs deployment/atenet-egress -c ext-proc | grep 'egress denied'
@@ -325,7 +333,8 @@ a policy URI naming any other class fails closed rather than being sent to the
 wrong provider.
 
 The gateway reads only the URI host, to confirm the URI targets the provider it
-serves. Everything after the host is the provider's to interpret.
+serves. The provider interprets the path, within the rules under
+[Credential URIs](#credential-uris).
 
 [credprovider-gcp-secret-manager](https://github.com/agent-substrate-plugins/credprovider-gcp-secret-manager) is such a provider for Google Cloud Secret Manager.
 
@@ -364,6 +373,5 @@ may only resolve Secrets in namespaces explicitly granted to it.
 * `api/credprovider/v1/credprovider.proto` — the provider plugin API and
   its trust model.
 * `cmd/credential-provider/kubernetes-secrets` — the reference provider.
-* `internal/e2e/suites/egresscredinject` — the e2e suite that proves the
-  behavior table above on both sandbox classes, against a cluster installed
-  with `--credential-provider='{"name":"k8s.io"}'`.
+* `internal/e2e/suites/egresscredinject` — the e2e suite, run against a
+  cluster installed with `--credential-provider='{"name":"k8s.io"}'`.

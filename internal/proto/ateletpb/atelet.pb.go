@@ -3100,12 +3100,12 @@ type Capabilities struct {
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar; "ALL" not accepted
+	// +k8s:customValidation # a Linux capability name; "ALL" not accepted
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar
+	// +k8s:customValidation # a Linux capability name or "ALL"
 	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

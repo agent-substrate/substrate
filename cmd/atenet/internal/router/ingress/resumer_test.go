@@ -328,7 +328,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Unlock()
 					if n < 3 {
 						// Worker pool momentarily saturated.
-						return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 					}
 					return &ateapi.ResumeActorResponse{
 						Actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Name: testActorName}, Status: &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapi.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
@@ -361,7 +361,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
@@ -371,8 +371,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 			// The client must see the meaningful capacity error, not a generic
 			// timeout: status.Code must unwrap through the budget-exhaustion marker.
-			if got := status.Code(err); got != codes.FailedPrecondition {
-				t.Errorf("expected FailedPrecondition after park budget elapsed, got %v (err=%v)", got, err)
+			if got := status.Code(err); got != codes.ResourceExhausted {
+				t.Errorf("expected ResourceExhausted after park budget elapsed, got %v (err=%v)", got, err)
 			}
 			var budget *budgetExhaustedError
 			if !errors.As(err, &budget) {
@@ -580,6 +580,42 @@ func TestActorResumer_Parking(t *testing.T) {
 		})
 	})
 
+	t.Run("FailedPreconditionFailsFastWhileParking", func(t *testing.T) {
+		// ateapi answers FailedPrecondition for states a resume cannot start
+		// from, so the first attempt is the only one even with parking enabled.
+		synctest.Test(t, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls int
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					mu.Lock()
+					calls++
+					mu.Unlock()
+					return nil, status.Error(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: team-a/actor-park (got: ACTOR_STATE_CRASHED, want ACTOR_STATE_SUSPENDED)")
+				},
+			}
+
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
+			start := time.Now()
+			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			if got := status.Code(err); got != codes.FailedPrecondition {
+				t.Errorf("expected FailedPrecondition, got %v (err=%v)", got, err)
+			}
+			var budgetErr *budgetExhaustedError
+			if errors.As(err, &budgetErr) {
+				t.Errorf("expected a fail-fast error, got budget exhaustion %v", err)
+			}
+			if elapsed := time.Since(start); elapsed != 0 {
+				t.Errorf("expected no parked wait, got %v", elapsed)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if calls != 1 {
+				t.Errorf("expected exactly 1 resume attempt, got %d", calls)
+			}
+		})
+	})
+
 	t.Run("DisabledFailsFastOnCapacityError", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
@@ -589,15 +625,15 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
 			// Default constructor => parking disabled => fail-fast.
 			resumer := NewActorResumer(mock)
 			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
-			if got := status.Code(err); got != codes.FailedPrecondition {
-				t.Errorf("expected FailedPrecondition, got %v (err=%v)", got, err)
+			if got := status.Code(err); got != codes.ResourceExhausted {
+				t.Errorf("expected ResourceExhausted, got %v (err=%v)", got, err)
 			}
 			mu.Lock()
 			defer mu.Unlock()
