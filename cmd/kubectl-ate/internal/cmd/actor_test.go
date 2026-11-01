@@ -263,9 +263,11 @@ type fakeActorUpdater struct {
 	actor     *ateapi.Actor
 	getErr    error
 	updateErr error
+	deleteErr error
 
 	getCalls  int
 	updateReq *ateapi.UpdateActorRequest
+	deleteReq *ateapi.DeleteActorRequest
 }
 
 func (f *fakeActorUpdater) GetActor(_ context.Context, _ *ateapi.GetActorRequest, _ ...grpc.CallOption) (*ateapi.Actor, error) {
@@ -284,6 +286,14 @@ func (f *fakeActorUpdater) UpdateActor(_ context.Context, in *ateapi.UpdateActor
 	updated := proto.Clone(in.GetActor()).(*ateapi.Actor)
 	updated.Metadata.Version++
 	return updated, nil
+}
+
+func (f *fakeActorUpdater) DeleteActor(_ context.Context, in *ateapi.DeleteActorRequest, _ ...grpc.CallOption) (*ateapi.Actor, error) {
+	f.deleteReq = in
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	return proto.Clone(f.actor).(*ateapi.Actor), nil
 }
 
 func TestUpdateActor(t *testing.T) {
@@ -387,6 +397,67 @@ func TestUpdateActor(t *testing.T) {
 			t.Fatalf("updateActor() error = %v, want FailedPrecondition", err)
 		}
 	})
+}
+
+func TestDeleteActor(t *testing.T) {
+	ref := &ateapi.ObjectRef{Atespace: "demo", Name: "my-counter"}
+	const warning = `Warning: actor "my-counter" is RUNNING. Deleting it stops the actor and permanently deletes its snapshots.` + "\n"
+	actorIn := func(state ateapi.ActorState) *ateapi.Actor {
+		return &ateapi.Actor{Status: &ateapi.ActorStatus{State: state}}
+	}
+
+	tests := []struct {
+		name        string
+		client      *fakeActorUpdater
+		wantStderr  string
+		wantDeleted bool
+		wantCode    codes.Code
+	}{
+		{
+			name:        "running actor warns",
+			client:      &fakeActorUpdater{actor: actorIn(ateapi.ActorState_ACTOR_STATE_RUNNING)},
+			wantStderr:  warning,
+			wantDeleted: true,
+		},
+		{
+			name:        "suspended actor does not warn",
+			client:      &fakeActorUpdater{actor: actorIn(ateapi.ActorState_ACTOR_STATE_SUSPENDED)},
+			wantDeleted: true,
+		},
+		{
+			name:     "GetActor error stops the delete",
+			client:   &fakeActorUpdater{getErr: status.Error(codes.NotFound, "not found")},
+			wantCode: codes.NotFound,
+		},
+		{
+			name:        "DeleteActor error is returned after the warning",
+			client:      &fakeActorUpdater{actor: actorIn(ateapi.ActorState_ACTOR_STATE_RUNNING), deleteErr: status.Error(codes.Aborted, "conflict")},
+			wantStderr:  warning,
+			wantDeleted: true,
+			wantCode:    codes.Aborted,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			err := deleteActor(context.Background(), tc.client, &stderr, ref)
+			if got := status.Code(err); got != tc.wantCode {
+				t.Fatalf("deleteActor() error = %v, want code %v", err, tc.wantCode)
+			}
+			if got := stderr.String(); got != tc.wantStderr {
+				t.Errorf("stderr = %q, want %q", got, tc.wantStderr)
+			}
+			if gotDeleted := tc.client.deleteReq != nil; gotDeleted != tc.wantDeleted {
+				t.Fatalf("DeleteActor called = %v, want %v", gotDeleted, tc.wantDeleted)
+			}
+			if tc.wantDeleted {
+				if diff := cmp.Diff(&ateapi.DeleteActorRequest{Actor: ref}, tc.client.deleteReq, protocmp.Transform()); diff != "" {
+					t.Errorf("DeleteActor request mismatch (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
 }
 
 func TestFilterAndDisplayLogLine(t *testing.T) {

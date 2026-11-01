@@ -210,16 +210,32 @@ var deleteActorCmd = &cobra.Command{
 		defer c.Close()
 
 		actorRef := resources.ActorRef{Atespace: deleteActorAtespaceFlag, Name: args[0]}
-		_, err = c.ControlClient.DeleteActor(ctx, &ateapi.DeleteActorRequest{
-			Actor: actorRef.ToObjectRef(),
-		})
-		if err != nil {
+		if err := deleteActor(ctx, c, cmd.ErrOrStderr(), actorRef.ToObjectRef()); err != nil {
 			return err
 		}
 
 		fmt.Printf("actor %q deleted\n", actorRef.Name)
 		return nil
 	},
+}
+
+type actorDeleter interface {
+	GetActor(ctx context.Context, in *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
+	DeleteActor(ctx context.Context, in *ateapi.DeleteActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error)
+}
+
+// deleteActor deletes the actor. The server deletes in any state, so it warns
+// on errOut first when the actor is RUNNING.
+func deleteActor(ctx context.Context, client actorDeleter, errOut io.Writer, ref *ateapi.ObjectRef) error {
+	actor, err := client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
+	if err != nil {
+		return fmt.Errorf("failed to get actor %q: %w", ref.GetName(), err)
+	}
+	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
+		fmt.Fprintf(errOut, "Warning: actor %q is RUNNING. Deleting it stops the actor and permanently deletes its snapshots.\n", ref.GetName())
+	}
+	_, err = client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
+	return err
 }
 
 var resumeActorCmd = &cobra.Command{
