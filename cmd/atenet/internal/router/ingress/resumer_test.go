@@ -386,6 +386,42 @@ func TestActorResumer_Parking(t *testing.T) {
 		})
 	})
 
+	t.Run("BudgetExpiryKeepsCapacityErrorOverLateConflict", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls int
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					mu.Lock()
+					calls++
+					n := calls
+					mu.Unlock()
+					if n < 3 {
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+					}
+					// Another operation on the actor, such as atelet reporting a
+					// snapshot upload, holds its lease during the later attempts.
+					return nil, status.Error(codes.Aborted, "another operation is in progress for this actor")
+				},
+			}
+
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 1500 * time.Millisecond}))
+			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			if got := status.Code(err); got != codes.ResourceExhausted {
+				t.Errorf("expected the capacity error after park budget elapsed, got %v (err=%v)", got, err)
+			}
+			var budget *budgetExhaustedError
+			if !errors.As(err, &budget) {
+				t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if calls < 3 {
+				t.Errorf("expected the resume to be retried through the conflict while parked, got %d attempts", calls)
+			}
+		})
+	})
+
 	t.Run("ParksThroughUnavailableBlip", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var mu sync.Mutex
