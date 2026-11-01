@@ -215,7 +215,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		g.Go(func() error {
 			t := time.Now()
 			var err error
-			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
+			durableFiles, err = s.tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
@@ -223,7 +223,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if shipsRootfs {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
+			err := s.tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})

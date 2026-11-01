@@ -111,3 +111,20 @@ func TestWait(t *testing.T) {
 		t.Fatal("placement still waiting after the borrow was returned")
 	}
 }
+
+func TestTakeAll(t *testing.T) {
+	l := ledger(4<<30, 1<<30, unbookedOf(64<<20))
+	if l.TakeAll(128 << 20) {
+		t.Error("TakeAll() lent more than is unbooked")
+	}
+	if got := l.Take(want); got != 64<<20 {
+		t.Errorf("Take() after a refused TakeAll = %d, want all %d still unbooked", got, int64(64<<20))
+	}
+	l = ledger(4<<30, 1<<30, unbookedOf(256<<20))
+	if !l.TakeAll(128 << 20) {
+		t.Fatal("TakeAll() refused what is unbooked")
+	}
+	if got := l.Take(want); got != 128<<20 {
+		t.Errorf("Take() after TakeAll = %d, want the %d left", got, int64(128<<20))
+	}
+}

@@ -17,6 +17,7 @@
 package tarutil
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -66,5 +67,31 @@ func TestCreateKeepsArchiveCached(t *testing.T) {
 	}
 	if chunks := uint64(2*writeBehindChunk)/uint64(os.Getpagesize()) + 1; cs.Dirty > chunks {
 		t.Errorf("%d archive pages dirty, want at most %d", cs.Dirty, chunks)
+	}
+}
+
+func TestCreateWithoutWriteBehind(t *testing.T) {
+	src := t.TempDir()
+	want := make([]byte, 3*writeBehindChunk)
+	for i := range want {
+		want[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(filepath.Join(src, "big"), want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(t.TempDir(), "out.tar")
+	if err := Create(context.Background(), tarPath, src, WriteBehind(0)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "big"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("extracted %d bytes that differ from the %d archived", len(got), len(want))
 	}
 }

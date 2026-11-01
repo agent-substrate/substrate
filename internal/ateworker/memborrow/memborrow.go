@@ -57,6 +57,17 @@ func (l *Ledger) podMemory() (limit, used int64, err error) {
 // pages it held are on disk. A nil Ledger lends nothing. Without a pod memory
 // limit it returns all of want, there's no limit to run into.
 func (l *Ledger) Take(want int64) int64 {
+	return l.take(want, false)
+}
+
+// TakeAll is Take for all of want or nothing: it reports whether it borrowed
+// exactly want, which the caller then passes to Return. A caller that can't use
+// part of it doesn't hold any while others ask. TakeAll(0) reports true.
+func (l *Ledger) TakeAll(want int64) bool {
+	return l.take(want, true) == want
+}
+
+func (l *Ledger) take(want int64, all bool) int64 {
 	if l == nil {
 		return 0
 	}
@@ -70,7 +81,7 @@ func (l *Ledger) Take(want int64) int64 {
 	if limit != 0 {
 		n = min(want, l.Unbooked(limit)-l.bytes, limit-used-margin)
 	}
-	if n <= 0 {
+	if n <= 0 || (all && n < want) {
 		return 0
 	}
 	l.bytes += n
