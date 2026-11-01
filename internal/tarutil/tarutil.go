@@ -83,30 +83,39 @@ func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
 }
 
 // writeBehindChunk is how much of an archive may be dirty in the page cache
-// before we write it out and drop it. Dirty pages can't be reclaimed, and
-// piling up a whole archive of them can run a worker pod out of memory.
+// before we start writing it out. Dirty pages can't be reclaimed, and piling up
+// a whole archive of them can run a worker pod out of memory. Written pages stay
+// cached, since they are reclaimable and a local resume reads them back.
 const writeBehindChunk = 8 << 20
 
-// writeBehind writes to f, writing out and dropping each full chunk.
+// writeBehind writes to f, starting write-out of each full chunk and waiting
+// for the one before it, so at most about two chunks are dirty.
 type writeBehind struct {
 	f       *os.File
 	written int64
-	flushed int64
+	// started is where write-out was last started, and waited where the
+	// previous chunk ends
+	started int64
+	waited  int64
 }
 
 func (w *writeBehind) Write(p []byte) (int, error) {
 	n, err := w.f.Write(p)
 	w.written += int64(n)
-	if err != nil || w.written-w.flushed < writeBehindChunk {
+	if err != nil || w.written-w.started < writeBehindChunk {
 		return n, err
 	}
-	fd, off, size := int(w.f.Fd()), w.flushed, w.written-w.flushed
-	if err := unix.SyncFileRange(fd, off, size, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+	fd := int(w.f.Fd())
+	if err := unix.SyncFileRange(fd, w.started, w.written-w.started, unix.SYNC_FILE_RANGE_WRITE); err != nil {
 		return n, fmt.Errorf("while writing out archive: %w", err)
 	}
-	// best effort, the range is on disk already
-	_ = unix.Fadvise(fd, off, size, unix.FADV_DONTNEED)
-	w.flushed = w.written
+	if w.started > w.waited {
+		if err := unix.SyncFileRange(fd, w.waited, w.started-w.waited, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+			return n, fmt.Errorf("while writing out archive: %w", err)
+		}
+		w.waited = w.started
+	}
+	w.started = w.written
 	return n, nil
 }
 
@@ -157,7 +166,8 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	defer f.Close()
 
 	bw := tarWriterPool.Get().(*bufio.Writer)
-	bw.Reset(&writeBehind{f: f})
+	wb := &writeBehind{f: f}
+	bw.Reset(wb)
 	defer func() {
 		bw.Reset(nil)
 		tarWriterPool.Put(bw)
@@ -172,6 +182,13 @@ func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeR
 	// The end of the archive is still in the buffer; flush it before returning.
 	if err := bw.Flush(); err != nil {
 		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
+	}
+	if wb.written > wb.started {
+		// start on the last, partial chunk too, so it isn't left for the
+		// kernel's own writeback
+		if err := unix.SyncFileRange(int(f.Fd()), wb.started, wb.written-wb.started, unix.SYNC_FILE_RANGE_WRITE); err != nil {
+			return fmt.Errorf("while writing out %q: %w", tarPath, err)
+		}
 	}
 	// No fsync: local-only snapshots aren't guaranteed to survive a node
 	// restart, and atelet doesn't trust a local snapshot written before the
