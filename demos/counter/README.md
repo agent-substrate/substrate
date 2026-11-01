@@ -1,3 +1,13 @@
+---
+title: "Stateful Counter"
+linkTitle: "Stateful Counter"
+weight: 1
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-stopwatch"
+description: >
+  Preserve in-memory and durable volume state across actor suspend and resume cycles.
+---
+
 # Counter Demo
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
@@ -9,19 +19,21 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 ## Prerequisites
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  or [GKE Quickstart](../../README.md#gke-quickstart-development).
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
+
+The [Quickstart](../../README.md#quickstart-development) already deploys this
+demo, creates `my-counter-1` and starts its proxy on port `8000`. If you ran
+it, skip to [How to Use](#how-to-use).
 
 ### 1. Build and Deploy
 
 > [!NOTE]
 > Do not manually edit `demos/counter/counter.yaml.tmpl` or
-> `demos/counter/counter-template.yaml.tmpl`. The installation script
-> automatically injects your `${BUCKET_NAME}` environment variable during
-> deployment.
+> `demos/counter/counter-template.yaml.tmpl`. `ate-setup` fills in their
+> `${...}` placeholders during deployment.
 
 <details>
 <summary>Installation on MicroVM</summary>
@@ -34,42 +46,36 @@ sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor).
 - [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl) —
   the `counter-microvm` actor template, created through the ate API in the
   `ate-demo-counter-microvm` atespace.
-- [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
-  that builds the microVM worker image, stages the guest assets, deploys the
-  control plane, and applies the manifests above. Like the other hack scripts it
-  reads `.ate-dev-env.sh` for GKE; use the kind wrapper for a local cluster.
 
-Run it and follow the printed next steps:
-
-```bash
-# GKE (uses .ate-dev-env.sh, uploads assets to GCS):
-./hack/run-microvm-demo.sh
-
-# local kind (local registry + in-cluster rustfs):
-KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
-```
-
-On a cluster that already has the microVM deps (`hack/install-microvm-deps.sh`),
-deploy directly instead:
+`deploy ate-system` already stages the microVM guest assets and applies the
+cluster-wide `microvm` `SandboxConfig`, so on a cluster installed as in the
+Quickstart, deploy the demo with:
 
 ```bash
 go run ./cmd/ate-setup deploy demo counter-microvm
+```
+
+Inspect the deployed template with:
+
+```bash
+kubectl ate get actor-templates -a ate-demo-counter-microvm
+kubectl ate get actor-template counter-microvm -a ate-demo-counter-microvm -o yaml
 ```
 </details>
 
 <details>
 <summary>Installation on GVisor</summary>
-Use the core installation script to build the image and deploy the demo to your cluster:
+Use `ate-setup` to build the image and deploy the demo to your cluster:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter
+go run ./cmd/ate-setup deploy demo counter
 ```
 
 To enable validation of reading from an external volume (e.g.
 `/external-data/test.txt`), run:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-with-external-volume --preview=ExternalVolumes
+go run ./cmd/ate-setup deploy demo counter --with-external-volume --preview=ExternalVolumes
 ```
 
 This command will:
@@ -182,10 +188,12 @@ kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 The snapshot stays on the worker's node and is uploaded to snapshot storage in
 the background. Add `--mode=sync` to wait for the upload instead.
 
-Repeat the `curl` from step 1 and the actor resumes from its snapshot —
-possibly on a different worker — with **both** counters continuing from where
+Repeat the `curl` from step 1 and the actor resumes from its snapshot,
+possibly on a different worker, with **both** counters continuing from where
 they left off: the memory count comes back from the `MEMORY` snapshot's process
-memory, the file counter from the durable volume.
+memory, the file counter from the durable volume. Run `kubectl ate get actor`
+from step 2 again and check the `WORKER POD` column to see which worker pod it
+resumed on.
 
 4. To permanently delete the suspended actor:
 <details>
@@ -209,7 +217,8 @@ kubectl ate delete actor my-counter-1 -a ate-demo-counter
 `counter.go` also listens on a second, configurable port (`--extra-port=9090`
 in this demo's template) to demonstrate atenet-router's arbitrary-port ingress
 support. Pass `[local-port:]remote-port` arguments to `kubectl ate proxy actor`
-to forward additional ports:
+to forward additional ports. This proxy also takes port `8000`, so stop the
+earlier one (such as the Quickstart's) first:
 
 <details>
 <summary>Non standard port with MicroVM</summary>
@@ -245,7 +254,7 @@ prioritizing it, not a fundamental limitation of the design.
 ## Settings
 
 The installer reads these settings in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels.
 
 | Key                               | Environment variable                    | Flag                     | Default    | Applies to            |

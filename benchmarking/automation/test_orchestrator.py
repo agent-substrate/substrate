@@ -25,6 +25,21 @@ import orchestrator
 from testtypes import locust
 
 
+class SelectTestsTest(unittest.TestCase):
+    TESTS = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+
+    def test_no_names_runs_all(self):
+        self.assertEqual(orchestrator.select_tests(self.TESTS, []), self.TESTS)
+
+    def test_keeps_file_order(self):
+        got = orchestrator.select_tests(self.TESTS, ["c", "a"])
+        self.assertEqual([t["name"] for t in got], ["a", "c"])
+
+    def test_unknown_name(self):
+        with self.assertRaisesRegex(ValueError, "x, y"):
+            orchestrator.select_tests(self.TESTS, ["a", "y", "x"])
+
+
 class DeployWorkloadsFakeAteletTest(unittest.TestCase):
     @mock.patch("orchestrator.run")
     def test_fake_atelet_tuning_goes_to_deploy_sh(self, run):
@@ -40,7 +55,7 @@ class SubstrateArgsTest(unittest.TestCase):
     def test_ate_args_only(self):
         self.assertEqual(
             orchestrator.substrate_args({"ateArgs": ["--cluster-size=size10"]}),
-            ["--cluster-size=size10"],
+            ["--cluster-size=size10", "--sandbox-classes=gvisor"],
         )
 
     def test_isolate_installs_the_fake_data_plane(self):
@@ -50,14 +65,26 @@ class SubstrateArgsTest(unittest.TestCase):
                 "isolate": {"delay": "500ms"},
             }),
             # The delay tunes fake-atelet through deploy.sh, not the install.
-            ["--cluster-size=size10", "--fake-data-plane"],
+            ["--cluster-size=size10", "--fake-data-plane", "--sandbox-classes=gvisor"],
         )
 
     def test_neither(self):
-        self.assertEqual(orchestrator.substrate_args({}), [])
+        self.assertEqual(orchestrator.substrate_args({}), ["--sandbox-classes=gvisor"])
 
     def test_bare_isolate_key(self):
-        self.assertEqual(orchestrator.substrate_args({"isolate": None}), ["--fake-data-plane"])
+        self.assertEqual(
+            orchestrator.substrate_args({"isolate": None}),
+            ["--fake-data-plane", "--sandbox-classes=gvisor"],
+        )
+
+    def test_microvm_selects_microvm_sandbox_class(self):
+        self.assertEqual(
+            orchestrator.substrate_args({
+                "sandboxClass": "microvm",
+                "ateArgs": ["--cluster-size=size10"],
+            }),
+            ["--cluster-size=size10", "--sandbox-classes=microvm"],
+        )
 
 
 class DeploySubstrateTest(unittest.TestCase):
@@ -68,7 +95,7 @@ class DeploySubstrateTest(unittest.TestCase):
     def test_runner_and_client_are_bootstrap_owners(self, run):
         orchestrator.deploy_substrate(["--credential-provider={}"])
         cmd = run.call_args.args[0]
-        self.assertEqual(cmd, ["hack/install-ate.sh", "deploy", "ate-system", "--credential-provider={}"])
+        self.assertEqual(cmd, ["go", "run", "./cmd/ate-setup", "deploy", "ate-system", "--credential-provider={}"])
         env = run.call_args.kwargs["env"]
         owners = env["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"].split(",")
         self.assertEqual(
@@ -92,7 +119,7 @@ class DeploySubstrateTest(unittest.TestCase):
     @mock.patch("orchestrator.run_no_check")
     def test_teardown_substrate(self, run_no_check):
         orchestrator.teardown_substrate()
-        run_no_check.assert_called_once_with(["hack/install-ate.sh", "delete", "ate-system"])
+        run_no_check.assert_called_once_with(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
 
 
 class DeployWorkloadsTest(unittest.TestCase):

@@ -88,6 +88,11 @@ func TestVirtiofsdArgs(t *testing.T) {
 	if !slices.Contains(args, "--cache=auto") {
 		t.Errorf("args %v do not contain --cache=auto", args)
 	}
+	for _, required := range []string{"--sandbox=namespace", "--seccomp=kill", "--inode-file-handles=never"} {
+		if !slices.Contains(args, required) {
+			t.Errorf("args %v do not contain %s", args, required)
+		}
+	}
 	// The host kernel owns the overlay; the guest needs no xattr passthrough, so
 	// the flag must never be emitted.
 	if slices.Contains(args, "--xattr") {
@@ -97,6 +102,18 @@ func TestVirtiofsdArgs(t *testing.T) {
 	// inode, such as a live-rotated trust bundle, could never be restored.
 	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
+	}
+	// The worker's capability set is sized to virtiofsd's default child set,
+	// which --inode-file-handles=never keeps free of DAC_READ_SEARCH, so the
+	// arguments must never add a capability back (--modcaps=+...).
+	for _, arg := range args {
+		if value, ok := strings.CutPrefix(arg, "--modcaps="); ok {
+			for _, entry := range strings.Split(value, ":") {
+				if strings.HasPrefix(entry, "+") {
+					t.Errorf("args %v add a capability back to virtiofsd", args)
+				}
+			}
+		}
 	}
 }
 

@@ -68,7 +68,7 @@ func WithSystemRoots() ProbeOption {
 // out from under another running concurrently. It returns the fixture's
 // atespace (which also names the k8s namespace holding the pool) and the
 // created ActorTemplate, already golden-snapshotted.
-func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string, *ateapi.ActorTemplate) {
+func DeployProbe(t *testing.T, name string, opts ...ProbeOption) (string, *ateapi.ActorTemplate) {
 	t.Helper()
 
 	var cfg probeConfig
@@ -81,6 +81,6 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string
 		EnsureEgressTrustBundle(t, context.Background(), GetClients())
 	}
 
-	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundles)
+	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, name, cfg.trustBundles)
 	return atespace, templates[0]
 }

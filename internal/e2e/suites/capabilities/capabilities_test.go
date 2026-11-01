@@ -52,14 +52,13 @@ type capabilitiesResponse struct {
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gvisor and micro-VM from one suite.
 func TestActorCapabilities(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	namespace := deployFixture(t, ctx, clients, env["BUCKET_NAME"])
+	namespace := deployFixture(t, ctx, clients)
 
 	tests := []struct {
 		name     string
@@ -145,12 +144,12 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 // container cannot start — for example because a needed capability was
 // dropped — fails the deploy with the template's error message rather than
 // timing out per subtest.
-func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) string {
+func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
 	t.Helper()
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, bucket, "capabilities", nil)
+	}, "capabilities", nil)
 	return atespace
 }
 

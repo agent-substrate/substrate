@@ -48,13 +48,16 @@ type hostedActor struct {
 	// usage is this activation's epoch, CPU baseline, and latest sample.
 	// Immutable after admission.
 	usage *workerstats.Activation
+	// memoryBytes is the actor's memory limit, what it books on the worker.
+	// Immutable after admission.
+	memoryBytes int64
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
 // resumesGuest is true when the activation resumes a guest from a snapshot,
-// whose CPU counters come back with it.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, *actornet.SandboxSession, error) {
+// whose CPU counters come back with it. memoryBytes is what the actor books.
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *actornet.SandboxSession
@@ -63,17 +66,17 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, re
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest)}
+	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), resumesGuest), memoryBytes: memoryBytes}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
 // hostActor sets up the actor's network, replacing any stale one. resumesGuest
-// is as for admitActor.
-func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool) (*hostedActor, error) {
+// and memoryBytes are as for admitActor.
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, resumesGuest bool, memoryBytes int64) (*hostedActor, error) {
 	uid := attribution.UID
 
-	hosted, stale, err := s.admitActor(attribution, resumesGuest)
+	hosted, stale, err := s.admitActor(attribution, resumesGuest, memoryBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -161,15 +161,23 @@ func applyDirFixups(rootfsPath string, fixups []dirFixup) error {
 		if !fi.IsDir() {
 			continue
 		}
-		// Chown first: chown can clear setuid/setgid bits, so the chmod
-		// must come after it.
+		// Chmod clears setgid when the caller is not in the directory's group
+		// and lacks CAP_FSETID, as in the gVisor worker. A directory
+		// FinalizeLayer created can already have another group from a setgid
+		// parent, so give it the caller's group before the chmod. Chown keeps
+		// a directory's setgid and sticky bits.
 		if f.HasOwner {
-			if err := root.Chown(f.Path, f.UID, f.GID); err != nil {
-				return fmt.Errorf("while restoring owner of %q: %w", f.Path, err)
+			if err := root.Chown(f.Path, -1, os.Getegid()); err != nil {
+				return fmt.Errorf("while restoring mode of %q: %w", f.Path, err)
 			}
 		}
 		if err := root.Chmod(f.Path, f.Mode); err != nil {
 			return fmt.Errorf("while restoring mode of %q: %w", f.Path, err)
+		}
+		if f.HasOwner {
+			if err := root.Chown(f.Path, f.UID, f.GID); err != nil {
+				return fmt.Errorf("while restoring owner of %q: %w", f.Path, err)
+			}
 		}
 	}
 	return nil

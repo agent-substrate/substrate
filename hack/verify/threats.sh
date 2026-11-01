@@ -22,7 +22,7 @@ cd "${ROOT}"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-hack/export-threats.py --md docs/threat-model.md --out "${TMP_DIR}/threats.json" > /dev/null
+hack/export-threats.py --md docs/security/threat-model.md --out "${TMP_DIR}/threats.json" > /dev/null
 
 if ! diff -u docs/threats.json "${TMP_DIR}/threats.json"; then
   echo "FAIL: docs/threats.json is out of date." >&2

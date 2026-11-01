@@ -1,3 +1,13 @@
+---
+title: "Multi-Template WorkerPool"
+linkTitle: "Multi-Template WorkerPool"
+weight: 4
+estimated_time: "5 mins"
+card_icon: "fa-solid fa-layer-group"
+description: >
+  Share a single WorkerPool across multiple ActorTemplates and atespaces using label selectors.
+---
+
 # Multi-Template Demo
 
 This demo shows that **two different actor templates running two different binaries
@@ -10,18 +20,12 @@ or namespace.
 ## Prerequisites
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  or [GKE Quickstart](../../README.md#gke-quickstart-development).
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
 
 ### 1. Build and Deploy
-
-> [!NOTE]
-> Do not manually edit the `demos/multi-template/*.yaml.tmpl` manifests. The
-> installation script automatically injects your `${BUCKET_NAME}` environment
-> variable during deployment.
 
 ```bash
 go run ./cmd/ate-setup deploy demo multi-template
@@ -68,7 +72,7 @@ When you send an HTTP request through the proxy, `atenet-router` automatically a
 ```bash
 # counter binary
 curl -s http://localhost:8000
-# -> hello from: <ip> | preserved memory count: 1
+# -> preserved memory count: 1
 
 # fspersist binary
 curl -s http://localhost:8001

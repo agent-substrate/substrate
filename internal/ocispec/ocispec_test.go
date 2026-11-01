@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -134,6 +135,26 @@ func TestBuild_Capabilities(t *testing.T) {
 		if len(set.got) != 0 {
 			t.Errorf("%s = %v, want empty", set.name, set.got)
 		}
+	}
+}
+
+func TestBuild_ProcessUser(t *testing.T) {
+	user := &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65534, AdditionalGids: []uint32{44}}
+	want := specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, User: user}}}).Process.User; !reflect.DeepEqual(got, want) {
+		t.Errorf("Process.User = %+v, want %+v", got, want)
+	}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}}).Process.User; !reflect.DeepEqual(got, specs.User{}) {
+		t.Errorf("Process.User = %+v, want root", got)
+	}
+}
+
+func TestBuild_Cwd(t *testing.T) {
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, Cwd: "/work"}}}).Process.Cwd; got != "/work" {
+		t.Errorf("Process.Cwd = %q, want /work", got)
+	}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}}).Process.Cwd; got != "/" {
+		t.Errorf("Process.Cwd = %q, want /", got)
 	}
 }
 

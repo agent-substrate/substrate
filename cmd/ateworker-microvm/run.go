@@ -73,6 +73,10 @@ type runningActor struct {
 	// exit from a crash: shutting the VM down makes cloud-hypervisor exit, and
 	// virtiofsd exits once its only client is gone.
 	stopping atomic.Bool
+	// memoryBytes is the actor's memory limit, what it books on the worker.
+	memoryBytes int64
+	// memory kills the actor's cgroup once it is stuck at its memory.high.
+	memory cgroup.MemoryGuard
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
 	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
@@ -140,16 +144,12 @@ const kataAgentPath = "/usr/bin/kata-agent"
 // pod cgroup, which the control plane books with every actor: cloud-hypervisor
 // and virtiofsd, and the host page tables for guest RAM, KVM's EPT and the
 // memfd's xarray.
-//
-// The fixed part also covers the page cache of the actor's snapshot writes,
-// which are not capped yet, so tight pods don't OOM on suspend.
-// TODO: drop that part once snapshot writes are capped
-var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 128 << 20, MemoryBytesPerGib: 8 << 20}
+var actorOverhead = &ateletpb.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}
 
 // memoryReservedBytes is how much of the worker pod's memory limit we keep from
 // actors: the worker process itself, and the page cache of snapshot writes in
 // flight.
-const memoryReservedBytes = 64 << 20
+const memoryReservedBytes = 32<<20 + snapshotWriteSlots*snapshotWriteHeadroom
 
 // minGuestMemMiB is the floor for guest RAM, and so for an actor's memory limit. A
 // smaller one is rejected at cold boot (see resolveGuestMemMiB), since too little
@@ -278,7 +278,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false); err != nil {
+	if _, err := s.hostActor(ctx, attribution, false, p.size.MemoryBytes); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -289,6 +289,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			_ = s.unhostActor(cleanupCtx, attribution.UID)
 		}
 	}()
+	if err := s.borrow.Wait(ctx); err != nil {
+		return nil, err
+	}
 
 	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
@@ -369,7 +372,7 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 		// The failed attempt deactivated egress, which retires the listener
 		// bound to it, so the network is rebuilt. The actor keeps its slot.
-		if _, err := s.hostActor(ctx, p.attribution(), false); err != nil {
+		if _, err := s.hostActor(ctx, p.attribution(), false, p.size.MemoryBytes); err != nil {
 			return err
 		}
 	}
@@ -492,7 +495,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
 	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
 	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU)
+	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU, s.leafMemoryHigh(p.size.MemoryBytes))
 	if err != nil {
 		return err
 	}
@@ -607,10 +610,11 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
+	ra.memory.Resume(uint64(s.leafMemoryHigh(p.size.MemoryBytes)))
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
@@ -795,9 +799,11 @@ func initParams(agentInit bool) string {
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
 // map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
+//
+// swiotlb=noforce skips the software bounce buffer.
 func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
 	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
-		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
+		"panic=1 no_timer_check noreplace-smp console=hvc0 swiotlb=noforce " +
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams

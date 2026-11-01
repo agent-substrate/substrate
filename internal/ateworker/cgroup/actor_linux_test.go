@@ -35,7 +35,7 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 	root := ownCgroup(t)
 	self := "/" + strings.TrimPrefix(root, Root)
 
-	leaf, err := openActorLeaf(root, "cgroup-test", 500)
+	leaf, err := openActorLeaf(root, "cgroup-test", 500, 0)
 	if err != nil {
 		t.Skipf("cannot create a cgroup here: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestActorLeafStartsProcessesInside(t *testing.T) {
 func TestKillActorLeaf(t *testing.T) {
 	roottest.Require(t, "creates cgroups")
 	root := ownCgroup(t)
-	leaf, err := openActorLeaf(root, "cgroup-kill-test", 0)
+	leaf, err := openActorLeaf(root, "cgroup-kill-test", 0, 0)
 	if err != nil {
 		t.Skipf("cannot create a cgroup here: %v", err)
 	}

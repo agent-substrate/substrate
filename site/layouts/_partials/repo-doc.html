@@ -1,0 +1,50 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Reads a Markdown file from the repository, named by its path from the
+repository root (it must be mounted under assets/repo in hugo.yaml).
+
+Returns a dict:
+  found   whether the file is mounted
+  params  its YAML front matter, or an empty dict
+  body    the content without the front matter and without the leading
+          "# Heading" (after any HTML comments), which the page title replaces
+
+Front matter is only recognized as a "---" block starting on the first line,
+the form GitHub renders. Call through partialCached keyed by the path.
+*/ -}}
+
+{{- $path := . -}}
+{{- $found := false -}}
+{{- $params := dict -}}
+{{- $body := "" -}}
+{{- with resources.Get (path.Join "repo" $path) -}}
+  {{- $found = true -}}
+  {{- $body = .Content -}}
+  {{- with findRESubmatch `\A---\n((?s:.*?)\n)?---\n` $body 1 -}}
+    {{- $match := index . 0 -}}
+    {{- with strings.TrimSpace (index $match 1) -}}
+      {{- $params = resources.FromString (printf "repo-front-matter/%s.yaml" $path) . | transform.Unmarshal -}}
+    {{- end -}}
+    {{- $body = strings.TrimPrefix (index $match 0) $body -}}
+  {{- end -}}
+  {{- $body = replaceRE `\A(?s:\s*(?:<!--.*?-->\s*)*)# [^\n]*\n+` "" $body 1 -}}
+{{- end -}}
+{{- if not (reflect.IsMap $params) -}}
+  {{- errorf "repo-doc: %s: front matter must be a YAML mapping" $path -}}
+{{- end -}}
+{{- return (dict "found" $found "params" $params "body" $body) -}}

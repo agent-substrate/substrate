@@ -1,0 +1,34 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Returns the page's params merged over the front matter of its repo_source
+file, so a stub's own keys win. Fails the build if status is set to anything
+but experimental, deprecated or planned. Call as:
+  partialCached "page-params.html" $page $page.Path
+*/ -}}
+
+{{- $params := .Params -}}
+{{- with .Params.repo_source -}}
+  {{- $doc := partialCached "repo-doc.html" . . -}}
+  {{- $params = merge $doc.params $params -}}
+{{- end -}}
+{{- with $params.status -}}
+  {{- if not (in (slice "experimental" "deprecated" "planned") .) -}}
+    {{- errorf "page-params: %s (repo_source %q): status %q is not one of: experimental, deprecated, planned" $.Path ($.Params.repo_source | default "") (printf "%v" .) -}}
+  {{- end -}}
+{{- end -}}
+{{- return $params -}}

@@ -85,7 +85,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// HTTP headers carried inside the ProcessingRequest payload. Extract
 	// from there so our span links to the gateway's ingress span.
 	ctx = otel.GetTextMapPropagator().Extract(ctx, md)
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ExtProc.RequestHeaders")
+	ctx, span := otel.Tracer(serviceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
 	actorRef, err := atenet.ParseTargetActor(routingValue(md, atenet.TargetActorHeader, extproc.TargetActorFilterStateAttribute))
