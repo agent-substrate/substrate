@@ -62,7 +62,6 @@ snapshotConfig:
   # demo promises. ROOTFS is also available on this class: it would keep the
   # file counter and any rootfs writes but cold-boot the memory counter.
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
 volumes:
 - name: data
   durableDir: {}

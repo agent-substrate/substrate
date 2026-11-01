@@ -28,7 +28,6 @@ containers:
   command:
   - jupyter
   - lab
-  - "--allow-root"
   - "--ServerApp.token=''"
   - "--ServerApp.password=''"
   - "--ServerApp.allow_origin='*'"
@@ -47,4 +46,3 @@ resources:
     memoryBytes: 4294967296 # 4Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/ate-demo-jupyter/

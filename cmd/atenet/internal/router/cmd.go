@@ -83,14 +83,14 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
 
 	// Egress credential injection (MITM leg). Only the egress gateway sets these,
-	// and only when injection is enabled: with an empty
+	// and only when injection is enabled: with no
 	// --credential-provider-address, a request matching an EgressPolicy rule
 	// that requires injection is denied.
-	fs.StringVar(&cfg.CredentialProvider.Name, "credential-provider-name", "", "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io); a policy credential URI naming any other provider is refused. Empty disables the check (dev only)")
-	fs.StringVar(&cfg.CredentialProvider.Address, "credential-provider-address", "", "gRPC dial target of the credential provider the MITM-leg injector resolves secrets through. Empty (the default) disables egress credential injection, and requests matching a rule that requires it are denied")
+	fs.StringArrayVar(&cfg.CredentialProvider.Names, "credential-provider-name", nil, "Credential provider this egress gateway serves, as the host of its ate-secret:// credential URIs (e.g. k8s.io). Repeat once per --credential-provider-address, in the same order; a policy credential URI naming no configured provider is refused. A single empty name disables the check (dev only)")
+	fs.StringArrayVar(&cfg.CredentialProvider.Addresses, "credential-provider-address", nil, "gRPC dial target of a credential provider the MITM-leg injector resolves secrets through. Repeat once per provider. None (the default) disables egress credential injection, and requests matching a rule that requires it are denied")
 	fs.StringVar(&cfg.CredentialProvider.CAFile, "credential-provider-ca-file", "", "CA the credential provider's serving certificate must chain to; required unless --credential-provider-insecure is set")
 	fs.StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
-	fs.StringVar(&cfg.CredentialProvider.ServerName, "credential-provider-server-name", "", "SAN/SNI expected on the credential provider's serving certificate")
+	fs.StringArrayVar(&cfg.CredentialProvider.ServerNames, "credential-provider-server-name", nil, "SAN/SNI expected on a credential provider's serving certificate. Repeat once per --credential-provider-address, in the same order, or omit")
 	fs.BoolVar(&cfg.CredentialProvider.Insecure, "credential-provider-insecure", false, "Dial the credential provider WITHOUT TLS. Development only: secrets cross the network in the clear. Without this, a missing --credential-provider-ca-file or --credential-provider-client-cert fails startup instead of silently downgrading")
 
 	// Envoy learns the collector over xDS rather than from its own environment,

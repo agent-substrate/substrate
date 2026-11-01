@@ -25,6 +25,9 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
+// testBootID is the boot the tests record and reuse checkpoints on.
+const testBootID = "boot-1"
+
 func TestRecordAndReuseCheckpoint(t *testing.T) {
 	checkpointDir := t.TempDir()
 	imgPath := filepath.Join(checkpointDir, "checkpoint.img")
@@ -34,33 +37,38 @@ func TestRecordAndReuseCheckpoint(t *testing.T) {
 
 	// Without a completion marker (e.g. partial files from an interrupted attempt),
 	// ReuseCheckpoint returns nil.
-	if got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
+	if got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
 		t.Fatalf("ReuseCheckpoint(before RecordCheckpoint) = %v, want nil", got)
 	}
 
 	wantResp := &ateworkerpb.CheckpointWorkloadResponse{
 		SnapshotFiles: []string{"checkpoint.img"},
 	}
-	if err := RecordCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, wantResp); err != nil {
+	if err := RecordCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, wantResp); err != nil {
 		t.Fatalf("RecordCheckpoint: %v", err)
 	}
 
 	// Reusing with matching fidelity and intact file succeeds.
-	got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if got == nil || !slices.Equal(got.GetSnapshotFiles(), wantResp.GetSnapshotFiles()) {
 		t.Fatalf("ReuseCheckpoint() = %v, want %v", got, wantResp)
 	}
 
+	// A marker recorded before the node rebooted is not reused.
+	if got := ReuseCheckpoint(checkpointDir, "boot-2", ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
+		t.Fatalf("ReuseCheckpoint(another boot) = %v, want nil", got)
+	}
+
 	// Mismatched fidelity is not reused.
-	if got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES); got != nil {
+	if got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES); got != nil {
 		t.Fatalf("ReuseCheckpoint(different fidelity) = %v, want nil", got)
 	}
 
-	// Once atelet moves/removes the file from checkpoint-state/, the marker is not reused.
+	// Once the file is gone from checkpoint-state/, the marker is not reused.
 	if err := os.Remove(imgPath); err != nil {
 		t.Fatal(err)
 	}
-	if got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
+	if got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
 		t.Fatalf("ReuseCheckpoint(after file removed) = %v, want nil", got)
 	}
 }
@@ -82,10 +90,10 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 		SnapshotFiles:     []string{"checkpoint.img", "fs/fscheckpoint.pb", "fs/multitar.img"},
 		DataSnapshotFiles: []string{"fs/fscheckpoint.pb", "fs/multitar.img"},
 	}
-	if err := RecordCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, memResp); err != nil {
+	if err := RecordCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, memResp); err != nil {
 		t.Fatalf("RecordCheckpoint(MEMORY): %v", err)
 	}
-	got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if got == nil || !slices.Equal(got.GetSnapshotFiles(), memResp.GetSnapshotFiles()) || !slices.Equal(got.GetDataSnapshotFiles(), memResp.GetDataSnapshotFiles()) {
 		t.Fatalf("ReuseCheckpoint(MEMORY) = %v, want %v", got, memResp)
 	}
@@ -95,10 +103,10 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 		SnapshotFiles:     []string{"checkpoint.img"},
 		DataSnapshotFiles: []string{"fs/fscheckpoint.pb"},
 	}
-	if err := RecordCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, badSubset); err != nil {
+	if err := RecordCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, badSubset); err != nil {
 		t.Fatalf("RecordCheckpoint(badSubset): %v", err)
 	}
-	if got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
+	if got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY); got != nil {
 		t.Fatalf("ReuseCheckpoint(data file not in SnapshotFiles) = %v, want nil", got)
 	}
 
@@ -108,19 +116,19 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 		SnapshotFiles:     []string{"fs/multitar.img", "fs/fscheckpoint.pb"},
 		DataSnapshotFiles: []string{"fs/fscheckpoint.pb", "fs/multitar.img"},
 	}
-	if err := RecordCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, volResp); err != nil {
+	if err := RecordCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, volResp); err != nil {
 		t.Fatalf("RecordCheckpoint(VOLUMES): %v", err)
 	}
-	got = ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+	got = ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
 	if got == nil || !slices.Equal(got.GetSnapshotFiles(), volResp.GetSnapshotFiles()) || !slices.Equal(got.GetDataSnapshotFiles(), volResp.GetDataSnapshotFiles()) {
 		t.Fatalf("ReuseCheckpoint(VOLUMES) = %v, want %v", got, volResp)
 	}
 
 	// VOLUMES fidelity rejects non-data files in SnapshotFiles.
-	if err := RecordCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, memResp); err != nil {
+	if err := RecordCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, memResp); err != nil {
 		t.Fatalf("RecordCheckpoint(VOLUMES with non-data files): %v", err)
 	}
-	if got := ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES); got != nil {
+	if got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES); got != nil {
 		t.Fatalf("ReuseCheckpoint(VOLUMES with non-data files) = %v, want nil", got)
 	}
 }

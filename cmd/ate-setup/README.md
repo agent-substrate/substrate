@@ -7,10 +7,6 @@ go run ./cmd/ate-setup [global flags] <command> [flags]
 go build -o bin/ate-setup ./cmd/ate-setup
 ```
 
-`ate-setup` is the installer. `hack/install-ate.sh` is a shim over it, kept so
-that existing command lines and CI jobs keep working; it holds no install logic
-of its own.
-
 ## Installing pre-built images
 
 By default every image is built from the checkout with `ko`, which is what a
@@ -20,11 +16,17 @@ tag they share:
 
 ```
 ate-setup deploy ate-system \
+  --storage-bucket-name=BUCKET \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=IDS \
   --image-repo registry.example.com/substrate \
   --image-tag vX.Y.Z
 ```
+
+On GKE, the default `--sandbox-classes=gvisor,microvm` downloads microVM guest
+assets from GitHub and uploads them with `gcloud` to `gs://<BUCKET>-assets`
+(created with `atelet` read access by `go run ./tools/setup-gcp create bucket`
+and `create iam`). Pass `--sandbox-classes=gvisor` to skip microVM staging.
 
 The registry has to hold every image the install deploys. The images a release
 publishes to `ghcr.io/agent-substrate/substrate` leave out the demos and the
@@ -37,10 +39,7 @@ the checkout, which should be the tag being installed. Each reference is pinned
 to the digest its tag names, so the registry has to be readable from here as
 well as from the cluster.
 
-- [`commands.md`](commands.md) — every command with its `hack/install-ate.sh`
-  equivalent.
+- [`commands.md`](commands.md) — every command, and the common global flags.
 - [`differences.md`](differences.md) — where the Go port deliberately behaves
   differently from the shell scripts it replaced, and what was reproduced
   exactly.
-- [`cli-diff.md`](cli-diff.md) — what a `hack/install-ate.sh` user can observe
-  after the switch.

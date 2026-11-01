@@ -62,14 +62,13 @@ type resourcesResponse struct {
 // the CPU quota and the cgroup memory limit, while the micro-VM sizes the guest
 // VM itself (see internal/sizing).
 func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	deploySizedProbe(t, ctx, clients, env["BUCKET_NAME"])
+	deploySizedProbe(t, ctx, clients)
 
 	const id = "sized-actor"
 	createAndResumeActor(t, ctx, clients, id)
@@ -108,12 +107,12 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 
 // deploySizedProbe installs the sized probe fixture for the sandbox class
 // under test and waits for its golden snapshot.
-func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) {
+func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients) {
 	t.Helper()
 	e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
-	}, bucket, "sizing", nil)
+	}, "sizing", nil)
 }
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {

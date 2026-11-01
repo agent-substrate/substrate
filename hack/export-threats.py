@@ -89,7 +89,7 @@ def extract(md_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Export threats from threat-model.md to JSON")
-    parser.add_argument("--md", type=str, default="docs/threat-model.md", help="Path to threat-model.md")
+    parser.add_argument("--md", type=str, default="docs/security/threat-model.md", help="Path to threat-model.md")
     parser.add_argument("--out", type=str, default="docs/threats.json", help="Output JSON path")
     args = parser.parse_args()
 

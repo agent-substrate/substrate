@@ -23,7 +23,7 @@
 #     certificate, cannot open a tunnel: the gateway trusts the actor-identity
 #     CA, so the mTLS handshake itself is refused.
 #
-# Prerequisites: a substrate cluster with `--deploy-demo-egress` applied, plus
+# Prerequisites: a substrate cluster with `ate-setup deploy demo egress` applied, plus
 # kubectl and kubectl-ate on PATH. The install's --ingress-allowed-spiffe-ids
 # must include spiffe://cluster.local/ns/ate-system/sa/atenet-client. See demos/egress/README.md.
 #
@@ -33,7 +33,12 @@
 
 set -o errexit -o nounset -o pipefail
 
-CTX="${KUBECTL_CONTEXT:-kind-kind}"
+# Target the cluster ate-setup deploys to: KUBECTL_CONTEXT, else the kind
+# cluster when ATE_INSTALL_KIND=true, else the current context.
+if [[ -z "${KUBECTL_CONTEXT:-}" && "${ATE_INSTALL_KIND:-}" == "true" ]]; then
+  KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME:-kind}"
+fi
+CTX="${KUBECTL_CONTEXT:-$(kubectl config current-context)}"
 # The actor lives in the demo's atespace: --template resolves the
 # template by name within the actor's own atespace.
 ATESPACE="${ATESPACE:-ate-demo-egress}"

@@ -35,7 +35,6 @@ EGRESS_POLICY_MANIFEST="${SCRIPT_DIR}/egress-policy.yaml"
 KUBECTL_ATE_BIN="kubectl-ate"
 WAIT_TIMEOUT_SECS=300
 CONTEXT="${KUBECTL_CONTEXT:-}"
-BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
 
 usage() {
@@ -44,7 +43,6 @@ usage() {
   echo "Options:"
   echo "  --deploy                Deploy the ${ATESPACE}/${TEMPLATE_NAME} worker pool, actor template, and ${ACTOR_NAME} actor (default)"
   echo "  --delete                Delete the ${ACTOR_NAME} actor, template, atespace, and worker pool"
-  echo "  --bucket-name BUCKET    GCS bucket name for actor snapshots (default: \$BUCKET_NAME)"
   echo "  --ko-docker-repo REPO   Container registry for ko image builds (default: \$KO_DOCKER_REPO)"
   echo "  --context CONTEXT       kubectl context to use (default: \$KUBECTL_CONTEXT or current context)"
   echo "  --wait-timeout SECONDS  Timeout waiting for worker pool and golden snapshot readiness (default: ${WAIT_TIMEOUT_SECS})"
@@ -59,13 +57,6 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --delete)
       action="delete"
-      ;;
-    --bucket-name)
-      shift
-      BUCKET_NAME="$1"
-      ;;
-    --bucket-name=*)
-      BUCKET_NAME="${1#*=}"
       ;;
     --ko-docker-repo)
       shift
@@ -150,10 +141,6 @@ wait_template_ready() {
 }
 
 deploy() {
-  if [[ -z "${BUCKET_NAME}" ]]; then
-    echo "Error: BUCKET_NAME is not set. Pass --bucket-name or configure .ate-dev-env.sh." >&2
-    exit 1
-  fi
   if [[ -z "${KO_DOCKER_REPO}" ]]; then
     echo "Error: KO_DOCKER_REPO is not set. Pass --ko-docker-repo or configure .ate-dev-env.sh." >&2
     exit 1
@@ -181,8 +168,7 @@ deploy() {
   run_kubectl_ate delete actor-template "${TEMPLATE_NAME}" -a "${ATESPACE}" >/dev/null 2>&1 || true
 
   echo "Creating actor template ${ATESPACE}/${TEMPLATE_NAME} from ${MANIFEST}..."
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${MANIFEST}" \
-    | run_kubectl_ate create actor-template -f -
+  run_kubectl_ate create actor-template -f "${MANIFEST}"
 
   wait_template_ready
 
