@@ -46,26 +46,20 @@ sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor).
 - [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl) —
   the `counter-microvm` actor template, created through the ate API in the
   `ate-demo-counter-microvm` atespace.
-- [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
-  that builds the microVM worker image, stages the guest assets, deploys the
-  control plane, and applies the manifests above. Like the other hack scripts it
-  reads `.ate-dev-env.sh` for GKE; use the kind wrapper for a local cluster.
 
-Run it and follow the printed next steps:
-
-```bash
-# GKE (uses .ate-dev-env.sh, uploads assets to GCS):
-./hack/run-microvm-demo.sh
-
-# local kind (local registry + in-cluster rustfs):
-KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
-```
-
-On a cluster that already has the microVM deps (`hack/install-microvm-deps.sh`),
-deploy directly instead:
+`deploy ate-system` already stages the microVM guest assets and applies the
+cluster-wide `microvm` `SandboxConfig`, so on a cluster installed as in the
+Quickstart, deploy the demo with:
 
 ```bash
 go run ./cmd/ate-setup deploy demo counter-microvm
+```
+
+Inspect the deployed template with:
+
+```bash
+kubectl ate get actor-templates -a ate-demo-counter-microvm
+kubectl ate get actor-template counter-microvm -a ate-demo-counter-microvm -o yaml
 ```
 </details>
 
@@ -194,10 +188,12 @@ kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 The snapshot stays on the worker's node and is uploaded to snapshot storage in
 the background. Add `--mode=sync` to wait for the upload instead.
 
-Repeat the `curl` from step 1 and the actor resumes from its snapshot —
-possibly on a different worker — with **both** counters continuing from where
+Repeat the `curl` from step 1 and the actor resumes from its snapshot,
+possibly on a different worker, with **both** counters continuing from where
 they left off: the memory count comes back from the `MEMORY` snapshot's process
-memory, the file counter from the durable volume.
+memory, the file counter from the durable volume. Run `kubectl ate get actor`
+from step 2 again and check the `WORKER POD` column to see which worker pod it
+resumed on.
 
 4. To permanently delete the suspended actor:
 <details>

@@ -361,8 +361,9 @@ func assertLifecycleFidelity(t *testing.T, reader *sdkmetric.ManualReader, want 
 }
 
 // updateDuringCheckpoint makes atelet's Checkpoint mutate the stored actor
-// before it returns, standing in for a writer that lands between a workflow's
-// atelet call and its finalize step.
+// before it returns, standing in for a writer that takes over the actor after
+// a workflow loses its lease, between the workflow's atelet call and its
+// finalize step.
 func updateDuringCheckpoint(t *testing.T, atelet *capturingAtelet, st store.Interface, actorRef resources.ActorRef, mutate func(*ateapi.ActorStatus)) {
 	atelet.onCheckpoint = func(ctx context.Context) error {
 		actor, err := st.GetActor(ctx, actorRef)
@@ -392,11 +393,12 @@ func mustReadActor(t *testing.T, ctx context.Context, st store.Interface, actorR
 }
 
 // workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
-// an actor right after a finalize step frees the actor's worker, so its crash
-// runs between the step's read of the actor and its write. In production the
-// release takes the actor's lease, which pause and suspend hold through their
-// finalize steps, so it waits for them instead; AcquireLease is bypassed here
-// to keep the finalize step's own version guard against the crash covered.
+// an actor right before a finalize step's write frees the actor's worker, so
+// its crash runs between the step's read of the actor and its write. In
+// production the release takes the actor's lease, which pause and suspend hold
+// through their finalize steps, so it waits for them instead; AcquireLease is
+// bypassed here to keep the finalize step's own version guard against the
+// crash covered.
 type workerDeletedDuringReleaseStore struct {
 	store.Interface
 }
@@ -405,24 +407,36 @@ func (s workerDeletedDuringReleaseStore) AcquireLease(ctx context.Context, _ str
 	return store.NewLease(ctx, func() {}), nil
 }
 
-func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapi.Worker, error) {
+func (s workerDeletedDuringReleaseStore) UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
+	actor, err := s.Interface.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	workerName := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
 	worker, err := s.Interface.GetWorker(ctx, workerName)
 	if err != nil {
 		return nil, err
 	}
-	assignment, err := s.Interface.GetWorkerAssignment(ctx, workerName, actorUID)
-	if err != nil {
-		return nil, err
-	}
-	released, err := s.Interface.ReleaseActorFromWorker(ctx, workerName, actorUID)
+	assignment, err := s.Interface.GetWorkerAssignment(ctx, workerName, precondition.UID)
 	if err != nil {
 		return nil, err
 	}
 	dialer := NewAteletDialer(cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{byNode: nil}), "", "", "")
-	if err := NewWorkerWorkflow(s, dialer).releaseBoundActor(ctx, worker, assignment); err != nil {
+	if err := NewWorkerWorkflow(noLeaseStore(s), dialer).releaseBoundActor(ctx, worker, assignment); err != nil {
 		return nil, err
 	}
-	return released, nil
+	return s.Interface.UpdateActorAndRelease(ctx, actorRef, precondition, mutate)
+}
+
+// noLeaseStore is the store the injected release runs against: it skips the
+// lease, as workerDeletedDuringReleaseStore does, but writes straight to the
+// wrapped store, so the release does not inject itself again.
+type noLeaseStore struct {
+	store.Interface
+}
+
+func (noLeaseStore) AcquireLease(ctx context.Context, _ string) (*store.Lease, error) {
+	return store.NewLease(ctx, func() {}), nil
 }
 
 // assertConcurrentCrashKept verifies that a finalize step racing

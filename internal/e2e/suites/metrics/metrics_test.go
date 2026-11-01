@@ -110,7 +110,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	prefixes := dataplane.PlatformMetricPrefixes(e2e.PlatformMetricPrefixes)
 	var missing []string
-	var workerSeen, controllerSeen, routeDurationSeen, lifecycleSeen bool
+	var workerSeen, controllerSeen, egressSeen, routeDurationSeen, lifecycleSeen bool
 	var missingStates []string
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
@@ -126,6 +126,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventSeries(scrape), wantStates)
 		lifecycleSeen = len(missingStates) == 0
 		workerSeen = e2e.CollectorHasService(scrape, "ateworker-gvisor", "ateworker-microvm")
+		egressSeen = dataplane.EgressCollectorTelemetrySeen(scrape)
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
 		// some series arrived. Substring, not prefix: the collector's Prometheus
@@ -133,7 +134,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && workerSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
+		if len(missing) == 0 && workerSeen && controllerSeen && egressSeen && routeDurationSeen && lifecycleSeen {
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -240,6 +241,10 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 				errs = append(errs, err.Error())
 			}
 
+			if err := validateEgressServiceAttribution(scrape); err != nil {
+				errs = append(errs, err.Error())
+			}
+
 			if len(errs) == 0 {
 				return
 			}
@@ -253,11 +258,11 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, worker pushed=%v, atecontroller pushed=%v, error detail: %v",
-			missing, missingStates, workerSeen, controllerSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, worker pushed=%v, atecontroller pushed=%v, atenet-egress pushed=%v, error detail: %v",
+			missing, missingStates, workerSeen, controllerSeen, egressSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, worker pushed=%v, atecontroller pushed=%v",
-		missing, missingStates, routeDurationSeen, workerSeen, controllerSeen)
+	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, worker pushed=%v, atecontroller pushed=%v, atenet-egress pushed=%v",
+		missing, missingStates, routeDurationSeen, workerSeen, controllerSeen, egressSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
@@ -346,6 +351,24 @@ func validateNodeAttribution(scrape string) error {
 	// found; zero of them means the assertion above proved nothing.
 	if checked == 0 {
 		return fmt.Errorf("no node-scoped service reached the collector, so k8s_node_name went unchecked")
+	}
+	return nil
+}
+
+// validateEgressServiceAttribution verifies that atenet-egress pods never
+// report under job="atenet-router" (nor emit ate_direction="egress" under
+// job="atenet-router").
+func validateEgressServiceAttribution(scrape string) error {
+	for _, line := range strings.Split(scrape, "\n") {
+		if !strings.Contains(line, `job="atenet-router"`) {
+			continue
+		}
+		if pod := extractLabelValue(line, "k8s_pod_name"); strings.HasPrefix(pod, "atenet-egress") {
+			return fmt.Errorf("atenet-egress pod %q exported telemetry as job=\"atenet-router\": %q", pod, line)
+		}
+		if extractLabelValue(line, "ate_direction") == "egress" {
+			return fmt.Errorf("egress metric exported as job=\"atenet-router\": %q", line)
+		}
 	}
 	return nil
 }

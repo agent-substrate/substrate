@@ -83,19 +83,21 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return p.updateActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
+	return updateActor(ctx, p.pool, actorRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
 func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	return p.updateActor(ctx, actorRef, precondition, mutate, true)
+	return updateActor(ctx, p.pool, actorRef, precondition, mutate, true)
 }
 
-func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+// updateActor applies mutate to the stored actor through q, which is the pool
+// or a transaction the write must commit with.
+func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
-	if err := p.pool.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actors
 			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -134,7 +136,7 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	commandTag, err := q.Exec(ctx, `
 			UPDATE actors
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
@@ -153,27 +155,38 @@ func (p *Persistence) updateActor(ctx context.Context, actorRef resources.ActorR
 
 func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	// Locked so the Actor checked is the one the DELETE removes.
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
-		DELETE FROM actors
-		WHERE atespace = $1 AND name = $2
-		  AND ($3::text = '' OR uid = $3::text)
-		  AND ($4::bigint = 0 OR version = $4::bigint)
-		RETURNING proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
+	err = tx.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2 FOR UPDATE`, atespace, name).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		var uid string
-		var version int64
-		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
-		return nil, mapDeleteError(err, uid, version, precondition)
+		return nil, store.ErrNotFound
 	}
 	if err != nil {
+		return nil, fmt.Errorf("locking actor %s/%s: %w", atespace, name, err)
+	}
+	deleted := &ateapi.Actor{}
+	if err := unmarshalStored(protoBytes, deleted); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor to delete: %w", err)
+	}
+	if err := precondition.Check(deleted.GetMetadata()); err != nil {
+		return nil, err
+	}
+	if deleted.GetStatus().GetWorkerAssignment() != nil {
+		return nil, fmt.Errorf("%w: actor %s/%s is still assigned to a worker", store.ErrFailedPrecondition, atespace, name)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {
 		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
 	}
-	out := &ateapi.Actor{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
-		return nil, fmt.Errorf("unmarshaling deleted actor: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor delete %s/%s: %w", atespace, name, err)
 	}
-	return out, nil
+	return deleted, nil
 }
 
 func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Actor], error) {

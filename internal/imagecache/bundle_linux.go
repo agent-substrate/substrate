@@ -15,7 +15,7 @@
 // limitations under the License.
 
 // The consumer half of the image cache: everything in this file runs in the
-// privileged worker pods (which own all mounts on the node), never in atelet.
+// worker pods, which set up the rootfs mounts, never in atelet.
 
 package imagecache
 
@@ -69,6 +69,15 @@ func SetupBundleRootfs(bundlePath string) error {
 	// path (e.g. a run that failed between mount and teardown). EINVAL just
 	// means nothing was mounted there.
 	_ = unix.Unmount(rootfs, unix.MNT_DETACH)
+
+	// upper (with an overlay) or rootfs (without) becomes the container's "/".
+	// At 0700 a non-root container cannot search its own root. Chmod after the
+	// unmount, explicitly: MkdirAll applies the umask and skips existing dirs.
+	for _, d := range []string{rootfs, upper} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			return fmt.Errorf("while setting mode of %q: %w", d, err)
+		}
+	}
 
 	if len(spec.Layers) == 0 {
 		// Degenerate zero-layer image: the empty rootfs dir plus ExtraDirs is
@@ -231,9 +240,9 @@ func fsContextLog(fsfd int) string {
 
 // FinalizeLayer materializes the whiteout state recorded at unpack time:
 // 0:0 char devices for whiteouts and trusted.overlay.opaque=y on opaque
-// dirs. This runs in worker rather than atelet because mknod needs CAP_MKNOD
-// and trusted.* xattrs need CAP_SYS_ADMIN, both of which atelet deliberately
-// drops.
+// dirs. This runs in worker rather than atelet because trusted.* xattrs need
+// CAP_SYS_ADMIN, which atelet deliberately drops. Unlike ordinary device nodes,
+// 0:0 whiteouts can be created without CAP_MKNOD since Linux 5.8.
 //
 // Idempotent and safe under concurrent callers (multiple worker pods share
 // the node's pool): EEXIST from mknod is success, setxattr is naturally

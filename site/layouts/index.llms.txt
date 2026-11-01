@@ -15,25 +15,76 @@ limitations under the License.
 */ -}}
 # Agent Substrate
 
-> Agent Substrate is an open source, secure-by-default agent execution runtime that runs millions of sandboxed agents (microVMs and gVisor) at up to 10x higher density than standard container runtimes. It runs on Kubernetes, which manages the machines, while its own control and data plane handle sub-500ms suspend and resume.
+> Agent Substrate is an open source, zero-trust runtime for running millions of stateful sandboxed agents on Kubernetes with sub-500ms suspend and resume.
 
-Agent Substrate decouples the logical **Actor** (a stateful agent or workload instance addressed by `(atespace, name)` and instantiated from an `ActorTemplate`) from the physical **Worker** (a pre-warmed Kubernetes Pod in a `WorkerPool`). Idle actors are checkpointed to object storage (GCS or S3) and evicted from compute; when a request arrives with the `ate-target-actor: <atespace>/<actor>` header, the Substrate router (`atenet`) and control plane (`ate-api-server`) assign a ready worker and the node-level supervisor (`atelet`) coordinates with the in-pod sandbox herder (`ateom`) to restore the actor's memory and filesystem state in under 500ms—bypassing the Kubernetes control plane on the request path.
+Agent Substrate maps stateful **Actors** (addressed as `<atespace>/<actor>` and created from an `ActorTemplate`) onto smaller pools of pre-warmed **Workers** (Kubernetes Pods in a `WorkerPool`). Idle actors checkpoint their memory and filesystem state to object storage (GCS or S3) and release compute. When a request arrives with the `ate-target-actor: <atespace>/<actor>` header, `atenet-router` parks the request while `ate-api-server` assigns a ready worker, `atelet` streams the snapshot on the node, and `ateworker` restores the sandbox off the Kubernetes control-plane path.
+
+Every actor runs inside a Cloud Hypervisor microVM or gVisor (`runsc`) sandbox. Plain Linux containers are unsupported. Actors hold zero ambient credentials inside the sandbox and start with default-deny networking. Outbound traffic traverses `atunnel` (authenticated with a short-lived per-actor SPIFFE X.509 certificate) to `atenet-egress`, which enforces `EgressPolicy` host allowlists and injects external credentials or actor JWTs out of band.
+
+Substrate splits its APIs between cluster infrastructure and tenant workloads. Infrastructure resources (`WorkerPool`, `SandboxConfig`, `CSIDriverConfig` under `ate.dev/v1`) are Kubernetes CRDs reconciled by `atecontroller` and managed with `kubectl`. Workload and access resources (`Atespace`, `ActorTemplate`, `Actor`, `Tag`, `EgressPolicy`, `AccessPolicy`) live in PostgreSQL behind `ate-api-server`'s gRPC Control API (`api/ateapi/v1/ateapi.proto`) and are managed with `kubectl ate` or gRPC clients. Agent Substrate is a Cloud Native Computing Foundation sandbox project originally created by Google.
 
 ## Consolidated Reference Bundle
 
-- [Full Documentation Bundle (llms-full.txt)]({{ "llms-full.txt" | absURL }}): Single-file compilation of all Agent Substrate conceptual, architecture, how-to, CLI reference, API, and security documentation for AI context windows.
+- [Full Documentation Bundle (llms-full.txt)]({{ "llms-full.txt" | absURL }}): Single-file Markdown compilation of all Agent Substrate documentation.
+{{- $repo := site.Params.github_repo -}}
+{{- $branch := site.Params.github_branch | default "main" -}}
 {{- $docs := site.GetPage "/docs" -}}
+{{- $projectSection := false -}}
 {{- if $docs -}}
-{{- range $section := $docs.Sections.ByWeight }}
+{{- range $section := $docs.Sections.ByWeight -}}
+{{- if eq (path.Base $section.Path) "project" -}}
+  {{- $projectSection = $section -}}
+{{- else if $section.RegularPages }}
 
 ## {{ $section.LinkTitle | default $section.Title }}
-{{- range $p := $section.RegularPages.ByWeight }}
-- [{{ $p.Title }}]({{ $p.Permalink }}): {{ with $p.Params.description }}{{ replaceRE `\s+` " " (strings.TrimSpace .) }}{{ else }}Agent Substrate documentation for {{ $p.Title }}.{{ end }}
+{{- range $p := $section.RegularPages.ByWeight -}}
+{{- $params := partialCached "page-params.html" $p $p.Path -}}
+{{- $url := $p.Permalink -}}
+{{- with $p.OutputFormats.Get "markdown" -}}
+  {{- $url = .Permalink -}}
+{{- end -}}
+{{- $statusPrefix := "" -}}
+{{- with $params.status -}}
+  {{- $statusPrefix = printf "[Status: %s] " (title .) -}}
+{{- end -}}
+{{- $desc := "" -}}
+{{- with $params.description -}}
+  {{- $rawDesc := partial "rewrite-repo-links.html" (dict "content" (strings.TrimSpace .) "dir" (path.Dir ($p.Params.repo_source | default "")) "absolute" true "markdown" true) -}}
+  {{- $desc = replaceRE `\s+` " " $rawDesc -}}
+{{- else -}}
+  {{- $desc = printf "Agent Substrate documentation for %s." $p.Title -}}
+{{- end }}
+- [{{ $p.Title }}]({{ $url }}): {{ $statusPrefix }}{{ $desc }}
+{{- end -}}
+{{- if and $repo (eq (path.Base $section.Path) "reference") }}
+- [Control Plane gRPC Proto (ateapi.proto)]({{ printf "%s/blob/%s/api/ateapi/v1/ateapi.proto" $repo $branch }}): Canonical protobuf service and resource definitions for Atespace, ActorTemplate, Actor, Tag, EgressPolicy, AccessPolicy, and Worker.
+- [WorkerPool CRD]({{ printf "%s/blob/%s/manifests/ate-install/generated/ate.dev_workerpools.yaml" $repo $branch }}): OpenAPI v3 Kubernetes CustomResourceDefinition schema for `ate.dev/v1` `WorkerPool`.
+- [SandboxConfig CRD]({{ printf "%s/blob/%s/manifests/ate-install/generated/ate.dev_sandboxconfigs.yaml" $repo $branch }}): OpenAPI v3 Kubernetes CustomResourceDefinition schema for `ate.dev/v1` `SandboxConfig`.
+- [CSIDriverConfig CRD]({{ printf "%s/blob/%s/manifests/ate-install/generated/ate.dev_csidriverconfigs.yaml" $repo $branch }}): OpenAPI v3 Kubernetes CustomResourceDefinition schema for `ate.dev/v1` `CSIDriverConfig`.
+- [Metrics & Events Registry]({{ printf "%s/tree/%s/docs/metrics/registry" $repo $branch }}): OpenTelemetry Weaver schema defining emitted metrics, log events, and attributes.
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
 
 ## Optional
-
-- [Tutorials Overview]({{ "docs/tutorials/" | absURL }}): Interactive step-by-step example workloads demonstrating stateful actors, sandboxes, request parking, egress, and multiplexing.
-- [GitHub Repository](https://github.com/agent-substrate/substrate): Source code, issue tracker, manifests, and release artifacts for Agent Substrate.
+{{- with $projectSection -}}
+{{- range $p := .RegularPages.ByWeight -}}
+{{- $params := partialCached "page-params.html" $p $p.Path -}}
+{{- $url := $p.Permalink -}}
+{{- with $p.OutputFormats.Get "markdown" -}}
+  {{- $url = .Permalink -}}
+{{- end -}}
+{{- $desc := "" -}}
+{{- with $params.description -}}
+  {{- $rawDesc := partial "rewrite-repo-links.html" (dict "content" (strings.TrimSpace .) "dir" (path.Dir ($p.Params.repo_source | default "")) "absolute" true "markdown" true) -}}
+  {{- $desc = replaceRE `\s+` " " $rawDesc -}}
+{{- else -}}
+  {{- $desc = printf "Agent Substrate documentation for %s." $p.Title -}}
+{{- end }}
+- [{{ $p.Title }}]({{ $url }}): {{ $desc }}
+{{- end -}}
+{{- end -}}
+{{- with $repo }}
+- [GitHub Repository]({{ . }}): Source code, issue tracker, manifests, and release artifacts for Agent Substrate.
+{{- end }}

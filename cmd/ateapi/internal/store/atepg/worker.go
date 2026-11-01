@@ -167,6 +167,15 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, preconditio
 		if err := precondition.Check(deleted.GetMetadata()); err != nil {
 			return nil, err
 		}
+		// Binds and releases lock the Worker row first, so this sees every
+		// assignment committed before the lock was taken.
+		var assigned bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM worker_assignments WHERE worker_name = $1)`, name).Scan(&assigned); err != nil {
+			return nil, fmt.Errorf("checking assignments of worker %s: %w", name, err)
+		}
+		if assigned {
+			return nil, fmt.Errorf("%w: worker %s still holds assignments", store.ErrFailedPrecondition, name)
+		}
 		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
 		if err != nil {
 			return nil, fmt.Errorf("deleting worker %s: %w", name, err)

@@ -283,7 +283,7 @@ Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
   - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, `delete_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
-  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
+  - **Immutable** fields (`atespace`, `name`, and resource-specific ones such as an actor's `source_tag`) are caller-set at creation and fixed thereafter. A request that changes one, including by omitting it, **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
 - A request carrying a field the server does not know, at any level of nesting, **must** return `INVALID_ARGUMENT` naming the field, as for every RPC. Fields only the client does not know are a different case: a client that modifies the resource it read sends them back unchanged, so an update from an older client does not clear fields a newer server set.
