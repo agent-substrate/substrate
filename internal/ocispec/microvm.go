@@ -58,10 +58,11 @@ type MicroVMOptions struct {
 }
 
 // ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
-// bind mounts to guest share paths, applies containerd's default masked and
-// read-only paths, fills in kata's default resources, and lifts the guest's
-// privileged-port limit. It must run on an unshaped spec, and errors on a bind
-// it cannot place in the guest.
+// bind mounts to guest share paths, applies containerd's default read-only
+// paths and the subset of its default masked paths that exists in the guest,
+// fills in kata's default resources, and lifts the guest's privileged-port
+// limit. It must run on an unshaped spec, and errors on a bind it cannot place
+// in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	// Translate volume bind mounts into guest share paths.
 	volumes := make([]specs.Mount, 0, len(spec.Mounts))
@@ -162,7 +163,7 @@ func guestSystemMounts() []specs.Mount {
 	}
 	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
 	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350
-	for _, dir := range guestMaskedDirPaths() {
+	for _, dir := range guestMaskedDirPaths(runtime.GOARCH) {
 		mounts = append(mounts, specs.Mount{Destination: dir, Type: "tmpfs", Source: "tmpfs", Options: []string{"ro", "nr_blocks=1", "nr_inodes=1"}})
 	}
 	return mounts
@@ -170,10 +171,12 @@ func guestSystemMounts() []specs.Mount {
 
 // guestMaskedDirPaths returns containerd's default masked directories that
 // exist in the guest. The others don't, and kata-agent fails container start on
-// a missing mount target. arm64 guests boot without ACPI.
+// a missing mount target. goarch is the guest's architecture, which is the
+// host's under KVM. arm64 guests boot without ACPI.
 // https://github.com/containerd/containerd/blob/v2.4.2/pkg/oci/spec.go#L262-L276
-func guestMaskedDirPaths() []string {
-	if runtime.GOARCH == "amd64" {
+// TODO(#3530): Remove once kata-agent masks directories itself.
+func guestMaskedDirPaths(goarch string) []string {
+	if goarch == "amd64" {
 		return []string{
 			"/sys/firmware",
 			"/proc/acpi",

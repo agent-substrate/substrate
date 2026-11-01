@@ -17,7 +17,6 @@ package ocispec
 import (
 	"reflect"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -204,10 +203,6 @@ func TestShapeMicroVM_MasksProcAndSys(t *testing.T) {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
 	roTmpfs := []string{"ro", "nr_blocks=1", "nr_inodes=1"}
-	var acpiMount *specs.Mount
-	if runtime.GOARCH == "amd64" {
-		acpiMount = &specs.Mount{Destination: "/proc/acpi", Type: "tmpfs", Source: "tmpfs", Options: roTmpfs}
-	}
 	for _, tc := range []struct {
 		path     string
 		readonly bool
@@ -217,7 +212,6 @@ func TestShapeMicroVM_MasksProcAndSys(t *testing.T) {
 		{path: "/proc/sys", readonly: true},
 		{path: "/proc/kcore", masked: true},
 		{path: "/sys/firmware", mount: &specs.Mount{Destination: "/sys/firmware", Type: "tmpfs", Source: "tmpfs", Options: roTmpfs}},
-		{path: "/proc/acpi", mount: acpiMount},
 		// Not in the guest kernel, so masking them would fail container start.
 		{path: "/proc/asound"},
 		{path: "/proc/scsi"},
@@ -236,6 +230,22 @@ func TestShapeMicroVM_MasksProcAndSys(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tc.mount) {
 				t.Errorf("mount = %+v, want %+v", got, tc.mount)
+			}
+		})
+	}
+}
+
+func TestGuestMaskedDirPaths(t *testing.T) {
+	for _, tc := range []struct {
+		goarch string
+		want   []string
+	}{
+		{goarch: "amd64", want: []string{"/sys/firmware", "/proc/acpi"}},
+		{goarch: "arm64", want: []string{"/sys/firmware"}},
+	} {
+		t.Run(tc.goarch, func(t *testing.T) {
+			if got := guestMaskedDirPaths(tc.goarch); !slices.Equal(got, tc.want) {
+				t.Errorf("guestMaskedDirPaths(%q) = %v, want %v", tc.goarch, got, tc.want)
 			}
 		})
 	}
