@@ -352,7 +352,7 @@ func TestShippedSandboxConfigManifests(t *testing.T) {
 
 	for _, path := range []string{
 		"../../../../../manifests/ate-install/sandboxconfig-gvisor.yaml",
-		"../../../../../manifests/microvm/sandboxconfig-microvm.yaml.tmpl",
+		"../../../../../manifests/ate-install/sandboxconfig-microvm.yaml.tmpl",
 	} {
 		t.Run(path, func(t *testing.T) {
 			raw, err := os.ReadFile(path)

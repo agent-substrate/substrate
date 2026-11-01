@@ -62,6 +62,7 @@ unchanged.
 
 ```
 ate-setup deploy ate-system \
+  --storage-bucket-name=BUCKET \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=IDS \
   --image-repo REPO \
@@ -71,7 +72,12 @@ ate-setup deploy ate-system \
 installs images already published to `REPO` instead, and never invokes `ko`.
 The manifests still come from the checkout, so this needs one; what it removes
 is the build and write access to a registry. Releases ship no `ate-setup`
-binary, so running it from the checkout still needs Go.
+binary, so running it from the checkout still needs Go. On non-Kind clusters,
+the default `--sandbox-classes=gvisor,microvm` also downloads the microVM guest
+assets from GitHub and uploads them with `gcloud` to `<BUCKET>-assets` (created
+with `atelet` read access by `go run ./tools/setup-gcp create bucket` and
+`create iam`); pass `--sandbox-classes=gvisor` to install gVisor only without
+`--storage-bucket-name` or `gcloud`.
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including
 `envoy-dataplane`, which a build from source builds from a Dockerfile with
@@ -101,18 +107,23 @@ that already names a manifest is used as written, and is not looked up.
 
 - `deploy ate-system`
 - `deploy ate-system --setup-csi=nfs`
+- `deploy ate-system --sandbox-classes=gvisor`
 - `deploy atelet`
 - `deploy apiserver`
 - `deploy ate-controller`
 - `deploy atenet`
 - `deploy podcertificate-controller`
-- `deploy sandboxconfig`
+- `deploy sandboxconfig [--sandbox-classes=...]`
 - `deploy postgres`
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the
-apiserver, the controller, atenet, and atelet. It creates every `create`
-resource below on the way, so those subcommands are only needed to redo one on
-a running cluster.
+apiserver, the controller, atenet, and atelet. By default
+(`--sandbox-classes=gvisor,microvm`, also accepted by `deploy sandboxconfig`),
+it installs the cluster-wide `gvisor-default` and `microvm` `SandboxConfig`
+resources, staging the microVM guest assets into the asset bucket (`rustfs` on
+Kind, `<BUCKET_NAME>-assets` on GKE). It creates every `create` resource below
+on the way, so those subcommands are only needed to redo one on a running
+cluster.
 
 ## Publish
 
@@ -186,9 +197,9 @@ is absent); the other two are flags of the benchmark commands. See
 |---|---|
 | `deploy demo counter` | A counter actor exercising snapshot, resume, and atenet ingress |
 | `deploy demo counter --with-external-volume [--storage-class NAME]` | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
-| `deploy demo counter-microvm` | The counter demo on microVM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo counter-microvm` | The counter demo on microVM workers |
 | `deploy demo egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
-| `deploy demo egress-microvm` | The same on microVM workers. Run `hack/install-microvm-deps.sh --install` first |
+| `deploy demo egress-microvm` | The same on microVM workers |
 | `deploy demo jupyter` | A Jupyter notebook server per actor, reached through atenet ingress |
 | `deploy demo sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | Two ActorTemplates sharing one WorkerPool |

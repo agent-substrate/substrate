@@ -21,7 +21,6 @@ import (
 	"time"
 
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,20 +28,13 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 )
 
-// ServiceName is the OpenTelemetry service name and instrumentation scope
-// shared by every part of the atenet router process — the ext_proc mux here,
-// the direction handlers, and the router's own servers. It lives in this
-// package because it is the one package all of them already depend on.
-const ServiceName = "atenet-router"
-
 // atenet.router.route.duration measures the latency from when the ext_proc handler receives a request
 // (dataplane -> EPP) until the target worker endpoint is resolved
 const routeDurationMetricName = "atenet.router.route.duration"
 
-// NewRouteDurationHistogram creates the atenet.router.route.duration histogram from
-// the global MeterProvider.
-func NewRouteDurationHistogram() (metric.Float64Histogram, error) {
-	h, err := otel.Meter(ServiceName).Float64Histogram(
+// NewRouteDurationHistogram creates the atenet.router.route.duration histogram on meter.
+func NewRouteDurationHistogram(meter metric.Meter) (metric.Float64Histogram, error) {
+	h, err := meter.Float64Histogram(
 		routeDurationMetricName,
 		metric.WithUnit("s"),
 		metric.WithDescription(

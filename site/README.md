@@ -70,6 +70,21 @@ writes `data/release.json`.
 `hack/site.sh test` builds the site against `testdata/` and checks the rendered
 templates.
 
+## Machine-readable documentation (`llms.txt`)
+
+Hugo builds three plain-text outputs alongside the HTML pages:
+
+- `/llms.txt` (`layouts/index.llms.txt`), a concise project overview and index
+  linking to the Markdown build of each doc page and the repository's proto,
+  CRD, and metric schemas;
+- `/llms-full.txt` (`layouts/index.llmsfull.txt`), a single-file compilation of
+  every published doc page;
+- `/docs/<section>/<page>/index.md` (`layouts/docs/single.md`), the standalone
+  Markdown version of each page, with relative links rewritten to absolute URLs.
+
+All three share `layouts/_partials/raw-markdown.html` with the per-page
+"Copy as Markdown" button.
+
 ## Glossary hover cards
 
 On doc pages, the first mention of each glossary term gets a hover card with

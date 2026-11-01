@@ -1,34 +1,34 @@
 [
   {
     "threat_id": "T-01",
-    "priority": "Critical",
+    "priority": "High",
     "threat": "External attacker can access actors over the internet",
     "mitigating_invariants": "Access to actors over the external internet is blocked by default.",
-    "suggested_concrete_mitigations": "Recommend use of infrastructure firewall to limit external ingress/egress in documentation (cloud specific). Use Kubernetes NetworkPolicy to limit external ingress/egress by default. Use additional network policy features depending on CNI.",
-    "notes": "This should at least be a default deny policy for ingress in Substrate. The others below depend on Kubernetes configuration that may be out of scope for Substrate to configure directly."
+    "suggested_concrete_mitigations": "ClusterIP-only Services. Default-deny ingress NetworkPolicies for ate-system and worker pools. Exposing anything outside the cluster is an explicit operator choice. Requires a CNI that enforces NetworkPolicy.",
+    "notes": ""
   },
   {
     "threat_id": "T-02",
-    "priority": "Critical",
+    "priority": "High",
     "threat": "External attacker can access nodes over the internet",
     "mitigating_invariants": "Access to nodes over the external internet is blocked by default.",
-    "suggested_concrete_mitigations": "Recommend use of infrastructure firewall to limit external ingress/egress in documentation (cloud specific). Use Kubernetes NetworkPolicy to limit external ingress/egress by default. Use additional network policy features depending on CNI.",
-    "notes": "Included for completeness but this may be beyond Substrate's ability to configure directly, as it depends on the surrounding Kubernetes configuration, determined by the system administrator."
+    "suggested_concrete_mitigations": "No hostNetwork, hostPort, NodePort, or LoadBalancer in Substrate components. Cluster setup tooling creates private nodes.",
+    "notes": "Node firewalls are cluster configuration and outside Substrate's scope, but are recommended."
   },
   {
     "threat_id": "T-03",
-    "priority": "Critical",
+    "priority": "High",
     "threat": "External attacker can access Substrate API or backend database over the internet",
     "mitigating_invariants": "Access to Substrate API over the external internet is blocked by default.",
-    "suggested_concrete_mitigations": "Recommend use of infrastructure firewall to limit external ingress/egress in documentation (cloud specific). Use Kubernetes NetworkPolicy to limit external ingress/egress by default. Use additional network policy features depending on CNI.",
-    "notes": "Included for completeness but this may be beyond Substrate's ability to configure directly, as it depends on the surrounding Kubernetes configuration, determined by the system administrator."
+    "suggested_concrete_mitigations": "ClusterIP-only Services. Default-deny ingress NetworkPolicies for ate-system; only ate-api-server can reach the database. Exposing the API outside the cluster is an explicit operator choice. Requires a CNI that enforces NetworkPolicy.",
+    "notes": ""
   },
   {
     "threat_id": "T-04",
     "priority": "Critical",
     "threat": "Access to the internal network allows arbitrary actions to be performed on ate-apiserver, atelet, substrate backend database, etc.",
     "mitigating_invariants": "All system components must have basic mutual authentication and authorization, and communicate over TLS. All clients (including end users and actors) must be authenticated and authorized.  Unauthenticated traffic must be rejected. Where possible, use firewalls to block access from ranges that have no business communicating with Substrate components.",
-    "suggested_concrete_mitigations": "mTLS or other secure channel (e.g. UDS) between networked system components (ate-apiserver, atelet, ateworker, etc); each atelet has a unique identity cryptographically tied to the node identity. The ingress gateway should check client permissions before resuming actors or forwarding traffic to actors. The only component authorized to connect directly to the backend database should be ate-apiserver. Use Kubernetes NetworkPolicy to block access to the Substrate API and other core components by default.",
+    "suggested_concrete_mitigations": "mTLS or a UDS between components, with each caller's identity checked. Per-node identity for atelet. Ingress checks the caller's permission on the target actor before resuming or forwarding. Only ate-api-server can reach the database. Default-deny NetworkPolicies for ate-system.",
     "notes": ""
   },
   {
@@ -36,23 +36,23 @@
     "priority": "High",
     "threat": "Privilege escalation via access to sensitive labels.",
     "mitigating_invariants": "If Substrate offers its own resource labeling mechanism, it must also offer a way to authorize label updates on a per-label basis.",
-    "suggested_concrete_mitigations": "Substrate authorization system requires explicit authorization to update metadata, separate from updating resource body. Substrate authorization system supports per-label authorization rules.",
-    "notes": "Plenty of attacks in K8s were possible because labels had semantic meaning, but the permission model could implicitly granted access to modify labels, even if it was inappropriate. For example, /status subresource allows label updates. Substrate shouldn't repeat this mistake."
+    "suggested_concrete_mitigations": "Restrict who can change labels that drive behavior, such as the WorkerPool labels that `worker_selector` matches. Authorize label updates separately from the resource body.",
+    "notes": "Kubernetes let the /status subresource update labels. Don't repeat this."
   },
   {
     "threat_id": "T-06",
     "priority": "High",
     "threat": "Attacker gains control of the Substrate API server or an ingress/egress gateway.",
     "mitigating_invariants": "Isolate the control plane from the data plane, and isolate data plane ingress from sandboxes.",
-    "suggested_concrete_mitigations": "Don't co-locate ate-apiserver or other control-plane components on the same machines as the untrusted sandboxes. This also supports control-plane / data-plane isolation from a reliability and performance perspective. Consider running any gateway that enables direct interaction with sandboxes on a separate VM from the sandboxes. Consider using a zero-trust architecture where traffic is encrypted and authenticated end-to-end and routed via a mesh.",
-    "notes": "While the sandbox is trusted as an isolation layer, the residual risk is typically not worth the marginal cost savings of colocating, and isolation is recommend to avoid noisy neighbor problems or other reliability issues that stem from mixing the control-plane and data-plane, especially for large scale deployments of Substrate."
+    "suggested_concrete_mitigations": "Run control-plane components and gateways on separate nodes from sandboxes. Block network access from workers to the control plane. mTLS between all components.",
+    "notes": "Separation also limits noisy-neighbor and reliability problems."
   },
   {
     "threat_id": "T-07",
     "priority": "High",
     "threat": "Attacker who can create ActorTemplates specifies malicious runtime.",
     "mitigating_invariants": "Ensure available runtime can only be configured by administrators.",
-    "suggested_concrete_mitigations": "Consider a mechanism like RuntimeClass to decouple configuration of available runtimes from consumption of available runtimes.",
+    "suggested_concrete_mitigations": "Configure runtimes in admin-owned cluster resources, similar to RuntimeClass, not in ActorTemplates.",
     "notes": ""
   },
   {
@@ -60,47 +60,39 @@
     "priority": "High",
     "threat": "Attacker who can create ActorTemplates can read or write any storage buckets atelet has access to.",
     "mitigating_invariants": "Ensure that bucket access is least-privilege.",
-    "suggested_concrete_mitigations": "Use credentials derived from actor identity to read snapshots. Configure permissions to prevent atelet or nodes from having access to sensitive buckets. Don't support arbitrary URLs in APIs, instead design a standard approach for accessing the correct resource given the ActorTemplate name and compute the mapping internally, subject to scheduling-aware authorization checks.",
-    "notes": "For example: Attacker creates an ActorTemplate with the runsc URL or golden snapshot URL pointing to an arbitrary bucket in the same project/resource scope as the cluster. If atelet has project-wide access to buckets, this could cause the state to be pulled into the worker pod or malicious actor. Similarly, an attacker could set the snapshots URL to point to an internal infrastructure bucket, causing data to be written to that bucket. Current state for sandbox asset URLs (SandboxConfig): atelet holds no storage credentials. It fetches every asset through the node's object-store plugin, which refuses any URL under a snapshot location before reading it, and returns an object only if its content matches the sha256 the SandboxConfig pins, staging the download where atelet cannot read it until it is verified. Only when the plugin cannot serve a `gs://` URL (no such object, a URL it rejects, no `AssetProvider`, unreachable, or an error it does not recognize) does atelet read it anonymously, which returns only publicly readable objects; any other refusal by the plugin is final. A SandboxConfig author therefore cannot use an asset URL to pull another actor's snapshot onto a node, even when assets share a bucket with snapshots, and a modified asset fails the digest check in the plugin and again in atelet. Current state for snapshot locations on GCS: snapshot transfers run on per-actor tokens from the credential exchange. The tokens are downscoped from ate-api-server's identity, so a template can reach only buckets that identity can access. setup-gcp gives the plugin's own identity read access to the asset bucket only, and no storage role on the snapshot bucket or the project."
+    "suggested_concrete_mitigations": "Per-actor, downscoped credentials for snapshot transfers. No storage credentials on atelet or nodes. Derive storage locations internally instead of accepting arbitrary URLs. Verify asset digests.",
+    "notes": "Example: a template points its snapshot or asset URL at an internal bucket to read from it or write to it."
   },
   {
     "threat_id": "T-09",
     "priority": "Medium",
     "threat": "DoS attack against API, gateway, or available cluster resources.",
     "mitigating_invariants": "Minimize exposure and ensure APIs and proxies implement appropriately scoped quotas and rate limiting.",
-    "suggested_concrete_mitigations": "Don't co-locate ate-apiserver or other control-plane components on the same machines as the untrusted sandboxes. Don't expose ate-apiserver directly to the internet. Consider an identity-aware WAF (likely up to providers) if external access is required. Use network policy to block direct interaction between untrusted sandboxes and the ate-apiserver. Implement quotas and rate limiting in the API and in proxies. This includes quotas for the number of actors a user can allocate. Use a zero-trust architecture that prevents identity spoofing or intentional misrouting to get around limits.",
-    "notes": "The gateway calls ate-apiserver to resolve Actor assignments and uses a short-lived cache. A flood of Actor traffic could still create high API load; cache invalidation during Actor rescheduling must avoid stale routing."
+    "suggested_concrete_mitigations": "Keep the API and gateways off the internet and unreachable from sandboxes. Run control-plane components on separate nodes from sandboxes. Rate limits and quotas in the API and gateways, including per-user actor quotas. Consider an identity-aware WAF if external access is required.",
+    "notes": "Bound the API load from gateway assignment lookups during traffic floods."
   },
   {
     "threat_id": "T-10",
     "priority": "Medium",
     "threat": "Internal network traffic is intercepted or spoofed",
     "mitigating_invariants": "Encrypt all traffic by default",
-    "suggested_concrete_mitigations": "Use mTLS between all system components, including the gateway-to-worker `atunnel` connection.",
-    "notes": "It may be desirable to rely on cloud providers to transparently encrypt traffic between VMs on their internal network. Worth discussing what makes the most sense."
+    "suggested_concrete_mitigations": "mTLS between all components, including gateway to worker.",
+    "notes": ""
   },
   {
     "threat_id": "T-11",
     "priority": "High",
     "threat": "Improper handling of Secrets",
-    "mitigating_invariants": "Ensure there is an official, secure, recommended way to pass secret data, like API access tokens, to actors.",
-    "suggested_concrete_mitigations": "Support env and filesystem plumbing for Kubernetes Secrets, to provide an official path that avoids secret material being plumbed via nonspecific fields that are difficult to audit. Ensure secrets are encrypted in transit and ideally stored in memory. If exposed via the filesystem, do so via in-memory tmpfs.",
-    "notes": "If we don't support this, users will inevitably put secrets in plaintext."
-  },
-  {
-    "threat_id": "T-12",
-    "priority": "Medium",
-    "threat": "Complexity configuring permissions for frameworks on top of Substrate may lead to unintentional privilege escalation.",
-    "mitigating_invariants": "It must be clear to users what the downstream effects of auth config in substrate are.",
-    "suggested_concrete_mitigations": "If it's not intuitive, it must be documented in a user guide.",
-    "notes": "AI framework has to set up permissions to access ATE, and to access K8s, and potentially for actors (based on ATE identity and K8s identity) to access the framework. We need to make this easy. Think about past K8s issues like escalate/bind risk. Substrate resource model is spread across ate-apiserver and K8s, increasing complexity and chance for error."
+    "mitigating_invariants": "Ensure there is an official, secure, recommended way for actors to use secrets, like API access tokens, without the secret entering the sandbox.",
+    "suggested_concrete_mitigations": "Inject credentials at the egress gateway so secrets never enter the sandbox.",
+    "notes": "Without an official path, users put secrets in plaintext fields."
   },
   {
     "threat_id": "T-13",
     "priority": "Medium",
     "threat": "Flat namespace of actors encourages broad permission grants or complex graph-oriented policy.",
     "mitigating_invariants": "Support a grouping mechanism that can be used in policy controls.",
-    "suggested_concrete_mitigations": "Add namespaces to Substrate, similar to Kubernetes.",
+    "suggested_concrete_mitigations": "Atespaces as the policy grouping unit, like Kubernetes namespaces.",
     "notes": ""
   },
   {
@@ -108,15 +100,15 @@
     "priority": "Medium",
     "threat": "DNS misconfiguration",
     "mitigating_invariants": "Access to DNS configuration should be limited to authoritative controllers. Routing should use stable configurations and query the API for the current worker assignment before forwarding requests.",
-    "suggested_concrete_mitigations": "Don't co-locate controllers with access to sensitive system state on the same nodes as actors. Limit permissions to update DNS configuration. Use the Substrate API and bounded caching to keep assignments current. Authenticate gateway-to-worker traffic with mTLS.",
-    "notes": "A flood of requests could create high read load on ate-apiserver. Cache invalidation during Actor rescheduling is important to avoid stale routing. The gateway-to-`atunnel` mTLS connection prevents the removed direct worker-port path from bypassing worker assignment checks."
+    "suggested_concrete_mitigations": "Keep controllers with sensitive access off actor nodes. Limit who can update DNS configuration. Gateways get the worker assignment from the Substrate API, with bounded caching. mTLS from gateway to worker.",
+    "notes": "Invalidate cached assignments when actors move."
   },
   {
     "threat_id": "T-15",
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying node or other actors via container breakout (Linux local privilege escalation)",
     "mitigating_invariants": "Actors are always sandboxed using a hardened sandbox solution like gvisor or microvm. Traditional containers are not a secure sandbox.",
-    "suggested_concrete_mitigations": "Use Gvisor for strong container isolation. Run sentry in a user namespace and pivot_root to limit broader file system access if the gvisor boundary is broken. Use Seccomp for sentry/gofer as well. Limit capabilities granted to directfs/sentry Any sidecar containers running alongside actors or warmpool pods should be as low privileged as possible. Sandbox lifecycle must be controlled from outside the sandbox",
+    "suggested_concrete_mitigations": "gVisor or microVM sandboxes. Defense in depth around the sandbox runtime: user namespace, pivot_root, seccomp, minimal capabilities. Low-privilege sidecars. Control sandbox lifecycle from outside the sandbox.",
     "notes": ""
   },
   {
@@ -124,7 +116,7 @@
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying node via node-local endpoints exposed on the network",
     "mitigating_invariants": "Network policies must prevent the actor from accessing system services on the node (e.g. instance metadata, host network namespace, host network interface).",
-    "suggested_concrete_mitigations": "Enable network namespacing, and do not provide host network access to any workload. Any host services should have targeted ingress policies so that only the correct clients even have network access to those services",
+    "suggested_concrete_mitigations": "Per-actor network namespace, no host network access. Block node-local services such as instance metadata. Targeted ingress policies on host services.",
     "notes": ""
   },
   {
@@ -132,7 +124,7 @@
     "priority": "Critical",
     "threat": "Malicious actor gains access to other actors via network",
     "mitigating_invariants": "Network policies must deny ingress and egress by default, and selectively allow access to specific actors only when necessary. Network policies must be synchronized with actor lifecycle.",
-    "suggested_concrete_mitigations": "Implement default-deny network policy that blocks any cross-communication between actors (this could be implemented by ateworker instead of Kubernetes, to speed up policy updates when actor groups do need to communicate).",
+    "suggested_concrete_mitigations": "Default-deny traffic between actors, enforced by the worker so policy updates are fast.",
     "notes": ""
   },
   {
@@ -140,15 +132,15 @@
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying node or other actors via filesystem",
     "mitigating_invariants": "Filesystem access is limited to the actor's local fs and remote filesystems the actor is directly, explicitly authorized to access.",
-    "suggested_concrete_mitigations": "Ensure that actor access to the filesystem is protected by, for example, mapping each actor to a unique Linux uid and using filesystem permissions, or by using user namespaces to isolate actor filesystem access on the same host.  Ensure that actor management APIs and filesystem setup protects against traversal via symlinks, mount trickery, etc.",
-    "notes": "Possible vectors: Arbitrary file read vuln in fs implementation. Symlink traversal vulns. Vuln in OCI image unpacking. Path traversal attacks in mount configuration. Shared directories only gated via filesystem permissions + workers running as root or privileged."
+    "suggested_concrete_mitigations": "Isolate actor filesystems with user namespaces or per-actor UIDs. Guard filesystem setup and APIs against symlink, mount, and path traversal.",
+    "notes": "Vectors: file-read bugs, symlink and path traversal, OCI image unpacking, shared directories on root or privileged workers."
   },
   {
     "threat_id": "T-19",
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying Worker Pod or node via local Substrate services (atelet, ateworker, etc).",
     "mitigating_invariants": "Actor access to system services must be denied or explicitly scoped to the actor. Local services must run with the fewest privileges possible to limit the ability for an actor to escalate privilege.",
-    "suggested_concrete_mitigations": "Limit actor access to system services. Ensure system services are aware of actor identity, and authenticate and authorize actors when access is required.",
+    "suggested_concrete_mitigations": "Limit actor access to local services. Local services authenticate the actor and authorize by its identity.",
     "notes": ""
   },
   {
@@ -156,23 +148,23 @@
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying node or other actors via Substrate APIs (remote ate-apiserver)",
     "mitigating_invariants": "Either actors are completely unable to access Substrate APIs, or actor access is authenticated and authorized such that the actor cannot escalate beyond its intended scope. Especially prevent self-modification, which was a common escalation path in K8s.",
-    "suggested_concrete_mitigations": "Do not allow actors or workers to self-modify, e.g. by: reading or writing their own snapshots self-labeling or other self-manipulations of KRM or ATE resources Logic to modify resource definitions including actors, workers, etc lives in the control plane, rather than the data plane, as much as possible.",
+    "suggested_concrete_mitigations": "Don't let actors or workers modify themselves, e.g. read or write their own snapshots or change their own labels. Keep resource-modifying logic in the control plane.",
     "notes": ""
   },
   {
     "threat_id": "T-21",
-    "priority": "Critical",
-    "threat": "Attacker escalates to host via excessive Worker Pod permissions",
-    "mitigating_invariants": "Ensure Worker pods use the minimum necessary permissions to set manage sandbox lifecycle",
-    "suggested_concrete_mitigations": "Deprivilege the worker Pods. Run them as non-root or in a user namespace, without privileged, and with only required caps/devices.",
-    "notes": "Possible example, accidentally putting things in the same cgroup: [https://github.com/agent-substrate/substrate/issues/288](https://github.com/agent-substrate/substrate/issues/288)"
+    "priority": "High",
+    "threat": "Attacker who has escaped the sandbox escalates to the node, atelet, or other workers via excessive Worker Pod permissions",
+    "mitigating_invariants": "Worker Pods hold only the permissions sandbox lifecycle needs, and each permission beyond the container defaults has a documented reason. A worker can't modify or execute anything that atelet or other workers trust.",
+    "suggested_concrete_mitigations": "Run worker Pods non-root or in a user namespace, unprivileged, with only required capabilities and devices. A tailored seccomp profile instead of Unconfined. No ServiceAccount token. Mount only the worker's own host paths, read-only where it doesn't write. Verify shared assets before every use.",
+    "notes": "Rated High priority because it requires a sandbox escape first (T-15). Until workers run in their own user namespace, they may run as root, hold the capabilities the sandbox runtime needs (for example, `SYS_ADMIN` for mounts and `pivot_root`, and `NET_ADMIN` to build the actor network), and run with AppArmor Unconfined, because the default profile denies `mount`. By design, a worker can observe and modify the actors it hosts (such as pause containers that share a cgroup)."
   },
   {
     "threat_id": "T-22",
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying node or other actors via Kubernetes APIs",
     "mitigating_invariants": "Either actors are completely unable to access the Kubernetes APIs, or actor access is authenticated and authorized such that the actor cannot escalate beyond its intended scope. **Strong preference on blocking actor access to Kubernetes.**",
-    "suggested_concrete_mitigations": "Block network access to the kubernetes API Ensure the default kubernetes service account token in each pod has 0 privileges",
+    "suggested_concrete_mitigations": "Block network access to the Kubernetes API. Give worker Pods no service account token, or one with no privileges.",
     "notes": ""
   },
   {
@@ -180,7 +172,7 @@
     "priority": "Critical",
     "threat": "Malicious actor workload gains access to snapshots of other actors and steals data from them.",
     "mitigating_invariants": "Worker Pods and actors must not have direct access to snapshots.",
-    "suggested_concrete_mitigations": "If actor identity is used for snapshot access, require the credential issued for snapshots to include additional claims identifying it as atelet, or require it to be used over a channel secured with atelet's mTLS certificate. Envelope encrypt snapshots and tie decryption to actor identity. Avoid snapshotting sensitive credentials in the filesystem, where possible.",
+    "suggested_concrete_mitigations": "Make snapshot credentials usable only by atelet, via extra claims or binding to atelet's mTLS. Envelope encrypt snapshots, keyed to actor identity. Avoid snapshotting credentials.",
     "notes": ""
   },
   {
@@ -188,31 +180,31 @@
     "priority": "Critical",
     "threat": "Malicious actor workload overrides snapshots of other actors with malicious snapshots.",
     "mitigating_invariants": "Worker Pods and actors must not have direct access to snapshots.",
-    "suggested_concrete_mitigations": "If actor identity is used for snapshot access, require the credential issued for snapshots to include additional claims identifying it as atelet, or require it to be used over a channel secured with atelet's mTLS certificate.",
+    "suggested_concrete_mitigations": "Make snapshot credentials usable only by atelet, via extra claims or binding to atelet's mTLS.",
     "notes": ""
   },
   {
     "threat_id": "T-25",
-    "priority": "Critical",
-    "threat": "Corrupt snapshot is restored",
+    "priority": "Medium",
+    "threat": "Malicious snapshot is restored",
     "mitigating_invariants": "Cryptographically verify each snapshot before restoration",
-    "suggested_concrete_mitigations": "Snapshots must be checked against a trusted digest or be signed and checked against a trusted key before restore is allowed. The digest or key must be delivered via a trusted channel.",
-    "notes": ""
+    "suggested_concrete_mitigations": "Check snapshots against a trusted digest or signature before restore. Deliver the digest or key over a trusted channel.",
+    "notes": "Rated Medium priority because it requires control of snapshot storage, or of the path to it, which is a failure of other controls (T-23, T-24, T-36). Those with that access are mostly storage administrators, as in T-39."
   },
   {
     "threat_id": "T-26",
     "priority": "Critical",
     "threat": "Stale policies propagated out-of-band with actor scheduling result in incorrect access boundaries (including network policies, IAM permissions, etc.)",
-    "mitigating_invariants": "All network and authorization policies must be fully synced before an actor starts running.",
-    "suggested_concrete_mitigations": "Actor lifecycle APIs could support programming authz and network policy as part of create/resume.",
-    "notes": ""
+    "mitigating_invariants": "An actor's network and authorization policy is in effect before it starts running. Enforcement points may cache policy, as long as a policy change takes effect within a short time. An enforcement point that can't get current policy denies rather than serving stale policy indefinitely.",
+    "suggested_concrete_mitigations": "Program authz and network policy as part of actor create and resume, or fetch it on first use and deny until it arrives. Short cache TTLs. Invalidate caches on policy change where it's cheap.",
+    "notes": "Caching is required for performance, since enforcement points check policy on every connection or query. Operators may tune cache TTLs. Policy applies to new connections; a policy change doesn't cut connections that are already open. Credentials already issued are limited by their own lifetime (T-28), not by policy propagation."
   },
   {
     "threat_id": "T-27",
     "priority": "Critical",
     "threat": "Worker reuse enables malicious actor to escalate to other actors by persisting a threat across reuse, reading leftover state from a previous actor, or taking advantage of stale policy configuration.",
     "mitigating_invariants": "All actor-specific worker state, including process state, filesystem, env vars, mounted config, network policy, and security policy, must be completely reset between actors that subsequently run on the same worker.",
-    "suggested_concrete_mitigations": "Ensure local policy updates are tightly synchronized with actor lifecycle to avoid race conditions. Test that the suspend/resume lifecycle for every supported sandbox technology properly cleans up state by exercising it and enumerating system state. Use \"honeypots\" on each side of the boundary to detect state leaks. Test policy behavior on both sides of suspend/resume to ensure policies are appropriately updated in-sync with actor lifecycle.",
+    "suggested_concrete_mitigations": "Synchronize local policy updates with actor lifecycle. Test cleanup across suspend/resume for each sandbox type, with honeypots on both sides.",
     "notes": ""
   },
   {
@@ -220,7 +212,7 @@
     "priority": "Critical",
     "threat": "Malicious actor tricks Substrate identity broker into returning identity credentials for a different actor.",
     "mitigating_invariants": "Add defense-in-depth to ensure that credentials cannot be mis-issued, and that mis-issued credentials are unusable in practice.",
-    "suggested_concrete_mitigations": "Ensure that credential issuance checks actor-to-worker scheduling assignment. Ensure actor identities include claims tying them to the worker and node the actor is scheduled to. Ensure claims are validated against scheduling assignments during authz policy evaluation; when actors are rescheduled old credentials should be immediately invalidated.",
+    "suggested_concrete_mitigations": "Check the actor's worker assignment before issuing credentials. Bind credentials to the worker and node, check those claims in authz, and invalidate old credentials on reschedule.",
     "notes": ""
   },
   {
@@ -228,39 +220,39 @@
     "priority": "High",
     "threat": "Agent leaks credentials exposed in sandbox, because LLMs are unreliable. Due to prompt injection or just agent silliness.",
     "mitigating_invariants": "Credentials are not exposed in sandboxes by default.",
-    "suggested_concrete_mitigations": "Opt-in to credentials, none by default. Credential injecting proxy (injects tokens or terminates TLS and holds x509 private key on behalf of sandbox). Delegation to \"drivers\" rather than relying on sandboxed clients (like CSI).  Encrypting credentials exposed in sandboxes, requiring them to be unwrapped by a network proxy to be usable. Consider supporting pluggable per-node or per-worker security sidecars that can interpose network, implement additional policy, add monitoring, etc.",
-    "notes": "May provide an option to expose in sandbox if there are other mitigating factors. For example, the process is NOT an AI agent, or the process limits agent access to env/filesystem."
+    "suggested_concrete_mitigations": "No credentials in sandboxes by default. Inject credentials at a proxy. Delegate to drivers (like CSI) rather than sandboxed clients. Credentials that must enter the sandbox are wrapped and only usable through the proxy.",
+    "notes": "Exposing credentials can be opt-in when the process is not an AI agent or can't read them."
   },
   {
     "threat_id": "T-30",
-    "priority": "High",
+    "priority": "Medium",
     "threat": "Malicious actor moves laterally to other nodes via suspend/resume, especially if self-suspend is allowed.",
-    "mitigating_invariants": "Suspend/resume is guaranteed to provide some acceptable locality with respect to lateral movement. TBD.",
-    "suggested_concrete_mitigations": "Maybe some kind of actor pinning to specific groups of nodes, to contain the movement? Or statistical bias to resume on the same node?",
-    "notes": "Particularly useful in combination with a sandbox breakout vuln, or network or filesystem access vulns."
+    "mitigating_invariants": "Actor isolation doesn't depend on which node an actor runs on. Admins can confine actors to specific node pools.",
+    "suggested_concrete_mitigations": "Let admins restrict which node pools an actor can resume on.",
+    "notes": "Actors move between workers by design, so nodes aren't a boundary between actors. This only matters combined with a sandbox, network, or filesystem escape."
   },
   {
     "threat_id": "T-31",
     "priority": "High",
     "threat": "DoS/resource exhaustion via malicious container image",
     "mitigating_invariants": "Enforce limits when pulling and extracting container images",
-    "suggested_concrete_mitigations": "Ensure limits on the uncompressed layers are enforced when untarring container images. Ensure a time limit is enforced when unpacking container images.",
-    "notes": "For example, image can contain a zip bomb."
+    "suggested_concrete_mitigations": "Limit uncompressed layer size and unpack time.",
+    "notes": "Example: a zip bomb."
   },
   {
     "threat_id": "T-32",
     "priority": "Medium",
     "threat": "Compromised process inside actor uses actor identity to write its own snapshot, enabling local privilege escalation (still in actor sandbox).",
     "mitigating_invariants": "Issue separate credentials for accessing snapshots.",
-    "suggested_concrete_mitigations": "Even if actor identity is used to make snapshot access permissions granular, require an extra claim, audience, or dual-identity authorization to prove that it's atelet accessing the snapshot on behalf of the actor, rather than the actor itself.",
-    "notes": "Medium since it's still a local exploit within the application layer. Example: nonroot process with access to the actor credential rewrites a snapshot so that it can `su` to root after the next restore."
+    "suggested_concrete_mitigations": "Snapshot access requires an extra claim, audience, or second identity proving atelet is acting for the actor.",
+    "notes": "Medium because it's still a local exploit inside the sandbox. Example: a nonroot process rewrites the snapshot so it can `su` to root after restore."
   },
   {
     "threat_id": "T-33",
     "priority": "Medium",
     "threat": "Attacker creates a large number of malicious actors to rapidly spread across the cluster or exhaust resources (via direct create or fork-bomb equivalent).",
     "mitigating_invariants": "Limit resource consumption and number of child actors for each actor.",
-    "suggested_concrete_mitigations": "Direct ability to create actors should be considered a privileged permission. Use rate quotas and throttling to limit the speed of execution of this attack. Account for number of child actors and resource consumption by children so quotas can be enforced. Implement a namespace-like concept that quotas can be attached to.",
+    "suggested_concrete_mitigations": "Make actor creation a privileged permission. Rate limits and quotas that count child actors and their resources, attached to atespaces.",
     "notes": ""
   },
   {
@@ -268,7 +260,7 @@
     "priority": "Medium",
     "threat": "Attacker discovers Kubernetes-internal network topology from inside sandboxed actor",
     "mitigating_invariants": "Don't allow actors to explore the cluster network",
-    "suggested_concrete_mitigations": "Don't expose cluster internal DNS to actors. Don't mount worker Pod resolv.conf in actors, instead provision a new file for the actor.",
+    "suggested_concrete_mitigations": "Don't expose cluster DNS to actors. Give actors their own resolv.conf, not the worker Pod's.",
     "notes": ""
   },
   {
@@ -276,31 +268,31 @@
     "priority": "Low",
     "threat": "Attacker discovers enough information about actor names or namespace names to be consequential, from inside a sandboxed actor.",
     "mitigating_invariants": "Only expose actor names for peers the actor needs to interact with.",
-    "suggested_concrete_mitigations": "Don't expose full Substrate-internal DNS to actors by default (since some \"actors\" may need access, opt-in may be acceptable).",
-    "notes": "Likely want to expose separate DNS for internet, when internet egress is required. The actor names are opaque UUIDs so there's probably not much you can get from them, other than potential targets. What's more consequential is what you can actually send traffic to, since actors get the IP of the worker Pod and those are IPv4 allocated from the cluster's IP space, it's possible to enumerate them with a network scan.  Namespace names in DNS might be consequential, ideally they're also just IDs in DNS, or even unnecessary."
+    "suggested_concrete_mitigations": "Don't expose Substrate-internal DNS to actors by default.",
+    "notes": "What an actor can send traffic to matters more than the names it learns."
   },
   {
     "threat_id": "T-36",
     "priority": "High",
     "threat": "A compromised node accesses all snapshots for the cluster.",
     "mitigating_invariants": "Node access to snapshots must be scoped to actors actively scheduled to the node.",
-    "suggested_concrete_mitigations": "Issue special per-actor JWT, only for atelet, not in sandbox, that has claims available in conditional IAM. Use CredentialAccessBoundary (GCP only) Perform data wipeout on previous actor \u201ctenants\u201d of the node on actor suspension. Snapshots should be write-once per version, to prevent malicious actors from overwriting \u201cgolden\u201d snapshots and compromising other actors that use that snapshot.",
-    "notes": "Detection rules to determine whether a given actor is running on the node and correlate it to a node requesting a snapshot for the actor could be valuable defense in depth. Current state on GCS: each snapshot transfer runs on a token downscoped to one actor's prefixes, which the credential exchange issues only while the actor is still assigned to the node that minted its JWT. setup-gcp gives atelet no storage role on snapshots. Still open: S3 installs transfer with the plugin's own credentials."
+    "suggested_concrete_mitigations": "Per-actor snapshot credentials, issued only to the node the actor is scheduled on and downscoped to that actor's snapshots. No node-wide storage role. Write-once snapshot versions. Wipe previous actors' data from the node on suspend.",
+    "notes": "Detecting nodes that request snapshots for actors not scheduled on them adds defense in depth."
   },
   {
     "threat_id": "T-37",
     "priority": "High",
     "threat": "Compromised node accesses filesystem storage for actors on other nodes.",
     "mitigating_invariants": "Node access to network filesystems must be scoped to actors actively scheduled to the node.",
-    "suggested_concrete_mitigations": "TBD - depends on network filesystem implementation and what it supports.",
-    "notes": ""
+    "suggested_concrete_mitigations": "Per-actor filesystem credentials, issued only to the node the actor is scheduled on.",
+    "notes": "Depends on what the network filesystem supports."
   },
   {
     "threat_id": "T-38",
     "priority": "High",
     "threat": "Compromised node can escalate to other nodes or control plane via Substrate or Kubernetes.",
     "mitigating_invariants": "Node access to Substrate or Kubernetes APIs must be scoped to operations relevant to actors actively scheduled to the node, and to the node itself.",
-    "suggested_concrete_mitigations": "Disable network communications for actors by default Tightly scoped Ingress/Egress network policies for every pod Default deny Actor to Actor communication Any allowed Actor to Actor communication should be over TLS and have authentication/authorization Limit total number of child actors under a given parent (and limit depth of actor create calls) Limit network access between data plane components, and ensure control plane components have minimal ingress from actors/workloads.",
+    "suggested_concrete_mitigations": "Scope atelet's API access to actors on its node. Tight NetworkPolicies between data-plane and control-plane components. Limit what node identities can do in Kubernetes, as NodeRestriction does.",
     "notes": ""
   },
   {
@@ -308,7 +300,7 @@
     "priority": "Medium",
     "threat": "Insider access to snapshots",
     "mitigating_invariants": "Substrate's storage models for snapshots must enable users to grant granular access control when needed for system administration, rather than only supporting broad access across all actors.",
-    "suggested_concrete_mitigations": "Customer managed encryption keys for snapshots, similar to K8s kmsplugin. Storage layout that maps well to per-actor identity.",
+    "suggested_concrete_mitigations": "Encrypt snapshots so storage is untrusted and only the node running the actor can decrypt them (T-23). A storage layout that maps to per-actor identity, so access can be granted per actor.",
     "notes": ""
   },
   {
@@ -316,23 +308,23 @@
     "priority": "Medium",
     "threat": "Insider access to disks, e.g. for substrate backend DB",
     "mitigating_invariants": "Support envelope encryption of sensitive data, or avoid storing sensitive data.",
-    "suggested_concrete_mitigations": "Use FDE by default (most cloud providers already do this, nonspecific to Substrate). If secrets are ever stored in Substrate's DB, support envelope encryption using HSMs, similar to kms providers in K8s.",
-    "notes": ""
+    "suggested_concrete_mitigations": "Full-disk encryption, which most clouds enable by default. Keep secrets out of Substrate's database, and envelope encrypt any that must be stored, with HSM-backed keys.",
+    "notes": "Credentials are injected at egress, not passed to actors (T-29), so actor specs such as environment variables are not a place for secrets."
   },
   {
     "threat_id": "T-41",
     "priority": "High",
     "threat": "Malicious actions are not recorded for forensics.",
     "mitigating_invariants": "Enable audit logging for all Substrate components that serve APIs, including node-local components.",
-    "suggested_concrete_mitigations": "Enable audit logging for snapshot/GCS buckets Set up audit logging for ateapi requests",
-    "notes": ""
+    "suggested_concrete_mitigations": "Every component that serves an API or accesses snapshot storage logs each request with the caller's identity, so the cluster's log collection captures it.",
+    "notes": "Data-access logs on busy snapshot buckets are impractical, so rely on logs from the components allowed access."
   },
   {
     "threat_id": "T-42",
     "priority": "Medium",
     "threat": "Malicious activity proceeds undetected.",
     "mitigating_invariants": "Enable integration with threat detections systems.",
-    "suggested_concrete_mitigations": "Support for pluggable threat detection integrations, making telemetry from Substrate API and node components, as well as sandboxes, available for continuous analysis. Consider supporting pluggable per-node or per-worker security sidecars that can gather telemetry, etc.",
+    "suggested_concrete_mitigations": "Pluggable threat detection fed by telemetry from the API, node components, and sandboxes. Optional per-node or per-worker security sidecars.",
     "notes": ""
   },
   {
@@ -340,7 +332,7 @@
     "priority": "Medium",
     "threat": "Detected malicious actor cannot be contained.",
     "mitigating_invariants": "Quarantine or suspension option.",
-    "suggested_concrete_mitigations": "Support dynamic policy updates for quick quarantine. Automatically trigger snapshot/suspend on malicious activity, but taint the snapshot so that it can't automatically be resumed in production.",
+    "suggested_concrete_mitigations": "Dynamic policy updates for fast quarantine. Snapshot and suspend on detection, and taint the snapshot so it can't resume automatically.",
     "notes": ""
   }
 ]

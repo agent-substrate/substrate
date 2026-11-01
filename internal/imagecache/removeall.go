@@ -22,10 +22,11 @@ import (
 
 // RemoveAllWritable removes path and everything under it, first making every
 // directory owner-writable so its children can be unlinked. Unpacked image
-// trees keep the image's (possibly read-only) directory modes, which atelet
-// cannot remove as plain root without CAP_DAC_OVERRIDE — os.RemoveAll alone
-// fails there with EACCES. atelet owns these files, so chmod needs no
-// capability.
+// trees keep the image's (possibly read-only) directory modes, which plain
+// root without CAP_DAC_OVERRIDE cannot remove: os.RemoveAll alone fails there
+// with EACCES. They also keep the image's owners, so removing them takes the
+// capabilities manifests/ate-install/atelet.yaml grants atelet. An
+// unprivileged caller owns every entry it unpacked.
 func RemoveAllWritable(path string) error {
 	// Make dirs traversable/writable top-down (WalkDir visits a directory before
 	// reading it, so chmod here lets the walk descend into otherwise-unreadable

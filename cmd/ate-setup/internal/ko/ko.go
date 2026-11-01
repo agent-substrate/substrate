@@ -33,6 +33,9 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
+
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -158,6 +161,37 @@ func (r *Runner) BuildTagged(ctx context.Context, tag string, labels []string, i
 	refs := strings.Fields(stdout.String())
 	if len(refs) != len(importPaths) {
 		return nil, fmt.Errorf("ko build printed %d image references for %d packages", len(refs), len(importPaths))
+	}
+	return refs, nil
+}
+
+// buildBackoff paces the retries of an image that fails to build or push: 3
+// attempts, 10s then 20s apart. ghcr.io can briefly deny pushes to a package it
+// has just created.
+var buildBackoff = wait.Backoff{Steps: 3, Duration: 10 * time.Second, Factor: 2}
+
+// BuildEach runs BuildTagged once per import path, retrying each failure per
+// buildBackoff. It returns the refs in importPaths order.
+func (r *Runner) BuildEach(ctx context.Context, tag string, labels []string, importPaths ...string) ([]string, error) {
+	refs := make([]string, 0, len(importPaths))
+	for _, path := range importPaths {
+		var ref string
+		logAndRetry := func(err error) bool {
+			log.Warnf("%s: %v", path, err)
+			return true
+		}
+		err := retry.OnError(buildBackoff, logAndRetry, func() error {
+			built, err := r.BuildTagged(ctx, tag, labels, path)
+			if err != nil {
+				return err
+			}
+			ref = built[0]
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
 	}
 	return refs, nil
 }

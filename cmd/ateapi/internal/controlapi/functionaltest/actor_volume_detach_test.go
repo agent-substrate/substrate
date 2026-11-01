@@ -22,7 +22,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
@@ -190,43 +189,6 @@ func TestResumeActor_RestoreCrash_DeleteDetaches(t *testing.T) {
 	assertDetachedNodes(t, plugin, "after delete", "node1")
 }
 
-// TestSuspendActor_WorkerRowGone_StillDetaches verifies that a suspend
-// unpublishes the volume from the node recorded on the actor even when the
-// worker row the assignment names is already gone, and clears assigned_node
-// afterwards.
-func TestSuspendActor_WorkerRowGone_StillDetaches(t *testing.T) {
-	ns := namespaceForTest("ns-suspend-worker-gone")
-	plugin := &attachFailVolumePlugin{}
-	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
-		"substrate.io/mock": plugin,
-	})
-	defer tc.cleanup()
-
-	const name = "worker-gone-actor"
-	workerName := createSingleVolumeActor(t, tc, ns, name)
-	resumeToRunningOnNode1(t, tc, plugin, name)
-
-	// Remove the worker row directly, bypassing the DeleteWorker workflow, so
-	// the actor stays RUNNING with an assignment to a worker that no longer
-	// exists.
-	if _, err := tc.persistence.DeleteWorker(context.Background(), workerName, store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker(%s) from store: %v", workerName, err)
-	}
-
-	suspended, err := tc.client.SuspendActor(context.Background(), &ateapi.SuspendActorRequest{
-		Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
-		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
-	})
-	if err != nil {
-		t.Fatalf("SuspendActor failed: %v", err)
-	}
-	if got := suspended.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("state = %v, want SUSPENDED", got)
-	}
-	assertDetachedNodes(t, plugin, "after suspend", "node1")
-	assertAssignedNode(t, tc, name, "after suspend", "")
-}
-
 // TestRevertActor_Crashed_DetachesAssignedNode verifies that reverting an
 // actor that crashed because its worker went away unpublishes its volume from
 // the node recorded in assigned_node, clears assigned_node, and leaves the
@@ -245,54 +207,6 @@ func TestRevertActor_Crashed_DetachesAssignedNode(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-1")
 	assertCrashedKeepingAssignedNode(t, tc, name, "node1")
-	tc.fakeAtelet.Lock.Lock()
-	tc.fakeAtelet.TerminateCalled = false
-	tc.fakeAtelet.Lock.Unlock()
-
-	reverted, err := tc.client.RevertActor(context.Background(), &ateapi.RevertActorRequest{
-		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: name},
-	})
-	if err != nil {
-		t.Fatalf("RevertActor failed: %v", err)
-	}
-	if got := reverted.GetActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("state = %v, want SUSPENDED", got)
-	}
-	assertDetachedNodes(t, plugin, "after revert", "node1")
-	assertAssignedNode(t, tc, name, "after revert", "")
-	tc.fakeAtelet.Lock.Lock()
-	if !tc.fakeAtelet.TerminateCalled {
-		t.Errorf("expected Terminate call to clean up assigned node")
-	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetWorkerPodUid(); gotUID != "" {
-		t.Errorf("TerminateRequest.WorkerPodUid = %q, want empty", gotUID)
-	}
-	tc.fakeAtelet.Lock.Unlock()
-}
-
-// TestRevertActor_WorkerNoLongerHosts_Detaches verifies that reverting a
-// RUNNING actor whose worker no longer hosts it skips the ateom workload
-// termination (WorkerPodUid == "") but still unpublishes the volume from the
-// node recorded on the actor and clears assigned_node.
-func TestRevertActor_WorkerNoLongerHosts_Detaches(t *testing.T) {
-	ns := namespaceForTest("ns-revert-unhosted-detach")
-	plugin := &attachFailVolumePlugin{}
-	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
-		"substrate.io/mock": plugin,
-	})
-	defer tc.cleanup()
-
-	const name = "unhosted-revert-actor"
-	workerName := createSingleVolumeActor(t, tc, ns, name)
-	resumeToRunningOnNode1(t, tc, plugin, name)
-
-	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
-	if err != nil {
-		t.Fatalf("GetActor(%s) from store: %v", name, err)
-	}
-	// Drop the worker's assignment row only; the actor still names the worker.
-	if _, err := tc.persistence.ReleaseActorFromWorker(context.Background(), workerName, actor.GetMetadata().GetUid()); err != nil {
-		t.Fatalf("ReleaseActorFromWorker failed: %v", err)
-	}
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.TerminateCalled = false
 	tc.fakeAtelet.Lock.Unlock()

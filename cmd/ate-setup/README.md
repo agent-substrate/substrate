@@ -16,11 +16,17 @@ tag they share:
 
 ```
 ate-setup deploy ate-system \
+  --storage-bucket-name=BUCKET \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=IDS \
   --image-repo registry.example.com/substrate \
   --image-tag vX.Y.Z
 ```
+
+On GKE, the default `--sandbox-classes=gvisor,microvm` downloads microVM guest
+assets from GitHub and uploads them with `gcloud` to `gs://<BUCKET>-assets`
+(created with `atelet` read access by `go run ./tools/setup-gcp create bucket`
+and `create iam`). Pass `--sandbox-classes=gvisor` to skip microVM staging.
 
 The registry has to hold every image the install deploys. The images a release
 publishes to `ghcr.io/agent-substrate/substrate` leave out the demos and the
