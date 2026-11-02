@@ -218,23 +218,18 @@ func TestValidateClientCertificateSource(t *testing.T) {
 	}{
 		{name: "actor certificate", source: &ateapi.ClientCertificateSource{ActorCertificate: &ateapi.ActorClientCertificateSource{}}},
 		{name: "provider certificate", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
-			CertificateUri: "ate-secret://k8s.io/default/ns/cert/tls.crt",
-			PrivateKeyUri:  "ate-secret://k8s.io/default/ns/cert/tls.key",
+			CredentialUri: "ate-secret://k8s.io/default/ns/cert/client.pem",
 		}}},
 		{name: "missing source", source: &ateapi.ClientCertificateSource{}, wantErr: true},
 		{name: "both sources", source: &ateapi.ClientCertificateSource{
 			ActorCertificate: &ateapi.ActorClientCertificateSource{},
 			CredentialProvider: &ateapi.CredentialClientCertificateSource{
-				CertificateUri: "ate-secret://k8s.io/default/ns/cert/tls.crt",
-				PrivateKeyUri:  "ate-secret://k8s.io/default/ns/cert/tls.key",
+				CredentialUri: "ate-secret://k8s.io/default/ns/cert/client.pem",
 			},
 		}, wantErr: true},
-		{name: "missing certificate URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
-			PrivateKeyUri: "ate-secret://k8s.io/default/ns/cert/tls.key",
-		}}, wantErr: true},
+		{name: "missing credential URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{}}, wantErr: true},
 		{name: "invalid provider URI", source: &ateapi.ClientCertificateSource{CredentialProvider: &ateapi.CredentialClientCertificateSource{
-			CertificateUri: "https://example.com/cert",
-			PrivateKeyUri:  "ate-secret://k8s.io/default/ns/cert/tls.key",
+			CredentialUri: "https://example.com/client.pem",
 		}}, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

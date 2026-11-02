@@ -17,8 +17,11 @@ package controlapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"slices"
 	"time"
 
@@ -31,7 +34,10 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/substratex509"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -598,6 +604,8 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtR
 		IssuedAt:   now,
 		JTI:        rand.Text(),
 
+		ClientCertificateSHA256: req.GetClientCertificateSha256(),
+
 		Substrate: actoridjwt.SubstrateClaims{
 			Atespace:  dbActor.GetMetadata().GetAtespace(),
 			ActorName: dbActor.GetMetadata().GetName(),
@@ -613,5 +621,87 @@ func (s *RPCService) MintActorJwt(ctx context.Context, req *ateapi.MintActorJwtR
 	return &ateapi.MintActorJwtResponse{
 		ActorJwt:   actorJWT,
 		ExpireTime: timestamppb.New(expiresAt),
+	}, nil
+}
+
+func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapi.MintActorCertificateRequest) (*ateapi.MintActorCertificateResponse, error) {
+	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
+
+	// The authorization interceptor requires can_mint_actor_certificate on the
+	// actor, which only the egress gateway holds.
+
+	// Do not bootstrap a proof-of-possession credential from a bearer
+	// credential. The authorization interceptor identifies an authorized
+	// egress gateway by its mTLS SPIFFE ID.
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, apierror.Unauthenticated("no peer transport information found")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, apierror.Unauthenticated("unexpected peer transport credentials")
+	}
+	if len(tlsInfo.State.PeerCertificates) == 0 || len(tlsInfo.State.VerifiedChains) == 0 {
+		return nil, apierror.Unauthenticated("could not verify peer certificate")
+	}
+
+	// Verify that this actor exists in the store.  It doesn't need to be
+	// running, since we may need to issue certificates during actor boot / resume.
+	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, apierror.NotFound("actor not found")
+	} else if err != nil {
+		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	}
+	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
+		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
+	}
+
+	// Parse the CSR.
+	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
+	if err != nil {
+		return nil, apierror.InvalidArgument("invalid certificate signing request")
+	}
+	if err := csr.CheckSignature(); err != nil {
+		slog.ErrorContext(ctx, "Failed to verify CSR signature", slog.Any("err", err))
+		return nil, apierror.InvalidArgument("Failed to verify CSR signature")
+	}
+
+	now := time.Now()
+	template := &x509.Certificate{
+		URIs: []*url.URL{resources.ActorSPIFFEID(resources.ActorRef{
+			Atespace: dbActor.GetMetadata().GetAtespace(),
+			Name:     dbActor.GetMetadata().GetName(),
+		})},
+		NotBefore:             now,
+		NotAfter:              now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	err = substratex509.AddActorIdentityToCertificate(
+		&substratex509.ActorIdentity{
+			Atespace:  dbActor.GetMetadata().GetAtespace(),
+			ActorName: dbActor.GetMetadata().GetName(),
+			ActorUid:  dbActor.GetMetadata().GetUid(),
+		},
+		template,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("while adding Substrate extension: %w", err)
+	}
+
+	// Sign and return the actor cert.
+	chain, err := s.actorIDCAPool.CreateCertificate(template, csr.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("while signing certificate: %w", err)
+	}
+
+	return &ateapi.MintActorCertificateResponse{
+		ActorCertificates: chain,
 	}, nil
 }

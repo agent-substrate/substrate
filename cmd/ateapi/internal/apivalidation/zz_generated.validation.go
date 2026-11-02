@@ -2665,7 +2665,7 @@ func Validate_CredentialClientCertificateSource(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *v1.CredentialClientCertificateSource) (errs field.ErrorList) {
 
-	{ // field v1.CredentialClientCertificateSource.CertificateUri
+	{ // field v1.CredentialClientCertificateSource.CredentialUri
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2686,49 +2686,16 @@ func Validate_CredentialClientCertificateSource(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_CredentialClientCertificateSource_CertificateUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_CredentialClientCertificateSource_CredentialUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.CredentialClientCertificateSource) *string {
-				return &oldObj.CertificateUri
+				return &oldObj.CredentialUri
 			})
-		errs = append(errs, fn(fldPath.Child("certificate_uri"), &obj.CertificateUri, oldVal, oldObj != nil)...)
-	}
-
-	{ // field v1.CredentialClientCertificateSource.PrivateKeyUri
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_CredentialClientCertificateSource_PrivateKeyUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.CredentialClientCertificateSource) *string {
-				return &oldObj.PrivateKeyUri
-			})
-		errs = append(errs, fn(fldPath.Child("private_key_uri"), &obj.PrivateKeyUri, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("credential_uri"), &obj.CredentialUri, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -6068,6 +6035,110 @@ func Validate_MarkWorkerUnavailableRequest(
 	return errs
 }
 
+// Validate_MintActorCertificateRequest validates an instance of MintActorCertificateRequest according
+// to declarative validation rules in the API schema.
+func Validate_MintActorCertificateRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.MintActorCertificateRequest) (errs field.ErrorList) {
+
+	{ // field v1.MintActorCertificateRequest.Actor
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ObjectRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.MintActorCertificateRequest) *v1.ObjectRef {
+				return oldObj.Actor
+			})
+		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.MintActorCertificateRequest.ActorUid
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.MintActorCertificateRequest) *string {
+				return &oldObj.ActorUid
+			})
+		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.MintActorCertificateRequest.CertificateSigningRequest
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []byte,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 16384); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.MintActorCertificateRequest) []byte {
+				return oldObj.CertificateSigningRequest
+			})
+		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_MintActorJwtRequest validates an instance of MintActorJwtRequest according
 // to declarative validation rules in the API schema.
 func Validate_MintActorJwtRequest(
@@ -6181,6 +6252,41 @@ func Validate_MintActorJwtRequest(
 				return &oldObj.ExpirationSeconds
 			})
 		errs = append(errs, fn(fldPath.Child("expiration_seconds"), &obj.ExpirationSeconds, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.MintActorJwtRequest.ClientCertificateSha256
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []byte,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_MintActorJwtRequest_ClientCertificateSha256(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 32); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.MintActorJwtRequest) []byte {
+				return oldObj.ClientCertificateSha256
+			})
+		errs = append(errs, fn(fldPath.Child("client_certificate_sha256"), obj.ClientCertificateSha256, oldVal, oldObj != nil)...)
 	}
 
 	return errs
