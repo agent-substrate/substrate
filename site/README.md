@@ -37,6 +37,17 @@ relative links:
   mounted into `static/`;
 - any other relative link goes to the file on GitHub.
 
+`docs/reference/api.md` is not included this way. Its front matter sets
+`layout: api-reference`, so `layouts/docs/api-reference.html` renders the page
+from `assets/api-reference/`, and the sidebar lists its resources from
+`nav.json` there. `hack/site.sh` fills that directory with
+`apitool generate-docs` (see `tools/apitool/README.md`), which generates the
+reference from `ateapi.proto` for main and for each release since v1.0.0.
+`api.md` is the page for main. The content adapter
+`adapters/docs/reference/api/_content.gotmpl` adds a hidden page for each
+release, which the page's version menu links to. The `.apiref` variables in
+`assets/scss/_styles_project.scss` set its colors.
+
 To publish another doc, place it in the appropriate `docs/<section>/`
 directory (or `demos/<name>/README.md`). Optional YAML front matter (`title`,
 `linkTitle`, `weight`, `description`, `aliases`, `card_icon`, `estimated_time`,

@@ -1,0 +1,40 @@
+{
+  "metadata": {
+    "atespace": "prod",
+    "name": "default",
+    "uid": "1a2b3c4d-5e6f-4a3b-8c9d-0e1f2a3b4c5d",
+    "version": "2",
+    "createTime": "2026-08-01T18:22:04Z",
+    "updateTime": "2026-08-02T11:05:40Z"
+  },
+  "rules": [
+    {
+      "https": {
+        "hostnames": [
+          "api.example.com"
+        ],
+        "effects": {
+          "replaceHeaders": [
+            {
+              "header": "Authorization",
+              "prefix": "Bearer ",
+              "credentialUri": "ate-secret://example-provider/prod/checkout-api-key"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tlsPassthrough": {
+        "hostnames": [
+          "*.example.com"
+        ],
+        "ports": {
+          "numbers": [
+            443
+          ]
+        }
+      }
+    }
+  ]
+}
