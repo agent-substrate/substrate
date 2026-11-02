@@ -78,7 +78,7 @@ func (h *Handler) Direction() extproc.Direction { return extproc.DirectionIngres
 func (h *Handler) ParkingStatus() ParkingStatus { return h.parking.status() }
 
 func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestMetadata) (extproc.Result, error) {
-	slog.InfoContext(ctx, "Request", slog.String("host", md.Host))
+	slog.DebugContext(ctx, "Request", slog.String("host", md.Host))
 
 	// The dataplane doesn't propagate trace context into the ext_proc gRPC
 	// stream's metadata — the per-request traceparent arrives in the
@@ -107,7 +107,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		}
 	}
 
-	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
+	slog.DebugContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
 	actor, resumeOutcome, err := h.resumer.ResumeActor(ctx, actorRef)
 	if err != nil {
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
@@ -129,7 +129,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		workerIP = ips[0]
 	}
 	workerSPIFFEID := assignment.GetWorkerSpiffeId()
-	slog.InfoContext(ctx, "ResumeActor result",
+	slog.DebugContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
 		slog.String("state", actor.GetStatus().GetState().String()),
 		slog.String("workerIP", workerIP),
@@ -145,7 +145,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// actor's targetPort.
 	targetAddr := net.JoinHostPort(workerIP, "443")
 
-	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
+	slog.DebugContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
 	// ext_proc clients may use regular HTTPS on :443 or choose to CONNECT to
 	// atunnel instead.
