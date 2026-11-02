@@ -67,7 +67,7 @@ func init() {
 		},
 		{
 			use:   "api-server-env-vars",
-			short: "Create the ate-api-server environment ConfigMap and Secret",
+			short: "Create the ate-api-server environment ConfigMap and Secret, rolling any running deployment",
 			run: func(e *steps.Env, ctx context.Context) error {
 				// The full deploy needs no guard: it updates the Deployment in
 				// the same run.
@@ -79,13 +79,13 @@ func init() {
 		},
 		{
 			use:   "api-authentication-config",
-			short: "Create the default ate-api-server authentication config",
-			run:   (*steps.Env).CreateAPIAuthenticationConfig,
+			short: "Create the default ate-api-server authentication config, rolling any running deployment",
+			run:   (*steps.Env).UpdateAPIAuthenticationConfig,
 		},
 		{
 			use:   "api-config",
-			short: "Create the ate-api-server config file, including its log level",
-			run:   (*steps.Env).CreateAPIConfig,
+			short: "Create the ate-api-server config file, including its log level, rolling any running deployment",
+			run:   (*steps.Env).UpdateAPIConfig,
 		},
 	} {
 		run := sub.run
