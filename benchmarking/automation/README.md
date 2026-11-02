@@ -116,7 +116,7 @@ gcloud container clusters create <CLUSTER_NAME> \
 ```
 
 On GKE 1.37 or higher, omit `--enable-kubernetes-unstable-apis`; the
-required APIs are served by default. See the [cluster setup guide](../../tools/setup-gcp/README.md#2-create-cluster) for details.
+required APIs are served by default. See the [cluster setup guide](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#2-create-cluster) in substrate-gke for details.
 
 The orchestration cluster needs Workload Identity but no special APIs. It only
 ever runs one pod (the orchestrator + DIND sidecar), so a single zonal node
