@@ -19,11 +19,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/k8sresolver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -94,6 +96,13 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 
 	opts := []grpc.DialOption{
 		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+		// Without pings, an RPC on a connection to a node that disappeared
+		// hangs until the kernel gives up, about 15 minutes by default.
+		// ate-api-server's keepalive EnforcementPolicy allows this rate.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:    time.Minute,
+			Timeout: 10 * time.Second,
+		}),
 	}
 	if cfg.K8sClient != nil {
 		opts = append(opts, grpc.WithResolvers(k8sresolver.NewBuilder(cfg.K8sClient)))
