@@ -31,7 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
+	"k8s.io/utils/clock"
 )
 
 // placeholderObject is the one object written under each snapshot URI.
@@ -43,9 +43,16 @@ type objectWriter interface {
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
 }
 
-// actorCertMinter is the part of ateapi.WorkerServiceClient the herder uses.
+// actorCertMinter is the part of ateapi.WorkerServiceClient the herder uses to
+// mint actor certificates.
 type actorCertMinter interface {
 	MintWorkerActorCertificate(ctx context.Context, in *ateapi.MintWorkerActorCertificateRequest, opts ...grpc.CallOption) (*ateapi.MintWorkerActorCertificateResponse, error)
+}
+
+// snapshotReporter is the part of ateapi.WorkerServiceClient the herder uses
+// to report background snapshot uploads and detaches.
+type snapshotReporter interface {
+	ReportActorSnapshotState(ctx context.Context, in *ateapi.ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ateapi.ReportActorSnapshotStateResponse, error)
 }
 
 // delays is how long each Atelet call takes before it succeeds: the
@@ -57,27 +64,51 @@ type delays struct {
 // herder answers every Atelet call with success after its delay, without
 // running or saving any workload. Actors it "runs" do not exist.
 //
-// The one side effect it keeps is a placeholder object under each snapshot
-// URI a call uploads to before it returns: ate-api-server copies an actor's
-// snapshot when it creates a tag, golden tags included, and refuses to copy
-// an empty one.
+// It writes a placeholder object under each snapshot URI it uploads to:
+// ate-api-server copies an actor's snapshot when it creates a tag, golden tags
+// included, and refuses to copy an empty one.
 //
-// The one call back it keeps is the actor certificate mint: before worker
-// starts a workload with tunneled egress it has atelet mint the actor's
-// certificate from ate-api-server, so in production every Run and Restore
-// that names an egress gateway costs ate-api-server a mint.
+// It calls ate-api-server back to mint actor certificates on Run and Restore
+// when an egress gateway is named, and to report background snapshot uploads
+// and detaches.
 type herder struct {
 	ateletpb.UnimplementedAteletServer
 
+	ctx     context.Context
+	clk     clock.WithDelayedExecution
 	delays  delays
 	storage objectWriter
 	// minter mints actor certificates under this pod's atelet identity; nil
 	// leaves the mint out. csr is sent with every mint.
 	minter actorCertMinter
 	csr    []byte
+	// reporter reports background uploads and detaches under this pod's atelet
+	// identity; nil leaves background work out.
+	reporter snapshotReporter
 	// epochs is where Run and Restore read the epoch they report; the relay
 	// records it when the Worker registers. Workers are named by their pod UID.
 	epochs *workerEpochs
+	// snapshots is the state Checkpoint and PromoteSnapshot report, and
+	// schedules background uploads and detaches.
+	snapshots actorSnapshots
+}
+
+func (h *herder) baseContext() context.Context {
+	if h.ctx != nil {
+		return h.ctx
+	}
+	return context.Background()
+}
+
+func (h *herder) clock() clock.WithDelayedExecution {
+	if h.clk != nil {
+		return h.clk
+	}
+	return clock.RealClock{}
+}
+
+func (h *herder) now() time.Time {
+	return h.clock().Now()
 }
 
 // newActorCSR returns a CSR for a fresh key. ate-api-server takes only the
@@ -162,6 +193,7 @@ func (h *herder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.R
 	if err := wait(ctx, time.Now(), h.delays.run); err != nil {
 		return nil, err
 	}
+	h.snapshots.markStarted(req.GetActorUid())
 	return &ateletpb.RunResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
@@ -172,14 +204,15 @@ func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*at
 	if err := wait(ctx, time.Now(), h.delays.restore); err != nil {
 		return nil, err
 	}
+	h.snapshots.markStarted(req.GetActorUid())
 	return &ateletpb.RestoreResponse{WorkerEpoch: h.epochs.get(req.GetWorkerPodUid())}, nil
 }
 
 func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	start := time.Now()
 	// An immediate upload puts the snapshot in object storage before
-	// Checkpoint returns. The fake does not run deferred uploads: the
-	// actor's PromoteSnapshot writes it instead.
+	// Checkpoint returns; a deferred upload runs in the background after
+	// defaultUploadDelay.
 	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
 		if err := h.writePlaceholder(ctx, start, h.delays.checkpoint, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 			return nil, err
@@ -188,7 +221,14 @@ func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	if err := wait(ctx, start, h.delays.checkpoint); err != nil {
 		return nil, err
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	// Like atelet, keep the snapshot on the node in either mode, after
+	// recording an immediate upload as durable.
+	actorUID, snap, now := req.GetActorUid(), req.GetSnapshot(), h.now()
+	actor := &ateapi.ObjectRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+		h.snapshots.commitDurable(actorUID, actor, snap, now)
+	}
+	return &ateletpb.CheckpointResponse{State: h.commitLocal(actorUID, actor, snap, now)}, nil
 }
 
 func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
@@ -200,16 +240,20 @@ func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 		return nil, err
 	}
 	// Like atelet, report the snapshot durable and still kept on the node.
-	report := &ateletpb.SnapshotReport{Snapshot: proto.CloneOf(req.GetSnapshot())}
-	return &ateletpb.PromoteSnapshotResponse{State: &ateletpb.ActorSnapshotState{
-		LatestLocal:   report,
-		LatestDurable: proto.CloneOf(report),
-	}}, nil
+	actorUID, snap, now := req.GetActorUid(), req.GetSnapshot(), h.now()
+	actor := &ateapi.ObjectRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	state := h.snapshots.commitDurable(actorUID, actor, snap, now)
+	if state.GetLatestLocal() == nil {
+		state = h.commitLocal(actorUID, actor, snap, now)
+	}
+	return &ateletpb.PromoteSnapshotResponse{State: state}, nil
 }
 
-func (h *herder) Terminate(ctx context.Context, _ *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+func (h *herder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	if err := wait(ctx, time.Now(), h.delays.terminate); err != nil {
 		return nil, err
 	}
+	// Like atelet, drop the actor's snapshot state with the actor.
+	h.snapshots.forget(req.GetActorUid())
 	return &ateletpb.TerminateResponse{}, nil
 }

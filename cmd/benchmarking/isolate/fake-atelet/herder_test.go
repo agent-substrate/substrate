@@ -214,8 +214,8 @@ func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	}
 }
 
-// A deferred upload happens after Checkpoint returns, which the fake does not
-// model, so only an immediate one writes a placeholder.
+// A deferred upload happens after Checkpoint returns, so Checkpoint itself
+// writes a placeholder only for an immediate upload.
 func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 	storage := &recordingStorage{}
 	h := &herder{storage: storage}
@@ -256,7 +256,7 @@ func TestHerderPromoteSnapshotReportsSnapshotDurable(t *testing.T) {
 		LatestLocal:   &ateletpb.SnapshotReport{Snapshot: snap},
 		LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap},
 	}
-	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, resp.GetState(), protocmp.Transform(), ignoreReportTimes); diff != "" {
 		t.Errorf("PromoteSnapshot state mismatch (-want +got):\n%s", diff)
 	}
 }
