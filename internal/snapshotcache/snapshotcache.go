@@ -48,14 +48,25 @@ var (
 	cachestatFn = unix.Cachestat
 	fadviseFn   = unix.Fadvise
 
-	// RetryDelays are the backoff intervals between passes over files that
-	// still have dirty or writeback pages. StartWriteback repeats the last one.
+	// RetryDelays are the backoff intervals between EvictWithRetries passes
+	// while dirty pages wait for writeback.
 	RetryDelays = []time.Duration{
 		500 * time.Millisecond,
 		1500 * time.Millisecond,
 		3000 * time.Millisecond,
 	}
 )
+
+// writebackPollDelays are the intervals between StartWriteback passes, short at
+// first so a small file's loan comes back soon after it's written, and the last
+// repeats.
+var writebackPollDelays = []time.Duration{
+	25 * time.Millisecond,
+	100 * time.Millisecond,
+	500 * time.Millisecond,
+	1500 * time.Millisecond,
+	3000 * time.Millisecond,
+}
 
 // FindFiles walks dir and returns regular files whose base name satisfies
 // match, pinned by their FileInfo at discovery time.
@@ -117,7 +128,7 @@ func DropFiles(files []File) bool {
 // once. If a path can't be opened it returns the error, holds nothing, and never
 // calls done.
 func StartWriteback(paths []string, done func()) error {
-	return startWriteback(kernelPageCache{}, RetryDelays, paths, done)
+	return startWriteback(kernelPageCache{}, writebackPollDelays, paths, done)
 }
 
 // pageCache is the page cache state and write-out startWriteback uses
