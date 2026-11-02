@@ -186,18 +186,31 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 	return nil
 }
 
-func (d *Substrate) Delete(ctx context.Context, e *steps.Env) error {
+func (d *Substrate) Delete(ctx context.Context, e *steps.Env) ([]string, error) {
 	log.Step(d.DemoName + "_delete")
 	refs := make([]resources.ActorTemplateRef, 0, len(d.Templates))
 	for _, t := range d.Templates {
 		refs = append(refs, t.Ref)
 	}
 	if err := e.DeleteSubstrateDemo(ctx, refs, d.atespaces()); err != nil {
-		return err
+		return nil, err
 	}
 	manifest, err := Render(e, d.WorkerPoolManifest, nil, ExternalVolumePlaceholders)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return e.Kube.DeleteBytes(ctx, manifest)
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.Kube.Delete(ctx, objs); err != nil {
+		return nil, err
+	}
+	var namespaces []string
+	for _, obj := range objs {
+		if gvk := obj.GroupVersionKind(); gvk.Group == "" && gvk.Kind == "Namespace" {
+			namespaces = append(namespaces, obj.GetName())
+		}
+	}
+	return namespaces, nil
 }
