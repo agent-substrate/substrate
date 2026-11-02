@@ -37,23 +37,27 @@ if (( $# > 1 )); then
   exit 2
 fi
 
-BASELINE_REF="${1:-}"
-if [ -z "${BASELINE_REF}" ]; then
-  for CANDIDATE in origin/main main; do
-    if git rev-parse --verify --quiet "${CANDIDATE}^{commit}" >/dev/null; then
-      BASELINE_REF="${CANDIDATE}"
-      break
+# Compare against the merge base, so a breaking change that landed on main
+# separately is not reported against this branch. When no ref is given, check
+# upstream/main, origin/main, and main, and keep the newest merge base so a
+# stale fork or local main does not win.
+BASELINE=""
+if (( $# == 1 )); then
+  BASELINE="$(git merge-base HEAD "$1")"
+else
+  for CANDIDATE in upstream/main origin/main main; do
+    if ! MB="$(git merge-base HEAD "${CANDIDATE}" 2>/dev/null)"; then
+      continue
+    fi
+    if [ -z "${BASELINE}" ] || git merge-base --is-ancestor "${BASELINE}" "${MB}"; then
+      BASELINE="${MB}"
     fi
   done
+  if [ -z "${BASELINE}" ]; then
+    echo "proto-breaking: no baseline; fetch main (git fetch origin main)" >&2
+    exit 1
+  fi
 fi
-if [ -z "${BASELINE_REF}" ]; then
-  echo "proto-breaking: no baseline; fetch main (git fetch origin main)" >&2
-  exit 1
-fi
-
-# Compare against the merge base, so a breaking change that landed on main
-# separately is not reported against this branch.
-BASELINE="$(git merge-base HEAD "${BASELINE_REF}")"
 
 # The input is the working tree, so an incompatible edit is reported before it
 # is ever committed. --against-config reads the baseline with the current

@@ -33,7 +33,7 @@ done
 
 if [[ ${#FAILED[@]} -gt 0 ]]; then
   echo >&2
-  echo "FAILED verifiers:" >&2
+  echo "Verification failed:" >&2
   printf '  %s\n' "${FAILED[@]}" >&2
   exit 1
 fi
