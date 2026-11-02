@@ -397,6 +397,7 @@ footer {
 .td-section .td-navbar.as-navbar .as-navbar__inner,
 .td-page .td-navbar.as-navbar .as-navbar__inner,
 .td-404 .td-navbar.as-navbar .as-navbar__inner {
+  max-width: 1760px;
   min-height: 64px;
   padding: 0 40px;
 
@@ -416,7 +417,6 @@ footer {
 
   > .td-main {
     width: 100%;
-    max-width: 1440px;
     margin: 0 auto;
     padding: 0 40px;
 
@@ -2580,7 +2580,7 @@ footer {
 
 .td-content.as-prose {
   width: 100%;
-  max-width: 820px;
+  max-width: none;
   min-width: 0;
 
   > *,
@@ -3298,13 +3298,13 @@ footer {
       code {
         font-size: 12.5px;
         padding: 1px 5px;
-        overflow-wrap: anywhere;
-        word-break: break-all;
+        overflow-wrap: break-word;
+        word-break: normal;
       }
 
       a {
-        overflow-wrap: anywhere;
-        word-break: break-all;
+        overflow-wrap: break-word;
+        word-break: normal;
       }
 
       &:first-child {
@@ -3314,6 +3314,7 @@ footer {
           padding: 0;
           color: #f4f8f5;
           font-size: 13px;
+          white-space: nowrap;
         }
       }
     }
@@ -3640,7 +3641,7 @@ footer {
 
   .as-footer__docs-bar {
     width: 100%;
-    max-width: 1440px;
+    max-width: 1760px;
     margin: 0 auto;
     padding: 0 40px;
     display: flex;
