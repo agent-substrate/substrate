@@ -280,6 +280,24 @@ func TestStartWritebackWaitsForDirtyPages(t *testing.T) {
 	}
 }
 
+func TestStartWritebackKeepsStartingWriteOutWhileDirty(t *testing.T) {
+	pc := &fakePageCache{}
+	_, done := startFakeWriteback(t, pc)
+	deadline := time.Now().Add(10 * time.Second)
+	for pc.writeOuts.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("write-out started %d times while the file stayed dirty, want it again on a later pass", pc.writeOuts.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	pc.clean.Store(true)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran once the file was clean")
+	}
+}
+
 func TestStartWritebackDropsUnlinkedDirtyFile(t *testing.T) {
 	pc := &fakePageCache{}
 	p, done := startFakeWriteback(t, pc)
