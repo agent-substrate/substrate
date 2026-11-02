@@ -198,14 +198,17 @@ func TestPodMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	limit, used, err := podMemory(root)
-	if want := int64(1<<30 + 256<<20 + 16<<20 + 64<<20); err != nil || limit != 4<<30 || used != want {
-		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, used, err, int64(4<<30), want)
+	limit, unreclaimable, err := podMemory(root)
+	if want := int64(1<<30 + 256<<20 + 16<<20 + 64<<20); err != nil || limit != 4<<30 || unreclaimable != want {
+		t.Errorf("podMemory() = %d, %d, %v, want %d, %d", limit, unreclaimable, err, int64(4<<30), want)
 	}
 	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("max\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if limit, _, err := podMemory(root); err != nil || limit != 0 {
-		t.Errorf("podMemory() without a limit = %d, %v, want 0", limit, err)
+	if err := os.Remove(filepath.Join(root, "memory.stat")); err != nil {
+		t.Fatal(err)
+	}
+	if limit, unreclaimable, err := podMemory(root); err != nil || limit != 0 || unreclaimable != 0 {
+		t.Errorf("podMemory() without a limit = %d, %d, %v, want 0, 0 without reading memory.stat", limit, unreclaimable, err)
 	}
 }

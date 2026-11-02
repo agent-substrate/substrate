@@ -171,34 +171,34 @@ func actorLeafMemory(root, actorUID string) (int64, error) {
 }
 
 // PodMemory returns the worker pod's memory limit and what it uses besides
-// clean page cache, which the kernel can reclaim. limit is 0 when the pod has
-// none.
-func PodMemory() (limit, used int64, err error) {
+// clean page cache, which the kernel can reclaim. Both are 0 when the pod has no
+// limit.
+func PodMemory() (limit, unreclaimable int64, err error) {
 	return podMemory(Root)
 }
 
-func podMemory(root string) (limit, used int64, err error) {
+func podMemory(root string) (limit, unreclaimable int64, err error) {
 	raw, err := os.ReadFile(filepath.Join(root, "memory.max"))
 	if err != nil {
 		return 0, 0, err
 	}
-	if v := strings.TrimSpace(string(raw)); v != "max" {
-		if limit, err = parseBytes(raw); err != nil {
-			return 0, 0, fmt.Errorf("while parsing memory.max %q: %w", raw, err)
-		}
+	if strings.TrimSpace(string(raw)) == "max" {
+		return 0, 0, nil
 	}
-	used, err = memoryUnreclaimable(root)
-	if err != nil {
+	if limit, err = parseBytes(raw); err != nil {
+		return 0, 0, fmt.Errorf("while parsing memory.max %q: %w", raw, err)
+	}
+	if unreclaimable, err = memoryUnreclaimable(root); err != nil {
 		return 0, 0, err
 	}
-	return limit, used, nil
+	return limit, unreclaimable, nil
 }
 
 // memoryUnreclaimable is memoryUsed plus page cache that is dirty or under
 // writeback, which reclaim can't drop either.
 func memoryUnreclaimable(root string) (int64, error) {
-	used, err := sumMemoryStat(root, memoryUnreclaimableStats...)
-	return int64(used), err
+	sum, err := sumMemoryStat(root, memoryUnreclaimableStats...)
+	return int64(sum), err
 }
 
 // memoryUnreclaimableStats are the memory.stat keys memoryUnreclaimable sums
