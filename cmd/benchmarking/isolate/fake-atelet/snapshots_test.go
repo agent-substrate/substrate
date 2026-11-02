@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -390,5 +391,123 @@ func TestHerderTerminateForgetsSnapshots(t *testing.T) {
 	h.snapshots.wg.Wait()
 	if got := len(reporter.reports()); got != 0 {
 		t.Errorf("got %d reports after Terminate, want 0", got)
+	}
+}
+
+func detachActor(ctx context.Context, h *herder) (*ateletpb.ActorSnapshotState, error) {
+	resp, err := h.DetachActor(ctx, &ateletpb.DetachActorRequest{
+		Atespace:  "team-a",
+		ActorName: "sleep-1",
+		ActorUid:  testActorUID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetState(), nil
+}
+
+// ate-api-server detaches a suspended actor from a full node and resumes it
+// elsewhere from its durable snapshot, so DetachActor makes the latest local
+// snapshot durable and reports none kept locally. Once detached, the actor is
+// forgotten.
+func TestHerderDetachActor(t *testing.T) {
+	const placeholder = "bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1/" + placeholderObject
+	snap := testSnapshot("snap-1", 1, testSnapshotURI)
+	for _, tc := range []struct {
+		name       string
+		checkpoint ateletpb.UploadMode // unspecified takes no checkpoint
+		want       *ateletpb.ActorSnapshotState
+		wantWrites []string
+	}{
+		{
+			name:       "deferred upload",
+			checkpoint: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED,
+			want:       &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap}},
+			wantWrites: []string{placeholder},
+		},
+		{
+			name:       "immediate upload",
+			checkpoint: ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE,
+			want:       &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: snap}},
+			wantWrites: []string{placeholder}, // the Checkpoint's
+		},
+		{
+			name: "no snapshot",
+			want: &ateletpb.ActorSnapshotState{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := &recordingStorage{}
+			h := &herder{storage: storage}
+			if tc.checkpoint != ateletpb.UploadMode_UPLOAD_MODE_UNSPECIFIED {
+				if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{
+					Atespace:     "team-a",
+					ActorName:    "sleep-1",
+					ActorUid:     testActorUID,
+					Snapshot:     snap,
+					UploadConfig: &ateletpb.UploadConfig{Mode: tc.checkpoint},
+				}); err != nil {
+					t.Fatalf("Checkpoint: %v", err)
+				}
+			}
+			got, err := detachActor(context.Background(), h)
+			if err != nil {
+				t.Fatalf("DetachActor: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform(), ignoreReportTimes); diff != "" {
+				t.Errorf("DetachActor state mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantWrites, storage.objects()); diff != "" {
+				t.Errorf("objects written mismatch (-want +got):\n%s", diff)
+			}
+			again, err := detachActor(context.Background(), h)
+			if err != nil {
+				t.Fatalf("second DetachActor: %v", err)
+			}
+			if diff := cmp.Diff(&ateletpb.ActorSnapshotState{}, again, protocmp.Transform()); diff != "" {
+				t.Errorf("second DetachActor state mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// Like atelet, DetachActor fails when the latest local snapshot has nowhere to
+// be uploaded.
+func TestHerderDetachActorWithoutObjectFails(t *testing.T) {
+	h := &herder{storage: &recordingStorage{}}
+	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{
+		Atespace:     "team-a",
+		ActorName:    "sleep-1",
+		ActorUid:     testActorUID,
+		Snapshot:     testSnapshot("snap-1", 1, ""),
+		UploadConfig: &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
+	}); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if _, err := detachActor(context.Background(), h); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("DetachActor: got %v, want %v", err, codes.FailedPrecondition)
+	}
+}
+
+// A detach does not end with its call: a caller that gives up during the delay
+// finds the actor detached when it calls again.
+func TestHerderDetachActorCompletesWhenCallerGivesUp(t *testing.T) {
+	// The state a deferred Checkpoint leaves, without waiting its hour.
+	h := &herder{delays: uniformDelays(time.Hour), storage: &recordingStorage{}}
+	h.commitLocal(testActorUID, &ateapi.ObjectRef{Atespace: "team-a", Name: "sleep-1"}, testSnapshot("snap-1", 1, testSnapshotURI), time.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := detachActor(ctx, h); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DetachActor: got %v, want %v", err, context.DeadlineExceeded)
+	}
+	// With nothing left to detach, the second call returns without its delay.
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := detachActor(ctx, h)
+	if err != nil {
+		t.Fatalf("second DetachActor: %v", err)
+	}
+	if diff := cmp.Diff(&ateletpb.ActorSnapshotState{}, got, protocmp.Transform()); diff != "" {
+		t.Errorf("second DetachActor state mismatch (-want +got):\n%s", diff)
 	}
 }

@@ -68,10 +68,11 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, detachActor: d, terminate: d}
 }
 
-// herderCalls invokes every Atelet method the herder implements. The
+// herderCalls invokes every Atelet method the herder implements but
+// DetachActor, which waits only when it has a snapshot to detach. The
 // Checkpoint and PromoteSnapshot calls upload a snapshot, so each writes a
 // placeholder.
 func herderCalls(h *herder) map[string]func(context.Context) error {
