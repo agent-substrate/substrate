@@ -74,21 +74,24 @@ trade-offs.
 First, we trade one problem (many idle Pods consuming resources) for another.
 Doing suspend and resume at this scale introduces a large data management
 problem.  We need to store the state of millions of actors, which can update
-frequently.  Agent Substrate treats data locality as a first-class concern.
-`atelet` keeps a node-local copy of an actor's latest snapshot after suspend so
-subsequent resumes on that node avoid an object-store round-trip.  It uploads
-snapshots to durable object storage in the background or on demand.
+frequently.  Agent Substrate balances fast local reactivation against durable
+remote storage: `atelet` keeps a node-local copy of an actor's latest snapshot
+after suspend so subsequent resumes on that node avoid an object-store
+round-trip, but local copies are ephemeral (held only until
+`--snapshot-detach-delay`) and asynchronous suspends risk state loss if the node
+fails before background upload completes (see [Actor Lifecycle](#actor-lifecycle)).
 
 Second, a specialized control plane must integrate cleanly with Kubernetes
 while enforcing its own security boundaries.  `ate-api-server` authenticates
-callers via mTLS and OIDC, authorizes every RPC per atespace with an embedded
-OpenFGA model, and delegates pod and node lifecycle to Kubernetes.
+callers via mTLS and OIDC and authorizes every RPC per atespace with an embedded
+OpenFGA model, while `atecontroller` reconciles declarative `WorkerPool` CRDs
+into Kubernetes Deployments.
 
 Third, with actors multiplexed onto and off of workers, operators need
 actor-level and pool-level visibility.  Agent Substrate emits OpenTelemetry
 metrics, structured logs, and lifecycle events across its components so
 operators can monitor worker capacity, track suspend/resume latency, and
-correlate activity across an actor's lifetime (see the
+correlate activity across an actor's lifetime through container logs (see the
 [Observability](../guides/observability.md) guide).
 
 ## North Star Metrics
@@ -371,17 +374,12 @@ Handles actor-aware ingress routing, on-demand resumption, and policy-enforced e
     HTTP(S) traffic over the tunnel is supported today; raw TCP or other
     non-HTTP protocols on a non-default port are not yet reachable this way.
 
-  * **Egress Filtering and Credential Injection**: Outbound TCP from an Actor
-    is redirected by nftables in the sandbox's gateway namespace to `atunnel`,
-    which opens an mTLS `CONNECT` tunnel using the Actor's worker-for-actor
-    certificate to `atenet-egress`. The sandbox's DNS relay answers queries only
-    for hostnames allowed by the Actor's `EgressPolicy` (`NXDOMAIN` otherwise),
-    and `atenet-egress` enforces the `EgressPolicy` on HTTP, HTTPS, and TLS
-    passthrough traffic (see [Egress Traffic](../guides/egress-traffic.md)).
-    For `http` and `https` rules with `replaceHeaders`, `atenet-egress` injects
-    secrets from a configured credential provider or an actor JWT minted by
-    `ate-api-server` on the wire so the sandbox never holds ambient credentials
-    (see [Egress Credential Injection](../guides/egress-credential-injection.md)).
+  * **Egress Filtering and Credential Injection**: Outbound traffic from an
+    Actor is tunneled through `atunnel` to `atenet-egress`, which enforces
+    destination policy and resolves credential replacement effects without
+    placing ambient secrets in the sandbox (see the
+    [Network Egress Contract](../guides/network-egress.md) and
+    [Egress Credential Injection](../guides/egress-credential-injection.md)).
 
   * **Latency**: The data plane is optimized for low-latency activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
