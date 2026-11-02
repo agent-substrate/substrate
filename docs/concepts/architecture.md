@@ -566,7 +566,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     versions.
 
   * **API Authorization**: Every `ate-api-server` RPC is authorized. Users
-    and automation get owner, editor, or viewer roles on the global scope or
+    and automation get owner, editor, operator, or viewer roles on the global scope or
     on an atespace through AccessPolicy (`kubectl ate access-policy`), and
     Substrate's components hold fixed system roles bound to their pod
     certificates. The atespace is the finest boundary today. See

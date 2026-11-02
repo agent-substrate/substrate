@@ -37,6 +37,9 @@ tuples:
   - user: user:dave
     relation: viewer
     object: atespace:space-1
+  - user: user:olga
+    relation: operator
+    object: atespace:space-1
 
   # Templates and tags
   - user: atespace:space-1
@@ -289,6 +292,33 @@ tests:
           can_create_egress_policy: true
           can_update_egress_policy: true
           can_delete_egress_policy: true
+      - user: user:olga # Operator: the actors' lifecycle and nothing else
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+          can_resume: true
+          can_suspend: true
+          can_revert: true
+          can_get_egress_policy: false
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+      - user: user:olga # Operator holds nothing on the atespace itself
+        object: atespace:space-1
+        assertions:
+          operator: true
+          editor: false
+          viewer: false
+          can_get: false
+          can_create_actor: false
+          can_list_actors: false
+          can_get_access_policy: false
+      - user: user:bob # Editor is an operator too
+        object: atespace:space-1
+        assertions:
+          operator: true
       - user: user:dave # Viewer
         object: actor:runner-1
         assertions:

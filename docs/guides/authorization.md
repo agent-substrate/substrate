@@ -116,21 +116,27 @@ access in a policy or those steps are denied.
 Roles are granted on the **global** scope, which covers every atespace, or on
 one **atespace**.
 
-| Permission | Global owner | Global viewer | Atespace owner | Atespace editor | Atespace viewer |
-|---|:-:|:-:|:-:|:-:|:-:|
-| Create atespaces; list all atespaces | ✅ | list only | | | |
-| Get the atespace | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Delete the atespace | ✅ | | ✅ | | |
-| Get access policies | ✅ | ✅ | ✅ (its own) | ✅ (its own) | ✅ (its own) |
-| Create, update, delete access policies | ✅ | | ✅ (its own) | | |
-| Get and list actors, actor templates, tags, egress policies | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Create, update, delete actors and actor templates | ✅ | | ✅ | ✅ | |
-| Resume, suspend, revert actors | ✅ | | ✅ | ✅ | |
-| Create, update, delete egress policies | ✅ | | ✅ | ✅ | |
-| Create, publish, delete tags | ✅ | | ✅ | ✅ | |
-| Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
-| Workers: get, list, list assignments | ✅ | ✅ | | | |
-| Workers: create, update, delete, drain | ✅ | | | | |
+| Permission | Global owner | Global viewer | Atespace owner | Atespace editor | Atespace operator | Atespace viewer |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Create atespaces; list all atespaces | ✅ | list only | | | | |
+| Get the atespace | ✅ | ✅ | ✅ | ✅ | | ✅ |
+| Delete the atespace | ✅ | | ✅ | | | |
+| Get access policies | ✅ | ✅ | ✅ (its own) | ✅ (its own) | | ✅ (its own) |
+| Create, update, delete access policies | ✅ | | ✅ (its own) | | | |
+| Get and list actors, actor templates, tags, egress policies | ✅ | ✅ | ✅ | ✅ | get actors only | ✅ |
+| Create, update, delete actors and actor templates | ✅ | | ✅ | ✅ | | |
+| Resume, suspend, revert actors | ✅ | | ✅ | ✅ | ✅ | |
+| Create, update, delete egress policies | ✅ | | ✅ | ✅ | | |
+| Create, publish, delete tags | ✅ | | ✅ | ✅ | | |
+| Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | | |
+| Workers: get, list, list assignments | ✅ | ✅ | | | | |
+| Workers: create, update, delete, drain | ✅ | | | | | |
+
+The `operator` role is for a controller outside Substrate that runs actors'
+lifecycle, such as a scheduler that suspends an actor once its turn is over:
+it resumes, suspends, reverts and gets actors in the atespace and can do
+nothing else, so a compromised scheduler cannot create, replace or delete
+actors. An editor is an operator too.
 
 ### System roles
 
@@ -158,9 +164,10 @@ A gRPC interceptor makes every check before the handler runs
 [`model.fga`](../../cmd/ateapi/internal/authz/model.fga)). When an RPC lists
 several checks, all must pass.
 
-Roles inherit: an owner is also an editor and a viewer, an editor is also a
-viewer, and a global role holds the same role in every atespace. So
-"atespace editor" below also means atespace owner, global owner, and so on.
+Roles inherit: an owner is also an editor and a viewer, an editor is also an
+operator and a viewer, and a global role holds the same role in every
+atespace. So "atespace editor" below also means atespace owner, global owner,
+and so on, and "atespace operator" also means atespace editor and up.
 
 ### Atespaces and access policies
 

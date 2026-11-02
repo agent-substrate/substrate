@@ -78,6 +78,10 @@ type atespace
     # Global owner automatically inherits owner without explicit per-atespace tuples
     define owner: [user] or owner from parent_global
     define editor: [user] or owner
+    # An operator runs the actors' lifecycle (resume, suspend, revert) and reads
+    # them, and nothing else: the role for a scheduler that puts actors to sleep
+    # after their turn. An editor is an operator too.
+    define operator: [user] or editor
     define viewer: [user] or editor or viewer from parent_global
 
     # System component roles, inherited from global only.
@@ -145,7 +149,7 @@ type actor
     # ate-api-server pod's sidecars, today the objectstore control plugin,
     # read it to derive the snapshot prefixes a per-actor storage credential
     # may cover, and nothing else.
-    define can_get: viewer from parent_atespace or egress_gateway from parent_atespace or api_server_sidecar from parent_atespace
+    define can_get: viewer from parent_atespace or operator from parent_atespace or egress_gateway from parent_atespace or api_server_sidecar from parent_atespace
     define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
 
@@ -170,9 +174,9 @@ type actor
     # mints them; an editor holding one could impersonate the actor.
     define can_mint_actor_jwt: egress_gateway from parent_atespace
 
-    # Data Plane Ingress: Routers (or editors) can resume
-    define can_resume: [user] or editor from parent_atespace or ingress_router from parent_atespace
+    # Data Plane Ingress: Routers (or operators, so editors) can resume
+    define can_resume: [user] or operator from parent_atespace or ingress_router from parent_atespace
 
     # Lifecycle Operations
-    define can_suspend: [user] or editor from parent_atespace
-    define can_revert: [user] or editor from parent_atespace
+    define can_suspend: [user] or operator from parent_atespace
+    define can_revert: [user] or operator from parent_atespace

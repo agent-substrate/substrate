@@ -40,9 +40,10 @@ const (
 	// GlobalRootObject is the singleton global scope object identifier in OpenFGA.
 	GlobalRootObject = "global:root"
 
-	RoleOwner  = "owner"
-	RoleEditor = "editor"
-	RoleViewer = "viewer"
+	RoleOwner    = "owner"
+	RoleEditor   = "editor"
+	RoleOperator = "operator"
+	RoleViewer   = "viewer"
 
 	RoleController       = "controller"
 	RoleEgressGateway    = "egress_gateway"
