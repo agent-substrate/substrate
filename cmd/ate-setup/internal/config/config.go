@@ -292,8 +292,8 @@ func (c *Config) Resolved() *Resolved {
 }
 
 // TransferServiceAccount is the email of the snapshot transfer service
-// account, built from TransferGSAName and ProjectID as tools/setup-gcp builds
-// it. It is empty when either is.
+// account, built from TransferGSAName and ProjectID the same way substrate-gke's
+// tools/setup-gcp builds it. It is empty when either is.
 func (c *Config) TransferServiceAccount() string {
 	if c.TransferGSAName == "" || c.ProjectID == "" {
 		return ""
