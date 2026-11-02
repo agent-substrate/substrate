@@ -20,7 +20,7 @@ The numbered tags mark the boundaries Substrate holds:
 
 1. **Sandbox.** Each actor runs in its own gVisor or microVM sandbox, with its own network namespace and storage. Actor code cannot reach the node or other actors; it can only talk through its gateway path and DNS relay, where policy applies.
 2. **Gateways.** Traffic reaches actors only through the ingress gateway, from authenticated callers. Outbound traffic leaves only through the egress gateway and DNS relay. The gateway enforces destination policies and injects credentials, so sandboxes hold none.
-3. **Control plane.** Actors have no network path to the Substrate API, its database, or the Kubernetes API. Worker pods cannot reach the Substrate API or bundled database. API callers are authorized per atespace.
+3. **Control plane.** Actors have no direct network path to the Substrate API, its database, or the Kubernetes API; their egress policy decides what external destinations or cluster services they can reach. Worker pods cannot reach the Substrate API or bundled database. API callers are authorized per atespace.
 4. **Storage.** Sandboxes never touch snapshot storage. On GCS, the node supervisor moves an actor's snapshots using credentials scoped to that one actor (S3 per-actor scoping is planned), and only the control plane copies or deletes them.
 
 Your application is outside these boundaries: it authenticates end users and decides which actors they can reach. A more detailed diagram is available in the [threat model](threat-model.md#architecture-of-substrate).
