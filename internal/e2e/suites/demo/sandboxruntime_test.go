@@ -531,7 +531,9 @@ func (f *sandboxRuntimeFixture) call(t *testing.T, stage string) {
 // checkpoint after an asynchronous one. It returns that snapshot.
 func (f *sandboxRuntimeFixture) suspend(t *testing.T, mode ateapi.DurabilityMode, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
 	t.Helper()
-	suspended, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapi.SuspendActorRequest{
+	// After an asynchronous suspend, atelet's report of the background
+	// upload can hold the actor's lease when the next suspend arrives.
+	suspended, err := e2e.RetryAborted(t, f.ctx, f.clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
 		Actor:   f.actorRef,
 		Options: &ateapi.SuspendOptions{Mode: mode},
 	})
