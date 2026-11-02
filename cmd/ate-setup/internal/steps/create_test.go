@@ -68,33 +68,40 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 			name:   "external issuer needs no discovery credentials",
 			issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
 			want: "jwtProviders:\n" +
-				"- name: kubernetes\n" +
+				"- audiences:\n" +
+				"  - api.ate-system.svc\n" +
 				"  issuer: https://container.googleapis.com/v1/projects/p/locations/l/clusters/c\n" +
-				"  audiences: [api.ate-system.svc]",
+				"  name: kubernetes",
 		},
 		{
 			name:   "in-cluster issuer projects the service account CA and token",
 			issuer: inClusterIssuer,
 			want: "jwtProviders:\n" +
-				"- name: kubernetes\n" +
-				"  issuer: https://kubernetes.default.svc\n" +
-				"  audiences: [api.ate-system.svc]\n" +
+				"- audiences:\n" +
+				"  - api.ate-system.svc\n" +
 				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token",
+				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n" +
+				"  issuer: https://kubernetes.default.svc\n" +
+				"  name: kubernetes",
 		},
 		{
 			name:   "cluster.local form is treated as in-cluster too",
 			issuer: inClusterIssuer + ".cluster.local",
 			want: "jwtProviders:\n" +
-				"- name: kubernetes\n" +
-				"  issuer: https://kubernetes.default.svc.cluster.local\n" +
-				"  audiences: [api.ate-system.svc]\n" +
+				"- audiences:\n" +
+				"  - api.ate-system.svc\n" +
 				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token",
+				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n" +
+				"  issuer: https://kubernetes.default.svc.cluster.local\n" +
+				"  name: kubernetes",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := buildAuthenticationConfig(tc.issuer); got != tc.want {
+			got, err := buildAuthenticationConfig(tc.issuer)
+			if err != nil {
+				t.Fatalf("buildAuthenticationConfig(%q) error = %v", tc.issuer, err)
+			}
+			if got != tc.want {
 				t.Errorf("buildAuthenticationConfig(%q) =\n%q\nwant\n%q", tc.issuer, got, tc.want)
 			}
 		})
