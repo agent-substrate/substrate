@@ -200,7 +200,7 @@ func TestStartQueuesActorsWithSnapshotState(t *testing.T) {
 	before := New(t.Context(), newFakeSnapshotStore(), clocktesting.NewFakeClock(t0), WithUploadDelay(testUploadDelay), WithDetachDelay(testDetachDelay))
 	before.CommitLocal("actor-both", testRef("s1", 1, t0))
 	before.CommitLocal("actor-upload", testRef("s2", 1, t0))
-	endStart, err := before.BeginStart(t.Context(), "actor-upload")
+	_, endStart, err := before.BeginStart(t.Context(), "actor-upload", "")
 	if err != nil {
 		t.Fatalf("BeginStart: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 	s2 := testRef("s2", 1, t0)
 	before.CommitDurable("actor-running-old", s2)
 	before.CommitLocal("actor-running-old", s2)
-	endStart, err := before.BeginStart(t.Context(), "actor-running-old")
+	_, endStart, err := before.BeginStart(t.Context(), "actor-running-old", "")
 	if err != nil {
 		t.Fatalf("BeginStart: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 		s1 := testRef("s1", 1, before.clock.Now())
 		before.CommitDurable(trackedActorUID, s1)
 		before.CommitLocal(trackedActorUID, s1)
-		endStart, err := before.BeginStart(t.Context(), trackedActorUID)
+		_, endStart, err := before.BeginStart(t.Context(), trackedActorUID, "")
 		if err != nil {
 			t.Fatalf("BeginStart: %v", err)
 		}
@@ -581,7 +581,7 @@ func TestTrackerTerminateHoldsOffBackgroundWork(t *testing.T) {
 	}
 }
 
-// CommitLocal, LocalSnapshotsToKeep, and State neither wait for the actor's
+// CommitLocal, localSnapshotsKept, and State neither wait for the actor's
 // background upload in progress nor cancel it.
 func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 	useActorDir(t)
@@ -596,7 +596,7 @@ func TestCommitsDoNotWaitForInFlightOp(t *testing.T) {
 		call func()
 	}{
 		{"CommitLocal", func() { tr.CommitLocal(trackedActorUID, testRef("s2", 2, t0)) }},
-		{"LocalSnapshotsToKeep", func() { tr.LocalSnapshotsToKeep(trackedActorUID) }},
+		{"localSnapshotsKept", func() { localSnapshotsKept(tr) }},
 		{"State", func() { tr.State(trackedActorUID) }},
 	} {
 		returnsPromptly(t, c.name+" during a background operation", c.call)
