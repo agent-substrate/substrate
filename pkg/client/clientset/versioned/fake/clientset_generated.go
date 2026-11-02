@@ -18,8 +18,8 @@ package fake
 
 import (
 	clientset "go.ate.dev/substrate/pkg/client/clientset/versioned"
-	apiv1alpha1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1"
-	fakeapiv1alpha1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/api/v1alpha1/fake"
+	atev1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/ate/v1"
+	fakeatev1 "go.ate.dev/substrate/pkg/client/clientset/versioned/typed/ate/v1/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -93,7 +93,7 @@ var (
 	_ testing.FakeClient  = &Clientset{}
 )
 
-// ApiV1alpha1 retrieves the ApiV1alpha1Client
-func (c *Clientset) ApiV1alpha1() apiv1alpha1.ApiV1alpha1Interface {
-	return &fakeapiv1alpha1.FakeApiV1alpha1{Fake: &c.Fake}
+// AteV1 retrieves the AteV1Client
+func (c *Clientset) AteV1() atev1.AteV1Interface {
+	return &fakeatev1.FakeAteV1{Fake: &c.Fake}
 }

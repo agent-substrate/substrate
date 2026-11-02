@@ -58,6 +58,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := e.Cfg.RequireTransferServiceAccount(); err != nil {
+		return err
+	}
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
@@ -135,6 +138,9 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
+	// Written empty on kind, so the sidecar's argument is never the literal
+	// $(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT).
+	configVars["ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT"] = e.Cfg.TransferServiceAccount()
 	if snapshotLocation != "" {
 		configVars["ATE_API_SNAPSHOT_LOCATION"] = snapshotLocation
 	}
@@ -158,15 +164,12 @@ func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
 	return e.annotateAPIServerEnvHash(ctx)
 }
 
-// sharedBootstrapOwnerWarning returns a warning when enforced authorization
-// makes the shared client ServiceAccount a bootstrap owner, and "" otherwise.
+// sharedBootstrapOwnerWarning returns a warning when the shared client
+// ServiceAccount is a bootstrap owner, and "" otherwise.
 // It is the default so demos, benchmarks and e2e work, but everyone who can
 // mint its token, including every kubectl-ate user without --token-file, is
 // then a global owner.
-func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string) string {
-	if !enabled {
-		return ""
-	}
+func sharedBootstrapOwnerWarning(bootstrapOwners, namespace string) string {
 	shared := installdefaults.ClientPrincipal(namespace)
 	for owner := range strings.SplitSeq(bootstrapOwners, ",") {
 		if strings.TrimSpace(owner) == shared {
@@ -184,7 +187,9 @@ func sharedBootstrapOwnerWarning(enabled bool, bootstrapOwners, namespace string
 // snapshots. It is used whether or not the PerTemplateSnapshotLocation preview
 // gate is enabled; with the gate, an actor template's
 // snapshotConfig.storageLocation overrides it. It may be empty only when the
-// gate is enabled, in which case every template must set its own.
+// gate is enabled. CreateActorTemplate then fails with FailedPrecondition for
+// a template without storageLocation, which includes every demo and
+// benchmark.
 func clusterSnapshotLocation(location string, gates []string) (string, error) {
 	if location != "" {
 		if err := resources.ValidateSnapshotLocation(location); err != nil {
@@ -309,7 +314,7 @@ func (e *Env) EnsureEnvVarsSafeStandalone(ctx context.Context) error {
 	}
 	return fmt.Errorf("the running ate-api-server Deployment does not reference the %s Secret; "+
 		"rewriting the env vars alone would leave it without a DSN on its next restart. "+
-		"Run `ate-setup deploy ate-apiserver` instead, which also updates the Deployment", SecretAPIEnvVars)
+		"Run `ate-setup deploy apiserver` instead, which also updates the Deployment", SecretAPIEnvVars)
 }
 
 // annotateAPIServerEnvHash stamps the running Deployment's pod template with
@@ -349,26 +354,56 @@ func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) er
 	if err := stampAPIServerEnvHash(objs, hash); err != nil {
 		return err
 	}
-	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIExperimentalEnableAuthz, e.Cfg.APIAuthzBootstrapOwners); err != nil {
+	if err := setAPIServerAuthzArgs(objs, e.Cfg.APIAuthzBootstrapOwners); err != nil {
 		return err
 	}
-	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIExperimentalEnableAuthz, e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
+	if err := setAPIServerEgressGatewayArgs(objs, e.Namespace(), e.Cfg.EgressGatewayExtraSPIFFEIDs); err != nil {
+		return err
+	}
+	if msg := sharedBootstrapOwnerWarning(e.Cfg.APIAuthzBootstrapOwners, e.Namespace()); msg != "" {
 		log.Warnf("%s", msg)
 	}
 	return e.Kube.Apply(ctx, objs)
 }
 
-// apiServerAuthzFlags are the ate-api-server flags setAPIServerAuthzArgs owns.
-var apiServerAuthzFlags = []string{"--experimental-enable-authz", "--authz-bootstrap-owners"}
+// apiServerAuthzFlag is the ate-api-server flag setAPIServerAuthzArgs owns.
+const apiServerAuthzFlag = "--authz-bootstrap-owners"
 
-// setAPIServerAuthzArgs sets ate-api-server's authorization flags on its
-// container in objs, replacing any the manifest already carries. A changed
-// flag changes the pod template, so it rolls the Deployment.
-//
-// The bootstrap owners are passed even with enforcement off: access policy
-// RPCs are checked either way, so without them nobody could set up policies
-// before turning enforcement on.
-func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, bootstrapOwners string) error {
+// setAPIServerAuthzArgs sets ate-api-server's bootstrap owners flag on its
+// container in objs, replacing any the manifest already carries.
+func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, bootstrapOwners string) error {
+	var values []string
+	if strings.Trim(bootstrapOwners, " ,") != "" {
+		values = []string{bootstrapOwners}
+	}
+	return setAPIServerFlag(objs, apiServerAuthzFlag, values)
+}
+
+// apiServerEgressGatewayFlag is the ate-api-server flag
+// setAPIServerEgressGatewayArgs owns.
+const apiServerEgressGatewayFlag = "--egress-gateway-spiffe-id"
+
+// setAPIServerEgressGatewayArgs passes atenet-egress's SPIFFE ID and then each
+// of extras, without duplicates, to ate-api-server's egress gateway flag. With
+// no extras it drops the flag, leaving ate-api-server's default.
+func setAPIServerEgressGatewayArgs(objs []*unstructured.Unstructured, namespace string, extras []string) error {
+	var ids []string
+	if len(extras) > 0 {
+		// Passing the flag replaces ate-api-server's default.
+		ids = []string{installdefaults.EgressSPIFFEID(namespace)}
+		for _, id := range extras {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return setAPIServerFlag(objs, apiServerEgressGatewayFlag, ids)
+}
+
+// setAPIServerFlag replaces every flag arg on ate-api-server's container in
+// objs with one flag=value arg per value, in order. A changed flag changes the
+// pod template, so it rolls the Deployment.
+func setAPIServerFlag(objs []*unstructured.Unstructured, flag string, values []string) error {
 	var dep *unstructured.Unstructured
 	for _, obj := range objs {
 		if obj.GetKind() == "Deployment" && obj.GetName() == "ate-api-server" {
@@ -377,7 +412,7 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, boot
 		}
 	}
 	if dep == nil {
-		return fmt.Errorf("the manifest has no deployment/ate-api-server to set authorization flags on")
+		return fmt.Errorf("the manifest has no deployment/ate-api-server to set %s on", flag)
 	}
 	containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
 	if err != nil || !found {
@@ -393,15 +428,10 @@ func setAPIServerAuthzArgs(objs []*unstructured.Unstructured, enabled bool, boot
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)
 		}
 		args = slices.DeleteFunc(args, func(arg string) bool {
-			return slices.ContainsFunc(apiServerAuthzFlags, func(flag string) bool {
-				return arg == flag || strings.HasPrefix(arg, flag+"=")
-			})
+			return arg == flag || strings.HasPrefix(arg, flag+"=")
 		})
-		if enabled {
-			args = append(args, "--experimental-enable-authz=true")
-		}
-		if strings.Trim(bootstrapOwners, " ,") != "" {
-			args = append(args, "--authz-bootstrap-owners="+bootstrapOwners)
+		for _, v := range values {
+			args = append(args, flag+"="+v)
 		}
 		if err := unstructured.SetNestedStringSlice(container, args, "args"); err != nil {
 			return fmt.Errorf("%s: %w", kube.Describe(dep), err)

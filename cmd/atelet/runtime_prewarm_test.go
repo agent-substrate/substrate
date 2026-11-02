@@ -30,56 +30,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	kubeinformers "k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/events"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
-	"go.ate.dev/substrate/internal/imagecache"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	atefake "go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 )
 
-// pushPauseImage pushes a tiny image to ref and returns its manifest digest,
-// so tests can later assert a cache hit by digest with the registry gone.
-func pushPauseImage(t *testing.T, ref string) v1.Hash {
-	t.Helper()
-	img, err := mutate.AppendLayers(empty.Image, singleFileLayer(t, "pause", "pause bytes"))
-	if err != nil {
-		t.Fatalf("mutate.AppendLayers: %v", err)
-	}
-	digest, err := img.Digest()
-	if err != nil {
-		t.Fatalf("img.Digest: %v", err)
-	}
-	tag, err := name.ParseReference(ref, name.Insecure)
-	if err != nil {
-		t.Fatalf("name.ParseReference(%q): %v", ref, err)
-	}
-	if err := remote.Write(tag, img); err != nil {
-		t.Fatalf("remote.Write(%q): %v", ref, err)
-	}
-	return digest
-}
-
-func gvisorConfig(name, url, sha string) *v1alpha1.SandboxConfig {
-	return &v1alpha1.SandboxConfig{
+func gvisorConfig(name, url, sha string) *atev1.SandboxConfig {
+	return &atev1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: v1alpha1.SandboxConfigSpec{
-			SandboxClass:   v1alpha1.SandboxClassGvisor,
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassGvisor,
 			DefaultVersion: "v1",
-			Versions: []v1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "registry.k8s.io/pause@sha256:abc",
-				Assets: map[string]map[string]v1alpha1.AssetFile{
+			Versions: []atev1.SandboxVersionConfig{{
+				Name: "v1",
+				Assets: map[string]map[string]atev1.AssetFile{
 					runtime.GOARCH: {
 						gvisorAssetName: {URL: url, SHA256: sha},
 					},
@@ -100,36 +72,22 @@ func (hangingObjectStorage) GetObject(ctx context.Context, _, _ string) (io.Read
 
 func (hangingObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
 
-// pauseImageInTestRegistry pushes a pause image to a test registry and
-// returns its digest-pinned reference, the only form a runtime hash accepts.
-func pauseImageInTestRegistry(t *testing.T) (ref string, host string) {
-	t.Helper()
-	host = imageVolumeTestRegistry(t)
-	digest := pushPauseImage(t, host+"/pause:3.10")
-	return host + "/pause@" + digest.String(), host
-}
-
 // indexedTestRuntime registers a runtime with one gvisor release asset, the
-// tarball content, and the given pause image as a worker's default, and
-// returns its hash.
-func indexedTestRuntime(t *testing.T, index *runtimeIndex, content []byte, pauseImage string) string {
+// tarball content, as a worker's default, and returns its hash.
+func indexedTestRuntime(t *testing.T, index *runtimeIndex, content []byte) string {
 	t.Helper()
-	return indexedTestRuntimeAt(t, index, "gs://bucket/gvisor.tar", content, pauseImage)
+	return indexedTestRuntimeAt(t, index, "gs://bucket/gvisor.tar", content)
 }
 
 // indexedTestRuntimeAt is indexedTestRuntime with the asset at url.
-func indexedTestRuntimeAt(t *testing.T, index *runtimeIndex, url string, content []byte, pauseImage string) string {
+func indexedTestRuntimeAt(t *testing.T, index *runtimeIndex, url string, content []byte) string {
 	t.Helper()
 	rec := &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
-		PauseImage:   pauseImage,
 		Assets:       map[string]assetEntry{gvisorAssetName: {URL: url, SHA256: fmt.Sprintf("%x", sha256.Sum256(content))}},
 	}
-	hash, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	index.register("pod-a", advertisedClass{class: v1alpha1.SandboxClassGvisor, config: "gvisor-release", hashed: []hashedVersion{{
+	hash := bundleHash(rec)
+	index.register("pod-a", advertisedClass{class: atev1.SandboxClassGvisor, config: "gvisor-release", hashed: []hashedVersion{{
 		versionPlan: versionPlan{name: "v1", isDefault: true, rec: rec}, hash: hash,
 	}}})
 	return hash
@@ -147,25 +105,16 @@ func defaultItem(t *testing.T, root, hash string) prewarmItem {
 	return prewarmItem{hash: hash, dir: dir}
 }
 
-func newTestImageStore(t *testing.T) *imagecache.Store {
-	t.Helper()
-	store, err := imagecache.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("imagecache.New: %v", err)
-	}
-	return store
-}
-
 // TestRuntimePrewarmProcess covers the worker's failure handling: a failed
 // prewarm is requeued with backoff until prewarmMaxRetries and then dropped,
 // and an item naming a hash that is not in the index is dropped at once.
 func TestRuntimePrewarmProcess(t *testing.T) {
 	ctx := context.Background()
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), "")
+	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t))
 	root := t.TempDir()
 	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
-	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+	p := newRuntimePrewarmer(index, herder)
 
 	item := defaultItem(t, root, hash)
 	for i := 1; i <= prewarmMaxRetries; i++ {
@@ -194,7 +143,7 @@ func TestRuntimePrewarmSuperseded(t *testing.T) {
 	ctx := context.Background()
 	index := newRuntimeIndex()
 	content := gvisorReleaseTarball(t)
-	hash := indexedTestRuntime(t, index, content, "")
+	hash := indexedTestRuntime(t, index, content)
 	root := t.TempDir()
 	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
 
@@ -203,7 +152,7 @@ func TestRuntimePrewarmSuperseded(t *testing.T) {
 		if err := os.RemoveAll(item.dir); err != nil {
 			t.Fatal(err)
 		}
-		p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+		p := newRuntimePrewarmer(index, herder)
 		p.process(ctx, item)
 		if got := p.queue.NumRequeues(item); got != 0 {
 			t.Errorf("NumRequeues after a superseded prewarm = %d, want 0 (not retried)", got)
@@ -219,7 +168,7 @@ func TestRuntimePrewarmSuperseded(t *testing.T) {
 	t.Run("worker gone while staging", func(t *testing.T) {
 		item := defaultItem(t, root, hash)
 		removing := &removingFetcher{inner: herder, remove: filepath.Join(root, "workers", "pod-a")}
-		p := newRuntimePrewarmer(index, removing, newTestImageStore(t))
+		p := newRuntimePrewarmer(index, removing)
 		p.process(ctx, item)
 		if got := p.queue.NumRequeues(item); got != 0 {
 			t.Errorf("NumRequeues after the worker went mid-staging = %d, want 0 (not retried)", got)
@@ -248,25 +197,23 @@ func (r *removingFetcher) stageSandboxAssets(ctx context.Context, rec *sandboxAs
 	return r.inner.stageSandboxAssets(ctx, rec, dstDir)
 }
 
-// TestRuntimePrewarmFillsBothCaches covers a successful prewarm: the asset
+// TestRuntimePrewarmFillsTheAssetCache covers a successful prewarm: the asset
 // lands in the asset cache, linked into the runtime's directory so an
-// eviction pass keeps it, and the pause image lands in the image cache. A
-// second prewarm of the same directory fetches nothing.
-func TestRuntimePrewarmFillsBothCaches(t *testing.T) {
+// eviction pass keeps it. A second prewarm of the same directory fetches
+// nothing.
+func TestRuntimePrewarmFillsTheAssetCache(t *testing.T) {
 	ctx := context.Background()
-	pauseRef, _ := pauseImageInTestRegistry(t)
 	content := gvisorReleaseTarball(t)
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, content, pauseRef)
+	hash := indexedTestRuntime(t, index, content)
 	rt, _ := index.lookup(hash)
 
 	root := t.TempDir()
-	images := newTestImageStore(t)
 	var gets atomic.Int32
 	// No min age, so the only thing standing between the entry and a pass is
 	// the directory's link.
 	s := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root, filecache.WithMinAge(0)), anonGCSClient: fakeObjectStorage{data: content, gets: &gets}}
-	p := newRuntimePrewarmer(index, s, images)
+	p := newRuntimePrewarmer(index, s)
 	item := defaultItem(t, root, hash)
 	if err := p.prewarm(ctx, item, rt); err != nil {
 		t.Fatalf("prewarm: %v", err)
@@ -276,9 +223,6 @@ func TestRuntimePrewarmFillsBothCaches(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(item.dir, gvisorAssetName, "runsc")); err != nil {
 		t.Errorf("prewarm did not link the runtime's asset into its directory: %v", err)
-	}
-	if _, err := images.EnsureImage(ctx, pauseRef); err != nil {
-		t.Errorf("pause image not prewarmed into the image cache: %v", err)
 	}
 	stats, err := s.sandboxAssetCache.EvictUnused(ctx, 1<<40, false)
 	if err != nil {
@@ -307,23 +251,18 @@ func TestRuntimePrewarmFillsBothCaches(t *testing.T) {
 	}
 }
 
-// TestRuntimePrewarmAssetFailureStillPullsImage pins that the two halves
-// are independent: a failing asset fetch does not stop the pause image pull.
-func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
+// TestRuntimePrewarmAssetFailure pins that a failing asset fetch fails the
+// prewarm.
+func TestRuntimePrewarmAssetFailure(t *testing.T) {
 	ctx := context.Background()
-	pauseRef, _ := pauseImageInTestRegistry(t)
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), pauseRef)
+	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t))
 	rt, _ := index.lookup(hash)
 
-	images := newTestImageStore(t)
 	root := t.TempDir()
-	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}, images)
+	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}})
 	if err := p.prewarm(ctx, defaultItem(t, root, hash), rt); err == nil {
 		t.Error("prewarm returned nil despite the asset fetch failing")
-	}
-	if _, err := images.EnsureImage(ctx, pauseRef); err != nil {
-		t.Errorf("pause image not pulled when the asset fetch failed: %v", err)
 	}
 }
 
@@ -332,10 +271,10 @@ func TestRuntimePrewarmAssetFailureStillPullsImage(t *testing.T) {
 // that never returned would block every other runtime's prewarm.
 func TestRuntimePrewarmAttemptTimeout(t *testing.T) {
 	index := newRuntimeIndex()
-	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t), "")
+	hash := indexedTestRuntime(t, index, gvisorReleaseTarball(t))
 	rt, _ := index.lookup(hash)
 	root := t.TempDir()
-	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: hangingObjectStorage{}}, newTestImageStore(t))
+	p := newRuntimePrewarmer(index, &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: hangingObjectStorage{}})
 	p.attemptTimeout = 50 * time.Millisecond
 
 	item := defaultItem(t, root, hash)
@@ -378,14 +317,14 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err != nil {
+	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod: %v", err)
 	}
 	wr, ok := s.index.worker("pod-a")
 	if !ok {
 		t.Fatal("pod-a not indexed")
 	}
-	cr, _ := wr.class(v1alpha1.SandboxClassGvisor)
+	cr, _ := wr.class(atev1.SandboxClassGvisor)
 	want := []prewarmItem{{hash: cr.defaultHash, dir: s.defaultRuntimeDir("pod-a", cr.defaultHash)}}
 	if got := rec.items(); !slices.Equal(got, want) {
 		t.Errorf("prewarm handed %+v, want %+v", got, want)
@@ -406,7 +345,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err != nil {
+	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod again: %v", err)
 	}
 	if got := rec.items(); len(got) != 2 || got[1] != want[0] {
@@ -432,7 +371,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.MkdirAll(previous, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.syncPod(context.Background(), pod); err == nil {
+	if _, err := s.syncPod(context.Background(), pod); err == nil {
 		t.Fatal("syncPod with the default's probe failing = nil, want an error")
 	}
 	if got := rec.items(); len(got) != 0 {
@@ -479,9 +418,9 @@ func (r *recordingPrewarm) count() int {
 // request.
 func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	useTempAssetScratch(t) // the syncer's runsc probe stages into it
-	// The worker's own prewarm call returns only when the asset has landed
-	// and the pause-image pull has finished. Waiting for the call keeps the
-	// pull's last writes from racing the TempDir cleanup.
+	// The worker's own prewarm call returns only when the asset has landed.
+	// Waiting for the call keeps its last writes from racing the TempDir
+	// cleanup.
 	prewarmed := make(chan error, 1)
 	onFinished := func(_ prewarmItem, err error) {
 		// Non-blocking: a failed attempt is retried, and the worker must not
@@ -492,10 +431,8 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		}
 	}
 
-	pauseRef, _ := pauseImageInTestRegistry(t)
 	content := gvisorReleaseTarball(t)
 	cfg := gvisorConfig("gvisor-release", "gs://bucket/gvisor.tar", fmt.Sprintf("%x", sha256.Sum256(content)))
-	cfg.Spec.Versions[0].PauseImage = pauseRef
 
 	kube := kubefake.NewClientset([]k8sruntime.Object{workerPod("pod-a", "pool")}...)
 	ate := atefake.NewSimpleClientset(resolvedPool("pool", "gvisor-release"), cfg)
@@ -507,7 +444,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 	workersDir := filepath.Join(root, "workers") // on the cache's filesystem
 	index := newRuntimeIndex()
 	herder := &Atelet{sandboxAssetCache: newTestAssetCacheAt(t, root), anonGCSClient: fakeObjectStorage{data: content}}
-	p := newRuntimePrewarmer(index, herder, newTestImageStore(t))
+	p := newRuntimePrewarmer(index, herder)
 	p.onFinished = onFinished
 	go p.run(ctx)
 	// Join the worker before the TempDir cleanups remove what it writes into.
@@ -520,10 +457,10 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 
 	s, err := startWorkerSandboxSyncer(ctx,
 		podFactory.Core().V1().Pods(),
-		ateFactory.Api().V1alpha1().WorkerPools(),
-		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		ateFactory.Ate().V1().WorkerPools(),
+		ateFactory.Ate().V1().SandboxConfigs(),
 		newScriptAssetFetcher(t), // the syncer's runsc probe; prewarm goes through herder
-		workersDir, index, p)
+		workersDir, index, p, &events.FakeRecorder{})
 	if err != nil {
 		t.Fatalf("startWorkerSandboxSyncer: %v", err)
 	}
@@ -547,7 +484,7 @@ func TestDefaultRuntimePrewarmThroughSyncer(t *testing.T) {
 		return err == nil && len(left) == 0
 	})
 	wr, _ := index.worker("pod-a")
-	cr, _ := wr.class(v1alpha1.SandboxClassGvisor)
+	cr, _ := wr.class(atev1.SandboxClassGvisor)
 	linked := filepath.Join(s.defaultRuntimeDir("pod-a", cr.defaultHash), gvisorAssetName, "runsc")
 	waitFor(t, "the worker's default runtime to be linked under its directory", func() bool { return exists(linked) })
 	if dirs, err := os.ReadDir(filepath.Join(s.podDir("pod-a"), defaultRuntimeDirsName)); err != nil || len(dirs) != 1 {

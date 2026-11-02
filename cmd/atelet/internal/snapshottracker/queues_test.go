@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // Uploads and detaches have queues and workers of their own, so a due detach
@@ -183,7 +184,7 @@ func TestTrackerUploadRunsDuringCheckpointHoldWhileDetachWaits(t *testing.T) {
 	t0 := tr.clock.Now()
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, t0))
 
-	endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot)
+	_, endCheckpoint, err := tr.BeginCheckpoint(t.Context(), trackedActorUID, testRef("s2", 2, time.Time{}).Snapshot, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED)
 	if err != nil {
 		t.Fatalf("BeginCheckpoint: %v", err)
 	}

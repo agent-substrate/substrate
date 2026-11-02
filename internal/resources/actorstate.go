@@ -14,22 +14,22 @@
 
 package resources
 
-import "go.ate.dev/substrate/pkg/proto/ateapipb"
+import "go.ate.dev/substrate/api/ateapi/v1"
 
 // TransferStates are the states in which a node may be moving the actor's
 // snapshot between itself and object storage:
 //   - RESUMING: a resume fetches the snapshot.
 //   - RUNNING: the actor keeps the credentials its resume minted.
 //   - SUSPENDING: a suspend uploads the snapshot.
-//   - SUSPENDED: a paused actor's background upload runs.
+//   - SUSPENDED: a background upload of a local snapshot runs.
 //
 // In every other state no node acts for the actor, so no node may hold a
 // credential for its snapshots. The mint's host check and the objectstore
 // plugin's credential exchange both refuse the other states, and read the
 // list here so they cannot disagree.
-var TransferStates = []ateapipb.ActorState{
-	ateapipb.ActorState_ACTOR_STATE_RESUMING,
-	ateapipb.ActorState_ACTOR_STATE_RUNNING,
-	ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-	ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+var TransferStates = []ateapi.ActorState{
+	ateapi.ActorState_ACTOR_STATE_RESUMING,
+	ateapi.ActorState_ACTOR_STATE_RUNNING,
+	ateapi.ActorState_ACTOR_STATE_SUSPENDING,
+	ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 }

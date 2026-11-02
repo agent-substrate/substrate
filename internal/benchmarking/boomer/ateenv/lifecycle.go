@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
@@ -39,12 +40,11 @@ import (
 	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	ateenvv1alpha "go.ate.dev/substrate/internal/proto/ateenv/v1alpha"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -104,20 +104,20 @@ func init() {
 	})
 }
 
-// routerGRPCTarget converts an HTTP/HTTPS router URL into a dns:/// gRPC dial target.
+// routerGRPCTarget converts an HTTPS router URL into a dns:/// gRPC dial target.
 func routerGRPCTarget(rawURL string) (string, error) {
 	if rawURL == "" {
-		rawURL = "http://atenet-router.ate-system.svc.cluster.local"
+		rawURL = boomerutil.DefaultRouterURL
 	}
 	if !strings.Contains(rawURL, "://") {
-		rawURL = "http://" + rawURL
+		rawURL = "https://" + rawURL
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
-	if strings.EqualFold(u.Scheme, "https") {
-		return "", fmt.Errorf("router URL %q uses https, which is not supported by the plaintext gRPC dialer", rawURL)
+	if !strings.EqualFold(u.Scheme, "https") {
+		return "", fmt.Errorf("router URL %q uses %s, want https", rawURL, u.Scheme)
 	}
 	host := u.Hostname()
 	if host == "" {
@@ -125,7 +125,7 @@ func routerGRPCTarget(rawURL string) (string, error) {
 	}
 	port := u.Port()
 	if port == "" {
-		port = "80"
+		port = "443"
 	}
 	return "dns:///" + net.JoinHostPort(host, port), nil
 }
@@ -333,10 +333,14 @@ func (r *taskRuntime) startUser(ctx context.Context) (*ateEnvUser, error) {
 		if err != nil {
 			return nil, err
 		}
+		tlsCfg, err := boomerutil.RouterTLSConfig()
+		if err != nil {
+			return nil, err
+		}
 		dialFn = func() (ateenvv1alpha.ProcessServiceClient, io.Closer, error) {
 			conn, err := grpc.NewClient(
 				target,
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 				grpc.WithDisableServiceConfig(),
 			)
 			if err != nil {
@@ -420,10 +424,10 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 		u := val.(*ateEnvUser)
 		for _, a := range u.snapshotActors() {
 			if a.isRunning() {
-				if dynconfig.Get[ateEnvKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
-					_ = a.pause(ctx)
-				} else {
+				if dynconfig.Get[ateEnvKnobs](r.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModeSync {
 					_ = a.suspend(ctx)
+				} else {
+					_ = a.pause(ctx)
 				}
 			}
 			a.delete(ctx)
@@ -581,15 +585,15 @@ func (u *ateEnvActor) noteSuccess() {
 	u.mu.Unlock()
 }
 
-func (u *ateEnvActor) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
+func (u *ateEnvActor) ref() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 func (u *ateEnvActor) ensureAtespace(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: u.cfg.Atespace,
 				},
 			},
@@ -606,10 +610,10 @@ func (u *ateEnvActor) ensureAtespace(ctx context.Context) error {
 
 func (u *ateEnvActor) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateAtespace, Name: templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -626,7 +630,7 @@ func (u *ateEnvActor) resume(ctx context.Context) error {
 	}
 	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
 		return boomerutil.RetryOnConflict(callCtx, func() error {
-			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+			_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapi.ResumeActorRequest{
 				Actor: u.ref(),
 			}, grpc.Trailer(tr))
 			return err
@@ -655,18 +659,18 @@ func (u *ateEnvActor) hibernate(ctx context.Context) error {
 	switch dynconfig.Get[ateEnvKnobs](u.cfg.Dyn).LifecycleMode {
 	case dynconfig.LifecycleModeNone:
 		return nil
-	case dynconfig.LifecycleModePause:
-		return u.pause(ctx)
-	default:
+	case dynconfig.LifecycleModeSync:
 		return u.suspend(ctx)
+	default:
+		return u.pause(ctx)
 	}
 }
 
 func (u *ateEnvActor) pause(ctx context.Context) error {
 	err := u.tracedCall(ctx, "SuspendActorAsync", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -679,9 +683,9 @@ func (u *ateEnvActor) pause(ctx context.Context) error {
 
 func (u *ateEnvActor) suspend(ctx context.Context) error {
 	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
+		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapi.SuspendActorRequest{
 			Actor:   u.ref(),
-			Options: &ateapipb.SuspendOptions{Mode: ateapipb.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -694,7 +698,7 @@ func (u *ateEnvActor) suspend(ctx context.Context) error {
 
 func (u *ateEnvActor) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
-		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
+		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapi.DeleteActorRequest{
 			Actor: u.ref(),
 		}, grpc.Trailer(tr))
 		return err

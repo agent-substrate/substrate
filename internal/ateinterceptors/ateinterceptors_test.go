@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/protoredact"
 	"go.ate.dev/substrate/internal/serverboot"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
-	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -396,9 +396,9 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	log := captureDefaultLog(t)
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.c2lnbmF0dXJl"
-	resp := &ateapipb.MintActorJwtResponse{ActorJwt: token}
+	resp := &ateapi.MintActorJwtResponse{ActorJwt: token}
 
-	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapi.MintActorJwtRequest{}, &grpc.UnaryServerInfo{FullMethod: "/substrate.ateapi.v1.Control/MintActorJwt"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -412,7 +412,7 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 	if !strings.Contains(gotLog, `"actor_jwt":"`+protoredact.Placeholder+`"`) {
 		t.Fatalf("log does not show the redacted actor_jwt: %s", gotLog)
 	}
-	if got.(*ateapipb.MintActorJwtResponse).GetActorJwt() != token {
+	if got.(*ateapi.MintActorJwtResponse).GetActorJwt() != token {
 		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }
@@ -420,8 +420,8 @@ func TestServerUnaryInterceptorResponseLogMasksActorJWT(t *testing.T) {
 func TestInternalServerUnaryInterceptorLogMasksBytesFields(t *testing.T) {
 	log := captureDefaultLog(t)
 
-	resp := &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte("hunter2-hunter2")}
-	_, err := InternalServerUnaryInterceptor(context.Background(), &credproviderpb.FetchSecretRequest{Uri: "ate-secret://kubernetes.io/ns/name"}, &grpc.UnaryServerInfo{FullMethod: "/credprovider.CredentialProvider/FetchSecret"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	resp := &credprovider.FetchSecretResponse{OpaqueBytes: []byte("hunter2-hunter2")}
+	_, err := InternalServerUnaryInterceptor(context.Background(), &credprovider.FetchSecretRequest{Uri: "ate-secret://kubernetes.io/ns/name"}, &grpc.UnaryServerInfo{FullMethod: "/substrate.credprovider.v1.CredentialProvider/FetchSecret"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -449,10 +449,10 @@ func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 		method string
 		resp   any
 	}{
-		{name: "nil", method: "/ateapi.Control/MintActorJwt", resp: nil},
+		{name: "nil", method: "/substrate.ateapi.v1.Control/MintActorJwt", resp: nil},
 		// The generated handlers return a typed nil on error; a List call must
 		// not log it as an elided response.
-		{name: "typed nil List response", method: "/ateapi.Control/ListActors", resp: (*ateapipb.ListActorsResponse)(nil)},
+		{name: "typed nil List response", method: "/substrate.ateapi.v1.Control/ListActors", resp: (*ateapi.ListActorsResponse)(nil)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -473,8 +473,8 @@ func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 func TestServerUnaryInterceptorElidesListResponses(t *testing.T) {
 	log := captureDefaultLog(t)
 
-	resp := &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{{Metadata: &ateapipb.ResourceMetadata{Name: "gym-0123456789ab"}}}}
-	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.ListActorsRequest{Atespace: "nemo-gym"}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/ListActors"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	resp := &ateapi.ListActorsResponse{Actors: []*ateapi.Actor{{Metadata: &ateapi.ResourceMetadata{Name: "gym-0123456789ab"}}}}
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapi.ListActorsRequest{Atespace: "nemo-gym"}, &grpc.UnaryServerInfo{FullMethod: "/substrate.ateapi.v1.Control/ListActors"}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return resp, nil
 	})
 	if err != nil {
@@ -483,7 +483,7 @@ func TestServerUnaryInterceptorElidesListResponses(t *testing.T) {
 	if gotLog := log.String(); strings.Contains(gotLog, "gym-0123456789ab") || !strings.Contains(gotLog, "ListActors response elided") {
 		t.Fatalf("list response not elided from the log: %s", gotLog)
 	}
-	if len(got.(*ateapipb.ListActorsResponse).GetActors()) != 1 {
+	if len(got.(*ateapi.ListActorsResponse).GetActors()) != 1 {
 		t.Fatalf("interceptor mutated the response returned to the client")
 	}
 }

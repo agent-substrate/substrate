@@ -63,7 +63,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 	}{
 		{
 			name:          "bundled identities",
-			cfg:           config.Config{PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
+			cfg:           config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID, PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
 			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser),
 			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
@@ -71,6 +71,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name: "size10 bundled identities",
 			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				ClusterSize: config.ClusterSizeSize10, PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
 			},
 			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser) + config.Size10PostgresPoolParams,
@@ -80,6 +81,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name: "external one login",
 			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteConnectionString: "postgres://operator@database/atepg",
 				PostgresReadWriteRole:             "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
 			},
@@ -90,6 +92,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name: "external separate logins",
 			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteConnectionString: "postgres://runtime@database/atepg",
 				PostgresOwnerConnectionString:     "postgres://owner@database/atepg",
 				PostgresReadWriteRole:             "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
@@ -101,6 +104,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name: "Cloud SQL one login",
 			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
 				CloudSQL: config.CloudSQLConfig{Instance: "p:r:i", InstanceSet: true, GSA: "svc@p.iam.gserviceaccount.com"},
 			},
@@ -142,7 +146,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 }
 
 func TestCreateAPIServerEnvVarsRejectsCustomBundledIdentity(t *testing.T) {
-	cfg := config.Config{PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner"}
+	cfg := config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID, PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner"}
 	cfg.SnapshotLocation = "gs://ate-snapshots/"
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
@@ -176,6 +180,7 @@ func TestCreateAPIServerEnvVarsKeepsExternalPostgres(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
 				CloudSQL:         tc.cloudSQL,
 				SnapshotLocation: "gs://ate-snapshots/",
@@ -230,7 +235,7 @@ func TestCreateAPIServerEnvVarsKeepsOwnerLogin(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Config{PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner, SnapshotLocation: "gs://ate-snapshots/"}
+			cfg := config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID, PostgresReadWriteConnectionString: readWrite, PostgresOwnerConnectionString: tc.owner, SnapshotLocation: "gs://ate-snapshots/"}
 			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -265,6 +270,7 @@ func TestCreateAPIServerEnvVarsKeepsOwnerLogin(t *testing.T) {
 
 func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 	cfg := config.Config{
+		TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		PostgresPoolMaxConns:              "20",
 	}
@@ -294,6 +300,7 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 
 func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
 	cfg := config.Config{
+		TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 		ActorJWTIssuer:                    "https://idp.example.com/prod",
 	}
@@ -330,6 +337,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 		{
 			name: "preserve recorded identity",
 			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
 				PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
 			},
@@ -342,6 +350,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 		{
 			name: "explicit overrides win",
 			cfg: config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteRole:         config.DefaultPostgresReadWriteRole,
 				PostgresOwnerRole:             config.DefaultPostgresOwnerRole,
 				PostgresReadWriteRoleSet:      true,
@@ -423,7 +432,7 @@ func TestRecordedConnectionStrings(t *testing.T) {
 		{"separate DSNs", map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("readwrite"), "ATE_API_POSTGRES_OWNER_CONNECTION_STRING": []byte("owner")}, "owner"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, &corev1.Secret{
+			e := &Env{Cfg: &config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID}, Kube: fakeKube(t, &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
 				Data:       tc.data,
 			})}
@@ -482,9 +491,9 @@ func TestEnsureEnvVarsSafeStandalone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var e *Env
 			if tc.dep == nil {
-				e = &Env{Cfg: &config.Config{}, Kube: fakeKube(t)}
+				e = &Env{Cfg: &config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID}, Kube: fakeKube(t)}
 			} else {
-				e = &Env{Cfg: &config.Config{}, Kube: fakeKube(t, tc.dep)}
+				e = &Env{Cfg: &config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID}, Kube: fakeKube(t, tc.dep)}
 			}
 			err := e.EnsureEnvVarsSafeStandalone(t.Context())
 			if tc.wantErr {
@@ -502,7 +511,7 @@ func TestEnsureEnvVarsSafeStandalone(t *testing.T) {
 
 func TestAnnotateAPIServerEnvHash(t *testing.T) {
 	t.Run("fresh install is a no-op", func(t *testing.T) {
-		e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t)}
+		e := &Env{Cfg: &config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID}, Kube: fakeKube(t)}
 		if err := e.annotateAPIServerEnvHash(t.Context()); err != nil {
 			t.Errorf("annotateAPIServerEnvHash() error = %v, want nil", err)
 		}
@@ -513,7 +522,7 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: SecretAPIEnvVars},
 			Data:       map[string][]byte{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("postgresql://h/atepg")},
 		}
-		e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, apiServerDeployment(SecretAPIEnvVars), secret)}
+		e := &Env{Cfg: &config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID}, Kube: fakeKube(t, apiServerDeployment(SecretAPIEnvVars), secret)}
 
 		if err := e.annotateAPIServerEnvHash(t.Context()); err != nil {
 			t.Fatalf("annotateAPIServerEnvHash() error = %v", err)
@@ -536,7 +545,7 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 // Deployment, patches the running one.
 func TestOnlyAStandaloneEnvUpdateRollsTheAPIServer(t *testing.T) {
 	newEnv := func(t *testing.T) *Env {
-		return &Env{Cfg: &config.Config{PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg", SnapshotLocation: "gs://ate-snapshots/"},
+		return &Env{Cfg: &config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID, PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg", SnapshotLocation: "gs://ate-snapshots/"},
 			Kube: fakeKube(t,
 				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
@@ -618,8 +627,8 @@ spec:
 	}
 }
 
-// Authorization reaches ate-api-server as flags on its container, so a change
-// rolls the Deployment, and the envvars ConfigMap carries none of it.
+// The bootstrap owners reach ate-api-server as a flag on its container, so a
+// change rolls the Deployment, and the envvars ConfigMap carries none of it.
 func TestSetAPIServerAuthzArgs(t *testing.T) {
 	const manifest = `apiVersion: apps/v1
 kind: Deployment
@@ -636,35 +645,22 @@ spec:
         args:
         - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
         - --authz-bootstrap-owners=stale
-        - --experimental-enable-authz
 `
 	for _, tc := range []struct {
-		name    string
-		enabled bool
-		owners  string
-		want    []string
+		name   string
+		owners string
+		want   []string
 	}{
 		{
-			name:    "enforced",
-			enabled: true,
-			owners:  "alice,bob",
+			name:   "replaces the owners",
+			owners: "alice,bob",
 			want: []string{
 				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
-				"--experimental-enable-authz=true",
 				"--authz-bootstrap-owners=alice,bob",
 			},
 		},
 		{
-			// Owners stay, so access policies can be set up before enforcement is on.
-			name:   "off keeps the owners",
-			owners: "alice",
-			want: []string{
-				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
-				"--authz-bootstrap-owners=alice",
-			},
-		},
-		{
-			name: "off with no owners",
+			name: "no owners drops the flag",
 			want: []string{"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto"},
 		},
 	} {
@@ -673,7 +669,7 @@ spec:
 			if err != nil {
 				t.Fatalf("DecodeManifestBytes() error = %v", err)
 			}
-			if err := setAPIServerAuthzArgs(objs, tc.enabled, tc.owners); err != nil {
+			if err := setAPIServerAuthzArgs(objs, tc.owners); err != nil {
 				t.Fatalf("setAPIServerAuthzArgs() error = %v", err)
 			}
 			containers, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "template", "spec", "containers")
@@ -694,18 +690,75 @@ spec:
 	if err != nil {
 		t.Fatalf("DecodeManifestBytes() error = %v", err)
 	}
-	if err := setAPIServerAuthzArgs(objs, true, "alice"); err == nil {
+	if err := setAPIServerAuthzArgs(objs, "alice"); err == nil {
 		t.Error("setAPIServerAuthzArgs() without deployment/ate-api-server error = nil, want an error")
+	}
+}
+
+func TestSetAPIServerEgressGatewayArgs(t *testing.T) {
+	const manifest = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: ate-api-server
+        args:
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+        - --egress-gateway-spiffe-id=stale
+`
+	const (
+		egress = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+		a      = "spiffe://cluster.local/ns/ate-system/sa/sts-credential-provider"
+		b      = "spiffe://cluster.local/ns/plugins/sa/other"
+	)
+	for _, tc := range []struct {
+		name   string
+		extras []string
+		want   []string
+	}{
+		{
+			name:   "gateway first, then extras without duplicates",
+			extras: []string{a, egress, b, a},
+			want: []string{
+				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
+				"--egress-gateway-spiffe-id=" + egress,
+				"--egress-gateway-spiffe-id=" + a,
+				"--egress-gateway-spiffe-id=" + b,
+			},
+		},
+		{
+			name: "no extras drops the flag",
+			want: []string{"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs, err := kube.DecodeManifestBytes([]byte(manifest))
+			if err != nil {
+				t.Fatalf("DecodeManifestBytes() error = %v", err)
+			}
+			if err := setAPIServerEgressGatewayArgs(objs, "ate-system", tc.extras); err != nil {
+				t.Fatalf("setAPIServerEgressGatewayArgs() error = %v", err)
+			}
+			containers, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "template", "spec", "containers")
+			args, _, _ := unstructured.NestedStringSlice(containers[0].(map[string]any), "args")
+			if diff := cmp.Diff(tc.want, args); diff != "" {
+				t.Errorf("ate-api-server args (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
 func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 	e := &Env{Cfg: &config.Config{
-		PostgresReadWriteRole:      config.DefaultPostgresReadWriteRole,
-		PostgresOwnerRole:          config.DefaultPostgresOwnerRole,
-		APIExperimentalEnableAuthz: true,
-		APIAuthzBootstrapOwners:    "system:serviceaccount:ate-system:ate-client",
-		SnapshotLocation:           "gs://ate-snapshots/",
+		TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
+		PostgresReadWriteRole:   config.DefaultPostgresReadWriteRole,
+		PostgresOwnerRole:       config.DefaultPostgresOwnerRole,
+		APIAuthzBootstrapOwners: "system:serviceaccount:ate-system:ate-client",
+		SnapshotLocation:        "gs://ate-snapshots/",
 	}, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
 		apiServerEnvVarsConfigMap(map[string]string{}),
@@ -718,10 +771,8 @@ func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 	if err != nil || cm == nil {
 		t.Fatalf("GetConfigMap() = %v, %v", cm, err)
 	}
-	for _, key := range []string{"ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "ATE_API_AUTHZ_BOOTSTRAP_OWNERS"} {
-		if v, ok := cm.Data[key]; ok {
-			t.Errorf("ConfigMap carries %s=%q; authorization is passed as flags", key, v)
-		}
+	if v, ok := cm.Data["ATE_API_AUTHZ_BOOTSTRAP_OWNERS"]; ok {
+		t.Errorf("ConfigMap carries ATE_API_AUTHZ_BOOTSTRAP_OWNERS=%q; the bootstrap owners are passed as a flag", v)
 	}
 }
 
@@ -730,22 +781,20 @@ func TestCreateAPIServerEnvVarsOmitsAuthz(t *testing.T) {
 func TestSharedBootstrapOwnerWarning(t *testing.T) {
 	const shared = "system:serviceaccount:ate-system:ate-client"
 	for _, tc := range []struct {
-		name    string
-		enabled bool
-		owners  string
-		warn    bool
+		name   string
+		owners string
+		warn   bool
 	}{
-		{name: "default owner", enabled: true, owners: shared, warn: true},
-		{name: "listed among others", enabled: true, owners: "alice, " + shared + " ,bob", warn: true},
-		{name: "own principals only", enabled: true, owners: "alice,bob", warn: false},
-		{name: "another namespace's client", enabled: true, owners: "system:serviceaccount:other:ate-client", warn: false},
-		{name: "prefix is not a match", enabled: true, owners: shared + "-x", warn: false},
-		{name: "authorization off", enabled: false, owners: shared, warn: false},
+		{name: "default owner", owners: shared, warn: true},
+		{name: "listed among others", owners: "alice, " + shared + " ,bob", warn: true},
+		{name: "own principals only", owners: "alice,bob", warn: false},
+		{name: "another namespace's client", owners: "system:serviceaccount:other:ate-client", warn: false},
+		{name: "prefix is not a match", owners: shared + "-x", warn: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sharedBootstrapOwnerWarning(tc.enabled, tc.owners, "ate-system")
+			got := sharedBootstrapOwnerWarning(tc.owners, "ate-system")
 			if (got != "") != tc.warn {
-				t.Fatalf("sharedBootstrapOwnerWarning(%v, %q) = %q, want warning: %v", tc.enabled, tc.owners, got, tc.warn)
+				t.Fatalf("sharedBootstrapOwnerWarning(%q) = %q, want warning: %v", tc.owners, got, tc.warn)
 			}
 			if tc.warn {
 				for _, want := range []string{shared, "--ateapi-authz-bootstrap-owners", "ATE_API_AUTHZ_BOOTSTRAP_OWNERS"} {
@@ -792,6 +841,7 @@ func TestCreateAPIServerEnvVarsSnapshotLocation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
+				TransferGSAName: testTransferGSAName, ProjectID: testProjectID,
 				PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
 				SnapshotLocation:                  tc.location,
 				PreviewGates:                      tc.gates,
@@ -820,6 +870,66 @@ func TestCreateAPIServerEnvVarsSnapshotLocation(t *testing.T) {
 				t.Errorf("ATE_API_SNAPSHOT_LOCATION = %q, want it unset", got)
 			} else if got != tc.want {
 				t.Errorf("ATE_API_SNAPSHOT_LOCATION = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The transfer account the test configs name, and the email ate-setup builds
+// from them.
+const (
+	testTransferGSAName = "ate-snapshot-transfer"
+	testProjectID       = "proj"
+	testTransferAccount = "ate-snapshot-transfer@proj.iam.gserviceaccount.com"
+)
+
+// The sidecar reads the transfer account from the ConfigMap. kind writes the
+// key empty, since its S3 backend needs no account. A GKE install without one
+// fails before writing anything.
+func TestCreateAPIServerEnvVarsTransferServiceAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     config.Config
+		want    string
+		wantErr bool
+	}{
+		{name: "GKE", cfg: config.Config{TransferGSAName: testTransferGSAName, ProjectID: testProjectID}, want: testTransferAccount},
+		{name: "kind", cfg: config.Config{Kind: true}},
+		{name: "GKE without an account", cfg: config.Config{}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.PostgresReadWriteConnectionString = "postgres://runtime@postgres/atepg"
+			cfg.SnapshotLocation = "gs://ate-snapshots/"
+			e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+				&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+			)}
+			err := e.CreateAPIServerEnvVars(t.Context())
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "SNAPSHOT_TRANSFER_GSA_NAME") {
+					t.Fatalf("CreateAPIServerEnvVars() = %v, want the missing account named", err)
+				}
+				cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(cm.Data) != 0 {
+					t.Fatalf("the ConfigMap was written before the missing account was reported: %v", cm.Data)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := cm.Data["ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT"]
+			if !ok || got != tc.want {
+				t.Errorf("ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT = %q (present %v), want %q", got, ok, tc.want)
 			}
 		})
 	}

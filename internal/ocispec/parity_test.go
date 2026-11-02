@@ -16,12 +16,15 @@ package ocispec
 
 import (
 	"encoding/json"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/sizing"
+	"google.golang.org/protobuf/proto"
 )
 
 const testActorUID = "actor_uid"
@@ -106,6 +109,43 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}
 }
 
+// Both shapers leave the process identity and cwd as Build set them.
+func TestShapers_PreserveProcess(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		shape   func(*specs.Spec) error
+	}{{
+		runtime: "gvisor",
+		shape: func(s *specs.Spec) error {
+			ShapeGVisor(s, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
+			return nil
+		},
+	}, {
+		runtime: "microvm",
+		shape: func(s *specs.Spec) error {
+			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"})
+		},
+	}} {
+		t.Run(tc.runtime, func(t *testing.T) {
+			opts := parityOptions
+			opts.Container = proto.Clone(parityOptions.Container).(*ateworkerpb.Container)
+			opts.Container.ContainerSpec.User = &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65534, AdditionalGids: []uint32{44}}
+			opts.Container.ContainerSpec.Cwd = "/work"
+			spec := Build(opts)
+			if err := tc.shape(spec); err != nil {
+				t.Fatalf("shaping the spec: %v", err)
+			}
+			want := specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}
+			if !reflect.DeepEqual(spec.Process.User, want) {
+				t.Errorf("Process.User = %+v after shaping, want %+v", spec.Process.User, want)
+			}
+			if spec.Process.Cwd != "/work" {
+				t.Errorf("Process.Cwd = %q after shaping, want /work", spec.Process.Cwd)
+			}
+		})
+	}
+}
+
 // ShapeMicroVM rewrites bind sources to their guest share paths.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)
@@ -140,15 +180,25 @@ func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 // Shaping a spec twice does not accumulate mounts.
 func TestShapeGVisor_Idempotent(t *testing.T) {
 	spec := Build(parityOptions)
-	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: PauseContainer, DurableVolumes: []string{"data"}, Size: paritySize}
+	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: "app", Size: paritySize}
 	ShapeGVisor(spec, o)
 	first := len(spec.Mounts)
 	ShapeGVisor(spec, o)
 	if len(spec.Mounts) != first {
 		t.Errorf("mount count = %d after a second shaping, want %d", len(spec.Mounts), first)
 	}
+}
+
+// The sandbox spec has no process, rootfs, or mounts, and declares the
+// durable-dir mount hints.
+func TestShapeGVisor_Sandbox(t *testing.T) {
+	spec := BuildSandbox(testActorUID)
+	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: SandboxID, DurableVolumes: []string{"data"}, Size: paritySize})
+	if spec.Process != nil || spec.Root != nil || spec.Mounts != nil {
+		t.Errorf("sandbox spec has process %v, root %v, mounts %v; want none", spec.Process, spec.Root, spec.Mounts)
+	}
 	if got := spec.Annotations["io.kubernetes.cri.container-type"]; got != "sandbox" {
-		t.Errorf("pause container-type = %q, want sandbox", got)
+		t.Errorf("sandbox container-type = %q, want sandbox", got)
 	}
 	if got := spec.Annotations["dev.gvisor.spec.mount.data.type"]; got != "tmpfs" {
 		t.Errorf("durable-dir mount type annotation = %q, want tmpfs", got)
@@ -163,11 +213,25 @@ func TestShapeGVisor_Idempotent(t *testing.T) {
 
 // gVisor sizes the container's cgroup leaf from the actor-level limits: one
 // sentry backs every container, so the sandbox cgroup is the only one that
-// binds.
+// binds. The sandbox spec keeps its limits, cgroup, and namespaces.
 func TestShapeGVisor_AppliesTheActorSize(t *testing.T) {
-	spec := Build(parityOptions)
-	ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
-	if got := *spec.Linux.Resources.Memory.Limit; got != paritySize.MemoryBytes {
-		t.Errorf("memory limit = %d, want %d", got, paritySize.MemoryBytes)
+	for _, name := range []string{"app", SandboxID} {
+		spec := Build(parityOptions)
+		if name == SandboxID {
+			spec = BuildSandbox(testActorUID)
+		}
+		ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: name, Size: paritySize})
+		if got := *spec.Linux.Resources.Memory.Limit; got != paritySize.MemoryBytes {
+			t.Errorf("%s memory limit = %d, want %d", name, got, paritySize.MemoryBytes)
+		}
+		if want := "/" + GVisorCgroupLeaf(testActorUID, name); spec.Linux.CgroupsPath != want {
+			t.Errorf("%s cgroupsPath = %q, want %q", name, spec.Linux.CgroupsPath, want)
+		}
+		if !slices.ContainsFunc(spec.Linux.Namespaces, func(ns specs.LinuxNamespace) bool { return ns.Type == "network" && ns.Path != "" }) {
+			t.Errorf("%s namespaces = %v, want the actor's network namespace", name, spec.Linux.Namespaces)
+		}
+		if spec.Hostname == "" {
+			t.Errorf("%s hostname is empty", name)
+		}
 	}
 }

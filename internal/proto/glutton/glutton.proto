@@ -66,6 +66,16 @@ service Glutton {
   // load; calling again replaces it, and num_cores=0 stops it. See
   // UseCPURequest for the (goroutines x duty cycle) shape.
   rpc UseCPU(UseCPURequest) returns (UseCPUResponse) {}
+
+  // Runs a script inside the glutton as one request, so a caller can act
+  // out a whole on-sandbox activity (a build, a test run, a file churn)
+  // without a network round trip per operation. A script is a tree: a
+  // Block runs its steps in order and may loop them for a wall-clock
+  // budget; an Operation runs its requests at the same time. The request
+  // holds the connection open until the script finishes, and the response
+  // mirrors the tree with summed stats at every node; the requests' own
+  // results are not returned.
+  rpc RunScript(RunScriptRequest) returns (RunScriptResponse) {}
 }
 
 enum WriteMode {
@@ -243,4 +253,106 @@ message UseCPUResponse {
   // The number of goroutines actually spun. Equals the request's
   // num_cores unless it was capped at GOMAXPROCS.
   int32 num_cores = 1;
+}
+
+// A Block is a list of steps run in order. With loop_duration_ms set, the
+// block cycles through its steps until the budget elapses. A budget is
+// checked between passes: the pass in progress finishes, so a loop
+// overruns its budget by at most one pass and no request is cut short.
+// A nested block stops cycling once any ancestor's budget has elapsed,
+// the same way.
+message Block {
+  // At least one step is required.
+  repeated Step steps = 1;
+
+  // Wall-clock budget to cycle through the steps for, in milliseconds;
+  // the pass under way when it elapses finishes. Zero runs the steps once.
+  int64 loop_duration_ms = 2;
+}
+
+// A Step is either a nested Block or an Operation.
+message Step {
+  oneof kind {
+    Block block = 1;
+    Operation operation = 2;
+  }
+}
+
+// An Operation runs its requests at the same time and waits for all of
+// them. The first request to fail cancels the rest. RAM requests take
+// turns on the glutton's single RAM lock, so only CPU, disk, and sleep
+// requests overlap in practice.
+message Operation {
+  // At least one request is required.
+  repeated Request requests = 1;
+}
+
+// A Request is one of the service's work requests. UseCPU and OpenFD are
+// left out because they set a background load that outlives the script
+// (BurnCPU is the CPU spike), and Gossip because it starts a loop.
+message Request {
+  oneof kind {
+    WriteRAMRequest write_ram = 1;
+    ReadRAMRequest read_ram = 2;
+    WriteDiskRequest write_disk = 3;
+    ReadDiskRequest read_disk = 4;
+    BurnCPURequest burn_cpu = 5;
+    IngestRequest ingest = 6;
+    SleepRequest sleep = 7;
+  }
+}
+
+message SleepRequest {
+  // Wall-clock time to idle, in milliseconds. The glutton stays awake and
+  // does nothing, which paces the requests around it.
+  int64 duration_ms = 1;
+}
+
+message RunScriptRequest {
+  Block script = 1;
+}
+
+message RunScriptResponse {
+  // The script's root block.
+  StepResult result = 1;
+}
+
+// A StepResult mirrors one node of the script: a block, an operation, or
+// a request. Its children are in the request's order: a block's steps or
+// an operation's requests; a request has none. A node inside a looped
+// block is entered once per pass, and its stats sum over every entry, so
+// the response is the size of the script however long it ran.
+message StepResult {
+  Stats stats = 1;
+  repeated StepResult children = 2;
+}
+
+// Stats are a node's vital signs. Every field but elapsed_ms is the sum
+// over the node's children and entries, so the root carries the totals.
+message Stats {
+  // Wall clock spent in this node, summed over its entries. A block's is
+  // the sum of its steps'; an operation's is its longest request's, since
+  // they overlap; so a parent's elapsed is not the sum of its children's.
+  int64 elapsed_ms = 1;
+
+  // Times this node was entered: a looped block's pass count, and for
+  // every other node the entries its enclosing loops gave it.
+  int64 passes = 2;
+
+  // Requests run beneath this node.
+  int64 requests_run = 3;
+
+  // Bytes WriteDisk generated and Ingest received, and bytes ReadDisk read.
+  int64 disk_bytes_written = 4;
+  int64 disk_bytes_read = 5;
+
+  // Bytes WriteRAM was asked to write, and bytes ReadRAM walked.
+  int64 ram_bytes_written = 6;
+  int64 ram_bytes_read = 7;
+
+  // Hash iterations BurnCPU completed.
+  int64 burn_iterations = 8;
+
+  // Milliseconds slept.
+  int64 slept_ms = 9;
 }

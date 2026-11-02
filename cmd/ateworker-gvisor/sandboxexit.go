@@ -56,10 +56,10 @@ func openSandboxProcess(actorDirs *ateworkerpb.ActorDirs) (*sandboxProcess, erro
 	return &sandboxProcess{pid: pid, pidfd: fd}, nil
 }
 
-// sandboxPid reads the sandbox's pid from the pause container's pid file,
-// which runsc writes for the sandbox.
+// sandboxPid reads the sandbox's pid from the pid file runsc writes for the
+// sandbox.
 func sandboxPid(actorDirs *ateworkerpb.ActorDirs) (int, error) {
-	b, err := os.ReadFile(pidFilePath(actorDirs, ocispec.PauseContainer))
+	b, err := os.ReadFile(pidFilePath(actorDirs, ocispec.SandboxID))
 	if err != nil {
 		return 0, err
 	}

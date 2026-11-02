@@ -27,7 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/pkg/sandboxclass"
 )
 
@@ -97,7 +97,7 @@ const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 // actor identity, which no metric may carry.
 const ActorStateKey = attribute.Key("ate.actor.state")
 
-// Values for ActorStateKey, mirroring ateapipb.ActorState with the
+// Values for ActorStateKey, mirroring ateapi.ActorState with the
 // ACTOR_STATE_ prefix dropped so the two cannot fork. ActorStateDeleted is the
 // exception and has no enum counterpart: the record is gone, so no stored state
 // can stand for it.
@@ -115,21 +115,21 @@ const (
 
 // ActorStateValue maps the committed state onto its label value, so a producer
 // reports the state the store holds rather than one it names by hand.
-func ActorStateValue(state ateapipb.ActorState) string {
+func ActorStateValue(state ateapi.ActorState) string {
 	switch state {
-	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+	case ateapi.ActorState_ACTOR_STATE_RESUMING:
 		return ActorStateResuming
-	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+	case ateapi.ActorState_ACTOR_STATE_RUNNING:
 		return ActorStateRunning
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 		return ActorStateSuspending
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 		return ActorStateSuspended
-	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+	case ateapi.ActorState_ACTOR_STATE_CRASHED:
 		return ActorStateCrashed
-	case ateapipb.ActorState_ACTOR_STATE_DELETING:
+	case ateapi.ActorState_ACTOR_STATE_DELETING:
 		return ActorStateDeleting
-	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
+	case ateapi.ActorState_ACTOR_STATE_REVERTING:
 		return ActorStateReverting
 	default:
 		return ActorStateUnknown
@@ -262,8 +262,11 @@ const (
 // reports the same condition. It is a capacity signal, not a defect. A request
 // that the router sheds from a full parking lot is RouterOutcomeNoCapacity when
 // its resume failed with ResourceExhausted. A 503 without a gRPC cause, such as
-// a denied egress request, a failed policy lookup, or a shed request whose
-// resume failed for a different reason, is RouterOutcomeUnavailable.
+// a failed policy lookup or a shed request whose resume failed for a different
+// reason, is RouterOutcomeUnavailable. RouterOutcomeDenied is a request the
+// router refused by policy (a 403 or PermissionDenied), such as an egress
+// request outside the actor's egress policy. It is a policy decision, not a
+// defect.
 const (
 	RouterOutcomeOK                 = "ok"
 	RouterOutcomeCancelled          = "cancelled"
@@ -274,6 +277,7 @@ const (
 	RouterOutcomeNotFound           = "not_found"
 	RouterOutcomeUnavailable        = "unavailable"
 	RouterOutcomeRateLimited        = "rate_limited"
+	RouterOutcomeDenied             = "denied"
 	RouterOutcomeResumeError        = "resume_error"
 )
 
@@ -449,7 +453,7 @@ func ActorRefAttributes(actorRef resources.ActorRef) []attribute.KeyValue {
 }
 
 // ActorAttributes is nil-safe; a nil Actor yields zero-valued attributes.
-func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
+func ActorAttributes(a *ateapi.Actor) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
@@ -507,7 +511,7 @@ func ActorRefLogAttrs(actorRef resources.ActorRef) []slog.Attr {
 // The worker-pool pair is omitted while the actor holds no assignment, so a
 // crash before the actor reaches a worker reports no pool rather than an
 // empty-string one.
-func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName string) []attribute.KeyValue {
+func ActorMetricAttributes(a *ateapi.Actor, sandboxClass, operationName string) []attribute.KeyValue {
 	if a == nil {
 		return nil
 	}

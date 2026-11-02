@@ -437,7 +437,7 @@ func TestValidateContainer(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
 	}, {
 		name: "invalid name: the sandbox's own container",
-		obj:  valid(func(c *ateworkerpb.Container) { c.Name = "_pause" }),
+		obj:  valid(func(c *ateworkerpb.Container) { c.Name = "_sandbox" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "too many external mounts",

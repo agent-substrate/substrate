@@ -18,8 +18,8 @@ import (
 	"net/http"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,7 +27,7 @@ import (
 // and passed to the entry's Init func.
 type Config struct {
 	// APIStub is the shared gRPC client to ateapi (one connection, all goroutines).
-	APIStub ateapipb.ControlClient
+	APIStub ateapi.ControlClient
 	// HTTPClient is the shared HTTP client for atenet pings.
 	HTTPClient *http.Client
 	// RouterURL is the base URL of the atenet router (no trailing slash).

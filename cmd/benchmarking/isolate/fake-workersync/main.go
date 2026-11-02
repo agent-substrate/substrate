@@ -45,16 +45,16 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	ateinformers "go.ate.dev/substrate/pkg/client/informers/externalversions"
-	atelisters "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
+	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -134,7 +134,7 @@ func main() {
 	defer relay.Close()
 
 	factory := ateinformers.NewSharedInformerFactory(ac, 0)
-	poolInformer := factory.Api().V1alpha1().WorkerPools()
+	poolInformer := factory.Ate().V1().WorkerPools()
 	changed := make(chan struct{}, 1)
 	notify := func(any) {
 		select {
@@ -243,7 +243,7 @@ type kubeCluster struct {
 	seen map[string]time.Time
 }
 
-func (k *kubeCluster) Pools() ([]*atev1alpha1.WorkerPool, error) {
+func (k *kubeCluster) Pools() ([]*atev1.WorkerPool, error) {
 	return k.pools.List(labels.Everything())
 }
 
@@ -318,7 +318,7 @@ func (k *kubeCluster) Relays(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-func (k *kubeCluster) UpdateStatus(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
-	_, err := k.ac.ApiV1alpha1().WorkerPools(wp.Namespace).UpdateStatus(ctx, wp, metav1.UpdateOptions{})
+func (k *kubeCluster) UpdateStatus(ctx context.Context, wp *atev1.WorkerPool) error {
+	_, err := k.ac.AteV1().WorkerPools(wp.Namespace).UpdateStatus(ctx, wp, metav1.UpdateOptions{})
 	return err
 }

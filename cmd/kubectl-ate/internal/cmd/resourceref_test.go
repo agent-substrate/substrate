@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -27,20 +27,20 @@ func TestParseAtespacedName(t *testing.T) {
 		name            string
 		value           string
 		defaultAtespace string
-		want            *ateapipb.ObjectRef
+		want            *ateapi.ObjectRef
 		wantErr         bool
 	}{
 		{
 			name:            "qualified reference",
 			value:           "team-a/before-upgrade",
 			defaultAtespace: "default-atespace",
-			want:            &ateapipb.ObjectRef{Atespace: "team-a", Name: "before-upgrade"},
+			want:            &ateapi.ObjectRef{Atespace: "team-a", Name: "before-upgrade"},
 		},
 		{
 			name:            "bare name uses the default atespace",
 			value:           "before-upgrade",
 			defaultAtespace: "default-atespace",
-			want:            &ateapipb.ObjectRef{Atespace: "default-atespace", Name: "before-upgrade"},
+			want:            &ateapi.ObjectRef{Atespace: "default-atespace", Name: "before-upgrade"},
 		},
 		{
 			name:            "bare name with no default atespace",

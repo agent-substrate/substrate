@@ -17,6 +17,7 @@
 package ocispec
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -77,19 +78,42 @@ func ociResources(r *ateworkerpb.ResourceRequirements) *specs.LinuxResources {
 	return out
 }
 
+// BuildSandbox returns the OCI spec of a sandbox with no root container: the
+// hostname and namespaces, and no process, rootfs, or mounts.
+func BuildSandbox(actorUID string) *specs.Spec {
+	return &specs.Spec{
+		Hostname: Hostname,
+		Linux:    &specs.Linux{Namespaces: namespaces(actorUID)},
+	}
+}
+
+// namespaces returns the namespaces of an actor's sandbox and containers. The
+// network namespace is the actor's.
+func namespaces(actorUID string) []specs.LinuxNamespace {
+	return []specs.LinuxNamespace{
+		{Type: "pid"},
+		{Type: "network", Path: nodepath.ActorNetNSPath(actorUID)},
+		{Type: "ipc"},
+		{Type: "uts"},
+		{Type: "mount"},
+	}
+}
+
+// processUser maps the resolved identity onto the OCI process. nil is root.
+func processUser(u *ateworkerpb.ProcessUser) specs.User {
+	return specs.User{UID: u.GetUid(), GID: u.GetGid(), AdditionalGids: u.GetAdditionalGids()}
+}
+
 // Build returns a runtime-neutral OCI spec for an actor container.
 func Build(o Options) *specs.Spec {
 	container := o.Container
 	containerSpec := container.GetContainerSpec()
 	spec := &specs.Spec{
 		Process: &specs.Process{
-			User: specs.User{
-				UID: 0,
-				GID: 0,
-			},
+			User: processUser(containerSpec.GetUser()),
 			Args: containerSpec.GetArgs(),
 			Env:  containerSpec.GetEnv(),
-			Cwd:  "/",
+			Cwd:  cmp.Or(containerSpec.GetCwd(), "/"),
 			Capabilities: &specs.LinuxCapabilities{
 				Bounding:  containerSpec.GetCapabilities(),
 				Effective: containerSpec.GetCapabilities(),
@@ -138,25 +162,8 @@ func Build(o Options) *specs.Spec {
 			},
 		},
 		Linux: &specs.Linux{
-			Namespaces: []specs.LinuxNamespace{
-				{
-					Type: "pid",
-				},
-				{
-					Type: "network",
-					Path: nodepath.ActorNetNSPath(o.ActorUID),
-				},
-				{
-					Type: "ipc",
-				},
-				{
-					Type: "uts",
-				},
-				{
-					Type: "mount",
-				},
-			},
-			Resources: ociResources(containerSpec.GetResources()),
+			Namespaces: namespaces(o.ActorUID),
+			Resources:  ociResources(containerSpec.GetResources()),
 		},
 	}
 

@@ -25,9 +25,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -39,15 +39,15 @@ import (
 func TestEgressPolicyFromManifest(t *testing.T) {
 	t.Parallel()
 
-	fullMetadata := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}
-	httpRules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}}
-	tlsRules := []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
-	anyRules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}}}}
+	fullMetadata := &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default"}
+	httpRules := []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}}}
+	tlsRules := []*ateapi.EgressRule{{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"*.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}}}
+	anyRules := []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"*"}}}}
 
 	tests := []struct {
 		name     string
 		manifest string
-		want     *ateapipb.EgressPolicy
+		want     *ateapi.EgressPolicy
 		wantErr  bool
 		// wantErrContains is checked only for errors this package produces.
 		wantErrContains string
@@ -62,7 +62,7 @@ rules:
     hostnames:
     - api.example.com
 `,
-			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: httpRules},
+			want: &ateapi.EgressPolicy{Metadata: fullMetadata, Rules: httpRules},
 		},
 		{
 			name: "snake case tls_passthrough",
@@ -70,7 +70,7 @@ rules:
 rules:
 - tls_passthrough: {hostnames: ["*.example.com"], ports: {numbers: [443]}}
 `,
-			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
+			want: &ateapi.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
 		{
 			name: "star pattern",
@@ -78,14 +78,14 @@ rules:
 rules:
 - http: {hostnames: ["*"]}
 `,
-			want: &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: anyRules},
+			want: &ateapi.EgressPolicy{Metadata: fullMetadata, Rules: anyRules},
 		},
 		{
 			name: "metadata omitted is left nil",
 			manifest: `rules:
 - http: {hostnames: [api.example.com]}
 `,
-			want: &ateapipb.EgressPolicy{Rules: httpRules},
+			want: &ateapi.EgressPolicy{Rules: httpRules},
 		},
 		{
 			name: "uid version and timestamps preserved",
@@ -98,8 +98,8 @@ rules:
 rules:
 - http: {hostnames: [api.example.com]}
 `,
-			want: &ateapipb.EgressPolicy{
-				Metadata: &ateapipb.ResourceMetadata{
+			want: &ateapi.EgressPolicy{
+				Metadata: &ateapi.ResourceMetadata{
 					Atespace:   "team-a",
 					Name:       "default",
 					Uid:        "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
@@ -112,14 +112,14 @@ rules:
 		{
 			name:     "json input",
 			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"tls_passthrough": {"hostnames": ["*.example.com"], "ports": {"numbers": [443]}}}]}`,
-			want:     &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
+			want:     &ateapi.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
 		{name: "empty", manifest: "", wantErr: true, wantErrContains: "manifest is empty"},
 		{name: "unknown field", manifest: "rulez: []", wantErr: true, wantErrContains: "invalid EgressPolicy"},
 		{name: "rules not a list", manifest: "rules: {http: {}}", wantErr: true},
 		{
 			name: "crd shape",
-			manifest: `apiVersion: ate.dev/v1alpha1
+			manifest: `apiVersion: ate.dev/v1
 kind: EgressPolicy
 metadata: {name: default}
 `,
@@ -132,7 +132,7 @@ metadata: {name: default}
 rules:
 - http: {hostnames: ["*"]}
 `,
-			want: &ateapipb.EgressPolicy{Rules: anyRules},
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "document end marker",
@@ -140,7 +140,7 @@ rules:
 - http: {hostnames: ["*"]}
 ...
 `,
-			want: &ateapipb.EgressPolicy{Rules: anyRules},
+			want: &ateapi.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "trailing document separator",
@@ -284,49 +284,49 @@ rules:
 func TestOverrideEgressPolicyMetadata(t *testing.T) {
 	t.Parallel()
 
-	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}}}}
-	filled := &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}, Rules: rules}
-	pinned := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d", Version: 2}
+	rules := []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"*"}}}}
+	filled := &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default"}, Rules: rules}
+	pinned := &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d", Version: 2}
 
 	tests := []struct {
 		name            string
-		policy          *ateapipb.EgressPolicy
-		want            *ateapipb.EgressPolicy
+		policy          *ateapi.EgressPolicy
+		want            *ateapi.EgressPolicy
 		wantErrContains string
 	}{
 		{
 			name:   "metadata omitted is filled",
-			policy: &ateapipb.EgressPolicy{Rules: rules},
+			policy: &ateapi.EgressPolicy{Rules: rules},
 			want:   filled,
 		},
 		{
 			name:   "empty metadata object is filled",
-			policy: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{}, Rules: rules},
+			policy: &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{}, Rules: rules},
 			want:   filled,
 		},
 		{
 			name:   "name omitted is filled",
-			policy: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a"}, Rules: rules},
+			policy: &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a"}, Rules: rules},
 			want:   filled,
 		},
 		{
 			name:   "atespace omitted is filled",
-			policy: &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}, Rules: rules},
+			policy: &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default"}, Rules: rules},
 			want:   filled,
 		},
 		{
 			name:   "matching metadata is kept",
-			policy: &ateapipb.EgressPolicy{Metadata: proto.Clone(pinned).(*ateapipb.ResourceMetadata), Rules: rules},
-			want:   &ateapipb.EgressPolicy{Metadata: pinned, Rules: rules},
+			policy: &ateapi.EgressPolicy{Metadata: proto.Clone(pinned).(*ateapi.ResourceMetadata), Rules: rules},
+			want:   &ateapi.EgressPolicy{Metadata: pinned, Rules: rules},
 		},
 		{
 			name:            "atespace mismatch",
-			policy:          &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "dev"}, Rules: rules},
+			policy:          &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Atespace: "dev"}, Rules: rules},
 			wantErrContains: `metadata.atespace "dev" does not match --atespace "team-a"`,
 		},
 		{
 			name:            "name mismatch",
-			policy:          &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "other"}, Rules: rules},
+			policy:          &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Name: "other"}, Rules: rules},
 			wantErrContains: `metadata.name "other" must be "default"`,
 		},
 	}
@@ -356,8 +356,8 @@ func TestOverrideEgressPolicyMetadata(t *testing.T) {
 func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 	t.Parallel()
 
-	policy := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	policy := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace:   "team-a",
 			Name:       "default",
 			Uid:        "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
@@ -365,12 +365,12 @@ func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 			CreateTime: timestamppb.New(time.Date(2026, 1, 1, 11, 55, 0, 0, time.UTC)),
 			UpdateTime: timestamppb.New(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
 		},
-		Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HttpRule{Hostnames: []string{"*.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80, 8080}}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{
-				ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"}},
+		Rules: []*ateapi.EgressRule{
+			{Http: &ateapi.HttpRule{Hostnames: []string{"*.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{80, 8080}}}},
+			{Https: &ateapi.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapi.HttpRuleEffects{
+				ReplaceHeaders: []*ateapi.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"}},
 			}}},
-			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapi.Ports{All: &ateapi.AllPorts{}}}},
 		},
 	}
 
@@ -422,22 +422,22 @@ func TestEgressPolicyCommandArgs(t *testing.T) {
 // NotFound, and answers with a configured error. actorReq stays nil unless the
 // runner reads the actor.
 type fakeActorReader struct {
-	actorReq *ateapipb.GetActorRequest
+	actorReq *ateapi.GetActorRequest
 	actorErr error
 }
 
-func (f *fakeActorReader) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+func (f *fakeActorReader) GetActor(ctx context.Context, req *ateapi.GetActorRequest, opts ...grpc.CallOption) (*ateapi.Actor, error) {
 	f.actorReq = req
 	if f.actorErr != nil {
 		return nil, f.actorErr
 	}
-	return &ateapipb.Actor{}, nil
+	return &ateapi.Actor{}, nil
 }
 
 func TestRequireActor(t *testing.T) {
 	t.Parallel()
 
-	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
 	tests := []struct {
 		name     string
 		actorErr error
@@ -469,7 +469,7 @@ func TestRequireActor(t *testing.T) {
 			if gotErr != test.wantErr {
 				t.Errorf("requireActor() error = %q, want %q", gotErr, test.wantErr)
 			}
-			if diff := cmp.Diff(&ateapipb.GetActorRequest{Actor: actor}, getter.actorReq, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(&ateapi.GetActorRequest{Actor: actor}, getter.actorReq, protocmp.Transform()); diff != "" {
 				t.Errorf("actor request mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -480,12 +480,12 @@ func TestRequireActor(t *testing.T) {
 // configured policy or error.
 type fakeEgressPolicyGetter struct {
 	fakeActorReader
-	req    *ateapipb.GetActorEgressPolicyRequest
-	policy *ateapipb.EgressPolicy
+	req    *ateapi.GetActorEgressPolicyRequest
+	policy *ateapi.EgressPolicy
 	err    error
 }
 
-func (f *fakeEgressPolicyGetter) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (f *fakeEgressPolicyGetter) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	f.req = req
 	if f.err != nil {
 		return nil, f.err
@@ -497,24 +497,24 @@ func TestGetEgressPolicyRunner_Run(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinTime(t, now)
 
-	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
-	policy := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
+	policy := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace:   "team-a",
 			Name:       "default",
 			Uid:        "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
 			Version:    1,
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)), // table row prints AGE 5m
 		},
-		Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}},
+		Rules: []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}}},
 	}
 
 	tests := []struct {
 		name         string
 		outputFmt    string
 		getter       *fakeEgressPolicyGetter
-		wantReq      *ateapipb.GetActorEgressPolicyRequest
-		wantActorReq *ateapipb.GetActorRequest
+		wantReq      *ateapi.GetActorEgressPolicyRequest
+		wantActorReq *ateapi.GetActorRequest
 		wantOut      string
 		wantErrOut   string
 		wantErr      string
@@ -523,7 +523,7 @@ func TestGetEgressPolicyRunner_Run(t *testing.T) {
 			name:      "table by default",
 			outputFmt: "table",
 			getter:    &fakeEgressPolicyGetter{policy: policy},
-			wantReq:   &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
+			wantReq:   &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
 			wantOut: `ATESPACE   ACTOR   RULES   VERSION   AGE
 team-a     c1      1       1         5m
 `,
@@ -532,7 +532,7 @@ team-a     c1      1       1         5m
 			name:      "yaml",
 			outputFmt: "yaml",
 			getter:    &fakeEgressPolicyGetter{policy: policy},
-			wantReq:   &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
+			wantReq:   &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
 			wantOut: `metadata:
   atespace: team-a
   createTime: "2026-01-01T11:55:00Z"
@@ -549,31 +549,31 @@ rules:
 			name:         "no policy on an existing actor writes a note and succeeds",
 			outputFmt:    "yaml",
 			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found")},
-			wantReq:      &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
-			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
+			wantReq:      &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
+			wantActorReq: &ateapi.GetActorRequest{Actor: actor},
 			wantErrOut:   "actor \"c1\" in atespace \"team-a\" has no egress policy\n",
 		},
 		{
 			name:         "missing actor fails",
 			outputFmt:    "yaml",
 			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")}},
-			wantReq:      &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
-			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
+			wantReq:      &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
+			wantActorReq: &ateapi.GetActorRequest{Actor: actor},
 			wantErr:      `actor "c1" in atespace "team-a" not found`,
 		},
 		{
 			name:         "actor lookup error wraps",
 			outputFmt:    "yaml",
 			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.PermissionDenied, "denied")}},
-			wantReq:      &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
-			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
+			wantReq:      &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
+			wantActorReq: &ateapi.GetActorRequest{Actor: actor},
 			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
 		},
 		{
 			name:      "other error wraps",
 			outputFmt: "table",
 			getter:    &fakeEgressPolicyGetter{err: status.Error(codes.Unavailable, "api-server down")},
-			wantReq:   &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
+			wantReq:   &ateapi.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName},
 			wantErr:   `failed to get egress policy for actor "c1" in atespace "team-a": rpc error: code = Unavailable desc = api-server down`,
 		},
 	}
@@ -615,12 +615,12 @@ rules:
 // fakeEgressPolicyCreator records the request it received and answers with a
 // configured policy or error.
 type fakeEgressPolicyCreator struct {
-	req    *ateapipb.CreateActorEgressPolicyRequest
-	policy *ateapipb.EgressPolicy
+	req    *ateapi.CreateActorEgressPolicyRequest
+	policy *ateapi.EgressPolicy
 	err    error
 }
 
-func (f *fakeEgressPolicyCreator) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (f *fakeEgressPolicyCreator) CreateActorEgressPolicy(ctx context.Context, req *ateapi.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	f.req = req
 	if f.err != nil {
 		return nil, f.err
@@ -632,16 +632,16 @@ func TestCreateEgressPolicyRunner_Run(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinTime(t, now)
 
-	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
-	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}}
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
+	rules := []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}}}
 	// A manifest cloned from another actor still carries that actor's
 	// server-managed fields; the CLI sends them as is and the server scrubs them.
-	manifest := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "old-uid", Version: 7},
+	manifest := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "old-uid", Version: 7},
 		Rules:    rules,
 	}
-	created := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	created := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace:   "team-a",
 			Name:       "default",
 			Uid:        "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
@@ -650,7 +650,7 @@ func TestCreateEgressPolicyRunner_Run(t *testing.T) {
 		},
 		Rules: rules,
 	}
-	wantReq := &ateapipb.CreateActorEgressPolicyRequest{Actor: actor, EgressPolicy: manifest}
+	wantReq := &ateapi.CreateActorEgressPolicyRequest{Actor: actor, EgressPolicy: manifest}
 
 	tests := []struct {
 		name      string
@@ -729,12 +729,12 @@ rules:
 // configured policy or error.
 type fakeEgressPolicyUpdater struct {
 	fakeActorReader
-	req    *ateapipb.UpdateActorEgressPolicyRequest
-	policy *ateapipb.EgressPolicy
+	req    *ateapi.UpdateActorEgressPolicyRequest
+	policy *ateapi.EgressPolicy
 	err    error
 }
 
-func (f *fakeEgressPolicyUpdater) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (f *fakeEgressPolicyUpdater) UpdateActorEgressPolicy(ctx context.Context, req *ateapi.UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	f.req = req
 	if f.err != nil {
 		return nil, f.err
@@ -746,16 +746,16 @@ func TestUpdateEgressPolicyRunner_Run(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinTime(t, now)
 
-	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
 	const uid = "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d"
-	rules := []*ateapipb.EgressRule{
-		{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
-		{Https: &ateapipb.HttpsRule{Hostnames: []string{"www.example.com"}}},
+	rules := []*ateapi.EgressRule{
+		{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}},
+		{Https: &ateapi.HttpsRule{Hostnames: []string{"www.example.com"}}},
 	}
 	// The manifest is what `get -o yaml` printed, edited: it still carries the
 	// uid, version, and timestamps of the policy being replaced.
-	manifest := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	manifest := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace:   "team-a",
 			Name:       "default",
 			Uid:        uid,
@@ -764,8 +764,8 @@ func TestUpdateEgressPolicyRunner_Run(t *testing.T) {
 		},
 		Rules: rules,
 	}
-	updated := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	updated := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace:   "team-a",
 			Name:       "default",
 			Uid:        uid,
@@ -775,13 +775,13 @@ func TestUpdateEgressPolicyRunner_Run(t *testing.T) {
 		},
 		Rules: rules,
 	}
-	wantReq := &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: manifest}
+	wantReq := &ateapi.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: manifest}
 
 	tests := []struct {
 		name         string
 		outputFmt    string
 		updater      *fakeEgressPolicyUpdater
-		wantActorReq *ateapipb.GetActorRequest
+		wantActorReq *ateapi.GetActorRequest
 		wantOut      string
 		wantErr      string
 	}{
@@ -829,21 +829,21 @@ rules:
 			name:         "missing actor names the actor",
 			outputFmt:    "table",
 			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")}},
-			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
+			wantActorReq: &ateapi.GetActorRequest{Actor: actor},
 			wantErr:      `actor "c1" in atespace "team-a" not found`,
 		},
 		{
 			name:         "existing actor with no policy points at create",
 			outputFmt:    "table",
 			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found")},
-			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
+			wantActorReq: &ateapi.GetActorRequest{Actor: actor},
 			wantErr:      `actor "c1" in atespace "team-a" has no egress policy to update; create it with "kubectl ate create egress-policy"`,
 		},
 		{
 			name:         "actor lookup error wraps",
 			outputFmt:    "table",
 			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.PermissionDenied, "denied")}},
-			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
+			wantActorReq: &ateapi.GetActorRequest{Actor: actor},
 			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
 		},
 		{
@@ -888,24 +888,24 @@ rules:
 func TestRequireEgressPolicyPreconditions(t *testing.T) {
 	t.Parallel()
 
-	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
 	const wantErr = `manifest for actor "c1" in atespace "team-a" lacks the metadata.uid and metadata.version preconditions that "get egress-policy -o yaml" prints`
 
 	tests := []struct {
 		name     string
-		metadata *ateapipb.ResourceMetadata
+		metadata *ateapi.ResourceMetadata
 		wantErr  string
 	}{
-		{name: "uid and version present", metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "u", Version: 1}},
-		{name: "uid missing", metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1}, wantErr: wantErr},
-		{name: "version missing", metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "u"}, wantErr: wantErr},
-		{name: "both missing", metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}, wantErr: wantErr},
+		{name: "uid and version present", metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "u", Version: 1}},
+		{name: "uid missing", metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1}, wantErr: wantErr},
+		{name: "version missing", metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "u"}, wantErr: wantErr},
+		{name: "both missing", metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default"}, wantErr: wantErr},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := requireEgressPolicyPreconditions(&ateapipb.EgressPolicy{Metadata: test.metadata}, actor)
+			err := requireEgressPolicyPreconditions(&ateapi.EgressPolicy{Metadata: test.metadata}, actor)
 			gotErr := ""
 			if err != nil {
 				gotErr = err.Error()
@@ -923,13 +923,13 @@ func TestDeleteOptionsFromFlags(t *testing.T) {
 	tests := []struct {
 		name        string
 		flags       deleteGuardFlags
-		wantOptions *ateapipb.DeleteOptions
+		wantOptions *ateapi.DeleteOptions
 		wantErr     string
 	}{
 		{name: "neither set leaves options nil"},
-		{name: "uid alone", flags: deleteGuardFlags{uidSet: true, uid: "u"}, wantOptions: &ateapipb.DeleteOptions{Uid: "u"}},
-		{name: "version alone", flags: deleteGuardFlags{versionSet: true, version: 3}, wantOptions: &ateapipb.DeleteOptions{Version: 3}},
-		{name: "uid and version", flags: deleteGuardFlags{uidSet: true, uid: "u", versionSet: true, version: 3}, wantOptions: &ateapipb.DeleteOptions{Uid: "u", Version: 3}},
+		{name: "uid alone", flags: deleteGuardFlags{uidSet: true, uid: "u"}, wantOptions: &ateapi.DeleteOptions{Uid: "u"}},
+		{name: "version alone", flags: deleteGuardFlags{versionSet: true, version: 3}, wantOptions: &ateapi.DeleteOptions{Version: 3}},
+		{name: "uid and version", flags: deleteGuardFlags{uidSet: true, uid: "u", versionSet: true, version: 3}, wantOptions: &ateapi.DeleteOptions{Uid: "u", Version: 3}},
 		{name: "empty uid rejected", flags: deleteGuardFlags{uidSet: true}, wantErr: "--uid must not be empty"},
 		{name: "zero version rejected", flags: deleteGuardFlags{versionSet: true}, wantErr: "--version must be at least 1, got 0"},
 		{name: "negative version rejected", flags: deleteGuardFlags{versionSet: true, version: -1}, wantErr: "--version must be at least 1, got -1"},
@@ -958,12 +958,12 @@ func TestDeleteOptionsFromFlags(t *testing.T) {
 // configured policy or error.
 type fakeEgressPolicyDeleter struct {
 	fakeActorReader
-	req    *ateapipb.DeleteActorEgressPolicyRequest
-	policy *ateapipb.EgressPolicy
+	req    *ateapi.DeleteActorEgressPolicyRequest
+	policy *ateapi.EgressPolicy
 	err    error
 }
 
-func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, req *ateapi.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
 	f.req = req
 	if f.err != nil {
 		return nil, f.err
@@ -974,13 +974,13 @@ func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, r
 func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 	t.Parallel()
 
-	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
-	deleted := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1},
-		Rules:    []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}},
+	actor := &ateapi.ObjectRef{Atespace: "team-a", Name: "c1"}
+	deleted := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1},
+		Rules:    []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}}},
 	}
-	unguarded := &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}
-	wantActorReq := &ateapipb.GetActorRequest{Actor: actor}
+	unguarded := &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}
+	wantActorReq := &ateapi.GetActorRequest{Actor: actor}
 	policyNotFound := status.Error(codes.NotFound, "EgressPolicy not found")
 	const uid = "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
 	confirmed := "egress policy for actor \"c1\" in atespace \"team-a\" deleted\n"
@@ -988,9 +988,9 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 	tests := []struct {
 		name         string
 		deleter      *fakeEgressPolicyDeleter
-		options      *ateapipb.DeleteOptions
-		wantReq      *ateapipb.DeleteActorEgressPolicyRequest
-		wantActorReq *ateapipb.GetActorRequest
+		options      *ateapi.DeleteOptions
+		wantReq      *ateapi.DeleteActorEgressPolicyRequest
+		wantActorReq *ateapi.GetActorRequest
 		wantOut      string
 		wantErr      string
 	}{
@@ -1003,22 +1003,22 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 		{
 			name:    "uid and version populate options",
 			deleter: &fakeEgressPolicyDeleter{policy: deleted},
-			options: &ateapipb.DeleteOptions{Uid: uid, Version: 3},
-			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapipb.DeleteOptions{Uid: uid, Version: 3}},
+			options: &ateapi.DeleteOptions{Uid: uid, Version: 3},
+			wantReq: &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Uid: uid, Version: 3}},
 			wantOut: confirmed,
 		},
 		{
 			name:    "uid alone",
 			deleter: &fakeEgressPolicyDeleter{policy: deleted},
-			options: &ateapipb.DeleteOptions{Uid: uid},
-			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapipb.DeleteOptions{Uid: uid}},
+			options: &ateapi.DeleteOptions{Uid: uid},
+			wantReq: &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Uid: uid}},
 			wantOut: confirmed,
 		},
 		{
 			name:    "version alone",
 			deleter: &fakeEgressPolicyDeleter{policy: deleted},
-			options: &ateapipb.DeleteOptions{Version: 3},
-			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapipb.DeleteOptions{Version: 3}},
+			options: &ateapi.DeleteOptions{Version: 3},
+			wantReq: &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Version: 3}},
 			wantOut: confirmed,
 		},
 		{
@@ -1031,8 +1031,8 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 		{
 			name:         "guarded delete not found still reads actor",
 			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound},
-			options:      &ateapipb.DeleteOptions{Uid: uid, Version: 3},
-			wantReq:      &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapipb.DeleteOptions{Uid: uid, Version: 3}},
+			options:      &ateapi.DeleteOptions{Uid: uid, Version: 3},
+			wantReq:      &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Uid: uid, Version: 3}},
 			wantActorReq: wantActorReq,
 			wantErr:      `actor "c1" in atespace "team-a" has no egress policy`,
 		},
@@ -1053,8 +1053,8 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 		{
 			name:    "aborted conflict wraps",
 			deleter: &fakeEgressPolicyDeleter{err: status.Error(codes.Aborted, "EgressPolicy version conflict")},
-			options: &ateapipb.DeleteOptions{Version: 3},
-			wantReq: &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapipb.DeleteOptions{Version: 3}},
+			options: &ateapi.DeleteOptions{Version: 3},
+			wantReq: &ateapi.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Version: 3}},
 			wantErr: `failed to delete egress policy for actor "c1" in atespace "team-a": rpc error: code = Aborted desc = EgressPolicy version conflict`,
 		},
 		{
@@ -1106,28 +1106,28 @@ func TestEgressPolicyFromManifest_NighthawkEgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("egressPolicyFromManifest: %v", err)
 	}
-	want := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	want := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace: "nighthawk",
 			Name:     "default",
 		},
-		Rules: []*ateapipb.EgressRule{
+		Rules: []*ateapi.EgressRule{
 			{
-				Http: &ateapipb.HttpRule{
+				Http: &ateapi.HttpRule{
 					Hostnames: []string{"*"},
-					Ports:     &ateapipb.Ports{Numbers: []int32{80}},
+					Ports:     &ateapi.Ports{Numbers: []int32{80}},
 				},
 			},
 			{
-				Https: &ateapipb.HttpsRule{
+				Https: &ateapi.HttpsRule{
 					Hostnames: []string{"*"},
-					Ports:     &ateapipb.Ports{Numbers: []int32{443}},
+					Ports:     &ateapi.Ports{Numbers: []int32{443}},
 				},
 			},
 			{
-				TlsPassthrough: &ateapipb.TlsPassthroughRule{
+				TlsPassthrough: &ateapi.TlsPassthroughRule{
 					Hostnames: []string{"*"},
-					Ports:     &ateapipb.Ports{Numbers: []int32{8443}},
+					Ports:     &ateapi.Ports{Numbers: []int32{8443}},
 				},
 			},
 		},

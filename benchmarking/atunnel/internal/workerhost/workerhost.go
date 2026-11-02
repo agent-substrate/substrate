@@ -117,7 +117,10 @@ func (h *Host) host(ctx context.Context, attribution resources.ActorAttribution,
 	h.mu.Lock()
 	h.actors = append(h.actors, &actor{attribution: attribution, session: session})
 	h.mu.Unlock()
-	return h.tunnel.Activate(attribution, session.Dialer(), egress)
+	if err := h.tunnel.ActivateEgress(attribution, egress); err != nil {
+		return err
+	}
+	return h.tunnel.ActivateIngress(attribution, session.Dialer())
 }
 
 // Info returns the hosted actors.

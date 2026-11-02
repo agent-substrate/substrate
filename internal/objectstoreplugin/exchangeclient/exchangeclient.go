@@ -151,8 +151,7 @@ func (s *Source) Client(ctx context.Context, actorJWT string, force bool) (objec
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "while building the actor's storage client: %v", err)
 	}
-	// A token minted inside the source credential's end-of-hour window is
-	// shorter than the floor. It serves this transfer and is not kept.
+	// A token shorter than the floor serves this transfer and is not kept.
 	if tok.Expiry.Sub(s.now()) >= credential.MinServeLifetime {
 		s.cache.Add(actorJWT, &entry{token: tok, client: client})
 	}

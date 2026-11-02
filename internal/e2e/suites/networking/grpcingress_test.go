@@ -26,7 +26,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	"go.ate.dev/substrate/internal/atenet"
@@ -138,29 +137,24 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 // deploys as a plain pod, so the two directions cannot disagree about what a
 // working RPC is.
 func TestIngressGRPC(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 
-	fixture := deployGRPCEchoTemplate(t, ctx, env["BUCKET_NAME"])
+	fixture := deployGRPCEchoTemplate(t, ctx)
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "grpcingress", fixture)
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	ctx = metadata.AppendToOutgoingContext(ctx,
 		atenet.TargetActorHeader, actorRef.String(),
 	)
 
-	// Cleartext h2c to the router's HTTP port, or h2 negotiated by ALPN on its
-	// TLS port when the router requires mTLS. Explicit metadata identifies the
-	// Actor; the conventional actor authority remains application metadata.
+	// h2 negotiated by ALPN on the router's TLS port. Explicit metadata
+	// identifies the Actor; the conventional actor authority remains
+	// application metadata.
 	rc := mustRouterClient(t, ctx)
 	t.Cleanup(rc.Close)
-	creds := insecure.NewCredentials()
-	if tlsConfig := rc.TLSConfig(); tlsConfig != nil {
-		creds = credentials.NewTLS(tlsConfig)
-	}
-	conn, err := grpc.NewClient(rc.Address(), grpc.WithTransportCredentials(creds))
+	conn, err := grpc.NewClient(rc.Address(), grpc.WithTransportCredentials(credentials.NewTLS(rc.TLSConfig())))
 	if err != nil {
 		t.Fatalf("creating the gRPC client for %s: %v", actorRef, err)
 	}
@@ -267,9 +261,9 @@ func TestIngressGRPC(t *testing.T) {
 // under test, waits for its golden snapshot and returns it. The suite gets its
 // own copy of the fixture: suite packages run as concurrent processes, so a
 // shared one would be deleted out from under another.
-func deployGRPCEchoTemplate(t *testing.T, ctx context.Context, bucket string) e2e.SubstrateFixture {
+func deployGRPCEchoTemplate(t *testing.T, ctx context.Context) e2e.SubstrateFixture {
 	t.Helper()
-	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", nil)
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, "networking", nil)
 	return e2e.SubstrateFixture{
 		Atespace:   atespace,
 		Name:       "grpcecho",
@@ -301,29 +295,19 @@ func waitForGRPCRouteReady(t *testing.T, ctx context.Context, client grpcechopb.
 }
 
 // routerTransport returns an HTTP transport for rc's router listener that
-// speaks HTTP/2 when http2 is set and HTTP/1.1 otherwise. Against the plaintext
-// listener HTTP/2 is cleartext h2c by prior knowledge; against the TLS
-// listener the router requires in static-mtls mode, it is negotiated by ALPN.
+// speaks HTTP/2, negotiated by ALPN, when http2 is set and HTTP/1.1 otherwise.
 //
 // e2e.RouterClient's own client is not usable here: it speaks HTTP/1.1 only,
 // and the whole point of both tests in this file is to control the protocol
 // the client negotiates with the router.
 func routerTransport(rc *e2e.RouterClient, http2 bool) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = rc.TLSConfig()
 	protocols := new(http.Protocols)
-	if tlsConfig := rc.TLSConfig(); tlsConfig != nil {
-		transport.TLSClientConfig = tlsConfig
-		if http2 {
-			protocols.SetHTTP2(true)
-		} else {
-			protocols.SetHTTP1(true)
-		}
+	if http2 {
+		protocols.SetHTTP2(true)
 	} else {
-		if http2 {
-			protocols.SetUnencryptedHTTP2(true)
-		} else {
-			protocols.SetHTTP1(true)
-		}
+		protocols.SetHTTP1(true)
 	}
 	transport.Protocols = protocols
 	return transport

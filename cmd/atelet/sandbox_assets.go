@@ -37,14 +37,13 @@ import (
 	"strings"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -77,19 +76,14 @@ func (e assetEntry) displayURL() string {
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
-// the local node's architecture: the sandbox class and pause image plus the
-// asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
-// asset).
+// the local node's architecture: the sandbox class plus the asset set keyed by
+// asset name (gVisor uses a single "gvisor" release-tarball asset).
 // It is both the per-actor on-node record (written at Run/Restore, read at
 // Checkpoint) and the snapshot manifest (written at Checkpoint, read at
 // Restore).
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
-	// PauseImage is the root sandbox container's image. It is recorded here
-	// rather than taken from the request at Restore so a snapshot is rebuilt
-	// with the same sandbox it was captured from. Only gVisor has one.
-	PauseImage string `json:"pauseImage,omitempty"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace              string `json:"atespace,omitempty"`
@@ -112,15 +106,12 @@ type sandboxAssetsRecord struct {
 	// is knowable from the manifest alone. Empty in the on-node record written at
 	// Run/Restore.
 	Fidelity string `json:"fidelity,omitempty"`
-}
-
-// checkPauseImage requires a pause image for gVisor, the only sandbox class
-// that runs a pause container.
-func checkPauseImage(sandboxClass, pauseImage string) error {
-	if sandboxClass == string(v1alpha1.SandboxClassGvisor) && pauseImage == "" {
-		return fmt.Errorf("gvisor sandbox has no pauseImage")
-	}
-	return nil
+	// BootID is the node's boot ID when atelet wrote this local copy of the
+	// snapshot. Not every file of a local copy is synced to disk, so one
+	// written before the node last rebooted may be torn and is deleted on
+	// reboot. Set only in the manifest of a local copy, never in an uploaded
+	// one.
+	BootID string `json:"bootId,omitempty"`
 }
 
 // ensureSandboxAssets stages every asset in the record under dstDir, named
@@ -437,7 +428,7 @@ func (s *Atelet) downloadAnonymous(ctx context.Context, entry assetEntry, shown,
 // signed URL or other credential in a form no scrubber can recognize.
 func (s *Atelet) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string) codes.Code {
 	slog.DebugContext(ctx, "Fetching sandbox asset through the object-store plugin", slog.String("url", shown))
-	_, err := s.assetPlugin.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
+	_, err := s.assetPlugin.FetchAsset(ctx, &objectstore.FetchAssetRequest{
 		AssetUri:  entry.URL,
 		Sha256:    entry.SHA256,
 		WritePath: path,
@@ -455,7 +446,7 @@ func (s *Atelet) pluginError(ctx context.Context, entry assetEntry, shown string
 	switch code {
 	case codes.Unimplemented:
 		msg = fmt.Sprintf("the object-store plugin at %s does not serve %s; private sandbox assets need a plugin that implements it",
-			s.pluginSocket, objectstorev1.AssetProvider_ServiceDesc.ServiceName)
+			s.pluginSocket, objectstore.AssetProvider_ServiceDesc.ServiceName)
 	case codes.Unavailable:
 		newErr, msg = apierror.Unavailable, fmt.Sprintf("the object-store plugin at %s is unavailable", s.pluginSocket)
 	case codes.Canceled, codes.DeadlineExceeded:
@@ -675,9 +666,6 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
-	}
-	if err := checkPauseImage(rec.SandboxClass, rec.PauseImage); err != nil {
-		return nil, fmt.Errorf("invalid sandbox record/manifest: %w", err)
 	}
 	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
 		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)

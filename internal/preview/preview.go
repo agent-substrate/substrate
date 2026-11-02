@@ -42,9 +42,13 @@ const (
 	// GateExternalVolumes controls whether external volumes are supported.
 	GateExternalVolumes Gate = "ExternalVolumes"
 
-	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate's
-	// snapshotConfig.storage_location is honored. When disabled, snapshots
-	// are stored under ate-api-server's --snapshot-location.
+	// GateGoldenEgressPolicy controls configuring a golden actor's egress policy on its template.
+	GateGoldenEgressPolicy Gate = "GoldenEgressPolicy"
+
+	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate may
+	// set snapshotConfig.storage_location. When disabled, the API rejects the
+	// field and snapshots are stored under ate-api-server's
+	// --snapshot-location.
 	GatePerTemplateSnapshotLocation Gate = "PerTemplateSnapshotLocation"
 )
 
@@ -55,6 +59,7 @@ const All = "ALL"
 // default and enabled via the --preview flag.
 var realKnownGates = []Gate{
 	GateExternalVolumes,
+	GateGoldenEgressPolicy,
 	GatePerTemplateSnapshotLocation,
 }
 

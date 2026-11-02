@@ -27,12 +27,12 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/atenet"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/testcert"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -141,7 +141,6 @@ func TestActorEgress(t *testing.T) {
 
 func TestActorEgressMultiplexing(t *testing.T) {
 	ctx := context.Background()
-	dataplane := e2e.CurrentAtenetDataplane()
 
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
@@ -153,11 +152,6 @@ func TestActorEgressMultiplexing(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	waitForActorRoute(t, ctx, router, actorRef)
-
-	beforeScrape, err := dataplane.ScrapeMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeMetrics before /mux: %v", err)
-	}
 
 	url := fmt.Sprintf("http://%s/fetch", target.Address())
 	payload, err := json.Marshal(map[string]string{"url": url})
@@ -173,24 +167,6 @@ func TestActorEgressMultiplexing(t *testing.T) {
 	t.Logf("Actor egress mux of %s succeeded; body: %s", url, body)
 
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
-
-	afterScrape, err := dataplane.ScrapeMetrics(ctx)
-	if err != nil {
-		t.Fatalf("ScrapeMetrics after /mux: %v", err)
-	}
-
-	const (
-		// Different dataplane may have different stream concurrency.
-		wantConnectionsAtLeast = 1
-		wantRequests           = 250
-	)
-	stats := dataplane.EgressConnectStats(beforeScrape, afterScrape)
-	if stats.Connections != -1 && stats.Connections < wantConnectionsAtLeast {
-		t.Errorf("egress connect connections = %d, want at least %d", stats.Connections, wantConnectionsAtLeast)
-	}
-	if stats.Requests != -1 && stats.Requests != wantRequests {
-		t.Errorf("egress connect requests = %d, want %d", stats.Requests, wantRequests)
-	}
 }
 
 // egressHTTPSTarget returns an origin whose /healthz answers with body over
@@ -356,38 +332,41 @@ func postThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.
 }
 
 // assertEgressGatewayConnect waits for the atenet-egress log to show a CONNECT
-// to port opened by actorName. Envoy logs authenticated peer details in its
-// successful CONNECT access record; AgentGateway logs the terminated tunnel.
+// to port opened by actorName. Envoy logs authenticated peer details and the
+// negotiated HTTP/2 protocol in its successful CONNECT access record;
+// AgentGateway logs the terminated tunnel.
 func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, atespace, actorName, port string) {
 	t.Helper()
 	want := fmt.Sprintf("a CONNECT to port %s by actor %s/%s", port, atespace, actorName)
 	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
 		for _, line := range lines {
-			switch line.container {
-			case "envoy":
-				authority, ok := accessLogField(line.text, "authority")
-				if !ok {
-					continue
-				}
-				if !strings.HasSuffix(authority, ":"+port) {
-					continue
-				}
-				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
-				if !strings.Contains(line.text, spiffeSlug) {
-					continue
-				}
+			if egressConnectAccessLogMatches(line, atespace, actorName, port) {
+				t.Logf("egress gateway tunneled the request: %s", line.text)
 				return true
-			case "agentgateway":
-				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
-					strings.Contains(line.text, "target=") &&
-					strings.Contains(line.text, ":"+port) {
-					t.Logf("egress gateway tunneled the request: %s", line.text)
-					return true
-				}
 			}
 		}
 		return false
 	})
+}
+
+func egressConnectAccessLogMatches(line gatewayAccessLogLine, atespace, actorName, port string) bool {
+	switch line.container {
+	case "envoy":
+		authority, ok := accessLogField(line.text, "authority")
+		if !ok || !strings.HasSuffix(authority, ":"+port) {
+			return false
+		}
+		if protocol, ok := accessLogField(line.text, "protocol"); !ok || protocol != "HTTP/2" {
+			return false
+		}
+		spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
+		return strings.Contains(line.text, spiffeSlug)
+	case "agentgateway":
+		target, ok := accessLogField(line.text, "target")
+		return ok && strings.HasSuffix(target, ":"+port) &&
+			protocolGatewayAccessLogMatches(line, resources.ActorRef{Atespace: atespace, Name: actorName}, target, true)
+	}
+	return false
 }
 
 type gatewayAccessLogLine struct {
@@ -473,46 +452,46 @@ func accessLogField(line, key string) (string, bool) {
 
 // createAndResumeActorWithEgress creates an actor from template, gives it an
 // EgressPolicy of exactly rules (none leaves it without one) and resumes it.
-func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
+func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapi.EgressRule) (string, string, *ateapi.Actor) {
 	t.Helper()
-	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
+	actor := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
 	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith, rules)
 }
 
 // createAndResumeSubstrateActor is createAndResumeActor for a substrate
 // ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
-func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, string, *ateapipb.Actor) {
+func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, string, *ateapi.Actor) {
 	t.Helper()
-	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
+	actor := &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
 	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, e2e.EgressAllowAll())
 }
 
 // createAndResume creates the actor, gives it an EgressPolicy with rules (none
 // when rules is nil), and resumes it. The policy goes in before the resume so
 // the actor's first outbound connection already finds it.
-func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string, rules []*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
+func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapi.Actor, source, deployWith string, rules []*ateapi.EgressRule) (string, string, *ateapi.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
-	actorRef := &ateapipb.ObjectRef{Atespace: networkingAtespace, Name: actorName}
+	actorRef := &ateapi.ObjectRef{Atespace: networkingAtespace, Name: actorName}
 
 	t.Logf("creating actor %s/%s", networkingAtespace, actorName)
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: networkingAtespace}},
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+		Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: networkingAtespace}},
 	})
-	actor.Metadata = &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: actor}); err != nil {
+	actor.Metadata = &ateapi.ResourceMetadata{Atespace: networkingAtespace, Name: actorName}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("CreateActor from %s: %v (deploy the fixture with %s)", source, err, deployWith)
 	}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
-		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef})
+		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapi.SuspendActorRequest{Actor: actorRef})
+		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{Actor: actorRef})
 	})
 	if rules != nil {
 		e2e.EnsureEgressPolicy(t, ctx, clients, actorRef, rules...)
 	}
 
-	resumeResponse, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	resumeResponse, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
@@ -560,7 +539,7 @@ func waitForRouteReady(t *testing.T, what string, request func() (*http.Response
 	}
 }
 
-func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.Actor) {
+func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapi.Actor) {
 	t.Helper()
 	if actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetStatus().GetWorkerAssignment().GetWorkerPod() == "" {
 		t.Fatalf("resumed Actor has no worker pod assignment: %+v", actor)
@@ -913,7 +892,7 @@ func TestBoundedOriginDiagnosticText(t *testing.T) {
 func prepareProtocolActor(t *testing.T, ctx context.Context, prefix string) (string, *e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
 	https8443 := e2e.EgressAllowHTTPS("*")
-	https8443.Https.Ports = &ateapipb.Ports{Numbers: []int32{8443}}
+	https8443.Https.Ports = &ateapi.Ports{Numbers: []int32{8443}}
 	rules := append(e2e.EgressAllowAll(), https8443)
 	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, prefix, egressFixture(), rules...)
 	router := mustRouterClient(t, ctx)

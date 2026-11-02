@@ -15,10 +15,10 @@
 package resources
 
 import (
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
-// The same ateapipb.Resources is what an Actor's limits ask for, what a Worker
+// The same ateapi.Resources is what an Actor's limits ask for, what a Worker
 // supplies, and the sum of what a Worker's Actors hold, so they subtract.
 //
 // A zero dimension is none of that resource. A Worker reports every dimension
@@ -26,15 +26,15 @@ import (
 
 // CPUMemory returns the Resources for cpuMilli and memoryBytes, or nil when
 // both are zero, so an emptied total compares equal to an absent one.
-func CPUMemory(cpuMilli, memoryBytes int64) *ateapipb.Resources {
+func CPUMemory(cpuMilli, memoryBytes int64) *ateapi.Resources {
 	if cpuMilli == 0 && memoryBytes == 0 {
 		return nil
 	}
-	return &ateapipb.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}
+	return &ateapi.Resources{CpuMillicores: cpuMilli, MemoryBytes: memoryBytes}
 }
 
 // Covers reports whether have leaves room for want in every dimension. A
 // dimension want leaves at zero asks for nothing.
-func Covers(have, want *ateapipb.Resources) bool {
+func Covers(have, want *ateapi.Resources) bool {
 	return have.GetCpuMillicores() >= want.GetCpuMillicores() && have.GetMemoryBytes() >= want.GetMemoryBytes()
 }

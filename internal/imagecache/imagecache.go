@@ -19,15 +19,16 @@
 //
 // The work is split along the existing atelet/worker privilege boundary:
 //
-//   - atelet (plain root, all capabilities dropped) pulls layers and unpacks
-//     them into the pool (Store.EnsureImage), and writes a rootfs-overlay.json
-//     into each bundle (WriteSpec). Whiteout entries are
-//     recorded in per-layer metadata rather than materialized, because
-//     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
-//     for opaque dirs (CAP_SYS_ADMIN).
-//   - worker (privileged; it already owns every mount on the node) finalizes
-//     layers — materializing the recorded whiteout state, once per layer —
-//     and mounts the overlay rootfs (SetupBundleRootfs) just before
+//   - atelet (root with the capabilities manifests/ate-install/atelet.yaml
+//     grants it) pulls layers and unpacks them into the pool with the
+//     owners their tars record (Store.EnsureImage), and writes a
+//     rootfs-overlay.json into each bundle (WriteSpec). Whiteout entries
+//     are recorded in per-layer metadata rather than materialized, because
+//     opaque directories need trusted.* xattrs (CAP_SYS_ADMIN). The 0:0 char
+//     devices used as whiteouts have a separate kernel permission check and
+//     can be created without CAP_MKNOD since Linux 5.8.
+//   - worker finalizes layers, materializing the recorded whiteout state once per
+//     layer, and mounts the overlay rootfs (SetupBundleRootfs) just before
 //     `runsc create` / staging the micro-VM virtio-fs lower.
 //
 // On-disk layout under the cache root (a directory on the BasePath hostPath,
@@ -75,7 +76,10 @@ import (
 )
 
 const (
-	layoutVersion   = "1"
+	// Version 1 layers may not have been hashed against their diffID, and
+	// version 2 layers are root-owned without setuid, setgid or sticky bits,
+	// so both pools are refused.
+	layoutVersion   = "3"
 	versionFileName = "version"
 
 	layerFSDirName           = "fs"
@@ -148,10 +152,9 @@ var (
 
 // sharedRegistries are the well-known communal registries whose rate limits
 // are shared across all anonymous clients. Everything not listed here is
-// assumed dedicated: fleet-scale pulls realistically hit either the pause
-// image (registry.k8s.io) or the customer's own registry, and enumerating
-// the small stable set of communal hosts beats guessing at every private
-// registry vendor.
+// assumed dedicated: fleet-scale pulls realistically hit the customer's own
+// registry, and enumerating the small stable set of communal hosts beats
+// guessing at every private registry vendor.
 var sharedRegistries = map[string]bool{
 	"registry.k8s.io": true,
 	// Pulls only ever present index.docker.io here: name.ParseReference
@@ -338,7 +341,7 @@ func New(root string, opts ...Option) (*Store, error) {
 		if got := strings.TrimSpace(string(b)); got != layoutVersion {
 			// Fail loudly instead of silently mixing layouts; an operator can
 			// delete the cache dir to rebuild it (it holds no unique state).
-			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q", root, got, layoutVersion)
+			return nil, fmt.Errorf("image cache at %q has layout version %q and this atelet supports %q, so delete it once no actor runs on this node", root, got, layoutVersion)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := os.WriteFile(versionPath, []byte(layoutVersion+"\n"), 0o600); err != nil {
@@ -346,6 +349,10 @@ func New(root string, opts ...Option) (*Store, error) {
 		}
 	default:
 		return nil, fmt.Errorf("while reading image cache version marker: %w", err)
+	}
+
+	if os.Geteuid() != 0 {
+		slog.Warn("Image cache is not running as root: unpacked layers belong to this user instead of the owners the image records", slog.String("root", root))
 	}
 
 	if err := s.sweepTempDirs(); err != nil {
@@ -634,6 +641,11 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 			diffID := cfgFile.RootFS.DiffIDs[i]
 			dir, err := s.ensureLayer(gctx, diffID, layer)
 			if err != nil {
+				if errors.Is(err, errDiffIDMismatch) {
+					slog.WarnContext(gctx, "Image layer does not match its claimed diffID",
+						slog.String("ref", parsedRef.String()), slog.String("digest", digest.String()),
+						slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
 				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
 			}
 			layerDirs[i] = dir

@@ -53,7 +53,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 		}
 	})
 	for range 2 {
-		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false); err != nil {
+		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

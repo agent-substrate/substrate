@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -446,7 +448,7 @@ func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
 		}
 	})
 
-	t.Run("preserveRestoreSource=false moves expendable base into checkpointDir", func(t *testing.T) {
+	t.Run("preserveRestoreSource=false merges expendable base in place and links into checkpointDir", func(t *testing.T) {
 		restoreDir := t.TempDir()
 		checkpointDir := t.TempDir()
 		basePath := filepath.Join(restoreDir, "memory-ranges")
@@ -459,8 +461,16 @@ func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
 			t.Fatalf("mergeOnDemandDelta: %v", err)
 		}
 
-		if _, err := os.Stat(basePath); !os.IsNotExist(err) {
-			t.Errorf("expendable base memory-ranges still in restoreDir (stat err = %v), want moved", err)
+		bi, err := os.Stat(basePath)
+		if err != nil {
+			t.Fatalf("stat base memory-ranges in restoreDir: %v", err)
+		}
+		di, err := os.Stat(deltaPath)
+		if err != nil {
+			t.Fatalf("stat merged memory-ranges in checkpointDir: %v", err)
+		}
+		if !os.SameFile(bi, di) {
+			t.Errorf("expected basePath and deltaPath to share an inode after in-place merge")
 		}
 		gotMerged, err := os.ReadFile(deltaPath)
 		if err != nil {
@@ -539,8 +549,48 @@ func TestReseedGuestCRNG(t *testing.T) {
 	})
 }
 
+func TestRestoreGuestReadyError(t *testing.T) {
+	// Child timeouts in dialAgentRetry and reseedGuestCRNG wrap a real
+	// context.DeadlineExceeded.
+	cause := fmt.Errorf("agent ReseedRandomDev: %w", context.DeadlineExceeded)
+
+	t.Run("live caller context reports Unavailable even when cause wraps child DeadlineExceeded", func(t *testing.T) {
+		err := restoreGuestReadyError(t.Context(), "reseeding guest CRNG", cause)
+		if got := apierror.Code(err); got != codes.Unavailable {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Unavailable, err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("err = %v, want it to wrap %v", err, cause)
+		}
+	})
+
+	t.Run("canceled caller context reports Canceled without child DeadlineExceeded shadowing it", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		err := restoreGuestReadyError(ctx, "dialing kata-agent after resume", cause)
+		if got := apierror.Code(err); got != codes.Canceled {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Canceled, err)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want it to wrap context.Canceled", err)
+		}
+	})
+
+	t.Run("stopped guest reports Internal, not Unavailable", func(t *testing.T) {
+		stopped := fmt.Errorf("%w (cloud-hypervisor removed %q): %w", errGuestStopped, "/run/vsock.sock", fs.ErrNotExist)
+		err := restoreGuestReadyError(t.Context(), "dialing kata-agent after resume", stopped)
+		if got := apierror.Code(err); got != codes.Internal {
+			t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Internal, err)
+		}
+		if !errors.Is(err, errGuestStopped) {
+			t.Errorf("err = %v, want it to wrap errGuestStopped", err)
+		}
+	})
+}
+
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 	s := &AteWorkerService{}
+	s.epoch.Store(1)
 	ctx := context.Background()
 	assets := map[string]string{assetCH: "/bin/sh"}
 	for name, call := range map[string]func() error{

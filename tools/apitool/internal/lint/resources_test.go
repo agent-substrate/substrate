@@ -33,7 +33,7 @@ func TestResourceMetadata(t *testing.T) {
 	}{
 		{
 			name: "compliant",
-			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ResourceMetadata"})),
+			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ResourceMetadata"})),
 		},
 		{
 			name: "missing entirely",
@@ -44,28 +44,28 @@ func TestResourceMetadata(t *testing.T) {
 		},
 		{
 			name: "wrong type",
-			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ObjectRef"})),
+			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ObjectRef"})),
 			want: []lint.Finding{
-				{Subject: "test.Widget", Message: `"metadata" field is ateapi.ObjectRef, want ateapi.ResourceMetadata`},
+				{Subject: "test.Widget", Message: `"metadata" field is substrate.ateapi.v1.ObjectRef, want substrate.ateapi.v1.ResourceMetadata`},
 			},
 		},
 		{
 			name: "scalar",
 			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.StringKind, TypeDisplay: "string"})),
 			want: []lint.Finding{
-				{Subject: "test.Widget", Message: `"metadata" field is string, want ateapi.ResourceMetadata`},
+				{Subject: "test.Widget", Message: `"metadata" field is string, want substrate.ateapi.v1.ResourceMetadata`},
 			},
 		},
 		{
 			name: "repeated",
-			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Repeated: true, Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ResourceMetadata"})),
+			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 1, Repeated: true, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ResourceMetadata"})),
 			want: []lint.Finding{
-				{Subject: "test.Widget", Message: `"metadata" field is repeated ateapi.ResourceMetadata, want ateapi.ResourceMetadata`},
+				{Subject: "test.Widget", Message: `"metadata" field is repeated substrate.ateapi.v1.ResourceMetadata, want substrate.ateapi.v1.ResourceMetadata`},
 			},
 		},
 		{
 			name: "wrong field number",
-			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 2, Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ResourceMetadata"})),
+			api:  messagesAPI(resource("Widget", nil, model.Field{Name: "metadata", Number: 2, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ResourceMetadata"})),
 			want: []lint.Finding{
 				{Subject: "test.Widget", Message: `"metadata" field is number 2, want 1`},
 			},
@@ -76,7 +76,7 @@ func TestResourceMetadata(t *testing.T) {
 		},
 		{
 			name:    "parent that isn't a resource",
-			api:     messagesAPI(resource("Widget", []string{"Gadget"}, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "ateapi.ResourceMetadata"})),
+			api:     messagesAPI(resource("Widget", []string{"Gadget"}, model.Field{Name: "metadata", Number: 1, Kind: protoreflect.MessageKind, TypeFullName: "substrate.ateapi.v1.ResourceMetadata"})),
 			wantErr: true,
 		},
 	}

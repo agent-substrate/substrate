@@ -26,8 +26,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 func TestScopeFromFlags(t *testing.T) {
@@ -66,29 +66,29 @@ func TestScopeFromFlags(t *testing.T) {
 
 func TestLoadAccessPolicyManifest(t *testing.T) {
 	t.Parallel()
-	ownerAlice := []*ateapipb.Binding{{Role: "owner", Members: []string{"user:alice"}}}
+	ownerAlice := []*ateapi.Binding{{Role: "owner", Members: []string{"user:alice"}}}
 	tests := []struct {
 		name     string
 		manifest string
-		want     *ateapipb.AccessPolicy
+		want     *ateapi.AccessPolicy
 		wantErr  string
 	}{
 		{
 			name:     "metadata omitted is filled in",
 			manifest: "bindings:\n- role: owner\n  members: [\"user:alice\"]\n",
-			want:     &ateapipb.AccessPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}, Bindings: ownerAlice},
+			want:     &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default"}, Bindings: ownerAlice},
 		},
 		{
 			name: "preconditions preserved",
 			manifest: `metadata: {name: default, uid: u-1, version: "3"}
 bindings: [{role: owner, members: ["user:alice"]}]
 `,
-			want: &ateapipb.AccessPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default", Uid: "u-1", Version: 3}, Bindings: ownerAlice},
+			want: &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 3}, Bindings: ownerAlice},
 		},
 		{
 			name:     "no bindings",
 			manifest: "metadata: {name: default}\n",
-			want:     &ateapipb.AccessPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default"}},
+			want:     &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default"}},
 		},
 		{name: "wrong name", manifest: "metadata: {name: other}\n", wantErr: `must be "default"`},
 		{name: "atespace set", manifest: "metadata: {atespace: team-a}\n", wantErr: "metadata.atespace must be empty"},
@@ -117,7 +117,7 @@ bindings: [{role: owner, members: ["user:alice"]}]
 
 // fakeAccessPolicyClient records the last RPC and answers with policy or err.
 type fakeAccessPolicyClient struct {
-	policy      *ateapipb.AccessPolicy
+	policy      *ateapi.AccessPolicy
 	err         error
 	atespaceErr error
 
@@ -125,53 +125,53 @@ type fakeAccessPolicyClient struct {
 	req    any
 }
 
-func (f *fakeAccessPolicyClient) answer(method string, req any) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) answer(method string, req any) (*ateapi.AccessPolicy, error) {
 	f.method, f.req = method, req
 	return f.policy, f.err
 }
 
-func (f *fakeAccessPolicyClient) GetGlobalAccessPolicy(_ context.Context, req *ateapipb.GetGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) GetGlobalAccessPolicy(_ context.Context, req *ateapi.GetGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("GetGlobalAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) CreateGlobalAccessPolicy(_ context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) CreateGlobalAccessPolicy(_ context.Context, req *ateapi.CreateGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("CreateGlobalAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) UpdateGlobalAccessPolicy(_ context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) UpdateGlobalAccessPolicy(_ context.Context, req *ateapi.UpdateGlobalAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("UpdateGlobalAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) GetAtespaceAccessPolicy(_ context.Context, req *ateapipb.GetAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) GetAtespaceAccessPolicy(_ context.Context, req *ateapi.GetAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("GetAtespaceAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) CreateAtespaceAccessPolicy(_ context.Context, req *ateapipb.CreateAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) CreateAtespaceAccessPolicy(_ context.Context, req *ateapi.CreateAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("CreateAtespaceAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) UpdateAtespaceAccessPolicy(_ context.Context, req *ateapipb.UpdateAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) UpdateAtespaceAccessPolicy(_ context.Context, req *ateapi.UpdateAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("UpdateAtespaceAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) DeleteAtespaceAccessPolicy(_ context.Context, req *ateapipb.DeleteAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapipb.AccessPolicy, error) {
+func (f *fakeAccessPolicyClient) DeleteAtespaceAccessPolicy(_ context.Context, req *ateapi.DeleteAtespaceAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
 	return f.answer("DeleteAtespaceAccessPolicy", req)
 }
 
-func (f *fakeAccessPolicyClient) GetAtespace(_ context.Context, req *ateapipb.GetAtespaceRequest, _ ...grpc.CallOption) (*ateapipb.Atespace, error) {
+func (f *fakeAccessPolicyClient) GetAtespace(_ context.Context, req *ateapi.GetAtespaceRequest, _ ...grpc.CallOption) (*ateapi.Atespace, error) {
 	if f.atespaceErr != nil {
 		return nil, f.atespaceErr
 	}
-	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: req.GetAtespace().GetName()}}, nil
+	return &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: req.GetAtespace().GetName()}}, nil
 }
 
 func TestAccessPolicyRunner(t *testing.T) {
 	t.Parallel()
-	stored := &ateapipb.AccessPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2},
-		Bindings: []*ateapipb.Binding{{Role: "owner", Members: []string{"user:alice"}}},
+	stored := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2},
+		Bindings: []*ateapi.Binding{{Role: "owner", Members: []string{"user:alice"}}},
 	}
-	edit := &ateapipb.AccessPolicy{Metadata: &ateapipb.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2}}
+	edit := &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2}}
 	teamA := accessPolicyScope{atespace: "team-a"}
 	global := accessPolicyScope{}
 	notFound := status.Error(codes.NotFound, "not found")
@@ -194,7 +194,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{policy: stored},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.get(ctx) },
 			wantMethod: "GetAtespaceAccessPolicy",
-			wantReq:    &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
+			wantReq:    &ateapi.GetAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
 			wantStdout: "team-a   owner   user:alice",
 		},
 		{
@@ -203,7 +203,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{policy: stored},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.get(ctx) },
 			wantMethod: "GetGlobalAccessPolicy",
-			wantReq:    &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName},
+			wantReq:    &ateapi.GetGlobalAccessPolicyRequest{Name: resources.SingletonName},
 			wantStdout: "<global>   owner   user:alice",
 		},
 		{
@@ -236,7 +236,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{policy: stored},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.create(ctx, edit) },
 			wantMethod: "CreateAtespaceAccessPolicy",
-			wantReq:    &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, AccessPolicy: edit},
+			wantReq:    &ateapi.CreateAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, AccessPolicy: edit},
 			wantStdout: "team-a   owner   user:alice",
 		},
 		{
@@ -245,7 +245,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{policy: stored},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.create(ctx, edit) },
 			wantMethod: "CreateGlobalAccessPolicy",
-			wantReq:    &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: edit},
+			wantReq:    &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: edit},
 		},
 		{
 			name:       "create existing",
@@ -261,7 +261,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			client:     &fakeAccessPolicyClient{policy: stored},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.update(ctx, edit) },
 			wantMethod: "UpdateGlobalAccessPolicy",
-			wantReq:    &ateapipb.UpdateGlobalAccessPolicyRequest{AccessPolicy: edit},
+			wantReq:    &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: edit},
 		},
 		{
 			name:       "update stale",
@@ -284,10 +284,10 @@ func TestAccessPolicyRunner(t *testing.T) {
 			scope:  teamA,
 			client: &fakeAccessPolicyClient{policy: stored},
 			run: func(ctx context.Context, r *accessPolicyRunner) error {
-				return r.delete(ctx, &ateapipb.DeleteOptions{Version: 2})
+				return r.delete(ctx, &ateapi.DeleteOptions{Version: 2})
 			},
 			wantMethod: "DeleteAtespaceAccessPolicy",
-			wantReq:    &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: resources.SingletonName, Options: &ateapipb.DeleteOptions{Version: 2}},
+			wantReq:    &ateapi.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Version: 2}},
 			wantStdout: `access policy for atespace "team-a" deleted`,
 		},
 		{

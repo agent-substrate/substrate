@@ -30,8 +30,21 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 )
+
+// The default must suit a root trusted by external relying parties, and many
+// accept ECDSA but not Ed25519.
+func TestMakeCAPoolDefaultKeyTypeIsECDSA(t *testing.T) {
+	got, err := parseCAKeyType(makeCaPoolCmd.Flags().Lookup("key-type").DefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != localca.KeyTypeECDSAP256 {
+		t.Errorf("default key type = %v, want KeyTypeECDSAP256", got)
+	}
+}
 
 func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {
 	alg := makeJwtPoolCmd.Flags().Lookup("alg").DefValue

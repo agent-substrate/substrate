@@ -74,6 +74,11 @@ func ValidateDetachActorRequest(ctx context.Context, req *ateletpb.DetachActorRe
 	return Validate_DetachActorRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateSetWorkerSandboxRuntimesRequest runs the generated validation for req.
+func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) field.ErrorList {
+	return Validate_SetWorkerSandboxRuntimesRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -83,7 +88,11 @@ func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operati
 	return resources.ValidateHostPort(fldPath, *value)
 }
 
-func ValidateCustom_SandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 

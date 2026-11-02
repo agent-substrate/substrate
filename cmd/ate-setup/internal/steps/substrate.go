@@ -25,11 +25,11 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"sigs.k8s.io/yaml"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // AteClient connects to the ate-api-server, port-forwarding if needed. It
@@ -45,9 +45,9 @@ func (e *Env) AteClient(ctx context.Context) (*ateclient.Client, error) {
 // EnsureAtespace creates the atespace if it does not already exist. The store
 // enforces that an ActorTemplate's atespace exists at create time.
 func EnsureAtespace(ctx context.Context, client *ateclient.Client, atespace string) error {
-	_, err := client.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{
-			Metadata: &ateapipb.ResourceMetadata{Name: atespace},
+	_, err := client.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+		Atespace: &ateapi.Atespace{
+			Metadata: &ateapi.ResourceMetadata{Name: atespace},
 		},
 	})
 	if status.Code(err) == codes.AlreadyExists {
@@ -60,7 +60,7 @@ func EnsureAtespace(ctx context.Context, client *ateclient.Client, atespace stri
 // document into an ActorTemplate, as `kubectl ate create actor-template`
 // does. Parsing is strict: unknown fields are an error, so typos don't
 // silently drop configuration.
-func ActorTemplateFromManifest(manifest []byte) (*ateapipb.ActorTemplate, error) {
+func ActorTemplateFromManifest(manifest []byte) (*ateapi.ActorTemplate, error) {
 	jsonData, err := yaml.YAMLToJSON(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("invalid YAML: %w", err)
@@ -68,7 +68,7 @@ func ActorTemplateFromManifest(manifest []byte) (*ateapipb.ActorTemplate, error)
 	if string(jsonData) == "null" {
 		return nil, fmt.Errorf("manifest is empty")
 	}
-	template := &ateapipb.ActorTemplate{}
+	template := &ateapi.ActorTemplate{}
 	if err := protojson.Unmarshal(jsonData, template); err != nil {
 		return nil, err
 	}
@@ -78,9 +78,9 @@ func ActorTemplateFromManifest(manifest []byte) (*ateapipb.ActorTemplate, error)
 // CreateActorTemplate creates the template through the ate API. Actor
 // templates are immutable (no update RPC), so an existing template is left
 // in place: delete the demo and redeploy to change it.
-func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template *ateapipb.ActorTemplate) error {
+func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template *ateapi.ActorTemplate) error {
 	ref := resources.ActorTemplateRefFromActorTemplate(template)
-	_, err := client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: template})
+	_, err := client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: template})
 	if status.Code(err) == codes.AlreadyExists {
 		log.Stepf("actor template %s already exists; keeping it (delete the demo to replace it)", ref)
 		return nil
@@ -101,10 +101,10 @@ func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref 
 	// template reconciler.
 	var lastErr error
 	for {
-		template, err := client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: ref.ToObjectRef()})
+		template, err := client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: ref.ToObjectRef()})
 		lastErr = err
 		if err == nil {
-			if template.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+			if template.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 				// The template opted out: no golden snapshot will ever appear,
 				// and none is needed.
 				return nil
@@ -167,7 +167,7 @@ func (e *Env) DeleteSubstrateDemo(ctx context.Context, refs []resources.ActorTem
 			}
 			actorRef := resources.ActorRefFromActor(actor)
 			log.Stepf("  deleting actor %s/%s", actorRef.Atespace, actorRef.Name)
-			if _, err := client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+			if _, err := client.DeleteActor(ctx, &ateapi.DeleteActorRequest{
 				Actor: actorRef.ToObjectRef(),
 			}); err != nil {
 				log.Warnf("while deleting actor %s/%s: %v", actorRef.Atespace, actorRef.Name, err)
@@ -176,13 +176,13 @@ func (e *Env) DeleteSubstrateDemo(ctx context.Context, refs []resources.ActorTem
 	}
 
 	for _, ref := range refs {
-		if _, err := client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: ref.ToObjectRef()}); err != nil && status.Code(err) != codes.NotFound {
+		if _, err := client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref.ToObjectRef()}); err != nil && status.Code(err) != codes.NotFound {
 			log.Warnf("while deleting actor template %s: %v", ref, err)
 		}
 	}
 
 	for _, atespace := range atespaces {
-		if _, err := client.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespace}}); err != nil && status.Code(err) != codes.NotFound {
+		if _, err := client.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: atespace}}); err != nil && status.Code(err) != codes.NotFound {
 			log.Warnf("while deleting atespace %s: %v", atespace, err)
 		}
 	}

@@ -27,10 +27,10 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -53,19 +53,19 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	lifecycleBaseline := e2e.LifecycleEventSeries(baselineScrape)
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: metricsAtespace}},
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+		Atespace: &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: metricsAtespace}},
 	})
 
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: tmpl.Atespace, Name: tmpl.Name},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: tmpl.Atespace, Name: tmpl.Name},
 	}}); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
 	})
 
 	// Resume so the pool has an assigned worker, which the ateapi worker-count
@@ -110,7 +110,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	prefixes := dataplane.PlatformMetricPrefixes(e2e.PlatformMetricPrefixes)
 	var missing []string
-	var workerSeen, controllerSeen, routeDurationSeen, lifecycleSeen bool
+	var workerSeen, controllerSeen, egressSeen, routeDurationSeen, lifecycleSeen bool
 	var missingStates []string
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
@@ -126,6 +126,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		missingStates = e2e.StatesNotAdvanced(lifecycleBaseline, e2e.LifecycleEventSeries(scrape), wantStates)
 		lifecycleSeen = len(missingStates) == 0
 		workerSeen = e2e.CollectorHasService(scrape, "ateworker-gvisor", "ateworker-microvm")
+		egressSeen = dataplane.EgressCollectorTelemetrySeen(scrape)
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
 		// some series arrived. Substring, not prefix: the collector's Prometheus
@@ -133,7 +134,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && workerSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
+		if len(missing) == 0 && workerSeen && controllerSeen && egressSeen && routeDurationSeen && lifecycleSeen {
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -240,6 +241,10 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 				errs = append(errs, err.Error())
 			}
 
+			if err := validateEgressServiceAttribution(scrape); err != nil {
+				errs = append(errs, err.Error())
+			}
+
 			if len(errs) == 0 {
 				return
 			}
@@ -253,19 +258,19 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, worker pushed=%v, atecontroller pushed=%v, error detail: %v",
-			missing, missingStates, workerSeen, controllerSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, missing lifecycle states %v, worker pushed=%v, atecontroller pushed=%v, atenet-egress pushed=%v, error detail: %v",
+			missing, missingStates, workerSeen, controllerSeen, egressSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, worker pushed=%v, atecontroller pushed=%v",
-		missing, missingStates, routeDurationSeen, workerSeen, controllerSeen)
+	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, missing lifecycle states %v, AgentGateway route duration seen=%v, worker pushed=%v, atecontroller pushed=%v, atenet-egress pushed=%v",
+		missing, missingStates, routeDurationSeen, workerSeen, controllerSeen, egressSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
 	t.Helper()
 
 	// Get running actor to find its assigned worker pod.
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 	})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
@@ -284,17 +289,17 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 		t.Fatalf("Actor %s has no assigned worker pod to delete", actorID)
 	}
 
-	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	waitForStatus(t, ctx, clients, actorID, ateapi.ActorState_ACTOR_STATE_CRASHED)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
 	t.Helper()
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForStatus(t, ctx, clients, actorID, ateapi.ActorState_ACTOR_STATE_RUNNING)
 }
 
 // validateSnapshotPhaseLabels guards atelet's cold-start histograms against a
@@ -350,22 +355,40 @@ func validateNodeAttribution(scrape string) error {
 	return nil
 }
 
+// validateEgressServiceAttribution verifies that atenet-egress pods never
+// report under job="atenet-router" (nor emit ate_direction="egress" under
+// job="atenet-router").
+func validateEgressServiceAttribution(scrape string) error {
+	for _, line := range strings.Split(scrape, "\n") {
+		if !strings.Contains(line, `job="atenet-router"`) {
+			continue
+		}
+		if pod := extractLabelValue(line, "k8s_pod_name"); strings.HasPrefix(pod, "atenet-egress") {
+			return fmt.Errorf("atenet-egress pod %q exported telemetry as job=\"atenet-router\": %q", pod, line)
+		}
+		if extractLabelValue(line, "ate_direction") == "egress" {
+			return fmt.Errorf("egress metric exported as job=\"atenet-router\": %q", line)
+		}
+	}
+	return nil
+}
+
 func suspend(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForStatus(t, ctx, clients, actorID, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 }
 
-func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.ActorState) {
+func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapi.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{
+			Actor: &ateapi.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return

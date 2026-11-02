@@ -108,7 +108,9 @@ service Worker {
 // ActorDirs is the set of per-actor directories atelet prepares on the volume
 // it shares with the worker. The worker takes them from the RPC instead of deriving
 // them from the actor UID.
-// Every directory is under root_dir.
+// Every directory except checkpoint_dir and restore_dir is under root_dir.
+// Those two may be on a different filesystem from root_dir, so the worker must
+// not rename or hard-link files between them and root_dir.
 //
 // +k8s:customValidation # each directory is an absolute, clean path
 message ActorDirs {
@@ -273,8 +275,8 @@ message WorkloadSpec {
 //
 // +k8s:customValidation # mount paths are unique and do not nest across the four lists
 message Container {
-  // The sandbox's own container, ocispec.PauseContainer, is not a short
-  // name, so the format keeps a workload container from taking its bundle.
+  // The sandbox ID, ocispec.SandboxID, is not a short name, so the format
+  // keeps a workload container from taking its bundle.
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
@@ -347,6 +349,19 @@ message ContainerSpec {
   //
   // +k8s:optional
   ResourceRequirements resources = 4;
+
+  // user is the process identity, the image's USER resolved against its
+  // /etc/passwd and /etc/group. Unset is root.
+  ProcessUser user = 5;
+
+  // cwd is the process working directory, the image's WORKDIR. Empty is "/".
+  string cwd = 6;
+}
+// ProcessUser is a resolved process identity.
+message ProcessUser {
+  uint32 uid = 1;
+  uint32 gid = 2;
+  repeated uint32 additional_gids = 3;
 }
 
 // ResourceRequirements mirrors atelet's ResourceRequirements.
@@ -422,6 +437,8 @@ message HttpGetAction {
 }
 
 message RunWorkloadResponse {
+  // The epoch this worker process registered with.
+  int64 worker_epoch = 1;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -554,6 +571,8 @@ message RestoreWorkloadRequest {
 }
 
 message RestoreWorkloadResponse {
+  // The epoch this worker process registered with.
+  int64 worker_epoch = 1;
 }
 
 message GetWorkloadStatsRequest {
@@ -603,7 +622,7 @@ message WorkloadStatsSample {
   string actor_template_name = 5;
 
   // The sandbox runtime family that produced this sample, in the
-  // ate.dev/v1alpha1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
+  // ate.dev/v1 SandboxClass form: "gvisor" (cmd/ateworker-gvisor) or
   // "microvm" (cmd/ateworker-microvm). A worker binary only ever reports its own.
   string sandbox_class = 6;
 

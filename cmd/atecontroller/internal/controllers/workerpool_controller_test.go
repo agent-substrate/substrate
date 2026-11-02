@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,10 +44,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/testenv"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 var (
@@ -60,7 +61,7 @@ func TestMain(m *testing.M) {
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(atev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(atev1.AddToScheme(scheme))
 
 	var err error
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
@@ -99,7 +100,7 @@ func TestMain(m *testing.M) {
 
 	// makeWorkerPool omits configRef, so every gvisor pool resolves to this
 	// class default. Tests that need to control the class default use microvm.
-	if err := k8sClient.Create(context.Background(), makeSandboxConfig(testGvisorDefault, atev1alpha1.SandboxClassGvisor, true)); err != nil {
+	if err := k8sClient.Create(context.Background(), makeSandboxConfig(testGvisorDefault, atev1.SandboxClassGvisor, true)); err != nil {
 		fmt.Fprintf(os.Stderr, "create default SandboxConfig: %v\n", err)
 		os.Exit(1)
 	}
@@ -108,6 +109,7 @@ func TestMain(m *testing.M) {
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		SystemNamespace: installdefaults.SystemNamespace,
+		Recorder:        mgr.GetEventRecorder("networkpolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "netpolicy controller setup failed: %v\n", err)
 		os.Exit(1)
@@ -181,7 +183,7 @@ func TestWorkerPoolReplicasUpdate(t *testing.T) {
 		return err == nil, nil
 	})
 
-	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool replicas", func(current *atev1alpha1.WorkerPool) {
+	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool replicas", func(current *atev1.WorkerPool) {
 		current.Spec.Replicas = 5
 	})
 
@@ -210,7 +212,7 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 		return err == nil, nil
 	})
 
-	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool image", func(current *atev1alpha1.WorkerPool) {
+	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool image", func(current *atev1.WorkerPool) {
 		current.Spec.WorkerImage = "worker:v2"
 	})
 
@@ -343,7 +345,7 @@ func TestStatusReplicasPropagation(t *testing.T) {
 	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
-		current := &atev1alpha1.WorkerPool{}
+		current := &atev1.WorkerPool{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
 			return false, nil
 		}
@@ -354,8 +356,8 @@ func TestStatusReplicasPropagation(t *testing.T) {
 	})
 }
 
-func sampleWorkerPoolPodTemplate() *atev1alpha1.WorkerPoolPodTemplate {
-	return &atev1alpha1.WorkerPoolPodTemplate{
+func sampleWorkerPoolPodTemplate() *atev1.WorkerPoolPodTemplate {
+	return &atev1.WorkerPoolPodTemplate{
 		NodeSelector: map[string]string{
 			"workload": "substrate",
 		},
@@ -431,7 +433,7 @@ func TestWorkerPoolWithServiceAccountSkipsDefault(t *testing.T) {
 		t.Fatalf("create namespace: %v", err)
 	}
 	wp := makeWorkerPool("test-custom-sa", ns.Name, 1, "worker:v1")
-	wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{ServiceAccountName: ptr.To("substrate-worker")}
+	wp.Spec.Template = &atev1.WorkerPoolPodTemplate{ServiceAccountName: ptr.To("substrate-worker")}
 	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
@@ -517,7 +519,7 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
 	})
 
-	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool template", func(current *atev1alpha1.WorkerPool) {
+	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool template", func(current *atev1.WorkerPool) {
 		current.Spec.Template.NodeSelector = map[string]string{"workload": "updated"}
 	})
 
@@ -530,6 +532,62 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		return podSpec.NodeSelector["workload"] == "updated" &&
 			podSpec.Containers[0].Resources.Requests.Cpu().String() == "500m", nil
 	})
+}
+
+// TestWorkerPoolCapabilitiesRepairDrift checks that reconciliation restores
+// each runtime's fixed permissions after another client changes them.
+func TestWorkerPoolCapabilitiesRepairDrift(t *testing.T) {
+	for _, class := range []atev1.SandboxClass{atev1.SandboxClassGvisor, atev1.SandboxClassMicroVM} {
+		t.Run(string(class), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			wantAdd := slices.Clone(workerGvisorCapabilities)
+			if class == atev1.SandboxClassMicroVM {
+				wantAdd = slices.Clone(workerMicroVMCapabilities)
+			}
+			wp := makeWorkerPool("test-caps-drift-"+string(class), "default", 1, "worker:v1")
+			wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: class}}
+			if class == atev1.SandboxClassMicroVM {
+				config := makeSandboxConfig(wp.Name, class, false)
+				createSandboxConfig(t, config)
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1.SandboxConfigReference{Name: config.Name}
+			}
+			if err := k8sClient.Create(ctx, wp); err != nil {
+				t.Fatal(err)
+			}
+			deleteOnCleanup(t, wp)
+			eventually(t, func(ctx context.Context) (bool, error) {
+				dep, err := getDeployment(ctx, wp)
+				if err != nil {
+					return false, client.IgnoreNotFound(err)
+				}
+				return slices.Equal(dep.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add, wantAdd), nil
+			})
+			updateDeploymentSpec(t, ctx, wp, "re-add a dropped capability", func(dep *appsv1.Deployment) {
+				sc := dep.Spec.Template.Spec.Containers[0].SecurityContext
+				sc.Capabilities.Add = append(sc.Capabilities.Add, "SYS_PTRACE")
+				sc.AllowPrivilegeEscalation = ptr.To(true)
+			})
+			// Apply synchronously so failure reports the surviving capabilities
+			// rather than timing out waiting for background reconciliation.
+			r := &WorkerPoolReconciler{Client: k8sClient}
+			if err := r.applyDeployment(ctx, wp); err != nil {
+				t.Fatal(err)
+			}
+			dep, err := getDeployment(ctx, wp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sc := dep.Spec.Template.Spec.Containers[0].SecurityContext
+			caps := sc.Capabilities
+			if !slices.Equal(caps.Add, wantAdd) || !slices.Equal(caps.Drop, []corev1.Capability{"ALL"}) {
+				t.Fatalf("capabilities after reconciliation = %+v, want add %v and drop [ALL]", caps, wantAdd)
+			}
+			if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+				t.Fatalf("AllowPrivilegeEscalation after reconciliation = %v, want false", sc.AllowPrivilegeEscalation)
+			}
+		})
+	}
 }
 
 // TestWorkerPoolPodTemplateClear verifies that clearing template.nodeSelector
@@ -549,7 +607,7 @@ func TestWorkerPoolPodTemplateClear(t *testing.T) {
 		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
 	})
 
-	updateWorkerPoolSpec(t, ctx, wp, "clear WorkerPool nodeSelector", func(current *atev1alpha1.WorkerPool) {
+	updateWorkerPoolSpec(t, ctx, wp, "clear WorkerPool nodeSelector", func(current *atev1.WorkerPool) {
 		current.Spec.Template.NodeSelector = nil
 	})
 
@@ -591,7 +649,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			container.Resources.Requests.Cpu().String() == "500m", nil
 	})
 
-	updateWorkerPoolSpec(t, ctx, wp, "clear WorkerPool template", func(current *atev1alpha1.WorkerPool) {
+	updateWorkerPoolSpec(t, ctx, wp, "clear WorkerPool template", func(current *atev1.WorkerPool) {
 		current.Spec.Template = nil
 	})
 
@@ -663,13 +721,13 @@ func TestReplicasValidationRejectsNegative(t *testing.T) {
 
 // --- helpers ---
 
-func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.WorkerPool {
-	return &atev1alpha1.WorkerPool{
+func makeWorkerPool(name, ns string, replicas int32, image string) *atev1.WorkerPool {
+	return &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Spec: atev1alpha1.WorkerPoolSpec{
+		Spec: atev1.WorkerPoolSpec{
 			Replicas:       replicas,
 			WorkerImage:    image,
-			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
+			SandboxClasses: []atev1.WorkerPoolSandboxClass{{Name: atev1.SandboxClassGvisor}},
 		},
 	}
 }
@@ -687,7 +745,7 @@ func deleteOnCleanup(t *testing.T, obj client.Object) {
 	})
 }
 
-func getDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) (*appsv1.Deployment, error) {
+func getDeployment(ctx context.Context, wp *atev1.WorkerPool) (*appsv1.Deployment, error) {
 	dep := &appsv1.Deployment{}
 	err := k8sClient.Get(ctx, types.NamespacedName{
 		Name:      wp.Name,
@@ -701,7 +759,7 @@ func getDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) (*appsv1.Dep
 // controller reconciles the Deployment concurrently (bumping its
 // resourceVersion on every SSA apply), so a plain get-then-update flakes with
 // "the object has been modified" under load.
-func updateDeployment(t *testing.T, ctx context.Context, wp *atev1alpha1.WorkerPool, action string, mutate func(*appsv1.Deployment), update func(*appsv1.Deployment) error) {
+func updateDeployment(t *testing.T, ctx context.Context, wp *atev1.WorkerPool, action string, mutate func(*appsv1.Deployment), update func(*appsv1.Deployment) error) {
 	t.Helper()
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		dep, err := getDeployment(ctx, wp)
@@ -716,7 +774,7 @@ func updateDeployment(t *testing.T, ctx context.Context, wp *atev1alpha1.WorkerP
 	}
 }
 
-func updateDeploymentSpec(t *testing.T, ctx context.Context, wp *atev1alpha1.WorkerPool, action string, mutate func(*appsv1.Deployment)) {
+func updateDeploymentSpec(t *testing.T, ctx context.Context, wp *atev1.WorkerPool, action string, mutate func(*appsv1.Deployment)) {
 	t.Helper()
 	updateDeployment(t, ctx, wp, action, mutate, func(dep *appsv1.Deployment) error {
 		return k8sClient.Update(ctx, dep)
@@ -724,17 +782,17 @@ func updateDeploymentSpec(t *testing.T, ctx context.Context, wp *atev1alpha1.Wor
 }
 
 // updateDeploymentStatus is updateDeploymentSpec for the status subresource.
-func updateDeploymentStatus(t *testing.T, ctx context.Context, wp *atev1alpha1.WorkerPool, action string, mutate func(*appsv1.Deployment)) {
+func updateDeploymentStatus(t *testing.T, ctx context.Context, wp *atev1.WorkerPool, action string, mutate func(*appsv1.Deployment)) {
 	t.Helper()
 	updateDeployment(t, ctx, wp, action, mutate, func(dep *appsv1.Deployment) error {
 		return k8sClient.Status().Update(ctx, dep)
 	})
 }
 
-func updateWorkerPoolSpec(t *testing.T, ctx context.Context, wp *atev1alpha1.WorkerPool, action string, mutate func(*atev1alpha1.WorkerPool)) {
+func updateWorkerPoolSpec(t *testing.T, ctx context.Context, wp *atev1.WorkerPool, action string, mutate func(*atev1.WorkerPool)) {
 	t.Helper()
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		current := &atev1alpha1.WorkerPool{}
+		current := &atev1.WorkerPool{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
 			return err
 		}
@@ -774,7 +832,7 @@ func TestSyncStatus_ReadyReplicas(t *testing.T) {
 		dep.Status.ReadyReplicas = 2
 	})
 	eventually(t, func(ctx context.Context) (bool, error) {
-		current := &atev1alpha1.WorkerPool{}
+		current := &atev1.WorkerPool{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
 			return false, nil
 		}
@@ -789,11 +847,11 @@ func TestSyncStatus_ReadyReplicas(t *testing.T) {
 func TestWorkerPoolMetrics(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
-	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+	if err := atev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
 	wp := makeWorkerPool("test-metrics", "default", 4, "worker:v1")
-	wp.Status = atev1alpha1.WorkerPoolStatus{Replicas: 4, ReadyReplicas: 2}
+	wp.Status = atev1.WorkerPoolStatus{Replicas: 4, ReadyReplicas: 2}
 	reader := sdkmetric.NewManualReader()
 	r := &WorkerPoolReconciler{
 		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp).Build(),

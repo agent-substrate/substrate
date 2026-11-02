@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -58,6 +57,7 @@ type Proxy struct {
 }
 
 type activation struct {
+	actorUID          string
 	dialer            tunnelDialer
 	certificateSource actorCertificateSource
 	expiresAt         time.Time
@@ -110,7 +110,7 @@ func (e *Proxy) activationLocked(actorUID string) *activation {
 	active := e.active[actorUID]
 	if active == nil {
 		ctx, cancel := context.WithCancel(context.Background())
-		active = &activation{ctx: ctx, cancel: cancel}
+		active = &activation{actorUID: actorUID, ctx: ctx, cancel: cancel}
 		e.active[actorUID] = active
 	}
 	return active
@@ -287,10 +287,23 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 		_ = downstream.Close()
 		return
 	}
+	if active.dialer == nil {
+		e.mu.Unlock()
+		// The actor sees this as a connection that closes right away, like a
+		// network failure. This logs at Debug because an actor without an
+		// egress gateway hits this on every outbound connection.
+		slog.DebugContext(active.ctx, "atunnel dropped an egress connection: actor egress is not active",
+			slog.String("actorUID", active.actorUID))
+		_ = downstream.Close()
+		return
+	}
 	if time.Now().Compare(active.expiresAt) >= 0 {
 		// Expiry blocks only new tunnels. Connections admitted with a valid
 		// certificate have completed mTLS and are allowed to drain normally.
 		e.mu.Unlock()
+		// renew logs the expiry or the denied renewal once at Warn.
+		slog.DebugContext(active.ctx, "atunnel dropped an egress connection: actor has no valid certificate",
+			slog.String("actorUID", active.actorUID))
 		_ = downstream.Close()
 		return
 	}
@@ -328,17 +341,26 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 func copyBothWays(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(a, b)
+		_, _ = copyConn(a, b)
 		closeWrite(a)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(b, a)
+		_, _ = copyConn(b, a)
 		closeWrite(b)
 		done <- struct{}{}
 	}()
 	<-done
 	<-done
+}
+
+// copyConn copies src to dst until EOF. Unlike io.Copy, it doesn't hold a 32 KiB
+// buffer per direction while the tunnel is idle.
+func copyConn(dst, src net.Conn) (int64, error) {
+	if stream, ok := src.(*h2StreamConn); ok {
+		return stream.writeTo(dst)
+	}
+	return (&streamCopy{dest: dst, src: src}).do()
 }
 
 func closeWrite(conn net.Conn) {

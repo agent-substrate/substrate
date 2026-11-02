@@ -44,4 +44,5 @@ const (
 	BurnCPURoute   = "/burncpu"
 	IngestRoute    = "/ingest"
 	UseCPURoute    = "/usecpu"
+	RunScriptRoute = "/runscript"
 )

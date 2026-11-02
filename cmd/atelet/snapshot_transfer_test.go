@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
@@ -36,7 +37,6 @@ import (
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -62,6 +62,7 @@ func newPluginHerder(t *testing.T, store objectstorage.ObjectStorage) *Atelet {
 		snapshots:          snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 		sandboxAssetCache:  newTestAssetCache(t),
 		runtimes:           newRuntimeIndex(),
+		checkpointTimeout:  defaultCheckpointTimeout,
 	}
 }
 
@@ -105,7 +106,7 @@ func TestUploadSnapshotManifestLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a", "b", "c"}}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a", "b", "c"}}
 	for _, f := range rec.SnapshotFiles {
 		if err := os.WriteFile(dir+"/"+f, []byte(f), 0o600); err != nil {
 			t.Fatal(err)
@@ -161,11 +162,11 @@ type failingNodePlugin struct {
 	err error
 }
 
-func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstorev1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
+func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstore.FetchSnapshotRequest, ...grpc.CallOption) (*objectstore.FetchSnapshotResponse, error) {
 	return nil, p.err
 }
 
-func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstorev1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
+func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstore.UploadSnapshotRequest, ...grpc.CallOption) (*objectstore.UploadSnapshotResponse, error) {
 	return nil, p.err
 }
 
@@ -181,7 +182,6 @@ func TestObjectStorePluginErrorCodeThroughAtelet(t *testing.T) {
 	}
 	rec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
@@ -245,7 +245,7 @@ func TestMintErrorCodeThroughAtelet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
 	transfers := []struct {
 		name      string
 		retryable bool
@@ -304,7 +304,7 @@ func TestObjectStorePluginErrorKeepsCredentialsOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
 	transfers := []struct {
 		name string
 		uri  string // the URI the transfer names in its error, when it takes one
@@ -417,7 +417,7 @@ func (s *pluginSidecar) start() {
 		return
 	}
 	srv := grpc.NewServer()
-	objectstorev1.RegisterNodeProviderServer(srv, s.plugin)
+	objectstore.RegisterNodeProviderServer(srv, s.plugin)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go srv.Serve(lis)
 	s.mu.Lock()
@@ -438,7 +438,7 @@ func (s *pluginSidecar) stop() {
 }
 
 // The upload after CheckpointWorkload waits out a plugin outage longer than
-// the ready wait, since a retried Checkpoint cannot redo it. The paused
+// the ready wait, since a retried Checkpoint cannot redo it. The PromoteSnapshot
 // upload, which a retry can redo, still fails within the ready wait.
 func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	const wait = 200 * time.Millisecond
@@ -456,13 +456,12 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		t.Fatalf("WaitReady = %v", err)
 	}
 	s := &Atelet{
-		objectStorePlugin:  objectstorev1.NewNodeProviderClient(conn),
+		objectStorePlugin:  objectstore.NewNodeProviderClient(conn),
 		workerActorJWTs:    testWorkerActorJWTs(),
 		snapshotScratchDir: t.TempDir(),
 	}
 	rec := sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    testPauseImage,
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
@@ -514,7 +513,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	}
 }
 
-// fetchManifest keeps the plugin's NotFound readable, which the paused
+// fetchManifest keeps the plugin's NotFound readable, which the local
 // snapshot upload uses to tell a missing snapshot from a failed probe.
 func TestFetchManifestKeepsNotFound(t *testing.T) {
 	s := &Atelet{

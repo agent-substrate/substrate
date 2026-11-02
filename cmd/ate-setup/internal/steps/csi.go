@@ -69,17 +69,12 @@ type csiDriverSpec struct {
 // installsNothing reports whether the value selects no driver at all.
 func (s csiDriverSpec) installsNothing() bool { return !s.hostpath && !s.nfs }
 
-// csiDrivers is every accepted --setup-csi value. "true", "false" and the empty
-// string are the shell installer's boolean spellings, from before the flag grew
-// driver names, and still work.
+// csiDrivers is every accepted --setup-csi value.
 var csiDrivers = map[string]csiDriverSpec{
 	"nfs":      {nfs: true},
 	"hostpath": {hostpath: true},
 	"both":     {hostpath: true, nfs: true},
-	"true":     {hostpath: true, nfs: true},
 	"none":     {},
-	"false":    {},
-	"":         {},
 }
 
 // ValidateCSIDriver reports whether driver names something --setup-csi accepts.
@@ -271,7 +266,7 @@ spec:
 
 	log.Infof("Creating the hostpath.csi.k8s.io CSIDriverConfig...")
 	if err := e.applyInline(ctx, `
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: hostpath.csi.k8s.io
@@ -403,7 +398,7 @@ spec:
       - $patch: delete
         name: socat
       - name: envoy
-        image: envoyproxy/envoy:v1.34-latest
+        image: envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
         command:
         - /usr/local/bin/envoy
         args:
@@ -457,7 +452,7 @@ spec:
 
 // csiNFSDriverConfig registers the NFS driver; its serverName is the one DNS name servicednssigner issues, <service>.<namespace>.svc.
 const csiNFSDriverConfig = `
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io

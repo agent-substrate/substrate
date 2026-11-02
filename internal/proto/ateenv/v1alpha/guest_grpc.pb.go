@@ -26,7 +26,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: guest.proto
+// source: internal/proto/ateenv/v1alpha/guest.proto
 
 package ateenvv1alpha
 
@@ -334,7 +334,7 @@ var ProcessService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "guest.proto",
+	Metadata: "internal/proto/ateenv/v1alpha/guest.proto",
 }
 
 const (
@@ -480,5 +480,5 @@ var FileSystemService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "guest.proto",
+	Metadata: "internal/proto/ateenv/v1alpha/guest.proto",
 }

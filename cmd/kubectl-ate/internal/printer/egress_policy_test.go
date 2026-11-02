@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -28,28 +28,28 @@ func TestPrintEgressPolicyTo(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)
 
-	policy := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{
+	policy := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{
 			Atespace:   "team-a",
 			Name:       "default",
 			Uid:        "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d",
 			Version:    2,
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 		},
-		Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HttpsRule{Hostnames: []string{"www.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
+		Rules: []*ateapi.EgressRule{
+			{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapi.HttpsRule{Hostnames: []string{"www.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{8443}}}},
 		},
 	}
-	empty := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1, CreateTime: timestamppb.New(now.Add(-30 * time.Second))},
+	empty := &ateapi.EgressPolicy{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1, CreateTime: timestamppb.New(now.Add(-30 * time.Second))},
 	}
 
 	tests := []struct {
 		name    string
 		format  string
 		actor   string
-		policy  *ateapipb.EgressPolicy
+		policy  *ateapi.EgressPolicy
 		want    string
 		wantErr bool
 	}{

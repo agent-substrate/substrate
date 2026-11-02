@@ -48,12 +48,12 @@ Apply all areas that are touched. Most issues need one or two; a few need more.
 
 | Label | Scope |
 |---|---|
-| `area/api` | User-facing Substrate API (`pkg/proto/ateapipb/`, proto definitions, API semantics, versioning) |
+| `area/api` | User-facing Substrate API (`api/ateapi/v1/`, proto definitions, API semantics, versioning) |
 | `area/api-machinery` | API server internals: RPC handlers, storage layer, syncer, controllers (`cmd/ateapi/`, `cmd/atecontroller/`) |
 | `area/network` | Networking: atenet-router, Envoy, ext_proc, DNS, xDS, ingress (`cmd/atenet/`) |
 | `area/node` | Node agent and worker lifecycle: atelet, sandbox launch, OCI, cgroups (`cmd/atelet/`) |
 | `area/gvisor` | gVisor sandbox specifics: runsc integration, GPU in gVisor, gVisor OCI (`cmd/ateworker-gvisor/`) |
-| `area/microVM` | Micro-VM sandbox specifics: cloud-hypervisor, kata, snapshot/restore (`cmd/ateworker-microvm/`) |
+| `area/microVM` | MicroVM sandbox specifics: cloud-hypervisor, kata, snapshot/restore (`cmd/ateworker-microvm/`) |
 | `area/storage` | Snapshot storage, image cache, GCS/S3 backends, retention (`internal/imagecache/`, ActorSnapshot) |
 | `area/scheduling` | WorkerPool sizing, actor placement, HPA, resource allocation |
 | `area/observability` | Metrics, tracing, logging, OTLP, OTel SDK integration |

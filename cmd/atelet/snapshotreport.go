@@ -17,15 +17,15 @@ package main
 import (
 	"context"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/snapshottracker"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // trackerReporter is the snapshottracker.Reporter that reports to the control
 // plane's WorkerService, with atelet's own client certificate.
-type trackerReporter struct{ workers ateapipb.WorkerServiceClient }
+type trackerReporter struct{ workers ateapi.WorkerServiceClient }
 
 var _ snapshottracker.Reporter = (*trackerReporter)(nil)
 
@@ -34,7 +34,7 @@ var _ snapshottracker.Reporter = (*trackerReporter)(nil)
 // error unwrapped, so the tracker can tell a refusal from a failure to reach
 // it.
 func (r *trackerReporter) ReportActorSnapshotState(ctx context.Context, actorUID string, actor resources.ActorRef, state *ateletpb.ActorSnapshotState) error {
-	_, err := r.workers.ReportActorSnapshotState(ctx, &ateapipb.ReportActorSnapshotStateRequest{
+	_, err := r.workers.ReportActorSnapshotState(ctx, &ateapi.ReportActorSnapshotStateRequest{
 		Actor:    actor.ToObjectRef(),
 		ActorUid: actorUID,
 		State:    toAteAPIActorSnapshotState(state),
@@ -46,11 +46,11 @@ func (r *trackerReporter) ReportActorSnapshotState(ctx context.Context, actorUID
 // control plane's, which carries each snapshot's fields inline. A snapshot
 // atelet does not hold stays unset, since the control plane reads a state with
 // neither latest_local nor uploading as a detach.
-func toAteAPIActorSnapshotState(in *ateletpb.ActorSnapshotState) *ateapipb.ActorSnapshotState {
+func toAteAPIActorSnapshotState(in *ateletpb.ActorSnapshotState) *ateapi.ActorSnapshotState {
 	if in == nil {
 		return nil
 	}
-	return &ateapipb.ActorSnapshotState{
+	return &ateapi.ActorSnapshotState{
 		LatestLocal:   toAteAPISnapshotReport(in.GetLatestLocal()),
 		Uploading:     toAteAPISnapshotReport(in.GetUploading()),
 		LatestDurable: toAteAPISnapshotReport(in.GetLatestDurable()),
@@ -60,12 +60,12 @@ func toAteAPIActorSnapshotState(in *ateletpb.ActorSnapshotState) *ateapipb.Actor
 
 // toAteAPISnapshotReport converts one of atelet's SnapshotReports to the
 // control plane's. A report that names no snapshot converts to nil.
-func toAteAPISnapshotReport(in *ateletpb.SnapshotReport) *ateapipb.SnapshotReport {
+func toAteAPISnapshotReport(in *ateletpb.SnapshotReport) *ateapi.SnapshotReport {
 	snap := in.GetSnapshot()
 	if snap == nil {
 		return nil
 	}
-	out := &ateapipb.SnapshotReport{
+	out := &ateapi.SnapshotReport{
 		Uuid:                snap.GetSnapshotUuid(),
 		Generation:          snap.GetGeneration(),
 		Fidelity:            toAteAPIFidelity(snap.GetFidelity()),
@@ -73,7 +73,7 @@ func toAteAPISnapshotReport(in *ateletpb.SnapshotReport) *ateapipb.SnapshotRepor
 		DurableCompleteTime: in.GetDurableCompleteTime(),
 	}
 	if obj := snap.GetObject(); obj != nil {
-		out.Object = &ateapipb.ObjectSnapshot{SnapshotUri: obj.GetSnapshotUri()}
+		out.Object = &ateapi.ObjectSnapshot{SnapshotUri: obj.GetSnapshotUri()}
 	}
 	return out
 }
@@ -81,15 +81,15 @@ func toAteAPISnapshotReport(in *ateletpb.SnapshotReport) *ateapipb.SnapshotRepor
 // toAteAPIFidelity maps atelet's fidelity enum onto the identical public one,
 // level by level. Anything else goes out as UNSPECIFIED, which the control
 // plane rejects.
-func toAteAPIFidelity(in ateletpb.SnapshotFidelity) ateapipb.SnapshotFidelity {
+func toAteAPIFidelity(in ateletpb.SnapshotFidelity) ateapi.SnapshotFidelity {
 	switch in {
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		return ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		return ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+		return ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	default:
-		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		return ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
 }

@@ -18,8 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -31,8 +32,9 @@ const (
 )
 
 var (
-	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
-	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
+	ignoreUID        = protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "uid")
+	ignoreVersion    = protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "version")
+	ignoreTimestamps = protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "create_time", "update_time", "delete_time")
 )
 
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
@@ -45,7 +47,7 @@ func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) 
 // is still a meaningful thing to assert on even though a Worker holds a set;
 // asserting through this keeps them readable and would fail loudly (by looking
 // at the wrong entry) if a test ever placed two.
-func firstAssignment(t *testing.T, st store.Interface, workerName string) *ateapipb.ActorAssignment {
+func firstAssignment(t *testing.T, st store.Interface, workerName string) *ateapi.ActorAssignment {
 	t.Helper()
 	page, err := st.ListWorkerAssignments(context.Background(), workerName, store.ListOptions{})
 	if err != nil {
@@ -59,13 +61,10 @@ func firstAssignment(t *testing.T, st store.Interface, workerName string) *ateap
 
 // seedAssignment places an actor on an already-created worker, which is how a
 // test arranges a worker that is already hosting something.
-func seedAssignment(t *testing.T, st store.Interface, workerName string, assignment *ateapipb.ActorAssignment) {
+func seedAssignment(t *testing.T, st store.Interface, workerName string, assignment *ateapi.ActorAssignment) {
 	t.Helper()
 	if assignment == nil {
 		return
 	}
-	ctx := context.Background()
-	if err := st.BindActorToWorker(ctx, workerName, assignment, nil); err != nil {
-		t.Fatalf("seed assignment on worker %q: %v", workerName, err)
-	}
+	storetest.MustSeedAssignment(t, context.Background(), st, workerName, assignment)
 }

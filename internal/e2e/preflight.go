@@ -21,7 +21,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // PreflightChecks checks that the test environment is ready for the test suite.
@@ -56,7 +56,7 @@ func PreflightChecks() error {
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	_, err = clients.SubstrateAPI.ListActors(listCtx, &ateapipb.ListActorsRequest{})
+	_, err = clients.SubstrateAPI.ListActors(listCtx, &ateapi.ListActorsRequest{})
 	if err != nil {
 		return fmt.Errorf("ListActors RPC failed: %v", err)
 	}
@@ -67,7 +67,7 @@ func PreflightChecks() error {
 	// and any issues are to be reported at runtime. Which device a sandbox class
 	// requires should not be checked here to prevent drift between platforms.
 	if IsMicroVM() {
-		if _, err := clients.SubstrateK8s.ApiV1alpha1().SandboxConfigs().Get(ctx, SandboxClassMicroVM, metav1.GetOptions{}); err != nil {
+		if _, err := clients.SubstrateK8s.AteV1().SandboxConfigs().Get(ctx, SandboxClassMicroVM, metav1.GetOptions{}); err != nil {
 			return fmt.Errorf("E2E_SANDBOX_CLASS=%s but SandboxConfig/%s is missing (see docs/dev/microvm-local.md for cluster setup): %w",
 				SandboxClassMicroVM, SandboxClassMicroVM, err)
 		}

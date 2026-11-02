@@ -32,8 +32,20 @@ service WorkerSupport {
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 
-  // Register capacity and supported sandbox runtimes for this worker with atelet.
+  // AcquireWorkerEpoch hands out a new epoch for this worker process, for
+  // atelet to forward to the control plane's WorkerService, which this
+  // mirrors. A worker process calls it once at startup, before RegisterWorker.
+  rpc AcquireWorkerEpoch(AcquireWorkerEpochRequest) returns (AcquireWorkerEpochResponse) {}
+
+  // RegisterWorker activates the epoch this worker process acquired and
+  // records its pod IPs and capacity. A worker process registers once, and
+  // takes no workloads until it has. FAILED_PRECONDITION means another worker
+  // process has registered since; this one must not serve.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
+
+  // SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
+  // can run. Called after RegisterWorker, and again whenever they change.
+  rpc SetWorkerSandboxRuntimes(SetWorkerSandboxRuntimesRequest) returns (SetWorkerSandboxRuntimesResponse) {}
 
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
   // for atelet to forward to the control plane's WorkerService, which this
@@ -58,33 +70,62 @@ service WorkerSupport {
   rpc ReportActorCrashed(ReportActorCrashedRequest) returns (ReportActorCrashedResponse) {}
 }
 
+message AcquireWorkerEpochRequest {
+}
+
+message AcquireWorkerEpochResponse {
+  // The epoch handed out, for this worker process to register with.
+  int64 epoch = 1;
+}
+
 message RegisterWorkerRequest {
+  // The epoch this worker process acquired through AcquireWorkerEpoch.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 2;
+
+  // The worker pod's IPs, at most one per IP family, in the order Kubernetes
+  // reports them.
+  //
+  // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  repeated string ips = 3;
+
   // What the worker can supply. atelet converts it to the control plane's
   // WorkerResources when forwarding.
   //
   // +k8s:required
   WorkerResources capacity = 1;
-
-  // Runtime that new and cold-booted actors start under.
-  // Snapshots matching default_runtime can also warm-boot on this worker.
-  // atelet converts it to the control plane's SandboxRuntime when forwarding.
-  //
-  // +k8s:required
-  SandboxRuntime default_runtime = 2;
-
-  // Additional runtimes (excluding default_runtime) that this worker can
-  // restore snapshots from right now.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=32
-  // +k8s:listType=atomic
-  repeated SandboxRuntime restorable_runtimes = 3;
 }
 
-// SandboxRuntime describes a sandbox runtime and its compatibility identity as
-// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+message SetWorkerSandboxRuntimesRequest {
+  // The epoch this worker process registered with.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 epoch = 1;
+
+  // The sandbox classes this worker runs and the compatibility versions it
+  // runs them under. atelet converts it to the control plane's
+  // WorkerSandboxClass when forwarding.
+  //
+  // +k8s:required
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # keep in sync with WorkerPoolSpec.sandboxClasses
+  // +k8s:listType=map
+  // +k8s:listMapKey=sandbox_class
+  repeated WorkerSandboxClass sandbox_classes = 2;
+}
+
+message SetWorkerSandboxRuntimesResponse {
+}
+
+// WorkerSandboxClass is one sandbox class a worker runs, with the runtimes
+// it runs it under. It mirrors the control plane's WorkerSandboxClass and is
 // validated by the same rules.
-message SandboxRuntime {
+message WorkerSandboxClass {
   // e.g. "gvisor", "microvm"
   //
   // +k8s:required
@@ -92,20 +133,77 @@ message SandboxRuntime {
   // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1;
 
-  // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version`
-  // can warm-boot on this runtime.
-  // TODO: Add support for additional compatibility versions.
+  // Runtime new and cold-booted actors of this class start under. Snapshots
+  // matching its version can also warm-boot on this worker.
+  //
+  // +k8s:required
+  WorkerSandboxRuntime default_runtime = 2;
+
+  // Additional runtimes of this class (excluding default_runtime) that this
+  // worker can restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated WorkerSandboxRuntime restorable_runtimes = 3;
+}
+
+// WorkerSandboxRuntime is one runtime a worker runs for the class of its
+// WorkerSandboxClass entry. It mirrors the control plane's
+// WorkerSandboxRuntime and is validated by the same rules.
+message WorkerSandboxRuntime {
+  // Compatibility version stamped onto an actor's snapshot when a checkpoint
+  // is taken on this runtime. Snapshots matching it can warm-boot on this
+  // runtime.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 1;
+
+  // The resource overhead incurred by the worker for each actor running under
+  // this runtime, on top of the actor's stated limits.
+  //
+  // +k8s:optional
+  RuntimeOverhead actor_overhead = 2;
+}
+
+// RuntimeOverhead is the memory an actor uses on its worker outside its own
+// limits. It mirrors the control plane's RuntimeOverhead.
+message RuntimeOverhead {
+  // memory_bytes is a fixed amount of memory for each actor.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1099511627776 # 1TiB
+  int64 memory_bytes = 1;
+
+  // memory_bytes_per_gib is memory per GiB of the actor's memory limit, in
+  // proportion and rounded down to a byte.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=1073741824 # 1GiB
+  int64 memory_bytes_per_gib = 2;
+}
+
+// ActorSandboxRuntime is the runtime an actor runs under, as named on Run and
+// Restore. It mirrors the control plane's ActorSandboxRuntime and is validated by
+// the same rules.
+message ActorSandboxRuntime {
+  // e.g. "gvisor", "microvm"
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:customValidation # gvisor or microvm
+  string sandbox_class = 1;
+
+  // Compatibility version of the runtime.
   //
   // +k8s:required
   VersionedSandboxCompat version = 2;
-
-  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
-  // once workers report one.
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
-// key-value compatibility attributes for a SandboxRuntime.
+// key-value compatibility attributes of a sandbox runtime.
 message VersionedSandboxCompat {
   // Compatibility schema version (e.g. "v1") defining which runtime and
   // hardware attributes are recorded and how they are computed.
@@ -338,7 +436,7 @@ message MintActorCertificateRequest {
   // corresponding private key.
   //
   // +k8s:required
-  // +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
+  // +k8s:maxBytes=16384 # matches the control-plane MintWorkerActorCertificateRequest bound this is forwarded to
   bytes certificate_signing_request = 4;
 }
 
@@ -366,6 +464,11 @@ service Atelet {
   // atelet deletes the actor's older local snapshots, except one still being
   // uploaded, which it deletes after that upload ends. A Checkpoint that fails
   // before then leaves the actor's previous local snapshot in place.
+  //
+  // A Checkpoint of a snapshot already committed, as a retry's is, returns the
+  // actor's state without checkpointing the workload again; under
+  // UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+  // yet.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
   // Restore restores a workload from a snapshot onto a worker.
@@ -373,9 +476,13 @@ service Atelet {
 
   // PromoteSnapshot makes `snapshot` durable in object storage while keeping
   // its local copy on this node. Used when a snapshot needs to be in object
-  // storage (e.g. for tagging) without evicting the paused actor from the
-  // node. Waits for an in-flight detach, and fails for an actor running on
-  // this node.
+  // storage (e.g. for tagging) without evicting the suspended actor's local
+  // snapshot from the node. Waits for an in-flight detach, and fails for an
+  // actor running on this node.
+  //
+  // atelet never uploads a local copy written before the node last rebooted,
+  // since its files may be torn: it answers from the manifest at
+  // `snapshot.object` instead, and fails with NOT_FOUND if there is none.
   //
   // Idempotent: once the snapshot is durable, atelet answers from the
   // manifest at `snapshot.object`, and fails if there is none.
@@ -385,14 +492,16 @@ service Atelet {
 
   // DetachActor makes the actor's latest local snapshot durable, then deletes
   // the actor's local snapshots on this node, so it can resume on any node.
-  // atelet also detaches a suspended actor on its own after its detach delay,
-  // and reports that with WorkerService.ReportActorSnapshotState; it does not
-  // report a DetachActor call, whose caller reads the state from the response.
-  // Waits for an operation already in progress on the actor, such as an
-  // upload or a detach. Does nothing when atelet holds no local snapshot for
-  // the actor. Returns ABORTED when the actor runs on this node, and
-  // FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-  // durable, such as when it has no `snapshot.object`.
+  // atelet also detaches a suspended actor on its own after its detach delay.
+  // It reports either detach with WorkerService.ReportActorSnapshotState, so
+  // the control plane records a DetachActor call's detach even if the caller
+  // does not, and once reported, forgets the actor. The detach doesn't end with
+  // the call: if the caller's context ends first, DetachActor returns that
+  // error and the detach runs on. Waits for an operation already in progress on
+  // the actor, such as an upload or a detach. Does nothing when atelet holds no
+  // local snapshot for the actor. Returns ABORTED when the actor runs on this
+  // node, and FAILED_PRECONDITION when atelet cannot make the latest local
+  // snapshot durable, such as when it has no `snapshot.object`.
   rpc DetachActor(DetachActorRequest) returns (DetachActorResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -485,12 +594,12 @@ message RunRequest {
   ResourceRequirements resources = 10;
 
   // The runtime the assigned worker runs this actor under, from
-  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-  // sandbox binaries through its advertised-runtime index and records the
-  // runtime for the actor so a later Checkpoint pins the snapshot to it.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so a later Checkpoint pins the snapshot to it.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 12;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -750,13 +859,13 @@ message Capabilities {
   // +k8s:optional
   // +k8s:maxItems=64
   // +k8s:listType=set
-  // +k8s:customValidation # capability grammar; "ALL" not accepted
+  // +k8s:customValidation # a Linux capability name; "ALL" not accepted
   repeated string add = 1;
 
   // +k8s:optional
   // +k8s:maxItems=64
   // +k8s:listType=set
-  // +k8s:customValidation # capability grammar
+  // +k8s:customValidation # a Linux capability name or "ALL"
   repeated string drop = 2;
 }
 
@@ -805,6 +914,9 @@ message HttpGetAction {
 }
 
 message RunResponse {
+  // The epoch of the worker process that started the workload, as it
+  // registered with the control plane.
+  int64 worker_epoch = 1;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -930,8 +1042,9 @@ message ActorSnapshotState {
 
   // The newest snapshot atelet knows is durable, whether or not the control
   // plane has recorded it: one atelet uploaded since it started, or one a
-  // PromoteSnapshot found already uploaded. Unset if there is none, which says
-  // nothing about older durable snapshots.
+  // PromoteSnapshot found already uploaded, while atelet still tracks the
+  // actor. Unset if there is none (or once the actor is detached and
+  // reported), which says nothing about older durable snapshots.
   SnapshotReport latest_durable = 3;
 
   // When atelet next plans to trigger a background upload, of `uploading` if
@@ -1076,9 +1189,10 @@ message RestoreRequest {
 
   // Snapshot to restore from. atelet reads its local copy if it holds a
   // usable one, and `snapshot.object` otherwise. A local copy is unusable if
-  // its manifest does not parse or lists a missing file. While atelet is
-  // detaching the actor, it waits for the detach to finish and then reads
-  // `snapshot.object`. Fails if neither copy exists: that generation is lost.
+  // its manifest does not parse, lists a missing file, or was written before
+  // the node last rebooted. While atelet is detaching the actor, it waits for
+  // the detach to finish and then reads `snapshot.object`. Fails if neither
+  // copy exists: that generation is lost.
   //
   // `snapshot.object` is required even while the control plane has not
   // recorded the snapshot's upload complete: atelet may have uploaded the
@@ -1101,16 +1215,19 @@ message RestoreRequest {
   ResourceRequirements resources = 10;
 
   // The runtime the assigned worker restores this actor under, from
-  // WorkerAssignment.sandbox_runtime. atelet resolves the pause image and
-  // sandbox binaries through its advertised-runtime index and records the
-  // runtime for the actor so the next Checkpoint pins the snapshot to what ran
-  // this activation, not what the restored snapshot was taken under.
+  // WorkerAssignment.sandbox_runtime. atelet resolves the sandbox binaries
+  // through its advertised-runtime index and records the runtime for the
+  // actor so the next Checkpoint pins the snapshot to what ran this
+  // activation, not what the restored snapshot was taken under.
   //
   // +k8s:required
-  SandboxRuntime sandbox_runtime = 12;
+  ActorSandboxRuntime sandbox_runtime = 12;
 }
 
 message RestoreResponse {
+  // The epoch of the worker process that restored the workload, as it
+  // registered with the control plane.
+  int64 worker_epoch = 1;
 }
 
 message PromoteSnapshotRequest {
@@ -1166,7 +1283,8 @@ message DetachActorRequest {
 }
 
 message DetachActorResponse {
-  // The actor's state once detached: latest_local is unset, and latest_durable
-  // is its latest snapshot, if atelet knows one.
+  // The actor's state from the detach: latest_local is unset, and
+  // latest_durable is its latest snapshot. Once detached and reported, atelet
+  // forgets the actor, so calling DetachActor again returns an empty state.
   ActorSnapshotState state = 1;
 }

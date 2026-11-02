@@ -18,12 +18,12 @@ import (
 	"log/slog"
 	"reflect"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // Resource is any Atespaced resource message carrying the common metadata.
 type Resource interface {
-	GetMetadata() *ateapipb.ResourceMetadata
+	GetMetadata() *ateapi.ResourceMetadata
 }
 
 // ResourceRef identifies an Atespaced resource by the (atespace, name).
@@ -50,25 +50,25 @@ func (r ResourceRef[R]) LogValue() slog.Value {
 }
 
 // ToObjectRef converts the reference to its wire form.
-func (r ResourceRef[R]) ToObjectRef() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: r.Atespace, Name: r.Name}
+func (r ResourceRef[R]) ToObjectRef() *ateapi.ObjectRef {
+	return &ateapi.ObjectRef{Atespace: r.Atespace, Name: r.Name}
 }
 
 // resourceRefFromObjectRef converts a wire reference to the in-process form.
-func resourceRefFromObjectRef[R Resource](ref *ateapipb.ObjectRef) ResourceRef[R] {
+func resourceRefFromObjectRef[R Resource](ref *ateapi.ObjectRef) ResourceRef[R] {
 	return ResourceRef[R]{Atespace: ref.GetAtespace(), Name: ref.GetName()}
 }
 
 // ActorRef identifies an actor by the (atespace, name).
-type ActorRef = ResourceRef[*ateapipb.Actor]
+type ActorRef = ResourceRef[*ateapi.Actor]
 
 // ActorRefFromObjectRef converts a wire reference to an ActorRef.
-func ActorRefFromObjectRef(ref *ateapipb.ObjectRef) ActorRef {
-	return resourceRefFromObjectRef[*ateapipb.Actor](ref)
+func ActorRefFromObjectRef(ref *ateapi.ObjectRef) ActorRef {
+	return resourceRefFromObjectRef[*ateapi.Actor](ref)
 }
 
 // ActorRefFromActor returns the reference addressing the given actor.
-func ActorRefFromActor(a *ateapipb.Actor) ActorRef {
+func ActorRefFromActor(a *ateapi.Actor) ActorRef {
 	return ActorRef{
 		Atespace: a.GetMetadata().GetAtespace(),
 		Name:     a.GetMetadata().GetName(),
@@ -76,16 +76,16 @@ func ActorRefFromActor(a *ateapipb.Actor) ActorRef {
 }
 
 // ActorTemplateRef identifies an ActorTemplate by the (atespace, name).
-type ActorTemplateRef = ResourceRef[*ateapipb.ActorTemplate]
+type ActorTemplateRef = ResourceRef[*ateapi.ActorTemplate]
 
 // ActorTemplateRefFromObjectRef converts a wire reference to an ActorTemplateRef.
-func ActorTemplateRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateRef {
-	return resourceRefFromObjectRef[*ateapipb.ActorTemplate](ref)
+func ActorTemplateRefFromObjectRef(ref *ateapi.ObjectRef) ActorTemplateRef {
+	return resourceRefFromObjectRef[*ateapi.ActorTemplate](ref)
 }
 
 // ActorTemplateRefFromActorTemplate returns the reference addressing the given
 // template.
-func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateRef {
+func ActorTemplateRefFromActorTemplate(t *ateapi.ActorTemplate) ActorTemplateRef {
 	return ActorTemplateRef{
 		Atespace: t.GetMetadata().GetAtespace(),
 		Name:     t.GetMetadata().GetName(),
@@ -93,15 +93,15 @@ func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateR
 }
 
 // TagRef identifies a Tag by the (atespace, name).
-type TagRef = ResourceRef[*ateapipb.Tag]
+type TagRef = ResourceRef[*ateapi.Tag]
 
 // TagRefFromObjectRef converts an ObjectRef to a TagRef.
-func TagRefFromObjectRef(ref *ateapipb.ObjectRef) TagRef {
-	return resourceRefFromObjectRef[*ateapipb.Tag](ref)
+func TagRefFromObjectRef(ref *ateapi.ObjectRef) TagRef {
+	return resourceRefFromObjectRef[*ateapi.Tag](ref)
 }
 
 // TagRefFromTag returns the reference addressing the given tag.
-func TagRefFromTag(t *ateapipb.Tag) TagRef {
+func TagRefFromTag(t *ateapi.Tag) TagRef {
 	return TagRef{
 		Atespace: t.GetMetadata().GetAtespace(),
 		Name:     t.GetMetadata().GetName(),

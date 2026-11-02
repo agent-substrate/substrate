@@ -58,8 +58,8 @@ import (
 	"sync"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -137,7 +137,7 @@ var (
 	mu          sync.Mutex
 	assignments = make([]*assignment, 0, maxAssignments) // newest first
 
-	ateClient  ateapipb.ControlClient
+	ateClient  ateapi.ControlClient
 	ateAPI     *ateclient.Client
 	kubeClient *kubernetes.Clientset
 )
@@ -198,17 +198,17 @@ func newKubeClient() (*kubernetes.Clientset, error) {
 // actorStateString maps the proto State enum to the human-readable
 // phase string the UI's badge logic understands (running / suspended
 // / etc).
-func actorStateString(s ateapipb.ActorState) string {
+func actorStateString(s ateapi.ActorState) string {
 	switch s {
-	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+	case ateapi.ActorState_ACTOR_STATE_RESUMING:
 		return "Resuming"
-	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+	case ateapi.ActorState_ACTOR_STATE_RUNNING:
 		return "Running"
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDING:
 		return "Suspending"
-	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+	case ateapi.ActorState_ACTOR_STATE_SUSPENDED:
 		return "Suspended"
-	case ateapipb.ActorState_ACTOR_STATE_DELETING:
+	case ateapi.ActorState_ACTOR_STATE_DELETING:
 		return "Deleting"
 	default:
 		return "?"
@@ -219,7 +219,7 @@ func actorStateString(s ateapipb.ActorState) string {
 // A worker hosting an actor is "Running"; an idle worker is "Idle".
 // The UI's badgeFor() treats "running" as green; "idle" falls through
 // to the neutral badge, which is the right visual treatment.
-func workerPhase(w *ateapipb.Worker) string {
+func workerPhase(w *ateapi.Worker) string {
 	if w.GetStatus().GetAllocated().GetActors() > 0 {
 		return "Running"
 	}
@@ -234,7 +234,7 @@ func listActorNames(ctx context.Context) []string {
 	}
 	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(rctx, &ateapipb.ListActorsRequest{})
+	resp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{})
 	if err != nil {
 		log.Printf("[ui] ListActors error: %v", err)
 		return nil
@@ -365,7 +365,7 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+	resp, err := ateClient.ListWorkers(ctx, &ateapi.ListWorkersRequest{})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ListWorkers: " + err.Error()})
 		return
@@ -397,7 +397,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(ctx, &ateapipb.ListActorsRequest{})
+	resp, err := ateClient.ListActors(ctx, &ateapi.ListActorsRequest{})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ListActors: " + err.Error()})
 		return

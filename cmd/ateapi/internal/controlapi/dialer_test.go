@@ -15,6 +15,7 @@
 package controlapi
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -24,6 +25,7 @@ import (
 	"errors"
 	"math/big"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -39,7 +41,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 )
@@ -295,6 +299,48 @@ func TestVerifyAteletServerCert(t *testing.T) {
 			t.Fatal("verifyAteletServerCert succeeded, want error")
 		}
 	})
+}
+
+// nodeGetter answers like the API server: the named nodes exist, others are
+// NotFound, and lookupErr, when set, fails every read.
+func nodeGetter(lookupErr error, names ...string) func(context.Context, string) error {
+	return func(_ context.Context, node string) error {
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if slices.Contains(names, node) {
+			return nil
+		}
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "nodes"}, node)
+	}
+}
+
+func TestNodeGone(t *testing.T) {
+	spiffeID := installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace)
+	atelet := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "atelet-1"},
+		Spec:       corev1.PodSpec{NodeName: "node1"},
+	}
+	unavailable := apierrors.NewServiceUnavailable("etcd is down")
+	for _, tc := range []struct {
+		name     string
+		dialer   *AteletDialer
+		wantGone bool
+		wantErr  bool
+	}{
+		{name: "node deleted", dialer: NewAteletDialer(newTestAteletIndexer(t), spiffeID, "", "", WithNodeGetter(nodeGetter(nil, "node2"))), wantGone: true},
+		{name: "node exists", dialer: NewAteletDialer(newTestAteletIndexer(t), spiffeID, "", "", WithNodeGetter(nodeGetter(nil, "node1")))},
+		{name: "lookup fails", dialer: NewAteletDialer(newTestAteletIndexer(t), spiffeID, "", "", WithNodeGetter(nodeGetter(unavailable))), wantErr: true},
+		{name: "atelet registered meanwhile", dialer: NewAteletDialer(newTestAteletIndexer(t, atelet), spiffeID, "", "", WithNodeGetter(nodeGetter(nil)))},
+		{name: "no node getter", dialer: NewAteletDialer(newTestAteletIndexer(t), spiffeID, "", "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gone, err := tc.dialer.NodeGone(context.Background(), "node1")
+			if gone != tc.wantGone || (err != nil) != tc.wantErr {
+				t.Fatalf("NodeGone = %v, %v; want %v, error %v", gone, err, tc.wantGone, tc.wantErr)
+			}
+		})
+	}
 }
 
 // newTestAteletIndexer builds an indexer with the production byNode index

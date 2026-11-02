@@ -22,10 +22,10 @@ import (
 	"slices"
 	"testing"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	"go.ate.dev/substrate/pkg/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 )
 
@@ -35,14 +35,9 @@ func hashedTestVersion(t *testing.T, name string, isDefault bool, sha string) ha
 	t.Helper()
 	rec := &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
-		PauseImage:   testPauseImage,
 		Assets:       map[string]assetEntry{gvisorAssetName: {URL: "gs://bucket/" + name, SHA256: sha}},
 	}
-	h, err := versionBundleHash(rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return hashedVersion{versionPlan: versionPlan{name: name, isDefault: isDefault, rec: rec}, hash: h}
+	return hashedVersion{versionPlan: versionPlan{name: name, isDefault: isDefault, rec: rec}, hash: bundleHash(rec)}
 }
 
 func TestRuntimeIndex(t *testing.T) {
@@ -53,7 +48,7 @@ func TestRuntimeIndex(t *testing.T) {
 	x := newRuntimeIndex()
 	v1, v2 := hashedTestVersion(t, "v1", true, shaA), hashedTestVersion(t, "v2", false, shaB)
 
-	gvisor := v1alpha1.SandboxClassGvisor
+	gvisor := atev1.SandboxClassGvisor
 	x.register("pod-1", advertisedClass{class: gvisor, config: "config-x", hashed: []hashedVersion{v1, v2}})
 	for _, v := range []hashedVersion{v1, v2} {
 		rt, ok := x.lookup(v.hash)
@@ -69,7 +64,7 @@ func TestRuntimeIndex(t *testing.T) {
 	if !ok || cr.config != "config-x" || cr.defaultHash != v1.hash || !slices.Equal(cr.hashes, []string{v1.hash, v2.hash}) {
 		t.Errorf("worker(pod-1).class(gvisor) = %+v, %v; want config-x with %s default and both hashes", cr, ok, v1.hash)
 	}
-	if _, ok := wr.class(v1alpha1.SandboxClassMicroVM); ok {
+	if _, ok := wr.class(atev1.SandboxClassMicroVM); ok {
 		t.Error("worker(pod-1) advertises a class its pool does not run")
 	}
 
@@ -121,7 +116,7 @@ func TestRuntimeIndexRegisterRuntimes(t *testing.T) {
 		shaC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	)
 	x := newRuntimeIndex()
-	gvisor := v1alpha1.SandboxClassGvisor
+	gvisor := atev1.SandboxClassGvisor
 	old := hashedTestVersion(t, "v1", true, shaA)
 	x.register("pod-1", advertisedClass{class: gvisor, config: "config-x", hashed: []hashedVersion{old}})
 
@@ -148,8 +143,8 @@ func TestResolveRuntime(t *testing.T) {
 	const sha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	s := &Atelet{runtimes: newRuntimeIndex()}
 	advertised := hashedTestVersion(t, "v1", true, sha)
-	runtimeWith := func(class string, attrs ...*ateletpb.AttributeEntry) *ateletpb.SandboxRuntime {
-		return &ateletpb.SandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs}}
+	runtimeWith := func(class string, attrs ...*ateletpb.AttributeEntry) *ateletpb.ActorSandboxRuntime {
+		return &ateletpb.ActorSandboxRuntime{SandboxClass: class, Version: &ateletpb.VersionedSandboxCompat{SchemaVersion: hardware.SchemaVersionV1, Attributes: attrs}}
 	}
 	placed := runtimeWith("gvisor",
 		&ateletpb.AttributeEntry{Key: hardware.AttrArchitecture, Value: "amd64"},
@@ -158,7 +153,7 @@ func TestResolveRuntime(t *testing.T) {
 	if _, err := s.advertisedRuntime(t.Context(), placed); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("advertisedRuntime before any worker advertises it = %v, want %s", err, codes.FailedPrecondition)
 	}
-	s.runtimes.register("pod-1", advertisedClass{class: v1alpha1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{advertised}})
+	s.runtimes.register("pod-1", advertisedClass{class: atev1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{advertised}})
 	rec, err := s.advertisedRuntime(t.Context(), placed)
 	if err != nil {
 		t.Fatalf("advertisedRuntime: %v", err)
@@ -167,7 +162,7 @@ func TestResolveRuntime(t *testing.T) {
 		t.Errorf("advertisedRuntime returned %+v, want the advertised record", rec)
 	}
 
-	for name, rt := range map[string]*ateletpb.SandboxRuntime{
+	for name, rt := range map[string]*ateletpb.ActorSandboxRuntime{
 		"no runtime":    nil,
 		"no attributes": runtimeWith("gvisor"),
 		"no bundle hash": runtimeWith("gvisor",
@@ -205,7 +200,7 @@ func TestRuntimeIndexPersists(t *testing.T) {
 	if err := x.registerRuntimes("config-x", []hashedVersion{v1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := x.register("pod-1", advertisedClass{class: v1alpha1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{v1, v2}}); err != nil {
+	if err := x.register("pod-1", advertisedClass{class: atev1.SandboxClassGvisor, config: "config-x", hashed: []hashedVersion{v1, v2}}); err != nil {
 		t.Fatal(err)
 	}
 

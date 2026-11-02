@@ -26,7 +26,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11-devel
 // 	protoc        v4.25.3
-// source: guest.proto
+// source: internal/proto/ateenv/v1alpha/guest.proto
 
 package ateenvv1alpha
 
@@ -83,11 +83,11 @@ func (x ProcessState) String() string {
 }
 
 func (ProcessState) Descriptor() protoreflect.EnumDescriptor {
-	return file_guest_proto_enumTypes[0].Descriptor()
+	return file_internal_proto_ateenv_v1alpha_guest_proto_enumTypes[0].Descriptor()
 }
 
 func (ProcessState) Type() protoreflect.EnumType {
-	return &file_guest_proto_enumTypes[0]
+	return &file_internal_proto_ateenv_v1alpha_guest_proto_enumTypes[0]
 }
 
 func (x ProcessState) Number() protoreflect.EnumNumber {
@@ -96,7 +96,7 @@ func (x ProcessState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ProcessState.Descriptor instead.
 func (ProcessState) EnumDescriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{0}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{0}
 }
 
 // POSIX signals that can be sent to a process. Values match the Linux signal
@@ -215,11 +215,11 @@ func (x Signal) String() string {
 }
 
 func (Signal) Descriptor() protoreflect.EnumDescriptor {
-	return file_guest_proto_enumTypes[1].Descriptor()
+	return file_internal_proto_ateenv_v1alpha_guest_proto_enumTypes[1].Descriptor()
 }
 
 func (Signal) Type() protoreflect.EnumType {
-	return &file_guest_proto_enumTypes[1]
+	return &file_internal_proto_ateenv_v1alpha_guest_proto_enumTypes[1]
 }
 
 func (x Signal) Number() protoreflect.EnumNumber {
@@ -228,7 +228,7 @@ func (x Signal) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Signal.Descriptor instead.
 func (Signal) EnumDescriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{1}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{1}
 }
 
 // The Process resource: identity, lifecycle state, and exit status.
@@ -256,7 +256,7 @@ type Process struct {
 
 func (x *Process) Reset() {
 	*x = Process{}
-	mi := &file_guest_proto_msgTypes[0]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -268,7 +268,7 @@ func (x *Process) String() string {
 func (*Process) ProtoMessage() {}
 
 func (x *Process) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[0]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -281,7 +281,7 @@ func (x *Process) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Process.ProtoReflect.Descriptor instead.
 func (*Process) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{0}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Process) GetProcessId() string {
@@ -354,7 +354,7 @@ type StartProcessRequest struct {
 
 func (x *StartProcessRequest) Reset() {
 	*x = StartProcessRequest{}
-	mi := &file_guest_proto_msgTypes[1]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -366,7 +366,7 @@ func (x *StartProcessRequest) String() string {
 func (*StartProcessRequest) ProtoMessage() {}
 
 func (x *StartProcessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[1]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -379,7 +379,7 @@ func (x *StartProcessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartProcessRequest.ProtoReflect.Descriptor instead.
 func (*StartProcessRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{1}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *StartProcessRequest) GetCommand() []string {
@@ -428,7 +428,7 @@ type GetProcessRequest struct {
 
 func (x *GetProcessRequest) Reset() {
 	*x = GetProcessRequest{}
-	mi := &file_guest_proto_msgTypes[2]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -440,7 +440,7 @@ func (x *GetProcessRequest) String() string {
 func (*GetProcessRequest) ProtoMessage() {}
 
 func (x *GetProcessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[2]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -453,7 +453,7 @@ func (x *GetProcessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProcessRequest.ProtoReflect.Descriptor instead.
 func (*GetProcessRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{2}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetProcessRequest) GetProcessId() string {
@@ -484,7 +484,7 @@ type StreamProcessOutputRequest struct {
 
 func (x *StreamProcessOutputRequest) Reset() {
 	*x = StreamProcessOutputRequest{}
-	mi := &file_guest_proto_msgTypes[3]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -496,7 +496,7 @@ func (x *StreamProcessOutputRequest) String() string {
 func (*StreamProcessOutputRequest) ProtoMessage() {}
 
 func (x *StreamProcessOutputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[3]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -509,7 +509,7 @@ func (x *StreamProcessOutputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamProcessOutputRequest.ProtoReflect.Descriptor instead.
 func (*StreamProcessOutputRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{3}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StreamProcessOutputRequest) GetProcessId() string {
@@ -555,7 +555,7 @@ type ProcessOutput struct {
 
 func (x *ProcessOutput) Reset() {
 	*x = ProcessOutput{}
-	mi := &file_guest_proto_msgTypes[4]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +567,7 @@ func (x *ProcessOutput) String() string {
 func (*ProcessOutput) ProtoMessage() {}
 
 func (x *ProcessOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[4]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +580,7 @@ func (x *ProcessOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessOutput.ProtoReflect.Descriptor instead.
 func (*ProcessOutput) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{4}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ProcessOutput) GetOutput() isProcessOutput_Output {
@@ -658,7 +658,7 @@ type WriteProcessInputRequest struct {
 
 func (x *WriteProcessInputRequest) Reset() {
 	*x = WriteProcessInputRequest{}
-	mi := &file_guest_proto_msgTypes[5]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -670,7 +670,7 @@ func (x *WriteProcessInputRequest) String() string {
 func (*WriteProcessInputRequest) ProtoMessage() {}
 
 func (x *WriteProcessInputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[5]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -683,7 +683,7 @@ func (x *WriteProcessInputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteProcessInputRequest.ProtoReflect.Descriptor instead.
 func (*WriteProcessInputRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{5}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *WriteProcessInputRequest) GetProcessId() string {
@@ -718,7 +718,7 @@ type WriteProcessInputResponse struct {
 
 func (x *WriteProcessInputResponse) Reset() {
 	*x = WriteProcessInputResponse{}
-	mi := &file_guest_proto_msgTypes[6]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -730,7 +730,7 @@ func (x *WriteProcessInputResponse) String() string {
 func (*WriteProcessInputResponse) ProtoMessage() {}
 
 func (x *WriteProcessInputResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[6]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -743,7 +743,7 @@ func (x *WriteProcessInputResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteProcessInputResponse.ProtoReflect.Descriptor instead.
 func (*WriteProcessInputResponse) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{6}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *WriteProcessInputResponse) GetBytesWritten() int64 {
@@ -766,7 +766,7 @@ type SignalProcessRequest struct {
 
 func (x *SignalProcessRequest) Reset() {
 	*x = SignalProcessRequest{}
-	mi := &file_guest_proto_msgTypes[7]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +778,7 @@ func (x *SignalProcessRequest) String() string {
 func (*SignalProcessRequest) ProtoMessage() {}
 
 func (x *SignalProcessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[7]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +791,7 @@ func (x *SignalProcessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalProcessRequest.ProtoReflect.Descriptor instead.
 func (*SignalProcessRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{7}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SignalProcessRequest) GetProcessId() string {
@@ -824,7 +824,7 @@ type ReadFileRequest struct {
 
 func (x *ReadFileRequest) Reset() {
 	*x = ReadFileRequest{}
-	mi := &file_guest_proto_msgTypes[8]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -836,7 +836,7 @@ func (x *ReadFileRequest) String() string {
 func (*ReadFileRequest) ProtoMessage() {}
 
 func (x *ReadFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[8]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -849,7 +849,7 @@ func (x *ReadFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadFileRequest.ProtoReflect.Descriptor instead.
 func (*ReadFileRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{8}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ReadFileRequest) GetPath() string {
@@ -877,7 +877,7 @@ type ReadFileResponse struct {
 
 func (x *ReadFileResponse) Reset() {
 	*x = ReadFileResponse{}
-	mi := &file_guest_proto_msgTypes[9]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -889,7 +889,7 @@ func (x *ReadFileResponse) String() string {
 func (*ReadFileResponse) ProtoMessage() {}
 
 func (x *ReadFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[9]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -902,7 +902,7 @@ func (x *ReadFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadFileResponse.ProtoReflect.Descriptor instead.
 func (*ReadFileResponse) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{9}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ReadFileResponse) GetChunk() []byte {
@@ -936,7 +936,7 @@ type WriteFileRequest struct {
 
 func (x *WriteFileRequest) Reset() {
 	*x = WriteFileRequest{}
-	mi := &file_guest_proto_msgTypes[10]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +948,7 @@ func (x *WriteFileRequest) String() string {
 func (*WriteFileRequest) ProtoMessage() {}
 
 func (x *WriteFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[10]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +961,7 @@ func (x *WriteFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteFileRequest.ProtoReflect.Descriptor instead.
 func (*WriteFileRequest) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{10}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *WriteFileRequest) GetPath() string {
@@ -1003,7 +1003,7 @@ type WriteFileResponse struct {
 
 func (x *WriteFileResponse) Reset() {
 	*x = WriteFileResponse{}
-	mi := &file_guest_proto_msgTypes[11]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1015,7 +1015,7 @@ func (x *WriteFileResponse) String() string {
 func (*WriteFileResponse) ProtoMessage() {}
 
 func (x *WriteFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_guest_proto_msgTypes[11]
+	mi := &file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1028,7 +1028,7 @@ func (x *WriteFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteFileResponse.ProtoReflect.Descriptor instead.
 func (*WriteFileResponse) Descriptor() ([]byte, []int) {
-	return file_guest_proto_rawDescGZIP(), []int{11}
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *WriteFileResponse) GetBytesWritten() int64 {
@@ -1038,11 +1038,11 @@ func (x *WriteFileResponse) GetBytesWritten() int64 {
 	return 0
 }
 
-var File_guest_proto protoreflect.FileDescriptor
+var File_internal_proto_ateenv_v1alpha_guest_proto protoreflect.FileDescriptor
 
-const file_guest_proto_rawDesc = "" +
+const file_internal_proto_ateenv_v1alpha_guest_proto_rawDesc = "" +
 	"\n" +
-	"\vguest.proto\x12\x0eateenv.v1alpha\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9d\x02\n" +
+	")internal/proto/ateenv/v1alpha/guest.proto\x12\x0eateenv.v1alpha\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9d\x02\n" +
 	"\aProcess\x12\x1d\n" +
 	"\n" +
 	"process_id\x18\x01 \x01(\tR\tprocessId\x12\x18\n" +
@@ -1156,20 +1156,20 @@ const file_guest_proto_rawDesc = "" +
 	"\tWriteFile\x12 .ateenv.v1alpha.WriteFileRequest\x1a!.ateenv.v1alpha.WriteFileResponse(\x01BBZ@go.ate.dev/substrate/internal/proto/ateenv/v1alpha;ateenvv1alphab\x06proto3"
 
 var (
-	file_guest_proto_rawDescOnce sync.Once
-	file_guest_proto_rawDescData []byte
+	file_internal_proto_ateenv_v1alpha_guest_proto_rawDescOnce sync.Once
+	file_internal_proto_ateenv_v1alpha_guest_proto_rawDescData []byte
 )
 
-func file_guest_proto_rawDescGZIP() []byte {
-	file_guest_proto_rawDescOnce.Do(func() {
-		file_guest_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_guest_proto_rawDesc), len(file_guest_proto_rawDesc)))
+func file_internal_proto_ateenv_v1alpha_guest_proto_rawDescGZIP() []byte {
+	file_internal_proto_ateenv_v1alpha_guest_proto_rawDescOnce.Do(func() {
+		file_internal_proto_ateenv_v1alpha_guest_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_proto_ateenv_v1alpha_guest_proto_rawDesc), len(file_internal_proto_ateenv_v1alpha_guest_proto_rawDesc)))
 	})
-	return file_guest_proto_rawDescData
+	return file_internal_proto_ateenv_v1alpha_guest_proto_rawDescData
 }
 
-var file_guest_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
-var file_guest_proto_goTypes = []any{
+var file_internal_proto_ateenv_v1alpha_guest_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_internal_proto_ateenv_v1alpha_guest_proto_goTypes = []any{
 	(ProcessState)(0),                  // 0: ateenv.v1alpha.ProcessState
 	(Signal)(0),                        // 1: ateenv.v1alpha.Signal
 	(*Process)(nil),                    // 2: ateenv.v1alpha.Process
@@ -1188,7 +1188,7 @@ var file_guest_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),      // 15: google.protobuf.Timestamp
 	(*durationpb.Duration)(nil),        // 16: google.protobuf.Duration
 }
-var file_guest_proto_depIdxs = []int32{
+var file_internal_proto_ateenv_v1alpha_guest_proto_depIdxs = []int32{
 	0,  // 0: ateenv.v1alpha.Process.state:type_name -> ateenv.v1alpha.ProcessState
 	15, // 1: ateenv.v1alpha.Process.started_at:type_name -> google.protobuf.Timestamp
 	15, // 2: ateenv.v1alpha.Process.finished_at:type_name -> google.protobuf.Timestamp
@@ -1217,12 +1217,12 @@ var file_guest_proto_depIdxs = []int32{
 	0,  // [0:7] is the sub-list for field type_name
 }
 
-func init() { file_guest_proto_init() }
-func file_guest_proto_init() {
-	if File_guest_proto != nil {
+func init() { file_internal_proto_ateenv_v1alpha_guest_proto_init() }
+func file_internal_proto_ateenv_v1alpha_guest_proto_init() {
+	if File_internal_proto_ateenv_v1alpha_guest_proto != nil {
 		return
 	}
-	file_guest_proto_msgTypes[4].OneofWrappers = []any{
+	file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes[4].OneofWrappers = []any{
 		(*ProcessOutput_Stdout)(nil),
 		(*ProcessOutput_Stderr)(nil),
 		(*ProcessOutput_Exit)(nil),
@@ -1231,18 +1231,18 @@ func file_guest_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_guest_proto_rawDesc), len(file_guest_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_proto_ateenv_v1alpha_guest_proto_rawDesc), len(file_internal_proto_ateenv_v1alpha_guest_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
-		GoTypes:           file_guest_proto_goTypes,
-		DependencyIndexes: file_guest_proto_depIdxs,
-		EnumInfos:         file_guest_proto_enumTypes,
-		MessageInfos:      file_guest_proto_msgTypes,
+		GoTypes:           file_internal_proto_ateenv_v1alpha_guest_proto_goTypes,
+		DependencyIndexes: file_internal_proto_ateenv_v1alpha_guest_proto_depIdxs,
+		EnumInfos:         file_internal_proto_ateenv_v1alpha_guest_proto_enumTypes,
+		MessageInfos:      file_internal_proto_ateenv_v1alpha_guest_proto_msgTypes,
 	}.Build()
-	File_guest_proto = out.File
-	file_guest_proto_goTypes = nil
-	file_guest_proto_depIdxs = nil
+	File_internal_proto_ateenv_v1alpha_guest_proto = out.File
+	file_internal_proto_ateenv_v1alpha_guest_proto_goTypes = nil
+	file_internal_proto_ateenv_v1alpha_guest_proto_depIdxs = nil
 }

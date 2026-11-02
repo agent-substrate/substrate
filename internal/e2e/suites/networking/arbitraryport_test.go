@@ -17,10 +17,13 @@ package networking
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"regexp"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +56,8 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 	ctx := context.Background()
 	_, actorName, _ := createAndResumeSubstrateActor(t, ctx, "arbitraryport", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	// A tunnel that ends in an error, such as a reset, ends the whole
+	// port-forward it went through, so each later subtest opens its own.
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -69,28 +74,31 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		if !strings.Contains(body, "extra port 9090") {
 			t.Fatalf("tunneled response body = %q, want it to mention extra port 9090", body)
 		}
-
-		// Cross-check against the default port's own response, both self-reported
-		// by the same counter binary via getCurrentIP() -- either sandbox has its
-		// own network stack (the gVisor sentry's, or the micro-VM guest's), so
-		// this address is not the pod's Kubernetes IP, but it is consistent
-		// between the two ports on one actor. Asserting they match proves the
-		// tunnel reached the same actor's extra port rather than some other,
-		// unrelated open port.
-		defaultResp, err := router.Get(ctx, actorRef, "/")
-		if err != nil {
-			t.Fatalf("GET the actor's default port through ingress: %v", err)
-		}
-		defaultBody, err := io.ReadAll(defaultResp.Body)
-		defaultResp.Body.Close()
-		if err != nil {
-			t.Fatalf("reading default-port response body: %v", err)
-		}
-		wantIP := selfReportedIP(t, string(defaultBody))
-		if !strings.Contains(body, wantIP) {
-			t.Fatalf("tunneled response body = %q, want it to mention the same self-reported IP as the default port (%s): %q", body, wantIP, defaultBody)
-		}
 		t.Logf("arbitrary-port access through CONNECT succeeded; body: %s", body)
+	})
+
+	t.Run("tunnels to different ports do not cross", func(t *testing.T) {
+		// Two streams on one connection are handled by the same Envoy worker,
+		// and the held tunnel keeps its upstream connection open while the
+		// second tunnel opens.
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		router := mustRouterClient(t, ctx)
+		defer router.Close()
+		cc := dialConnectH2(t, ctx, router)
+		defer cc.Close()
+
+		held := connectH2(t, ctx, cc, actorRef, 80)
+		defer held.Close()
+		if body := getThroughTunnel(t, held, actorRef.Name); !strings.Contains(body, "preserved memory count:") {
+			t.Fatalf("tunnel to port 80 got %q, want the default port's response", body)
+		}
+
+		extra := connectH2(t, ctx, cc, actorRef, counterExtraPort)
+		defer extra.Close()
+		if body := getThroughTunnel(t, extra, actorRef.Name); !strings.Contains(body, "extra port 9090") {
+			t.Fatalf("tunnel to port %d got %q, want the extra port's response", counterExtraPort, body)
+		}
 	})
 
 	t.Run("unlisted port rejected", func(t *testing.T) {
@@ -100,6 +108,8 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		// fails to dial the actor and reports it as an HTTP error, rather
 		// than the connection hanging or a request through it succeeding.
 		const unlistedPort = 6553
+		router := mustRouterClient(t, ctx)
+		defer router.Close()
 		conn, err := router.Connect(ctx, actorRef, unlistedPort)
 		if err != nil {
 			t.Fatalf("CONNECT to an unlisted port unexpectedly failed to establish: %v", err)
@@ -130,6 +140,8 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		headers := http.Header{
 			atenet.TargetActorHeader: []string{actorRef.String(), "untrusted/actor"},
 		}
+		router := mustRouterClient(t, ctx)
+		defer router.Close()
 		conn, err := router.ConnectWithHeaders(ctx, actorRef, counterExtraPort, headers)
 		if err != nil {
 			// A rejected CONNECT handshake is a valid rejection.
@@ -193,6 +205,80 @@ func waitForTunneledRouteReady(t *testing.T, ctx context.Context, router *e2e.Ro
 	}
 }
 
+// dialConnectH2 opens one HTTP/2 connection to the router's CONNECT listener.
+// That listener offers no ALPN, so net/http gets the TLS connection as if it
+// were plaintext, to start HTTP/2 without negotiation; Envoy recognizes it
+// from the first bytes.
+func dialConnectH2(t *testing.T, ctx context.Context, router *e2e.RouterClient) *http.ClientConn {
+	t.Helper()
+	address, stop, err := router.ConnectPortForward(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	transport := &http.Transport{
+		Protocols:   protocols,
+		DialContext: (&tls.Dialer{Config: router.TLSConfig()}).DialContext,
+	}
+	cc, err := transport.NewClientConn(ctx, "http", address)
+	if err != nil {
+		t.Fatalf("opening an HTTP/2 connection to the router's CONNECT listener: %v", err)
+	}
+	return cc
+}
+
+// connectH2 opens a CONNECT tunnel to port on actorRef as a new stream on cc.
+// Writes go out in the request body and reads come from the response body.
+func connectH2(t *testing.T, ctx context.Context, cc *http.ClientConn, actorRef resources.ActorRef, port int) io.ReadWriteCloser {
+	t.Helper()
+	body, writer := io.Pipe()
+	destination := net.JoinHostPort(actorRef.Name, strconv.Itoa(port))
+	req := (&http.Request{
+		Method:        http.MethodConnect,
+		URL:           &url.URL{Host: destination},
+		Host:          destination,
+		Header:        http.Header{atenet.TargetActorHeader: []string{actorRef.String()}},
+		Body:          body,
+		ContentLength: -1,
+	}).WithContext(ctx)
+	resp, err := cc.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("CONNECT to port %d: %v", port, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("CONNECT to port %d returned HTTP %d", port, resp.StatusCode)
+	}
+	return struct {
+		io.Writer
+		io.ReadCloser
+	}{writer, resp.Body}
+}
+
+// getThroughTunnel sends GET / through tunnel and returns the body of a 200
+// response, leaving the tunnel open.
+func getThroughTunnel(t *testing.T, tunnel io.ReadWriter, host string) string {
+	t.Helper()
+	if _, err := fmt.Fprintf(tunnel, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host); err != nil {
+		t.Fatalf("writing a request through the tunnel: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tunnel), nil)
+	if err != nil {
+		t.Fatalf("reading the response through the tunnel: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("reading the response body through the tunnel: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("request through the tunnel returned HTTP %d: %s", resp.StatusCode, body)
+	}
+	return string(body)
+}
+
 func requestTunneled(conn interface {
 	io.ReadWriter
 	SetDeadline(time.Time) error
@@ -213,19 +299,4 @@ func requestTunneled(conn interface {
 		return resp, "", fmt.Errorf("reading tunneled response body (HTTP %d): %w", resp.StatusCode, err)
 	}
 	return resp, string(body), nil
-}
-
-// counterDefaultPortIPPattern matches the "hello from: <IP> | ..." response
-// counter.go's default (port 80) handler returns.
-var counterDefaultPortIPPattern = regexp.MustCompile(`^hello from: (\S+)`)
-
-// selfReportedIP extracts the IP counter.go's getCurrentIP() reported in a
-// default-port response body.
-func selfReportedIP(t *testing.T, body string) string {
-	t.Helper()
-	m := counterDefaultPortIPPattern.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("default-port response body = %q, want it to match %q", body, counterDefaultPortIPPattern)
-	}
-	return m[1]
 }

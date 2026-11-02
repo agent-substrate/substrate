@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
-	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
@@ -43,7 +42,7 @@ type DashboardContext struct {
 	RouterClusterIP string                `json:"router_cluster_ip"`
 	Namespace       string                `json:"namespace"`
 	Mode            Mode                  `json:"mode"`
-	HttpPort        int                   `json:"port_http"`
+	HttpsPort       int                   `json:"port_https"`
 	XdsPort         int                   `json:"port_xds"`
 	ExtprocPort     int                   `json:"port_extproc"`
 	StatusPort      int                   `json:"status_port"`
@@ -94,10 +93,7 @@ func (s *RouterServer) getRouterIP(ctx context.Context) string {
 }
 
 func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(req.Context(), "handleStatusz")
-	defer span.End()
-
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
 	defer cancel()
 
 	routerIP := s.getRouterIP(ctx)
@@ -155,7 +151,7 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		RouterClusterIP: routerIP,
 		Namespace:       s.cfg.Namespace,
 		Mode:            s.cfg.Mode,
-		HttpPort:        s.cfg.HttpPort,
+		HttpsPort:       s.cfg.HttpsPort,
 		XdsPort:         s.cfg.XdsPort,
 		ExtprocPort:     s.cfg.ExtprocPort,
 		StatusPort:      s.cfg.StatusPort,

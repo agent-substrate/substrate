@@ -16,20 +16,24 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/e2e/procstatus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 )
 
-// testserverImage resolves the e2e testserver image, whose kill subcommand
-// does the killing.
+// testserverImage resolves the e2e testserver image, whose kill and procstatus
+// subcommands run inside the worker's PID namespace.
 func testserverImage(t *testing.T) string {
 	t.Helper()
 	manifest := filepath.Join(t.TempDir(), "image.yaml")
@@ -49,29 +53,64 @@ func testserverImage(t *testing.T) string {
 // crash would, from an ephemeral container sharing the worker's PID namespace.
 func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, namespace, podName, actorUID string) {
 	t.Helper()
-	pods := clients.K8s.CoreV1().Pods(namespace)
-	pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting worker pod %s/%s: %v", namespace, podName, err)
+	// kills the runsc sandbox and gofer, or cloud-hypervisor and virtiofsd:
+	// each names the actor UID in its command line
+	runInWorkerPIDNamespace(ctx, t, clients, namespace, podName, "kill-sandbox", []string{"kill", "--cmdline-contains", actorUID})
+	t.Logf("Killed the sandbox of actor %s on %s/%s", actorUID, namespace, podName)
+}
+
+// ReadWorkerProcessStatus reports the worker process (PID 1 of the worker
+// container) and every process in its PID namespace whose name, the base name
+// of argv[0], is one of names, as the kernel enforces them. The rendered
+// PodSpec says what was asked for; this says what the container runtime
+// actually granted.
+func ReadWorkerProcessStatus(ctx context.Context, t *testing.T, clients *Clients, namespace, podName string, names ...string) []procstatus.Process {
+	t.Helper()
+	args := []string{"procstatus"}
+	for _, name := range names {
+		args = append(args, "--name", name)
 	}
-	name := fmt.Sprintf("kill-sandbox-%d", len(pod.Spec.EphemeralContainers))
-	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, corev1.EphemeralContainer{
-		TargetContainerName: "worker",
-		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name:  name,
-			Image: testserverImage(t),
-			// kills the runsc sandbox and gofer, or cloud-hypervisor and
-			// virtiofsd: each names the actor UID in its command line
-			Args: []string{"kill", "--cmdline-contains", actorUID},
-			// root, like the sandbox processes, which also run unconfined, and
-			// the default AppArmor profile, enforced on GKE, may not signal them
-			SecurityContext: &corev1.SecurityContext{
-				RunAsUser:       ptr.To[int64](0),
-				AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+	logs := runInWorkerPIDNamespace(ctx, t, clients, namespace, podName, "procstatus", args)
+	var procs []procstatus.Process
+	if err := json.Unmarshal([]byte(logs), &procs); err != nil {
+		t.Fatalf("parsing procstatus output from %s/%s: %v\n%s", namespace, podName, err, logs)
+	}
+	return procs
+}
+
+// runInWorkerPIDNamespace runs one testserver subcommand in an ephemeral
+// container that shares the worker container's PID namespace, waits for it to
+// exit cleanly and returns what it wrote to stdout.
+func runInWorkerPIDNamespace(ctx context.Context, t *testing.T, clients *Clients, namespace, podName, prefix string, args []string) string {
+	t.Helper()
+	image := testserverImage(t)
+	pods := clients.K8s.CoreV1().Pods(namespace)
+	var name string
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		pod, err := pods.Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		name = fmt.Sprintf("%s-%d", prefix, len(pod.Spec.EphemeralContainers))
+		pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, corev1.EphemeralContainer{
+			TargetContainerName: "worker",
+			EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+				Name:  name,
+				Image: image,
+				Args:  args,
+				// root, like the sandbox processes, which also run unconfined, and
+				// the default AppArmor profile, enforced on GKE, may not signal
+				// them or read their /proc entries
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser:       ptr.To[int64](0),
+					AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+				},
 			},
-		},
+		})
+		_, err = pods.UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{})
+		return err
 	})
-	if _, err := pods.UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{}); err != nil {
+	if err != nil {
 		t.Fatalf("adding ephemeral container to %s/%s: %v", namespace, podName, err)
 	}
 
@@ -86,18 +125,33 @@ func KillActorSandbox(ctx context.Context, t *testing.T, clients *Clients, names
 				continue
 			}
 			if w := st.State.Waiting; w != nil && w.Reason != "" && w.Reason != "ContainerCreating" && w.Reason != "PodInitializing" {
-				t.Fatalf("kill container for actor %s cannot start: %s: %s", actorUID, w.Reason, w.Message)
+				t.Fatalf("%s container on %s/%s cannot start: %s: %s", name, namespace, podName, w.Reason, w.Message)
 			}
 			if st.State.Terminated == nil {
 				continue
 			}
+			logs := ephemeralContainerLogs(ctx, t, clients, namespace, podName, name)
 			if code := st.State.Terminated.ExitCode; code != 0 {
-				t.Fatalf("killing the sandbox of actor %s exited %d", actorUID, code)
+				t.Fatalf("%s container on %s/%s exited %d\n%s", name, namespace, podName, code, logs)
 			}
-			t.Logf("Killed the sandbox of actor %s on %s/%s", actorUID, namespace, podName)
-			return
+			return logs
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatalf("timed out killing the sandbox of actor %s", actorUID)
+	t.Fatalf("timed out waiting for the %s container on %s/%s", name, namespace, podName)
+	return ""
+}
+
+func ephemeralContainerLogs(ctx context.Context, t *testing.T, clients *Clients, namespace, podName, container string) string {
+	t.Helper()
+	stream, err := clients.K8s.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{Container: container}).Stream(ctx)
+	if err != nil {
+		t.Fatalf("reading %s logs from %s/%s: %v", container, namespace, podName, err)
+	}
+	defer stream.Close()
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("reading %s logs from %s/%s: %v", container, namespace, podName, err)
+	}
+	return string(out)
 }

@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: atelet.proto
+// source: internal/proto/ateletpb/atelet.proto
 
 package ateletpb
 
@@ -33,11 +33,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkerSupport_MintActorCertificate_FullMethodName = "/atelet.WorkerSupport/MintActorCertificate"
-	WorkerSupport_RegisterWorker_FullMethodName       = "/atelet.WorkerSupport/RegisterWorker"
-	WorkerSupport_RequestActorSuspend_FullMethodName  = "/atelet.WorkerSupport/RequestActorSuspend"
-	WorkerSupport_GetActorEgressPolicy_FullMethodName = "/atelet.WorkerSupport/GetActorEgressPolicy"
-	WorkerSupport_ReportActorCrashed_FullMethodName   = "/atelet.WorkerSupport/ReportActorCrashed"
+	WorkerSupport_MintActorCertificate_FullMethodName     = "/atelet.WorkerSupport/MintActorCertificate"
+	WorkerSupport_AcquireWorkerEpoch_FullMethodName       = "/atelet.WorkerSupport/AcquireWorkerEpoch"
+	WorkerSupport_RegisterWorker_FullMethodName           = "/atelet.WorkerSupport/RegisterWorker"
+	WorkerSupport_SetWorkerSandboxRuntimes_FullMethodName = "/atelet.WorkerSupport/SetWorkerSandboxRuntimes"
+	WorkerSupport_RequestActorSuspend_FullMethodName      = "/atelet.WorkerSupport/RequestActorSuspend"
+	WorkerSupport_GetActorEgressPolicy_FullMethodName     = "/atelet.WorkerSupport/GetActorEgressPolicy"
+	WorkerSupport_ReportActorCrashed_FullMethodName       = "/atelet.WorkerSupport/ReportActorCrashed"
 )
 
 // WorkerSupportClient is the client API for WorkerSupport service.
@@ -55,8 +57,18 @@ type WorkerSupportClient interface {
 	// MintActorCertificate (which would be used for certificates projected into
 	// the actor filesystem, when/if we support those).
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
-	// Register capacity and supported sandbox runtimes for this worker with atelet.
+	// AcquireWorkerEpoch hands out a new epoch for this worker process, for
+	// atelet to forward to the control plane's WorkerService, which this
+	// mirrors. A worker process calls it once at startup, before RegisterWorker.
+	AcquireWorkerEpoch(ctx context.Context, in *AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*AcquireWorkerEpochResponse, error)
+	// RegisterWorker activates the epoch this worker process acquired and
+	// records its pod IPs and capacity. A worker process registers once, and
+	// takes no workloads until it has. FAILED_PRECONDITION means another worker
+	// process has registered since; this one must not serve.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
+	// SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
+	// can run. Called after RegisterWorker, and again whenever they change.
+	SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error)
 	// RequestActorSuspend asks that the actor this worker hosts be suspended,
 	// for atelet to forward to the control plane's WorkerService, which this
 	// mirrors.
@@ -96,10 +108,30 @@ func (c *workerSupportClient) MintActorCertificate(ctx context.Context, in *Mint
 	return out, nil
 }
 
+func (c *workerSupportClient) AcquireWorkerEpoch(ctx context.Context, in *AcquireWorkerEpochRequest, opts ...grpc.CallOption) (*AcquireWorkerEpochResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireWorkerEpochResponse)
+	err := c.cc.Invoke(ctx, WorkerSupport_AcquireWorkerEpoch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerSupportClient) RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterWorkerResponse)
 	err := c.cc.Invoke(ctx, WorkerSupport_RegisterWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerSupportClient) SetWorkerSandboxRuntimes(ctx context.Context, in *SetWorkerSandboxRuntimesRequest, opts ...grpc.CallOption) (*SetWorkerSandboxRuntimesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetWorkerSandboxRuntimesResponse)
+	err := c.cc.Invoke(ctx, WorkerSupport_SetWorkerSandboxRuntimes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -151,8 +183,18 @@ type WorkerSupportServer interface {
 	// MintActorCertificate (which would be used for certificates projected into
 	// the actor filesystem, when/if we support those).
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
-	// Register capacity and supported sandbox runtimes for this worker with atelet.
+	// AcquireWorkerEpoch hands out a new epoch for this worker process, for
+	// atelet to forward to the control plane's WorkerService, which this
+	// mirrors. A worker process calls it once at startup, before RegisterWorker.
+	AcquireWorkerEpoch(context.Context, *AcquireWorkerEpochRequest) (*AcquireWorkerEpochResponse, error)
+	// RegisterWorker activates the epoch this worker process acquired and
+	// records its pod IPs and capacity. A worker process registers once, and
+	// takes no workloads until it has. FAILED_PRECONDITION means another worker
+	// process has registered since; this one must not serve.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
+	// SetWorkerSandboxRuntimes records the sandbox runtimes this worker process
+	// can run. Called after RegisterWorker, and again whenever they change.
+	SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error)
 	// RequestActorSuspend asks that the actor this worker hosts be suspended,
 	// for atelet to forward to the control plane's WorkerService, which this
 	// mirrors.
@@ -185,8 +227,14 @@ type UnimplementedWorkerSupportServer struct{}
 func (UnimplementedWorkerSupportServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
 }
+func (UnimplementedWorkerSupportServer) AcquireWorkerEpoch(context.Context, *AcquireWorkerEpochRequest) (*AcquireWorkerEpochResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquireWorkerEpoch not implemented")
+}
 func (UnimplementedWorkerSupportServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterWorker not implemented")
+}
+func (UnimplementedWorkerSupportServer) SetWorkerSandboxRuntimes(context.Context, *SetWorkerSandboxRuntimesRequest) (*SetWorkerSandboxRuntimesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWorkerSandboxRuntimes not implemented")
 }
 func (UnimplementedWorkerSupportServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
@@ -236,6 +284,24 @@ func _WorkerSupport_MintActorCertificate_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerSupport_AcquireWorkerEpoch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireWorkerEpochRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerSupportServer).AcquireWorkerEpoch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerSupport_AcquireWorkerEpoch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerSupportServer).AcquireWorkerEpoch(ctx, req.(*AcquireWorkerEpochRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerSupport_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterWorkerRequest)
 	if err := dec(in); err != nil {
@@ -250,6 +316,24 @@ func _WorkerSupport_RegisterWorker_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerSupportServer).RegisterWorker(ctx, req.(*RegisterWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerSupport_SetWorkerSandboxRuntimes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkerSandboxRuntimesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerSupportServer).SetWorkerSandboxRuntimes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerSupport_SetWorkerSandboxRuntimes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerSupportServer).SetWorkerSandboxRuntimes(ctx, req.(*SetWorkerSandboxRuntimesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -320,8 +404,16 @@ var WorkerSupport_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerSupport_MintActorCertificate_Handler,
 		},
 		{
+			MethodName: "AcquireWorkerEpoch",
+			Handler:    _WorkerSupport_AcquireWorkerEpoch_Handler,
+		},
+		{
 			MethodName: "RegisterWorker",
 			Handler:    _WorkerSupport_RegisterWorker_Handler,
+		},
+		{
+			MethodName: "SetWorkerSandboxRuntimes",
+			Handler:    _WorkerSupport_SetWorkerSandboxRuntimes_Handler,
 		},
 		{
 			MethodName: "RequestActorSuspend",
@@ -337,7 +429,7 @@ var WorkerSupport_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "atelet.proto",
+	Metadata: "internal/proto/ateletpb/atelet.proto",
 }
 
 const (
@@ -371,14 +463,23 @@ type AteletClient interface {
 	// atelet deletes the actor's older local snapshots, except one still being
 	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
 	// before then leaves the actor's previous local snapshot in place.
+	//
+	// A Checkpoint of a snapshot already committed, as a retry's is, returns the
+	// actor's state without checkpointing the workload again; under
+	// UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+	// yet.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// PromoteSnapshot makes `snapshot` durable in object storage while keeping
 	// its local copy on this node. Used when a snapshot needs to be in object
-	// storage (e.g. for tagging) without evicting the paused actor from the
-	// node. Waits for an in-flight detach, and fails for an actor running on
-	// this node.
+	// storage (e.g. for tagging) without evicting the suspended actor's local
+	// snapshot from the node. Waits for an in-flight detach, and fails for an
+	// actor running on this node.
+	//
+	// atelet never uploads a local copy written before the node last rebooted,
+	// since its files may be torn: it answers from the manifest at
+	// `snapshot.object` instead, and fails with NOT_FOUND if there is none.
 	//
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
@@ -387,14 +488,16 @@ type AteletClient interface {
 	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
-	// atelet also detaches a suspended actor on its own after its detach delay,
-	// and reports that with WorkerService.ReportActorSnapshotState; it does not
-	// report a DetachActor call, whose caller reads the state from the response.
-	// Waits for an operation already in progress on the actor, such as an
-	// upload or a detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED when the actor runs on this node, and
-	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-	// durable, such as when it has no `snapshot.object`.
+	// atelet also detaches a suspended actor on its own after its detach delay.
+	// It reports either detach with WorkerService.ReportActorSnapshotState, so
+	// the control plane records a DetachActor call's detach even if the caller
+	// does not, and once reported, forgets the actor. The detach doesn't end with
+	// the call: if the caller's context ends first, DetachActor returns that
+	// error and the detach runs on. Waits for an operation already in progress on
+	// the actor, such as an upload or a detach. Does nothing when atelet holds no
+	// local snapshot for the actor. Returns ABORTED when the actor runs on this
+	// node, and FAILED_PRECONDITION when atelet cannot make the latest local
+	// snapshot durable, such as when it has no `snapshot.object`.
 	DetachActor(ctx context.Context, in *DetachActorRequest, opts ...grpc.CallOption) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -491,14 +594,23 @@ type AteletServer interface {
 	// atelet deletes the actor's older local snapshots, except one still being
 	// uploaded, which it deletes after that upload ends. A Checkpoint that fails
 	// before then leaves the actor's previous local snapshot in place.
+	//
+	// A Checkpoint of a snapshot already committed, as a retry's is, returns the
+	// actor's state without checkpointing the workload again; under
+	// UPLOAD_MODE_IMMEDIATE it first uploads the snapshot if it is not durable
+	// yet.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from a snapshot onto a worker.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// PromoteSnapshot makes `snapshot` durable in object storage while keeping
 	// its local copy on this node. Used when a snapshot needs to be in object
-	// storage (e.g. for tagging) without evicting the paused actor from the
-	// node. Waits for an in-flight detach, and fails for an actor running on
-	// this node.
+	// storage (e.g. for tagging) without evicting the suspended actor's local
+	// snapshot from the node. Waits for an in-flight detach, and fails for an
+	// actor running on this node.
+	//
+	// atelet never uploads a local copy written before the node last rebooted,
+	// since its files may be torn: it answers from the manifest at
+	// `snapshot.object` instead, and fails with NOT_FOUND if there is none.
 	//
 	// Idempotent: once the snapshot is durable, atelet answers from the
 	// manifest at `snapshot.object`, and fails if there is none.
@@ -507,14 +619,16 @@ type AteletServer interface {
 	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
 	// DetachActor makes the actor's latest local snapshot durable, then deletes
 	// the actor's local snapshots on this node, so it can resume on any node.
-	// atelet also detaches a suspended actor on its own after its detach delay,
-	// and reports that with WorkerService.ReportActorSnapshotState; it does not
-	// report a DetachActor call, whose caller reads the state from the response.
-	// Waits for an operation already in progress on the actor, such as an
-	// upload or a detach. Does nothing when atelet holds no local snapshot for
-	// the actor. Returns ABORTED when the actor runs on this node, and
-	// FAILED_PRECONDITION when atelet cannot make the latest local snapshot
-	// durable, such as when it has no `snapshot.object`.
+	// atelet also detaches a suspended actor on its own after its detach delay.
+	// It reports either detach with WorkerService.ReportActorSnapshotState, so
+	// the control plane records a DetachActor call's detach even if the caller
+	// does not, and once reported, forgets the actor. The detach doesn't end with
+	// the call: if the caller's context ends first, DetachActor returns that
+	// error and the detach runs on. Waits for an operation already in progress on
+	// the actor, such as an upload or a detach. Does nothing when atelet holds no
+	// local snapshot for the actor. Returns ABORTED when the actor runs on this
+	// node, and FAILED_PRECONDITION when atelet cannot make the latest local
+	// snapshot durable, such as when it has no `snapshot.object`.
 	DetachActor(context.Context, *DetachActorRequest) (*DetachActorResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -709,5 +823,5 @@ var Atelet_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "atelet.proto",
+	Metadata: "internal/proto/ateletpb/atelet.proto",
 }

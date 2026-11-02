@@ -36,10 +36,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/atenet"
 	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // defaultActorPort is the actor's port when a request names no other one.
@@ -64,7 +64,7 @@ type Handler struct {
 	parking *parkingLot
 }
 
-func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
+func New(apiClient ateapi.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
 	lot := newParkingLot(parkCfg, parkMetrics)
 	return &Handler{
 		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
@@ -85,7 +85,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// HTTP headers carried inside the ProcessingRequest payload. Extract
 	// from there so our span links to the gateway's ingress span.
 	ctx = otel.GetTextMapPropagator().Extract(ctx, md)
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ExtProc.RequestHeaders")
+	ctx, span := otel.Tracer(serviceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
 	actorRef, err := atenet.ParseTargetActor(routingValue(md, atenet.TargetActorHeader, extproc.TargetActorFilterStateAttribute))

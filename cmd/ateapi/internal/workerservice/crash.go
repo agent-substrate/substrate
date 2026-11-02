@@ -18,16 +18,16 @@ import (
 	"context"
 	"log/slog"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // ReportActorCrashed crashes a RUNNING Actor whose sandbox died, on behalf of
 // the Worker hosting it. The caller must be an atelet running on the Worker's
 // node.
-func (s *Server) ReportActorCrashed(ctx context.Context, req *ateapipb.ReportActorCrashedRequest) (*ateapipb.ReportActorCrashedResponse, error) {
+func (s *Server) ReportActorCrashed(ctx context.Context, req *ateapi.ReportActorCrashedRequest) (*ateapi.ReportActorCrashedResponse, error) {
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
 	if err != nil {
 		return nil, err
@@ -51,5 +51,5 @@ func (s *Server) ReportActorCrashed(ctx context.Context, req *ateapipb.ReportAct
 		slog.String("actor_uid", req.GetActorUid()),
 		slog.String("node", caller.NodeName),
 		slog.String("message", req.GetMessage()))
-	return &ateapipb.ReportActorCrashedResponse{Actor: actor}, nil
+	return &ateapi.ReportActorCrashedResponse{Actor: actor}, nil
 }

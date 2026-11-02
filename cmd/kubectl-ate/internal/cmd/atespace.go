@@ -18,8 +18,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var getAtespacesCmd = &cobra.Command{
@@ -36,9 +36,9 @@ var getAtespacesCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		if len(args) > 0 {
-			atespaces := make([]*ateapipb.Atespace, 0, len(args))
+			atespaces := make([]*ateapi.Atespace, 0, len(args))
 			for _, atespaceName := range args {
-				resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespaceName}})
+				resp, err := apiClient.GetAtespace(ctx, &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: atespaceName}})
 				if err != nil {
 					return fmt.Errorf("failed to get atespace %q: %w", atespaceName, err)
 				}
@@ -50,11 +50,11 @@ var getAtespacesCmd = &cobra.Command{
 			return printer.PrintAtespacesTo(cmd.OutOrStdout(), atespaces, outputFmt)
 		}
 
-		var allAtespaces []*ateapipb.Atespace
+		var allAtespaces []*ateapi.Atespace
 		pageToken := ""
 		for {
-			resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
-				Options: &ateapipb.ListOptions{PageSize: 1000, PageToken: pageToken},
+			resp, err := apiClient.ListAtespaces(ctx, &ateapi.ListAtespacesRequest{
+				Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list atespaces: %w", err)
@@ -82,9 +82,9 @@ var createAtespaceCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-			Atespace: &ateapipb.Atespace{
-				Metadata: &ateapipb.ResourceMetadata{
+		resp, err := apiClient.CreateAtespace(ctx, &ateapi.CreateAtespaceRequest{
+			Atespace: &ateapi.Atespace{
+				Metadata: &ateapi.ResourceMetadata{
 					Name: args[0],
 				},
 			},
@@ -110,7 +110,7 @@ var deleteAtespaceCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		name := args[0]
-		if _, err := apiClient.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}); err != nil {
+		if _, err := apiClient.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: name}}); err != nil {
 			return fmt.Errorf("failed to delete atespace: %w", err)
 		}
 

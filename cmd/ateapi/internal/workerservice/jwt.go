@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
@@ -29,7 +30,6 @@ import (
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -38,7 +38,7 @@ import (
 // plugins that exchange it for short-lived credentials.
 const workerActorJWTLifetime = time.Hour
 
-func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorkerActorJwtRequest) (*ateapipb.MintWorkerActorJwtResponse, error) {
+func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapi.MintWorkerActorJwtRequest) (*ateapi.MintWorkerActorJwtResponse, error) {
 	if errs := apivalidation.ValidateMintWorkerActorJwtRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -49,7 +49,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 	}
 
 	// The actor doesn't need to be running: tokens are needed to fetch a
-	// snapshot before resume and to upload a checkpoint after pause.
+	// snapshot before resume and to upload a checkpoint during or after suspend.
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")
@@ -93,7 +93,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 	if err != nil {
 		return nil, fmt.Errorf("while signing worker-for-actor JWT: %w", err)
 	}
-	return &ateapipb.MintWorkerActorJwtResponse{
+	return &ateapi.MintWorkerActorJwtResponse{
 		ActorJwt:   token,
 		ExpireTime: timestamppb.New(expiresAt),
 	}, nil
@@ -103,11 +103,8 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapipb.MintWorke
 // actor, as RequestActorSuspend does. Authoritative state decides, never the
 // request. The refusal is NotFound, so a node learns nothing about actors it
 // does not host. credential names what the caller mints, for the refusal log.
-func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapipb.Actor, callerNode, credential string) error {
-	hostingNode, err := controlapi.HostingNode(ctx, s.store, actor)
-	if err != nil {
-		return err
-	}
+func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapi.Actor, callerNode, credential string) error {
+	hostingNode := controlapi.HostingNode(actor)
 	if hostingNode == "" || hostingNode != callerNode {
 		slog.WarnContext(ctx, "Refusing a worker-for-actor "+credential+" for an actor the caller's node does not host",
 			slog.String("actor", resources.ActorRefFromActor(actor).String()),

@@ -26,17 +26,34 @@ import (
 )
 
 // File is the content of a worker's sandbox runtimes file: the sandbox
-// runtimes the worker can run, as the compatibility attributes atelet computed
-// for them. The worker registers DefaultRuntime and RestorableRuntimes as
-// RegisterWorkerRequest's default_runtime and restorable_runtimes.
+// classes the worker can run and, for each, the compatibility attributes
+// atelet computed for the runtimes of that class. The worker registers it as
+// RegisterWorkerRequest's sandbox_classes.
 type File struct {
-	// DefaultRuntime is the runtime new and cold-booted actors start under,
-	// from the default version of the pool's SandboxConfig.
-	DefaultRuntime Attributes `json:"defaultRuntime"`
+	// SandboxClasses has one entry per class the worker's pool declares:
+	// one today.
+	SandboxClasses []Class `json:"sandboxClasses"`
+}
+
+// Class is one sandbox class and the runtimes the worker runs it under.
+type Class struct {
+	// SandboxClass is e.g. "gvisor".
+	SandboxClass string `json:"sandboxClass"`
+	// DefaultRuntime is the runtime new and cold-booted actors of this class
+	// start under, from the default version of the pool's SandboxConfig.
+	DefaultRuntime Runtime `json:"defaultRuntime"`
 	// RestorableRuntimes are the other runtimes the worker can restore
-	// snapshots from, from the config's other Enabled versions in spec order.
-	// None repeats another runtime or the default.
-	RestorableRuntimes []Attributes `json:"restorableRuntimes,omitempty"`
+	// snapshots of this class from, from the config's other Enabled versions
+	// in spec order. None repeats another runtime or the default.
+	RestorableRuntimes []Runtime `json:"restorableRuntimes,omitempty"`
+}
+
+// Runtime is one runtime of a class, as RegisterWorkerRequest's
+// WorkerSandboxRuntime.
+type Runtime struct {
+	// Version is the compatibility attributes atelet computed for the
+	// runtime, which the worker registers under the current schema version.
+	Version Attributes `json:"version"`
 }
 
 // Attributes maps a compatibility attribute key, e.g. "sandbox_bundle_hash",

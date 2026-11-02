@@ -17,14 +17,14 @@ package resources
 import (
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 func TestCovers(t *testing.T) {
 	tests := []struct {
 		name string
-		have *ateapipb.Resources
-		want *ateapipb.Resources
+		have *ateapi.Resources
+		want *ateapi.Resources
 		ok   bool
 	}{
 		{

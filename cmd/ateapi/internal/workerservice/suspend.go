@@ -20,17 +20,17 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // RequestActorSuspend suspends an Actor on behalf of the Worker hosting it. The
 // caller must be an atelet running on the Worker's node.
-func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestActorSuspendRequest) (*ateapipb.RequestActorSuspendResponse, error) {
+func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapi.RequestActorSuspendRequest) (*ateapi.RequestActorSuspendResponse, error) {
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 
 	// From here it is an ordinary suspend. Running the same workflow Control
 	// runs is the point: its preconditions already refuse an Actor that is not
-	// suspendable, and a proposal that races a resume, pause, or delete loses
+	// suspendable, and a proposal that races a resume, suspend, or delete loses
 	// to whichever holds the Actor's lease.
 	//
 	// TODO: the checks above run outside the Actor's lease, so there is a small
@@ -55,7 +55,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	// the workflow to acquire the lease, the Actor can be resumed onto another
 	// Worker, or deleted and recreated under the same name, and the workflow
 	// suspends whatever the reference resolves to by then. See #1773.
-	resp, err := s.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: req.GetActor()})
+	resp, err := s.control.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: req.GetActor()})
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 		slog.String("actor", actorRef.String()),
 		slog.String("actor_uid", req.GetActorUid()),
 		slog.String("node", caller.NodeName))
-	return &ateapipb.RequestActorSuspendResponse{Actor: resp.GetActor()}, nil
+	return &ateapi.RequestActorSuspendResponse{Actor: resp.GetActor()}, nil
 }
 
 // authorizeHostedActor checks that the calling atelet may speak for actorRef:
@@ -106,7 +106,7 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 // Both failures are NotFound rather than PermissionDenied, as for a Worker on
 // another node: an atelet learns nothing about Actors it does not host, not
 // even that they exist.
-func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, actorUID string) error {
+func checkActorHostedBy(ctx context.Context, actor *ateapi.Actor, workerName, actorUID string) error {
 	actorRef := resources.ActorRefFromActor(actor)
 	if got := actor.GetMetadata().GetUid(); got != actorUID {
 		// The named Actor was deleted and recreated, and the caller never
@@ -119,7 +119,8 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 		return apierror.NotFound("Actor %s not found", actorRef)
 	}
 	// An Actor with no assignment has no worker to speak for it: it is
-	// SUSPENDED (paused or not) or CRASHED, and nothing hosts it.
+	// SUSPENDED (with or without a local snapshot) or CRASHED, and nothing
+	// hosts it.
 	if assigned := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); assigned != workerName {
 		slog.WarnContext(ctx, "Refusing a request for an actor hosted elsewhere",
 			slog.String("worker", workerName),

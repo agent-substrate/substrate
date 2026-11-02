@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -33,27 +34,24 @@ import (
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 )
 
-// TestMintWorkerActorCertificateAfterWorkerRelease drives each of
-// ReleaseWindowWorkflows into the window between releasing the actor's worker
-// and rewriting its status, by failing the second write. The status still
-// names the worker there, and keeps doing so until the workflow is retried.
-// The worker must not get a worker-for-actor certificate for the actor in that
-// window, nor once it hosts another actor or the status is finalized, and
-// another worker on the node never gets one.
+// TestMintWorkerActorCertificateAfterWorkerRelease fails the write of each of
+// ReleasingWorkflows that releases the actor's worker and rewrites its status.
+// The worker keeps the actor, and so its worker-for-actor certificate, until a
+// retry commits both; it gets none after that, and another worker on the node
+// never gets one.
 func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
-	// The worker is the one WireTestAssignment names, so a pause or suspend
+	// The worker is the one WireTestAssignment names, so an async or sync suspend
 	// reaches the workflow's fake atelet on its node.
 	wa := controlapi.WireTestAssignment()
 	node := wa.GetNodeName()
-	for _, wf := range controlapi.ReleaseWindowWorkflows() {
+	for _, wf := range controlapi.ReleasingWorkflows() {
 		t.Run(wf.Name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := controlapi.NewTestPersistence(t)
-			controlapi.SeedSuspendTemplate(t, ctx, persistence, &ateapipb.SnapshotConfig{StorageLocation: controlapi.TestStorageLocation})
+			controlapi.SeedSuspendTemplate(t, ctx, persistence, &ateapi.SnapshotConfig{StorageLocation: controlapi.TestStorageLocation})
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 			// wa's worker hosts the actor; the neighbor is another worker on
 			// its node.
@@ -63,36 +61,41 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 				{workerName, wa.GetWorkerPod(), wa.GetWorkerPodUid()},
 				{neighborName, "neighbor-pod", "neighbor-pod-uid"},
 			} {
-				if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
-					Metadata:        &ateapipb.ResourceMetadata{Name: w.name},
+				if _, err := persistence.CreateWorker(ctx, &ateapi.Worker{
+					Metadata:        &ateapi.ResourceMetadata{Name: w.name},
 					WorkerNamespace: wa.GetWorkerNamespace(),
 					WorkerPool:      wa.GetWorkerPool(),
 					WorkerPod:       w.pod,
 					WorkerPodUid:    w.podUID,
 					NodeName:        node,
-					SandboxClass:    "gvisor",
-					Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+					// Registered, with a sandbox class, so the scheduler takes it.
+					Status: &ateapi.WorkerStatus{
+						State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
+						RegisteredEpoch: 1,
+						Capacity:        &ateapi.WorkerResources{Actors: 1},
+						SandboxClasses:  []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
+					},
 				}); err != nil {
 					t.Fatalf("CreateWorker(%s): %v", w.name, err)
 				}
 			}
-			status := &ateapipb.ActorStatus{
+			status := &ateapi.ActorStatus{
 				State:                  wf.State,
 				AssignedNode:           node,
 				WorkerAssignment:       controlapi.WireTestAssignment(),
 				LastAssignedGeneration: 1,
 			}
 			if wf.Snapshot != nil {
-				status.Snapshots = []*ateapipb.Snapshot{wf.Snapshot(t)}
+				status.Snapshots = []*ateapi.Snapshot{wf.Snapshot(t)}
 			}
-			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: controlapi.SuspendTestTemplateRef(),
 				Status:        status,
 			})
 			uid := created.GetMetadata().GetUid()
-			controlapi.SeedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			controlapi.SeedAssignment(t, persistence, workerName, &ateapi.ActorAssignment{
+				Actor:    &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorUid: uid,
 			})
 
@@ -102,18 +105,18 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			// atelet on node.
 			mintAs := func(worker string) codes.Code {
 				t.Helper()
-				_, err := minter.MintWorkerActorCertificate(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, node)), &ateapipb.MintWorkerActorCertificateRequest{
-					Actor:                     &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				_, err := minter.MintWorkerActorCertificate(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, node)), &ateapi.MintWorkerActorCertificateRequest{
+					Actor:                     &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ActorUid:                  uid,
 					CertificateSigningRequest: csr,
-					Worker:                    &ateapipb.ObjectRef{Name: worker},
+					Worker:                    &ateapi.ObjectRef{Name: worker},
 				})
 				return apierror.Code(err)
 			}
 			// mint asks for the actor's certificate as the worker that the
 			// actor is assigned to and returns the actor as the mint saw it
 			// and the mint's code.
-			mint := func(stage string) (*ateapipb.Actor, codes.Code) {
+			mint := func(stage string) (*ateapi.Actor, codes.Code) {
 				t.Helper()
 				code := mintAs(workerName)
 				actor, gerr := persistence.GetActor(ctx, actorRef)
@@ -133,28 +136,19 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 				t.Errorf("certificate mint by another worker on the node: code %v, want NotFound", got)
 			}
 
-			// The release commits; recording the new state fails.
+			// The write that releases the worker and records the new state fails.
 			if err := wf.Finalize(t, ctx, controlapi.ConflictingUpdateStore{Interface: persistence}, actorRef, actor); err == nil {
 				t.Fatal("finalize succeeded through a store that fails every actor update")
 			}
-			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
-				t.Fatalf("worker assignment after release: err %v, want ErrNotFound", err)
+			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); err != nil {
+				t.Fatalf("worker assignment after the failed write: err %v, want the worker to keep the actor", err)
 			}
-			actor, got = mint("released, status not finalized")
+			actor, got = mint("write failed")
 			if actor.GetStatus().GetState() != wf.State || actor.GetStatus().GetWorkerAssignment() == nil {
-				t.Fatalf("actor after the failed update: state %v, worker assignment %v; want %v naming the worker", actor.GetStatus().GetState(), actor.GetStatus().GetWorkerAssignment(), wf.State)
+				t.Fatalf("actor after the failed write: state %v, worker assignment %v; want %v naming the worker", actor.GetStatus().GetState(), actor.GetStatus().GetWorkerAssignment(), wf.State)
 			}
-			if got != codes.NotFound {
-				t.Errorf("certificate mint after the worker was released: code %v, want NotFound", got)
-			}
-
-			// The worker takes another actor.
-			controlapi.SeedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
-				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: "actor-2"},
-				ActorUid: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
-			})
-			if _, got := mint("worker rebooked for another actor"); got != codes.NotFound {
-				t.Errorf("certificate mint after the worker was rebooked: code %v, want NotFound", got)
+			if got != codes.OK {
+				t.Errorf("certificate mint after the failed write: code %v, want OK", got)
 			}
 
 			// A retry records the new state.
@@ -165,9 +159,12 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			if actor.GetStatus().GetState() != wf.WantFinalState {
 				t.Errorf("actor state once finalized = %v, want %v", actor.GetStatus().GetState(), wf.WantFinalState)
 			}
-			// No worker runs the actor once finalized, paused or not.
+			// No worker runs the actor once finalized, with or without a local snapshot.
 			if got != codes.NotFound {
 				t.Errorf("certificate mint once finalized: code %v, want NotFound", got)
+			}
+			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("worker assignment once finalized: err %v, want ErrNotFound", err)
 			}
 		})
 	}

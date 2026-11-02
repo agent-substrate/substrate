@@ -49,12 +49,12 @@ func TestValidateSandboxAssetCacheFlags(t *testing.T) {
 }
 
 // TestOpenSandboxAssetCacheResetsScratch pins the startup contract: the
-// cache opens under the given dir, and whatever a crashed prewarm left in
-// the scratch dir is gone.
+// cache opens under the given dir, and whatever a crashed sync left in the
+// scratch dir is gone.
 func TestOpenSandboxAssetCacheResetsScratch(t *testing.T) {
 	useTempNodeDirs(t)
 	useTempAssetScratch(t)
-	leftover := filepath.Join(ateletpath.SandboxAssetScratchDir, "prewarm-123", "runsc")
+	leftover := filepath.Join(ateletpath.SandboxAssetScratchDir, "cpu-features-123", "runsc")
 	if err := os.MkdirAll(filepath.Dir(leftover), 0o755); err != nil {
 		t.Fatal(err)
 	}

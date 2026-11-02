@@ -15,7 +15,7 @@
 // limitations under the License.
 
 // The consumer half of the image cache: everything in this file runs in the
-// privileged worker pods (which own all mounts on the node), never in atelet.
+// worker pods, which set up the rootfs mounts, never in atelet.
 
 package imagecache
 
@@ -69,6 +69,15 @@ func SetupBundleRootfs(bundlePath string) error {
 	// path (e.g. a run that failed between mount and teardown). EINVAL just
 	// means nothing was mounted there.
 	_ = unix.Unmount(rootfs, unix.MNT_DETACH)
+
+	// upper (with an overlay) or rootfs (without) becomes the container's "/".
+	// At 0700 a non-root container cannot search its own root. Chmod after the
+	// unmount, explicitly: MkdirAll applies the umask and skips existing dirs.
+	for _, d := range []string{rootfs, upper} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			return fmt.Errorf("while setting mode of %q: %w", d, err)
+		}
+	}
 
 	if len(spec.Layers) == 0 {
 		// Degenerate zero-layer image: the empty rootfs dir plus ExtraDirs is
@@ -154,10 +163,10 @@ func mountImageVolume(mountpoint string, layers []string) error {
 // An empty upper mounts the overlay without a writable layer, which overlayfs
 // makes read-only.
 //
-// Minimum supported kernel: Linux 6.5, where overlayfs gained the
-// incremental "lowerdir+" option. Every current GKE channel is at or above
-// it (Stable runs COS 121 LTS on kernel 6.6; Regular and Rapid run COS
-// 125/129 on 6.12).
+// Requires overlayfs's "lowerdir+" option: Linux 6.7+, or 6.6.23+ where it was
+// backported.
+// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=24e16e385f2272b1a9df51337a5c32d28a29c7ad
+// https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=cc0918b3582c98f12cfb30bf7496496d14bff3e9
 func mountOverlay(mountpoint string, lowers []string, upper, work string) error {
 	fsfd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {
@@ -231,9 +240,9 @@ func fsContextLog(fsfd int) string {
 
 // FinalizeLayer materializes the whiteout state recorded at unpack time:
 // 0:0 char devices for whiteouts and trusted.overlay.opaque=y on opaque
-// dirs. This runs in worker rather than atelet because mknod needs CAP_MKNOD
-// and trusted.* xattrs need CAP_SYS_ADMIN, both of which atelet deliberately
-// drops.
+// dirs. This runs in worker rather than atelet because trusted.* xattrs need
+// CAP_SYS_ADMIN, which atelet deliberately drops. Unlike ordinary device nodes,
+// 0:0 whiteouts can be created without CAP_MKNOD since Linux 5.8.
 //
 // Idempotent and safe under concurrent callers (multiple worker pods share
 // the node's pool): EEXIST from mknod is success, setxattr is naturally

@@ -15,11 +15,16 @@
 package main
 
 import (
+	"io"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestResolveActorEnv(t *testing.T) {
@@ -174,6 +179,72 @@ func withCaps(in []string, add ...string) []string {
 	out := append(slices.Clone(in), add...)
 	slices.Sort(out)
 	return out
+}
+
+func TestResolveUser(t *testing.T) {
+	const passwd = "root:x:0:0:root:/root:/bin/sh\n" +
+		"jovyan:x:1000:100::/home/jovyan:/bin/bash\n" +
+		"nonroot:x:65532:65532::/home/nonroot:/sbin/nologin\n"
+	const group = "root:x:0:\n" +
+		"users:x:100:\n" +
+		"nonroot:x:65532:\n" +
+		"video:x:44:nonroot,jovyan\n" +
+		"audio:x:29:nonroot\n"
+	tests := []struct {
+		name          string
+		user          string
+		passwd, group string // empty: the image lacks the file
+		want          *ateworkerpb.ProcessUser
+		wantErr       bool
+	}{
+		{name: "bare uid, no passwd", user: "1000", want: &ateworkerpb.ProcessUser{Uid: 1000}},
+		{name: "bare uid takes its login group and memberships", user: "1000", passwd: passwd, group: group, want: &ateworkerpb.ProcessUser{Uid: 1000, Gid: 100, AdditionalGids: []uint32{44}}},
+		{name: "bare uid without a passwd entry", user: "1001", passwd: passwd, group: group, want: &ateworkerpb.ProcessUser{Uid: 1001}},
+		{name: "uid:gid passes through", user: "1000:2000", passwd: passwd, group: group, want: &ateworkerpb.ProcessUser{Uid: 1000, Gid: 2000}},
+		{name: "named user", user: "nonroot", passwd: passwd, group: group, want: &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65532, AdditionalGids: []uint32{44, 29}}},
+		{name: "named user and group", user: "jovyan:video", passwd: passwd, group: group, want: &ateworkerpb.ProcessUser{Uid: 1000, Gid: 44}},
+		{name: "named user missing from passwd", user: "nobody", passwd: passwd, wantErr: true},
+		{name: "named group missing from group", user: "1000:staff", passwd: passwd, group: group, wantErr: true},
+		{name: "above int32", user: "2147483648", wantErr: true},
+		{name: "third field", user: "1000:1000:1", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var passwdR, groupR io.Reader
+			if tc.passwd != "" {
+				passwdR = strings.NewReader(tc.passwd)
+			}
+			if tc.group != "" {
+				groupR = strings.NewReader(tc.group)
+			}
+			got, err := resolveUser(tc.user, passwdR, groupR)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolveUser(%q) = %v, %v; wantErr %v", tc.user, got, err, tc.wantErr)
+			}
+			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); err == nil && diff != "" {
+				t.Errorf("resolveUser(%q) mismatch (-want +got):\n%s", tc.user, diff)
+			}
+		})
+	}
+}
+
+func TestResolveCwd(t *testing.T) {
+	for _, tc := range []struct {
+		image   *v1.Config
+		want    string
+		wantErr bool
+	}{
+		{image: nil, want: "/"},
+		{image: &v1.Config{}, want: "/"},
+		{image: &v1.Config{WorkingDir: "/home/jovyan"}, want: "/home/jovyan"},
+		{image: &v1.Config{WorkingDir: "/app/"}, want: "/app"},
+		{image: &v1.Config{WorkingDir: "app"}, wantErr: true},
+	} {
+		got, err := resolveCwd(tc.image)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("resolveCwd(%+v) = %q, %v; want %q, wantErr %v", tc.image, got, err, tc.want, tc.wantErr)
+		}
+	}
 }
 
 func TestResolveCapabilities(t *testing.T) {

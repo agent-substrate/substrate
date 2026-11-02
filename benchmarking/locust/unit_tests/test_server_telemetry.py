@@ -785,6 +785,58 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(telemetry.call_args.kwargs["lag_s"], 70)
         self.assertNotIn("worker_pod_count", telemetry.call_args.kwargs)
 
+    # Ladder rows follow the telemetry harvest, whose wait covers their
+    # last samples, and a failure there still uploads the run.
+    @mock.patch.object(runner, "upload")
+    @mock.patch.object(runner, "run_test", return_value=1)
+    def test_ladder_steps_follow_telemetry_and_may_fail(self, _run, upload):
+        calls = []
+        telemetry = mock.Mock(side_effect=lambda **_: calls.append("telemetry"))
+
+        def ladder(jsonl_path, log_path, prom_url, *_):
+            calls.append(("ladder", log_path.name, prom_url))
+            raise RuntimeError("prometheus down")
+
+        out = io.StringIO()
+        with mock.patch.object(runner, "extract_and_record_server_telemetry", telemetry), \
+             mock.patch.object(runner, "append_ladder_steps", ladder), \
+             mock.patch.object(sys, "argv", ARGV + ["--no-cluster-facts", "--allow-empty-stats",
+                                                    "--prometheus-url", "http://x:9090"]), \
+             contextlib.redirect_stdout(out):
+            runner.main()
+        self.assertEqual(calls, ["telemetry", ("ladder", "unit-run_logs.txt", "http://x:9090")])
+        self.assertIn("Failed to summarize ladder steps: prometheus down", out.getvalue())
+        self.assertTrue(upload.called)
+
+    # The fill-done line of a turnover run starts the telemetry's steady
+    # window and the turnover_window row; a run without one gets neither.
+    @mock.patch.object(runner, "upload")
+    def test_turnover_start_reaches_telemetry_and_window(self, _up):
+        for line, start in (
+            ('[boomer] {"time":"2026-10-30T00:04:10Z","msg":"agentsession: turnover fill done"}\n',
+             1793318650),
+            ('[boomer] {"time":"2026-10-30T00:04:10Z","msg":"dynconfig applied"}\n', None),
+        ):
+            with self.subTest(start=start):
+                def run_test(_args, _csv_prefix, logs, _traces, line=line):
+                    logs.write(line)
+                    logs.flush()
+                    return 1
+
+                telemetry, window = mock.Mock(), mock.Mock(return_value=True)
+                with mock.patch.object(runner, "run_test", run_test), \
+                     mock.patch.object(runner, "extract_and_record_server_telemetry", telemetry), \
+                     mock.patch.object(runner, "append_turnover_window", window), \
+                     mock.patch.object(sys, "argv", ARGV + ["--no-cluster-facts",
+                                                            "--allow-empty-stats"]), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    runner.main()
+                self.assertEqual(telemetry.call_args.kwargs["steady_not_before"], start)
+                if start is None:
+                    self.assertFalse(window.called)
+                else:
+                    self.assertEqual(window.call_args.args[1], start)
+
 
 if __name__ == "__main__":
     unittest.main()

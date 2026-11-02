@@ -147,11 +147,15 @@ var Registry = []Setting{
 
 	{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
-		Usage: "Snapshot bucket the demos are templated with",
+		Usage: "Object-storage bucket passed to install scripts; the kind profile derives --snapshot-location from it",
 	},
 	{
 		Key: "storage.snapshotLocation", Env: "SNAPSHOT_LOCATION", Flag: "snapshot-location", Kind: KindString,
 		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the PerTemplateSnapshotLocation preview gate is not enabled)",
+	},
+	{
+		Key: "storage.transferGSAName", Env: "SNAPSHOT_TRANSFER_GSA_NAME", Flag: "snapshot-transfer-gsa-name", Kind: KindString,
+		Usage: "Name of the Google service account snapshot transfers run as on GCS, in gcp.projectID. ate-api-server's credential exchange impersonates it (required to deploy ate-api-server on GKE, unused on kind)",
 	},
 
 	{
@@ -178,20 +182,22 @@ var Registry = []Setting{
 		Usage: "Service account token issuer ate-api-server trusts, overriding derivation and discovery",
 	},
 	{
-		Key: "ateapi.authz.enabled", Env: "ATE_API_EXPERIMENTAL_ENABLE_AUTHZ",
-		Flag: "ateapi-experimental-enable-authz", Kind: KindBool, Default: "true",
-		Usage: "Enforce ate-api-server's runtime authorization",
-	},
-	{
 		Key: "ateapi.authz.bootstrapOwners", Env: "ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
 		Flag: "ateapi-authz-bootstrap-owners", Kind: KindString,
-		Usage: "Comma-separated principals that always hold owner on global:root when authorization is enforced. " +
+		Usage: "Comma-separated principals that always hold owner on global:root. " +
 			"Unset means kubectl-ate's ServiceAccount, system:serviceaccount:<namespace>:ate-client",
 	},
 	{
-		// The egress gateway's credential provider, as a JSON object. Upstream
-		// takes it as one value on one flag; it is carried the same way here
-		// so the two channels accept the same text.
+		Key: "ateapi.authz.egressGatewayExtraSPIFFEIDs", Env: "ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS",
+		Flag: "egress-gateway-extra-spiffe-ids", Kind: KindString,
+		Usage: "Comma-separated SPIFFE IDs that hold ate-api-server's egress_gateway role next to atenet-egress, " +
+			"such as a credential provider that mints actor JWTs. The role also reads actors and mints actor " +
+			"certificates. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
+	},
+	{
+		// The egress gateway's credential providers: one JSON object, or a JSON array
+		// of them for several. A repeated flag would be ideal, but a Setting holds one
+		// string on every channel, so an array is the least worst option.
 		Key: "atenet.egress.credentialProvider", Env: "ATE_CREDENTIAL_PROVIDER",
 		Flag: "credential-provider", Kind: KindString,
 		Usage: "Credential provider the egress gateway injects credentials from, as JSON; " +
@@ -271,6 +277,11 @@ var Registry = []Setting{
 		Usage: "Worker goroutines per signer in podcertificate-controller",
 	},
 	{
+		Key: "e2e.tuning", Env: "ATE_INSTALL_E2E_TUNING", Flag: "e2e-tuning",
+		Kind: KindBool, Default: "false",
+		Usage: "Apply the e2e test component (short atelet snapshot delays for end-to-end test runs)",
+	},
+	{
 		Key: "e2e.envoyConcurrency", Env: "E2E_ATE_ENVOY_CONCURRENCY",
 		Flag: "e2e-envoy-concurrency", Kind: KindInt, Default: "0",
 		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",
@@ -287,10 +298,10 @@ var Registry = []Setting{
 		Usage:   "Coarse-grained sizing of Substrate: size0 or size10",
 	},
 	{
-		Key: "cordonControlPlane", Env: "ATE_INSTALL_CORDON_CONTROL_PLANE", Flag: "cordon-control-plane",
+		Key: "cordonSystemInfraComponents", Env: "ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS", Flag: "cordon-system-infra-components",
 		Kind: KindBool, Default: "false",
-		Usage: "Keep the control plane off the worker nodes. Assumes a small shared pool labeled " +
-			"and tainted ate.dev/workloadType=ate-control-plane:NoSchedule, and a one-node pool " +
+		Usage: "Keep the system infra components off the worker nodes. Assumes a small shared pool labeled " +
+			"and tainted ate.dev/workloadType=ate-system-infra:NoSchedule, and a one-node pool " +
 			"labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone",
 	},
 	{
@@ -301,22 +312,14 @@ var Registry = []Setting{
 			"use it on a cluster that serves real actors",
 	},
 	{
-		Key: "ingressAuthMode", Env: "ATE_INGRESS_AUTH_MODE", Flag: "ingress-auth-mode", Kind: KindString,
-		Default: IngressAuthDeprecatedInsecure,
-		Usage: "How the ingress router authenticates clients: deprecated-insecure or static-mtls. Both check a " +
-			"client certificate on the router's TLS ports against the podidentity CA and --ingress-allowed-spiffe-ids; " +
-			"deprecated-insecure also lets through TLS clients without one and serves plaintext ports, while " +
-			"static-mtls requires the certificate and --atenet-dataplane=envoy",
-	},
-	{
 		// Comma-separated, as the router's own flag is. The registry has no
 		// list kind, so the value is carried as written and split where it is
 		// used.
 		Key: "ingressAllowedSPIFFEIDs", Env: "ATE_INGRESS_ALLOWED_SPIFFE_IDS", Flag: "ingress-allowed-spiffe-ids",
 		Kind: KindString,
-		Usage: "SPIFFE IDs (exact match, comma-separated) of the clients the ingress router lets reach actors over " +
-			"its TLS ports; any listed client may reach any actor. Required to deploy the router with " +
-			"--atenet-dataplane=envoy. The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
+		Usage: "SPIFFE IDs (exact match, comma-separated) of the clients the ingress router lets reach actors; " +
+			"any listed client may reach any actor. Unset, no client may reach actors through the router. " +
+			"The podidentity signer issues spiffe://cluster.local/ns/<namespace>/sa/<service-account>",
 	},
 	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,

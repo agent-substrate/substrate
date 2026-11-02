@@ -133,6 +133,9 @@ type FakeAteletServer struct {
 	RestoreRequest *ateletpb.RestoreRequest
 	FailRestore    error
 	RestoreDelay   time.Duration
+	// RestoreWorkerEpoch, when set, is the epoch a successful Restore returns,
+	// so a test can stand in for the worker process that ran it.
+	RestoreWorkerEpoch func() int64
 
 	PromoteCalled  bool
 	PromoteRequest *ateletpb.PromoteSnapshotRequest
@@ -191,6 +194,7 @@ func (f *FakeAteletServer) Reset() {
 	f.RestoreRequest = nil
 	f.FailRestore = nil
 	f.RestoreDelay = 0
+	f.RestoreWorkerEpoch = nil
 
 	f.PromoteCalled = false
 	f.PromoteRequest = nil
@@ -260,7 +264,8 @@ func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*
 		return nil, f.FailRun
 	}
 
-	return &ateletpb.RunResponse{}, nil
+	// The worker process every test Worker registers, see reportWorkerCapacity.
+	return &ateletpb.RunResponse{WorkerEpoch: reportedEpoch}, nil
 }
 
 func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
@@ -307,7 +312,10 @@ func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreReq
 	if f.FailRestore != nil {
 		return nil, f.FailRestore
 	}
-	return &ateletpb.RestoreResponse{}, nil
+	if f.RestoreWorkerEpoch != nil {
+		return &ateletpb.RestoreResponse{WorkerEpoch: f.RestoreWorkerEpoch()}, nil
+	}
+	return &ateletpb.RestoreResponse{WorkerEpoch: reportedEpoch}, nil
 }
 
 func (f *FakeAteletServer) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

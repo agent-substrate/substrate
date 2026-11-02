@@ -26,9 +26,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/ateapiauth"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // ErrStale is returned when the actor at the name a JWT carries has a
@@ -53,7 +53,7 @@ type Config struct {
 // Lookup resolves actors over one connection to ate-api-server.
 type Lookup struct {
 	conn   *grpc.ClientConn
-	client ateapipb.ControlClient
+	client ateapi.ControlClient
 }
 
 // New dials ate-api-server. The connection is lazy, so a server that is not up
@@ -77,19 +77,19 @@ func New(cfg Config) (*Lookup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("actorlookup: while creating the ate-api-server client: %w", err)
 	}
-	return &Lookup{conn: conn, client: ateapipb.NewControlClient(conn)}, nil
+	return &Lookup{conn: conn, client: ateapi.NewControlClient(conn)}, nil
 }
 
 // Actor returns the actor the claims name. The claims come from a verified
 // JWT, so the atespace and name are trusted, but the actor may have been
 // recreated since, which the UID detects. A gRPC status error from
 // ate-api-server, such as NotFound, is returned unchanged.
-func (l *Lookup) Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapipb.Actor, error) {
+func (l *Lookup) Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapi.Actor, error) {
 	if claims == nil || claims.Atespace == "" || claims.ActorName == "" || claims.ActorUID == "" {
 		return nil, errors.New("actorlookup: claims lack atespace, actor name, or UID")
 	}
-	actor, err := l.client.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: claims.Atespace, Name: claims.ActorName},
+	actor, err := l.client.GetActor(ctx, &ateapi.GetActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: claims.Atespace, Name: claims.ActorName},
 	})
 	if err != nil {
 		return nil, err

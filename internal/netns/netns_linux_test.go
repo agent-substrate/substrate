@@ -40,6 +40,13 @@ func TestNamedNetNSRejectsInvalidNames(t *testing.T) {
 			if !errors.Is(err, os.ErrInvalid) {
 				t.Fatalf("CreateNamed(%q): got %v, want invalid name", name, err)
 			}
+			handle, err = GetFromName(name)
+			if err == nil {
+				handle.Close()
+			}
+			if !errors.Is(err, os.ErrInvalid) {
+				t.Fatalf("GetFromName(%q): got %v, want invalid name", name, err)
+			}
 		})
 	}
 }

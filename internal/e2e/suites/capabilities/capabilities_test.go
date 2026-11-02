@@ -19,12 +19,14 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // defaultCapabilities mirrors atelet's default set (cmd/atelet/oci.go). It is
@@ -39,6 +41,7 @@ type capabilitiesResponse struct {
 	Permitted   []string `json:"permitted"`
 	Inheritable []string `json:"inheritable"`
 	Ambient     []string `json:"ambient"`
+	NoNewPrivs  bool     `json:"noNewPrivs"`
 	Error       string   `json:"error"`
 }
 
@@ -46,19 +49,20 @@ type capabilitiesResponse struct {
 // securityContext.capabilities is actually in force inside the sandbox, as the
 // kernel reports it — not merely present in the OCI spec atelet writes. atelet
 // does not spawn containers, so the spec being right and the sandbox applying
-// it are separate claims; only this test covers the second.
+// it are separate claims; only this test covers the second. It also checks
+// that uid 0 cannot write /proc/sys and, on microVM, that masked files read
+// empty and masked directories hide their contents and are read-only.
 //
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gvisor and micro-VM from one suite.
 func TestActorCapabilities(t *testing.T) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
-	if err != nil {
+	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	namespace := deployFixture(t, ctx, clients, env["BUCKET_NAME"])
+	namespace := deployFixture(t, ctx, clients)
 
 	tests := []struct {
 		name     string
@@ -76,6 +80,13 @@ func TestActorCapabilities(t *testing.T) {
 		name:     "drop ALL plus add yields exactly the added capability",
 		template: "caps-exact",
 		want:     []string{"NET_BIND_SERVICE"},
+	}, {
+		// The golden bake in deployFixture is what proves port 80 binds without
+		// NET_BIND_SERVICE; this row checks the restored actor still answers
+		// with an empty set.
+		name:     "drop ALL still binds port 80",
+		template: "caps-none",
+		want:     nil,
 	}}
 
 	for _, tt := range tests {
@@ -110,6 +121,57 @@ func TestActorCapabilities(t *testing.T) {
 			if len(got.Ambient) != 0 {
 				t.Errorf("ambient = %v, want empty (ambient capabilities are not supported)", got.Ambient)
 			}
+			// Neither runtime sets no_new_privileges; gVisor runs with --allow-suid.
+			if got.NoNewPrivs {
+				t.Error("no_new_privs = 1, want 0")
+			}
+
+			// uid 0 must not write /proc/sys. gVisor's procfs makes this file
+			// 0444. On microVM the container is root in the guest kernel, so
+			// this relies on the read-only path.
+			wantErr := "permission denied"
+			if e2e.IsMicroVM() {
+				wantErr = "read-only file system"
+			}
+			if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/proc/sys/kernel/domainname"); !strings.Contains(got["error"], wantErr) {
+				t.Errorf("writing /proc/sys/kernel/domainname: error %q, want %q", got["error"], wantErr)
+			}
+
+			// gVisor's procfs has no /proc/interrupts. On microVM it reads as
+			// empty only if the /dev/null mask is in force.
+			if e2e.IsMicroVM() {
+				got := probeFile(t, ctx, rc, namespace, actor, "/readfile", "/proc/interrupts")
+				if got["error"] != "" || got["content"] != "" {
+					t.Errorf("reading /proc/interrupts = %q, error %q, want empty content", got["content"], got["error"])
+				}
+
+				// The mask hides /sys/firmware's contents: acpi on amd64,
+				// devicetree on arm64.
+				const enoent = "no such file or directory"
+				for _, p := range []string{"/sys/firmware/acpi", "/sys/firmware/devicetree"} {
+					if got := probeFile(t, ctx, rc, namespace, actor, "/readfile", p); !strings.Contains(got["error"], enoent) {
+						t.Errorf("reading %s: error %q, want %q", p, got["error"], enoent)
+					}
+				}
+				// The mask is read-only. Without ro, nr_inodes=1 gives ENOSPC.
+				// Unmasked /sys also gives EROFS, which the check above rules
+				// out.
+				if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/sys/firmware/x"); !strings.Contains(got["error"], "read-only file system") {
+					t.Errorf("writing /sys/firmware/x: error %q, want read-only file system", got["error"])
+				}
+				// /proc/acpi is a read-only mask on amd64, and missing on arm64,
+				// which has no ACPI. Unmasked, procfs gives permission denied.
+				if got := probeFile(t, ctx, rc, namespace, actor, "/writefile", "/proc/acpi/x"); !strings.Contains(got["error"], "read-only file system") && !strings.Contains(got["error"], enoent) {
+					t.Errorf("writing /proc/acpi/x: error %q, want read-only file system or %q", got["error"], enoent)
+				}
+				// These have no mask because the guest kernel lacks them. A
+				// kernel that adds them must fail here.
+				for _, dir := range []string{"/proc/asound", "/proc/scsi", "/sys/devices/virtual/powercap"} {
+					if got := probeFile(t, ctx, rc, namespace, actor, "/readfile", dir); !strings.Contains(got["error"], enoent) {
+						t.Errorf("reading %s: error %q, want %q", dir, got["error"], enoent)
+					}
+				}
+			}
 		})
 	}
 }
@@ -128,36 +190,36 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 
 // deployFixture installs the fixture for the sandbox class under test and
 // returns its atespace (which also names the namespace it created, carrying
-// the class suffix so the gVisor and micro-VM lanes never share one). Both
-// templates are golden-snapshotted when this returns; a template whose
+// the class suffix so the gVisor and micro-VM lanes never share one). Every
+// template is golden-snapshotted when this returns; a template whose
 // container cannot start — for example because a needed capability was
 // dropped — fails the deploy with the template's error message rather than
 // timing out per subtest.
-func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) string {
+func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
 	t.Helper()
 	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
-	}, bucket, "capabilities", nil)
+	}, "capabilities", nil)
 	return atespace
 }
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, template, id string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: namespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: namespace, Name: template},
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: namespace, Name: id},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: namespace, Name: template},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id}})
 	})
 
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id},
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: id},
 	}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
@@ -177,6 +239,26 @@ func probeCapabilities(t *testing.T, ctx context.Context, rc *e2e.RouterClient, 
 	var out capabilitiesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decoding /capabilities for %q: %v", id, err)
+	}
+	return out
+}
+
+// probeFile runs the probe's /readfile or /writefile on path and returns its
+// response.
+func probeFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, namespace, id, endpoint, path string) map[string]string {
+	t.Helper()
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: namespace, Name: id}, endpoint+"?path="+url.QueryEscape(path))
+	if err != nil {
+		t.Fatalf("GET %s for %q: %v", endpoint, id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET %s for %q: status %d, body %q", endpoint, id, resp.StatusCode, body)
+	}
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decoding %s for %q: %v", endpoint, id, err)
 	}
 	return out
 }

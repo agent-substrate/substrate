@@ -26,9 +26,9 @@ import (
 	"testing"
 	"time"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 	"go.ate.dev/substrate/pkg/objectstorage"
 )
 
@@ -169,13 +169,13 @@ func TestSnapshotCacheMode(t *testing.T) {
 }
 
 func TestCacheModeFor(t *testing.T) {
-	if got := cacheModeFor(string(atev1alpha1.SandboxClassGvisor)); got != cacheModeLink {
+	if got := cacheModeFor(string(atev1.SandboxClassGvisor)); got != cacheModeLink {
 		t.Errorf("gVisor consumes restore state read-only; want cacheModeLink, got %v", got)
 	}
 	// ateworker-microvm keeps memory-ranges open for the VM's life, merges
 	// deltas into it, and drops it from the page cache; through a link each
 	// of those would reach the cache's entry, so it gets private copies.
-	if got := cacheModeFor(string(atev1alpha1.SandboxClassMicroVM)); got != cacheModeCopy {
+	if got := cacheModeFor(string(atev1.SandboxClassMicroVM)); got != cacheModeCopy {
 		t.Errorf("micro-VM keeps and reworks its restore files; want cacheModeCopy, got %v", got)
 	}
 	if got := cacheModeFor(""); got != cacheModeOff {

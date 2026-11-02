@@ -16,12 +16,13 @@
 // GCS half of the control plugin's credential exchange: actorscope decides what
 // an actor may touch, this package turns that into a credential GCS enforces.
 //
-// The source credential comes from the default credential chain, which on GKE
-// with Workload Identity is the federated token. The downscope package
-// exchanges it at STS with a Credential Access Boundary and returns an access
-// token GCS limits to the boundary. STS reports no lifetime for that token, so
-// the package falls back to the source token's expiry, and the two expire
-// together.
+// The source credential is a token for the snapshot transfer service account,
+// which the pod's own identity impersonates through the IAM Credentials API.
+// GCS audit logs then name that account rather than ate-api-server. The
+// downscope package exchanges the token at STS with a Credential Access
+// Boundary and returns an access token GCS limits to the boundary. STS reports
+// no lifetime for that token, so the package falls back to the source token's
+// expiry, and the two expire together.
 package gcsissuer
 
 import (
@@ -33,8 +34,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/google/downscope"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/utils/lru"
@@ -60,13 +61,14 @@ const (
 	stsTimeout = 30 * time.Second
 )
 
-// Issuer exchanges the pod's credential for per-actor downscoped tokens and
-// caches them by actor UID.
+// Issuer exchanges the transfer account's token for per-actor downscoped
+// tokens and caches them by actor UID.
 type Issuer struct {
-	source oauth2.TokenSource
-	client *http.Client
-	now    func() time.Time
-	cache  *lru.Cache
+	source     oauth2.TokenSource
+	iamOptions []option.ClientOption
+	client     *http.Client
+	now        func() time.Time
+	cache      *lru.Cache
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
@@ -79,7 +81,12 @@ type entry struct {
 // Option configures an Issuer.
 type Option func(*Issuer)
 
-// WithTokenSource overrides the source credential, for tests.
+// WithIAMCredentialsOptions configures the IAM Credentials client, for tests.
+func WithIAMCredentialsOptions(opts ...option.ClientOption) Option {
+	return func(i *Issuer) { i.iamOptions = opts }
+}
+
+// WithTokenSource replaces the transfer account's token, for tests.
 func WithTokenSource(ts oauth2.TokenSource) Option { return func(i *Issuer) { i.source = ts } }
 
 // WithHTTPClient overrides the client used for STS, for tests.
@@ -94,10 +101,11 @@ func WithCacheSize(n int) Option {
 	return func(i *Issuer) { i.cache = lru.New(max(n, 1)) }
 }
 
-// New returns an Issuer whose source credential is the default credential
-// chain, unless an option replaces it. The credential keeps refreshing for the
-// Issuer's whole life, so ctx is detached from cancellation.
-func New(ctx context.Context, opts ...Option) (*Issuer, error) {
+// New returns an Issuer whose source credential is a token for the transfer
+// service account with email account. Tests that replace the source with
+// WithTokenSource pass an empty account. The credential keeps refreshing for
+// the Issuer's whole life, so ctx is detached from cancellation.
+func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 	i := &Issuer{
 		client: &http.Client{Timeout: stsTimeout},
 		now:    time.Now,
@@ -107,13 +115,11 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 		o(i)
 	}
 	if i.source == nil {
-		creds, err := google.FindDefaultCredentialsWithParams(context.WithoutCancel(ctx), google.CredentialsParams{
-			Scopes: []string{cloudPlatformScope},
-		})
+		src, err := newTransferAccountSource(context.WithoutCancel(ctx), account, i.iamOptions...)
 		if err != nil {
-			return nil, fmt.Errorf("while loading the default credential: %w", err)
+			return nil, err
 		}
-		i.source = creds.TokenSource
+		i.source = src
 	}
 	return i, nil
 }
@@ -121,14 +127,12 @@ func New(ctx context.Context, opts ...Option) (*Issuer, error) {
 // Issue returns a token downscoped to grants for the actor. A cached token is
 // returned while it covers the grants and has at least minServeLifetime left,
 // unless force is set, which mints regardless and is what the node plugin
-// sends after GCS refused a token. A minted token with less than
-// minServeLifetime left is handed out anyway, since a short token beats a
-// failed transfer, but it is not cached. That happens for a stretch at the
-// end of every hour of the source credential's life: the downscoped token
-// expires with its source, and the GKE metadata server serves the same cached
-// source token until shortly before it expires, so no early refresh helps. In
-// that stretch every exchange reaches STS and the node plugin re-exchanges
-// once if a transfer outlives its token.
+// sends after GCS refused a token. A minted token expires with the source
+// token, which is fetched again once less than sourceRefreshMargin is left, so
+// it starts with at least that long. If that fetch fails, the previous source
+// token is used until it expires. A minted token with less than
+// minServeLifetime left, which only that leaves behind, is handed out anyway,
+// since a short token beats a failed transfer, but it is not cached.
 //
 // The cache is keyed by actor UID and each entry remembers its grants. Grants
 // narrow when the tag an actor was created from drops out after its first

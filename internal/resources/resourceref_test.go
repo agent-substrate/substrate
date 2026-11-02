@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // The ref aliases must stay distinct types: the phantom ResourceRef kind is
@@ -52,17 +52,17 @@ func TestResourceRefLogValue(t *testing.T) {
 		{
 			name: "zero actor ref",
 			val:  ActorRef{}.LogValue(),
-			want: map[string]string{"type": "*ateapipb.Actor", "atespace": "", "name": ""},
+			want: map[string]string{"type": "*ateapi.Actor", "atespace": "", "name": ""},
 		},
 		{
 			name: "zero template ref",
 			val:  ActorTemplateRef{}.LogValue(),
-			want: map[string]string{"type": "*ateapipb.ActorTemplate", "atespace": "", "name": ""},
+			want: map[string]string{"type": "*ateapi.ActorTemplate", "atespace": "", "name": ""},
 		},
 		{
 			name: "populated actor ref",
 			val:  ActorRef{Atespace: "team-a", Name: "act-1"}.LogValue(),
-			want: map[string]string{"type": "*ateapipb.Actor", "atespace": "team-a", "name": "act-1"},
+			want: map[string]string{"type": "*ateapi.Actor", "atespace": "team-a", "name": "act-1"},
 		},
 	}
 	for _, tt := range tests {
@@ -103,19 +103,19 @@ func TestActorRefObjectRefRoundTrip(t *testing.T) {
 func TestActorRefFromActor(t *testing.T) {
 	tests := []struct {
 		name  string
-		actor *ateapipb.Actor
+		actor *ateapi.Actor
 		want  ActorRef
 	}{
 		{
 			name: "populated",
-			actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{
+			actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{
 				Atespace: "team-a",
 				Name:     "act-1",
 			}},
 			want: ActorRef{Atespace: "team-a", Name: "act-1"},
 		},
 		{"nil actor", nil, ActorRef{}},
-		{"nil metadata", &ateapipb.Actor{}, ActorRef{}},
+		{"nil metadata", &ateapi.Actor{}, ActorRef{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,19 +148,19 @@ func TestActorTemplateRefObjectRefRoundTrip(t *testing.T) {
 func TestActorTemplateRefFromActorTemplate(t *testing.T) {
 	tests := []struct {
 		name     string
-		template *ateapipb.ActorTemplate
+		template *ateapi.ActorTemplate
 		want     ActorTemplateRef
 	}{
 		{
 			name: "populated",
-			template: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{
+			template: &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{
 				Atespace: "team-a",
 				Name:     "tmpl-1",
 			}},
 			want: ActorTemplateRef{Atespace: "team-a", Name: "tmpl-1"},
 		},
 		{"nil template", nil, ActorTemplateRef{}},
-		{"nil metadata", &ateapipb.ActorTemplate{}, ActorTemplateRef{}},
+		{"nil metadata", &ateapi.ActorTemplate{}, ActorTemplateRef{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -193,19 +193,19 @@ func TestTagRefObjectRefRoundTrip(t *testing.T) {
 func TestTagRefFromTag(t *testing.T) {
 	tests := []struct {
 		name string
-		tag  *ateapipb.Tag
+		tag  *ateapi.Tag
 		want TagRef
 	}{
 		{
 			name: "populated",
-			tag: &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{
+			tag: &ateapi.Tag{Metadata: &ateapi.ResourceMetadata{
 				Atespace: "team-a",
 				Name:     "tag-1",
 			}},
 			want: TagRef{Atespace: "team-a", Name: "tag-1"},
 		},
 		{"nil tag", nil, TagRef{}},
-		{"nil metadata", &ateapipb.Tag{}, TagRef{}},
+		{"nil metadata", &ateapi.Tag{}, TagRef{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

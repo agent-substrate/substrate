@@ -1,3 +1,7 @@
+---
+docsite: false
+---
+
 # Substrate gRPC API Style Guide
 
 This document is the authoritative style guide for Substrate public APIs. Today this only includes `ate-apiserver` API.
@@ -10,7 +14,7 @@ This guide is derived from [Google's AIP (API Improvement Proposals)](https://go
 
 *Follows [AIP-121](https://google.aip.dev/121).*
 
-APIs are structured around **resources** (nouns) and a small set of standard **methods** (verbs). Standard methods are Get, List, Create, Update, and Delete. **Custom methods** handle operations that don't fit these patterns (e.g., Suspend, Resume, Pause for Actors).
+APIs are structured around **resources** (nouns) and a small set of standard **methods** (verbs). Standard methods are Get, List, Create, Update, and Delete. **Custom methods** handle operations that don't fit these patterns (e.g., Suspend, Resume, Revert for Actors).
 
 Rules:
 - Every primary noun the API exposes is a resource.
@@ -278,8 +282,8 @@ Clients update by read-modify-write: `Get` the resource, change the fields they 
 Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
-  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
-  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
+  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, `delete_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
+  - **Immutable** fields (`atespace`, `name`, and resource-specific ones such as an actor's `source_tag`) are caller-set at creation and fixed thereafter. A request that changes one, including by omitting it, **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
 - A request carrying a field the server does not know, at any level of nesting, **must** return `INVALID_ARGUMENT` naming the field, as for every RPC. Fields only the client does not know are a different case: a client that modifies the resource it read sends them back unchanged, so an update from an older client does not clear fields a newer server set.
@@ -333,7 +337,7 @@ allow external controllers and upstream systems / automations to react to resour
 
 *Follows [AIP-136](https://google.aip.dev/136).*
 
-Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Pause), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
+Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Revert), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
 
 ```proto
 rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
@@ -433,6 +437,9 @@ message ResourceMetadata {
 
   // update_time is the time the resource was last updated by a user action.
   google.protobuf.Timestamp update_time = 6;
+
+  // delete_time is the time the resource started its deletion.
+  google.protobuf.Timestamp delete_time = 7;
 }
 ```
 
@@ -478,6 +485,11 @@ on resource updates. Also establishes a total order on "snapshots" of a given re
 - Type: `google.protobuf.Timestamp`.
 - Records when the resource was last modified by a user action (Create, Update, or a custom mutating method).
 - Updated on every mutation. Internal state changes made by the system (e.g., a scheduler assigning a worker) **may** also update this field, but are not required to.
+
+### 6.7 `delete_time`
+
+- Type: `google.protobuf.Timestamp`.
+- Records when the resource started its deletion.
 
 ---
 
@@ -699,7 +711,7 @@ Rules:
 - `scope` **must** be set on a top-level resource: `SCOPE_ATESPACE` or `SCOPE_GLOBAL` (see section #2.1). A subresource **must not** set it, because it has its parent's scope.
 - `plural` **must** be set on every resource, singletons included. It is the plural that List methods and their repeated resource field use (see section #3).
 - A message that is not a resource, such as a request, a status message, or `ObjectRef`, carries no `(resource)` option.
-- When you add, remove, or re-parent a resource, update [the resource model](resource-model.md) too.
+- When you add, remove, or re-parent a resource, update [the resource model](reference/resource-model.md) too.
 
 ### 11.2 Methods
 

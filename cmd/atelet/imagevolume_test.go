@@ -76,9 +76,24 @@ func singleFileLayer(t *testing.T, path, body string) v1.Layer {
 // which is what validated workload specs carry.
 func pushTestImage(t *testing.T, ref string, layers ...v1.Layer) string {
 	t.Helper()
+	return pushTestImageWithConfig(t, ref, v1.Config{}, layers...)
+}
+
+// pushTestImageWithConfig is pushTestImage with the image config set.
+func pushTestImageWithConfig(t *testing.T, ref string, cfg v1.Config, layers ...v1.Layer) string {
+	t.Helper()
 	img, err := mutate.AppendLayers(empty.Image, layers...)
 	if err != nil {
 		t.Fatalf("mutate.AppendLayers: %v", err)
+	}
+	cf, err := img.ConfigFile()
+	if err != nil {
+		t.Fatalf("img.ConfigFile: %v", err)
+	}
+	cf = cf.DeepCopy()
+	cf.Config = cfg
+	if img, err = mutate.ConfigFile(img, cf); err != nil {
+		t.Fatalf("mutate.ConfigFile: %v", err)
 	}
 	tag, err := name.ParseReference(ref, name.Insecure)
 	if err != nil {

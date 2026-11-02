@@ -24,6 +24,7 @@ package images
 import (
 	"fmt"
 	"path"
+	"slices"
 )
 
 // ModulePath is this repository's module path. A ko:// reference is it joined
@@ -38,7 +39,7 @@ const ModulePath = "go.ate.dev/substrate"
 // that was never pushed. TestComponentsCoverTheManifests keeps it in step with
 // the manifests, which is half of it: a new component also has to be published
 // under the same repository and tag as the rest before a pre-built install can
-// use it.
+// use it, and a release publishes it only once it is added to released.
 var Components = []string{
 	"cmd/ate-idp-server",
 	"cmd/ateapi",
@@ -57,6 +58,49 @@ var Components = []string{
 	"demos/multi-template/fspersist",
 	"demos/sandbox",
 }
+
+// released is the allowlist of Components a release publishes. A component is
+// published only after it is added here, so one added to Components stays out
+// of releases until it is added here in review. A pre-built install still
+// looks an unlisted image up in its registry; if the lookup fails, the error
+// says releases do not publish it.
+var released = []string{
+	"cmd/ate-idp-server",
+	"cmd/ateapi",
+	"cmd/atecontroller",
+	"cmd/atelet",
+	"cmd/atenet",
+	"cmd/ateworker-gvisor",
+	"cmd/ateworker-microvm",
+	"cmd/credential-provider/kubernetes-secrets",
+	"cmd/objectstore-plugin",
+	"cmd/podcertcontroller",
+}
+
+// ReleaseComponents returns the Components a release publishes.
+func ReleaseComponents() []string { return slices.Clone(released) }
+
+// DockerfileImage is an image built from a Dockerfile with docker buildx
+// rather than with ko.
+type DockerfileImage struct {
+	// Name is the image name under the repository.
+	Name string
+	// Context is the build context, relative to the repository root.
+	Context string
+}
+
+// EnvoyDataplane is the image the envoy router and egress gateways run.
+var EnvoyDataplane = DockerfileImage{Name: "envoy-dataplane", Context: "cmd/dataplane/envoy"}
+
+// releasedDockerfiles is the allowlist of DockerfileImages a release
+// publishes, the counterpart of released.
+var releasedDockerfiles = []DockerfileImage{EnvoyDataplane}
+
+// ReleaseDockerfileImages returns the DockerfileImages a release publishes.
+func ReleaseDockerfileImages() []DockerfileImage { return slices.Clone(releasedDockerfiles) }
+
+// IsReleased reports whether a release publishes pkg.
+func IsReleased(pkg string) bool { return slices.Contains(released, pkg) }
 
 // KoReference is the ko:// reference the manifests name pkg by.
 //

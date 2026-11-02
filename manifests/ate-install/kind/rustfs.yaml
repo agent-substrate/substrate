@@ -62,7 +62,7 @@ spec:
         fsGroup: 10001
       containers:
       - name: rustfs
-        image: rustfs/rustfs:1.0.0-beta.3@sha256:378642b05b7dcb4849fb77ebe6aca4ced1c3f66e7e504247df95a5c9018d3358
+        image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 9000
@@ -102,7 +102,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: create-bucket
-        image: amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73
+        image: amazon/aws-cli:2.38.5@sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
         env:
         - name: AWS_ACCESS_KEY_ID
           value: rustfsadmin

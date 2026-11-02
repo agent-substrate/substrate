@@ -38,9 +38,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/installdefaults"
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
 )
 
 const (
@@ -115,7 +115,7 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	log := log.FromContext(ctx)
 
 	// Fetch worker pool
-	wp := &atev1alpha1.WorkerPool{}
+	wp := &atev1.WorkerPool{}
 	if err := r.Get(ctx, req.NamespacedName, wp); err != nil {
 		if k8errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -159,7 +159,7 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // released this config, it listed the pools before step 2 wrote the claim.
 // The config was already being deleted then, so the read in step 3 sees the
 // deletion and the class does not switch.
-func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
+func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev1.WorkerPool) error {
 	log := log.FromContext(ctx)
 	log.Info("Reconciling worker pool")
 
@@ -179,7 +179,7 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 		}
 	}
 
-	var list atev1alpha1.SandboxConfigList
+	var list atev1.SandboxConfigList
 	if err := r.List(ctx, &list); err != nil {
 		return fmt.Errorf("failed to list SandboxConfigs: %w", err)
 	}
@@ -214,7 +214,7 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 
 // everyClassHasConfig reports whether every class in classes has a
 // SandboxConfig, either resolved now or kept from before.
-func everyClassHasConfig(classes []atev1alpha1.WorkerPoolSandboxClassStatus) bool {
+func everyClassHasConfig(classes []atev1.WorkerPoolSandboxClassStatus) bool {
 	for _, c := range classes {
 		if c.ConfigRef == nil {
 			return false
@@ -230,12 +230,12 @@ func everyClassHasConfig(classes []atev1alpha1.WorkerPoolSandboxClassStatus) boo
 // ever used has no finalizer and is deleted right away. A config that was
 // deleted after the cached read is caught later, when reconcileWorkerPool
 // confirms it against the API server.
-func protectSandboxConfigs(ctx context.Context, c client.Client, classes []atev1alpha1.WorkerPoolSandboxClassStatus, configs []atev1alpha1.SandboxConfig) error {
+func protectSandboxConfigs(ctx context.Context, c client.Client, classes []atev1.WorkerPoolSandboxClassStatus, configs []atev1.SandboxConfig) error {
 	for _, class := range classes {
 		if class.ConfigRef == nil {
 			continue
 		}
-		i := slices.IndexFunc(configs, func(sc atev1alpha1.SandboxConfig) bool { return sc.Name == class.ConfigRef.Name })
+		i := slices.IndexFunc(configs, func(sc atev1.SandboxConfig) bool { return sc.Name == class.ConfigRef.Name })
 		if i < 0 {
 			return fmt.Errorf("resolved SandboxConfig %q is not in the list it was resolved from", class.ConfigRef.Name)
 		}
@@ -251,12 +251,12 @@ func protectSandboxConfigs(ctx context.Context, c client.Client, classes []atev1
 // config is left alone. The patch carries sc's resourceVersion, so a
 // concurrent change to the config fails with a conflict and the reconcile is
 // retried.
-func addProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1alpha1.SandboxConfig) error {
-	if controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) || !sc.DeletionTimestamp.IsZero() {
+func addProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1.SandboxConfig) error {
+	if controllerutil.ContainsFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer) || !sc.DeletionTimestamp.IsZero() {
 		return nil
 	}
 	orig := sc.DeepCopy()
-	controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	controllerutil.AddFinalizer(sc, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 	if err := c.Patch(ctx, sc, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("failed to update finalizers of SandboxConfig %q: %w", sc.Name, err)
 	}
@@ -268,12 +268,12 @@ func addProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1alpha
 // to another class, or is being deleted gets an entry that keeps the config in
 // use instead. wp's status must already claim the new configs. See
 // reconcileWorkerPool.
-func (r *WorkerPoolReconciler) confirmSandboxConfigSwitches(ctx context.Context, wp *atev1alpha1.WorkerPool, classes []atev1alpha1.WorkerPoolSandboxClassStatus, configs []atev1alpha1.SandboxConfig) error {
+func (r *WorkerPoolReconciler) confirmSandboxConfigSwitches(ctx context.Context, wp *atev1.WorkerPool, classes []atev1.WorkerPoolSandboxClassStatus, configs []atev1.SandboxConfig) error {
 	for i, class := range classes {
 		if !switchesSandboxConfig(wp, class) {
 			continue
 		}
-		live := &atev1alpha1.SandboxConfig{}
+		live := &atev1.SandboxConfig{}
 		if err := r.APIReader.Get(ctx, client.ObjectKey{Name: class.ConfigRef.Name}, live); err != nil {
 			if !k8errors.IsNotFound(err) {
 				return fmt.Errorf("failed to get SandboxConfig %q: %w", class.ConfigRef.Name, err)
@@ -300,7 +300,7 @@ func (r *WorkerPoolReconciler) confirmSandboxConfigSwitches(ctx context.Context,
 // copy of the pool sees the switch a second time. The reconcile that a claim
 // write triggers often does. Its status write fails on the resourceVersion
 // before it gets here, so the switch is reported once.
-func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1alpha1.WorkerPool, prev, classes []atev1alpha1.WorkerPoolSandboxClassStatus) {
+func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1.WorkerPool, prev, classes []atev1.WorkerPoolSandboxClassStatus) {
 	for _, class := range classes {
 		if switchesSandboxConfigFrom(prev, class) {
 			if prev := findSandboxClassStatus(prev, class.Name); prev != nil && prev.ConfigRef != nil {
@@ -311,7 +311,7 @@ func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1alpha1.WorkerP
 					"sandbox class %q uses SandboxConfig %q", class.Name, class.ConfigRef.Name)
 			}
 		}
-		cond := meta.FindStatusCondition(class.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved)
+		cond := meta.FindStatusCondition(class.Conditions, atev1.WorkerPoolSandboxClassConditionResolved)
 		if cond == nil || cond.Status == metav1.ConditionTrue {
 			continue
 		}
@@ -325,7 +325,7 @@ func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1alpha1.WorkerP
 	}
 }
 
-func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
+func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1.WorkerPool) error {
 	if wp.Spec.Template == nil || wp.Spec.Template.ServiceAccountName == nil {
 		if err := r.applyWorkerServiceAccount(ctx, wp.Namespace); err != nil {
 			return err
@@ -359,7 +359,7 @@ func (r *WorkerPoolReconciler) applyWorkerServiceAccount(ctx context.Context, na
 
 // syncStatus writes wp's status: replica counts and selector from dep (left
 // as they are when dep is nil) and sandboxClasses from classes.
-func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, dep *appsv1.Deployment, classes []atev1alpha1.WorkerPoolSandboxClassStatus) error {
+func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1.WorkerPool, dep *appsv1.Deployment, classes []atev1.WorkerPoolSandboxClassStatus) error {
 	want := wp.Status.DeepCopy()
 	if dep != nil {
 		selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
@@ -408,7 +408,7 @@ func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
 
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, obs metric.Observer) error {
-			var list atev1alpha1.WorkerPoolList
+			var list atev1.WorkerPoolList
 			if err := r.List(ctx, &list); err != nil {
 				log.FromContext(ctx).Error(err, "failed to list worker pools to observe ate.workerpool.desired_workers and ate.workerpool.ready_workers")
 				return nil
@@ -444,9 +444,9 @@ func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to initialize workerpool metrics: %w", err)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&atev1alpha1.WorkerPool{}).
+		For(&atev1.WorkerPool{}).
 		Owns(&appsv1.Deployment{}).
-		Watches(&atev1alpha1.SandboxConfig{}, handler.EnqueueRequestsFromMapFunc(r.workerPoolsForSandboxConfig)).
+		Watches(&atev1.SandboxConfig{}, handler.EnqueueRequestsFromMapFunc(r.workerPoolsForSandboxConfig)).
 		Complete(r)
 }
 
@@ -455,11 +455,11 @@ func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // class, because the config may become or stop being their default, and the
 // pools whose spec or status names it.
 func (r *WorkerPoolReconciler) workerPoolsForSandboxConfig(ctx context.Context, obj client.Object) []reconcile.Request {
-	sc, ok := obj.(*atev1alpha1.SandboxConfig)
+	sc, ok := obj.(*atev1.SandboxConfig)
 	if !ok {
 		return nil
 	}
-	var pools atev1alpha1.WorkerPoolList
+	var pools atev1.WorkerPoolList
 	if err := r.List(ctx, &pools); err != nil {
 		log.FromContext(ctx).Error(err, "failed to list worker pools for SandboxConfig", "sandboxConfig", sc.Name)
 		return nil
@@ -474,7 +474,7 @@ func (r *WorkerPoolReconciler) workerPoolsForSandboxConfig(ctx context.Context, 
 	return reqs
 }
 
-func workerPoolMayUseSandboxConfig(wp *atev1alpha1.WorkerPool, sc *atev1alpha1.SandboxConfig) bool {
+func workerPoolMayUseSandboxConfig(wp *atev1.WorkerPool, sc *atev1.SandboxConfig) bool {
 	for _, entry := range wp.Spec.SandboxClasses {
 		if entry.Name == sc.Spec.SandboxClass || (entry.ConfigRef != nil && entry.ConfigRef.Name == sc.Name) {
 			return true

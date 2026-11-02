@@ -88,7 +88,7 @@ groups:
         note: >
           Logs only. It is bounded, but it is only ever recorded beside actor
           identity, which no metric may carry. The values mirror
-          ateapipb.ActorState with the ACTOR_STATE_ prefix dropped, so the log
+          ateapi.ActorState with the ACTOR_STATE_ prefix dropped, so the log
           vocabulary and the state machine cannot fork.
         type:
           members:
@@ -104,8 +104,9 @@ groups:
               stability: development
               value: suspending
               brief: >
-                ateapi is writing a snapshot: node-local for an asynchronous
-                suspend, durable for a synchronous suspend.
+                ateapi is writing a snapshot: uploaded to object storage before
+                returning for a synchronous suspend, or in the background for
+                an asynchronous suspend.
             - id: suspended
               stability: development
               value: suspended
@@ -260,16 +261,16 @@ groups:
             - id: microvm
               stability: development
               value: microvm
-              brief: A micro-VM sandbox.
+              brief: A microVM sandbox.
             - id: unknown
               stability: development
               value: unknown
               brief: >
                 The source has no class, or a class that is not in this list.
                 The default is not gvisor. Thus a bad record stays visible.
-                ateapi reports it for a Worker that CreateWorker accepted with
-                no class. atelet reports it for a snapshot manifest with no
-                class.
+                ateapi reports it for a Worker that has not registered a
+                sandbox class. atelet reports it for a snapshot
+                manifest with no class.
       - id: ate.sandbox.oom_kills
         stability: development
         type: int
@@ -299,9 +300,11 @@ groups:
               stability: development
               value: local
               brief: >
-                The copy on the node. An asynchronous suspend writes it. A
-                resume reads it while the node still has it, after either kind
-                of suspend and whether or not the upload has finished.
+                The copy on the node. On checkpoint, an asynchronous suspend
+                writes local (whereas a synchronous suspend writes latest,
+                though it also keeps a copy on the node). On restore, a resume
+                reads local while the node still has the copy, after either
+                kind of suspend and whether or not the upload has finished.
             - id: latest
               stability: development
               value: latest
@@ -523,13 +526,21 @@ groups:
               value: unavailable
               brief: >
                 The request got an Unavailable status, or a 503 without a gRPC
-                cause. For example, a denied egress request, a failed policy or
-                credential lookup, or a full parking lot when the resume did not
-                fail with ResourceExhausted.
+                cause. For example, a failed policy or credential lookup, or a
+                full parking lot when the resume did not fail with
+                ResourceExhausted.
             - id: rate_limited
               stability: development
               value: rate_limited
               brief: The router limited the rate of the request.
+            - id: denied
+              stability: development
+              value: denied
+              brief: >
+                The router refused the request by policy, with a 403 or a
+                PermissionDenied status. For example, an egress request that
+                the actor's egress policy does not allow. It is a policy
+                decision, not a defect.
             - id: resume_error
               stability: development
               value: resume_error
@@ -767,7 +778,7 @@ groups:
         stability: stable
         type: string
         brief: The gRPC method of the request.
-        examples: ["ateapi.Control/ResumeActor"]
+        examples: ["substrate.ateapi.v1.Control/ResumeActor"]
       - id: rpc.response.status_code
         stability: stable
         type: string
@@ -802,9 +813,8 @@ groups:
       Substrate can also lose the data that it did not write. Some moves into
       this state are not a loss of data. They are careful responses to a control
       plane problem.
-      ate.sandbox.class is unknown when ateapi could not read the class of the
-      worker: the worker record is already gone, or its assignment is already
-      clear.
+      ate.sandbox.class is unknown when the actor's worker assignment is already
+      clear or carries no sandbox runtime.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -835,9 +845,19 @@ groups:
     stability: development
     brief: The number of workers in each pool, divided by state and by sandbox class.
     note: >
-      ateapi reads this value with a callback. You can add the counts together.
-      The sum across the states is the size of the pool. The sum across the
-      pools is the size of the fleet. Thus this instrument is an UpDownCounter
+      ateapi reads this value with a callback. Each ateapi replica reports the
+      whole fleet from its own worker cache, and the default install runs two
+      replicas. Thus a sum across the replicas counts each worker once for
+      each replica. The caches can disagree for a few seconds, and a worker
+      that changed state then sits under its old state on one replica and
+      under its new state on the other. Take the average across the replicas
+      first, by pool namespace, pool, state and sandbox class, and add after
+      that. A maximum would count that worker twice, once under each state.
+      The average keeps the sum across the states equal to the size of the
+      pool, and the counts can be fractional while the replicas disagree.
+      Within one replica you can add the counts together. The sum across the
+      states is the size of the pool. The sum across the pools is the size of
+      the fleet. Thus this instrument is an UpDownCounter
       and not a gauge. ateapi sets every state to 0 for each known pool. Thus a
       full pool or an empty pool reports 0. An absent series would stop an alert
       on idle == 0.
@@ -1042,7 +1062,7 @@ groups:
     brief: The uncompressed allocated size in bytes of each snapshot image that a checkpoint writes.
     note: >
       atelet records one measurement for each image file from its allocated disk
-      blocks (st_blocks * 512, excluding sparse holes in micro-VM
+      blocks (st_blocks * 512, excluding sparse holes in microVM
       memory-ranges). It does not record one measurement for each checkpoint.
       Use the file.name key to compare the same type of image.
     annotations:
@@ -1070,13 +1090,14 @@ groups:
     note: >
       atelet uploads deferred snapshots in the background once the upload delay
       or the detach delay elapses. A probe that finds the manifest committed
-      already without uploading is not recorded. An upload that Terminate or an
-      atelet shutdown cancels records error.type Canceled, and one that runs
-      past its timeout (--snapshot-upload-timeout plus the time the snapshot
-      takes at --snapshot-upload-est-throughput-mib, doubled for each
-      consecutive failure to at most 8 times that) records DeadlineExceeded.
-      Synchronous uploads from UPLOAD_MODE_IMMEDIATE checkpoints and
-      PromoteSnapshot are recorded on ate.actor.checkpoint.duration instead.
+      already without uploading is not recorded. An upload that Terminate, an
+      atelet shutdown, or a newer durable snapshot cancels records error.type
+      Canceled, and one that runs past its timeout (--snapshot-upload-timeout
+      plus the time the snapshot takes at --snapshot-upload-est-throughput-mib,
+      doubled for each consecutive failure to at most 8 times that) records
+      DeadlineExceeded. Synchronous uploads from UPLOAD_MODE_IMMEDIATE
+      checkpoints and PromoteSnapshot are recorded on
+      ate.actor.checkpoint.duration instead.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1097,17 +1118,18 @@ groups:
     instrument: histogram
     unit: s
     stability: development
-    brief: The time of deleting the local snapshots of an actor during a background detach on atelet, excluding any snapshot upload.
+    brief: The time of deleting the local snapshots and node files of an actor during a background detach on atelet, excluding any snapshot upload.
     note: >
       atelet detaches an actor once it stays suspended on the node for the
       detach delay. If object storage does not hold the latest local snapshot
       yet, the detach uploads it first and records that upload on
       atelet.snapshot.upload.duration; a detach whose upload fails stops there
       and is not recorded here. Once the snapshot is durable, the detach deletes
-      the local snapshots of the actor, which is what this histogram times. A
-      detach that Terminate or an atelet shutdown cancels records error.type
-      Canceled. A failed detach keeps the local snapshots, and atelet tries it
-      again later. A detach that a DetachActor call asks for is not recorded.
+      the local snapshots and other node files of the actor (except
+      snapshot-state.json), which is what this histogram times. A detach that
+      Terminate or an atelet shutdown cancels records error.type Canceled. A
+      failed detach keeps LatestLocal, and atelet tries it again later. A detach
+      that a DetachActor call asks for is not recorded.
     annotations:
       substrate:
         emitted_by: [atelet]
@@ -1240,10 +1262,10 @@ groups:
       It does not count usage twice. It can count less: the end of an
       activation after the last sample atelet read of it, which is up to one
       poll interval plus one ateworker sample interval plus the sweep's own time
-      (up to 45s on a micro-VM), so an activation shorter than that can lose
+      (up to 45s on a microVM), so an activation shorter than that can lose
       most or all of its CPU here, while its usage records keep it; the time
       around an atelet restart; and, in a
-      micro-VM restored from a full snapshot, a container's use before its
+      microVM restored from a full snapshot, a container's use before its
       first successful reading. A node clock that steps back across an atelet
       restart can count one activation in full a second time.
     annotations:
@@ -1389,7 +1411,7 @@ groups:
     brief: The number of entries that the eviction passes removed from a file cache on the node, by cache.
     note: >
       An entry is one cached file or tree, such as a runsc binary or a
-      micro-VM kernel. A pass removes only an entry that nothing links,
+      microVM kernel. A pass removes only an entry that nothing links,
       oldest first, and a dry run removes none. A rate that stays above zero
       with a size at the budget means that the cache thrashes: an entry
       leaves and returns on each pass, and each return pays for a download.
@@ -1501,7 +1523,7 @@ groups:
       an activation time nor a warm route.
     annotations:
       substrate:
-        emitted_by: [atenet-router]
+        emitted_by: [atenet-router, atenet-egress]
         golden_signals: [latency, traffic, errors]
         code_anchor: cmd/atenet/internal/router/extproc/metrics.go
         buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
@@ -1595,7 +1617,7 @@ groups:
       cmd/credential-provider/kubernetes-secrets.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm, credprovider]
+        emitted_by: [ateapi, atelet, atenet-router, atenet-egress, ateworker-gvisor, ateworker-microvm, credprovider]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
@@ -1626,7 +1648,7 @@ groups:
       pod.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atecontroller, atenet-router]
+        emitted_by: [ateapi, atelet, atecontroller, atenet-router, atenet-egress]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc

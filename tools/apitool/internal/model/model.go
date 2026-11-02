@@ -26,7 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // sourceFileName is an arbitrary internal label: Build only ever compiles
@@ -44,12 +44,12 @@ type API struct {
 	// ateapi.proto's single "Control" service.
 	Services []Service
 	// Messages lists every message declared in the file, top-level and
-	// nested, flattened into one slice. For example, "ateapi.Actor" and
-	// "ateapi.ResourceMetadata" both appear here as top-level entries.
+	// nested, flattened into one slice. For example, "substrate.ateapi.v1.Actor" and
+	// "substrate.ateapi.v1.ResourceMetadata" both appear here as top-level entries.
 	Messages []Message
 	// Enums lists every enum declared in the file, top-level and nested,
 	// flattened the same way as Messages. For example, the top-level
-	// "ateapi.ActorState" appears here.
+	// "substrate.ateapi.v1.ActorState" appears here.
 	Enums []Enum
 }
 
@@ -65,7 +65,7 @@ func (a API) MessagesByFullName() map[protoreflect.FullName]Message {
 
 // Service is one RPC service. For example, ateapi.proto's "Control" service.
 type Service struct {
-	// FullName is the service's proto full name. For example, "ateapi.Control".
+	// FullName is the service's proto full name. For example, "substrate.ateapi.v1.Control".
 	FullName protoreflect.FullName
 	// Name is the service's short name. For example, "Control".
 	Name protoreflect.Name
@@ -86,20 +86,20 @@ type Method struct {
 	// new Actor deriving from a given ActorTemplate."
 	Comment string
 	// InputName is the full name of the request message, for linking. For
-	// example, "ateapi.CreateActorRequest" for CreateActor.
+	// example, "substrate.ateapi.v1.CreateActorRequest" for CreateActor.
 	InputName protoreflect.FullName
 	// OutputName is the full name of the response message, for linking.
-	// For example, "ateapi.Actor" for CreateActor - most standard methods
+	// For example, "substrate.ateapi.v1.Actor" for CreateActor - most standard methods
 	// return the resource itself rather than a wrapper message.
 	OutputName protoreflect.FullName
 
-	// Resource is the resource the method's (ateapi.method) annotation
+	// Resource is the resource the method's (substrate.ateapi.v1.method) annotation
 	// names, or "" if the method has none. For example, "Actor" for
 	// SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
 	Resource string
 
 	// ServiceFullName is the declaring service's full name. For example,
-	// "ateapi.Control".
+	// "substrate.ateapi.v1.Control".
 	ServiceFullName protoreflect.FullName
 	// ServiceName is the declaring service's short name. For example, "Control".
 	ServiceName protoreflect.Name
@@ -108,7 +108,7 @@ type Method struct {
 // Message is one message declared in the file, top-level or nested.
 type Message struct {
 	// FullName is the message's proto full name. For example,
-	// "ateapi.ResourceMetadata".
+	// "substrate.ateapi.v1.ResourceMetadata".
 	FullName protoreflect.FullName
 	// Name is the message's short name, with its enclosing message's name
 	// dotted in front for a nested type. For example, "ResourceMetadata"
@@ -117,7 +117,7 @@ type Message struct {
 	// here.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
-	// top-level message. For example, "" for "ateapi.ResourceMetadata".
+	// top-level message. For example, "" for "substrate.ateapi.v1.ResourceMetadata".
 	ParentFullName protoreflect.FullName
 	// Comment is the message's leading doc comment. For example,
 	// "ResourceMetadata holds the common fields carried by every Substrate
@@ -127,9 +127,9 @@ type Message struct {
 	// example, ResourceMetadata's atespace, name, uid, version,
 	// create_time, update_time.
 	Fields []Field
-	// ResourceAnnotation is the message's (ateapi.resource) annotation, or
+	// ResourceAnnotation is the message's (substrate.ateapi.v1.resource) annotation, or
 	// nil if the message isn't a resource. For example, non-nil for
-	// "ateapi.Actor"; nil for "ateapi.ResourceMetadata".
+	// "substrate.ateapi.v1.Actor"; nil for "substrate.ateapi.v1.ResourceMetadata".
 	ResourceAnnotation *ResourceAnnotation
 }
 
@@ -138,7 +138,7 @@ func (m Message) IsResource() bool {
 	return m.ResourceAnnotation != nil
 }
 
-// ResourceAnnotation is a resource message's (ateapi.resource) annotation.
+// ResourceAnnotation is a resource message's (substrate.ateapi.v1.resource) annotation.
 type ResourceAnnotation struct {
 	// Parents lists the resource types this resource is a subresource of:
 	// another resource's message name, or GlobalParent. For example,
@@ -151,7 +151,7 @@ type ResourceAnnotation struct {
 	// Scope is whether a top-level resource belongs to an atespace. For
 	// example, SCOPE_ATESPACE for Actor, or SCOPE_GLOBAL for Worker. Set
 	// only on a top-level resource: a subresource has its parent's scope.
-	Scope ateapipb.Scope
+	Scope ateapi.Scope
 	// Plural is the resource's plural name. For example, "AccessPolicies"
 	// for AccessPolicy.
 	Plural string
@@ -189,15 +189,15 @@ type Field struct {
 	Kind protoreflect.Kind
 	// TypeFullName is set only for a singular or repeated message/enum
 	// field. Empty for scalars and maps - see MapValueFullName for a map's
-	// value type. For example, "ateapi.ResourceMetadata" for Actor.metadata
-	// (`ResourceMetadata metadata = 1;`), or "ateapi.ActorState" for
+	// value type. For example, "substrate.ateapi.v1.ResourceMetadata" for Actor.metadata
+	// (`ResourceMetadata metadata = 1;`), or "substrate.ateapi.v1.ActorState" for
 	// ActorStatus.state (`ActorState state = 1;`).
 	TypeFullName protoreflect.FullName
 	// TypeIsExternal is true when the type isn't declared in this proto
 	// file (for example, an imported well-known type). For example, true
 	// for ResourceMetadata.create_time (google.protobuf.Timestamp,
 	// imported from google/protobuf/timestamp.proto); false for
-	// Actor.metadata (ateapi.ResourceMetadata, declared in ateapi.proto
+	// Actor.metadata (substrate.ateapi.v1.ResourceMetadata, declared in ateapi.proto
 	// itself).
 	TypeIsExternal bool
 
@@ -225,8 +225,8 @@ type Field struct {
 
 // Enum is one enum declared in the file, top-level or nested.
 type Enum struct {
-	// FullName is the enum's proto full name. For example, "ateapi.ActorState"
-	// for a top-level enum, or "ateapi.Parent.Status" for one nested inside
+	// FullName is the enum's proto full name. For example, "substrate.ateapi.v1.ActorState"
+	// for a top-level enum, or "substrate.ateapi.v1.Parent.Status" for one nested inside
 	// a Parent message.
 	FullName protoreflect.FullName
 	// Name is the enum's short name, with its enclosing message's name
@@ -234,8 +234,8 @@ type Enum struct {
 	// the top-level enum, or "Parent.Status" for one nested inside Parent.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
-	// top-level enum. For example, "" for "ateapi.ActorState", or
-	// "ateapi.Parent" for "ateapi.Parent.Status".
+	// top-level enum. For example, "" for "substrate.ateapi.v1.ActorState", or
+	// "substrate.ateapi.v1.Parent" for "substrate.ateapi.v1.Parent.Status".
 	ParentFullName protoreflect.FullName
 	// Comment is the enum's leading doc comment. ateapi.proto's ActorState
 	// has none today, so this is often "" in practice even though the field
@@ -446,7 +446,7 @@ func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescrip
 // into this binary under d's full name, or nil if there's none. Build reads
 // annotations from there rather than from d: protocompile, compiling the
 // annotations' own definitions from source, fills them in as dynamic
-// messages that the generated ateapipb extension types can't read.
+// messages that the generated ateapi extension types can't read.
 func generatedOptions(d protoreflect.Descriptor) proto.Message {
 	g, err := protoregistry.GlobalFiles.FindDescriptorByName(d.FullName())
 	if err != nil {
@@ -460,15 +460,15 @@ func methodResource(md protoreflect.MethodDescriptor) string {
 	if opts == nil {
 		return ""
 	}
-	return proto.GetExtension(opts, ateapipb.E_Method).(*ateapipb.MethodAnnotation).GetResource()
+	return proto.GetExtension(opts, ateapi.E_Method).(*ateapi.MethodAnnotation).GetResource()
 }
 
 func resourceAnnotation(md protoreflect.MessageDescriptor) *ResourceAnnotation {
 	opts := generatedOptions(md)
-	if opts == nil || !proto.HasExtension(opts, ateapipb.E_Resource) {
+	if opts == nil || !proto.HasExtension(opts, ateapi.E_Resource) {
 		return nil
 	}
-	a := proto.GetExtension(opts, ateapipb.E_Resource).(*ateapipb.ResourceAnnotation)
+	a := proto.GetExtension(opts, ateapi.E_Resource).(*ateapi.ResourceAnnotation)
 	return &ResourceAnnotation{
 		Parents:   a.GetParents(),
 		Singleton: a.GetSingleton(),
@@ -561,7 +561,7 @@ func scalarOrTypeName(fd protoreflect.FileDescriptor, mapField protoreflect.Fiel
 }
 
 // shortName strips fd's package prefix from a full name. For example,
-// "ateapi.Actor.Status" -> "Actor.Status".
+// "substrate.ateapi.v1.Actor.Status" -> "Actor.Status".
 func shortName(fd protoreflect.FileDescriptor, full protoreflect.FullName) string {
 	return strings.TrimPrefix(string(full), string(fd.Package())+".")
 }
@@ -615,11 +615,11 @@ func Resources(api *API) ([]Resource, error) {
 	for _, svc := range api.Services {
 		for _, method := range svc.Methods {
 			if method.Resource == "" {
-				return nil, fmt.Errorf("%s.%s: no resource annotation - add `option (ateapi.method).resource = \"<Resource>\";`", svc.Name, method.Name)
+				return nil, fmt.Errorf("%s.%s: no resource annotation - add `option (substrate.ateapi.v1.method).resource = \"<Resource>\";`", svc.Name, method.Name)
 			}
 			r, ok := byName[method.Resource]
 			if !ok {
-				return nil, fmt.Errorf("%s.%s: annotated resource %q is not a resource in this API - annotate its message with (ateapi.resource)", svc.Name, method.Name, method.Resource)
+				return nil, fmt.Errorf("%s.%s: annotated resource %q is not a resource in this API - annotate its message with (substrate.ateapi.v1.resource)", svc.Name, method.Name, method.Resource)
 			}
 			r.Methods = append(r.Methods, method)
 		}
@@ -628,7 +628,7 @@ func Resources(api *API) ([]Resource, error) {
 	return resources, nil
 }
 
-// validateAnnotation checks resource's (ateapi.resource) annotation: each
+// validateAnnotation checks resource's (substrate.ateapi.v1.resource) annotation: each
 // parent is GlobalParent or a resource in byName, the plural is set, and a
 // scope is set exactly when resource is top-level.
 func validateAnnotation(resource Message, byName map[string]*Resource) error {
@@ -639,12 +639,12 @@ func validateAnnotation(resource Message, byName map[string]*Resource) error {
 		}
 	}
 	if annotation.Plural == "" {
-		return fmt.Errorf("%s: resource has no plural - set `plural` in its (ateapi.resource) annotation", resource.FullName)
+		return fmt.Errorf("%s: resource has no plural - set `plural` in its (substrate.ateapi.v1.resource) annotation", resource.FullName)
 	}
-	if len(annotation.Parents) == 0 && annotation.Scope == ateapipb.Scope_SCOPE_UNSPECIFIED {
-		return fmt.Errorf("%s: top-level resource has no scope - set `scope` in its (ateapi.resource) annotation", resource.FullName)
+	if len(annotation.Parents) == 0 && annotation.Scope == ateapi.Scope_SCOPE_UNSPECIFIED {
+		return fmt.Errorf("%s: top-level resource has no scope - set `scope` in its (substrate.ateapi.v1.resource) annotation", resource.FullName)
 	}
-	if len(annotation.Parents) > 0 && annotation.Scope != ateapipb.Scope_SCOPE_UNSPECIFIED {
+	if len(annotation.Parents) > 0 && annotation.Scope != ateapi.Scope_SCOPE_UNSPECIFIED {
 		return fmt.Errorf("%s: subresource has scope %s - a subresource has its parent's scope, so leave `scope` unset", resource.FullName, annotation.Scope)
 	}
 	return nil

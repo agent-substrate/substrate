@@ -293,36 +293,12 @@ def append_trial_summary(
             # a truncated sample understates the peak without looking wrong.
             observed = []
 
-    # The flag stands in only when no sample was read at all.
-    peak_users = max(observed) if observed else args.users
-
-    # Locust counts VUs, not actors, and one VU drives --actors-per-user of them.
-    per_user = args.actors_per_user or 1
-    peak_actors = peak_users * per_user
-
-    node_count = facts.get("node_count")
-    cores = facts.get("allocatable_cores")
-    ram_gb = facts.get("allocatable_ram_gb")
-    pod_count = facts.get("worker_pod_count")
-
-    actors_per_node = round(peak_actors / node_count, 2) if node_count else None
-    actors_per_vcpu = round(peak_actors / cores, 2) if cores else None
-    actors_per_gb_ram = round(peak_actors / ram_gb, 2) if ram_gb else None
-
-    # Actors per pod across every sample, ramp-up included. Under a load shape
-    # there is no one target to measure steadiness against, so the
-    # distribution covers the whole run.
-    actors_per_pod_p50, actors_per_pod_p90, actors_per_pod_p99 = None, None, None
-    if observed and pod_count:
-        ratios = sorted(round(u * per_user / pod_count, 4) for u in observed)
-        n = len(ratios)
-        actors_per_pod_p50 = round(ratios[int(n * 0.50)], 2)
-        actors_per_pod_p90 = round(ratios[min(int(n * 0.90), n - 1)], 2)
-        actors_per_pod_p99 = round(ratios[min(int(n * 0.99), n - 1)], 2)
-
     # One ratio per row Locust reported, so a test's own operation names carry
     # through. Absent when the test has no such row, null when it ran nothing.
     failure_ratios: dict[str, float | None] = {"aggregate_failure_ratio": None}
+    create_actor_successes: int | None = None
+    delete_actor_requests = 0
+    retired_task_requests = 0
     if stats_csv.exists():
         try:
             with open(stats_csv, encoding="utf-8") as f:
@@ -338,6 +314,12 @@ def append_trial_summary(
                     if name == "Aggregated":
                         failure_ratios["aggregate_failure_ratio"] = ratio
                         continue
+                    if name == "CreateActor":
+                        create_actor_successes = max(requests - failures, 0)
+                    elif name == "DeleteActor":
+                        delete_actor_requests = requests
+                    elif name == "TaskWallClock":
+                        retired_task_requests = requests
                     key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
                     key = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key)
                     key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
@@ -345,8 +327,53 @@ def append_trial_summary(
         except Exception as e:
             _log(logs, f"Notice: could not parse {stats_csv}: {e}")
             failure_ratios = {"aggregate_failure_ratio": None}
+            create_actor_successes = None
+            delete_actor_requests = 0
+            retired_task_requests = 0
     else:
         _log(logs, f"Notice: {stats_csv} not found; failure ratios unknown")
+
+    # The flag stands in only when no sample was read at all.
+    peak_users = max(observed) if observed else args.users
+
+    # Locust counts VUs, not actors, and one VU drives --actors-per-user of them.
+    per_user = args.actors_per_user or 1
+    peak_actors = peak_users * per_user
+
+    # Locust's User Count tracks spawned VU goroutines even when CreateActor
+    # fails or broken actors are deleted during the run. When the test records
+    # CreateActor in stats.csv, cap by the actors still alive at the end of the
+    # run (stats.csv is written before boomer's shutdown DeleteActor sweep).
+    # In sweperf, each completed TaskWallClock retires its actor with
+    # DeleteActor before starting a fresh one, so only unretired deletes count
+    # as failed/wedged actors.
+    if create_actor_successes is not None:
+        unretired_deletes = max(delete_actor_requests - retired_task_requests, 0)
+        live_actors = max(create_actor_successes - unretired_deletes, 0)
+        peak_actors = min(peak_actors, live_actors)
+
+    node_count = facts.get("node_count")
+    cores = facts.get("allocatable_cores")
+    ram_gb = facts.get("allocatable_ram_gb")
+    pod_count = facts.get("worker_pod_count")
+
+    actors_per_node = round(peak_actors / node_count, 2) if node_count else None
+    actors_per_vcpu = round(peak_actors / cores, 2) if cores else None
+    actors_per_gb_ram = round(peak_actors / ram_gb, 2) if ram_gb else None
+
+    # Actors per pod across every sample, ramp-up included. Under a load shape
+    # there is no one target to measure steadiness against, so the
+    # distribution covers the whole run.
+    actors_per_pod_p50, actors_per_pod_p90, actors_per_pod_p99 = None, None, None
+    if observed and pod_count:
+        ratios = sorted(
+            round(min(u * per_user, peak_actors) / pod_count, 4)
+            for u in observed
+        )
+        n = len(ratios)
+        actors_per_pod_p50 = round(ratios[int(n * 0.50)], 2)
+        actors_per_pod_p90 = round(ratios[min(int(n * 0.90), n - 1)], 2)
+        actors_per_pod_p99 = round(ratios[min(int(n * 0.99), n - 1)], 2)
 
     # Whether workers hosted more than one actor at once (a multi-actor
     # worker), going by the median actors per pod.

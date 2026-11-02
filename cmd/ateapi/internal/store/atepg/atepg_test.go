@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // A listing fails as a whole on one undecodable row, so the error has to name
@@ -31,14 +31,14 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 	createTestAtespace(t, s, "team-a")
 	createTestActorTemplate(t, s, "team-a", "t1")
 	createTestTag(t, s, "team-a", "v1")
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Name: "a1", Atespace: "team-a"},
-		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	if _, err := s.CreateActor(ctx, &ateapi.Actor{
+		Metadata: &ateapi.ResourceMetadata{Name: "a1", Atespace: "team-a"},
+		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	if _, err := s.CreateWorker(ctx, &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: "w1"},
+	if _, err := s.CreateWorker(ctx, &ateapi.Worker{
+		Metadata:        &ateapi.ResourceMetadata{Name: "w1"},
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",

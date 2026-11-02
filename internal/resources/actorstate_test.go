@@ -18,25 +18,25 @@ import (
 	"slices"
 	"testing"
 
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
 // TestTransferStatesClassifyEveryState fails when a state is added to the
 // enum without deciding whether a node transfers snapshots in it, since the
 // mint's host check and the credential exchange both refuse unlisted states.
 func TestTransferStatesClassifyEveryState(t *testing.T) {
-	want := map[ateapipb.ActorState]bool{
-		ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED: false,
-		ateapipb.ActorState_ACTOR_STATE_RESUMING:    true,
-		ateapipb.ActorState_ACTOR_STATE_RUNNING:     true,
-		ateapipb.ActorState_ACTOR_STATE_SUSPENDING:  true,
-		ateapipb.ActorState_ACTOR_STATE_SUSPENDED:   true,
-		ateapipb.ActorState_ACTOR_STATE_CRASHED:     false,
-		ateapipb.ActorState_ACTOR_STATE_REVERTING:   false,
-		ateapipb.ActorState_ACTOR_STATE_DELETING:    false,
+	want := map[ateapi.ActorState]bool{
+		ateapi.ActorState_ACTOR_STATE_UNSPECIFIED: false,
+		ateapi.ActorState_ACTOR_STATE_RESUMING:    true,
+		ateapi.ActorState_ACTOR_STATE_RUNNING:     true,
+		ateapi.ActorState_ACTOR_STATE_SUSPENDING:  true,
+		ateapi.ActorState_ACTOR_STATE_SUSPENDED:   true,
+		ateapi.ActorState_ACTOR_STATE_CRASHED:     false,
+		ateapi.ActorState_ACTOR_STATE_REVERTING:   false,
+		ateapi.ActorState_ACTOR_STATE_DELETING:    false,
 	}
-	for value, name := range ateapipb.ActorState_name {
-		state := ateapipb.ActorState(value)
+	for value, name := range ateapi.ActorState_name {
+		state := ateapi.ActorState(value)
 		transfers, classified := want[state]
 		if !classified {
 			t.Errorf("%s is not classified: decide whether a node transfers snapshots in it and add it to this test", name)

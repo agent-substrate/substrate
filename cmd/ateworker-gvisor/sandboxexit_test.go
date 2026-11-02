@@ -44,7 +44,7 @@ func startFakeSandbox(t *testing.T) (*exec.Cmd, *sandboxProcess) {
 	if err := os.MkdirAll(pidFileDir(actorDirs), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	pidFile := pidFilePath(actorDirs, ocispec.PauseContainer)
+	pidFile := pidFilePath(actorDirs, ocispec.SandboxID)
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}

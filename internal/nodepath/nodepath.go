@@ -14,7 +14,7 @@
 
 // Package nodepath holds the node-level paths more than one component needs:
 // the host directory atelet and the workers both mount, the sockets and netns
-// they find each other by, the per-actor parent directory, and where atelet
+// they find each other by, the per-actor parent directories, and where atelet
 // stages runtime binaries.
 package nodepath
 
@@ -30,6 +30,10 @@ const BasePath = "/var/lib/ate"
 
 // ActorsDir is the parent of the per-actor directories atelet prepares.
 var ActorsDir = filepath.Join(BasePath, "actors")
+
+// SnapshotsDir is the parent of the per-actor snapshot directories, separate
+// from ActorsDir so it can be mounted on its own disk.
+var SnapshotsDir = filepath.Join(BasePath, "snapshots")
 
 // UnderBasePath reports whether dir resolves to a directory strictly under
 // BasePath; BasePath itself does not count. A relative dir resolves against

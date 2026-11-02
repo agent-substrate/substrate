@@ -38,8 +38,8 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
-	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 const serverName = "api.ate-system.svc"
@@ -47,12 +47,12 @@ const serverName = "api.ate-system.svc"
 // fakeControl serves GetActor for one actor and records the client identity
 // it saw.
 type fakeControl struct {
-	ateapipb.UnimplementedControlServer
-	actor    *ateapipb.Actor
+	ateapi.UnimplementedControlServer
+	actor    *ateapi.Actor
 	peerURIs []*url.URL
 }
 
-func (f *fakeControl) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
+func (f *fakeControl) GetActor(ctx context.Context, req *ateapi.GetActorRequest) (*ateapi.Actor, error) {
 	if p, ok := peerCert(ctx); ok {
 		f.peerURIs = p.URIs
 	}
@@ -96,7 +96,7 @@ func startServer(t *testing.T, fake *fakeControl, spiffeID string) Config {
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    pool,
 	})))
-	ateapipb.RegisterControlServer(srv, fake)
+	ateapi.RegisterControlServer(srv, fake)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +106,8 @@ func startServer(t *testing.T, fake *fakeControl, spiffeID string) Config {
 	return Config{Address: lis.Addr().String(), CAFile: caFile, ServerName: serverName, ClientCredBundle: bundle}
 }
 
-func testActor(uid string) *ateapipb.Actor {
-	return &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "agent-1", Uid: uid}}
+func testActor(uid string) *ateapi.Actor {
+	return &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "agent-1", Uid: uid}}
 }
 
 func TestActor(t *testing.T) {

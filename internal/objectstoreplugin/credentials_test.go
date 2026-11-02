@@ -29,8 +29,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 )
 
 // refusingObjects wraps a backend and answers 403 to every object request
@@ -121,7 +121,7 @@ func TestTransferRetriesOnceWithAReplacedCredential(t *testing.T) {
 	creds := &fakeCredentials{backend: newMemObjects(), stale: true}
 	p := newCredsPlugin(t, creds, root)
 
-	_, err := p.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+	_, err := p.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 		SnapshotUri: testURI, ActorJwt: "jwt", LocalPath: src, Files: []string{"a.img", "b.img", "c.img", manifestFile},
 	})
 	if err != nil {
@@ -143,7 +143,7 @@ func TestTransferRetriesOnceWithAReplacedCredential(t *testing.T) {
 	}
 	creds2 := &fakeCredentials{backend: creds.backend, stale: true}
 	p2 := newCredsPlugin(t, creds2, root)
-	if _, err := p2.FetchSnapshot(t.Context(), &objectstorev1.FetchSnapshotRequest{
+	if _, err := p2.FetchSnapshot(t.Context(), &objectstore.FetchSnapshotRequest{
 		SnapshotUri: testURI, ActorJwt: "jwt", WritePath: dst, Files: []string{"a.img", manifestFile},
 	}); err != nil {
 		t.Fatalf("FetchSnapshot with a stale credential: %v", err)
@@ -158,7 +158,7 @@ func TestTransferRetriesTheManifestFromItsStart(t *testing.T) {
 	writeFiles(t, root, manifestFile)
 	creds := &fakeCredentials{backend: newMemObjects(), stale: true}
 	p := newCredsPlugin(t, creds, root)
-	if _, err := p.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+	if _, err := p.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 		SnapshotUri: testURI, ActorJwt: "jwt", LocalPath: root, Files: []string{manifestFile},
 	}); err != nil {
 		t.Fatalf("UploadSnapshot of the manifest with a stale credential: %v", err)
@@ -186,7 +186,7 @@ func TestTransferReportsAnActorItCannotTransferFor(t *testing.T) {
 	for _, code := range []codes.Code{codes.NotFound, codes.Aborted} {
 		creds := &fakeCredentials{backend: newMemObjects(), err: status.Error(code, "actor not found")}
 		p := newCredsPlugin(t, creds, root)
-		_, err := p.FetchSnapshot(t.Context(), &objectstorev1.FetchSnapshotRequest{
+		_, err := p.FetchSnapshot(t.Context(), &objectstore.FetchSnapshotRequest{
 			SnapshotUri: testURI, ActorJwt: "jwt", WritePath: root, Files: []string{manifestFile},
 		})
 		if status.Code(err) != codes.FailedPrecondition {
@@ -209,7 +209,7 @@ func TestTransferFailsClosedOnASecondRefusal(t *testing.T) {
 		}
 		return client, err
 	})
-	_, err := p.FetchSnapshot(t.Context(), &objectstorev1.FetchSnapshotRequest{
+	_, err := p.FetchSnapshot(t.Context(), &objectstore.FetchSnapshotRequest{
 		SnapshotUri: testURI, ActorJwt: "jwt", WritePath: root, Files: []string{manifestFile},
 	})
 	if status.Code(err) != codes.PermissionDenied {
@@ -230,7 +230,7 @@ func TestTransferReturnsTheCredentialSourcesStatus(t *testing.T) {
 	root := t.TempDir()
 	creds := &fakeCredentials{backend: newMemObjects(), err: status.Error(codes.PermissionDenied, "actor is no longer on the token's node")}
 	p := newCredsPlugin(t, creds, root)
-	_, err := p.FetchSnapshot(t.Context(), &objectstorev1.FetchSnapshotRequest{
+	_, err := p.FetchSnapshot(t.Context(), &objectstore.FetchSnapshotRequest{
 		SnapshotUri: testURI, ActorJwt: "jwt", WritePath: root, Files: []string{manifestFile},
 	})
 	if status.Code(err) != codes.PermissionDenied || !strings.Contains(status.Convert(err).Message(), "actor is no longer on the token's node") {
@@ -247,7 +247,7 @@ func TestAmbientCredentialsIgnoreTheJWT(t *testing.T) {
 	}
 	writeFiles(t, root, manifestFile)
 	for _, jwt := range []string{"", "anything"} {
-		if _, err := p.UploadSnapshot(t.Context(), &objectstorev1.UploadSnapshotRequest{
+		if _, err := p.UploadSnapshot(t.Context(), &objectstore.UploadSnapshotRequest{
 			SnapshotUri: testURI, ActorJwt: jwt, LocalPath: root, Files: []string{manifestFile},
 		}); err != nil {
 			t.Fatalf("UploadSnapshot(actor_jwt=%q) with ambient credentials: %v", jwt, err)

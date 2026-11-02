@@ -173,7 +173,7 @@ spec:
       - $patch: delete
         name: socat
       - name: envoy
-        image: envoyproxy/envoy:v1.34-latest
+        image: envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
         command:
         - /usr/local/bin/envoy
         args:
@@ -239,7 +239,7 @@ kubectl rollout status daemonset/csi-nfs-node -n kube-system --timeout=120s
 # 8. Create the CSIDriverConfig for Substrate
 echo "Creating nfs.csi.k8s.io CSIDriverConfig..."
 cat <<EOF | kubectl apply -f -
-apiVersion: ate.dev/v1alpha1
+apiVersion: ate.dev/v1
 kind: CSIDriverConfig
 metadata:
   name: nfs.csi.k8s.io

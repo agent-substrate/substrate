@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/api/objectstore/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/objectstoreplugin"
@@ -37,7 +38,6 @@ import (
 	"go.ate.dev/substrate/internal/pluginsocket"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/pkg/objectstorage"
-	objectstorev1 "go.ate.dev/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -82,11 +82,11 @@ func (b *bucketStorage) PutObject(_ context.Context, bucket, object string, r io
 
 // countingAssetClient counts FetchAsset calls before passing them on.
 type countingAssetClient struct {
-	objectstorev1.AssetProviderClient
+	objectstore.AssetProviderClient
 	calls atomic.Int64
 }
 
-func (c *countingAssetClient) FetchAsset(ctx context.Context, in *objectstorev1.FetchAssetRequest, opts ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+func (c *countingAssetClient) FetchAsset(ctx context.Context, in *objectstore.FetchAssetRequest, opts ...grpc.CallOption) (*objectstore.FetchAssetResponse, error) {
 	c.calls.Add(1)
 	return c.AssetProviderClient.FetchAsset(ctx, in, opts...)
 }
@@ -302,7 +302,7 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { conn.Close() })
-		f.herder.assetPlugin = objectstorev1.NewAssetProviderClient(conn)
+		f.herder.assetPlugin = objectstore.NewAssetProviderClient(conn)
 		_, err = f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
 		if apierror.Code(err) != codes.Unavailable {
 			t.Fatalf("fetchAsset with the plugin down = %v (code %s), want %s", err, apierror.Code(err), codes.Unavailable)
@@ -331,13 +331,13 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { conn.Close() })
-		f.herder.assetPlugin = objectstorev1.NewAssetProviderClient(conn)
+		f.herder.assetPlugin = objectstore.NewAssetProviderClient(conn)
 		f.herder.pluginSocket = sock
 		_, err = f.fetch(t.Context(), assetEntry{URL: "s3://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: strings.Repeat("a", 64)})
 		if apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("fetchAsset with an old plugin = %v (code %s), want %s", err, apierror.Code(err), codes.FailedPrecondition)
 		}
-		for _, want := range []string{"s3://" + testAssetBucket + "/kata-assets/vmlinux", sock, "objectstore.v1.AssetProvider"} {
+		for _, want := range []string{"s3://" + testAssetBucket + "/kata-assets/vmlinux", sock, "substrate.objectstore.v1.AssetProvider"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error %q does not name %q", err, want)
 			}
@@ -352,7 +352,7 @@ type fakeAssetClient struct {
 	err  error
 }
 
-func (c fakeAssetClient) FetchAsset(_ context.Context, in *objectstorev1.FetchAssetRequest, _ ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+func (c fakeAssetClient) FetchAsset(_ context.Context, in *objectstore.FetchAssetRequest, _ ...grpc.CallOption) (*objectstore.FetchAssetResponse, error) {
 	if c.data != nil {
 		if err := os.WriteFile(in.GetWritePath(), c.data, 0o600); err != nil {
 			return nil, err
@@ -361,7 +361,7 @@ func (c fakeAssetClient) FetchAsset(_ context.Context, in *objectstorev1.FetchAs
 	if c.err != nil {
 		return nil, c.err
 	}
-	return &objectstorev1.FetchAssetResponse{}, nil
+	return &objectstore.FetchAssetResponse{}, nil
 }
 
 // TestFetchAssetAnonymousFallback covers when atelet reads an asset
@@ -557,7 +557,7 @@ type cancelingAssetClient struct {
 	err    error
 }
 
-func (c cancelingAssetClient) FetchAsset(context.Context, *objectstorev1.FetchAssetRequest, ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+func (c cancelingAssetClient) FetchAsset(context.Context, *objectstore.FetchAssetRequest, ...grpc.CallOption) (*objectstore.FetchAssetResponse, error) {
 	c.cancel()
 	return nil, c.err
 }
@@ -609,7 +609,7 @@ func TestFetchAssetKeepsCredentialsOutOfErrors(t *testing.T) {
 	sum := strings.Repeat("a", 64)
 	for _, tc := range []struct {
 		name     string
-		plugin   objectstorev1.AssetProviderClient
+		plugin   objectstore.AssetProviderClient
 		wantCode codes.Code
 	}{
 		{"in-tree plugin rejects the URL", nil, codes.Internal},

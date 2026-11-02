@@ -16,7 +16,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: grpcecho.proto
+// source: internal/proto/grpcechopb/grpcecho.proto
 
 package grpcechopb
 
@@ -255,5 +255,5 @@ var Echo_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "grpcecho.proto",
+	Metadata: "internal/proto/grpcechopb/grpcecho.proto",
 }

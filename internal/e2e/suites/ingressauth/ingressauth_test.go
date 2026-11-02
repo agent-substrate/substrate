@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ingressauth checks atenet-router's static-mtls client
-// authentication: who the ingress listeners let through, and who they turn
-// away. The other suites cover what happens once a client is let through,
-// since in static-mtls mode every one of them reaches its actors as the
-// allowlisted e2e router client.
+// Package ingressauth checks atenet-router's mTLS client authentication: who
+// the ingress listeners let through, and who they turn away. The other suites
+// cover what happens once a client is let through, since every one of them
+// reaches its actors as the allowlisted e2e router client.
 package ingressauth
 
 import (
@@ -29,10 +28,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"syscall"
 	"testing"
 	"time"
 
@@ -50,33 +52,15 @@ import (
 const unlistedServiceAccount = "router-client-unlisted"
 
 // targetActor names an actor that does not exist. A client the router lets
-// through gets an HTTP response, whatever its status; one it turns away gets
-// none, because the TLS handshake fails first.
+// through reaches actor routing and gets an HTTP response. Authorization
+// must reject an unlisted client before that lookup, even inside CONNECT.
 var targetActor = resources.ActorRef{Atespace: "ate-e2e-ingressauth", Name: "nobody"}
 
 // atenet-router's Service ports; see manifests/ate-install/atenet-router.yaml.
 const (
-	httpServicePort       = 80
 	httpsServicePort      = 443
-	connectServicePort    = 8081
 	connectTLSServicePort = 8444
 )
-
-// requireStaticMTLS skips the test unless the router was installed with
-// --ingress-auth-mode=static-mtls.
-//
-// Only needed until agent-gateway supports static-mtls mode as well.
-func requireStaticMTLS(t *testing.T) {
-	t.Helper()
-	if !e2e.IngressAuthModeSet() && e2e.IngressAuthModeRequired() {
-		t.Fatalf("%s is unset and required (CI or REQUIRE_INGRESS_AUTH_MODE is set): set it to %q or %q to match how atenet-router was installed (ATE_INGRESS_AUTH_MODE)",
-			e2e.IngressAuthModeEnv, e2e.IngressAuthStaticMTLS, e2e.IngressAuthDeprecatedInsecure)
-	}
-	if !e2e.IngressMTLS() {
-		t.Skipf("atenet-router does not require client certificates (%s=%q); install with --ingress-auth-mode=%s and set %s=%s to run this suite",
-			e2e.IngressAuthModeEnv, e2e.IngressAuthMode(), e2e.IngressAuthStaticMTLS, e2e.IngressAuthModeEnv, e2e.IngressAuthStaticMTLS)
-	}
-}
 
 // tlsListener is one of the router's TLS ingress listeners and how to send it
 // one request.
@@ -84,14 +68,13 @@ type tlsListener struct {
 	name        string
 	servicePort int32
 	// request sends one request for targetActor over a TLS connection
-	// presenting cert (nil for none), and returns the HTTP status. An error
-	// means no HTTP response came back.
+	// presenting cert (nil for none), including inside an accepted CONNECT
+	// tunnel, and returns the HTTP status.
 	request func(ctx context.Context, address string, cfg *tls.Config) (int, error)
 }
 
-// tlsListeners are both TLS ingress listeners. Every check runs against both:
-// they share a transport socket, but nothing else would notice one of them
-// losing it.
+// tlsListeners are both TLS ingress listeners. Every check runs against both
+// so one listener losing client authentication cannot hide behind the other.
 var tlsListeners = []tlsListener{
 	{name: "https", servicePort: httpsServicePort, request: httpsRequest},
 	{name: "connect-tls", servicePort: connectTLSServicePort, request: connectRequest},
@@ -154,12 +137,95 @@ func connectRequest(ctx context.Context, address string, cfg *tls.Config) (int, 
 	if err := req.Write(conn); err != nil {
 		return 0, err
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
 		return 0, err
 	}
+	if resp.StatusCode == http.StatusOK {
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, "http://"+destination+"/", nil)
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set(atenet.TargetActorHeader, targetActor.String())
+		if err := req.Write(conn); err != nil {
+			return 0, err
+		}
+		resp, err = http.ReadResponse(reader, req)
+		if err != nil {
+			return 0, err
+		}
+	}
 	resp.Body.Close()
 	return resp.StatusCode, nil
+}
+
+func TestConnectRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		connectStatus int
+		innerStatus   int
+		wantStatus    int
+		wantRefused   bool
+	}{
+		{name: "CONNECT denied", connectStatus: http.StatusForbidden, wantStatus: http.StatusForbidden, wantRefused: true},
+		{name: "inner denied", connectStatus: http.StatusOK, innerStatus: http.StatusForbidden, wantStatus: http.StatusForbidden, wantRefused: true},
+		{name: "inner closed", connectStatus: http.StatusOK, wantRefused: true},
+		{name: "actor lookup reached", connectStatus: http.StatusOK, innerStatus: http.StatusNotFound, wantStatus: http.StatusNotFound},
+		{name: "inner accepted", connectStatus: http.StatusOK, innerStatus: http.StatusOK, wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method != http.MethodConnect {
+					t.Errorf("outer method = %s, want CONNECT", req.Method)
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				if tc.connectStatus != http.StatusOK {
+					w.WriteHeader(tc.connectStatus)
+					return
+				}
+				conn, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Errorf("hijacking CONNECT: %v", err)
+					return
+				}
+				defer conn.Close()
+				if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+					t.Errorf("writing CONNECT response: %v", err)
+					return
+				}
+				if err := rw.Flush(); err != nil {
+					t.Errorf("flushing CONNECT response: %v", err)
+					return
+				}
+				inner, err := http.ReadRequest(rw.Reader)
+				if err != nil {
+					t.Errorf("reading inner request: %v", err)
+					return
+				}
+				defer inner.Body.Close()
+				if inner.Method != http.MethodGet || inner.Header.Get(atenet.TargetActorHeader) != targetActor.String() {
+					t.Errorf("unexpected inner request: %s, actor %q", inner.Method, inner.Header.Get(atenet.TargetActorHeader))
+				}
+				if tc.innerStatus != 0 {
+					if _, err := fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\n\r\n", tc.innerStatus, http.StatusText(tc.innerStatus)); err != nil {
+						t.Errorf("writing inner response: %v", err)
+					}
+				}
+			}))
+			defer server.Close()
+			roots := x509.NewCertPool()
+			roots.AddCert(server.Certificate())
+			status, err := connectRequest(t.Context(), server.Listener.Addr().String(), &tls.Config{RootCAs: roots})
+			if status != tc.wantStatus {
+				t.Errorf("status = %d, want %d (error: %v)", status, tc.wantStatus, err)
+			}
+			if got := ingressRefused(status, err, true); got != tc.wantRefused {
+				t.Errorf("refused = %t, want %t (error: %v)", got, tc.wantRefused, err)
+			}
+		})
+	}
 }
 
 // routerTLSConfig is the TLS config a client presenting cert dials the router
@@ -192,17 +258,16 @@ func isRemoteTLSAlert(err error) bool {
 const refusalAttempts = 3
 
 // TestIngressAuthentication checks each kind of client against both TLS
-// listeners.
+// listeners. Certificate trust is checked during TLS; the URI SAN allowlist
+// may be enforced during TLS or by network authorization afterward.
 //
 // Each refused client gets a port-forward of its own, opened fresh and first
 // shown to carry the allowlisted client through: a port-forward tears down its
 // whole tunnel once one forwarded connection fails, so a shared one would turn
-// every check after the first refusal into a dial error. The refusal itself
-// has to be a TLS alert from the router, which a broken tunnel cannot fake; a
-// failure without one is retried on a fresh port-forward, refusalAttempts
-// times at most.
+// every check after the first refusal into a dial error. Missing or untrusted
+// certificates must receive a TLS alert. A trusted but unlisted identity may
+// instead receive a connection close or HTTP 403 before actor routing.
 func TestIngressAuthentication(t *testing.T) {
-	requireStaticMTLS(t)
 	ctx := context.Background()
 
 	allowed := e2e.RouterClientCertificate(t, ctx, e2e.RouterClientServiceAccount)
@@ -212,11 +277,12 @@ func TestIngressAuthentication(t *testing.T) {
 	for _, listener := range tlsListeners {
 		t.Run(listener.name, func(t *testing.T) {
 			for _, tc := range []struct {
-				name string
-				cert *tls.Certificate
+				name         string
+				cert         *tls.Certificate
+				allowPostTLS bool
 			}{
 				{name: "no client certificate", cert: nil},
-				{name: "podidentity certificate for an unlisted SPIFFE ID", cert: &unlisted},
+				{name: "podidentity certificate for an unlisted SPIFFE ID", cert: &unlisted, allowPostTLS: true},
 				{name: "allowlisted SPIFFE ID signed by an untrusted CA", cert: &foreign},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -230,17 +296,24 @@ func TestIngressAuthentication(t *testing.T) {
 						t.Logf("allowlisted client let through (status %d)", status)
 
 						status, err = listener.request(ctx, address, routerTLSConfig(t, ctx, tc.cert))
-						if err == nil {
-							t.Fatalf("router let the client through (status %d); want the TLS handshake refused", status)
-						}
-						if isRemoteTLSAlert(err) {
+						if ingressRefused(status, err, tc.allowPostTLS) {
 							t.Logf("refused: %v", err)
+							if tc.allowPostTLS {
+								// A close alone could be a broken port-forward.
+								address = forwardRouterPort(t, ctx, listener.servicePort)
+								if _, err := listener.request(ctx, address, routerTLSConfig(t, ctx, &allowed)); err != nil {
+									t.Fatalf("allowlisted client failed after unlisted client refusal: %v", err)
+								}
+							}
 							return
 						}
-						if attempt == refusalAttempts {
-							t.Fatalf("request failed without a TLS alert from the router %d times, so the refusal is unproven: %v", attempt, err)
+						if err == nil {
+							t.Fatalf("router let the client through (status %d); want client refusal", status)
 						}
-						t.Logf("attempt %d failed without a TLS alert from the router; retrying on a fresh port-forward: %v", attempt, err)
+						if attempt == refusalAttempts {
+							t.Fatalf("request failed without proving client refusal %d times: %v", attempt, err)
+						}
+						t.Logf("attempt %d failed without proving client refusal; retrying on a fresh port-forward: %v", attempt, err)
 					}
 				})
 			}
@@ -248,35 +321,45 @@ func TestIngressAuthentication(t *testing.T) {
 	}
 }
 
-// TestPlaintextListenersDisabled checks that static-mtls leaves nothing
-// listening on the plaintext ports, which could not authenticate a client.
-// The Service still publishes them; the router container no longer serves
-// them, so a request through either gets no response.
-func TestPlaintextListenersDisabled(t *testing.T) {
-	requireStaticMTLS(t)
-	ctx := context.Background()
+func ingressRefused(status int, err error, allowPostTLS bool) bool {
+	if isRemoteTLSAlert(err) {
+		return true
+	}
+	if !allowPostTLS {
+		return false
+	}
+	if err == nil {
+		return status == http.StatusForbidden
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
 
+func TestIngressRefused(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		port int32
+		name         string
+		status       int
+		err          error
+		allowPostTLS bool
+		want         bool
 	}{
-		{name: "http", port: httpServicePort},
-		{name: "connect", port: connectServicePort},
+		{name: "TLS alert", err: &net.OpError{Op: "remote error", Err: errors.New("bad certificate")}, want: true},
+		{name: "unlisted identity closed", err: io.EOF, allowPostTLS: true, want: true},
+		{name: "unlisted identity reset", err: syscall.ECONNRESET, allowPostTLS: true, want: true},
+		{name: "unlisted identity broken pipe", err: syscall.EPIPE, allowPostTLS: true, want: true},
+		{name: "unlisted identity forbidden", status: http.StatusForbidden, allowPostTLS: true, want: true},
+		{name: "missing certificate closed", err: io.EOF},
+		{name: "missing certificate broken pipe", err: syscall.EPIPE},
+		{name: "untrusted certificate forbidden", status: http.StatusForbidden},
+		{name: "dial failure", err: syscall.ECONNREFUSED, allowPostTLS: true},
+		{name: "timeout", err: context.DeadlineExceeded, allowPostTLS: true},
+		{name: "actor route reached", status: http.StatusNotFound, allowPostTLS: true},
+		{name: "CONNECT accepted", status: http.StatusOK, allowPostTLS: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			address := forwardRouterPort(t, ctx, tc.port)
-			client := &http.Client{Timeout: 30 * time.Second}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/", nil)
-			if err != nil {
-				t.Fatal(err)
+			if got := ingressRefused(tc.status, tc.err, tc.allowPostTLS); got != tc.want {
+				t.Errorf("ingressRefused() = %t, want %t", got, tc.want)
 			}
-			req.Header.Set(atenet.TargetActorHeader, targetActor.String())
-			resp, err := client.Do(req)
-			if err == nil {
-				resp.Body.Close()
-				t.Fatalf("plaintext port %d answered with status %d; want nothing listening", tc.port, resp.StatusCode)
-			}
-			t.Logf("no response: %v", err)
 		})
 	}
 }

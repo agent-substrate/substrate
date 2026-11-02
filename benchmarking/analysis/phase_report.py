@@ -94,7 +94,7 @@ PHASE_ORDER = [
     # ateworker restore: micro-VM (cmd/ateworker-microvm/phaselog.go) and gVisor
     # (cmd/ateworker-gvisor/phaselog.go), each in its own sequential order
     "prep", "egress_prepare", "net_setup", "bundles", "upper_join", "lowers",
-    "pause_rootfs", "pause_create", "pause_restore",
+    "sandbox_create", "sandbox_restore",
     "app_rootfs", "app_create", "app_restore",
     "tap", "vmm_launch", "vm_restore", "resume", "wakeup_probe", "activate",
     # atelet + ateworker checkpoint
