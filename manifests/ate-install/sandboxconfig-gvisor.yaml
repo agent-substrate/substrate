@@ -31,7 +31,7 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v6
+  defaultVersion: v7
   versions:
   # gVisor release 20261026.0. ateworker-gvisor saves container rootfs overlays
   # (rootfs/) and durable-dir volumes (fs/) as separate checkpoint bundles. That
@@ -50,3 +50,15 @@ spec:
         gvisor:
           url: "gs://gvisor/releases/release/20261026.0/aarch64/gvisor.tar.zstd"
           sha256: "6257e49955f13e6caceb2c4181c5dc5406c460e805940c944e67ad65553f5b02"
+  # gVisor release 20261102.0.
+  - name: v7
+    state: Enabled
+    assets:
+      amd64:
+        gvisor:
+          url: "gs://gvisor/releases/release/20261102.0/x86_64/gvisor.tar.zstd"
+          sha256: "a1439ffbba7d212e0fde32ea79fa9bb51cbc4c5f6c16af1f047260290b861d42"
+      arm64:
+        gvisor:
+          url: "gs://gvisor/releases/release/20261102.0/aarch64/gvisor.tar.zstd"
+          sha256: "f702ae92ad7a0c4134be34ca23f52966dbb696db0c0f5b8ec439210ab2cd7c6a"
