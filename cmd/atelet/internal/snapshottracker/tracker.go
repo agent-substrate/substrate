@@ -108,7 +108,10 @@ type Store interface {
 //
 // Detach runs under the tracker's context rather than on a worker, so an
 // explicit control-plane call does not wait behind other actors' background
-// work, and its detach finishes even if the caller leaves.
+// work, and its detach finishes even if the caller leaves. Its upload, when the
+// snapshot is not durable yet, takes one of as many slots as there are detach
+// workers (see detachUploads), so a burst of Detach calls uploads a few
+// snapshots at a time rather than all at once.
 //
 // The first table shows how each RPC on an actor treats the actor's upload or
 // detach in progress, and its report due. The RPC waits for the operation to
@@ -202,6 +205,11 @@ type Tracker struct {
 	// reporting holds the queue and settings for reporting snapshot state
 	// changes to the control plane.
 	reporting reportQueue
+	// detachUploads holds a slot for each upload a Detach call's detach may run
+	// at once: as many as there are detach workers. When a node fills up, every
+	// resume of an actor on it detaches first, and uploads that all run at once
+	// share the object store's bandwidth and time each other out.
+	detachUploads chan struct{}
 	// workersDone counts the workers, and the detaches Detach calls started,
 	// still running.
 	workersDone sync.WaitGroup
@@ -284,7 +292,7 @@ func WithUploadWorkers(n int) Option {
 }
 
 // WithDetachWorkers sets how many background detaches run at once on this
-// node.
+// node, and how many snapshots the detaches of Detach calls upload at once.
 func WithDetachWorkers(n int) Option {
 	return func(t *Tracker) {
 		t.workers[opDetach] = n
@@ -348,6 +356,7 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 	for _, opt := range opts {
 		opt(t)
 	}
+	t.detachUploads = make(chan struct{}, t.workers[opDetach])
 	if t.instruments != nil {
 		t.undurableActorsTally = newUndurableActorsTally(clk, t.uploadDelay, t.store != nil)
 		t.instruments.watch(t.undurableActorsTally)

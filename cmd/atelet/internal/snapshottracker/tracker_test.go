@@ -138,6 +138,8 @@ type fakeSnapshotStore struct {
 	// deadline is the deadline of the latest call's context: zero if it has
 	// none.
 	deadline time.Time
+	// inFlight counts the calls running; maxInFlight is the most at once.
+	inFlight, maxInFlight int
 }
 
 func newFakeSnapshotStore() *fakeSnapshotStore {
@@ -184,6 +186,13 @@ func (f *fakeSnapshotStore) actorOf(uuid string) resources.ActorRef {
 	return f.actors[uuid]
 }
 
+// mostInFlight returns the most calls that ran at once.
+func (f *fakeSnapshotStore) mostInFlight() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxInFlight
+}
+
 // lastDeadline returns the deadline of the latest call's context: zero if it
 // has none.
 func (f *fakeSnapshotStore) lastDeadline() time.Time {
@@ -197,8 +206,15 @@ func (f *fakeSnapshotStore) UploadLocalSnapshot(ctx context.Context, _ string, r
 	f.calls = append(f.calls, ref.uuid())
 	f.actors[ref.uuid()] = ref.Actor
 	f.deadline, _ = ctx.Deadline()
+	f.inFlight++
+	f.maxInFlight = max(f.maxInFlight, f.inFlight)
 	blocking, ignoreCancel, err := f.blocking, f.ignoreCancel, f.err
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.inFlight--
+		f.mu.Unlock()
+	}()
 	f.started <- ref.uuid()
 	if blocking {
 		select {
