@@ -27,6 +27,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/internal/apiconfig"
 	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
 )
 
@@ -144,6 +145,23 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 		Data:       map[string]string{"authentication.yaml": multiProviderConfig},
 	}
 
+	mustBuild := func(issuer string) string {
+		t.Helper()
+		s, err := buildAuthenticationConfig(issuer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	mustMarshal := func(cfg *apiconfig.AuthenticationConfig) string {
+		t.Helper()
+		s, err := marshalAuthenticationConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
 	for _, tc := range []struct {
 		name       string
 		existing   runtime.Object
@@ -152,12 +170,12 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 	}{
 		{
 			name:     "new install defaults to in-cluster issuer",
-			wantYAML: buildAuthenticationConfig(inClusterIssuer),
+			wantYAML: mustBuild(inClusterIssuer),
 		},
 		{
 			name:       "new install with explicit issuer flag",
 			issuerFlag: "https://custom-issuer.example.com",
-			wantYAML:   buildAuthenticationConfig("https://custom-issuer.example.com"),
+			wantYAML:   mustBuild("https://custom-issuer.example.com"),
 		},
 		{
 			name:     "existing valid custom issuer is kept when flag is unset",
@@ -172,18 +190,33 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 		{
 			name:     "existing config with legacy actorIdentityJWTProvider is rewritten",
 			existing: legacyCM,
-			wantYAML: buildAuthenticationConfig(inClusterIssuer),
+			wantYAML: mustBuild(inClusterIssuer),
 		},
 		{
 			name:     "existing config with unknown future field is rewritten",
 			existing: unknownFieldCM,
-			wantYAML: buildAuthenticationConfig(inClusterIssuer),
+			wantYAML: mustBuild(inClusterIssuer),
 		},
 		{
 			name:       "explicit issuer flag overwrites existing valid config",
 			existing:   customIssuerCM,
 			issuerFlag: "https://new-issuer.example.com",
-			wantYAML:   buildAuthenticationConfig("https://new-issuer.example.com"),
+			wantYAML:   mustBuild("https://new-issuer.example.com"),
+		},
+		{
+			name:       "explicit issuer flag updates only kubernetes provider when extra jwtProviders exist",
+			existing:   multiProviderCM,
+			issuerFlag: "https://new-issuer.example.com",
+			wantYAML: mustMarshal(&apiconfig.AuthenticationConfig{
+				JWTProviders: []apiconfig.JWTProviderConfig{
+					kubernetesJWTProvider("https://new-issuer.example.com"),
+					{
+						Name:      "google-oidc",
+						Issuer:    "https://accounts.google.com",
+						Audiences: []string{"api.ate-system.svc"},
+					},
+				},
+			}),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

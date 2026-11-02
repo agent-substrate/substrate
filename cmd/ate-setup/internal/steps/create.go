@@ -24,8 +24,10 @@ import (
 	"google.golang.org/protobuf/encoding/prototext"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/apiconfig"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
@@ -182,12 +184,21 @@ func buildAPIConfig(logLevel string) (string, error) {
 // CreateAPIAuthenticationConfig writes the default ate-api-server
 // authentication config, pointing it at the cluster's service account issuer.
 func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
+	return e.applyAPIAuthenticationConfig(ctx, &apiconfig.AuthenticationConfig{
+		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(e.jwtIssuer(ctx))},
+	})
+}
+
+func (e *Env) applyAPIAuthenticationConfig(ctx context.Context, cfg *apiconfig.AuthenticationConfig) error {
 	log.Step("create_api_authentication_config")
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
 
-	authnConfig := buildAuthenticationConfig(e.jwtIssuer(ctx))
+	authnConfig, err := marshalAuthenticationConfig(cfg)
+	if err != nil {
+		return err
+	}
 	// The issuer decides which tokens the apiserver accepts at all, and a
 	// wrong one fails as an opaque 401 much later, so show what was written.
 	log.Infof("%s authentication.yaml:", ConfigMapAPIAuthn)
@@ -235,24 +246,54 @@ func (e *Env) jwtIssuer(ctx context.Context) string {
 // discoverable one.
 const inClusterIssuer = "https://kubernetes.default.svc"
 
-// buildAuthenticationConfig renders authentication.yaml.
+// kubernetesJWTProvider builds the default kubernetes JWT provider entry.
 //
 // An in-cluster issuer is not reachable over public discovery, so the apiserver
 // is pointed at its own projected service account CA and token to complete the
 // OIDC discovery handshake. A GKE or otherwise external issuer needs neither.
-func buildAuthenticationConfig(issuer string) string {
-	config := fmt.Sprintf(
-		"jwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
-		issuer)
+func kubernetesJWTProvider(issuer string) apiconfig.JWTProviderConfig {
+	p := apiconfig.JWTProviderConfig{
+		Name:      "kubernetes",
+		Issuer:    issuer,
+		Audiences: []string{"api.ate-system.svc"},
+	}
 	switch issuer {
 	case inClusterIssuer, inClusterIssuer + ".cluster.local":
-		config += "  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-			"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n"
+		p.CertificateAuthorityFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+		p.DiscoveryTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	}
-	// The shell script built this inside $(...), which strips trailing
-	// newlines. Matching that keeps the ConfigMap byte-identical, so switching
-	// between the two installers does not rewrite it.
-	return strings.TrimRight(config, "\n")
+	return p
+}
+
+// setKubernetesJWTProvider replaces the kubernetes entry in cfg, or prepends
+// one if none exists, preserving any additional JWT providers.
+func setKubernetesJWTProvider(cfg *apiconfig.AuthenticationConfig, issuer string) {
+	k8sProvider := kubernetesJWTProvider(issuer)
+	for i := range cfg.JWTProviders {
+		if cfg.JWTProviders[i].Name == k8sProvider.Name {
+			cfg.JWTProviders[i] = k8sProvider
+			return
+		}
+	}
+	cfg.JWTProviders = append([]apiconfig.JWTProviderConfig{k8sProvider}, cfg.JWTProviders...)
+}
+
+// buildAuthenticationConfig renders the default authentication.yaml for issuer.
+func buildAuthenticationConfig(issuer string) (string, error) {
+	return marshalAuthenticationConfig(&apiconfig.AuthenticationConfig{
+		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(issuer)},
+	})
+}
+
+func marshalAuthenticationConfig(cfg *apiconfig.AuthenticationConfig) (string, error) {
+	if err := apiconfig.ValidateAuthenticationConfig(cfg); err != nil {
+		return "", fmt.Errorf("while validating the ate-api-server authentication config: %w", err)
+	}
+	b, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("while marshaling the ate-api-server authentication config: %w", err)
+	}
+	return strings.TrimRight(string(b), "\n"), nil
 }
 
 // createCAPool generates a CA pool and stores it in a Secret.
