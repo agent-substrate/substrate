@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"os"
 	"path/filepath"
 
 	"go.ate.dev/substrate/internal/snapshotcache"
@@ -50,7 +51,7 @@ func actorBooking(memoryBytes int64) int64 {
 // archiveDir archives srcDir to tarPath. When the pod can lend the whole
 // directory, the archive goes to the page cache without a write-behind, and
 // the loan comes back once it's on disk. Otherwise its dirty pages are bounded.
-// On error the loan comes back once any partial archive is on disk or removed.
+// On error the partial archive is removed and nothing stays borrowed.
 func (s *AteWorkerService) archiveDir(ctx context.Context, tarPath, srcDir string) error {
 	var size int64
 	lent := false
@@ -63,15 +64,18 @@ func (s *AteWorkerService) archiveDir(ctx context.Context, tarPath, srcDir strin
 	if !lent {
 		return tarutil.CreateWithRoot(ctx, tarPath, srcDir)
 	}
-	err := tarutil.CreateWithRoot(ctx, tarPath, srcDir, tarutil.WriteBehind(0))
-	// a partial archive's pages are dirty too
-	if werr := snapshotcache.StartWriteback([]string{tarPath}, func() { s.borrow.Return(size) }); werr != nil {
+	if err := tarutil.CreateWithRoot(ctx, tarPath, srcDir, tarutil.WriteBehind(0)); err != nil {
+		// create has closed it, so unlinking drops its dirty pages without
+		// writing them
+		_ = os.Remove(tarPath)
 		s.borrow.Return(size)
-		if err == nil {
-			slog.WarnContext(ctx, "Failed to start archive writeback", slog.String("path", tarPath), slog.Any("err", werr))
-		}
+		return err
 	}
-	return err
+	if err := snapshotcache.StartWriteback([]string{tarPath}, func() { s.borrow.Return(size) }); err != nil {
+		s.borrow.Return(size)
+		slog.WarnContext(ctx, "Failed to start archive writeback", slog.String("path", tarPath), slog.Any("err", err))
+	}
+	return nil
 }
 
 // dirSize estimates how big a tar of dir is: each regular file's data padded
