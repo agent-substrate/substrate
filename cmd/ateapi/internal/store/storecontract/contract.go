@@ -3090,6 +3090,69 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
+	t.Run("ReleaseActorFromWorker", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		first := newTestAssignment(t, s, "1", 500, 1<<20)
+		second := newTestAssignment(t, s, "2", 250, 1<<21)
+		bind(t, s, testWorkerName, first)
+		bind(t, s, testWorkerName, second)
+
+		released, err := s.ReleaseActorFromWorker(ctx, testWorkerName, first.GetActorUid())
+		if err != nil {
+			t.Fatalf("ReleaseActorFromWorker failed: %v", err)
+		}
+		want := &ateapi.WorkerResources{Actors: 1, CpuMillicores: 250, MemoryBytes: 1 << 21}
+		if diff := cmp.Diff(want, released.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
+			t.Errorf("returned worker's allocated mismatch (-want +got):\n%s", diff)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, first.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("released assignment is still readable: %v", err)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, second.GetActorUid()); err != nil {
+			t.Errorf("releasing one actor disturbed another: %v", err)
+		}
+		worker, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
+			t.Errorf("allocated mismatch after release (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ReleaseActorFromWorker_AlreadyReleased", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		worker, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		released, err := s.ReleaseActorFromWorker(ctx, testWorkerName, "uid-1")
+		if err != nil {
+			t.Fatalf("ReleaseActorFromWorker failed: %v", err)
+		}
+		if released != nil {
+			t.Error("ReleaseActorFromWorker reported releasing an assignment that was never there")
+		}
+		after, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if after.GetMetadata().GetVersion() != worker.GetMetadata().GetVersion() {
+			t.Errorf("worker version moved from %d to %d on a release that freed nothing",
+				worker.GetMetadata().GetVersion(), after.GetMetadata().GetVersion())
+		}
+	})
+
 	// Deleting a Worker or an Actor while an assignment joins them would leave
 	// the Actor naming a Worker that is gone, or the Worker booking an Actor
 	// that is gone.

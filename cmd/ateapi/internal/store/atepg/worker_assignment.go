@@ -168,10 +168,17 @@ func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Work
 	if err != nil {
 		return nil, err
 	}
+	// A Worker gone, or a row missing, by now was released after the first
+	// read. A Worker is deleted only once it holds no assignments.
+	return releaseFromWorker(ctx, tx, workerName, actorUID)
+}
+
+// releaseFromWorker deletes actorUID's assignment on workerName and returns the
+// Worker as saved with the assignment no longer booked, or nil if the Worker
+// is gone or holds no assignment for actorUID.
+func releaseFromWorker(ctx context.Context, tx pgx.Tx, workerName, actorUID string) (*ateapi.Worker, error) {
 	worker, err := getWorkerForUpdate(ctx, tx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
-		// A Worker is deleted only once it holds no assignments, so the row
-		// was released after the first read.
 		return nil, nil
 	}
 	if err != nil {
@@ -183,7 +190,6 @@ func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Work
 		WHERE actor_uid = $1 AND worker_name = $2
 		RETURNING proto`, actorUID, workerName).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Released after the first read.
 		return nil, nil
 	}
 	if err != nil {
@@ -285,4 +291,10 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 		nextToken = encodePageToken(kindWorkerAssign, workerName, []string{uids[pageSize-1]})
 	}
 	return store.ListResponse[*ateapi.ActorAssignment]{Items: result, NextPageToken: nextToken}, nil
+}
+
+func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+		return releaseFromWorker(ctx, tx, workerName, actorUID)
+	})
 }

@@ -120,6 +120,10 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == cleanStaleAssignmentsCommand {
+		cleanStaleAssignments(os.Args[2:])
+		return
+	}
 	pflag.Parse()
 
 	if *showVersion {

@@ -197,6 +197,31 @@ kubectl ate get actors -A
 - **Stuck:** rollout status does not finish, or a new pod keeps restarting. [Roll back step 4](#roll-back-step-4).
 - **API clients:** an API call can fail once with a retriable error while an API server pod restarts. Retry it.
 
+##### Upgrades from v1.0.0-rc.1: clean stale assignments
+
+The v1.0.0-rc.1 API server writes an actor and its worker assignment separately, so an interrupted write can leave them disagreeing. An assignment whose actor names another worker or none still counts against its worker's capacity. A RESUMING actor whose worker holds no assignment for it fails every resume. Later releases write both together, and `clean-stale-assignments` fixes the records rc.1 left.
+
+Run it once `deploy/ate-api-server` has finished rolling, so no rc.1 replica is still writing. Start with a dry run, which only logs what it would change. It exits as the real run would, so it exits 1 if it finds anything it would skip or leave for you:
+
+```bash
+kubectl -n ate-system exec deploy/ate-api-server -c ate-api-server -- \
+  /ko-app/ateapi clean-stale-assignments --dry-run \
+  --postgres-read-write-connection-string=@env \
+  --postgres-owner-connection-string=@env \
+  --postgres-read-write-role=@env --postgres-owner-role=@env \
+  --postgres-schema=@env
+```
+
+Then run the same command without `--dry-run`. It releases each assignment whose actor is gone or names another worker or none. It crashes each RESUMING actor whose worker holds no assignment for it, because its resume cannot finish without one. It also crashes each such RUNNING, SUSPENDING or REVERTING actor whose worker is gone or has restarted since, because its sandbox went with the worker. A DELETING actor in that case only has its worker cleared; retry its delete with `kubectl ate delete actor`. A crashed actor goes back to its last snapshot with `kubectl ate revert actor <name> -a <atespace>`.
+
+- **Done:** the command exits 0 and logs `Cleaned stale assignments`.
+- **Rerun:** the command exits 1 and logs `Failed to clean stale assignments`. Its `err` says why:
+  - `records left for a retry`: an actor had an operation in progress and was skipped. Rerun the command.
+  - `actors left`: an actor logged with `Leaving` was left for you, because its sandbox may still be running. Suspend a RUNNING one with `kubectl ate suspend actor`. Retry the pending suspend, delete or revert of any other with `kubectl ate suspend actor`, `kubectl ate delete actor` or `kubectl ate revert actor`. Then rerun the command.
+  - Anything else, such as a database error, stopped the run partway. Fix it and rerun.
+
+  Rerun until the command exits 0.
+
 #### 4b. CRDs and ate-controller
 
 ```bash
@@ -287,7 +312,7 @@ go install ./cmd/kubectl-ate
 
 Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
-The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
+The database schema stays new; the old API server drops fields it does not know when it rewrites a record. An rc.1 API server can leave stale assignments again, so after you upgrade again, rerun [the cleanup](#upgrades-from-v100-rc1-clean-stale-assignments). Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 
 #### Roll back step 3
 

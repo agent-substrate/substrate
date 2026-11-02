@@ -286,11 +286,11 @@ type Interface interface {
 	// ErrFailedPrecondition if the worker still holds an assignment.
 	DeleteWorker(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.Worker, error)
 
-	// An assignment is written only together with its Actor, and Worker
-	// allocation moves with it, so an Actor names a Worker in
-	// status.worker_assignment exactly while the Worker holds its assignment.
-	// DeleteWorker refuses while the Worker holds an assignment, and
-	// DeleteActor while the Actor names a Worker.
+	// BindActorToWorker and UpdateActorAndRelease write an assignment together
+	// with its Actor, and move Worker allocation with it, so the Worker named
+	// in status.worker_assignment holds the Actor's assignment. Records written
+	// by v1.0.0-rc.1 can disagree. DeleteWorker refuses while the Worker
+	// holds an assignment, and DeleteActor while the Actor names a Worker.
 
 	// BindActorToWorker assigns an Actor, updates the Worker's allocation, and
 	// applies mutate to the Actor as UpdateActor does, all in one transaction.
@@ -320,6 +320,13 @@ type Interface interface {
 
 	// ListWorkerAssignments returns a page of the Actors a Worker hosts.
 	ListWorkerAssignments(ctx context.Context, workerName string, opts ListOptions) (ListResponse[*ateapi.ActorAssignment], error)
+
+	// ReleaseActorFromWorker removes an assignment and updates allocation
+	// without touching its Actor, returning the Worker as it now stands. It
+	// returns nil if the assignment was already absent. It cleans up
+	// assignments v1.0.0-rc.1 left out of step with their Actors. Remove it
+	// once upgrades from rc.1 are unsupported.
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the

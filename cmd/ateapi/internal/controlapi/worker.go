@@ -225,6 +225,10 @@ func (s *ServiceImpl) ListWorkerAssignments(ctx context.Context, workerName stri
 	return s.store.ListWorkerAssignments(ctx, workerName, opts)
 }
 
+func (s *ServiceImpl) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapi.Worker, error) {
+	return s.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
+}
+
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapi.DeleteWorkerRequest) (*ateapi.Worker, error) {
 	if errs := apivalidation.ValidateDeleteWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
