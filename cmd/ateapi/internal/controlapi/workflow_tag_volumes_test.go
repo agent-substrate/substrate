@@ -429,6 +429,42 @@ func TestTagActorSnapshot_UnknownVolumeName(t *testing.T) {
 	}
 }
 
+// TestVolumeSnapshotError covers the code a failed capture returns. The
+// failure leaves the tag pending, so no code may invite a plain retry, and the
+// message says to delete the tag first.
+func TestVolumeSnapshotError(t *testing.T) {
+	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{name: "quota", err: status.Error(codes.ResourceExhausted, "quota"), want: codes.ResourceExhausted},
+		{name: "unavailable", err: status.Error(codes.Unavailable, "down"), want: codes.Aborted},
+		{name: "deadline", err: status.Error(codes.DeadlineExceeded, "slow"), want: codes.Aborted},
+		{name: "aborted", err: status.Error(codes.Aborted, "conflict"), want: codes.Aborted},
+		{name: "source volume gone", err: status.Error(codes.NotFound, "gone"), want: codes.FailedPrecondition},
+		{name: "driver rejects", err: status.Error(codes.InvalidArgument, "bad"), want: codes.FailedPrecondition},
+		{name: "no status", err: errors.New("boom"), want: codes.Internal},
+		{
+			name: "first code wins",
+			err:  errors.Join(errors.New("boom"), fmt.Errorf("wrapped: %w", status.Error(codes.Unavailable, "down")), status.Error(codes.NotFound, "gone")),
+			want: codes.Aborted,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := volumeSnapshotError(tagRef, tt.err)
+			if code := apierror.Code(got); code != tt.want {
+				t.Errorf("volumeSnapshotError() code = %v, want %v", code, tt.want)
+			}
+			if want := "delete Tag " + tagRef.String() + " and create it again"; !strings.Contains(got.Error(), want) {
+				t.Errorf("volumeSnapshotError() = %q, want it to contain %q", got, want)
+			}
+		})
+	}
+}
+
 // TestTagVolumeSnapshotFailed verifies a driver error too long for
 // error_message, or not valid UTF-8, is still recorded as a valid status.
 func TestTagVolumeSnapshotFailed(t *testing.T) {
@@ -536,8 +572,8 @@ func TestTagActorSnapshot_RejectedBeforeReserve(t *testing.T) {
 }
 
 // TestTagActorSnapshot_PartialVolumeFailureLeavesPendingTag verifies capture is
-// all-or-nothing: a driver that fails on one volume fails the create, which
-// leaves the tag pending. The volume that succeeded keeps
+// all-or-nothing: a driver that fails on one volume fails the create with the
+// driver's code, which leaves the tag pending. The volume that succeeded keeps
 // its handle and the failed one records the driver's error. Deleting
 // the tag then releases every snapshot, their rows and the copied objects, and
 // frees the name for a retry.
@@ -555,8 +591,8 @@ func TestTagActorSnapshot_PartialVolumeFailureLeavesPendingTag(t *testing.T) {
 	before := objects.Objects()
 
 	_, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), &ateapi.ExternalVolumeSelection{})
-	if apierror.Code(err) != codes.Internal {
-		t.Fatalf("TagActorSnapshot error = %v, want Internal", err)
+	if apierror.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("TagActorSnapshot error = %v, want the driver's ResourceExhausted", err)
 	}
 	if got := plugin.snapshotsDeleted(); len(got) != 0 {
 		t.Errorf("snapshots deleted by the failed create = %v, want none: cleanup is DeleteTag's", got)
@@ -707,6 +743,56 @@ func TestDeleteTag_RecoversUnrecordedVolumeSnapshots(t *testing.T) {
 			}
 			if got := tagVolumeSnapshots(t, ctx, persistence, pending); len(got) != 0 {
 				t.Errorf("external volume snapshots after the delete = %v, want none", got)
+			}
+		})
+	}
+}
+
+// TestDeleteTag_UnrecoverableSnapshotSkipped verifies a snapshot whose handle
+// was never recorded does not block the delete when retrying cannot recover
+// it: it is skipped, and its row and the tag are still removed.
+func TestDeleteTag_UnrecoverableSnapshotSkipped(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		plugin func(*fakeSnapshotPlugin)
+	}{
+		{
+			name:   "source volume gone",
+			plugin: func(p *fakeSnapshotPlugin) { p.goneVolumes = map[string]bool{"vol-cache": true} },
+		},
+		{
+			name: "terminal error",
+			plugin: func(p *fakeSnapshotPlugin) {
+				p.failSnapshotOfVolume = "vol-cache"
+				p.failSnapshotCode = codes.InvalidArgument
+			},
+		},
+		{
+			name:   "driver without snapshots",
+			plugin: func(p *fakeSnapshotPlugin) { p.caps.CreateDeleteSnapshot = false },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			plugin := newFakeSnapshotPlugin()
+			tc.plugin(plugin)
+			w, _ := newVolumeTagWorkflow(persistence, plugin)
+
+			pending := seedCreatingVolumeTag(t, ctx, persistence, map[string]*ateapi.ExternalVolumeSnapshotStatus{"cache": {}})
+			tagRef := resources.TagRefFromTag(pending)
+
+			if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteTag: %v", err)
+			}
+			if got := plugin.snapshotsDeleted(); len(got) != 0 {
+				t.Errorf("snapshots deleted = %v, want none: nothing could be recovered", got)
+			}
+			if got := tagVolumeSnapshots(t, ctx, persistence, pending); len(got) != 0 {
+				t.Errorf("external volume snapshots after the delete = %v, want none", got)
+			}
+			if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
 			}
 		})
 	}
