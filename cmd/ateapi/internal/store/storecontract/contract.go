@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -324,6 +326,80 @@ func testMarkForDeletion[R any, T resourceMessage](t *testing.T, c markForDeleti
 	}
 }
 
+// concurrentCounterCase binds one resource's store methods for
+// testConcurrentLostUpdateCounter. R is the key the methods take.
+type concurrentCounterCase[R any, T resourceMessage] struct {
+	// ref addresses the resource that input creates.
+	ref   R
+	input T
+	// create, get and update are the resource's store methods.
+	create func(context.Context, T) (T, error)
+	get    func(context.Context, R) (T, error)
+	update func(context.Context, R, store.Precondition, func(T) error) (T, error)
+	// read and write keep the counter in a mutable field of the resource.
+	// read returns 0 before the first write.
+	read  func(T) int
+	write func(T, int)
+}
+
+// testConcurrentLostUpdateCounter runs N goroutines that each apply K
+// read-modify-write increments in a retry-on-conflict loop. Both the counter
+// and the stored version must advance by exactly N*K.
+func testConcurrentLostUpdateCounter[R any, T resourceMessage](t *testing.T, c concurrentCounterCase[R, T]) {
+	t.Helper()
+	ctx := context.Background()
+	created, err := c.create(ctx, c.input)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	const (
+		goroutines   = 8
+		perGoroutine = 10
+		wantTotal    = goroutines * perGoroutine
+	)
+	var start, wg sync.WaitGroup
+	start.Add(1)
+	for range goroutines {
+		wg.Go(func() {
+			start.Wait()
+			for range perGoroutine {
+				for {
+					cur, err := c.get(ctx, c.ref)
+					if err != nil {
+						t.Errorf("get failed: %v", err)
+						return
+					}
+					_, err = c.update(ctx, c.ref, store.PreconditionFrom(cur), func(toUpdate T) error {
+						c.write(toUpdate, c.read(toUpdate)+1)
+						return nil
+					})
+					if err == nil {
+						break
+					}
+					if !errors.Is(err, store.ErrVersionConflict) {
+						t.Errorf("update failed with unexpected error: %v", err)
+						return
+					}
+				}
+			}
+		})
+	}
+	start.Done()
+	wg.Wait()
+
+	got, err := c.get(ctx, c.ref)
+	if err != nil {
+		t.Fatalf("final get failed: %v", err)
+	}
+	if n := c.read(got); n != wantTotal {
+		t.Errorf("counter = %d, want %d (lost or duplicate update)", n, wantTotal)
+	}
+	if gotVer, wantVer := got.GetMetadata().GetVersion(), created.GetMetadata().GetVersion()+int64(wantTotal); gotVer != wantVer {
+		t.Errorf("version = %d, want %d", gotVer, wantVer)
+	}
+}
+
 // RunContractTests runs the backend-neutral store.Interface assertions
 // against a fresh store.Interface built by setup for each subtest. setup is
 // responsible for its own cleanup (e.g. via t.Cleanup).
@@ -511,6 +587,98 @@ func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("replacement Actor inherited policy: %v", err)
+		}
+	})
+
+	// Concurrent policy updates lose no write. The counter is the port of the
+	// policy's only rule.
+	t.Run("UpdateEgressPolicy_ConcurrentLostUpdateCounter", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+		if _, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, actorRef.Name)); err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		testConcurrentLostUpdateCounter(t, concurrentCounterCase[resources.ActorRef, *ateapi.EgressPolicy]{
+			ref:   actorRef,
+			input: &ateapi.EgressPolicy{Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "default"}},
+			create: func(ctx context.Context, p *ateapi.EgressPolicy) (*ateapi.EgressPolicy, error) {
+				return s.CreateEgressPolicy(ctx, actorRef, p)
+			},
+			get:    s.GetEgressPolicy,
+			update: s.UpdateEgressPolicy,
+			read: func(p *ateapi.EgressPolicy) int {
+				if len(p.GetRules()) == 0 {
+					return 0
+				}
+				return int(p.GetRules()[0].GetHttp().GetPorts().GetNumbers()[0])
+			},
+			write: func(p *ateapi.EgressPolicy, n int) {
+				p.Rules = []*ateapi.EgressRule{{
+					Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{int32(n)}}},
+				}}
+			},
+		})
+	})
+
+	// A policy cannot outlive its actor. Racers create and update the policy
+	// while the actor is deleted, and each may lose, but the actor and its
+	// policy are both gone once they finish.
+	t.Run("EgressPolicy_ConcurrentActorDelete", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		for trial := range 8 {
+			actorRef := resources.ActorRef{Atespace: testAtespace, Name: fmt.Sprintf("session-%d", trial)}
+			if _, err := s.CreateActor(ctx, &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: actorRef.Name},
+				Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_DELETING},
+			}); err != nil {
+				t.Fatalf("CreateActor(%s) failed: %v", actorRef, err)
+			}
+
+			var start, wg sync.WaitGroup
+			start.Add(1)
+			wg.Go(func() {
+				start.Wait()
+				if _, err := s.DeleteActor(ctx, actorRef, store.DeletePreconditions{}); err != nil {
+					t.Errorf("DeleteActor(%s) failed: %v", actorRef, err)
+				}
+			})
+			for range 4 {
+				wg.Go(func() {
+					start.Wait()
+					created, err := s.CreateEgressPolicy(ctx, actorRef, &ateapi.EgressPolicy{
+						Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "default"},
+					})
+					if err != nil {
+						if !errors.Is(err, store.ErrAlreadyExists) && !errors.Is(err, store.ErrFailedPrecondition) {
+							t.Errorf("CreateEgressPolicy(%s) unexpected error: %v", actorRef, err)
+						}
+						return
+					}
+					_, err = s.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(created), func(p *ateapi.EgressPolicy) error {
+						p.Rules = []*ateapi.EgressRule{{Http: &ateapi.HttpRule{Hostnames: []string{"api.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}}}
+						return nil
+					})
+					// UpdateEgressPolicy reports a policy deleted between its read
+					// and its write as ErrVersionConflict.
+					if err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrVersionConflict) {
+						t.Errorf("UpdateEgressPolicy(%s) unexpected error: %v", actorRef, err)
+					}
+				})
+			}
+			start.Done()
+			wg.Wait()
+
+			if _, err := s.GetActor(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("trial %d: GetActor after DeleteActor = %v, want ErrNotFound", trial, err)
+			}
+			if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("trial %d: GetEgressPolicy after DeleteActor = %v, want ErrNotFound", trial, err)
+			}
 		}
 	})
 }
@@ -916,6 +1084,27 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			},
 			mutated: func(marked *ateapi.Actor) bool {
 				return marked.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_DELETING
+			},
+		})
+	})
+
+	// Concurrent actor updates lose no write. The counter is the "n" label of
+	// the actor's worker selector.
+	t.Run("UpdateActor_ConcurrentLostUpdateCounter", func(t *testing.T) {
+		s := setup(t)
+		mustCreateAtespace(t, s, testAtespace)
+		testConcurrentLostUpdateCounter(t, concurrentCounterCase[resources.ActorRef, *ateapi.Actor]{
+			ref:    resources.ActorRef{Atespace: testAtespace, Name: "session-1"},
+			input:  newTestSuspendedActor(testAtespace, "session-1"),
+			create: s.CreateActor,
+			get:    s.GetActor,
+			update: s.UpdateActor,
+			read: func(a *ateapi.Actor) int {
+				n, _ := strconv.Atoi(a.GetWorkerSelector().GetMatchLabels()["n"])
+				return n
+			},
+			write: func(a *ateapi.Actor, n int) {
+				a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"n": strconv.Itoa(n)}}
 			},
 		})
 	})
@@ -1333,6 +1522,27 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 		})
 	})
 
+	// Concurrent template updates lose no write. The counter is the "n" label
+	// of the template's worker selector.
+	t.Run("UpdateActorTemplate_ConcurrentLostUpdateCounter", func(t *testing.T) {
+		s := setup(t)
+		mustCreateAtespace(t, s, testAtespace)
+		testConcurrentLostUpdateCounter(t, concurrentCounterCase[resources.ActorTemplateRef, *ateapi.ActorTemplate]{
+			ref:    resources.ActorTemplateRef{Atespace: testAtespace, Name: "tmpl-a"},
+			input:  newTestActorTemplate(testAtespace, "tmpl-a"),
+			create: s.CreateActorTemplate,
+			get:    s.GetActorTemplate,
+			update: s.UpdateActorTemplate,
+			read: func(tmpl *ateapi.ActorTemplate) int {
+				n, _ := strconv.Atoi(tmpl.GetWorkerSelector().GetMatchLabels()["n"])
+				return n
+			},
+			write: func(tmpl *ateapi.ActorTemplate, n int) {
+				tmpl.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"n": strconv.Itoa(n)}}
+			},
+		})
+	})
+
 	t.Run("ActorTemplateResources_BlockAtespaceDeletion", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -1742,6 +1952,75 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		})
 	})
 
+	// A reserved tag records its snapshot once. Writers race to record
+	// different snapshots: one wins, and the rest retry on conflict until the
+	// recorded snapshot rejects them with ErrImmutableField.
+	t.Run("Tag_ConcurrentRecordSnapshotAfterReserve", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
+		tagRef := resources.TagRef{Atespace: "team-a", Name: "production"}
+
+		input := newTestInProgressTag(tagRef.Name, actor)
+		templateSnap := proto.CloneOf(input.Status.Snapshot)
+		input.Status.Snapshot = nil
+		if _, err := s.CreateTag(ctx, input); err != nil {
+			t.Fatalf("CreateTag without a snapshot failed: %v", err)
+		}
+
+		const writers = 8
+		var start, wg sync.WaitGroup
+		start.Add(1)
+		var wins, immutableRejections atomic.Int32
+		for i := range writers {
+			wg.Go(func() {
+				start.Wait()
+				snap := proto.CloneOf(templateSnap)
+				snap.DurableSnapshot.Object.SnapshotUri = testTagSnapshotURI("gs://private", "team-a", fmt.Sprintf("production-%d", i))
+				for {
+					cur, err := s.GetTag(ctx, tagRef)
+					if err != nil {
+						t.Errorf("GetTag failed: %v", err)
+						return
+					}
+					_, err = s.UpdateTag(ctx, tagRef, store.PreconditionFrom(cur), func(toUpdate *ateapi.Tag) error {
+						toUpdate.Status.Snapshot = proto.CloneOf(snap)
+						return nil
+					})
+					switch {
+					case err == nil:
+						wins.Add(1)
+						return
+					case errors.Is(err, store.ErrVersionConflict):
+						continue
+					case errors.Is(err, store.ErrImmutableField):
+						immutableRejections.Add(1)
+						return
+					default:
+						t.Errorf("writer %d: unexpected UpdateTag error: %v", i, err)
+						return
+					}
+				}
+			})
+		}
+		start.Done()
+		wg.Wait()
+
+		if got := wins.Load(); got != 1 {
+			t.Errorf("%d writers recorded the snapshot, want 1", got)
+		}
+		if got := immutableRejections.Load(); got != writers-1 {
+			t.Errorf("%d writers were rejected with ErrImmutableField, want %d", got, writers-1)
+		}
+		stored, err := s.GetTag(ctx, tagRef)
+		if err != nil {
+			t.Fatalf("GetTag failed: %v", err)
+		}
+		if got := stored.GetMetadata().GetVersion(); got != 2 {
+			t.Errorf("tag version = %d, want 2", got)
+		}
+	})
+
 	t.Run("ListTags_PaginationAndScope", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -2141,49 +2420,58 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
-		if err != nil {
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
 		const claimants = 8
 		errTaken := errors.New("already assigned")
-		var wg sync.WaitGroup
-		won := make([]bool, claimants)
+		var start, wg sync.WaitGroup
+		start.Add(1)
+		var winners, taken atomic.Int32
 		for i := range claimants {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				// Claimants contend over the allocation total, which is what a
-				// claim actually moves on the Worker record now that the
-				// assignments themselves are separate records. The cpu limit carries
+			wg.Go(func() {
+				start.Wait()
+				// Claimants retry on version conflicts with a fresh read, so every
+				// loser reaches the occupancy check in mutate. The cpu limit carries
 				// the claimant's number so the winner is identifiable.
-				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapi.Worker) error {
-					if toUpdate.GetStatus().GetAllocated().GetActors() > 0 {
-						return errTaken
+				for {
+					cur, err := s.GetWorker(ctx, testWorkerName)
+					if err != nil {
+						t.Errorf("claimant %d: GetWorker failed: %v", i, err)
+						return
 					}
-					toUpdate.Status.Allocated = &ateapi.WorkerResources{Actors: 1, CpuMillicores: int64(i) + 1, MemoryBytes: 0}
-					return nil
-				})
-				switch {
-				case err == nil:
-					won[i] = true
-				case errors.Is(err, errTaken), errors.Is(err, store.ErrVersionConflict):
-				default:
-					t.Errorf("claimant %d: unexpected error %v", i, err)
+					_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(cur), func(toUpdate *ateapi.Worker) error {
+						if toUpdate.GetStatus().GetAllocated().GetActors() > 0 {
+							return errTaken
+						}
+						toUpdate.Status.Allocated = &ateapi.WorkerResources{Actors: 1, CpuMillicores: int64(i) + 1, MemoryBytes: 0}
+						return nil
+					})
+					switch {
+					case err == nil:
+						winners.Add(1)
+						return
+					case errors.Is(err, errTaken):
+						taken.Add(1)
+						return
+					case errors.Is(err, store.ErrVersionConflict):
+						continue
+					default:
+						t.Errorf("claimant %d: unexpected error %v", i, err)
+						return
+					}
 				}
-			}()
+			})
 		}
+		start.Done()
 		wg.Wait()
 
-		winners := 0
-		for _, w := range won {
-			if w {
-				winners++
-			}
+		if got := winners.Load(); got != 1 {
+			t.Fatalf("%d of %d claimants won the assignment, want exactly 1", got, claimants)
 		}
-		if winners != 1 {
-			t.Fatalf("%d of %d claimants won the assignment, want exactly 1", winners, claimants)
+		if got := taken.Load(); got != claimants-1 {
+			t.Errorf("%d claimants saw the worker taken, want %d", got, claimants-1)
 		}
 
 		got, err := s.GetWorker(ctx, testWorkerName)
@@ -2197,6 +2485,28 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if got.GetMetadata().GetVersion() != 2 {
 			t.Errorf("worker is at version %d, want 2 (create plus the single winning assign)", got.GetMetadata().GetVersion())
 		}
+	})
+
+	// Concurrent worker updates lose no write. The counter is the worker's
+	// pod name.
+	t.Run("UpdateWorker_ConcurrentLostUpdateCounter", func(t *testing.T) {
+		s := setup(t)
+		testConcurrentLostUpdateCounter(t, concurrentCounterCase[string, *ateapi.Worker]{
+			ref:   testWorkerName,
+			input: newTestWorker(testWorkerName, "0"),
+			create: func(ctx context.Context, w *ateapi.Worker) (*ateapi.Worker, error) {
+				return s.CreateWorker(ctx, w)
+			},
+			get:    s.GetWorker,
+			update: s.UpdateWorker,
+			read: func(w *ateapi.Worker) int {
+				n, _ := strconv.Atoi(w.GetWorkerPod())
+				return n
+			},
+			write: func(w *ateapi.Worker, n int) {
+				w.WorkerPod = strconv.Itoa(n)
+			},
+		})
 	})
 
 	t.Run("DeleteWorker", func(t *testing.T) {
@@ -2604,13 +2914,23 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		for i := range claims {
 			assignments[i] = newTestAssignment(t, s, fmt.Sprint(i), 0, 0)
 		}
-		var wg sync.WaitGroup
+		var start, wg sync.WaitGroup
+		start.Add(1)
 		won := make([]bool, claims)
 		for i := range claims {
 			wg.Go(func() {
-				won[i] = bindWith(ctx, s, testWorkerName, assignments[i], roomForOne) == nil
+				start.Wait()
+				err := bindWith(ctx, s, testWorkerName, assignments[i], roomForOne)
+				switch {
+				case err == nil:
+					won[i] = true
+				case errors.Is(err, full):
+				default:
+					t.Errorf("claim %d: unexpected error %v", i, err)
+				}
 			})
 		}
+		start.Done()
 		wg.Wait()
 
 		var winners int
@@ -3217,6 +3537,223 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			t.Errorf("after releasing everything the total is %v, want all zero", got)
 		}
 	})
+
+	// Binds, releases, updates and guarded deletes race across three workers.
+	// Afterward each worker's total matches its assignments, no actor is on two
+	// workers, each actor's status names the worker its assignment row does, and
+	// its version counts exactly its successful writes. Draining every
+	// assignment returns each total to zero.
+	t.Run("Allocated_TracksAssignmentsUnderConcurrentChurn", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		workerNames := []string{testWorkerName, otherTestWorkerName, "worker-3"}
+		for _, name := range workerNames {
+			if _, err := s.CreateWorker(ctx, newTestWorker(name, "pod-"+name)); err != nil {
+				t.Fatalf("CreateWorker(%s) failed: %v", name, err)
+			}
+		}
+
+		const numActors = 12
+		actorRefs := make([]resources.ActorRef, numActors)
+		actorUIDs := make([]string, numActors)
+		actorWrites := make([]atomic.Int64, numActors)
+		for i := range numActors {
+			ref := resources.ActorRef{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)}
+			created, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, ref.Name))
+			if err != nil {
+				t.Fatalf("CreateActor(%s) failed: %v", ref, err)
+			}
+			actorRefs[i] = ref
+			actorUIDs[i] = created.GetMetadata().GetUid()
+		}
+
+		const (
+			goroutines = 16
+			steps      = 25
+		)
+
+		var start, wg sync.WaitGroup
+		start.Add(1)
+		for g := range goroutines {
+			wg.Go(func() {
+				rng := rand.New(rand.NewPCG(42, uint64(g)))
+				start.Wait()
+				for range steps {
+					idx := rng.IntN(numActors)
+					ref := actorRefs[idx]
+					uid := actorUIDs[idx]
+					workerName := workerNames[rng.IntN(len(workerNames))]
+
+					switch rng.IntN(5) {
+					case 0, 1: // Bind or release based on observed state.
+						actor, err := s.GetActor(ctx, ref)
+						if err != nil {
+							t.Errorf("GetActor(%s) failed: %v", ref, err)
+							return
+						}
+						if actor.GetStatus().GetWorkerAssignment() == nil {
+							assignment := &ateapi.ActorAssignment{
+								Actor:     &ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
+								ActorUid:  uid,
+								Resources: resources.CPUMemory(int64(rng.IntN(4)+1)*250, int64(rng.IntN(4)+1)<<20),
+							}
+							_, err := s.BindActorToWorker(ctx, workerName, assignment, nil, ref, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+								toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+								toUpdate.Status.WorkerAssignment = &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: workerName}, WorkerPod: "pod-" + workerName}
+								return nil
+							})
+							if err == nil {
+								actorWrites[idx].Add(1)
+							} else if !errors.Is(err, store.ErrVersionConflict) {
+								t.Errorf("BindActorToWorker(%s, %s) unexpected error: %v", workerName, ref, err)
+								return
+							}
+						} else {
+							_, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+								toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+								toUpdate.Status.WorkerAssignment = nil
+								return nil
+							})
+							if err == nil {
+								actorWrites[idx].Add(1)
+							} else if !errors.Is(err, store.ErrVersionConflict) {
+								t.Errorf("UpdateActorAndRelease(%s) unexpected error: %v", ref, err)
+								return
+							}
+						}
+					case 2: // Concurrent UpdateActor racing with bind/release.
+						actor, err := s.GetActor(ctx, ref)
+						if err != nil {
+							t.Errorf("GetActor(%s) failed: %v", ref, err)
+							return
+						}
+						_, err = s.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+							toUpdate.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"step": fmt.Sprint(g)}}
+							return nil
+						})
+						if err == nil {
+							actorWrites[idx].Add(1)
+						} else if !errors.Is(err, store.ErrVersionConflict) {
+							t.Errorf("UpdateActor(%s) unexpected error: %v", ref, err)
+							return
+						}
+					case 3: // Concurrent UpdateWorker racing on the worker row lock.
+						worker, err := s.GetWorker(ctx, workerName)
+						if err != nil {
+							t.Errorf("GetWorker(%s) failed: %v", workerName, err)
+							return
+						}
+						_, err = s.UpdateWorker(ctx, workerName, store.PreconditionFrom(worker), func(toUpdate *ateapi.Worker) error {
+							toUpdate.WorkerPod = fmt.Sprintf("pod-%s-%d", workerName, g)
+							return nil
+						})
+						if err != nil && !errors.Is(err, store.ErrVersionConflict) {
+							t.Errorf("UpdateWorker(%s) unexpected error: %v", workerName, err)
+							return
+						}
+					case 4: // Guarded DeleteActor / DeleteWorker while assigned must be refused.
+						actor, err := s.GetActor(ctx, ref)
+						if err != nil {
+							t.Errorf("GetActor(%s) failed: %v", ref, err)
+							return
+						}
+						if actor.GetStatus().GetWorkerAssignment() != nil {
+							_, err := s.DeleteActor(ctx, ref, store.DeletePreconditions(store.PreconditionFrom(actor)))
+							if !errors.Is(err, store.ErrFailedPrecondition) && !errors.Is(err, store.ErrVersionConflict) {
+								t.Errorf("DeleteActor(%s) while assigned = %v, want ErrFailedPrecondition or ErrVersionConflict", ref, err)
+								return
+							}
+						}
+						worker, err := s.GetWorker(ctx, workerName)
+						if err != nil {
+							t.Errorf("GetWorker(%s) failed: %v", workerName, err)
+							return
+						}
+						if worker.GetStatus().GetAllocated().GetActors() > 0 {
+							_, err := s.DeleteWorker(ctx, workerName, store.DeletePreconditions(store.PreconditionFrom(worker)))
+							if !errors.Is(err, store.ErrFailedPrecondition) && !errors.Is(err, store.ErrVersionConflict) {
+								t.Errorf("DeleteWorker(%s) while assigned = %v, want ErrFailedPrecondition or ErrVersionConflict", workerName, err)
+								return
+							}
+						}
+					}
+				}
+			})
+		}
+		start.Done()
+		wg.Wait()
+
+		// Check cross-table invariants across all workers and actors.
+		assignedWorkerByUID := make(map[string]string, numActors)
+		for _, name := range workerNames {
+			worker, err := s.GetWorker(ctx, name)
+			if err != nil {
+				t.Fatalf("GetWorker(%s) failed: %v", name, err)
+			}
+			page, err := s.ListWorkerAssignments(ctx, name, store.ListOptions{})
+			if err != nil {
+				t.Fatalf("ListWorkerAssignments(%s) failed: %v", name, err)
+			}
+			want := resources.SumAllocated(page.Items)
+			got := worker.GetStatus().GetAllocated()
+			if !sameAllocation(got, want) {
+				t.Errorf("worker %s: allocated %v disagrees with %d assignments (%v)", name, got, len(page.Items), want)
+			}
+			for _, a := range page.Items {
+				if prev, dup := assignedWorkerByUID[a.GetActorUid()]; dup {
+					t.Errorf("actor %s is assigned to both %s and %s", a.GetActorUid(), prev, name)
+				}
+				assignedWorkerByUID[a.GetActorUid()] = name
+			}
+		}
+
+		for i, ref := range actorRefs {
+			actor, err := s.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatalf("GetActor(%s) failed: %v", ref, err)
+			}
+			if got, want := actor.GetMetadata().GetVersion(), 1+actorWrites[i].Load(); got != want {
+				t.Errorf("actor %s version = %d, want %d (1 + %d successful writes)", ref, got, want, actorWrites[i].Load())
+			}
+			gotWorker := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
+			wantWorker := assignedWorkerByUID[actorUIDs[i]]
+			if gotWorker != wantWorker {
+				t.Errorf("actor %s status.worker_assignment = %q, but worker_assignments table has %q", ref, gotWorker, wantWorker)
+			}
+		}
+
+		// Drain remaining assignments concurrently and verify every worker returns to zero.
+		var drainWG sync.WaitGroup
+		for _, ref := range actorRefs {
+			drainWG.Go(func() {
+				actor, err := s.GetActor(ctx, ref)
+				if err != nil {
+					t.Errorf("GetActor(%s) failed: %v", ref, err)
+					return
+				}
+				if _, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
+					toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+					toUpdate.Status.WorkerAssignment = nil
+					return nil
+				}); err != nil {
+					t.Errorf("UpdateActorAndRelease(%s) failed: %v", ref, err)
+				}
+			})
+		}
+		drainWG.Wait()
+
+		for _, name := range workerNames {
+			worker, err := s.GetWorker(ctx, name)
+			if err != nil {
+				t.Fatalf("GetWorker(%s) failed: %v", name, err)
+			}
+			if got := worker.GetStatus().GetAllocated(); got.GetActors() != 0 || got.GetCpuMillicores() != 0 || got.GetMemoryBytes() != 0 {
+				t.Errorf("worker %s: after draining all assignments allocated = %v, want all zero", name, got)
+			}
+		}
+	})
 }
 
 func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -3509,6 +4046,83 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-b", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
+	// An atespace delete races creates of an actor, a template and a tag in it.
+	// Either the delete wins and no child exists, or a child wins and the
+	// delete is refused with ErrFailedPrecondition, never both.
+	t.Run("DeleteAtespace_ConcurrentChildCreate", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		for trial := range 8 {
+			atespace := fmt.Sprintf("team-race-%d", trial)
+			if _, err := s.CreateAtespace(ctx, newTestAtespace(atespace)); err != nil {
+				t.Fatalf("CreateAtespace(%s) failed: %v", atespace, err)
+			}
+
+			var start, wg sync.WaitGroup
+			start.Add(1)
+			var deleteErr error
+			var childCreated atomic.Int32
+
+			wg.Go(func() {
+				start.Wait()
+				_, deleteErr = s.DeleteAtespace(ctx, atespace, store.DeletePreconditions{})
+			})
+			wg.Go(func() {
+				start.Wait()
+				_, err := s.CreateActor(ctx, newTestSuspendedActor(atespace, "actor-1"))
+				if err == nil {
+					childCreated.Add(1)
+				} else if !errors.Is(err, store.ErrFailedPrecondition) {
+					t.Errorf("CreateActor(%s) unexpected error: %v", atespace, err)
+				}
+			})
+			wg.Go(func() {
+				start.Wait()
+				_, err := s.CreateActorTemplate(ctx, newTestActorTemplate(atespace, "tmpl-1"))
+				if err == nil {
+					childCreated.Add(1)
+				} else if !errors.Is(err, store.ErrFailedPrecondition) {
+					t.Errorf("CreateActorTemplate(%s) unexpected error: %v", atespace, err)
+				}
+			})
+			wg.Go(func() {
+				start.Wait()
+				tag := &ateapi.Tag{
+					Metadata: &ateapi.ResourceMetadata{Atespace: atespace, Name: "tag-1"},
+					Scope:    ateapi.TagScope_TAG_SCOPE_ATESPACE,
+				}
+				_, err := s.CreateTag(ctx, tag)
+				if err == nil {
+					childCreated.Add(1)
+				} else if !errors.Is(err, store.ErrFailedPrecondition) {
+					t.Errorf("CreateTag(%s) unexpected error: %v", atespace, err)
+				}
+			})
+			start.Done()
+			wg.Wait()
+
+			switch {
+			case deleteErr == nil:
+				if n := childCreated.Load(); n != 0 {
+					t.Errorf("trial %d: DeleteAtespace succeeded alongside %d child creates", trial, n)
+				}
+				if _, err := s.GetAtespace(ctx, atespace); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("trial %d: GetAtespace after successful delete = %v, want ErrNotFound", trial, err)
+				}
+			case errors.Is(deleteErr, store.ErrFailedPrecondition):
+				if childCreated.Load() == 0 {
+					t.Errorf("trial %d: DeleteAtespace returned ErrFailedPrecondition when no child create succeeded", trial)
+				}
+				if _, err := s.GetAtespace(ctx, atespace); err != nil {
+					t.Errorf("trial %d: GetAtespace after rejected delete = %v, want nil", trial, err)
+				}
+			default:
+				t.Errorf("trial %d: DeleteAtespace unexpected error: %v", trial, deleteErr)
+			}
 		}
 	})
 }
