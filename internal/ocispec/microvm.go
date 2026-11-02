@@ -149,8 +149,9 @@ func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, contai
 	return "", fmt.Errorf("host path %q is not staged into the guest share", hostPath)
 }
 
-// guestSystemMounts returns the standard kata guest mount set, followed by a
-// read-only tmpfs over each of guestMaskedDirPaths.
+// guestSystemMounts returns the standard kata guest mount set without its /run
+// tmpfs, followed by a read-only tmpfs over each of guestMaskedDirPaths. /run
+// stays on the container rootfs, as on gVisor.
 func guestSystemMounts() []specs.Mount {
 	mounts := []specs.Mount{
 		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
@@ -159,7 +160,6 @@ func guestSystemMounts() []specs.Mount {
 		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
 		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
 		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
-		{Destination: "/run", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
 	}
 	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
 	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350
