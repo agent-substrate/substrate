@@ -164,9 +164,10 @@ curl -X POST -i http://localhost:8000/
 
 ### GKE Quickstart (Development)
 
-1. Create and configure your environment file:
+1. Create and configure your environment file from the GKE example in
+   [substrate-gke](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/ate-dev-env.sh.example) (`hack/ate-dev-env.sh.example` here is for kind):
    ```bash
-   cp hack/ate-dev-env.sh.example .ate-dev-env.sh
+   curl -fsSLo .ate-dev-env.sh https://raw.githubusercontent.com/ai-on-gke/substrate-gke/main/tools/setup-gcp/ate-dev-env.sh.example
 
    # Edit .ate-dev-env.sh to match your project and preferences, then source it:
    source .ate-dev-env.sh
@@ -186,9 +187,7 @@ curl -X POST -i http://localhost:8000/
    to audit them or apply them manually.
 
    If you bring your own cluster instead, it needs the PodCertificateRequest and
-   ClusterTrustBundle APIs, which GKE 1.37 and higher serve by default. On 1.36,
-   enable them as beta APIs, then replace any 1.36 node pools created before
-   that. See the [Create Cluster warning](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#2-create-cluster).
+   ClusterTrustBundle APIs, which GKE 1.37 and higher serve by default.
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
