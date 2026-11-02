@@ -323,7 +323,17 @@ func (w *ActorWorkflow) recordVolumeSnapshotStatus(ctx context.Context, snap *at
 // exists. When none does, this cuts one that the caller then deletes. That
 // snapshot is of the volume as it is now, which may be attached if the source
 // Actor has resumed, and it counts against the storage system's quota until
-// it is deleted. Any error keeps the row for a retry.
+// it is deleted.
+//
+// It returns no handle to skip the row when there is nothing to recover:
+//   - The driver lacks CREATE_DELETE_SNAPSHOT, so it never cut a snapshot.
+//   - CreateSnapshot fails with a terminal code, so retrying cannot recover
+//     the handle. NotFound is one such code: the storage system cannot look a
+//     snapshot up by name alone, so once the source volume is gone a snapshot
+//     cut from it can no longer be found.
+//
+// A snapshot skipped on a terminal error may be leaked. It is logged, and the
+// tag can still be deleted. Only a transient error keeps the row for a retry.
 func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) (volume.Snapshot, error) {
 	driver := snap.GetDriverName()
 	origin := snap.GetOrigin().GetTagCapture()
@@ -332,11 +342,37 @@ func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, snap *a
 	if err != nil {
 		return volume.Snapshot{}, fmt.Errorf("while getting volume plugin for driver %q: %w", driver, err)
 	}
+	caps, err := plugin.ControllerCapabilities(ctx)
+	if err != nil {
+		return volume.Snapshot{}, fmt.Errorf("while reading capabilities of driver %q: %w", driver, err)
+	}
+	if !caps.CreateDeleteSnapshot {
+		slog.InfoContext(ctx, "driver does not support snapshots, so it holds no volume snapshot to recover",
+			slog.String("driver", driver), slog.String("source_volume_name", volName))
+		return volume.Snapshot{}, nil
+	}
 	got, err := createTagVolumeSnapshot(ctx, plugin, snap.GetMetadata().GetName(), volName, origin.GetSourceVolumeId(), driver)
 	if err != nil {
+		if !transientSnapshotError(err) {
+			slog.WarnContext(ctx, "cannot recover a volume snapshot the tag never recorded; it may be leaked",
+				slog.String("snapshot_name", snap.GetMetadata().GetName()), slog.String("source_volume_id", origin.GetSourceVolumeId()),
+				slog.String("code", status.Code(err).String()), slog.Any("error", err))
+			return volume.Snapshot{}, nil
+		}
 		return volume.Snapshot{}, fmt.Errorf("while recovering the snapshot of volume %q: %w", volName, err)
 	}
 	return got, nil
+}
+
+// transientSnapshotError reports whether a failed CreateSnapshot may succeed on
+// a retry. An error without a gRPC status has code Unknown and counts as
+// transient.
+func transientSnapshotError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.Unknown, codes.Internal:
+		return true
+	}
+	return false
 }
 
 // ensureTagSnapshotReleased deletes the objects the tag's external snapshot is
@@ -710,7 +746,7 @@ func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *at
 	tagUID := tag.GetMetadata().GetUid()
 	for _, vol := range volumes {
 		if _, err := w.store.CreateExternalVolumeSnapshot(ctx, newTagVolumeSnapshot(tag, vol)); err != nil {
-			return fmt.Errorf("while recording the volumes to snapshot of tag %s: %w", tagRef, err)
+			return tagCreateUpdateError(tagRef, err, "recording the volumes to snapshot of")
 		}
 	}
 
@@ -746,10 +782,10 @@ func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *at
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("while recording the volume snapshots of tag %s: %w", tagRef, err)
+		return tagCreateUpdateError(tagRef, err, "recording the volume snapshots of")
 	}
 	if err := errors.Join(snapErrs...); err != nil {
-		return apierror.Internal("%v", err)
+		return volumeSnapshotError(tagRef, err)
 	}
 	return nil
 }
@@ -795,6 +831,40 @@ func tagVolumeSnapshotFailed(err error) *ateapi.ExternalVolumeSnapshotStatus {
 	return &ateapi.ExternalVolumeSnapshotStatus{
 		ErrorMessage: truncateUTF8(strings.ToValidUTF8(err.Error(), "�"), maxVolumeSnapshotErrorMessageLen),
 	}
+}
+
+// volumeSnapshotError maps a failed volume snapshot to the error the create
+// fails with, based on the code of the first failure that carries one.
+//
+// The failure leaves the tag pending, so a plain retry of the create fails
+// with AlreadyExists. Transient driver codes therefore become Aborted rather
+// than Unavailable, which client retry policies commonly retry on their own,
+// and every message says to delete the tag first.
+func volumeSnapshotError(tagRef resources.TagRef, err error) error {
+	const format = "%v; delete Tag %s and create it again"
+	switch status.Code(err) {
+	case codes.ResourceExhausted:
+		return apierror.ResourceExhausted(format, err, tagRef)
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted:
+		return apierror.Aborted(format, err, tagRef)
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.NotFound:
+		return apierror.FailedPrecondition(format, err, tagRef)
+	}
+	return apierror.Internal(format, err, tagRef)
+}
+
+// tagCreateUpdateError maps a store error from a step of the create that
+// writes after the snapshot is recorded. A version conflict leaves the tag
+// pending, so the caller must delete it before creating it again. A tag that
+// is gone, or is being deleted, can be created again once the delete ends.
+func tagCreateUpdateError(tagRef resources.TagRef, err error, action string) error {
+	if errors.Is(err, store.ErrVersionConflict) {
+		return apierror.Aborted("concurrent update conflict; delete Tag %s and create it again", tagRef)
+	}
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) || errors.Is(err, store.ErrFailedPrecondition) {
+		return apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
+	}
+	return fmt.Errorf("while %s tag %s: %w", action, tagRef, err)
 }
 
 // createTagVolumeSnapshot snapshots one volume under name, failing if the
