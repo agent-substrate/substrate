@@ -4737,6 +4737,65 @@ func TestResumeActor_RelocatesAfterDetach(t *testing.T) {
 	}
 }
 
+// Resumes an actor suspended asynchronously while its Restore is held at the
+// node's atelet, and the atelet reports a background detach of the actor's
+// snapshot before the Restore finishes. The report fails with ABORTED, naming
+// another operation in progress for the actor. Once the Restore is released,
+// the resume succeeds (OK) and the actor is RUNNING on the worker with its
+// snapshot still local to the node.
+// The resume retries while ate-api catches up.
+func TestResumeActor_ConcurrentSnapshotStateReportRejected(t *testing.T) {
+	t.Parallel()
+	h := harness.New(t)
+	as := h.CreateAtespace("team-a")
+	pool := h.CreateWorkerPool("pool1", nil)
+	node := h.Node("a")
+	w := h.AddWorker(pool, node)
+	actor := h.AsyncSuspendedActor(as, h.NewTemplate(as, pool))
+	ref := harness.ActorRef(actor)
+	before := h.GetActor(ref)
+	snap := latestSnapshot(t, before)
+
+	gate := node.Atelet.On(harness.AteletRestore).Block()
+	resumed := make(chan error, 1)
+	go func() {
+		_, err := h.ResumeActor(t.Context(), &ateapi.ResumeActorRequest{Actor: ref})
+		resumed <- err
+	}()
+	gate.Wait(t)
+
+	_, reportErr := node.WorkerService().ReportActorSnapshotState(t.Context(), &ateapi.ReportActorSnapshotStateRequest{
+		Actor:    ref,
+		ActorUid: actor.GetMetadata().GetUid(),
+		State: &ateapi.ActorSnapshotState{
+			LatestDurable: &ateapi.SnapshotReport{
+				Uuid:       snap.GetUuid(),
+				Generation: snap.GetGeneration(),
+				Fidelity:   snap.GetFidelity(),
+				Object:     snap.GetDurableSnapshot().GetObject(),
+			},
+		},
+	})
+	if status.Code(reportErr) != codes.Aborted {
+		t.Errorf("ReportActorSnapshotState during Restore = %v, want Aborted", reportErr)
+	}
+	if msg := status.Convert(reportErr).Message(); !strings.Contains(msg, "another operation is in progress for this actor") {
+		t.Errorf("ReportActorSnapshotState error %q does not contain %q", msg, "another operation is in progress for this actor")
+	}
+
+	gate.Release()
+	if err := <-resumed; err != nil {
+		t.Fatalf("ResumeActor: %v", err)
+	}
+	want := mutated(before, func(a *ateapi.Actor) {
+		a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+		a.Status.WorkerAssignment = workerAssignment(w)
+	})
+	if diff := cmp.Diff(want, h.GetActor(ref), protocmp.Transform(), ignoreVersion, ignoreCreateUpdateTime); diff != "" {
+		t.Errorf("actor after resume and rejected detach report (-want +got):\n%s", diff)
+	}
+}
+
 // checkCrashMessage fails the test unless the actor's crash message contains
 // each of parts.
 func checkCrashMessage(t *testing.T, actor *ateapi.Actor, parts ...string) {
