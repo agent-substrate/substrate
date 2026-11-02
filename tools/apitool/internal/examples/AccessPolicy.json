@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "name": "default",
+    "uid": "6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c",
+    "version": "4",
+    "createTime": "2026-06-01T00:05:00Z",
+    "updateTime": "2026-08-10T16:30:00Z"
+  },
+  "bindings": [
+    {
+      "role": "owner",
+      "members": [
+        "user:alice@example.com"
+      ]
+    },
+    {
+      "role": "viewer",
+      "members": [
+        "user:sa-ci-runner"
+      ]
+    }
+  ]
+}
