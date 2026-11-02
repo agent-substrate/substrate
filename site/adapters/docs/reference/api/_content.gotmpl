@@ -1,0 +1,43 @@
+{{/*
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+
+{{/*
+Adds a page for each release the API reference documents, such as
+docs/reference/api/v1.0.0/, from the versions.json that apitool
+generate-docs writes. docs/reference/api.md is the page for latest. Release
+pages stay out of the sidebar, section cards and search; the reference's
+version menu links to them.
+*/ -}}
+
+{{- with resources.Get "api-reference/versions.json" -}}
+  {{- range transform.Unmarshal . -}}
+    {{- if ne . "latest" -}}
+      {{- $.AddPage (dict
+        "path" .
+        "kind" "page"
+        "title" (printf "API Reference (%s)" .)
+        "layout" "api-reference"
+        "params" (dict
+          "api_version" .
+          "body_class" "as-apiref-page"
+          "toc_hide" true
+          "hide_summary" true
+          "exclude_search" true
+        )
+      ) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}

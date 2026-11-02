@@ -497,8 +497,7 @@ message ExternalVolumeStatus {
   // +k8s:required
   // +k8s:format=k8s-short-name
   // +k8s:update=NoModify
-  // +k8s:update=NoUnset # set-once; immutable would reject the create
-  // ratchet's nil->set when the final object is validated as an update
+  // +k8s:update=NoUnset # set-once; immutable would reject the create ratchet's nil->set when the final object is validated as an update
   string name = 1;
 
   // The globally unique volume_id returned from the storage system.
@@ -548,7 +547,11 @@ message Actor {
   // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
-  // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
+  // actor_template references the ActorTemplate this Actor is based on.
+  //
+  // (-- TODO: replace with full actor_template spec if we decide to make each
+  // Actor self-contained. --)
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   // +k8s:mutable
@@ -815,7 +818,7 @@ message HttpRuleEffects {
 
 // CredentialHeader replaces the value of an HTTP request header with a
 // credential. The Actor sends the header with a placeholder value, such as
-// "Authorization: <something>"; the gateway discards that value and forwards
+// `Authorization: <something>`; the gateway discards that value and forwards
 // the header with the credential instead. The placeholder itself is not
 // inspected, so any value works. A request without the header is not
 // modified.
@@ -834,7 +837,7 @@ message CredentialHeader {
   string prefix = 2;
 
   // Source-agnostic reference interpreted by a registered credential provider:
-  // ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
+  // `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`
   //
   // Exactly one of credential_uri and actor_jwt must be set.
   //
@@ -1251,7 +1254,7 @@ message GoldenSnapshotStatus {
   google.protobuf.Timestamp snapshot_time = 2;
 
   // error_message is set when the golden snapshot build fails and will not be
-  // retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
+  // retried, formatted as `<Reason>: <detail>`. A nonempty value is terminal.
   //
   // +k8s:optional
   // +k8s:maxLength=4096
@@ -2461,8 +2464,9 @@ message WorkerSandboxRuntime {
   // Compatibility version stamped onto an actor's snapshot when a checkpoint
   // is taken on this runtime. Snapshots matching it can warm-boot on this
   // runtime.
-  // TODO: Add the additional compatibility versions this runtime can also
-  // restore snapshots from.
+  //
+  // (-- TODO: Add the additional compatibility versions this runtime can also
+  // restore snapshots from. --)
   //
   // +k8s:required
   VersionedSandboxCompat version = 1;
@@ -2476,8 +2480,8 @@ message WorkerSandboxRuntime {
   // +k8s:optional
   RuntimeOverhead actor_overhead = 2;
 
-  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
-  // once workers report one.
+  // (-- TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one. --)
 }
 
 // RuntimeOverhead is the memory an Actor uses on its Worker outside its own
@@ -2517,8 +2521,8 @@ message ActorSandboxRuntime {
   // +k8s:required
   VersionedSandboxCompat version = 2;
 
-  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
-  // once workers report one.
+  // (-- TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one. --)
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
@@ -2914,9 +2918,12 @@ message MintWorkerActorJwtResponse {
   google.protobuf.Timestamp expire_time = 2;
 }
 
-// TODO: add a durability mode, carried through atelet's
+// RequestActorSuspendRequest asks to suspend an Actor the calling Worker hosts.
+// The suspend uses SuspendActor's default mode.
+//
+// (-- TODO: add a durability mode, carried through atelet's
 // RequestActorSuspendRequest, so the Worker can choose how the snapshot is
-// made durable. Until then the suspend uses SuspendActor's default mode.
+// made durable. --)
 message RequestActorSuspendRequest {
   // The Worker making the request. atespace is always empty; Workers are
   // global-scoped. atelet fills this in from its caller's certificate, so it

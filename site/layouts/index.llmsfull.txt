@@ -21,7 +21,7 @@ limitations under the License.
 {{- $docs := site.GetPage "/docs" -}}
 {{- if $docs -}}
 {{- range $section := $docs.Sections.ByWeight -}}
-{{- range $p := $section.RegularPages.ByWeight }}
+{{- range $p := where $section.RegularPages.ByWeight ".Params.toc_hide" "!=" true }}
 
 ================================================================================
 SECTION: {{ upper ($section.LinkTitle | default $section.Title) }}
