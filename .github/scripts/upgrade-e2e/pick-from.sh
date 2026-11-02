@@ -20,9 +20,11 @@
 #     .github/scripts/upgrade-e2e/pick-from.sh
 #
 # FROM wins when set. Otherwise, on a release-X.Y branch, it is the newest
-# earlier vX.Y.* tag: a release branch only takes patch releases. With nothing
-# to upgrade from, a push writes an empty tag and the job skips its steps, and
-# a manual run fails.
+# earlier vX.Y.Z release: a release branch only takes patch releases, and
+# users upgrade from a release. A minor with no release yet, such as one
+# between its release candidates, starts from its newest pre-release. With
+# nothing to upgrade from, a push writes an empty tag and the job skips its
+# steps, and a manual run fails.
 #
 # Runs in the checkout of the release under test. Used by
 # .github/workflows/upgrade-e2e.yaml.
@@ -30,10 +32,13 @@
 set -o errexit -o nounset -o pipefail
 
 if [[ -z "${FROM}" && "${TO}" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
-  # Release tags, newest first. versionsort.suffix sorts a pre-release
-  # (v0.2.0-rc1) below its release.
-  FROM="$(git -c versionsort.suffix=- tag -l 'v*' --merged HEAD --no-contains HEAD --sort=-v:refname \
-    | awk -v minor="v${TO#release-}." 'index($0, minor) == 1 {print; exit}')"
+  # The minor's tags, newest first. versionsort.suffix sorts a pre-release
+  # (v1.0.0-rc.1) below its release.
+  tags="$(git -c versionsort.suffix=- tag -l "v${TO#release-}.*" --merged HEAD --no-contains HEAD --sort=-v:refname)"
+  FROM="$(grep -v -e - <<<"${tags}" | head -n 1 || true)"
+  if [[ -z "${FROM}" ]]; then
+    FROM="$(head -n 1 <<<"${tags}")"
+  fi
 fi
 if [[ -z "${FROM}" ]]; then
   if [[ "${EVENT}" == workflow_dispatch ]]; then
