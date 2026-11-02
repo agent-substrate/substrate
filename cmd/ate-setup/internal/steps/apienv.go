@@ -457,9 +457,17 @@ func stampAPIServerEnvHash(objs []*unstructured.Unstructured, hash string) error
 	return fmt.Errorf("the manifest has no deployment/ate-api-server to stamp with %s", envHashAnnotation)
 }
 
-// apiServerEnvHash digests the apiserver's environment as it is in the cluster.
+// apiServerEnvHash digests the apiserver's environment and configuration sources as they are in the cluster.
 func (e *Env) apiServerEnvHash(ctx context.Context) (string, error) {
 	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars)
+	if err != nil {
+		return "", err
+	}
+	authn, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIAuthn)
+	if err != nil {
+		return "", err
+	}
+	apiConfig, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIConfig)
 	if err != nil {
 		return "", err
 	}
@@ -471,23 +479,36 @@ func (e *Env) apiServerEnvHash(ctx context.Context) (string, error) {
 	if cm != nil {
 		cmData = cm.Data
 	}
+	var authnData map[string]string
+	if authn != nil {
+		authnData = authn.Data
+	}
+	var apiConfigData map[string]string
+	if apiConfig != nil {
+		apiConfigData = apiConfig.Data
+	}
 	var secretData map[string][]byte
 	if secret != nil {
 		secretData = secret.Data
 	}
-	return envHash(cmData, secretData), nil
+	return envHash(cmData, authnData, apiConfigData, secretData), nil
 }
 
 // envHash digests the apiserver's environment sources. Only changes matter, so
 // the digest is an opaque value rather than a defined format; it does not
 // agree with the one the shell installer computed, so the first install after
 // the move to ate-setup rolls ate-api-server once.
-func envHash(configMap map[string]string, secret map[string][]byte) string {
+func envHash(configMap, authn, apiConfig map[string]string, secret map[string][]byte) string {
 	h := sha256.New()
-	fmt.Fprint(h, "configmap\n")
-	for _, k := range slices.Sorted(maps.Keys(configMap)) {
-		fmt.Fprintf(h, "%s=%s\n", k, configMap[k])
+	hashConfigMap := func(label string, m map[string]string) {
+		fmt.Fprintf(h, "%s\n", label)
+		for _, k := range slices.Sorted(maps.Keys(m)) {
+			fmt.Fprintf(h, "%s=%s\n", k, m[k])
+		}
 	}
+	hashConfigMap("configmap", configMap)
+	hashConfigMap("authn", authn)
+	hashConfigMap("apiconfig", apiConfig)
 	fmt.Fprint(h, "secret\n")
 	for _, k := range slices.Sorted(maps.Keys(secret)) {
 		fmt.Fprintf(h, "%s=%s\n", k, secret[k])
