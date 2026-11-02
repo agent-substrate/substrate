@@ -16,7 +16,9 @@ package ocispec
 
 import (
 	"encoding/json"
+	"maps"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -144,6 +146,68 @@ func TestShapers_PreserveProcess(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The shaped specs differ in their system mounts only where
+// knownSystemMountDifferences says. runsc also mounts a tmpfs on an empty /tmp,
+// which neither spec shows.
+func TestShapers_SystemMountDifferences(t *testing.T) {
+	// knownSystemMountDifferences maps a destination to what each runtime mounts
+	// there. Remove an entry when the runtimes match.
+	knownSystemMountDifferences := map[string]string{
+		"/proc":       "microVM adds nosuid, noexec and nodev.",
+		"/dev":        "runsc mounts its own dev filesystem. microVM mounts a 64MiB tmpfs.",
+		"/dev/pts":    "runsc adds devpts itself.",
+		"/dev/shm":    "runsc's dev filesystem has a 0755 shm directory. microVM mounts a 64MiB tmpfs.",
+		"/dev/mqueue": "runsc mounts nothing. microVM mounts mqueue.",
+		"/run":        "runsc leaves it on the rootfs. microVM mounts a 64MiB tmpfs.",
+	}
+	for _, dir := range guestMaskedDirPaths(runtime.GOARCH) {
+		knownSystemMountDifferences[dir] = "microVM masks it like containerd. runsc's sysfs has an empty /sys/firmware and its procfs has no /proc/acpi."
+	}
+
+	gvisor := Build(parityOptions)
+	ShapeGVisor(gvisor, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
+	microvm := Build(parityOptions)
+	if err := ShapeMicroVM(microvm, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+		t.Fatalf("ShapeMicroVM() = %v", err)
+	}
+	gvisorMounts, microvmMounts := systemMounts(gvisor), systemMounts(microvm)
+
+	var dests []string
+	for _, m := range []map[string]specs.Mount{gvisorMounts, microvmMounts} {
+		dests = slices.AppendSeq(dests, maps.Keys(m))
+	}
+	dests = slices.AppendSeq(dests, maps.Keys(knownSystemMountDifferences))
+	slices.Sort(dests)
+	for _, dest := range slices.Compact(dests) {
+		g, gok := gvisorMounts[dest]
+		m, mok := microvmMounts[dest]
+		differ := gok != mok || !reflect.DeepEqual(g, m)
+		_, known := knownSystemMountDifferences[dest]
+		switch {
+		case differ && !known:
+			t.Errorf("%s: gVisor mounts %+v, microVM mounts %+v. Make them match, or add it to knownSystemMountDifferences", dest, g, m)
+		case !gok && !mok:
+			t.Errorf("%s: neither runtime mounts it. Remove it from knownSystemMountDifferences", dest)
+		case !differ && known:
+			t.Errorf("%s: both runtimes mount %+v. Remove it from knownSystemMountDifferences", dest, g)
+		}
+	}
+}
+
+// systemMounts returns the spec's non-bind mounts by destination, without
+// their sources.
+func systemMounts(spec *specs.Spec) map[string]specs.Mount {
+	out := make(map[string]specs.Mount)
+	for _, m := range spec.Mounts {
+		if m.Type == "bind" {
+			continue
+		}
+		m.Source = ""
+		out[m.Destination] = m
+	}
+	return out
 }
 
 // ShapeMicroVM rewrites bind sources to their guest share paths.
