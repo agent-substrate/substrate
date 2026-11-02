@@ -64,26 +64,7 @@ jobs:
         FROM: ${{ inputs.from }}
         TO: ${{ github.ref_name }}
         EVENT: ${{ github.event_name }}
-      run: |
-        if [[ -z "${FROM}" && "${TO}" =~ ^release-[0-9]+\.[0-9]+$ ]]; then
-          # The newest earlier release of the branch's minor (release-0.4:
-          # v0.4.*): a release branch only takes patch releases. Release tags,
-          # newest first; versionsort.suffix sorts a pre-release (v0.2.0-rc1)
-          # below its release.
-          FROM="$(git -c versionsort.suffix=- tag -l 'v*' --merged HEAD --no-contains HEAD --sort=-v:refname \
-            | awk -v minor="v${TO#release-}." 'index($0, minor) == 1 {print; exit}')"
-        fi
-        if [[ -z "${FROM}" ]]; then
-          if [[ "${EVENT}" == workflow_dispatch ]]; then
-            echo "::error::Nothing to upgrade ${TO} from: set the from input."
-            exit 1
-          fi
-          echo "::notice::No earlier release on ${TO} to upgrade from yet."
-          echo "tag=" >> "${GITHUB_OUTPUT}"
-          exit 0
-        fi
-        echo "Upgrading ${FROM} -> ${TO}"
-        echo "tag=${FROM}" >> "${GITHUB_OUTPUT}"
+      run: .github/scripts/upgrade-e2e/pick-from.sh
     - name: Checkout ${{ steps.from.outputs.tag }}
       if: steps.from.outputs.tag != ''
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -100,39 +81,15 @@ jobs:
           old/go.sum
     - name: Enable KVM
       if: steps.from.outputs.tag != '' && matrix.sandbox == 'microvm'
-      # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it
-      # into the node.
-      run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-        sudo udevadm control --reload-rules
-        sudo udevadm trigger --name-match=kvm
+      run: new/.github/scripts/upgrade-e2e/enable-kvm.sh
     - name: Create cluster
       if: steps.from.outputs.tag != ''
       working-directory: new
       run: hack/create-kind-cluster.sh
     - name: Install ${{ steps.from.outputs.tag }}
-      if: >-
-        steps.from.outputs.tag != ''
-        && (matrix.sandbox == 'gvisor' || hashFiles('old/hack/run-microvm-demo-kind.sh') == '')
-      # The old release's own installer, so the cluster starts out exactly as
-      # that release left it. deploy ate-system also installs the microVM
-      # dependencies. The suite's actors run on the counter demo of the class.
+      if: steps.from.outputs.tag != ''
       working-directory: old
-      env:
-        DEMO: ${{ matrix.sandbox == 'microvm' && 'counter-microvm' || 'counter' }}
-      run: |
-        go run ./cmd/ate-setup --kind deploy ate-system
-        go run ./cmd/ate-setup --kind deploy demo "${DEMO}"
-    - name: Install ${{ steps.from.outputs.tag }} with microVM
-      if: >-
-        steps.from.outputs.tag != '' && matrix.sandbox == 'microvm'
-        && hashFiles('old/hack/run-microvm-demo-kind.sh') != ''
-      # Releases from before deploy ate-system installed the microVM
-      # dependencies install them, the control plane and counter-microvm with
-      # this script.
-      working-directory: old
-      run: hack/run-microvm-demo-kind.sh
+      run: ../new/.github/scripts/upgrade-e2e/install-old.sh ${{ matrix.sandbox }}
     - name: Upgrade to ${{ github.ref_name }}
       if: steps.from.outputs.tag != ''
       # The suite performs the upgrade with this checkout's ate-setup, in the
@@ -142,11 +99,7 @@ jobs:
       env:
         E2E_ATE_SETUP_CONFIG: ${{ github.workspace }}/new.yaml
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-upgrade-${{ matrix.sandbox }}.xml
-      # The previous release is installed with no preview gates, and CI has to
-      # say so.
-      run: |
-        cp "${ATE_RECORD_DIR}"/installs/*.yaml "${E2E_ATE_SETUP_CONFIG}"
-        hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 90m -v -args --no-color --preview=""
+      run: .github/scripts/upgrade-e2e/run-suite.sh
     # A suite that stops matching would otherwise leave the run green and empty.
     - name: Require the suite to have run tests
       if: always() && steps.from.outputs.tag != ''
@@ -164,20 +117,4 @@ jobs:
         if-no-files-found: error
     - name: Dump diagnostics on failure
       if: failure() && steps.from.outputs.tag != ''
-      run: |
-        kubectl --context kind-kind get workerpool,pods -A -o wide || true
-        kubectl --context kind-kind get ds,deploy -n ate-system -o wide || true
-        dump() {
-          echo "=== logs: $1/$2 ==="
-          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
-        }
-        for ns in ate-system podcertificate-controller-system; do
-          for p in $(kubectl --context kind-kind get pods -n "${ns}" -o name 2>/dev/null); do
-            dump "${ns}" "$p"
-          done
-        done
-        # The actors' worker pods are in the counter demo's pool; their worker
-        # logs say what happened to each actor.
-        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
-          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
-          | while read -r ns name; do dump "$ns" "$name"; done
+      run: new/.github/scripts/upgrade-e2e/dump-diagnostics.sh
