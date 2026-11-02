@@ -232,8 +232,7 @@ it alongside the gateway. The install applies:
 * a NetworkPolicy that admits only the egress gateway's pods
   (`app: atenet-egress`), on the provider's gRPC port. Every other connection
   to the provider pods is dropped. The NetworkPolicy takes effect only on a
-  cluster whose network plugin enforces NetworkPolicy, such as GKE Dataplane
-  V2, which `tools/setup-gcp` turns on by default. Elsewhere the provider's
+  cluster whose network plugin enforces NetworkPolicy. Elsewhere the provider's
   check of the gateway's client certificate is the only restriction.
 
 Selecting any other provider, or `{"enabled":false}`, removes a bundled
