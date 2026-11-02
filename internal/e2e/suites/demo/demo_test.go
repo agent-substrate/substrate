@@ -1256,8 +1256,8 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	validateCounterResponse(t, resp, "after second pause", 3, 3)
 
-	// Third async suspend: leave the actor SUSPENDED so atelet uploads the
-	// snapshot in the background and then detaches the actor from the node.
+	// Third async suspend: wait for the background upload to finish while the
+	// local checkpoint is still on the node, then resume before detach.
 	t.Logf("Pausing Actor %q (third async suspend)...", actorName)
 	paused3, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
 		Actor:   actorRef,
@@ -1267,17 +1267,14 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 		t.Fatalf("failed to pause Actor a third time: %v", err)
 	}
 	pause3 := getLocalSnapshotFromActor(t, paused3.GetActor())
-	t.Run("BackgroundDetach", func(t *testing.T) {
+	t.Run("BackgroundUploadBeforeResume", func(t *testing.T) {
 		e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
 		uploaded3 := waitForSnapshotUploaded(ctx, t, clients, actorName, pause3.uuid)
 		if uploaded3.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
 			t.Fatal("uploaded async snapshot has no URI")
 		}
-		waitForActorDetached(ctx, t, clients, actorName, pause3.uuid)
 	})
 
-	// Resuming restores the snapshot from object storage after the detach, or
-	// from its node-local copy when BackgroundDetach is skipped.
 	t.Logf("Resuming Actor %q from third async suspend...", actorName)
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
 		Actor: actorRef,
@@ -1291,6 +1288,42 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 		t.Fatalf("failed to call actor after third pause: %v", err)
 	}
 	validateCounterResponse(t, resp, "after third pause", 4, 4)
+
+	// Fourth async suspend: leave the actor SUSPENDED so atelet uploads the
+	// snapshot in the background and then detaches the actor from the node.
+	t.Logf("Pausing Actor %q (fourth async suspend)...", actorName)
+	paused4, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
+		Actor:   actorRef,
+		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+	})
+	if err != nil {
+		t.Fatalf("failed to pause Actor a fourth time: %v", err)
+	}
+	pause4 := getLocalSnapshotFromActor(t, paused4.GetActor())
+	t.Run("BackgroundDetach", func(t *testing.T) {
+		e2e.RequireShortSnapshotDelays(t, ctx, maxSnapshotDelay)
+		uploaded4 := waitForSnapshotUploaded(ctx, t, clients, actorName, pause4.uuid)
+		if uploaded4.GetDurableSnapshot().GetObject().GetSnapshotUri() == "" {
+			t.Fatal("uploaded async snapshot has no URI")
+		}
+		waitForActorDetached(ctx, t, clients, actorName, pause4.uuid)
+	})
+
+	// Resuming restores the snapshot from object storage after the detach, or
+	// from its node-local copy when BackgroundDetach is skipped.
+	t.Logf("Resuming Actor %q from fourth async suspend...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{
+		Actor: actorRef,
+	}); err != nil {
+		t.Fatalf("failed to resume Actor after fourth pause: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapi.ActorState_ACTOR_STATE_RUNNING)
+
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor after fourth pause: %v", err)
+	}
+	validateCounterResponse(t, resp, "after fourth pause", 5, 5)
 
 	// Deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)

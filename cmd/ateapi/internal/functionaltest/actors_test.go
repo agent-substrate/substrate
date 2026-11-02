@@ -1408,6 +1408,56 @@ func TestResumeActor_FromAsyncSuspended(t *testing.T) {
 	}
 }
 
+// Resumes an actor suspended asynchronously on node a, after the background
+// upload of its local snapshot finished while node a still holds the local
+// copy, on a pool with an idle worker on node a and an idle worker on node b.
+// The request succeeds (OK). The actor becomes RUNNING on the node a worker,
+// keeping the snapshot local to node a and COMPLETED in object storage. The
+// node a atelet received exactly one Restore, of the local snapshot keeping
+// its memory, and no DetachActor. Node b's atelet received no calls.
+// The resume retries while ate-api catches up.
+func TestResumeActor_FromUploadedAsyncSuspended(t *testing.T) {
+	t.Parallel()
+	h := harness.New(t)
+	as := h.CreateAtespace("team-a")
+	pool := h.CreateWorkerPool("pool1", nil)
+	nodeA := h.Node("a")
+	wA := h.AddWorker(pool, nodeA)
+	tmpl := h.NewTemplate(as, pool)
+	actor := h.AsyncSuspendedActor(as, tmpl)
+	ref := harness.ActorRef(actor)
+	nodeA.FinishUpload(actor)
+	nodeB := h.Node("b")
+	recB := nodeB.Atelet.RecordRPCs()
+	h.AddWorker(pool, nodeB)
+
+	before := h.GetActor(ref)
+	snap := latestSnapshot(t, before)
+	if snap.GetLocality() != nodeA.Name || snap.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
+		t.Fatalf("snapshot before resume = %v, want local to %q and COMPLETED", snap, nodeA.Name)
+	}
+	rec := nodeA.Atelet.RecordRPCs()
+	resp, err := h.ResumeActor(t.Context(), &ateapi.ResumeActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("ResumeActor: %v", err)
+	}
+	want := mutated(before, func(a *ateapi.Actor) {
+		a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+		a.Status.WorkerAssignment = workerAssignment(wA)
+	})
+	if diff := cmp.Diff(want, resp.GetActor(), protocmp.Transform(), ignoreVersion, ignoreCreateUpdateTime); diff != "" {
+		t.Errorf("resumed actor (-want +got):\n%s", diff)
+	}
+	restore := onlyRPC[*ateletpb.RestoreRequest](t, rec)
+	if got, want := restore.GetSnapshot().GetSnapshotUuid(), snap.GetUuid(); got != want {
+		t.Errorf("Restore snapshot = %q, want %q", got, want)
+	}
+	if got := restore.GetSnapshot().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Errorf("Restore fidelity = %v, want MEMORY", got)
+	}
+	assertRPCs(t, recB)
+}
+
 // Resumes an actor suspended asynchronously while the atelet fails the
 // Restore of its local snapshot. The request fails with INTERNAL, and the
 // actor becomes CRASHED with no worker assignment, still assigned to its node.
