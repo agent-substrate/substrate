@@ -160,7 +160,6 @@ func TestShapers_SystemMountDifferences(t *testing.T) {
 		"/dev/pts":    "runsc adds devpts itself.",
 		"/dev/shm":    "runsc's dev filesystem has a 0755 shm directory. microVM mounts a 64MiB tmpfs.",
 		"/dev/mqueue": "runsc mounts nothing. microVM mounts mqueue.",
-		"/run":        "runsc leaves it on the rootfs. microVM mounts a 64MiB tmpfs.",
 	}
 	for _, dir := range guestMaskedDirPaths(runtime.GOARCH) {
 		knownSystemMountDifferences[dir] = "microVM masks it like containerd. runsc's sysfs has an empty /sys/firmware and its procfs has no /proc/acpi."

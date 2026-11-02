@@ -24,7 +24,6 @@ An [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) select
 | Per-container limits (`containers[].resources.limits`) | Accepted in the API, ignored at runtime | Enforced via guest cgroups (`cpuMillicores` floored at 10) |
 | `NET_RAW` capability | Stripped (`runsc` default `--net-raw=false`) | Granted when listed in `securityContext.capabilities.add` |
 | `/dev/shm` | `0755` directory on the `runsc` `dev` filesystem | `64 MiB` `tmpfs` (`mode=1777`) |
-| `/run` | Part of the container rootfs overlay | `64 MiB` `tmpfs` (`mode=0755`) |
 | `/tmp` | `tmpfs` when the image's `/tmp` is missing or empty, otherwise rootfs overlay | Part of the container rootfs overlay |
 | `VOLUMES` and `ROOTFS` snapshot format | `runsc` filesystem checkpoint bundles (`fs/`, `rootfs/`) | Tar archives of the host directories |
 
@@ -65,7 +64,7 @@ See [Container Capabilities](api-guide.md#container-capabilities-securitycontext
 ## System Mounts (`/dev/shm`, `/run`, `/tmp`)
 
 - **gVisor (`gvisor`):** `runsc` mounts its internal `dev` filesystem at `/dev`, where `/dev/shm` is a `0755` directory, so only root can create files there. `/run` lives on the container's rootfs overlay. `runsc` mounts a `tmpfs` (`mode=01777`) at `/tmp` when the image's `/tmp` is missing or empty and no volume is mounted there. Files in `/dev/shm` and in that `/tmp` `tmpfs` live outside the rootfs overlay, so only `MEMORY` snapshots keep them.
-- **MicroVM (`microvm`):** `ateworker-microvm` mounts a `64 MiB` `tmpfs` at `/dev/shm` (`mode=1777`, `nosuid`, `nodev`, `noexec`) and at `/run` (`mode=0755`, `nosuid`, `strictatime`). `/tmp` lives on the container's host-backed rootfs overlay, so `ROOTFS` snapshots keep its files. Files in `/dev/shm` and `/run` live in guest memory, so only `MEMORY` snapshots keep them.
+- **MicroVM (`microvm`):** `ateworker-microvm` mounts a `64 MiB` `tmpfs` at `/dev/shm` (`mode=1777`, `nosuid`, `nodev`, `noexec`). `/run` and `/tmp` live on the container's host-backed rootfs overlay, so `ROOTFS` snapshots keep their files. Files in `/dev/shm` live in guest memory, so only `MEMORY` snapshots keep them.
 
 ## Snapshots (`VOLUMES`, `ROOTFS`, and `MEMORY`)
 
