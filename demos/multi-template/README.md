@@ -19,9 +19,9 @@ or namespace.
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
-- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
+- A Kubernetes cluster with Agent Substrate installed as in the [Quickstart](../../docs/get-started/quickstart.md) or [Operator Install Guide](../../docs/guides/operator-install.md).
+- `atenet-router` configured with `--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client` (`ATE_INGRESS_ALLOWED_SPIFFE_IDS`); see [Ingress to actors](../../docs/guides/operator-install.md#ingress-to-actors).
+- A snapshot location (`SNAPSHOT_LOCATION`, see [Snapshot storage](../../docs/guides/operator-install.md#snapshot-storage)) and image repository (`KO_DOCKER_REPO`, or `ko.dockerRepo` in `--config`) for `ate-setup deploy demo`. On [kind](https://kind.sigs.k8s.io/), `export ATE_INSTALL_KIND=true` configures local defaults (`gs://ate-snapshots/` and `localhost:5001`) automatically.
 
 ## How to Run on Agent Substrate
 
@@ -44,8 +44,7 @@ This command will:
 
 ### 2. Create one actor per template
 
-Each actor goes in its template's atespace — `--template` names the template,
-resolved in the actor's atespace — and their DNS names embed that atespace:
+Each actor goes in its template's atespace (`--template` names the template, resolved in the actor's atespace):
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
@@ -62,7 +61,9 @@ Start a local proxy for each actor:
 
 ```bash
 kubectl ate proxy actor c1 8000:80 -a ate-demo-multi-template-counter &
+PROXY_C1=$!
 kubectl ate proxy actor f1 8001:80 -a ate-demo-multi-template-fspersist &
+PROXY_F1=$!
 ```
 
 ## How to Use
@@ -72,7 +73,7 @@ When you send an HTTP request through the proxy, `atenet-router` automatically a
 ```bash
 # counter binary
 curl -s http://localhost:8000
-# -> preserved memory count: 1
+# -> preserved memory count: 1 | preserved file counter: 1 | preserved rootfs counter: 1
 
 # fspersist binary
 curl -s http://localhost:8001
@@ -87,9 +88,7 @@ Confirm both actors landed on workers in the one `shared-pool`:
 kubectl ate get workers
 ```
 
-The `counter` increments its in-memory count on each request, while `fspersist` prepends
-a line to its history file on each request. Suspending and re-requesting an actor
-preserves that state across the snapshot/restore cycle:
+The `counter` actor increments its in-memory, durable-volume (`/home/counter/a.txt`), and rootfs (`/rootfs-counter.txt`) counters on each request, while `fspersist` prepends a line to its history file on each request. Suspending and re-requesting an actor preserves that state across the snapshot/restore cycle:
 
 ```bash
 kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
@@ -98,9 +97,9 @@ curl -s http://localhost:8001  # history persists; count keeps climbing
 
 ## How to Uninstall
 
-Remove the demo — this deletes the actors (suspending running ones first), the
-templates, both atespaces, and then the pool and its namespace:
+Stop the background proxy processes and remove the demo. This deletes the actors, the templates, both atespaces, and then the pool and its namespace:
 
 ```bash
+kill "$PROXY_C1" "$PROXY_F1"
 go run ./cmd/ate-setup delete demo multi-template
 ```
