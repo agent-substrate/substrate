@@ -66,7 +66,7 @@ It takes the Kubernetes control-plane out of the critical path to achieve lower 
 Agent Substrate relies on the fact that agent-like applications tend to be idle most of the time to achieve heavy multiplexing.
 
 For development, it's recommended to read the `README.md` and `CONTRIBUTING.md` in the root folder.
-See `cmd/ate-setup` and `tools/setup-gcp` for provisioning and deploying clusters and GCP resources.
+See `cmd/ate-setup` for deploying clusters. GCP resources are provisioned with `tools/setup-gcp` in [substrate-gke](https://github.com/ai-on-gke/substrate-gke).
 
 ## Repository Layout
 
@@ -156,7 +156,7 @@ See the [metric registry](docs/guides/observability.md#the-metric-registry) sect
 1. Write tests for new behavior. Update tests when you change existing behavior. Consider the value of tests for future changes.
 2. Ensure changes do not break existing tests.
 3. Run `go test -race ./...` and `hack/verify-all.sh` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
-4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
+4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (on GKE, set up with `tools/setup-gcp` in [substrate-gke](https://github.com/ai-on-gke/substrate-gke)).
 5. A test that skips when a precondition is missing (Docker, a cluster, an artifact directory) must **fail** on it in CI, because a skip and a pass are the same exit code. Check for CI with a named predicate like `cmd/ateapi/internal/store/dockerenv.Required()` instead of an inline `os.Getenv("CI")`. Make sure the CI branch actually fails before merging. See `docs/dev/best-practices/ci-fail-closed.md`.
 
 ## Security Considerations
