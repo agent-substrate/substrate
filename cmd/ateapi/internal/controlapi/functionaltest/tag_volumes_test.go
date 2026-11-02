@@ -58,7 +58,8 @@ func tagVolumeHandles(tag *ateapi.Tag) map[string]string {
 }
 
 // TestCreateTag_CapturesVolumes verifies that a tag taken with external volumes
-// snapshots each of them and records the handles.
+// snapshots each of them and records the handles, and that the tag can then be
+// deleted.
 func TestCreateTag_CapturesVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-tag-capture-volumes")
 	tc, workerName := setupTagVolumesTest(t, ns)
@@ -83,6 +84,15 @@ func TestCreateTag_CapturesVolumes(t *testing.T) {
 	}
 	if got, want := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetState(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED; got != want {
 		t.Errorf("tag snapshot status = %v, want %v", got, want)
+	}
+
+	tagRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "with-volumes"}
+	if _, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("DeleteTag failed: %v", err)
+	}
+	_, err = tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetTag() after DeleteTag = %v, want NotFound", err)
 	}
 }
 

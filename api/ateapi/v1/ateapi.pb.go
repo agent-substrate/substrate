@@ -756,9 +756,7 @@ type Snapshot struct {
 	// storage_snapshot_id is filled in once the snapshot handles come back, so
 	// an entry with an empty storage_snapshot_id names a snapshot that did not
 	// finish or whose handle was never recorded.
-	// Actors seeded from a Tag provision their own volumes from these, so the
-	// entries are handles to copy from, not volumes to attach. Each template
-	// volume appears at most once.
+	// Each template volume appears at most once.
 	//
 	// +ate:preview=ExternalVolumes
 	// +k8s:optional
@@ -864,21 +862,16 @@ func (x *Snapshot) GetVolumeSnapshots() []*ExternalVolumeSnapshot {
 }
 
 // ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
-// by the tag Snapshot that captured it. Volumes restored from it are new
-// volumes with their own IDs: the snapshot is never attached directly, so many
-// Actors can be seeded from one snapshot without sharing storage.
+// by the tag Snapshot that captured it.
 type ExternalVolumeSnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// source_volume_name is the template volume this was captured from,
-	// matching the ExternalVolumeStatus of the same name on the source Actor. A
-	// restored volume keeps the name and takes a new storage_volume_id, which is
-	// what lets the attach and mount paths stay unaware of snapshots entirely.
+	// matching the ExternalVolumeStatus of the same name on the source Actor.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	// +k8s:update=NoModify
-	// +k8s:update=NoUnset # set-once; immutable would reject the create
-	// ratchet's nil->set when the final object is validated as an update
+	// +k8s:update=NoUnset # set-once
 	SourceVolumeName string `protobuf:"bytes,1,opt,name=source_volume_name,json=sourceVolumeName,proto3" json:"source_volume_name,omitempty"`
 	// storage_snapshot_id is the snapshot handle returned by the storage system.
 	// Empty until the storage system returns the handle, and set once. An entry
@@ -895,8 +888,8 @@ type ExternalVolumeSnapshot struct {
 	// +k8s:customValidation # no control characters
 	StorageSnapshotId string `protobuf:"bytes,2,opt,name=storage_snapshot_id,json=storageSnapshotId,proto3" json:"storage_snapshot_id,omitempty"`
 	// volume_type is the plugin or CSI driver that took the snapshot, copied
-	// from the source ExternalVolumeStatus. A restore must go through the same driver:
-	// a snapshot handle means nothing to any other one.
+	// from the source ExternalVolumeStatus. The snapshot handle is only
+	// meaningful to that driver.
 	//
 	// +k8s:required
 	// +k8s:maxLength=253
@@ -905,11 +898,8 @@ type ExternalVolumeSnapshot struct {
 	// +k8s:customValidation
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// ready_to_use is whether the storage system had finished the snapshot when
-	// it was last observed. False is not a failure: drivers may return a usable
-	// handle while the copy proceeds in the background, and tag creation does not
-	// wait for it. Restore checks readiness again at that point, so this records
-	// what was seen rather than a durable property, and is per-volume so a
-	// lagging volume can be named.
+	// the tag recorded it. Drivers may return a usable handle while the copy
+	// continues in the background, and tag creation does not wait for it.
 	//
 	// +k8s:optional
 	ReadyToUse bool `protobuf:"varint,4,opt,name=ready_to_use,json=readyToUse,proto3" json:"ready_to_use,omitempty"`
@@ -6318,10 +6308,8 @@ type ExternalVolumeSelection struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// names limits the capture to these external volumes of the source Actor,
 	// named as in its ActorTemplate. Empty captures every external volume. A
-	// name the Actor has no external volume for fails the call.
-	//
-	// Volumes left out are not recorded on the tag, and an Actor created from
-	// it gets them provisioned empty.
+	// name the Actor has no external volume for fails the call. Volumes left
+	// out are not recorded on the tag.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the template's volumes bound

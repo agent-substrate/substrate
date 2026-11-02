@@ -129,9 +129,8 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, e
 // none when sel is unset, then the ones it names, or all of them when it names
 // none. The result keeps the actor's volume order.
 //
-// All volumes means status.external_volumes rather than the mounted subset: a
-// template may declare a volume no container mounts, and leaving it out would
-// produce a tag missing a volume.
+// All volumes means every entry in status.external_volumes, including volumes
+// no container mounts. Leaving those out would produce a tag missing a volume.
 func selectTagVolumes(actor *ateapi.Actor, sel *ateapi.ExternalVolumeSelection) ([]*ateapi.ExternalVolumeStatus, error) {
 	if sel == nil {
 		return nil, nil
@@ -320,17 +319,34 @@ func (w *ActorWorkflow) ensureTagVolumeSnapshotsReleased(ctx context.Context, ta
 // the storage system cut whose handle a failed or crashed create never wrote
 // back. CreateSnapshot is idempotent on the snapshot name and source volume, so
 // issuing the create's request again returns the handle of a snapshot that
-// exists. When none does, this cuts one that the caller then deletes.
+// exists. When none does, this cuts one that the caller then deletes. That
+// snapshot is of the volume as it is now, which may be attached if the source
+// Actor has resumed, and it counts against the storage system's quota until
+// it is deleted.
 //
-// The storage system cannot look a snapshot up by name alone, so once the
-// source volume is gone a snapshot cut from it can no longer be found. That
-// snapshot is leaked: it is logged and skipped, returning nil, so the tag can
-// still be deleted.
+// It returns nil, nil to skip the entry when there is nothing to recover:
+//   - The driver lacks CREATE_DELETE_SNAPSHOT, so it never cut a snapshot.
+//   - CreateSnapshot fails with a terminal code, so retrying cannot recover
+//     the handle. NotFound is one such code: the storage system cannot look a
+//     snapshot up by name alone, so once the source volume is gone a snapshot
+//     cut from it can no longer be found.
+//
+// A snapshot skipped on a terminal error may be leaked. It is logged, and the
+// tag can still be deleted. Only a transient error keeps the row for a retry.
 func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, tagUID string, snap *ateapi.ExternalVolumeSnapshot) (*ateapi.ExternalVolumeSnapshot, error) {
 	volName := snap.GetSourceVolumeName()
 	plugin, err := w.pluginRegistry.GetPlugin(ctx, snap.GetVolumeType())
 	if err != nil {
 		return nil, fmt.Errorf("while getting volume plugin for driver %q: %w", snap.GetVolumeType(), err)
+	}
+	caps, err := plugin.ControllerCapabilities(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("while reading capabilities of driver %q: %w", snap.GetVolumeType(), err)
+	}
+	if !caps.CreateDeleteSnapshot {
+		slog.InfoContext(ctx, "driver does not support snapshots, so it holds no volume snapshot to recover",
+			slog.String("driver", snap.GetVolumeType()), slog.String("source_volume_name", volName))
+		return nil, nil
 	}
 	name := tagVolumeSnapshotID(tagUID, volName)
 	got, err := plugin.CreateSnapshot(ctx, volume.CreateSnapshotRequest{
@@ -338,9 +354,10 @@ func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, tagUID 
 		SourceVolumeID: snap.GetSourceVolumeId(),
 	})
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			slog.WarnContext(ctx, "source volume is gone, so a volume snapshot the tag never recorded cannot be found; it may be leaked",
-				slog.String("snapshot_name", name), slog.String("source_volume_id", snap.GetSourceVolumeId()), slog.Any("error", err))
+		if !transientSnapshotError(err) {
+			slog.WarnContext(ctx, "cannot recover a volume snapshot the tag never recorded; it may be leaked",
+				slog.String("snapshot_name", name), slog.String("source_volume_id", snap.GetSourceVolumeId()),
+				slog.String("code", status.Code(err).String()), slog.Any("error", err))
 			return nil, nil
 		}
 		return nil, fmt.Errorf("while recovering the snapshot of volume %q: %w", volName, err)
@@ -354,6 +371,17 @@ func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, tagUID 
 		StorageSnapshotId: got.SnapshotID,
 		VolumeType:        snap.GetVolumeType(),
 	}, nil
+}
+
+// transientSnapshotError reports whether a failed CreateSnapshot may succeed on
+// a retry. An error without a gRPC status has code Unknown and counts as
+// transient.
+func transientSnapshotError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.Unknown, codes.Internal:
+		return true
+	}
+	return false
 }
 
 // finalizeTagDeleted drops the row, once nothing it names is left behind.
@@ -678,8 +706,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 // It does not wait for the storage system to finish copying. A driver may
 // return a handle with ready_to_use false and finish in the background, and
 // blocking here would put an unbounded storage operation inside a synchronous
-// RPC. Readiness is checked instead when an Actor seeded from the tag
-// provisions its volumes, which is the first point the data is actually needed.
+// RPC.
 //
 // No quiesce step is required. A SUSPENDED actor has already had its volumes
 // unmounted by atelet and detached by the control plane, so the filesystem is
@@ -702,7 +729,9 @@ func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *at
 
 	// Siblings are not canceled when one fails: a canceled call may still
 	// have cut a snapshot whose handle would never come back, so each runs to
-	// completion and reports its result.
+	// completion and reports its result. Losing a lease does cancel ctx. A
+	// driver may still cut the snapshot after that, and if DeleteTag has
+	// dropped the row by then, the snapshot is leaked.
 	snaps := make([]volume.Snapshot, len(volumes))
 	snapErrs := make([]error, len(volumes))
 	var wg sync.WaitGroup
@@ -733,14 +762,48 @@ func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *at
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("while recording the volume snapshots on tag %s: %w", tagRef, err)
+			return nil, tagCreateUpdateError(tagRef, err, "recording the volume snapshots on")
 		}
 		tag = updated
 	}
 	if err := errors.Join(snapErrs...); err != nil {
-		return nil, apierror.Internal("%v", err)
+		return nil, volumeSnapshotError(tagRef, err)
 	}
 	return tag, nil
+}
+
+// volumeSnapshotError maps a failed volume snapshot to the error the create
+// fails with, based on the code of the first failure that carries one.
+//
+// The failure leaves the tag pending, so a plain retry of the create fails
+// with AlreadyExists. Transient driver codes therefore become Aborted rather
+// than Unavailable, which client retry policies commonly retry on their own,
+// and every message says to delete the tag first.
+func volumeSnapshotError(tagRef resources.TagRef, err error) error {
+	const format = "%v; delete Tag %s and create it again"
+	switch status.Code(err) {
+	case codes.ResourceExhausted:
+		return apierror.ResourceExhausted(format, err, tagRef)
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted:
+		return apierror.Aborted(format, err, tagRef)
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.NotFound:
+		return apierror.FailedPrecondition(format, err, tagRef)
+	}
+	return apierror.Internal(format, err, tagRef)
+}
+
+// tagCreateUpdateError maps an UpdateTag error from a step of the create,
+// like ensureTagSnapshotRecorded does. A version conflict leaves the tag
+// pending, so the caller must delete it before creating it again. A tag that
+// is gone can be created again directly.
+func tagCreateUpdateError(tagRef resources.TagRef, err error, action string) error {
+	if errors.Is(err, store.ErrVersionConflict) {
+		return apierror.Aborted("concurrent update conflict; delete Tag %s and create it again", tagRef)
+	}
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
+		return apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
+	}
+	return fmt.Errorf("while %s tag %s: %w", action, tagRef, err)
 }
 
 // createTagVolumeSnapshot snapshots one volume under the name the tag derives
@@ -792,10 +855,9 @@ func (w *ActorWorkflow) tagVolumeSnapshotPlugins(ctx context.Context, actor *ate
 }
 
 // recordTagVolumeSnapshots records on the pending tag the volumes it is about
-// to capture, each with its source volume ID and without a handle yet.
-// Recording them before any snapshot is taken is what lets a reader tell "not
-// requested" (no entry) from "requested and not finished" (an entry without a
-// handle), and what lets DeleteTag recover a handle that never got recorded.
+// to capture, each with its source volume ID and without a handle yet. An
+// entry without a handle tells a reader the volume was requested and did not
+// finish, and gives DeleteTag what it needs to recover the handle.
 func (w *ActorWorkflow) recordTagVolumeSnapshots(ctx context.Context, tag *ateapi.Tag, volumes []*ateapi.ExternalVolumeStatus) (*ateapi.Tag, error) {
 	tagRef := resources.TagRefFromTag(tag)
 	entries := make([]*ateapi.ExternalVolumeSnapshot, 0, len(volumes))
@@ -818,7 +880,7 @@ func (w *ActorWorkflow) recordTagVolumeSnapshots(ctx context.Context, tag *ateap
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("while recording the volumes to snapshot on tag %s: %w", tagRef, err)
+		return nil, tagCreateUpdateError(tagRef, err, "recording the volumes to snapshot on")
 	}
 	return updated, nil
 }

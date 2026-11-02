@@ -207,9 +207,9 @@ func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
 }
 
-// tagVolumeSnapshotID names the snapshot a tag takes of one volume. It is
-// derived from the tag's UID rather than its name so that a second create under
-// a reused name cannot land on the first one's snapshots.
+// tagVolumeSnapshotID names the snapshot a tag takes of one volume. It uses the
+// tag's UID so that a second create under a reused tag name gets new snapshot
+// names.
 func tagVolumeSnapshotID(tagUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-snap-%s-%s", tagUID, volumeName)
 }

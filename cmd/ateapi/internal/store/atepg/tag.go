@@ -190,10 +190,11 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 }
 
 // validateUpdateTagSnapshotMutation enforces that status.snapshot is immutable
-// once COMPLETED. While it is PENDING, durable_snapshot may move to COMPLETED,
-// volume_snapshots may be recorded once, and each recorded entry's
-// storage_snapshot_id, ready_to_use and size_bytes may be filled in once.
-// Nothing else may change.
+// once COMPLETED. While it is PENDING, durable_snapshot may move to COMPLETED
+// and volume_snapshots may be recorded once. After that, the list's length and
+// each entry's source_volume_name, source_volume_id and volume_type are fixed.
+// An entry's other fields may change until its storage_snapshot_id is set, and
+// then the entry is fixed too. Nothing else may change.
 func validateUpdateTagSnapshotMutation(stored, mutated *ateapi.Snapshot) error {
 	if stored == nil || proto.Equal(stored, mutated) {
 		return nil
