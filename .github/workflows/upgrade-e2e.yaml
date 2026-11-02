@@ -112,17 +112,25 @@ jobs:
       working-directory: new
       run: hack/create-kind-cluster.sh
     - name: Install ${{ steps.from.outputs.tag }}
-      if: steps.from.outputs.tag != '' && matrix.sandbox == 'gvisor'
+      if: >-
+        steps.from.outputs.tag != ''
+        && (matrix.sandbox == 'gvisor' || hashFiles('old/hack/run-microvm-demo-kind.sh') == '')
       # The old release's own installer, so the cluster starts out exactly as
-      # that release left it. The suite's actors run on the counter demo.
+      # that release left it. deploy ate-system also installs the microVM
+      # dependencies. The suite's actors run on the counter demo of the class.
       working-directory: old
+      env:
+        DEMO: ${{ matrix.sandbox == 'microvm' && 'counter-microvm' || 'counter' }}
       run: |
         go run ./cmd/ate-setup --kind deploy ate-system
-        go run ./cmd/ate-setup --kind deploy demo counter
+        go run ./cmd/ate-setup --kind deploy demo "${DEMO}"
     - name: Install ${{ steps.from.outputs.tag }} with microVM
-      if: steps.from.outputs.tag != '' && matrix.sandbox == 'microvm'
-      # The old release's own script installs the control plane, its microVM
-      # dependencies and the counter-microvm demo.
+      if: >-
+        steps.from.outputs.tag != '' && matrix.sandbox == 'microvm'
+        && hashFiles('old/hack/run-microvm-demo-kind.sh') != ''
+      # Releases from before deploy ate-system installed the microVM
+      # dependencies install them, the control plane and counter-microvm with
+      # this script.
       working-directory: old
       run: hack/run-microvm-demo-kind.sh
     - name: Upgrade to ${{ github.ref_name }}
