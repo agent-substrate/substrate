@@ -68,40 +68,33 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 			name:   "external issuer needs no discovery credentials",
 			issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c",
 			want: "jwtProviders:\n" +
-				"- audiences:\n" +
-				"  - api.ate-system.svc\n" +
+				"- name: kubernetes\n" +
 				"  issuer: https://container.googleapis.com/v1/projects/p/locations/l/clusters/c\n" +
-				"  name: kubernetes",
+				"  audiences: [api.ate-system.svc]",
 		},
 		{
 			name:   "in-cluster issuer projects the service account CA and token",
 			issuer: inClusterIssuer,
 			want: "jwtProviders:\n" +
-				"- audiences:\n" +
-				"  - api.ate-system.svc\n" +
-				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n" +
+				"- name: kubernetes\n" +
 				"  issuer: https://kubernetes.default.svc\n" +
-				"  name: kubernetes",
+				"  audiences: [api.ate-system.svc]\n" +
+				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
+				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token",
 		},
 		{
 			name:   "cluster.local form is treated as in-cluster too",
 			issuer: inClusterIssuer + ".cluster.local",
 			want: "jwtProviders:\n" +
-				"- audiences:\n" +
-				"  - api.ate-system.svc\n" +
-				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
-				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n" +
+				"- name: kubernetes\n" +
 				"  issuer: https://kubernetes.default.svc.cluster.local\n" +
-				"  name: kubernetes",
+				"  audiences: [api.ate-system.svc]\n" +
+				"  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
+				"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildAuthenticationConfig(tc.issuer)
-			if err != nil {
-				t.Fatalf("buildAuthenticationConfig(%q) error = %v", tc.issuer, err)
-			}
-			if got != tc.want {
+			if got := buildAuthenticationConfig(tc.issuer); got != tc.want {
 				t.Errorf("buildAuthenticationConfig(%q) =\n%q\nwant\n%q", tc.issuer, got, tc.want)
 			}
 		})
@@ -202,13 +195,16 @@ func TestNewJWTPoolSecretData(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newJWTPoolSecretData() error = %v", err)
 			}
-			if diff := cmp.Diff([]string{"pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
+			if diff := cmp.Diff([]string{"jwks", "pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
 				t.Errorf("secret keys differ (-want +got):\n%s", diff)
 			}
 
 			pool, err := localjwtauthority.Unmarshal(data["pool"])
 			if err != nil {
 				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if jwks, err := pool.JWKS(); err != nil || !bytes.Equal(jwks, data["jwks"]) {
+				t.Errorf("jwks = %s, want the pool's public keys (%v)", data["jwks"], err)
 			}
 			if len(pool.Authorities) != 1 {
 				t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
@@ -263,19 +259,23 @@ func TestEnsurePodCertificateCAs(t *testing.T) {
 	}
 }
 
-// TestCreateJWTPoolKeepsExistingPool checks that an existing pool Secret is
-// left as it is, including a "jwks" key that earlier versions wrote.
-func TestCreateJWTPoolKeepsExistingPool(t *testing.T) {
+func TestCreateJWTPoolPublishesKeysOfExistingPool(t *testing.T) {
 	poolBytes, _, err := localjwtauthority.GeneratePool("ES256", "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantJWKS, err := localjwtauthority.PublicJWKS(poolBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
-		name string
-		data map[string][]byte
+		name        string
+		data        map[string][]byte
+		wantUpdates int
 	}{
-		{"pool", map[string][]byte{"pool": poolBytes}},
-		{"pool with a stale jwks", map[string][]byte{"pool": poolBytes, "jwks": []byte(`{"keys":[]}`)}},
+		{"pool from before jwks", map[string][]byte{"pool": poolBytes}, 1},
+		{"pool with a stale jwks", map[string][]byte{"pool": poolBytes, "jwks": []byte(`{"keys":[]}`)}, 1},
+		{"pool with jwks", map[string][]byte{"pool": poolBytes, "jwks": wantJWKS}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			kc := fake.NewSimpleClientset(&corev1.Secret{
@@ -295,11 +295,11 @@ func TestCreateJWTPoolKeepsExistingPool(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(tc.data, got.Data); diff != "" {
-				t.Errorf("secret data differs (-want +got):\n%s", diff)
+			if !bytes.Equal(got.Data["pool"], poolBytes) || !bytes.Equal(got.Data["jwks"], wantJWKS) {
+				t.Errorf("secret data = %v keys, want the same pool and its jwks", slices.Sorted(maps.Keys(got.Data)))
 			}
-			if updates != 0 {
-				t.Errorf("updates = %d, want 0", updates)
+			if updates != tc.wantUpdates {
+				t.Errorf("updates = %d, want %d", updates, tc.wantUpdates)
 			}
 		})
 	}

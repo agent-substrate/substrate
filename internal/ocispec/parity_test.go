@@ -96,16 +96,6 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 					t.Errorf("mount %q has no source after shaping", dest)
 				}
 			}
-			// Both runtimes keep the tmpfs mounts at /dev/shm and /tmp.
-			for _, dest := range []string{"/dev/shm", "/tmp"} {
-				if m := mountFor(t, spec, dest); m.Type != "tmpfs" {
-					t.Errorf("%s type = %q after shaping, want tmpfs", dest, m.Type)
-				}
-			}
-			// Neither mounts anything at /run, so the image's /run shows through.
-			if slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/run" }) {
-				t.Errorf("a mount at /run after shaping; mounts=%v", spec.Mounts)
-			}
 			// Neither shaper overrides the hostname.
 			if spec.Hostname != "actor" {
 				t.Errorf("hostname = %q, want actor", spec.Hostname)
@@ -156,30 +146,25 @@ func TestShapers_PreserveProcess(t *testing.T) {
 	}
 }
 
-// ShapeMicroVM rewrites bind sources to their guest share paths and switches
-// bind to rbind.
+// ShapeMicroVM rewrites bind sources to their guest share paths.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
-	for _, tc := range []struct {
-		dest       string
-		wantSource string
-		wantOpts   []string
-	}{
-		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data", []string{"rbind", "rw"}},
-		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo", []string{"rbind", "ro"}},
-		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi", []string{"rbind", "rw"}},
-		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent", []string{"rbind", "ro"}},
+	for _, tc := range []struct{ dest, wantSource string }{
+		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data"},
+		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo"},
+		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi"},
+		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent"},
 	} {
-		m := mountFor(t, spec, tc.dest)
-		if m.Source != tc.wantSource {
-			t.Errorf("%s source = %q, want %q", tc.dest, m.Source, tc.wantSource)
+		if got := mountFor(t, spec, tc.dest).Source; got != tc.wantSource {
+			t.Errorf("%s source = %q, want %q", tc.dest, got, tc.wantSource)
 		}
-		if !slices.Equal(m.Options, tc.wantOpts) {
-			t.Errorf("%s options = %v, want %v", tc.dest, m.Options, tc.wantOpts)
-		}
+	}
+	// Guest system mounts replace the host's.
+	if got := mountFor(t, spec, "/dev/shm").Source; got != "shm" {
+		t.Errorf("/dev/shm source = %q, want the guest system mount", got)
 	}
 }
 
@@ -192,19 +177,15 @@ func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	}
 }
 
-// Shaping a spec twice leaves its mounts and options unchanged.
+// Shaping a spec twice does not accumulate mounts.
 func TestShapeGVisor_Idempotent(t *testing.T) {
 	spec := Build(parityOptions)
 	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: "app", Size: paritySize}
 	ShapeGVisor(spec, o)
-	first := make([]specs.Mount, len(spec.Mounts))
-	for i, m := range spec.Mounts {
-		m.Options = slices.Clone(m.Options)
-		first[i] = m
-	}
+	first := len(spec.Mounts)
 	ShapeGVisor(spec, o)
-	if !reflect.DeepEqual(spec.Mounts, first) {
-		t.Errorf("Mounts after a second shaping =\n%+v\nwant\n%+v", spec.Mounts, first)
+	if len(spec.Mounts) != first {
+		t.Errorf("mount count = %d after a second shaping, want %d", len(spec.Mounts), first)
 	}
 }
 

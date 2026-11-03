@@ -49,8 +49,9 @@ func dropStagedMemoryImage(ctx context.Context, restoreDir string) {
 }
 
 // dropActorSnapshotCacheAsync pins the actor's snapshot files in restoreDir
-// while the caller holds the actor lock, then evicts their clean pages from the
-// host page cache in the background.
+// while the caller holds the actor lock, then evicts them from the host page
+// cache in the background, once they are on disk. A snapshot taken moments ago
+// is still being written back.
 func dropActorSnapshotCacheAsync(restoreDir string, includeMemory bool) {
 	targets := snapshotcache.FindFiles(restoreDir, func(name string) bool {
 		return isSnapshotDataFile(name, includeMemory)
@@ -58,5 +59,5 @@ func dropActorSnapshotCacheAsync(restoreDir string, includeMemory bool) {
 	if len(targets) == 0 {
 		return
 	}
-	go snapshotcache.EvictWithRetries(targets)
+	go snapshotcache.SyncAndEvict(targets)
 }

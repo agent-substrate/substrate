@@ -4,6 +4,9 @@ linkTitle: "Architecture"
 weight: 1
 description: >
   The components of Agent Substrate and how actors, workers, and the control plane interact.
+status: planned
+status_note: >
+  Much of this architecture is aspirational and not yet implemented.
 ---
 # Agent Substrate Architecture
 
@@ -66,33 +69,45 @@ inspect network traffic.  Agent Substrate includes a lightweight,
 substrate-aware network proxy which can inspect incoming traffic and trigger
 the resumption of actors as needed.
 
-### Trade-offs and Design Considerations
+### New Problems
 
 Of course, there's no such thing as a free lunch, and these approaches have
 trade-offs.
 
 First, we trade one problem (many idle Pods consuming resources) for another.
-Doing suspend and resume at this scale introduces a large data management
+Doing suspend and resume at this scale introduces a vast data management
 problem.  We need to store the state of millions of actors, which can update
-frequently.  Agent Substrate balances fast local reactivation against durable
-remote storage: `atelet` keeps a node-local copy of an actor's latest snapshot
-after suspend so subsequent resumes on that node avoid an object-store
-round-trip, but local copies are ephemeral (held only until
-`--snapshot-detach-delay`) and asynchronous suspends risk state loss if the node
-fails before background upload completes (see [Actor Lifecycle](#actor-lifecycle)).
+many times per second.  Agent Substrate will need to consider data locality as
+a first-class concern.  When an event comes in, we need to know where the
+actor's most recent state is stored, and either route the event to that
+location or move the state to where the event can be serviced.
 
-Second, a specialized control plane must integrate cleanly with Kubernetes
-while enforcing its own security boundaries.  `ate-api-server` authenticates
-callers via mTLS and OIDC and authorizes every RPC per atespace with an embedded
-OpenFGA model, while `atecontroller` reconciles declarative `WorkerPool` CRDs
-into Kubernetes Deployments.
+In addition to that, we must acknowledge that building a new production-grade
+control-plane component is a non-trivial effort.  It will need to be highly
+available, secure, and performant, and it will need to integrate well with
+Kubernetes.
 
-Third, with actors multiplexed onto and off of workers, operators need
-actor-level and pool-level visibility.  Agent Substrate emits OpenTelemetry
-metrics, structured logs, and lifecycle events across its components so
-operators can monitor worker capacity, track suspend/resume latency, and
-correlate activity across an actor's lifetime through container logs (see the
-[Observability](../guides/observability.md) guide).
+Another problem to consider is observability and debugging.  With actors being
+multiplexed onto and off of workers all the time, it will be more difficult to
+understand what is happening. Agent Substrate will need to provide robust
+tooling for monitoring and debugging actors, including the ability to thread
+together metrics and logs for an actor over time, to inspect the state of
+suspended actors, and to trace the events that lead to their current state.
+
+### Problems We Haven't Addressed Yet
+
+As early as this project is, there are several problems that we haven't even
+started to tackle yet, but which we know will need to be solved eventually.
+
+  * Autoscaling: We will need to be able to automatically scale the number of workers up
+    and down based on demand.  Kubernetes Pod autoscaling may be sufficient or
+    it might not.
+  * Peer to peer state sharing: Relying on data locality presents a risk of
+    data loss.  We probably need some form of state-sharing to protect against
+    that, which needs to be balanced with saving state to a "permanent" store.
+  * Identity and policy: We know that agents' needs for identity are very
+    different than traditional workload identity and end-user credentials.
+  * There are certainly more that we haven't thought of yet!
 
 ## North Star Metrics
 
@@ -348,7 +363,7 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClasses[].name`), and e
 
 ### Networking Stack (`atenet` + `atunnel`)
 
-Handles actor-aware ingress routing, on-demand resumption, and policy-enforced egress.
+Handles actor-aware routing and automatic re-animation.
 
   * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
     processor. A higher-order system connects to the router and supplies the
@@ -374,14 +389,7 @@ Handles actor-aware ingress routing, on-demand resumption, and policy-enforced e
     HTTP(S) traffic over the tunnel is supported today; raw TCP or other
     non-HTTP protocols on a non-default port are not yet reachable this way.
 
-  * **Egress Filtering and Credential Injection**: Outbound traffic from an
-    Actor is tunneled through `atunnel` to `atenet-egress`, which enforces
-    destination policy and resolves credential replacement effects without
-    placing ambient secrets in the sandbox (see the
-    [Network Egress Contract](../guides/network-egress.md) and
-    [Egress Credential Injection](../guides/egress-credential-injection.md)).
-
-  * **Latency**: The data plane is optimized for low-latency activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
+  * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
 ### System Infra Isolation
 
@@ -546,7 +554,43 @@ Snapshots are stored durably in object storage (GCS or S3) through `objectstore-
 
 ## Security & Isolation
 
-See the [Security Overview](../security/security.md) and
-[Threat Model](../security/threat-model.md) for how Agent Substrate isolates
-workloads, authenticates and authorizes callers, and enforces network and
-credential boundaries.
+Agent Substrate is built on a **Defense-in-Depth** model:
+
+  * **Sandboxed Execution**: Every actor runs inside a hardened kernel-space
+    isolation layer (e.g. gVisor), preventing container escapes.
+
+  * **Actor Identity**: Every interaction is powered by a unique, Agent
+    Substrate-managed identity that is independent of the underlying hardware.
+    This ensures that actors maintain their own granular permissions and
+    security context even as they migrate across physical nodes or code
+    versions.
+
+  * **API Authorization**: Every `ate-api-server` RPC is authorized. Users
+    and automation get owner, editor, or viewer roles on the global scope or
+    on an atespace through AccessPolicy (`kubectl ate access-policy`), and
+    Substrate's components hold fixed system roles bound to their pod
+    certificates. The atespace is the finest boundary today. See
+    [authorization.md](../guides/authorization.md) for the roles, the check behind each
+    RPC, and known gaps.
+
+  * **Ingress Authentication and Routing**: The gateway routes each request to
+    the actor its `ate-target-actor` header names, and only to recognized,
+    registered actors. It accepts only mTLS clients whose SPIFFE ID is on a
+    static allowlist; any listed client may reach any actor, as per-actor
+    ingress authorization is not yet supported.
+    The installer takes that allowlist from `--ingress-allowed-spiffe-ids`
+    (`ATE_INGRESS_ALLOWED_SPIFFE_IDS` or `ingressAllowedSPIFFEIDs` in its config).
+    Both dataplanes must verify the client certificate against the Pod Identity
+    CA during the TLS handshake on both HTTPS and TLS CONNECT listeners.
+    The SPIFFE URI SAN allowlist may be checked during or after TLS, but an
+    unlisted client must not reach actor routing. A CONNECT tunnel may be
+    accepted before that check, but traffic inside it must still be denied.
+    Neither dataplane serves plaintext ingress listeners.
+
+  * **Network Policy**: Agent Substrate leverages standard Kubernetes
+    NetworkPolicy for connectivity control. Policies can be applied at the
+    `WorkerPool` boundary to restrict ingress/egress traffic for all actors
+    hosted within that pool.
+
+  * **mTLS Everywhere**: All internal system communication (e.g., Control Plane
+    to Atelet) is secured via mutual TLS with short-lived certificates.

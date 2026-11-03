@@ -91,51 +91,6 @@ func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template
 	return nil
 }
 
-// CreateActor creates an actor from template through the ate API, leaving an
-// existing actor in place so re-running deploy is idempotent.
-func CreateActor(ctx context.Context, client *ateclient.Client, actor resources.ActorRef, template resources.ActorTemplateRef) error {
-	_, err := client.CreateActor(ctx, &ateapi.CreateActorRequest{
-		Actor: &ateapi.Actor{
-			Metadata: &ateapi.ResourceMetadata{
-				Atespace: actor.Atespace,
-				Name:     actor.Name,
-			},
-			ActorTemplate: template.ToObjectRef(),
-		},
-	})
-	if status.Code(err) == codes.AlreadyExists {
-		log.Stepf("actor %s already exists; keeping it", actor)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("creating actor %s: %w", actor, err)
-	}
-	return nil
-}
-
-// CreateActorEgressPolicy gives actor an egress policy with rules, leaving an
-// existing policy in place so re-running deploy is idempotent.
-func CreateActorEgressPolicy(ctx context.Context, client *ateclient.Client, actor resources.ActorRef, rules []*ateapi.EgressRule) error {
-	_, err := client.CreateActorEgressPolicy(ctx, &ateapi.CreateActorEgressPolicyRequest{
-		Actor: actor.ToObjectRef(),
-		EgressPolicy: &ateapi.EgressPolicy{
-			Metadata: &ateapi.ResourceMetadata{
-				Atespace: actor.Atespace,
-				Name:     resources.SingletonName,
-			},
-			Rules: rules,
-		},
-	})
-	if status.Code(err) == codes.AlreadyExists {
-		log.Stepf("egress policy for actor %s already exists; keeping it", actor)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("creating egress policy for actor %s: %w", actor, err)
-	}
-	return nil
-}
-
 // WaitActorTemplateGolden blocks until the template's golden snapshot is
 // built. It fails fast when the template reconciler reports an error, and
 // returns immediately for a template that opted out of the golden snapshot.

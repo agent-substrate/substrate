@@ -22,7 +22,6 @@ package actorauthz
 import (
 	"context"
 	"errors"
-	"net/http"
 	"slices"
 	"time"
 
@@ -54,13 +53,6 @@ type Verifier interface {
 	Verify(ctx context.Context, jwt string, now time.Time) (*oidcjwt.Claims, error)
 }
 
-// NewVerifier returns the verifier the exchange checks actor JWTs with. It
-// accepts only Audience and fetches issuer's keys through OIDC discovery with
-// client, on Refresh or first use and then as oidcjwt.Verifier refreshes them.
-func NewVerifier(issuer string, client *http.Client) *oidcjwt.Verifier {
-	return oidcjwt.NewVerifier(issuer, []string{Audience}, oidcjwt.HTTPKeySource(issuer, client), oidcjwt.WithSubstrateClaims())
-}
-
 // Decision is what Authorize allowed: the UID of the actor a credential may
 // be issued for, and the storage grants the credential must be limited to.
 type Decision struct {
@@ -90,16 +82,7 @@ func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, erro
 		return nil, status.Error(codes.InvalidArgument, "actor_jwt is required")
 	}
 	claims, err := a.verifier.Verify(ctx, jwt, a.now())
-	switch {
-	case err == nil:
-	case ctx.Err() != nil:
-		// The caller gave up, which says nothing about the token. The
-		// error itself cannot tell: a hung issuer that hits the HTTP
-		// client's timeout also wraps context.DeadlineExceeded.
-		return nil, status.FromContextError(ctx.Err()).Err()
-	case errors.Is(err, oidcjwt.ErrSigningKeysUnavailable):
-		return nil, status.Errorf(codes.Unavailable, "actor_jwt cannot be verified: %v", err)
-	default:
+	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "actor_jwt is not valid: %v", err)
 	}
 	if claims.Kind != actoridjwt.KindWorkerForActor {

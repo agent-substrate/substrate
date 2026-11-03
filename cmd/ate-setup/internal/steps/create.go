@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -23,10 +24,8 @@ import (
 	"google.golang.org/protobuf/encoding/prototext"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
-	"go.ate.dev/substrate/internal/apiconfig"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/pkg/proto/ateconfigpb"
@@ -56,7 +55,7 @@ const (
 const caValidity = 365 * 24 * time.Hour
 
 // CreateJWTAuthorityPoolSecret generates the actor-identity JWT signing pool.
-// An existing pool is kept.
+// An existing pool is kept, and its "jwks" key is brought in step with it.
 // This is the make-jwt-pool call create_jwt_authority_pool_secret shelled out
 // to kubectl-ate for.
 func (e *Env) CreateJWTAuthorityPoolSecret(ctx context.Context) error {
@@ -159,16 +158,6 @@ func (e *Env) CreateAPIConfig(ctx context.Context) error {
 	})
 }
 
-// UpdateAPIConfig is CreateAPIConfig for an install that is not being
-// redeployed: it also stamps the new digest on the running Deployment,
-// which rolls ate-api-server onto the new config.
-func (e *Env) UpdateAPIConfig(ctx context.Context) error {
-	if err := e.CreateAPIConfig(ctx); err != nil {
-		return err
-	}
-	return e.annotateAPIServerEnvHash(ctx)
-}
-
 // buildAPIConfig renders apiconfig.textproto.
 func buildAPIConfig(logLevel string) (string, error) {
 	b, err := prototext.MarshalOptions{Multiline: true}.Marshal(&ateconfigpb.APIConfig{
@@ -183,21 +172,12 @@ func buildAPIConfig(logLevel string) (string, error) {
 // CreateAPIAuthenticationConfig writes the default ate-api-server
 // authentication config, pointing it at the cluster's service account issuer.
 func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
-	return e.applyAPIAuthenticationConfig(ctx, &apiconfig.AuthenticationConfig{
-		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(e.jwtIssuer(ctx))},
-	})
-}
-
-func (e *Env) applyAPIAuthenticationConfig(ctx context.Context, cfg *apiconfig.AuthenticationConfig) error {
 	log.Step("create_api_authentication_config")
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
 
-	authnConfig, err := marshalAuthenticationConfig(cfg)
-	if err != nil {
-		return err
-	}
+	authnConfig := buildAuthenticationConfig(e.jwtIssuer(ctx))
 	// The issuer decides which tokens the apiserver accepts at all, and a
 	// wrong one fails as an opaque 401 much later, so show what was written.
 	log.Infof("%s authentication.yaml:", ConfigMapAPIAuthn)
@@ -207,16 +187,6 @@ func (e *Env) applyAPIAuthenticationConfig(ctx context.Context, cfg *apiconfig.A
 	return e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIAuthn, map[string]string{
 		"authentication.yaml": authnConfig,
 	})
-}
-
-// UpdateAPIAuthenticationConfig is CreateAPIAuthenticationConfig for an install
-// that is not being redeployed: it also stamps the new digest on the running
-// Deployment, which rolls ate-api-server onto the new config.
-func (e *Env) UpdateAPIAuthenticationConfig(ctx context.Context) error {
-	if err := e.CreateAPIAuthenticationConfig(ctx); err != nil {
-		return err
-	}
-	return e.annotateAPIServerEnvHash(ctx)
 }
 
 // jwtIssuer determines the service account token issuer to trust.
@@ -245,54 +215,24 @@ func (e *Env) jwtIssuer(ctx context.Context) string {
 // discoverable one.
 const inClusterIssuer = "https://kubernetes.default.svc"
 
-// kubernetesJWTProvider builds the default kubernetes JWT provider entry.
+// buildAuthenticationConfig renders authentication.yaml.
 //
 // An in-cluster issuer is not reachable over public discovery, so the apiserver
 // is pointed at its own projected service account CA and token to complete the
 // OIDC discovery handshake. A GKE or otherwise external issuer needs neither.
-func kubernetesJWTProvider(issuer string) apiconfig.JWTProviderConfig {
-	p := apiconfig.JWTProviderConfig{
-		Name:      "kubernetes",
-		Issuer:    issuer,
-		Audiences: []string{"api.ate-system.svc"},
-	}
+func buildAuthenticationConfig(issuer string) string {
+	config := fmt.Sprintf(
+		"jwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
+		issuer)
 	switch issuer {
 	case inClusterIssuer, inClusterIssuer + ".cluster.local":
-		p.CertificateAuthorityFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-		p.DiscoveryTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+		config += "  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +
+			"  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n"
 	}
-	return p
-}
-
-// setKubernetesJWTProvider replaces the kubernetes entry in cfg, or prepends
-// one if none exists, preserving any additional JWT providers.
-func setKubernetesJWTProvider(cfg *apiconfig.AuthenticationConfig, issuer string) {
-	k8sProvider := kubernetesJWTProvider(issuer)
-	for i := range cfg.JWTProviders {
-		if cfg.JWTProviders[i].Name == k8sProvider.Name {
-			cfg.JWTProviders[i] = k8sProvider
-			return
-		}
-	}
-	cfg.JWTProviders = append([]apiconfig.JWTProviderConfig{k8sProvider}, cfg.JWTProviders...)
-}
-
-// buildAuthenticationConfig renders the default authentication.yaml for issuer.
-func buildAuthenticationConfig(issuer string) (string, error) {
-	return marshalAuthenticationConfig(&apiconfig.AuthenticationConfig{
-		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(issuer)},
-	})
-}
-
-func marshalAuthenticationConfig(cfg *apiconfig.AuthenticationConfig) (string, error) {
-	if err := apiconfig.ValidateAuthenticationConfig(cfg); err != nil {
-		return "", fmt.Errorf("while validating the ate-api-server authentication config: %w", err)
-	}
-	b, err := yaml.Marshal(cfg)
-	if err != nil {
-		return "", fmt.Errorf("while marshaling the ate-api-server authentication config: %w", err)
-	}
-	return strings.TrimRight(string(b), "\n"), nil
+	// The shell script built this inside $(...), which strips trailing
+	// newlines. Matching that keeps the ConfigMap byte-identical, so switching
+	// between the two installers does not rewrite it.
+	return strings.TrimRight(config, "\n")
 }
 
 // createCAPool generates a CA pool and stores it in a Secret.
@@ -366,7 +306,7 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 	}
 	if existing != nil {
 		log.Infof("  JWT authority pool %s/%s already exists; keeping it", namespace, name)
-		return nil
+		return e.publishJWTPoolKeys(ctx, existing)
 	}
 
 	data, err := newJWTPoolSecretData(e.Cfg.ActorJWTAlgorithm)
@@ -376,14 +316,40 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, data)
 }
 
+// publishJWTPoolKeys makes the "jwks" key of a pool Secret match its pool:
+// missing on a Secret from before the key existed, or stale after a tool that
+// did not know it rewrote the pool. A stale set would keep a removed key
+// trusted, so it is recomputed from the pool every run. A matching Secret is
+// left alone.
+func (e *Env) publishJWTPoolKeys(ctx context.Context, secret *corev1.Secret) error {
+	jwks, err := localjwtauthority.PublicJWKS(secret.Data["pool"])
+	if err != nil {
+		return fmt.Errorf("while publishing the public keys of %s/%s: %w", secret.Namespace, secret.Name, err)
+	}
+	if bytes.Equal(secret.Data["jwks"], jwks) {
+		return nil
+	}
+	secret.Data["jwks"] = jwks
+	if _, err := e.Kube.Typed.CoreV1().Secrets(secret.Namespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("while writing jwks to %s/%s: %w", secret.Namespace, secret.Name, err)
+	}
+	log.Infof("  published the public keys of %s/%s as jwks", secret.Namespace, secret.Name)
+	return nil
+}
+
 // newJWTPoolSecretData generates a pool with one active authority for
-// algorithm, keyed by its thumbprint.
+// algorithm, keyed by its thumbprint. "jwks" holds the pool's public keys for
+// verifiers that must not see the pool.
 func newJWTPoolSecretData(algorithm string) (map[string][]byte, error) {
 	poolBytes, _, err := localjwtauthority.GeneratePool(algorithm, "")
 	if err != nil {
 		return nil, fmt.Errorf("while generating the JWT pool: %w", err)
 	}
-	return map[string][]byte{"pool": poolBytes}, nil
+	jwks, err := localjwtauthority.PublicJWKS(poolBytes)
+	if err != nil {
+		return nil, fmt.Errorf("while publishing the JWT pool's public keys: %w", err)
+	}
+	return map[string][]byte{"pool": poolBytes, "jwks": jwks}, nil
 }
 
 // createPoolSecret writes pool state.

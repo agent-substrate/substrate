@@ -204,37 +204,17 @@ func (e *Env) DeleteAtenet(ctx context.Context) error {
 // The demos live in their own packages, which import this one for Env, so the
 // interface is declared here rather than imported from there.
 type Deleter interface {
-	Delete(ctx context.Context, e *Env) ([]string, error)
+	Delete(ctx context.Context, e *Env) error
 }
 
 // DeleteAll removes every registered demo and then the control plane.
 func (e *Env) DeleteAll(ctx context.Context, demos []Deleter) error {
 	log.Step("delete_all")
 
-	// The demos' namespaces drain while the control plane is deleted, and are
-	// waited for after it.
-	var namespaces []string
 	for _, demo := range demos {
-		demoNamespaces, err := demo.Delete(ctx, e)
-		if err != nil {
-			return err
-		}
-		namespaces = append(namespaces, demoNamespaces...)
-	}
-	if err := e.DeleteAteSystem(ctx); err != nil {
-		return err
-	}
-	return e.WaitNamespacesDeleted(ctx, namespaces)
-}
-
-// WaitNamespacesDeleted waits until each demo namespace is gone, because a
-// deploy cannot create objects in a namespace that is still terminating.
-func (e *Env) WaitNamespacesDeleted(ctx context.Context, names []string) error {
-	namespace := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
-	for _, name := range names {
-		if err := e.Kube.WaitDeleted(ctx, namespace, "", name, e.Cfg.WaitTimeout(DemoTimeout)); err != nil {
+		if err := demo.Delete(ctx, e); err != nil {
 			return err
 		}
 	}
-	return nil
+	return e.DeleteAteSystem(ctx)
 }

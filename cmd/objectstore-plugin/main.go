@@ -54,10 +54,6 @@ import (
 
 const usage = `usage: objectstore-plugin <node|control|healthcheck> [flags]`
 
-// serviceDNSTrustBundle is the CA bundle of the install's service DNS
-// certificates, which the exchange, ate-api-server and ate-idp-server serve.
-const serviceDNSTrustBundle = "/run/servicedns.podcert.ate.dev/trust-bundle.pem"
-
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, usage)
@@ -74,16 +70,16 @@ func main() {
 	apiHost := installdefaults.APIServiceHost(installdefaults.NamespaceFromPodEnv())
 	var ncfg exchangeclient.Config
 	flags.StringVar(&ncfg.Address, "exchange-address", net.JoinHostPort(apiHost, strconv.Itoa(exchange.DefaultPort)), "node mode on GCS: address of the credential exchange the control sidecar serves, where each transfer's actor JWT is traded for a token scoped to the actor")
-	flags.StringVar(&ncfg.CAFile, "exchange-ca-file", serviceDNSTrustBundle, "node mode on GCS: CA bundle used to verify the exchange")
+	flags.StringVar(&ncfg.CAFile, "exchange-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "node mode on GCS: CA bundle used to verify the exchange")
 	flags.StringVar(&ncfg.ServerName, "exchange-server-name", apiHost, "node mode on GCS: DNS name expected on the exchange's certificate, the API Service in the pod's namespace")
 	var xcfg exchangeConfig
 	flags.StringVar(&xcfg.listen, "exchange-listen", "", "control mode: TCP address to serve the credential exchange on over TLS, for example :8445. Empty leaves it unserved.")
 	flags.StringVar(&xcfg.credBundle, "exchange-cred-bundle", "/run/servicedns.podcert.ate.dev/credential-bundle.pem", "control mode: PEM credential bundle the exchange serves with, the pod's service DNS certificate")
 	flags.StringVar(&xcfg.issuer, "actor-jwt-issuer", "", "control mode: issuer URL of the actor JWTs the exchange accepts, the value ate-api-server runs with")
-	flags.StringVar(&xcfg.issuerCAFile, "actor-jwt-issuer-ca-file", serviceDNSTrustBundle, "control mode: CA bundle trusted in addition to the system roots when verifying --actor-jwt-issuer")
+	flags.StringVar(&xcfg.jwksFile, "actor-jwt-jwks-file", "/run/actor-id-jwt-jwks/jwks.json", "control mode: JWK set file holding the public keys actor JWTs are verified with")
 	flags.StringVar(&xcfg.transferAccount, "transfer-service-account", "", "control mode on GCS: email of the Google service account snapshot transfers run as. The exchange impersonates it and downscopes its token per actor")
 	flags.StringVar(&xcfg.ateapi.Address, "ateapi-address", "127.0.0.1:443", "control mode: ate-api-server gRPC address, the loopback in the shared pod")
-	flags.StringVar(&xcfg.ateapi.CAFile, "ateapi-ca-file", serviceDNSTrustBundle, "control mode: CA bundle used to verify ate-api-server")
+	flags.StringVar(&xcfg.ateapi.CAFile, "ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "control mode: CA bundle used to verify ate-api-server")
 	flags.StringVar(&xcfg.ateapi.ServerName, "ateapi-server-name", installdefaults.APIServiceHost(installdefaults.NamespaceFromPodEnv()), "control mode: DNS name expected on the ate-api-server certificate, the API Service in the pod's namespace")
 	flags.StringVar(&xcfg.ateapi.ClientCredBundle, "ateapi-client-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "control mode: PEM credential bundle presented to ate-api-server, the pod identity certificate")
 	previewFlags := flags.StringSlice("preview", nil, "Preview gates to enable.")

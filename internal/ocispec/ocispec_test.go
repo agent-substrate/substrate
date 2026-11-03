@@ -28,37 +28,16 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// mountFor returns the spec's only mount at destination dest, or fails.
+// mountFor returns the spec's mount at destination dest, or fails.
 func mountFor(t *testing.T, spec *specs.Spec, dest string) specs.Mount {
 	t.Helper()
-	var found []specs.Mount
 	for _, m := range spec.Mounts {
 		if m.Destination == dest {
-			found = append(found, m)
+			return m
 		}
 	}
-	if len(found) != 1 {
-		t.Fatalf("%d mounts at %q, want 1; mounts=%v", len(found), dest, spec.Mounts)
-	}
-	return found[0]
-}
-
-// Build gives both runtimes the same system mounts, including tmpfs at
-// /dev/shm and /tmp.
-func TestBuild_SystemMounts(t *testing.T) {
-	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
-	want := []specs.Mount{
-		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
-		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
-		{Destination: "/dev/pts", Type: "devpts", Source: "devpts", Options: []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"}},
-		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
-		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
-		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
-		{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777"}},
-	}
-	if !reflect.DeepEqual(spec.Mounts, want) {
-		t.Errorf("Mounts =\n%+v\nwant\n%+v", spec.Mounts, want)
-	}
+	t.Fatalf("no mount at %q; mounts=%v", dest, spec.Mounts)
+	return specs.Mount{}
 }
 
 // Each volume mount becomes a bind of its host directory, rw or ro by kind.
@@ -110,31 +89,6 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		if !slices.Equal(m.Options, tc.wantOpts) {
 			t.Errorf("%s options = %v, want %v", tc.dest, m.Options, tc.wantOpts)
 		}
-	}
-}
-
-// A volume at a system mount path replaces that mount in place.
-func TestBuild_VolumeReplacesSystemMount(t *testing.T) {
-	const durableDir = "/node/actors/a/durable-dir"
-	for _, dest := range []string{"/dev/mqueue", "/dev/shm", "/tmp"} {
-		t.Run(dest, func(t *testing.T) {
-			spec := Build(Options{
-				ActorDirs: &ateworkerpb.ActorDirs{DurableDirVolumeMountsDir: durableDir},
-				Container: &ateworkerpb.Container{
-					ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
-					DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: dest}},
-				},
-			})
-			want := systemMounts()
-			i := slices.IndexFunc(want, func(m specs.Mount) bool { return m.Destination == dest })
-			if i < 0 {
-				t.Fatalf("no system mount at %q", dest)
-			}
-			want[i] = specs.Mount{Destination: dest, Type: "bind", Source: durableDir + "/data", Options: []string{"bind", "rw"}}
-			if !reflect.DeepEqual(spec.Mounts, want) {
-				t.Errorf("Mounts =\n%+v\nwant\n%+v", spec.Mounts, want)
-			}
-		})
 	}
 }
 
