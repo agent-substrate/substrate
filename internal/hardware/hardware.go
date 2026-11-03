@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	// SchemaVersionV1 is the initial compatibility schema version.
-	SchemaVersionV1 = "v1"
+	// SchemaVersionV2 is the compatibility schema version workers report. It
+	// replaced v1 when the gVisor durable-dir root became 0777. runsc refuses
+	// a MEMORY restore whose mount hints differ from the checkpoint's, so v1
+	// and v2 snapshots restore at ROOTFS on workers of the other version.
+	SchemaVersionV2 = "v2"
 
 	// AttrArchitecture is the CPU architecture ("amd64", "arm64", etc.).
 	AttrArchitecture = "architecture"
@@ -50,13 +53,13 @@ const (
 	AttrCPUModel = "cpu_model"
 )
 
-// ProbeHost returns a minimal v1 VersionedSandboxCompat with the current
+// ProbeHost returns a minimal VersionedSandboxCompat with the current
 // host's architecture in atelet wire format, for synthetic workers in tests
 // and benchmarks. Production workers report the attributes atelet writes to
 // sandbox-runtimes.json instead.
 func ProbeHost() *ateletpb.VersionedSandboxCompat {
 	return &ateletpb.VersionedSandboxCompat{
-		SchemaVersion: SchemaVersionV1,
+		SchemaVersion: SchemaVersionV2,
 		Attributes: []*ateletpb.AttributeEntry{
 			{
 				Key:   AttrArchitecture,

@@ -124,8 +124,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if got := goldenStamp.GetSandboxClass(); got != wantClass {
 		t.Errorf("golden snapshot sandbox_class = %q, want %q", got, wantClass)
 	}
-	if got := goldenStamp.GetVersion().GetSchemaVersion(); got != hardware.SchemaVersionV1 {
-		t.Errorf("golden snapshot schema_version = %q, want %q", got, hardware.SchemaVersionV1)
+	if got := goldenStamp.GetVersion().GetSchemaVersion(); got != hardware.SchemaVersionV2 {
+		t.Errorf("golden snapshot schema_version = %q, want %q", got, hardware.SchemaVersionV2)
 	}
 	if runtimeAttribute(goldenStamp, hardware.AttrArchitecture) == "" {
 		t.Errorf("golden snapshot stamp %v has no %q attribute", goldenStamp, hardware.AttrArchitecture)
