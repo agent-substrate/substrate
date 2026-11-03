@@ -205,10 +205,11 @@ func TestTagCloneOnDisabledVersion(t *testing.T) {
 //     actor restores MEMORY on v1 through restorable_runtimes (memory=3,
 //     file=3, rootfs=3) and pauses. The paused actor then restores MEMORY on
 //     its node without detaching the checkpoint (memory=4, file=4, rootfs=4).
-//  3. The actor pauses again on v1, and the SandboxConfig disables v1.
-//  4. A pinned checkpoint cannot relax the runtime, so ResumeActor detaches it
-//     to durable storage first and then restores at ROOTFS on v2 (memory=1,
-//     file=5, rootfs=5).
+//  3. The SandboxConfig disables v1 while the actor runs on it. The worker
+//     re-registers without v1 and the actor keeps running.
+//  4. The actor pauses on v1. A pinned checkpoint cannot relax the runtime,
+//     so ResumeActor detaches it to durable storage first and then restores
+//     at ROOTFS on v2 (memory=1, file=5, rootfs=5).
 //  5. The actor pauses on v2 and its worker pod is deleted. The checkpoint
 //     belongs to the node, not the pod, so the actor stays SUSPENDED and
 //     restores MEMORY on the pool's replacement worker (memory=2, file=6,
@@ -232,8 +233,7 @@ func TestPausedActorSandboxRuntime(t *testing.T) {
 		t.Fatalf("local checkpoint detached although restorable_runtimes matched: %v", status.GetSnapshots())
 	}
 
-	// 3. Pause again on v1, then disable v1.
-	snap := f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, f.v1Runtime)
+	// 3. Disable v1 while the actor runs on it.
 	f.updateVersions(t, f.v2.Name, []atev1.SandboxVersionConfig{withState(f.v1, atev1.SandboxVersionStateDisabled), f.v2})
 	workerStatus := f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
 		defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
@@ -241,7 +241,9 @@ func TestPausedActorSandboxRuntime(t *testing.T) {
 	})
 	v2Runtime := hardware.ColdBootRuntime(workerStatus)
 
-	// 4. ResumeActor detaches the checkpoint, then falls back to ROOTFS on v2.
+	// 4. Pause and resume at once: ResumeActor detaches the checkpoint, then
+	// falls back to ROOTFS on v2.
+	snap := f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, f.v1Runtime)
 	status = f.resume(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, v2Runtime)
 	if hasLocalSnapshot(status) {
 		t.Fatalf("local snapshot survived the runtime fallback: %v", status.GetSnapshots())
