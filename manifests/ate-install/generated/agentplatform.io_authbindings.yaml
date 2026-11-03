@@ -1,0 +1,211 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: authbindings.agentplatform.io
+spec:
+  group: agentplatform.io
+  names:
+    kind: AuthBinding
+    listKind: AuthBindingList
+    plural: authbindings
+    shortNames:
+    - authbinding
+    singular: authbinding
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.source.identity
+      name: Identity
+      type: string
+    - jsonPath: .spec.target.hostname
+      name: Hostname
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AuthBinding allows one agent to call one destination and names the
+          credentials Auth Manager adds to those requests.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of AuthBinding
+            properties:
+              credentials:
+                description: |-
+                  credentials are the headers to set, 1 to 16, with header names unique
+                  case-insensitively.
+                items:
+                  description: |-
+                    AuthBindingCredential is one header Auth Manager sets on a matching
+                    request, from a stored secret.
+                  properties:
+                    header:
+                      description: |-
+                        header is the HTTP header to set. Any value the agent sent in it is
+                        replaced. Pseudo-headers, names starting with x-envoy, and the
+                        connection-level headers host, transfer-encoding, content-length,
+                        connection, te and upgrade are not allowed.
+                      maxLength: 256
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9!#$%&'*+.^_|~-]+$
+                      type: string
+                      x-kubernetes-validations:
+                      - message: header must not start with x-envoy
+                        rule: '!self.lowerAscii().startsWith(''x-envoy'')'
+                      - message: header must not be host, transfer-encoding, content-length,
+                          connection, te or upgrade
+                        rule: '!(self.lowerAscii() in [''host'', ''transfer-encoding'',
+                          ''content-length'', ''connection'', ''te'', ''upgrade''])'
+                    prefix:
+                      description: |-
+                        prefix is prepended verbatim to the secret value, separator included,
+                        for example "Bearer ". Printable ASCII only.
+                      maxLength: 256
+                      pattern: ^[ -~]*$
+                      type: string
+                    secretRef:
+                      description: |-
+                        secretRef names the Secret key holding the value. The Secret is in
+                        the binding's namespace.
+                      properties:
+                        key:
+                          description: |-
+                            key is the entry in the Secret's data map whose value becomes the
+                            header value.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[-._a-zA-Z0-9]+$
+                          type: string
+                        name:
+                          description: name is the Secret's name.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - key
+                      - name
+                      type: object
+                  required:
+                  - header
+                  - secretRef
+                  type: object
+                maxItems: 16
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+                x-kubernetes-validations:
+                - message: credentials header names must be unique, ignoring case
+                  rule: self.all(a, self.filter(b, b.header.lowerAscii() == a.header.lowerAscii()).size()
+                    == 1)
+              source:
+                description: source is the agent the binding applies to.
+                properties:
+                  identity:
+                    description: |-
+                      identity is the agent's SPIFFE ID, in one of two forms. Kubernetes
+                      workloads use spiffe://<trust-domain>/ns/<namespace>/sa/<name>; the
+                      namespace segment must equal the binding's namespace. The API server
+                      enforces that through the ValidatingAdmissionPolicy in
+                      manifests/ate-install/authbinding-validation.yaml, and Auth Manager
+                      checks it again. Substrate actors use
+                      spiffe://<trust-domain>/worker-for-actor/<atespace>/<name>, which
+                      carries no Kubernetes namespace and so is not checked against the
+                      binding's namespace yet.
+
+                      identity is tied to a namespace, and enforce it here and in the
+                      policy. Both forms are placeholders until bindings name agents by
+                      their registry URN.
+                    maxLength: 2048
+                    minLength: 1
+                    pattern: ^spiffe://[^/]+/(ns/[^/]+/sa|worker-for-actor/[^/]+)/[^/]+$
+                    type: string
+                required:
+                - identity
+                type: object
+              target:
+                description: target is the destination the binding applies to.
+                properties:
+                  hostname:
+                    description: |-
+                      hostname is the destination's DNS name: lowercase, no trailing dot,
+                      not an IP address. A leading "*." matches exactly one label, so
+                      "*.example.com" matches "api.example.com" but neither "example.com"
+                      nor "a.b.example.com". "*" alone is not allowed.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^(\*\.)?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: 'hostname must not be an IP address: its last label
+                        must not be all digits'
+                      rule: '!self.matches(''(^|[.])[0-9]+$'')'
+                  ports:
+                    default:
+                    - 443
+                    description: |-
+                      ports are the destination ports the binding covers; a request to any
+                      other port does not match. Defaults to [443]. There is no "all ports"
+                      option: a credential is only sent to ports named here.
+
+                      widens where a credential may be sent.
+                    items:
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    maxItems: 16
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                required:
+                - hostname
+                type: object
+            required:
+            - credentials
+            - source
+            - target
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

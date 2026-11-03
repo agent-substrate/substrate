@@ -1,0 +1,51 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The CRD schema cannot compare spec.source.identity with metadata.namespace,
+# so this policy does. Without it a binding in one namespace could allow
+# egress for another namespace's agents.
+#
+# TODO: Substrate actor identities (spiffe://<td>/worker-for-actor/<atespace>/
+# <name>) carry no Kubernetes namespace and pass this policy unchecked. Agree
+# with the Substrate and Prism owners how to tie an actor to a namespace and
+# add that rule here.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: authbinding-identity-namespace
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["agentplatform.io"]
+      apiVersions: ["v1alpha1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["authbindings"]
+  validations:
+  # The schema restricts the Kubernetes form to spiffe://<td>/ns/<ns>/sa/<name>
+  # with no "/" inside a segment, so "/ns/<namespace>/sa/" occurs exactly when
+  # the namespace segment equals the binding's namespace. Other forms are not
+  # checked (see the TODO above).
+  - expression: >-
+      !object.spec.source.identity.matches('^spiffe://[^/]+/ns/') ||
+      object.spec.source.identity.contains('/ns/' + object.metadata.namespace + '/sa/')
+    message: "spec.source.identity must name this binding's namespace in its /ns/<namespace>/ segment"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: authbinding-identity-namespace
+spec:
+  policyName: authbinding-identity-namespace
+  validationActions: ["Deny"]
