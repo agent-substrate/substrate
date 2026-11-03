@@ -26,8 +26,12 @@ containers:
 - name: counter
   image: ko://go.ate.dev/substrate/demos/counter
   command: ["/ko-app/counter"]
-# Sandbox size. The pool sets no worker limits, so the worker offers the
-# node's allocatable and these only need to fit the node.
+  wakeupProbe:
+    httpGet:
+      path: /readyz
+      port: 80
+# Sandbox size: an actor occupies its whole worker, so size it at (or below)
+# the pool's per-worker capacity (see parking.yaml.tmpl and internal/sizing).
 resources:
   limits:
     cpuMillicores: 1000
