@@ -322,6 +322,10 @@ func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) 
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 
+	if capacity.GetCpuMillicores() <= 0 {
+		return candidate{}, false
+	}
+
 	// No per-actor size to compare: every assignment costs one, so a worker at
 	// its limit has no room however small the next actor is.
 	if used.GetActors() >= capacity.GetActors() {

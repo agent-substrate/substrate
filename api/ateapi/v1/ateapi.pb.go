@@ -7934,7 +7934,8 @@ func (x *AttributeEntry) GetValue() string {
 type WorkerResources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// cpu_millicores is CPU in millicores (1000 = one core). Compared against
-	// the Actor's resource limits for placement.
+	// the Actor's resource limits for placement. A Worker with no CPU capacity
+	// is not scheduled.
 	//
 	// +k8s:optional
 	// +k8s:minimum=0

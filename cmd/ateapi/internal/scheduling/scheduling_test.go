@@ -288,9 +288,9 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-cool",
 		},
 		{
-			name: "prefers worker with known resource utilization over unreported capacity",
+			name: "skips worker with unreported capacity",
 			fleet: fleet{
-				worker("w-unreported", "gvisor", "node-a", tierTwo, withMaxActors(4), assigned("demo", "a")),
+				worker("w-unreported", "gvisor", "node-a", tierTwo, withMaxActors(4), withCapacity(0, 0)),
 				worker("w-known", "gvisor", "node-b", tierTwo, withCapacity(4000, 8<<30), withMaxActors(4),
 					assignedFor("demo", "b", resources.CPUMemory(1000, 2<<30))),
 			},
@@ -545,7 +545,7 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		Status: &ateapi.WorkerStatus{
 			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			RegisteredEpoch: 1,
-			Capacity:        &ateapi.WorkerResources{Actors: 1},
+			Capacity:        &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 		},
 	}
 	if class != "" {
@@ -769,7 +769,7 @@ func TestBooking(t *testing.T) {
 // A booking that overflows fits nowhere, rather than wrapping negative and
 // fitting everywhere.
 func TestBookingOverflow(t *testing.T) {
-	w := worker("w", "microvm", "node-a", nil, withMaxActors(10), withCapacity(0, 1<<30),
+	w := worker("w", "microvm", "node-a", nil, withMaxActors(10), withCapacity(4000, 1<<30),
 		withOverhead(&ateapi.RuntimeOverhead{MemoryBytes: 4 << 20, MemoryBytesPerGib: 8 << 20}))
 	for _, memory := range []int64{math.MaxInt64, math.MaxInt64 - 1<<20} {
 		constraints := Constraints{Limits: &ateapi.Resources{MemoryBytes: memory}}
@@ -788,13 +788,32 @@ func TestHasRoomBooksRuntimeOverhead(t *testing.T) {
 	const gib = 1 << 30
 	constraints := Constraints{Limits: &ateapi.Resources{MemoryBytes: gib}}
 	overhead := withOverhead(&ateapi.RuntimeOverhead{MemoryBytes: 4 << 20})
-	tight := worker("tight", "microvm", "node-a", nil, withMaxActors(10), withCapacity(0, gib), overhead)
-	roomy := worker("roomy", "microvm", "node-a", nil, withMaxActors(10), withCapacity(0, gib+4<<20), overhead)
+	tight := worker("tight", "microvm", "node-a", nil, withMaxActors(10), withCapacity(4000, gib), overhead)
+	roomy := worker("roomy", "microvm", "node-a", nil, withMaxActors(10), withCapacity(4000, gib+4<<20), overhead)
 	s := New(fleet{tight, roomy})
 	if s.HasRoom(tight, constraints) {
 		t.Error("HasRoom() = true without room for the actor's overhead, want false")
 	}
 	if !s.HasRoom(roomy, constraints) {
 		t.Error("HasRoom() = false with room for the actor and its overhead, want true")
+	}
+}
+
+func TestScheduleSkipsWorkersWithoutCPUCapacity(t *testing.T) {
+	f := fleet{
+		worker("w-none", "gvisor", "node-a", nil, withMaxActors(16), withCapacity(0, 1<<30)),
+		worker("w-cpu", "gvisor", "node-b", nil, withMaxActors(16), withCapacity(4000, 1<<30)),
+	}
+	for _, intn := range []func(int) int{seqIntn(0, 0), seqIntn(1, 0)} {
+		got, err := New(f, WithIntn(intn)).Schedule(context.Background(), Constraints{})
+		if err != nil {
+			t.Fatalf("Schedule() error = %v", err)
+		}
+		if got.GetWorkerPod() != "w-cpu" {
+			t.Errorf("Schedule() = %q, want w-cpu", got.GetWorkerPod())
+		}
+	}
+	if _, err := New(fleet{f[0]}).Schedule(context.Background(), Constraints{}); !errors.Is(err, ErrNoCapacity) {
+		t.Errorf("Schedule() with only a worker without CPU capacity = %v, want ErrNoCapacity", err)
 	}
 }

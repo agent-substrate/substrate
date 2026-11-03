@@ -72,7 +72,7 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 					Status: &ateapi.WorkerStatus{
 						State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 						RegisteredEpoch: 1,
-						Capacity:        &ateapi.WorkerResources{Actors: 1},
+						Capacity:        &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 						SandboxClasses:  []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 					},
 				}); err != nil {

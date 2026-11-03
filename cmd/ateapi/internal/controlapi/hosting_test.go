@@ -59,7 +59,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				NodeName:        node,
 				Status: registered(&ateapi.WorkerStatus{
 					State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-					Capacity:       &ateapi.WorkerResources{Actors: 1},
+					Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 					SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 				}),
 			}); err != nil {
@@ -157,7 +157,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		NodeName:        "node1",
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "microvm", DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: testSandboxRuntime().GetVersion()}}},
 		}),
 	}
@@ -171,7 +171,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		Labels:          map[string]string{"pool": "b"},
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}),
 	}
