@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -84,13 +85,27 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	// global-scoped; the name is the Actor's UID, which is also the row key.
 	assignment.Metadata = &ateapi.ResourceMetadata{Name: actorUID}
 	setCreateMetadata(assignment.Metadata)
+	assignment.State = ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING
 	assignmentBytes, err := proto.Marshal(assignment)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling assignment: %w", err)
 	}
 
 	var updated *ateapi.Actor
+	var movedFrom string
 	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+		// A suspended Actor still bound to a node keeps its assignment. Only
+		// finds where it is: the Worker holding it is locked below.
+		previous, holder, err := getAssignmentRow(ctx, tx, actorUID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			previous = nil
+		case err != nil:
+			return nil, err
+		case resources.AssignmentRunning(previous):
+			return nil, fmt.Errorf("binding actor %s to worker %s: it is already running on worker %s", actorUID, workerName, holder)
+		}
+
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, store.ErrWorkerNotFound
@@ -113,11 +128,30 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO worker_assignments (actor_uid, worker_name, proto)
-			VALUES ($1, $2, $3)`,
-			actorUID, workerName, assignmentBytes); err != nil {
-			return nil, fmt.Errorf("binding actor %s to worker %s: %w", actorUID, workerName, err)
+
+		resumed := false
+		if previous != nil && holder != workerName {
+			// Resumed on another Worker of the node: the assignment moves.
+			if _, err := dropAssignment(ctx, tx, actorUID, holder); err != nil {
+				return nil, err
+			}
+			movedFrom = holder
+		} else if previous != nil {
+			tag, err := tx.Exec(ctx, `UPDATE worker_assignments SET proto = $1 WHERE actor_uid = $2 AND worker_name = $3`,
+				assignmentBytes, actorUID, workerName)
+			if err != nil {
+				return nil, fmt.Errorf("resuming the assignment of actor %s on worker %s: %w", actorUID, workerName, err)
+			}
+			resumed = tag.RowsAffected() == 1
+		}
+		if !resumed {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO worker_assignments (actor_uid, worker_name, proto)
+				VALUES ($1, $2, $3)`,
+				actorUID, workerName, assignmentBytes); err != nil {
+				return nil, fmt.Errorf("binding actor %s to worker %s: %w", actorUID, workerName, err)
+			}
+			addAssignmentTotal(worker, +1)
 		}
 		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, +1)
 		if err := saveWorker(ctx, tx, worker); err != nil {
@@ -127,6 +161,11 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if movedFrom != "" {
+		// One transaction appends one event, for the Worker bound to, so the
+		// Worker the assignment left is published on its own.
+		p.publishWorker(ctx, movedFrom)
 	}
 	return updated, nil
 }
@@ -138,7 +177,9 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 	actorUID := precondition.UID
 	var updated *ateapi.Actor
 	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
-		released, err := releaseActor(ctx, tx, actorUID)
+		// The Worker is locked before the Actor, as BindActorToWorker locks
+		// them, so the first read only finds which Worker to lock.
+		worker, err := lockAssignedWorker(ctx, tx, actorUID)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +188,13 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 		if updated, err = updateActor(ctx, tx, actorRef, store.DeletePreconditions(precondition), mutate, false); err != nil {
 			return nil, err
 		}
-		return released, nil
+		if worker == nil {
+			return nil, nil
+		}
+		if keepsSuspendedAssignment(updated) && updated.GetStatus().GetAssignedNode() == worker.GetNodeName() {
+			return suspendAssignment(ctx, tx, worker, actorUID)
+		}
+		return releaseAssignment(ctx, tx, worker, actorUID)
 	})
 	if err != nil {
 		return nil, err
@@ -155,12 +202,19 @@ func (p *Persistence) UpdateActorAndRelease(ctx context.Context, actorRef resour
 	return updated, nil
 }
 
-// releaseActor deletes actorUID's assignment, wherever it is, and returns the
-// Worker that held it as saved with the assignment no longer booked, or nil if
-// no Worker held it. The Worker is locked before its assignment row, as
-// BindActorToWorker locks it, so the first read only finds which Worker to
-// lock.
-func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Worker, error) {
+// keepsSuspendedAssignment reports whether a stored Actor keeps its assignment
+// in the suspended state: it is suspended, names no Worker, and is still bound
+// to a node.
+func keepsSuspendedAssignment(actor *ateapi.Actor) bool {
+	status := actor.GetStatus()
+	return status.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED &&
+		status.GetWorkerAssignment() == nil &&
+		status.GetAssignedNode() != ""
+}
+
+// lockAssignedWorker locks and returns the Worker holding actorUID's
+// assignment, or nil if no Worker holds one.
+func lockAssignedWorker(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Worker, error) {
 	_, workerName, err := getAssignmentRow(ctx, tx, actorUID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
@@ -170,34 +224,143 @@ func releaseActor(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Work
 	}
 	worker, err := getWorkerForUpdate(ctx, tx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
-		// A Worker is deleted only once it holds no assignments, so the row
-		// was released after the first read.
+		// The Worker and its assignments went after the first read.
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if worker.Status == nil {
+		worker.Status = &ateapi.WorkerStatus{}
+	}
+	return worker, nil
+}
+
+// releaseAssignment deletes actorUID's assignment from worker, which the caller
+// has locked, and saves the Worker without it. It returns the saved Worker, or
+// nil if the row went after the caller found it.
+func releaseAssignment(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker, actorUID string) (*ateapi.Worker, error) {
+	workerName := worker.GetMetadata().GetName()
 	var protoBytes []byte
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		DELETE FROM worker_assignments
 		WHERE actor_uid = $1 AND worker_name = $2
 		RETURNING proto`, actorUID, workerName).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Released after the first read.
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
 	}
 	assignment := &ateapi.ActorAssignment{}
-	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, fmt.Errorf("unmarshaling released assignment: %w", err)
 	}
-	worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
+	if resources.AssignmentRunning(assignment) {
+		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
+	}
+	addAssignmentTotal(worker, -1)
 	if err := saveWorker(ctx, tx, worker); err != nil {
 		return nil, err
 	}
 	return worker, nil
+}
+
+// suspendAssignment marks actorUID's assignment on worker, which the caller has
+// locked, suspended, and saves the Worker with its resources no longer
+// allocated. The assignment stays counted in the Worker's total. It returns
+// the saved Worker, or nil if the row went after the caller found it.
+func suspendAssignment(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker, actorUID string) (*ateapi.Worker, error) {
+	workerName := worker.GetMetadata().GetName()
+	var protoBytes []byte
+	err := tx.QueryRow(ctx, `SELECT proto FROM worker_assignments WHERE actor_uid = $1 AND worker_name = $2 FOR UPDATE`,
+		actorUID, workerName).Scan(&protoBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting the assignment of actor %s on worker %s: %w", actorUID, workerName, err)
+	}
+	assignment := &ateapi.ActorAssignment{}
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
+		return nil, fmt.Errorf("unmarshaling assignment: %w", err)
+	}
+	if !resources.AssignmentRunning(assignment) {
+		return nil, nil
+	}
+	worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
+	assignment.State = ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED
+	setUpdateMetadata(assignment.Metadata, proto.CloneOf(assignment.Metadata))
+	if protoBytes, err = proto.Marshal(assignment); err != nil {
+		return nil, fmt.Errorf("marshaling assignment: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE worker_assignments SET proto = $1 WHERE actor_uid = $2 AND worker_name = $3`,
+		protoBytes, actorUID, workerName); err != nil {
+		return nil, fmt.Errorf("suspending the assignment of actor %s on worker %s: %w", actorUID, workerName, err)
+	}
+	if err := saveWorker(ctx, tx, worker); err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+// dropAssignment locks the Worker named workerName and deletes actorUID's
+// assignment from it. It returns the saved Worker, or nil if either is gone.
+// Callers already hold the Actor's row, and some another Worker's, so this can
+// lock in the reverse order of a concurrent BindActorToWorker. Postgres aborts
+// one side of such a deadlock, and writeAndAppendEvent reports it as
+// ErrVersionConflict.
+func dropAssignment(ctx context.Context, tx pgx.Tx, actorUID, workerName string) (*ateapi.Worker, error) {
+	worker, err := getWorkerForUpdate(ctx, tx, workerName)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if worker.Status == nil {
+		worker.Status = &ateapi.WorkerStatus{}
+	}
+	return releaseAssignment(ctx, tx, worker, actorUID)
+}
+
+// dropSuspendedAssignment deletes the suspended assignment of an Actor that is
+// no longer bound to a node, if it has one, and returns the Worker it left.
+func dropSuspendedAssignment(ctx context.Context, tx pgx.Tx, actorUID string) (*ateapi.Worker, error) {
+	_, workerName, err := getAssignmentRow(ctx, tx, actorUID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return dropAssignment(ctx, tx, actorUID, workerName)
+}
+
+// publishWorker appends an event carrying the Worker named name as stored, for
+// a change made by a transaction that appended an event for another Worker.
+// Best effort: the worker cache's relist picks up what this misses.
+func (p *Persistence) publishWorker(ctx context.Context, name string) {
+	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+		worker, err := getWorkerForUpdate(ctx, tx, name)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		return worker, err
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "Failed to publish a worker an assignment moved off", slog.String("worker", name), slog.Any("err", err))
+	}
+}
+
+// addAssignmentTotal adjusts the count of the Worker's assignments by n.
+func addAssignmentTotal(worker *ateapi.Worker, n int64) {
+	total := worker.GetStatus().GetAssignments().GetTotal() + n
+	if total == 0 {
+		worker.Status.Assignments = nil
+		return
+	}
+	worker.Status.Assignments = &ateapi.ActorAssignmentsStatus{Total: total}
 }
 
 // getAssignmentRow reads the assignment for actorUID and names the worker
@@ -216,7 +379,7 @@ func getAssignmentRow(ctx context.Context, q querier, actorUID string) (*ateapi.
 		return nil, "", fmt.Errorf("getting assignment for actor %s: %w", actorUID, err)
 	}
 	assignment := &ateapi.ActorAssignment{}
-	if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+	if err := unmarshalStored(protoBytes, assignment); err != nil {
 		return nil, "", fmt.Errorf("unmarshaling assignment: %w", err)
 	}
 	return assignment, workerName, nil
@@ -269,7 +432,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("scanning assignment of worker %s: %w", workerName, err)
 		}
 		assignment := &ateapi.ActorAssignment{}
-		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
+		if err := unmarshalStored(protoBytes, assignment); err != nil {
 			return store.ListResponse[*ateapi.ActorAssignment]{}, fmt.Errorf("unmarshaling assignment of actor %s: %w", actorUID, err)
 		}
 		result = append(result, assignment)

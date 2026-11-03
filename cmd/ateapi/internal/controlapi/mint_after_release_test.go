@@ -163,7 +163,13 @@ func TestMintWorkerActorCertificateAfterWorkerRelease(t *testing.T) {
 			if got != codes.NotFound {
 				t.Errorf("certificate mint once finalized: code %v, want NotFound", got)
 			}
-			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
+			// a suspended actor with a local snapshot keeps its assignment
+			kept, err := persistence.GetWorkerAssignment(ctx, workerName, uid)
+			if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && actor.GetStatus().GetAssignedNode() != "" {
+				if kept.GetState() != ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED {
+					t.Errorf("worker assignment once finalized: %v, %v, want it kept suspended", kept, err)
+				}
+			} else if !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("worker assignment once finalized: err %v, want ErrNotFound", err)
 			}
 		})

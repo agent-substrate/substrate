@@ -16,13 +16,11 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/apierror"
@@ -128,9 +126,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 			if want := wantFinalNode[tc.Name]; got != want {
 				t.Errorf("HostingNode once finalized = %q, want %q", got, want)
 			}
-			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
-				t.Errorf("worker assignment once finalized: err %v, want ErrNotFound", err)
-			}
+			wantAssignmentFollowsActor(t, ctx, persistence, workerName, uid, actor)
 		})
 	}
 }

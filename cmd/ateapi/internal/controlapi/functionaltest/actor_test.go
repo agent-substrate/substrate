@@ -3343,6 +3343,7 @@ func TestResumeActor(t *testing.T) {
 			// All a listing reports of the assignments: one actor and the
 			// compute its template declares.
 			Allocated:      &ateapi.WorkerResources{Actors: 1, CpuMillicores: 1000, MemoryBytes: 512 << 20},
+			Assignments:    &ateapi.ActorAssignmentsStatus{Total: 1},
 			SandboxClasses: workerSandboxClasses(defaultWorkerRuntime("gvisor")),
 		},
 	}

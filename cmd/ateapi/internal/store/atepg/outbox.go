@@ -23,12 +23,14 @@ package atepg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"google.golang.org/protobuf/proto"
@@ -85,7 +87,7 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 
 	worker, err := fn(ctx, tx)
 	if err != nil {
-		return nil, err
+		return nil, deadlockAsConflict(err)
 	}
 
 	var payload []byte
@@ -100,12 +102,22 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing transaction: %w", err)
+		return nil, deadlockAsConflict(fmt.Errorf("committing transaction: %w", err))
 	}
 	if payload != nil {
 		p.publishLocally(ctx, payload)
 	}
 	return worker, nil
+}
+
+// deadlockAsConflict reports a transaction Postgres aborted to break a
+// deadlock as ErrVersionConflict, which callers already retry.
+func deadlockAsConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "40P01" {
+		return fmt.Errorf("%w: %v", store.ErrVersionConflict, err)
+	}
+	return err
 }
 
 const (

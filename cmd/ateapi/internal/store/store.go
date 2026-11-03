@@ -280,16 +280,20 @@ type Interface interface {
 	// write wins, or mutate's error.
 	MarkWorkerForDeletion(ctx context.Context, name string, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error)
 
-	// Removes a worker by name and returns the deleted resource. Returns
-	// ErrNotFound if missing, ErrUIDConflict/ErrVersionConflict if
-	// precondition does not describe the worker the caller observed, or
-	// ErrFailedPrecondition if the worker still holds an assignment.
+	// Removes a worker by name and returns the deleted resource, with its
+	// suspended assignments. Returns ErrNotFound if missing,
+	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
+	// worker the caller observed, or ErrFailedPrecondition if the worker still
+	// holds a running assignment.
 	DeleteWorker(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.Worker, error)
 
 	// An assignment is written only together with its Actor, and Worker
-	// allocation moves with it, so an Actor names a Worker in
-	// status.worker_assignment exactly while the Worker holds its assignment.
-	// DeleteWorker refuses while the Worker holds an assignment, and
+	// allocation and assignment count move with it, so an Actor names a Worker
+	// in status.worker_assignment exactly while the Worker holds its running
+	// assignment. A suspended Actor still bound to a node by
+	// status.assigned_node keeps its assignment on the Worker it ran on, marked
+	// suspended and not allocated, until a write unbinds or deletes the Actor.
+	// DeleteWorker refuses while the Worker holds a running assignment, and
 	// DeleteActor while the Actor names a Worker.
 
 	// BindActorToWorker assigns an Actor, updates the Worker's allocation, and
@@ -302,23 +306,29 @@ type Interface interface {
 	// between the check and the bind. Returning an error from it refuses the
 	// bind and is returned unchanged.
 	//
+	// The assignment is stored running. An Actor that kept a suspended
+	// assignment resumes it on the same Worker, or moves it from another one.
+	//
 	// ErrWorkerNotFound if the Worker is gone, ErrNotFound if the Actor is, and
 	// ErrUIDConflict/ErrVersionConflict if precondition fails. Binding an Actor
-	// that is already bound is an error. Any error leaves both unchanged.
+	// that is already running is an error. Any error leaves both unchanged.
 	BindActorToWorker(ctx context.Context, workerName string, assignment *ateapi.ActorAssignment, admit func(*ateapi.Worker) error, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
 	// UpdateActorAndRelease applies mutate to the Actor as UpdateActor does
-	// and, in the same transaction, removes the assignment of the Actor
-	// precondition names, on whichever Worker holds it, if any. mutate should
-	// clear the Actor's worker assignment. It returns the updated Actor. Any
-	// error leaves both unchanged.
+	// and, in the same transaction, releases the assignment of the Actor
+	// precondition names, on whichever Worker holds it, if any: it is kept
+	// suspended if mutate leaves the Actor suspended and bound to that Worker's
+	// node, and removed otherwise. mutate should clear the Actor's worker
+	// assignment. It returns the updated Actor. Any error leaves both
+	// unchanged.
 	UpdateActorAndRelease(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
-	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
-	// ErrNotFound when the Worker is not hosting that Actor.
+	// GetWorkerAssignment returns a Worker's assignment for actorUID, running
+	// or suspended, or ErrNotFound when the Worker holds none.
 	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error)
 
-	// ListWorkerAssignments returns a page of the Actors a Worker hosts.
+	// ListWorkerAssignments returns a page of a Worker's assignments, running
+	// and suspended.
 	ListWorkerAssignments(ctx context.Context, workerName string, opts ListOptions) (ListResponse[*ateapi.ActorAssignment], error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.

@@ -16,11 +16,13 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -57,6 +59,27 @@ func firstAssignment(t *testing.T, st store.Interface, workerName string) *ateap
 		return nil
 	}
 	return page.Items[0]
+}
+
+// workerRunsAssignment reports whether a is a running assignment.
+func workerRunsAssignment(a *ateapi.ActorAssignment) bool {
+	return a != nil && resources.AssignmentRunning(a)
+}
+
+// wantAssignmentFollowsActor checks that a Worker keeps actor's assignment,
+// suspended, exactly while actor is suspended and bound to a node.
+func wantAssignmentFollowsActor(t *testing.T, ctx context.Context, st store.Interface, workerName, actorUID string, actor *ateapi.Actor) {
+	t.Helper()
+	got, err := st.GetWorkerAssignment(ctx, workerName, actorUID)
+	bound := actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && actor.GetStatus().GetAssignedNode() != ""
+	switch {
+	case bound && err != nil:
+		t.Errorf("worker assignment of a suspended actor bound to node %q: err %v, want it kept suspended", actor.GetStatus().GetAssignedNode(), err)
+	case bound && got.GetState() != ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED:
+		t.Errorf("worker assignment of a suspended actor = %v, want ACTOR_ASSIGNMENT_STATE_SUSPENDED", got.GetState())
+	case !bound && !errors.Is(err, store.ErrNotFound):
+		t.Errorf("worker assignment of an actor bound to no node: err %v, want ErrNotFound", err)
+	}
 }
 
 // seedAssignment places an actor on an already-created worker, which is how a
