@@ -2582,6 +2582,7 @@ footer {
   width: 100%;
   max-width: none;
   min-width: 0;
+  overflow-x: auto;
 
   > *,
   .as-doc-body > * {
@@ -3314,7 +3315,15 @@ footer {
           padding: 0;
           color: #f4f8f5;
           font-size: 13px;
-          white-space: nowrap;
+        }
+      }
+
+      &:last-child {
+        overflow-wrap: anywhere;
+
+        code,
+        a {
+          overflow-wrap: anywhere;
         }
       }
     }
