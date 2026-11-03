@@ -264,7 +264,7 @@ func TestPassShortfall(t *testing.T) {
 }
 
 // TestPassShortfallLogsEviction pins that, past the warn limit, a shortfall
-// pass is quiet unless it evicts.
+// pass is quiet unless it evicts, and then logs at info.
 func TestPassShortfallLogsEviction(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -285,8 +285,12 @@ func TestPassShortfallLogsEviction(t *testing.T) {
 
 	fake.stats.Retired = 1
 	g.runPass(context.Background())
-	if got := buf.String(); !strings.Contains(got, "evicted=1") {
+	got := buf.String()
+	if !strings.Contains(got, "evicted=1") {
 		t.Errorf("evicting shortfall pass logged %q, want a line with evicted=1", got)
+	}
+	if !strings.Contains(got, "level=INFO") {
+		t.Errorf("evicting shortfall pass logged %q, want info level", got)
 	}
 }
 
