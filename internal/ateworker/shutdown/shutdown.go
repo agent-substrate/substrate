@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateworker
+package shutdown
 
 import "time"
 
 // SignalDeliveryTimeout bounds delivering one signal to a workload during
-// graceful shutdown, separately from the grace period.
+// graceful shutdown: a SignalProcess ttrpc round-trip on microVM, or a `runsc
+// kill` invocation on gVisor. It is separate from the grace period so a wedged
+// transport cannot spend the actor's save budget or stall longer when the grace
+// period grows.
 const SignalDeliveryTimeout = 10 * time.Second

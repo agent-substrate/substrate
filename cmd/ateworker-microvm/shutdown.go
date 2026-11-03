@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
-	"go.ate.dev/substrate/internal/ateworker"
+	"go.ate.dev/substrate/internal/ateworker/shutdown"
 )
 
 // workloadGracePeriod is the whole budget for draining the worker on shutdown:
@@ -250,7 +250,7 @@ func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, de
 }
 
 // signalWorkload delivers one signal to a guest workload's init process, bounded
-// by ateworker.SignalDeliveryTimeout. ateworker sets ExecId equal to ContainerId, so passing wid
+// by shutdown.SignalDeliveryTimeout. ateworker sets ExecId equal to ContainerId, so passing wid
 // for both targets that init process.
 //
 // The bound is the point: the shutdown context has no deadline of its own, and
@@ -261,7 +261,7 @@ func stopGuestWorkload(ctx context.Context, agent guestAgent, id, wid string, de
 // never answers, and an unbounded call there would hang until the kubelet's
 // SIGKILL at the end of the pod's termination grace period.
 func signalWorkload(ctx context.Context, agent guestAgent, wid string, sig syscall.Signal) error {
-	sigCtx, cancel := context.WithTimeout(ctx, ateworker.SignalDeliveryTimeout)
+	sigCtx, cancel := context.WithTimeout(ctx, shutdown.SignalDeliveryTimeout)
 	defer cancel()
 	return agent.SignalProcess(sigCtx, wid, wid, uint32(sig))
 }
