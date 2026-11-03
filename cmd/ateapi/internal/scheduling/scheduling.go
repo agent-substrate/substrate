@@ -117,9 +117,12 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 }
 
 // Schedule filters the fleet for eligible candidates with room, samples two at
-// random (power of two choices), and returns the less-loaded one, where load is
-// the higher of actor-slot and compute-resource utilization. Spreading across
-// the warm pool avoids hotspots until autoscaling reclaims idle workers.
+// random (power of two choices), and returns the less-loaded one. For a new
+// placement, one with no RequiredNodes, that is the Worker with fewer
+// assignments per CPU core, counting suspended Actors still bound to its node.
+// Otherwise, or on a tie, load is the higher of actor-slot and compute-resource
+// utilization. Spreading across the warm pool avoids hotspots until
+// autoscaling reclaims idle workers.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
@@ -152,10 +155,36 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	if j >= i {
 		j++
 	}
+	if len(constraints.RequiredNodes) == 0 {
+		if c := compareAssignmentDensity(candidates[j].worker, candidates[i].worker); c != 0 {
+			if c < 0 {
+				return candidates[j].worker, nil
+			}
+			return candidates[i].worker, nil
+		}
+	}
 	if lessLoaded(&candidates[j], &candidates[i]) {
 		return candidates[j].worker, nil
 	}
 	return candidates[i].worker, nil
+}
+
+// compareAssignmentDensity compares a's and b's assignments, running and
+// suspended, per CPU core, and returns a negative number when a has fewer, 0 on
+// a tie, and a positive number when b has fewer. checkRoom only admits
+// workers with CPU capacity.
+func compareAssignmentDensity(a, b *ateapi.Worker) int {
+	aTotal, bTotal := a.GetStatus().GetAssignments().GetTotal(), b.GetStatus().GetAssignments().GetTotal()
+	aSize, bSize := a.GetStatus().GetCapacity().GetCpuMillicores(), b.GetStatus().GetCapacity().GetCpuMillicores()
+	// cross-multiplied, so equal densities tie exactly
+	lhs, rhs := aTotal*bSize, bTotal*aSize
+	switch {
+	case lhs < rhs:
+		return -1
+	case lhs > rhs:
+		return 1
+	}
+	return 0
 }
 
 // candidate pairs an eligible worker with its cached compute utilization.

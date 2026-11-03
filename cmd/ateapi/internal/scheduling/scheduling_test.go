@@ -799,10 +799,39 @@ func TestHasRoomBooksRuntimeOverhead(t *testing.T) {
 	}
 }
 
+func withAssignments(total int64) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
+		w.Status.Assignments = &ateapi.ActorAssignmentsStatus{Total: total}
+	}
+}
+
+func named(name string) func(*ateapi.Worker) {
+	return func(w *ateapi.Worker) {
+		w.Metadata = &ateapi.ResourceMetadata{Name: name}
+	}
+}
+
+func TestScheduleNewPlacementPrefersFewerAssignmentsPerCore(t *testing.T) {
+	// w-dense has fewer assignments but more of them per core
+	f := fleet{
+		worker("w-dense", "gvisor", "node-a", nil, withMaxActors(100), withCapacity(4000, 0), withAssignments(3)),
+		worker("w-roomy", "gvisor", "node-b", nil, withMaxActors(100), withCapacity(8000, 0), withAssignments(4)),
+	}
+	for _, intn := range []func(int) int{seqIntn(0, 0), seqIntn(1, 0)} {
+		got, err := New(f, WithIntn(intn)).Schedule(context.Background(), Constraints{})
+		if err != nil {
+			t.Fatalf("Schedule() error = %v", err)
+		}
+		if got.GetWorkerPod() != "w-roomy" {
+			t.Errorf("Schedule() = %q, want w-roomy", got.GetWorkerPod())
+		}
+	}
+}
+
 func TestScheduleSkipsWorkersWithoutCPUCapacity(t *testing.T) {
 	f := fleet{
 		worker("w-none", "gvisor", "node-a", nil, withMaxActors(16), withCapacity(0, 1<<30)),
-		worker("w-cpu", "gvisor", "node-b", nil, withMaxActors(16), withCapacity(4000, 1<<30)),
+		worker("w-cpu", "gvisor", "node-b", nil, withMaxActors(16), withCapacity(4000, 1<<30), withAssignments(8)),
 	}
 	for _, intn := range []func(int) int{seqIntn(0, 0), seqIntn(1, 0)} {
 		got, err := New(f, WithIntn(intn)).Schedule(context.Background(), Constraints{})
@@ -815,5 +844,19 @@ func TestScheduleSkipsWorkersWithoutCPUCapacity(t *testing.T) {
 	}
 	if _, err := New(fleet{f[0]}).Schedule(context.Background(), Constraints{}); !errors.Is(err, ErrNoCapacity) {
 		t.Errorf("Schedule() with only a worker without CPU capacity = %v, want ErrNoCapacity", err)
+	}
+}
+
+func TestSchedulePinnedResumeIgnoresAssignments(t *testing.T) {
+	f := fleet{
+		worker("w-0", "gvisor", "node-a", nil, withMaxActors(100), withCapacity(4000, 0), withAssignments(50)),
+		worker("w-1", "gvisor", "node-a", nil, withMaxActors(100), withCapacity(4000, 0)),
+	}
+	got, err := New(f, WithIntn(seqIntn(0, 0))).Schedule(context.Background(), Constraints{RequiredNodes: []string{"node-a"}})
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if got.GetWorkerPod() != "w-0" {
+		t.Errorf("Schedule() = %q, want w-0, the first sample on a tie in utilization", got.GetWorkerPod())
 	}
 }
