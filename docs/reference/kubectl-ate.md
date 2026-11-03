@@ -221,7 +221,8 @@ kubectl ate suspend actor my-actor -a <atespace> --mode=sync
 kubectl ate revert actor my-actor -a <atespace>
 
 # Delete an actor, terminating workloads and detaching volumes. This also
-# deletes its snapshots. A RUNNING actor prints a warning on stderr first.
+# deletes its snapshots. A RUNNING actor or one with snapshots prints a
+# warning on stderr first.
 kubectl ate delete actor my-actor -a <atespace>
 ```
 

@@ -402,8 +402,9 @@ func TestUpdateActor(t *testing.T) {
 func TestDeleteActor(t *testing.T) {
 	ref := &ateapi.ObjectRef{Atespace: "demo", Name: "my-counter"}
 	const warning = `Warning: actor "my-counter" is RUNNING. Deleting it stops the actor and permanently deletes its snapshots.` + "\n"
-	actorIn := func(state ateapi.ActorState) *ateapi.Actor {
-		return &ateapi.Actor{Status: &ateapi.ActorStatus{State: state}}
+	const snapWarning = `Warning: deleting actor "my-counter" permanently deletes its snapshots.` + "\n"
+	actorIn := func(state ateapi.ActorState, snapshots ...*ateapi.Snapshot) *ateapi.Actor {
+		return &ateapi.Actor{Status: &ateapi.ActorStatus{State: state, Snapshots: snapshots}}
 	}
 
 	tests := []struct {
@@ -420,7 +421,13 @@ func TestDeleteActor(t *testing.T) {
 			wantDeleted: true,
 		},
 		{
-			name:        "suspended actor does not warn",
+			name:        "suspended actor with a snapshot warns",
+			client:      &fakeActorUpdater{actor: actorIn(ateapi.ActorState_ACTOR_STATE_SUSPENDED, &ateapi.Snapshot{Uuid: "s1", Generation: 1})},
+			wantStderr:  snapWarning,
+			wantDeleted: true,
+		},
+		{
+			name:        "suspended actor without snapshots does not warn",
 			client:      &fakeActorUpdater{actor: actorIn(ateapi.ActorState_ACTOR_STATE_SUSPENDED)},
 			wantDeleted: true,
 		},

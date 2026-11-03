@@ -225,14 +225,18 @@ type actorDeleter interface {
 }
 
 // deleteActor deletes the actor. The server deletes in any state, so it warns
-// on errOut first when the actor is RUNNING.
+// on errOut first when the actor is RUNNING or has snapshots.
 func deleteActor(ctx context.Context, client actorDeleter, errOut io.Writer, ref *ateapi.ObjectRef) error {
 	actor, err := client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
 	if err != nil {
 		return fmt.Errorf("failed to get actor %q: %w", ref.GetName(), err)
 	}
-	if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
+	st := actor.GetStatus()
+	switch {
+	case st.GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING:
 		fmt.Fprintf(errOut, "Warning: actor %q is RUNNING. Deleting it stops the actor and permanently deletes its snapshots.\n", ref.GetName())
+	case len(st.GetSnapshots()) > 0:
+		fmt.Fprintf(errOut, "Warning: deleting actor %q permanently deletes its snapshots.\n", ref.GetName())
 	}
 	_, err = client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref})
 	return err
