@@ -10,6 +10,7 @@ require (
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/google/go-cmp v0.7.0
 	github.com/spf13/cobra v1.10.2
+	github.com/yuin/goldmark v1.8.5
 	go.ate.dev/substrate v0.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.12
 )

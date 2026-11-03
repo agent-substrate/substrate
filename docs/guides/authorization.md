@@ -91,7 +91,7 @@ ATE_API_AUTHZ_BOOTSTRAP_OWNERS=<sub>,system:serviceaccount:ate-system:ate-client
 
 Then add the Google provider to the `ate-api-authentication` ConfigMap and
 restart `ate-api-server`
-([authentication.md](authentication.md#google-cloud-cli-tokens)), and act as
+([authentication.md](authentication.md#configuring-jwt-providers)), and act as
 yourself:
 
 ```sh
@@ -101,11 +101,9 @@ kubectl ate --token-file me.token get atespaces
 
 ## `kubectl ate` and `ate-setup` identities
 
-`kubectl ate` sends the token from `--token-file` (`-` for stdin). Without
-one, it uses your kubeconfig to mint a token for `ate-client` (or
-`ATE_CLIENT_SERVICE_ACCOUNT`) and warns that it is acting as a shared
-identity. It still needs Kubernetes rights to port-forward to `ate-api-server`
-unless you pass `--endpoint`.
+`kubectl ate` sends the token from `--token-file`. Without one, it mints a
+token for `ate-client` (or `ATE_CLIENT_SERVICE_ACCOUNT`); see
+[authentication.md](authentication.md#people-running-kubectl-ate).
 
 `ate-setup` calls the API only to deploy and delete demos and benchmarks, as
 `ate-client`. If you leave `ate-client` out of the bootstrap owners, grant it
@@ -257,10 +255,10 @@ metadata:
 bindings:
 - role: editor
   members:
-  - user:system:serviceaccount:team-a:alice
+  - user:system:serviceaccount:ate-users:alice
 - role: viewer
   members:
-  - user:system:serviceaccount:team-a:bob
+  - user:system:serviceaccount:ate-users:bob
 ```
 
 ```sh
@@ -277,7 +275,9 @@ kubectl ate --token-file me.token delete access-policy -a team-a
   since.
 - The global policy can't be deleted; update it with no bindings instead.
 - Deleting an atespace deletes its policy, so a recreated atespace starts
-  with none.
+  with none. A request authorized against the old atespace and still in
+  flight across the delete and recreate can apply to the new one. See
+  [Known limitations](#known-limitations).
 - Changes take effect on the next call.
 
 ## Recovering access
@@ -297,29 +297,10 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 - **Give people their own identities** in access policies, and have them pass
   `--token-file` with a token from a trusted JWT provider or their own
-  ServiceAccount. To let a user mint tokens only for their own ServiceAccount:
-
-  ```yaml
-  apiVersion: rbac.authorization.k8s.io/v1
-  kind: Role
-  metadata: {name: mint-alice-token, namespace: team-a}
-  rules:
-  - apiGroups: [""]
-    resources: ["serviceaccounts/token"]
-    resourceNames: ["alice"]
-    verbs: ["create"]
-  ```
-
-  ```sh
-  kubectl create token -n team-a alice --audience api.ate-system.svc > alice.token
-  kubectl ate --token-file alice.token get actors -a team-a
-  ```
-
+  ServiceAccount ([authentication.md](authentication.md#people-running-kubectl-ate)).
 - **Limit who can act as a ServiceAccount bootstrap owner.** Anyone who can
-  create `serviceaccounts/token`, pods or Secrets in its namespace, or change
-  RBAC there, can get its token. A
-  `kubernetes.io/service-account-token` Secret gets one that never expires.
-  Check who can, and alert on the audit events:
+  create `serviceaccounts/token` or pods in its namespace, or change RBAC
+  there, can get its token. Check who can, and alert on the audit events:
 
   ```sh
   kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system --as alice@example.com
@@ -327,14 +308,18 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 ### Not yet supported
 
-- **Signing in.** `kubectl ate` has no login flow or credential plugin; people
-  obtain tokens themselves.
-- **JWT providers at install time.** `ate-setup` configures only the cluster's
-  ServiceAccount issuer; add others to the ConfigMap afterwards.
 - **Groups.** Policy members are individual principals.
+- **Signing in.** See [authentication.md](authentication.md#not-yet-supported).
 
 ## Known limitations
 
+- **Atespace names must not be reused.** Grants are keyed by atespace name,
+  and calls are authorized before the write runs. If an atespace is deleted
+  and recreated under the same name, a request authorized against the old
+  atespace and still in flight across the delete and recreate can land on
+  the new one, including granting access to it or deleting it. Nothing
+  enforces unique names. Once an atespace is deleted, don't create another
+  one under that name; use a fresh name instead.
 - **Tags can copy an actor's data.** A tag is a durable copy of an actor's
   memory and disk, including secrets, and outlives the actor. Any atespace
   editor can tag, publish and clone any actor in the atespace.

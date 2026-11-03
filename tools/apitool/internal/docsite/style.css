@@ -1,0 +1,426 @@
+/*
+   Copyright 2026 Google LLC
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+ */
+
+/* The site sets the colors and fonts on .apiref: --apiref-bg,
+   --apiref-bg-raised, --apiref-bg-sunken, --apiref-fg, --apiref-fg-muted,
+   --apiref-border, --apiref-accent, --apiref-mono, and the code colors
+   --apiref-code-type, -string, -number, -keyword and -punct. */
+
+.apiref {
+  color: var(--apiref-fg);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.apiref a { color: var(--apiref-accent); text-decoration: none; }
+.apiref a:hover { text-decoration: underline; }
+
+.apiref .mono { font-family: var(--apiref-mono); font-size: 0.92em; }
+
+.apiref .search-wrap {
+  position: relative;
+  max-width: 36rem;
+}
+
+.apiref #apiref-search {
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--apiref-border);
+  border-radius: 6px;
+  background: var(--apiref-bg);
+  color: var(--apiref-fg);
+  font-size: 0.95em;
+}
+
+.apiref #apiref-search:focus {
+  outline: 2px solid var(--apiref-accent);
+  outline-offset: -1px;
+}
+
+.apiref .search-results {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 10;
+  right: 0;
+  max-height: 60vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--apiref-border) transparent;
+  background: var(--apiref-bg);
+  border: 1px solid var(--apiref-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.apiref .search-results .group-label {
+  padding: 0.35rem 0.75rem 0.15rem;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--apiref-fg-muted);
+}
+
+.apiref .search-results .result {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+}
+
+.apiref .search-results .result > :first-child { flex: none; }
+
+.apiref .search-results .result .full-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--apiref-fg-muted);
+  font-size: 0.85em;
+}
+
+.apiref .search-results .result.active, .apiref .search-results .result:hover {
+  background: var(--apiref-bg-raised);
+}
+
+.apiref .search-results .empty {
+  padding: 0.6rem 0.75rem;
+  color: var(--apiref-fg-muted);
+}
+
+.apiref .group { margin-bottom: 2.5rem; padding: 0; }
+
+.apiref .group > h1 {
+  font-size: 1.1em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--apiref-fg-muted);
+  border-bottom: 1px solid var(--apiref-border);
+  padding-bottom: 0.4rem;
+  margin: 1rem 0;
+}
+
+.apiref .type-card {
+  scroll-margin-top: 1rem;
+  border: 1px solid var(--apiref-border);
+  border-radius: 10px;
+  padding: 1.1rem 1.3rem;
+  margin-bottom: 1.1rem;
+  background: var(--apiref-bg-raised);
+  overflow-x: auto;
+}
+
+.apiref .type-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05em;
+}
+
+.apiref .type-card h3 {
+  margin: 1.2rem 0 0.5rem;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--apiref-fg-muted);
+}
+
+/* --- A resource page: a stack of sections, each its own two-column grid.
+   Sticking the rail *inside* each section (rather than one page-wide rail)
+   means the proto definitions swap per section on scroll, with no JS: a
+   sticky element can't stick past its own containing block. --- */
+
+.apiref .resource-page { scroll-margin-top: 1rem; }
+
+.apiref .page-section {
+  scroll-margin-top: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 2.5rem;
+  padding: 2.25rem 0;
+  border-bottom: 1px solid var(--apiref-border);
+}
+
+.apiref .page-section.single { grid-template-columns: minmax(0, 1fr); }
+.apiref .page-section:last-child { border-bottom: none; }
+
+.apiref .section-main { min-width: 0; align-self: start; overflow-x: auto; }
+
+.apiref .rail-sticky { position: sticky; top: 1.5rem; }
+.apiref .rail-sticky > * + * { margin-top: 1.25rem; }
+
+.apiref .resource-title { margin: 0 0 0.6rem; font-size: 1.9rem; font-weight: 700; letter-spacing: -0.01em; }
+.apiref .resource-labels { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.8rem; }
+.apiref .subresource-list { list-style: none; margin: 0.25rem 0 0; padding: 0; }
+.apiref .subresource-list li { padding: 0.15rem 0; }
+.apiref .methods-table td.mono { white-space: nowrap; word-break: normal; }
+.apiref .section-title { margin: 0 0 1rem; font-size: 1.3rem; font-weight: 700; letter-spacing: -0.01em; }
+.apiref .method-section { border-top: 2px solid var(--apiref-border); }
+.apiref h1 + .method-section { border-top: none; }
+.apiref .method-title { margin: 0 0 1rem; font-size: 1.5rem; font-weight: 700; }
+.apiref .attr-group { margin-top: 1.75rem; padding-left: 1rem; border-left: 3px solid var(--apiref-border); }
+.apiref .attr-group .attr-row:first-of-type { padding-top: 0.5rem; }
+.apiref .group-title { margin: 0; font-size: 1rem; font-weight: 700; }
+.apiref .group-type { font-size: 0.9em; font-weight: 400; color: var(--apiref-fg-muted); }
+
+.apiref .description {
+  color: var(--apiref-fg-muted);
+  margin: 0;
+}
+
+.apiref .section-label {
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--apiref-fg-muted);
+  margin: 2rem 0 0.25rem;
+}
+
+/* --- Attribute / parameter rows: name + type on one line, description
+   below, with an optional "Show fields" expansion. --- */
+
+.apiref .attr-row { padding: 1rem 0; border-bottom: 1px solid var(--apiref-border); }
+.apiref .attr-row:last-child { border-bottom: none; }
+
+.apiref .attr-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.apiref .attr-name { font-family: var(--apiref-mono); font-weight: 700; font-size: 0.95em; }
+.apiref .attr-type { font-family: var(--apiref-mono); font-size: 0.85em; color: var(--apiref-fg-muted); }
+.apiref .attr-type a { color: var(--apiref-fg-muted); }
+.apiref .attr-type a:hover { color: var(--apiref-accent); }
+
+.apiref .attr-desc { margin: 0.4rem 0 0; color: var(--apiref-fg-muted); font-size: 0.92em; }
+
+.apiref .expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--apiref-border);
+  border-radius: 6px;
+  background: var(--apiref-bg);
+  color: var(--apiref-fg);
+  font-family: inherit;
+  font-size: 0.82em;
+  font-weight: 600;
+  cursor: pointer;
+}
+.apiref .expand-toggle:hover { border-color: var(--apiref-accent); color: var(--apiref-accent); }
+.apiref .expand-toggle .sign { font-family: var(--apiref-mono); }
+
+.apiref .attr-children {
+  margin: 0.9rem 0 0;
+  padding: 0.25rem 1.1rem;
+  border: 1px solid var(--apiref-border);
+  border-radius: 8px;
+  background: var(--apiref-bg-raised);
+}
+
+/* --- Rail cards: a resource's example, and a method's proto definitions. --- */
+
+.apiref .rail-card {
+  border: 1px solid var(--apiref-border);
+  border-radius: 10px;
+  background: var(--apiref-bg-raised);
+  overflow: hidden;
+}
+
+.apiref .rail-card h2 {
+  margin: 0;
+  padding: 0.7rem 1rem;
+  font-size: 0.78em;
+  font-weight: 600;
+  color: var(--apiref-fg-muted);
+  border-bottom: 1px solid var(--apiref-border);
+}
+
+.apiref .definition pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  font-family: var(--apiref-mono);
+  font-size: 0.8em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--apiref-bg-sunken);
+}
+
+/* A line too long for the rail wraps, continuing 4 characters in from its
+   own indentation. */
+.apiref .definition .line {
+  display: block;
+  padding-left: calc((var(--indent) + 4) * 1ch);
+  text-indent: calc((var(--indent) + 4) * -1ch);
+}
+
+.apiref .definition .line:empty::before { content: " "; }
+
+.apiref .tok-keyword { color: var(--apiref-code-keyword); }
+.apiref .tok-type { color: var(--apiref-code-type); }
+.apiref .tok-string { color: var(--apiref-code-string); }
+.apiref .tok-number { color: var(--apiref-code-number); font-variant-numeric: tabular-nums; }
+.apiref .tok-punct { color: var(--apiref-code-punct); }
+
+.apiref .comment {
+  margin: 0.2rem 0 0.9rem;
+  color: var(--apiref-fg-muted);
+}
+
+/* --- .description/.comment/.attr-desc hold rendered Markdown (see
+   docsite's markdown func), not plain text - reset the block spacing that
+   Markdown's own <p>/<ul>/<ol>/etc. bring along, since these containers
+   already carry their own margin. --- */
+
+.apiref .description > :first-child,
+.apiref .comment > :first-child,
+.apiref .attr-desc > :first-child { margin-top: 0; }
+
+.apiref .description > :last-child,
+.apiref .comment > :last-child,
+.apiref .attr-desc > :last-child { margin-bottom: 0; }
+
+.apiref .description p,
+.apiref .description ul,
+.apiref .description ol,
+.apiref .comment p,
+.apiref .comment ul,
+.apiref .comment ol,
+.apiref .attr-desc p,
+.apiref .attr-desc ul,
+.apiref .attr-desc ol {
+  margin: 0.5em 0;
+}
+
+.apiref .description ul,
+.apiref .description ol,
+.apiref .comment ul,
+.apiref .comment ol,
+.apiref .attr-desc ul,
+.apiref .attr-desc ol {
+  padding-left: 1.3em;
+}
+
+.apiref .description li + li,
+.apiref .comment li + li,
+.apiref .attr-desc li + li {
+  margin-top: 0.2em;
+}
+
+.apiref .description code,
+.apiref .comment code,
+.apiref .attr-desc code {
+  font-family: var(--apiref-mono);
+  font-size: 0.9em;
+  background: var(--apiref-bg-sunken);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.apiref .description h1,
+.apiref .description h2,
+.apiref .description h3,
+.apiref .description h4,
+.apiref .description h5,
+.apiref .description h6,
+.apiref .comment h1,
+.apiref .comment h2,
+.apiref .comment h3,
+.apiref .comment h4,
+.apiref .comment h5,
+.apiref .comment h6,
+.apiref .attr-desc h1,
+.apiref .attr-desc h2,
+.apiref .attr-desc h3,
+.apiref .attr-desc h4,
+.apiref .attr-desc h5,
+.apiref .attr-desc h6 {
+  font-size: 1em;
+  font-weight: 700;
+  color: var(--apiref-fg);
+  margin: 0.7em 0 0.3em;
+}
+
+.apiref .description blockquote,
+.apiref .comment blockquote,
+.apiref .attr-desc blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.9em;
+  border-left: 2px solid var(--apiref-border);
+}
+
+.apiref .parent-note {
+  margin: 0 0 0.6rem;
+  font-size: 0.85em;
+  color: var(--apiref-fg-muted);
+}
+
+.apiref .empty-note {
+  color: var(--apiref-fg-muted);
+  font-style: italic;
+  margin: 0.5rem 0 0;
+}
+
+.apiref table {
+  width: 100%;
+  border-collapse: collapse;
+  display: table;
+}
+
+.apiref th {
+  text-align: left;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--apiref-fg-muted);
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--apiref-border);
+}
+
+.apiref td {
+  vertical-align: top;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--apiref-border);
+  word-break: break-word;
+}
+
+.apiref tr:last-child td { border-bottom: none; }
+.apiref td > :first-child { margin-top: 0; }
+.apiref td > :last-child { margin-bottom: 0; }
+
+.apiref .tag {
+  display: inline-block;
+  font-size: 0.75em;
+  color: var(--apiref-fg-muted);
+  background: var(--apiref-bg);
+  border: 1px solid var(--apiref-border);
+  border-radius: 4px;
+  padding: 0 0.35em;
+}
+
+/* The site's docs layout leaves the reference too narrow for two columns
+   below this width. */
+@media (max-width: 1100px) {
+  .apiref .page-section { grid-template-columns: minmax(0, 1fr); }
+  .apiref .rail-sticky { position: static; }
+}

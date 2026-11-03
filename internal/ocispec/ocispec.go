@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/imagecache"
@@ -104,6 +105,21 @@ func processUser(u *ateworkerpb.ProcessUser) specs.User {
 	return specs.User{UID: u.GetUid(), GID: u.GetGid(), AdditionalGids: u.GetAdditionalGids()}
 }
 
+// systemMounts returns the system mounts of an actor container. ShapeGVisor
+// removes the parts runsc does not use. Like containerd's CRI plugin, it has no
+// /run mount, so the image's /run shows through.
+func systemMounts() []specs.Mount {
+	return []specs.Mount{
+		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+		{Destination: "/dev/pts", Type: "devpts", Source: "devpts", Options: []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"}},
+		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
+		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
+		{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777"}},
+	}
+}
+
 // Build returns a runtime-neutral OCI spec for an actor container.
 func Build(o Options) *specs.Spec {
 	container := o.Container
@@ -138,29 +154,7 @@ func Build(o Options) *specs.Spec {
 			Readonly: false,
 		},
 		Hostname: Hostname,
-		Mounts: []specs.Mount{
-			{
-				Destination: "/proc",
-				Type:        "proc",
-				Source:      "proc",
-			},
-			{
-				Destination: "/dev",
-				Type:        "tmpfs",
-				Source:      "tmpfs",
-			},
-			{
-				Destination: "/sys",
-				Type:        "sysfs",
-				Source:      "sysfs",
-				Options: []string{
-					"nosuid",
-					"noexec",
-					"nodev",
-					"ro",
-				},
-			},
-		},
+		Mounts:   systemMounts(),
 		Linux: &specs.Linux{
 			Namespaces: namespaces(o.ActorUID),
 			Resources:  ociResources(containerSpec.GetResources()),
@@ -168,14 +162,20 @@ func Build(o Options) *specs.Spec {
 	}
 
 	// Mount order across volume kinds does not matter: the API rejects mounts
-	// that nest under one another.
+	// that nest under one another. A volume at a system mount path, such as
+	// /tmp, replaces that mount in place.
 	bind := func(dest, src, mode string) {
-		spec.Mounts = append(spec.Mounts, specs.Mount{
+		m := specs.Mount{
 			Destination: dest,
 			Type:        "bind",
 			Source:      src,
 			Options:     []string{"bind", mode},
-		})
+		}
+		if i := slices.IndexFunc(spec.Mounts, func(s specs.Mount) bool { return s.Destination == dest }); i >= 0 {
+			spec.Mounts[i] = m
+			return
+		}
+		spec.Mounts = append(spec.Mounts, m)
 	}
 	actorDirs := o.ActorDirs
 	for _, m := range container.GetDurableDirVolumeMounts() {

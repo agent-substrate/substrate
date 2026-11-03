@@ -29,8 +29,8 @@ every setting with its environment variable.
 | `--ingress-allowed-spiffe-ids IDS` | Comma-separated SPIFFE IDs (exact match) of the clients the ingress router lets reach actors; any listed client may reach any actor. Unset, no client may reach actors through the router. Both dataplanes require a Pod Identity CA client certificate on HTTPS and TLS CONNECT. The SPIFFE URI SAN allowlist may be checked during or after TLS, including after CONNECT acceptance, but unlisted clients must be denied before actor routing. The podidentity signer issues `spiffe://cluster.local/ns/<namespace>/sa/<service-account>`. `ATE_INGRESS_ALLOWED_SPIFFE_IDS` when the flag is absent |
 | `--egress-gateway-extra-spiffe-ids IDS` | Comma-separated SPIFFE IDs that hold ate-api-server's `egress_gateway` role next to atenet-egress, such as a credential provider that mints actor JWTs. ate-setup passes atenet-egress's ID and then each listed ID as repeated `--egress-gateway-spiffe-id` flags; unset passes none, leaving ate-api-server's default. `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` when the flag is absent |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
-| `--credential-provider JSON` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/guides/egress-credential-injection.md`](../../docs/guides/egress-credential-injection.md). `ATE_CREDENTIAL_PROVIDER` when the flag is absent |
-| `--ateapi-log-level LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). The server picks up a change without restarting. `ATE_API_LOG_LEVEL` when the flag is absent |
+| `--credential-provider JSON` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. A JSON array of provider objects selects several, each serving the `ate-secret://` URIs its name is the host of. See [`docs/guides/egress-credential-injection.md`](../../docs/guides/egress-credential-injection.md). `ATE_CREDENTIAL_PROVIDER` when the flag is absent |
+| `--ateapi-log-level LEVEL` | ate-api-server log level: `debug`, `info`, `warn`, or `error`. Written to the `ate-api-config` ConfigMap on every deploy when set; unset keeps the installed level (`info` on a new install). Changing the level updates the env-hash annotation and rolls `ate-api-server`. `ATE_API_LOG_LEVEL` when the flag is absent |
 | `--otlp-endpoint URL` | Send control plane telemetry to `URL` instead of the cluster default (see [`benchmarking/telemetry/README.md`](../../benchmarking/telemetry/README.md)). `ATE_OTLP_ENDPOINT` when the flag is absent |
 | `--preview GATES` | Preview gates passed as `--preview` to every substrate component: comma-separated gate names, or `ALL` for all. `ATE_PREVIEW` or `config.preview` when the flag is absent. An explicit `--preview=''` turns them all off, even when `ATE_PREVIEW` is set |
 | `--context NAME` | Kubeconfig context. `KUBECTL_CONTEXT` when the flag is absent |
@@ -73,11 +73,9 @@ installs images already published to `REPO` instead, and never invokes `ko`.
 The manifests still come from the checkout, so this needs one; what it removes
 is the build and write access to a registry. Releases ship no `ate-setup`
 binary, so running it from the checkout still needs Go. On non-Kind clusters,
-the default `--sandbox-classes=gvisor,microvm` also downloads the microVM guest
-assets from GitHub and uploads them with `gcloud` to `<BUCKET>-assets` (created
-with `atelet` read access by `go run ./tools/setup-gcp create bucket` and
-`create iam`); pass `--sandbox-classes=gvisor` to install gVisor only without
-`--storage-bucket-name` or `gcloud`.
+the default `--sandbox-classes=gvisor,microvm` also stages the microVM guest
+assets in the `<BUCKET>-assets` bucket; pass `--sandbox-classes=gvisor` to
+install gVisor only.
 
 `REPO` has to hold every image the install deploys, all under `TAG`, including
 `envoy-dataplane`, which a build from source builds from a Dockerfile with
@@ -165,6 +163,8 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 - `create api-server-env-vars`
 - `create api-authentication-config`
 - `create api-config`
+
+`create api-server-env-vars`, `create api-authentication-config`, and `create api-config` also update `Deployment/ate-api-server`'s env-hash annotation and roll any running pods onto the new configuration.
 
 ## Setup
 

@@ -268,7 +268,8 @@ changes it.
 Defaults are also shown by `ate-setup --help` and by `--help` on the owning
 command. A setting with no default is unset unless something supplies it.
 The `ateapi.authz.*` settings are described in
-[authorization.md](authorization.md).
+[authorization.md](authorization.md), and `ateapi.expectedJWTIssuer` in
+[authentication.md](authentication.md#configuring-jwt-providers).
 
 Settings for the demos, benchmarks, and e2e tests are listed with them: the
 [counter](../../demos/counter/README.md#settings) and
@@ -351,32 +352,40 @@ its name with `SNAPSHOT_TRANSFER_GSA_NAME` (or ate-setup's
 one. The exchange impersonates the account, so
 ate-api-server's identity needs `roles/iam.serviceAccountTokenCreator` on it,
 and the account needs object admin and bucket viewer on every snapshot bucket.
-`go run ./tools/setup-gcp create iam` creates it under that name,
+`tools/setup-gcp create iam` in [substrate-gke](https://github.com/ai-on-gke/substrate-gke) creates it under that name,
 `ate-snapshot-transfer` by default, with both grants.
 kind does not use it.
+
+The exchange verifies the actor JWT with keys it fetches from `actorJWT.issuer`
+through OpenID Connect discovery. The default issuer is the install's
+ate-idp-server. A custom issuer must route to that ate-idp-server, which
+serves the keys the install signs actor JWTs with. It must also be reachable
+from the ate-api-server pod and serve a certificate that the system roots or
+the install's service DNS CA trust.
+The exchange fetches the keys once at start, and exits if the issuer's
+certificate does not verify. Then ate-api-server does not start either.
 
 With `--kind`, ate-setup defaults `storage.snapshotLocation` to
 `gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster
 rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`. On GKE, ate-setup
-does not create the bucket or grant access to it: run
-`go run ./tools/setup-gcp create bucket` and
-`go run ./tools/setup-gcp create iam` first, or `bootstrap` for both (see
-[tools/setup-gcp](../../tools/setup-gcp/README.md)).
+does not create the bucket or grant access to it: run substrate-gke's
+`tools/setup-gcp create bucket` and `create iam` first, or `bootstrap` for both
+(see [tools/setup-gcp](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md) in substrate-gke).
 
-setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
+substrate-gke's setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
 `ate-setup` stages microVM sandbox assets, and gives atelet
 read access to it. atelet gets no access to the snapshot bucket: every snapshot
 transfer runs on a token scoped to its actor, issued by ate-api-server's
 credential exchange. A GCP project set up before the asset bucket existed
-keeps atelet's old grants, since setup-gcp only adds bindings. Remove them as
-[tools/setup-gcp](../../tools/setup-gcp/README.md#upgrading-an-existing-install)
+keeps atelet's old grants, since substrate-gke's setup-gcp only adds bindings. Remove them as
+[tools/setup-gcp](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#moving-to-per-actor-snapshot-credentials) in substrate-gke
 shows, which also covers recreating a cluster with microVM workers.
 
 With the `PerTemplateSnapshotLocation` preview gate, an ActorTemplate may set
 `snapshotConfig.storageLocation` to store its snapshots elsewhere; templates
 that leave it empty use `--snapshot-location`. Grant ate-api-server's identity
 and the snapshot transfer service account object admin and bucket viewer on
-any other bucket a template names, as setup-gcp does on the snapshot bucket. Without the gate,
+any other bucket a template names, as substrate-gke's setup-gcp does on the snapshot bucket. Without the gate,
 ate-api-server rejects templates that set `snapshotConfig.storageLocation`. See
 [Snapshot Storage Layout](../reference/api-guide.md#snapshot-storage-layout).
 

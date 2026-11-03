@@ -97,7 +97,7 @@ func TestDurableVolumesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpointDir := t.TempDir()
-	files, err := tarDurableVolumes(t.Context(), src, checkpointDir, []string{"cache", "data"})
+	files, err := (&AteWorkerService{}).tarDurableVolumes(t.Context(), src, checkpointDir, []string{"cache", "data"})
 	if err != nil {
 		t.Fatalf("tarDurableVolumes: %v", err)
 	}
