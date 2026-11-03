@@ -16,6 +16,8 @@ package deviceplugin
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,21 +28,51 @@ import (
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
-// Each resource gets its own socket in the directory kubelet watches, and two
-// resources must never collide on one filename.
+// Each resource gets its own sockets in the directory kubelet watches, and two
+// resources never collide on one filename.
 func TestSocketPathsAreDistinctAndInKubeletDir(t *testing.T) {
 	kvm := New(HostDevice{ResourceName: "ate.dev/kvm", Path: "/dev/kvm"})
 	other := New(HostDevice{ResourceName: "ate.dev/other", Path: "/dev/other"})
 
-	if kvm.socket == other.socket {
-		t.Errorf("sockets collide: %q", kvm.socket)
+	if kvm.socketPrefix == other.socketPrefix {
+		t.Errorf("socket prefixes collide: %q", kvm.socketPrefix)
 	}
 	for _, p := range []*Plugin{kvm, other} {
-		if got := filepath.Dir(p.socket) + "/"; got != pluginapi.DevicePluginPath {
-			t.Errorf("socket %q is not in %q", p.socket, pluginapi.DevicePluginPath)
+		socket := p.newSocket()
+		if got := filepath.Dir(socket) + "/"; got != pluginapi.DevicePluginPath {
+			t.Errorf("socket %q is not in %q", socket, pluginapi.DevicePluginPath)
 		}
-		if filepath.Ext(p.socket) != ".sock" {
-			t.Errorf("socket %q should end in .sock", p.socket)
+		if filepath.Ext(socket) != ".sock" {
+			t.Errorf("socket %q should end in .sock", socket)
+		}
+	}
+}
+
+// removeSockets removes only our own sockets, not those of a resource whose
+// name extends ours.
+func TestRemoveSocketsKeepsOtherResources(t *testing.T) {
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, socketPrefix("ate.dev/kvm"))
+	ours := prefix + rand.Text() + ".sock"
+	others := []string{
+		filepath.Join(dir, socketPrefix("ate.dev/kvm-gpu")+rand.Text()+".sock"),
+		filepath.Join(dir, "kubelet.sock"),
+	}
+	for _, path := range append(others, ours) {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := removeSockets(prefix); err != nil {
+		t.Fatalf("removeSockets() = %v", err)
+	}
+	if _, err := os.Stat(ours); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%q still exists, err = %v", ours, err)
+	}
+	for _, path := range others {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%q was removed: %v", path, err)
 		}
 	}
 }
