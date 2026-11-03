@@ -493,7 +493,8 @@ func pgErrConstraint(err error) string {
 }
 
 const (
-	// Paces the maintenance loop (outbox partitions and expired leases).
+	// Paces the maintenance loop (outbox partitions, expired leases and
+	// assignment totals).
 	maintenanceInterval = time.Minute
 
 	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
@@ -501,8 +502,9 @@ const (
 	maintenancePassTimeout = 5 * time.Minute
 )
 
-// Maintains worker_outbox partitions and reaps expired leases on a fixed
-// timer. The two are independent: a failure in one still lets the other run.
+// Maintains worker_outbox partitions, repairs worker assignment totals and
+// reaps expired leases on a fixed timer. Each is independent: a failure in one
+// still lets the others run.
 func (p *Persistence) maintenance(ctx context.Context) {
 	ticker := time.NewTicker(maintenanceInterval)
 	defer ticker.Stop()
@@ -515,6 +517,9 @@ func (p *Persistence) maintenance(ctx context.Context) {
 		passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
 		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
+		}
+		if err := p.repairAssignmentTotals(passCtx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "worker assignment total repair failed", slog.Any("err", err))
 		}
 		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))

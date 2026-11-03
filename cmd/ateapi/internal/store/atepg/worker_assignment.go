@@ -151,7 +151,9 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 				actorUID, workerName, assignmentBytes); err != nil {
 				return nil, fmt.Errorf("binding actor %s to worker %s: %w", actorUID, workerName, err)
 			}
-			addAssignmentTotal(worker, +1)
+			if err := addAssignmentTotal(ctx, tx, worker, +1); err != nil {
+				return nil, err
+			}
 		}
 		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, +1)
 		if err := saveWorker(ctx, tx, worker); err != nil {
@@ -259,7 +261,9 @@ func releaseAssignment(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker, ac
 	if resources.AssignmentRunning(assignment) {
 		worker.Status.Allocated = resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
 	}
-	addAssignmentTotal(worker, -1)
+	if err := addAssignmentTotal(ctx, tx, worker, -1); err != nil {
+		return nil, err
+	}
 	if err := saveWorker(ctx, tx, worker); err != nil {
 		return nil, err
 	}
@@ -353,14 +357,123 @@ func (p *Persistence) publishWorker(ctx context.Context, name string) {
 	}
 }
 
-// addAssignmentTotal adjusts the count of the Worker's assignments by n.
-func addAssignmentTotal(worker *ateapi.Worker, n int64) {
+// addAssignmentTotal adjusts the count of the Worker's assignments by n, after
+// its rows changed. An unset count may be from rc.1, which kept rows without
+// counting them, so it is counted from the rows instead.
+//
+// TODO: drop the recount after rc.2, upgrades from rc.1 must go through rc.2.
+func addAssignmentTotal(ctx context.Context, tx pgx.Tx, worker *ateapi.Worker, n int64) error {
 	total := worker.GetStatus().GetAssignments().GetTotal() + n
+	if worker.GetStatus().GetAssignments() == nil {
+		var err error
+		if total, err = countAssignmentRows(ctx, tx, worker.GetMetadata().GetName()); err != nil {
+			return err
+		}
+	}
+	setAssignmentTotal(worker, total)
+	return nil
+}
+
+func setAssignmentTotal(worker *ateapi.Worker, total int64) {
 	if total == 0 {
 		worker.Status.Assignments = nil
 		return
 	}
 	worker.Status.Assignments = &ateapi.ActorAssignmentsStatus{Total: total}
+}
+
+func countAssignmentRows(ctx context.Context, tx pgx.Tx, name string) (int64, error) {
+	var total int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM worker_assignments WHERE worker_name = $1`, name).Scan(&total); err != nil {
+		return 0, fmt.Errorf("counting assignments of worker %s: %w", name, err)
+	}
+	return total, nil
+}
+
+// repairAssignmentTotals recounts each Worker whose total disagrees with its
+// rows. While rc.1 and rc.2 run side by side, rc.1 adds and removes rows
+// without counting them, so totals drift until the rollout finishes and this
+// repairs them.
+//
+// TODO: drop after rc.2, upgrades from rc.1 must go through rc.2.
+func (p *Persistence) repairAssignmentTotals(ctx context.Context) error {
+	counts := map[string]int64{}
+	rows, err := p.pool.Query(ctx, `SELECT worker_name, count(*) FROM worker_assignments GROUP BY worker_name`)
+	if err != nil {
+		return fmt.Errorf("counting assignments: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		var n int64
+		if err := rows.Scan(&name, &n); err != nil {
+			rows.Close()
+			return fmt.Errorf("counting assignments: %w", err)
+		}
+		counts[name] = n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("counting assignments: %w", err)
+	}
+
+	var drifted []string
+	rows, err = p.pool.Query(ctx, `SELECT name, proto FROM workers`)
+	if err != nil {
+		return fmt.Errorf("listing workers: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		var protoBytes []byte
+		if err := rows.Scan(&name, &protoBytes); err != nil {
+			rows.Close()
+			return fmt.Errorf("listing workers: %w", err)
+		}
+		worker := &ateapi.Worker{}
+		if err := unmarshalStored(protoBytes, worker); err != nil {
+			rows.Close()
+			return fmt.Errorf("unmarshaling worker %s: %w", name, err)
+		}
+		if worker.GetStatus().GetAssignments().GetTotal() != counts[name] {
+			drifted = append(drifted, name)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("listing workers: %w", err)
+	}
+
+	// the reads above take no locks, so recount under each Worker's row lock
+	for _, name := range drifted {
+		if _, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+			worker, err := getWorkerForUpdate(ctx, tx, name)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			total, err := countAssignmentRows(ctx, tx, name)
+			if err != nil {
+				return nil, err
+			}
+			stored := worker.GetStatus().GetAssignments().GetTotal()
+			if stored == total {
+				return nil, nil
+			}
+			if worker.Status == nil {
+				worker.Status = &ateapi.WorkerStatus{}
+			}
+			setAssignmentTotal(worker, total)
+			if err := saveWorker(ctx, tx, worker); err != nil {
+				return nil, err
+			}
+			slog.InfoContext(ctx, "Repaired worker assignment total", slog.String("worker", name), slog.Int64("from", stored), slog.Int64("to", total))
+			return worker, nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // getAssignmentRow reads the assignment for actorUID and names the worker

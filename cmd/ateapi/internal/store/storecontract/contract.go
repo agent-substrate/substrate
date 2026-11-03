@@ -3195,6 +3195,33 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		wantState(t, s, testWorkerName, assignment, ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING)
 	})
 
+	t.Run("AssignmentState_UnsetTotalIsCounted", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		first := newTestAssignment(t, s, "1", 500, 1<<20)
+		second := newTestAssignment(t, s, "2", 500, 1<<20)
+		third := newTestAssignment(t, s, "3", 500, 1<<20)
+		resumeOn(t, s, testWorkerName, "node-1", first)
+		resumeOn(t, s, testWorkerName, "node-1", second)
+		// a Worker last written by a version that didn't count
+		w, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if _, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(w), func(toUpdate *ateapi.Worker) error {
+			toUpdate.Status.Assignments = nil
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateWorker failed: %v", err)
+		}
+
+		resumeOn(t, s, testWorkerName, "node-1", third)
+		wantCounts(t, s, testWorkerName, 3, 3)
+		suspendOn(t, s, first, "")
+		wantCounts(t, s, testWorkerName, 2, 2)
+	})
+
 	t.Run("AssignmentState_SuspendOffTheNodeReleases", func(t *testing.T) {
 		s := setup(t)
 		newNodeWorker(t, s, testWorkerName, "node-1")
