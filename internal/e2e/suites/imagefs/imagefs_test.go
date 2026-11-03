@@ -43,8 +43,8 @@ type statResponse struct {
 // .ko.yaml builds the probe on the root distroless static base, whose base
 // layer has /home/nonroot as drwx------ owned by 65532:65532 (distroless's
 // nonroot user), /var/tmp as root-owned 1777, and root-owned system files.
-// /var/tmp, not /tmp, checks the sticky bit: gVisor mounts its own 1777 tmpfs
-// over an empty /tmp.
+// /var/tmp, not /tmp, checks the sticky bit: both runtimes mount a tmpfs over
+// /tmp.
 var layerOwners = []statResponse{
 	{Path: "/home/nonroot", UID: 65532, GID: 65532, Mode: "drwx------"},
 	{Path: "/var/tmp", UID: 0, GID: 0, Mode: "dtrwxrwxrwx"},
@@ -52,11 +52,19 @@ var layerOwners = []statResponse{
 	{Path: "/home", UID: 0, GID: 0, Mode: "drwxr-xr-x"},
 }
 
+// systemMountOwners are the owner and mode of the tmpfs mounts both runtimes
+// put at /tmp and /dev/shm.
+var systemMountOwners = []statResponse{
+	{Path: "/tmp", UID: 0, GID: 0, Mode: "dtrwxrwxrwx"},
+	{Path: "/dev/shm", UID: 0, GID: 0, Mode: "dtrwxrwxrwx"},
+}
+
 // TestImageLayerOwnership asserts that files keep the owners the image's
 // layer tars record, as they do under containerd: a private home directory
 // given to a non-root user must not show up as root-owned inside the actor.
-// It checks once on the first start and again after a suspend and resume,
-// which restores the actor over the same cached layers.
+// It also checks the tmpfs mounts in systemMountOwners. It checks once on the
+// first start and again after a suspend and resume, which restores the actor
+// over the same cached layers.
 //
 // It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
 // covers both gVisor and microVM from one suite.
@@ -85,10 +93,14 @@ func TestImageLayerOwnership(t *testing.T) {
 	}
 	defer rc.Close()
 
+	check := func(t *testing.T) {
+		checkOwners(t, ctx, rc, ref, layerOwners, "the image's layer")
+		checkOwners(t, ctx, rc, ref, systemMountOwners, "the system mount")
+	}
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", ref.Name, err)
 	}
-	t.Run("first start", func(t *testing.T) { checkOwners(t, ctx, rc, ref) })
+	t.Run("first start", check)
 
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: ref})
 	if err != nil {
@@ -100,7 +112,7 @@ func TestImageLayerOwnership(t *testing.T) {
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q after suspend: %v", ref.Name, err)
 	}
-	t.Run("after suspend and resume", func(t *testing.T) { checkOwners(t, ctx, rc, ref) })
+	t.Run("after suspend and resume", check)
 }
 
 // identityResponse mirrors the nonroot probe's /identity payload.
@@ -126,8 +138,9 @@ const (
 // TestImageUserAndWorkdir asserts that the actor's process runs as its image's
 // USER, resolved by name against the image's own /etc/passwd and /etc/group,
 // with no effective capabilities, and starts in the image's WORKDIR, where
-// that user can create files. The WORKDIR is private to the user, so the
-// write also needs the layer owners TestImageLayerOwnership checks.
+// that user can create files alongside /tmp and /dev/shm. The WORKDIR is
+// private to the user, so the write also needs the layer owners
+// TestImageLayerOwnership checks.
 //
 // The golden bake runs the probe as that user and binds :80, and the actor
 // resumes from that golden snapshot. It runs against whichever sandbox class
@@ -187,7 +200,7 @@ func TestImageUserAndWorkdir(t *testing.T) {
 		t.Errorf("working directory = %q, want the image's WORKDIR %q", got.Cwd, nonrootWorkdir)
 	}
 	if got.WriteError != "" {
-		t.Errorf("creating a file in the WORKDIR as the image's USER: %s", got.WriteError)
+		t.Errorf("creating a file in the WORKDIR, /tmp, or /dev/shm as the image's USER: %s", got.WriteError)
 	}
 }
 
@@ -209,17 +222,19 @@ func probeIdentity(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref 
 	return out
 }
 
-func checkOwners(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref *ateapi.ObjectRef) {
+// checkOwners checks the owner and mode of each path in want, naming source on
+// mismatch.
+func checkOwners(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref *ateapi.ObjectRef, want []statResponse, source string) {
 	t.Helper()
-	for _, want := range layerOwners {
-		got := probeStat(t, ctx, rc, ref, want.Path)
+	for _, w := range want {
+		got := probeStat(t, ctx, rc, ref, w.Path)
 		if got.Error != "" {
-			t.Errorf("stat %s inside the actor: %s", want.Path, got.Error)
+			t.Errorf("stat %s inside the actor: %s", w.Path, got.Error)
 			continue
 		}
-		if got.UID != want.UID || got.GID != want.GID || got.Mode != want.Mode {
-			t.Errorf("%s inside the actor is %s %d:%d, want %s %d:%d as the image's layer records it",
-				want.Path, got.Mode, got.UID, got.GID, want.Mode, want.UID, want.GID)
+		if got.UID != w.UID || got.GID != w.GID || got.Mode != w.Mode {
+			t.Errorf("%s inside the actor is %s %d:%d, want %s %d:%d from %s",
+				w.Path, got.Mode, got.UID, got.GID, w.Mode, w.UID, w.GID, source)
 		}
 	}
 }
