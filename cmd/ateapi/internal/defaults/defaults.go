@@ -32,6 +32,8 @@ func Apply(m proto.Message) {
 		applyAccessPolicyDefaults(v)
 	case *ateapi.Actor:
 		applyActorDefaults(v)
+	case *ateapi.ActorAssignment:
+		applyActorAssignmentDefaults(v)
 	case *ateapi.ActorTemplate:
 		applyActorTemplateDefaults(v)
 	case *ateapi.Atespace:
@@ -120,3 +122,11 @@ func applyEgressRuleDefaults(rules []*ateapi.EgressRule) {
 func applyTagDefaults(*ateapi.Tag) {}
 
 func applyWorkerDefaults(*ateapi.Worker) {}
+
+// applyActorAssignmentDefaults reads an unset state as running, which is what
+// every assignment was before suspended ones were kept.
+func applyActorAssignmentDefaults(a *ateapi.ActorAssignment) {
+	if a != nil && a.State == ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_UNSPECIFIED {
+		a.State = ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING
+	}
+}

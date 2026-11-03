@@ -159,6 +159,14 @@ func TestApply(t *testing.T) {
 		name: "worker has no defaults",
 		in:   &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: "worker-1"}},
 		want: &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: "worker-1"}},
+	}, {
+		name: "assignment without a state is running",
+		in:   &ateapi.ActorAssignment{ActorUid: "uid"},
+		want: &ateapi.ActorAssignment{ActorUid: "uid", State: ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING},
+	}, {
+		name: "suspended assignment stays suspended",
+		in:   &ateapi.ActorAssignment{State: ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED},
+		want: &ateapi.ActorAssignment{State: ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
