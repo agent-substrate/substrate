@@ -17,5 +17,6 @@
 A test entry's `evaluations:` (config.py) name sources, which read the run's
 files into values (sources/), and threshold conditions over those values
 (checks.py). evaluator.py judges them; outputs.py writes evaluation.json and
-stats.jsonl rows. Standard library only. See README.md.
+stats.jsonl rows. Standard library only, plus cel-expr-python for the cel
+source (requirements.txt). See README.md.
 """

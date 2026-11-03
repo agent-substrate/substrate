@@ -34,7 +34,7 @@ re-evaluation of a stored run.
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, Union
 
 Scalar = Union[int, float, bool, str, None]
 
@@ -58,15 +58,27 @@ def valid_value_name(name: Any) -> bool:
     return isinstance(name, str) and bool(VALUE_NAME.match(name)) and "__" not in name and len(name) <= NAME_MAX
 
 
+def no_paired_runs(test: str) -> "BenchmarkRunContext":
+    """BenchmarkRunContext.paired_run of a run that is paired with nothing."""
+    raise LookupError(f"no run of {test} to pair with")
+
+
 @dataclass(frozen=True)
 class BenchmarkRunContext:
     """One benchmark run (one run of a test entry), as a source sees it at init.
 
     files is the run's files by name ("logs.txt", "stats.jsonl",
-    "server_summary.json", "stats_history.csv"), as local paths that exist once
-    the run has finished.
+    "server_summary.json", "stats_history.csv"), as local paths that exist
+    once the run has finished. paired_run(test) returns the run of another test
+    from the same invocation (e.g. the suite's 1-user run), or raises
+    LookupError saying why there is none; whoever creates the context says
+    what "the same invocation" means. Call it from query: pairing may read this
+    run's files. label says where the run came from (e.g. its uri), for the
+    record only: sources never parse it.
     """
     files: Mapping[str, Path]
+    paired_run: Callable[[str], "BenchmarkRunContext"] = no_paired_runs
+    label: str = ""
 
     def file(self, name: str) -> Optional[Path]:
         """The local path of artifact name; None when the run did not produce it."""
