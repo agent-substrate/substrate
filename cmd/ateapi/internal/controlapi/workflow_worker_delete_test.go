@@ -266,6 +266,33 @@ func TestDeleteWorkerWorkflow_LeftoverAssignmentFails(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkerWorkflow_TakesSuspendedAssignments(t *testing.T) {
+	ctx := context.Background()
+	wf, persistence := newWorkerDeleteWorkflow(t)
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
+		a.Status.WorkerAssignment = nil
+		a.Status.AssignedNode = "node-1"
+	})
+	suspended := newAPIAssignment(actor.GetMetadata().GetUid())
+	suspended.State = ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED
+	storetest.MustSeedAssignment(t, ctx, persistence, apiWorkerName, suspended)
+
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker() failed: %v", err)
+	}
+	if _, err := persistence.GetWorker(ctx, apiWorkerName); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetWorker() after the delete = %v, want ErrNotFound", err)
+	}
+	got, err := persistence.GetActor(ctx, apiActorRef)
+	if err != nil {
+		t.Fatalf("GetActor() failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED || got.GetStatus().GetAssignedNode() != "node-1" {
+		t.Errorf("actor = %v on node %q, want it left suspended on node-1", got.GetStatus().GetState(), got.GetStatus().GetAssignedNode())
+	}
+}
+
 // A release that fails must leave the Worker in place: the delete is what
 // erases the Actor's pointer at it, so the record has to stay findable for the
 // caller to rediscover and retry.

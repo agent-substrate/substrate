@@ -148,6 +148,11 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 			return fmt.Errorf("while listing the assignments of worker %s: %w", worker.GetMetadata().GetName(), err)
 		}
 		for _, assignment := range page.Items {
+			// suspended assignments go with the Worker, their Actors stay bound
+			// to the node
+			if !resources.AssignmentRunning(assignment) {
+				continue
+			}
 			err := w.releaseBoundActor(ctx, worker, assignment)
 			if errors.Is(err, errActorBusy) {
 				busy++
