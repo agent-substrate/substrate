@@ -23,10 +23,13 @@ A relying party is configured with the issuer URL it trusts and the audience
 it expects. To verify a token:
 
 1. Check that the `iss` claim equals the trusted issuer.
-2. Fetch `<issuer>/.well-known/openid-configuration` and check that its
-   `issuer` equals the same value.
-3. Fetch the document's `jwks_uri` and take the key whose `kid` matches the
-   token header. Check the signature with that key and its `alg`.
+2. Fetch `<issuer>/.well-known/openid-configuration` over TLS, verifying the
+   server's certificate, and check that its `issuer` equals the same value.
+   See [Reaching the issuer](#reaching-the-issuer) for how to trust the
+   certificate.
+3. Fetch the document's `jwks_uri` over TLS with the same certificate check,
+   and take the key whose `kid` matches the token header. Check the signature
+   with that key and its `alg`.
 4. Check that `aud` contains the expected audience, and check `exp` and `nbf`
    against the current time.
 5. Check that `sub` starts with `actor/`. The same keys sign
@@ -37,7 +40,9 @@ it expects. To verify a token:
    must reject them.
 
 When a token names a `kid` the relying party has not seen, it should refetch
-the key set: a new key is published before it signs anything.
+the key set: a new key is published before it signs anything. Rate-limit key
+set fetches instead of fetching on every unrecognized `kid`, so invalid tokens
+cannot overload ate-idp-server.
 
 ## The token
 
@@ -164,11 +169,11 @@ through the signer's ClusterTrustBundle, projected the way
 [ate-controller.yaml](../../manifests/ate-install/ate-controller.yaml) mounts it.
 
 A relying party outside the cluster cannot resolve a Service name. To serve
-one, put an Ingress or load balancer with a publicly trusted certificate on a
-host you own, route `/.well-known/openid-configuration` and `/openid/v1/jwks`
-to the `idp` Service over HTTPS, and set the issuer to `https://<that host>`.
-The installer does not create the Ingress, the DNS record, or the
-certificate.
+one, put an Ingress or load balancer with a publicly trusted WebPKI
+certificate on a host you own, route `/.well-known/openid-configuration` and
+`/openid/v1/jwks` to the `idp` Service over HTTPS, and set the issuer to
+`https://<that host>`. The installer does not create the Ingress, the DNS
+record, or the certificate.
 
 ## Signing keys and rotation
 
