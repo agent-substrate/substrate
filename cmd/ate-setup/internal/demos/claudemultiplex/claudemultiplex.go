@@ -93,7 +93,7 @@ func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
 
 // Delete needs no credentials: only the pool manifest is rendered, and it
 // carries none of the deploy-time placeholders.
-func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
+func (d *demo) Delete(ctx context.Context, e *steps.Env) ([]string, error) {
 	return d.sub.Delete(ctx, e)
 }
 
