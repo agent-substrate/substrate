@@ -197,7 +197,7 @@ func TestShapeMicroVM_AllowsLowPortsInTheGuest(t *testing.T) {
 	}
 }
 
-func TestShapeMicroVM_VolumesAreNosuidNodev(t *testing.T) {
+func TestShapeMicroVM_VolumesAreNodev(t *testing.T) {
 	spec := Build(parityOptions)
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatal(err)
@@ -208,10 +208,15 @@ func TestShapeMicroVM_VolumesAreNosuidNodev(t *testing.T) {
 			t.Fatalf("no mount at %s", dest)
 		}
 		opts := spec.Mounts[i].Options
-		for _, want := range []string{"rbind", "nosuid", "nodev"} {
+		for _, want := range []string{"rbind", "nodev"} {
 			if !slices.Contains(opts, want) {
 				t.Errorf("%s options = %v, want %s", dest, opts, want)
 			}
+		}
+		// Setuid binaries and file capabilities on volumes work, as under
+		// containerd and gVisor.
+		if slices.Contains(opts, "nosuid") {
+			t.Errorf("%s options = %v, want no nosuid", dest, opts)
 		}
 	}
 }

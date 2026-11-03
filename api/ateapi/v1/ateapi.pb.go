@@ -3489,9 +3489,8 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 type Capabilities struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// add lists capabilities to grant on top of the default set. Only
-	// AUDIT_WRITE, CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, FSETID, KILL,
-	// NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID and SYS_CHROOT are
-	// accepted.
+	// AUDIT_WRITE, CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, NET_BIND_SERVICE,
+	// SETFCAP, SETGID, SETPCAP, SETUID and SYS_CHROOT are accepted.
 	//
 	// +k8s:optional
 	// +k8s:maxItems=64

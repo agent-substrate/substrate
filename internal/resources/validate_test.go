@@ -569,12 +569,13 @@ func TestValidateCapabilities(t *testing.T) {
 	tests := []struct {
 		name     string
 		caps     []string
-		allowAll bool
+		drop     bool
 		wantErrs int
 	}{
 		{"valid names", []string{"NET_BIND_SERVICE", "SYS_CHROOT"}, false, 0},
-		{"add outside the allowlist", []string{"MKNOD", "SYS_ADMIN", "NET_RAW", "SYS_PTRACE"}, false, 4},
+		{"add outside the allowlist", []string{"MKNOD", "SYS_ADMIN", "NET_RAW", "SYS_PTRACE", "DAC_READ_SEARCH"}, false, 5},
 		{"drop outside the allowlist", []string{"MKNOD", "SYS_ADMIN"}, true, 0},
+		{"CAP_ prefix in drop", []string{"CAP_NET_ADMIN"}, true, 1},
 		{"every allowed name in add", sets.List(AllowedAddCapabilities), false, 0},
 		{"ALL rejected for add", []string{"ALL"}, false, 1},
 		{"ALL accepted for drop", []string{"ALL"}, true, 0},
@@ -588,7 +589,11 @@ func TestValidateCapabilities(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if errs := ValidateCapabilities(field.NewPath("add"), tt.caps, tt.allowAll); len(errs) != tt.wantErrs {
+			validate := ValidateAddCapabilities
+			if tt.drop {
+				validate = ValidateDropCapabilities
+			}
+			if errs := validate(field.NewPath("caps"), tt.caps); len(errs) != tt.wantErrs {
 				t.Errorf("errs = %v, want %d", errs, tt.wantErrs)
 			}
 		})

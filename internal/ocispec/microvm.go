@@ -80,12 +80,6 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 				m.Options[j] = "rbind"
 			}
 		}
-		// The guest must not honor a device node or setuid bit on a volume.
-		for _, opt := range []string{"nosuid", "nodev"} {
-			if !slices.Contains(m.Options, opt) {
-				m.Options = append(m.Options, opt)
-			}
-		}
 	}
 	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
 	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350

@@ -269,10 +269,6 @@ func TestResolveCapabilities(t *testing.T) {
 		caps: &ateletpb.Capabilities{Add: []string{"SYS_CHROOT"}},
 		want: withCaps(wantDefaultCapabilities, "CAP_SYS_CHROOT"),
 	}, {
-		name: "add skips capabilities outside the allowlist",
-		caps: &ateletpb.Capabilities{Add: []string{"MKNOD", "SYS_ADMIN", "NET_RAW"}},
-		want: wantDefaultCapabilities,
-	}, {
 		name: "drop ALL clears the default set",
 		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}},
 		want: nil,

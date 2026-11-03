@@ -424,33 +424,58 @@ var linuxCapabilities = sets.New(
 
 // AllowedAddCapabilities are the capabilities a container may add.
 var AllowedAddCapabilities = sets.New(
-	"AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER",
-	"FSETID", "KILL", "NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETPCAP",
-	"SETUID", "SYS_CHROOT",
+	"AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL",
+	"NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT",
 )
 
-// ValidateCapabilities checks each capability name. allowAll is set for drop,
-// which accepts "ALL" and any capability name. Add accepts only
-// AllowedAddCapabilities.
-func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) field.ErrorList {
+// ValidateAddCapabilities accepts only AllowedAddCapabilities.
+func ValidateAddCapabilities(fldPath *field.Path, caps []string) field.ErrorList {
 	var errs field.ErrorList
 	for i, c := range caps {
 		p := fldPath.Index(i)
-		switch {
-		case c == "ALL" && !allowAll:
-			errs = append(errs, field.Invalid(p, c, "add does not accept 'ALL'; name the individual capabilities the container needs"))
-		case c == "ALL":
-		case len(c) > 63:
-			errs = append(errs, field.TooLong(p, nil, 63))
-		case strings.HasPrefix(c, "CAP_"):
-			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
-		case !allowAll && !AllowedAddCapabilities.Has(c):
+		if c == "ALL" {
+			errs = append(errs, field.Invalid(p, c, "'ALL' is not accepted; name the individual capabilities the container needs, from: "+strings.Join(sets.List(AllowedAddCapabilities), ", ")))
+			continue
+		}
+		if err := validateCapabilityName(p, c); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !AllowedAddCapabilities.Has(c) {
 			errs = append(errs, field.NotSupported(p, c, sets.List(AllowedAddCapabilities)))
-		case allowAll && !linuxCapabilities.Has(c):
+		}
+	}
+	return errs
+}
+
+// ValidateDropCapabilities accepts "ALL" and any Linux capability name.
+func ValidateDropCapabilities(fldPath *field.Path, caps []string) field.ErrorList {
+	var errs field.ErrorList
+	for i, c := range caps {
+		p := fldPath.Index(i)
+		if c == "ALL" {
+			continue
+		}
+		if err := validateCapabilityName(p, c); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !linuxCapabilities.Has(c) {
 			errs = append(errs, field.NotSupported(p, c, append(sets.List(linuxCapabilities), "ALL")))
 		}
 	}
 	return errs
+}
+
+// validateCapabilityName rejects names too long or spelled with "CAP_".
+func validateCapabilityName(p *field.Path, c string) *field.Error {
+	switch {
+	case len(c) > 63:
+		return field.TooLong(p, nil, 63)
+	case strings.HasPrefix(c, "CAP_"):
+		return field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')")
+	}
+	return nil
 }
 
 // mountPathBadSegmentRE matches '.' or '..' path segments.
