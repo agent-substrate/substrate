@@ -228,6 +228,23 @@ row lacks, or a number that isn't finite (NaN, an infinity, `1e999`), is null.
   per evaluation, with every value of every variable as `<variable>__<value>`,
   and one `evaluation_summary` row. Measurements are strings, or null.
 
+## In the runner
+
+The orchestrator passes a `locust` test entry's `evaluations` to `runner.py`
+as `--evaluations`. Before the load test, the runner loads them and runs the
+sources' `init`, so a config error is in `logs.txt` from the start. As its
+last step after the run, it runs the queries, writes `evaluation.json` (a
+config error goes there too), uploads it with the run's other files, appends
+the rows to `stats.jsonl`, and logs one line per evaluation. `status.json` and
+the exit code don't change: an evaluation never fails a run.
+
+The runner's `paired_run(test)` returns the run of `test` under the same
+`--dest` with the same `--tag` and the latest `run_ts`, at most 6 h before
+this run (`rundir.py`). When both runs record a cluster (`trial_summary`'s
+`metadata_cluster_name`), it must be the same. On a `gs://` `--dest`, this
+needs read access to the bucket (see the
+[automation README](../automation/README.md#iam-prerequisites)).
+
 ## Layout
 
 | file | |
@@ -237,6 +254,8 @@ row lacks, or a number that isn't finite (NaN, an infinity, `1e999`), is null.
 | `evaluator.py` | runs the source hooks and judges a run: the content of `evaluation.json` |
 | `outputs.py` | `evaluation.json` and the `stats.jsonl` rows |
 | `sources/` | the hooks (`base.py`) and the sources |
+| `rundir.py` | the runner's storage layout: local or `gs://` runs, finding a paired run |
+| `__init__.py` | `prepare` and `write`, which `runner.py` calls |
 
 ## Tests
 
