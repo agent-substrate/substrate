@@ -219,7 +219,7 @@ func TestWorkerSecurityFilesystem(t *testing.T) {
 					HttpGet: &ateapi.HttpGetAction{Path: "/healthz", Port: 80}, TimeoutSeconds: 30,
 				},
 				SecurityContext: &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{
-					Add: []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID", "MKNOD"},
+					Add: []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID"},
 				}},
 			}}
 		},

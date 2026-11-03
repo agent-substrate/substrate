@@ -156,8 +156,8 @@ func TestShapers_PreserveProcess(t *testing.T) {
 	}
 }
 
-// ShapeMicroVM rewrites bind sources to their guest share paths and switches
-// bind to rbind.
+// ShapeMicroVM rewrites bind sources to their guest share paths, switches bind
+// to rbind, and adds nosuid and nodev.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
@@ -168,10 +168,10 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 		wantSource string
 		wantOpts   []string
 	}{
-		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data", []string{"rbind", "rw"}},
-		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo", []string{"rbind", "ro"}},
-		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi", []string{"rbind", "rw"}},
-		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent", []string{"rbind", "ro"}},
+		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data", []string{"rbind", "rw", "nosuid", "nodev"}},
+		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo", []string{"rbind", "ro", "nosuid", "nodev"}},
+		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi", []string{"rbind", "rw", "nosuid", "nodev"}},
+		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent", []string{"rbind", "ro", "nosuid", "nodev"}},
 	} {
 		m := mountFor(t, spec, tc.dest)
 		if m.Source != tc.wantSource {

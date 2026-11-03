@@ -572,16 +572,19 @@ func TestValidateCapabilities(t *testing.T) {
 		allowAll bool
 		wantErrs int
 	}{
-		{"valid names", []string{"NET_BIND_SERVICE", "SYS_PTRACE"}, false, 0},
+		{"valid names", []string{"NET_BIND_SERVICE", "SYS_CHROOT"}, false, 0},
+		{"add outside the allowlist", []string{"MKNOD", "SYS_ADMIN", "NET_RAW", "SYS_PTRACE"}, false, 4},
+		{"drop outside the allowlist", []string{"MKNOD", "SYS_ADMIN"}, true, 0},
+		{"every allowed name in add", sets.List(AllowedAddCapabilities), false, 0},
 		{"ALL rejected for add", []string{"ALL"}, false, 1},
 		{"ALL accepted for drop", []string{"ALL"}, true, 0},
 		{"CAP_ prefix", []string{"CAP_NET_ADMIN"}, false, 1},
 		{"lowercase", []string{"net_admin"}, false, 1},
 		{"too long", []string{strings.Repeat("A", 64)}, false, 1},
-		{"each bad entry reported", []string{"CAP_X", "ok", "NET_ADMIN"}, false, 2},
+		{"each bad entry reported", []string{"CAP_X", "ok", "CHOWN"}, false, 2},
 		{"unknown name", []string{"NET_ADIMN"}, false, 1},
 		{"unknown name in drop", []string{"NET_ADIMN"}, true, 1},
-		{"every known name", sets.List(linuxCapabilities), false, 0},
+		{"every known name in drop", sets.List(linuxCapabilities), true, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

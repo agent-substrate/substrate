@@ -713,6 +713,12 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, nil)},
 	}, {
+		name: "capability outside the add allowlist",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{Add: []string{"MKNOD"}}}
+		},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, nil)},
+	}, {
 		name: "duplicate capability",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{Add: []string{"NET_BIND_SERVICE", "NET_BIND_SERVICE"}}}

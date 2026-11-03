@@ -32,6 +32,7 @@ import (
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
@@ -54,8 +55,10 @@ var defaultCapabilities = []string{
 
 // resolveCapabilities computes a container's effective capability set as
 // default - drop + add. Drop applies first, so a capability named in both is
-// granted. The result is CAP_-prefixed and sorted for a stable OCI spec: the
-// spec is written on every run and a reordered set would churn the bundle.
+// granted. An add outside resources.AllowedAddCapabilities is ignored, in case
+// one gets past validation. The result is CAP_-prefixed and sorted for a
+// stable OCI spec: the spec is written on every run and a reordered set would
+// churn the bundle.
 func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	effective := make(map[string]struct{}, len(defaultCapabilities))
 	for _, c := range defaultCapabilities {
@@ -69,7 +72,9 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 		delete(effective, d)
 	}
 	for _, a := range caps.GetAdd() {
-		effective[a] = struct{}{}
+		if resources.AllowedAddCapabilities.Has(a) {
+			effective[a] = struct{}{}
+		}
 	}
 
 	out := make([]string, 0, len(effective))

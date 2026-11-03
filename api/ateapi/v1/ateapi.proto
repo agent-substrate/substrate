@@ -1409,13 +1409,15 @@ message SecurityContext {
 // granted. Capabilities are named without the "CAP_" prefix; "ALL" in drop
 // removes the whole default set.
 message Capabilities {
-  // add lists capabilities to grant on top of the default set. "ALL" is
-  // rejected: name the individual capabilities the container needs.
+  // add lists capabilities to grant on top of the default set. Only
+  // AUDIT_WRITE, CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, FSETID, KILL,
+  // NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID and SYS_CHROOT are
+  // accepted.
   //
   // +k8s:optional
   // +k8s:maxItems=64
   // +k8s:listType=set
-  // +k8s:customValidation # a Linux capability name; "ALL" not accepted
+  // +k8s:customValidation # one of resources.AllowedAddCapabilities
   repeated string add = 1;
 
   // drop lists capabilities to remove from the default set. "ALL" drops the

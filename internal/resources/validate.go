@@ -422,8 +422,16 @@ var linuxCapabilities = sets.New(
 	"CHECKPOINT_RESTORE",
 )
 
-// ValidateCapabilities checks each capability name. "ALL" is accepted only
-// when allowAll is set, which is the case for drop but not add.
+// AllowedAddCapabilities are the capabilities a container may add.
+var AllowedAddCapabilities = sets.New(
+	"AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER",
+	"FSETID", "KILL", "NET_BIND_SERVICE", "SETFCAP", "SETGID", "SETPCAP",
+	"SETUID", "SYS_CHROOT",
+)
+
+// ValidateCapabilities checks each capability name. allowAll is set for drop,
+// which accepts "ALL" and any capability name. Add accepts only
+// AllowedAddCapabilities.
 func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) field.ErrorList {
 	var errs field.ErrorList
 	for i, c := range caps {
@@ -436,12 +444,10 @@ func ValidateCapabilities(fldPath *field.Path, caps []string, allowAll bool) fie
 			errs = append(errs, field.TooLong(p, nil, 63))
 		case strings.HasPrefix(c, "CAP_"):
 			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
-		case !linuxCapabilities.Has(c):
-			supported := sets.List(linuxCapabilities)
-			if allowAll {
-				supported = append(supported, "ALL")
-			}
-			errs = append(errs, field.NotSupported(p, c, supported))
+		case !allowAll && !AllowedAddCapabilities.Has(c):
+			errs = append(errs, field.NotSupported(p, c, sets.List(AllowedAddCapabilities)))
+		case allowAll && !linuxCapabilities.Has(c):
+			errs = append(errs, field.NotSupported(p, c, append(sets.List(linuxCapabilities), "ALL")))
 		}
 	}
 	return errs

@@ -486,7 +486,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				Image: "main",
 				SecurityContext: &ateapi.SecurityContext{
 					Capabilities: &ateapi.Capabilities{
-						Add:  []string{"NET_ADMIN"},
+						Add:  []string{"SETUID"},
 						Drop: []string{"ALL"},
 					},
 				},
@@ -515,7 +515,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				Image: "main",
 				SecurityContext: &ateletpb.SecurityContext{
 					Capabilities: &ateletpb.Capabilities{
-						Add:  []string{"NET_ADMIN"},
+						Add:  []string{"SETUID"},
 						Drop: []string{"ALL"},
 					},
 				},

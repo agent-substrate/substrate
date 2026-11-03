@@ -22,7 +22,7 @@ An [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) select
 | CPU limit enforcement | Host cgroup v2 `cpu.max` on the sandbox | Guest vCPU count, plus host cgroup v2 `cpu.max` on the VMM and `virtiofsd` |
 | Minimum `limits.memoryBytes` | None enforced by worker | `128 MiB` (`134217728` bytes) |
 | Per-container limits (`containers[].resources.limits`) | Accepted in the API, ignored at runtime | Enforced via guest cgroups (`cpuMillicores` floored at 10) |
-| `NET_RAW` capability | Stripped (`runsc` default `--net-raw=false`) | Granted when listed in `securityContext.capabilities.add` |
+| Unprivileged `ping` | Not configured | `net.ipv4.ping_group_range=0 2147483647` |
 | `VOLUMES` and `ROOTFS` snapshot format | `runsc` filesystem checkpoint bundles (`fs/`, `rootfs/`) | Tar archives of the host directories |
 
 ## CPU Count and Throttling
@@ -52,10 +52,10 @@ See [Per-container limits](api-guide.md#per-container-limits) in the API Guide.
 
 Both sandbox classes start from the same default capability set (`AUDIT_WRITE`, `KILL`, `NET_BIND_SERVICE`), allow binding ports below 1024 without `NET_BIND_SERVICE`, and allow `setuid` binaries.
 
-They differ on `NET_RAW`:
+Neither allows `NET_RAW` in `securityContext.capabilities.add`:
 
-- **gVisor (`gvisor`):** `ateworker-gvisor` does not enable `runsc --net-raw`, which defaults to `false`. `runsc` then removes `CAP_NET_RAW` from the container and disables raw sockets (`AF_PACKET` and `SOCK_RAW`), even when `securityContext.capabilities.add` includes `NET_RAW`.
-- **MicroVM (`microvm`):** Adding `NET_RAW` in `securityContext.capabilities.add` grants `CAP_NET_RAW` inside the guest container.
+- **gVisor (`gvisor`):** `ateworker-gvisor` does not enable `runsc --net-raw`, which defaults to `false`. `runsc` disables raw sockets (`AF_PACKET` and `SOCK_RAW`).
+- **MicroVM (`microvm`):** The guest sets `net.ipv4.ping_group_range=0 2147483647`, so `ping` works without `NET_RAW`.
 
 See [Container Capabilities](api-guide.md#container-capabilities-securitycontextcapabilities) in the API Guide.
 

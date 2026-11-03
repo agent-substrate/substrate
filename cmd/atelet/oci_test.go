@@ -266,16 +266,20 @@ func TestResolveCapabilities(t *testing.T) {
 		want: withoutCaps(wantDefaultCapabilities, "CAP_NET_BIND_SERVICE", "CAP_AUDIT_WRITE"),
 	}, {
 		name: "add grants on top of the default set",
-		caps: &ateletpb.Capabilities{Add: []string{"SYS_ADMIN"}},
-		want: withCaps(wantDefaultCapabilities, "CAP_SYS_ADMIN"),
+		caps: &ateletpb.Capabilities{Add: []string{"SYS_CHROOT"}},
+		want: withCaps(wantDefaultCapabilities, "CAP_SYS_CHROOT"),
+	}, {
+		name: "add skips capabilities outside the allowlist",
+		caps: &ateletpb.Capabilities{Add: []string{"MKNOD", "SYS_ADMIN", "NET_RAW"}},
+		want: wantDefaultCapabilities,
 	}, {
 		name: "drop ALL clears the default set",
 		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}},
 		want: nil,
 	}, {
 		name: "drop ALL with add gives an exact set",
-		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}, Add: []string{"NET_ADMIN", "CHOWN"}},
-		want: []string{"CAP_CHOWN", "CAP_NET_ADMIN"},
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}, Add: []string{"SETUID", "CHOWN"}},
+		want: []string{"CAP_CHOWN", "CAP_SETUID"},
 	}, {
 		// Drop applies first, so naming a capability in both grants it.
 		name: "add wins over drop",
