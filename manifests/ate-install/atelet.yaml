@@ -101,13 +101,12 @@ roleRef:
 # substrate writes under /var/lib/ate, so a node can't recover from
 # DiskPressure without it. system-node-critical also shields atelet from the
 # kernel OOM killer, so switch to it only once atelet and objectstore-plugin
-# have memory limits. Some clusters, like GKE, admit critical pods outside
-# kube-system only with a quota scoped to their class, so the quota allows
-# both classes.
-# https://kubernetes.io/docs/concepts/policy/resource-quotas/#limiting-priorityclass-consumption-by-default
-# The limit matches the upstream kube-system quota for critical pods, so it
+# have memory limits.
+# Clusters whose ResourceQuota admission config sets limitedResources for the
+# critical classes, like GKE, admit those pods only in a namespace with a
+# quota scoped to their class. This quota allows both classes, and its limit
 # never blocks atelet.
-# https://github.com/kubernetes/kubernetes/blob/3b323b2ef08f33353973433de269f78751a20061/cluster/gce/addons/admission-resource-quota-critical-pods/resource-quota.yaml
+# https://kubernetes.io/docs/concepts/policy/resource-quotas/#limiting-priorityclass-consumption-by-default
 apiVersion: v1
 kind: ResourceQuota
 metadata:
