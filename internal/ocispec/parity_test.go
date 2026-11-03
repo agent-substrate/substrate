@@ -96,11 +96,15 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 					t.Errorf("mount %q has no source after shaping", dest)
 				}
 			}
-			// Both runtimes keep the tmpfs mounts at /dev/shm, /run and /tmp.
-			for _, dest := range []string{"/dev/shm", "/run", "/tmp"} {
+			// Both runtimes keep the tmpfs mounts at /dev/shm and /tmp.
+			for _, dest := range []string{"/dev/shm", "/tmp"} {
 				if m := mountFor(t, spec, dest); m.Type != "tmpfs" {
 					t.Errorf("%s type = %q after shaping, want tmpfs", dest, m.Type)
 				}
+			}
+			// Neither mounts anything at /run, so the image's /run shows through.
+			if slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/run" }) {
+				t.Errorf("a mount at /run after shaping; mounts=%v", spec.Mounts)
 			}
 			// Neither shaper overrides the hostname.
 			if spec.Hostname != "actor" {
@@ -188,15 +192,19 @@ func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	}
 }
 
-// Shaping a spec twice does not accumulate mounts.
+// Shaping a spec twice leaves its mounts and options unchanged.
 func TestShapeGVisor_Idempotent(t *testing.T) {
 	spec := Build(parityOptions)
 	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: "app", Size: paritySize}
 	ShapeGVisor(spec, o)
-	first := len(spec.Mounts)
+	first := make([]specs.Mount, len(spec.Mounts))
+	for i, m := range spec.Mounts {
+		m.Options = slices.Clone(m.Options)
+		first[i] = m
+	}
 	ShapeGVisor(spec, o)
-	if len(spec.Mounts) != first {
-		t.Errorf("mount count = %d after a second shaping, want %d", len(spec.Mounts), first)
+	if !reflect.DeepEqual(spec.Mounts, first) {
+		t.Errorf("Mounts after a second shaping =\n%+v\nwant\n%+v", spec.Mounts, first)
 	}
 }
 

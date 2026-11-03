@@ -57,12 +57,11 @@ type MicroVMOptions struct {
 	ContainerName string
 }
 
-// ShapeMicroVM repoints volume bind mounts to guest share paths, adds the
-// guest's /dev/mqueue mount, applies containerd's default read-only paths and
-// the subset of its default masked paths that exists in the guest, fills in
-// kata's default resources, and lifts the guest's privileged-port limit. It
-// must run on an unshaped spec, and errors on a bind it cannot place in the
-// guest.
+// ShapeMicroVM repoints volume bind mounts to guest share paths, applies
+// containerd's default read-only paths and the subset of its default masked
+// paths that exists in the guest, fills in kata's default resources, and lifts
+// the guest's privileged-port limit. It must run on an unshaped spec, and
+// errors on a bind it cannot place in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	for i := range spec.Mounts {
 		m := &spec.Mounts[i]
@@ -81,17 +80,6 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 				m.Options[j] = "rbind"
 			}
 		}
-	}
-	// Only the guest gets /dev/mqueue; see systemMounts. A volume there
-	// replaces it. kata mounts in order, so it goes right after /dev.
-	if !slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/dev/mqueue" }) {
-		dev := slices.IndexFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/dev" })
-		spec.Mounts = slices.Insert(spec.Mounts, dev+1, specs.Mount{
-			Destination: "/dev/mqueue",
-			Type:        "mqueue",
-			Source:      "mqueue",
-			Options:     []string{"nosuid", "noexec", "nodev"},
-		})
 	}
 	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
 	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350

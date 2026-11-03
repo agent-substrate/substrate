@@ -504,7 +504,11 @@ func TestValidateMountPath(t *testing.T) {
 		{"devpts", "/dev/pts", true},
 		{"proc", "/proc", true},
 		{"sys", "/sys", true},
+		{"under devpts", "/dev/pts/0", true},
+		{"under proc", "/proc/foo", true},
+		{"under sys", "/sys/fs/cgroup", true},
 		{"under dev", "/dev/shm", false},
+		{"proc prefix", "/procfs", false},
 	})
 }
 

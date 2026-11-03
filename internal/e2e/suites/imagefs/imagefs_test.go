@@ -53,11 +53,10 @@ var layerOwners = []statResponse{
 }
 
 // systemMountOwners are the owner and mode of the tmpfs mounts both runtimes
-// put at /tmp, /dev/shm and /run.
+// put at /tmp and /dev/shm.
 var systemMountOwners = []statResponse{
 	{Path: "/tmp", UID: 0, GID: 0, Mode: "dtrwxrwxrwx"},
 	{Path: "/dev/shm", UID: 0, GID: 0, Mode: "dtrwxrwxrwx"},
-	{Path: "/run", UID: 0, GID: 0, Mode: "drwxr-xr-x"},
 }
 
 // TestImageLayerOwnership asserts that files keep the owners the image's
@@ -223,8 +222,8 @@ func probeIdentity(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref 
 	return out
 }
 
-// checkOwners checks the owner and mode of each path in want, which source
-// sets.
+// checkOwners checks the owner and mode of each path in want, naming source on
+// mismatch.
 func checkOwners(t *testing.T, ctx context.Context, rc *e2e.RouterClient, ref *ateapi.ObjectRef, want []statResponse, source string) {
 	t.Helper()
 	for _, w := range want {

@@ -397,11 +397,12 @@ message VolumeMount {
   // +k8s:required
   // +k8s:format=k8s-short-name
   string name = 1;
-  // mount_path is where the container sees the volume.
+  // mount_path is where the container sees the volume. Must not be /dev, and
+  // must not be /dev/pts, /proc, /sys, or a path under them.
   //
   // +k8s:required
   // +k8s:maxLength=4096
-  // +k8s:customValidation # clean absolute path, not /dev, /dev/pts, /proc or /sys
+  // +k8s:customValidation # clean absolute path, not /dev, outside /dev/pts, /proc and /sys
   string mount_path = 2;
 }
 

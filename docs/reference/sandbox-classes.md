@@ -59,9 +59,13 @@ They differ on `NET_RAW`:
 
 See [Container Capabilities](api-guide.md#container-capabilities-securitycontextcapabilities) in the API Guide.
 
-## System Mounts (`/dev/shm`, `/run`, `/tmp`)
+## System Mounts (`/dev/shm` and `/tmp`)
 
-Both sandbox classes mount `tmpfs` at `/dev/shm` (`64 MiB`, mode `1777`, `noexec`), `/run` (`64 MiB`, mode `0755`), and `/tmp` (mode `1777`). The `/tmp` mount hides any files the image has in `/tmp`. A volume at one of these paths replaces the `tmpfs`. Volumes cannot mount at `/dev`, `/dev/pts`, `/proc`, or `/sys`. Files in these `tmpfs` mounts live in memory outside the container's rootfs overlay, so `MEMORY` snapshots keep them and `ROOTFS` snapshots start with them empty.
+Each container gets its own `tmpfs` at `/dev/shm` (`64 MiB`, mode `1777`, `noexec`) and `/tmp` (mode `1777`). `/tmp` holds at most half of `limits.memoryBytes` on `gvisor`, and half of usable guest RAM (`MemTotal`) on `microvm`. The `/tmp` mount hides any files the image has in `/tmp`. A volume at either path replaces the `tmpfs`. Files in these `tmpfs` mounts count against the actor's memory limit. They live outside the container's rootfs overlay, so `MEMORY` snapshots keep them and `ROOTFS` snapshots start with them empty.
+
+Neither sandbox class mounts anything at `/run`. As with containerd, `/run` is part of the container's rootfs overlay, so the image's files there stay visible and `ROOTFS` snapshots keep them.
+
+Volumes cannot mount at `/dev`, or at or under `/dev/pts`, `/proc`, or `/sys`.
 
 ## Snapshots (`VOLUMES`, `ROOTFS`, and `MEMORY`)
 
