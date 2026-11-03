@@ -32,7 +32,7 @@ architecture on kind, and both `amd64` and `arm64` on non-kind), verifies
 their SHA-256 digests against `manifests/ate-install/sandboxconfig-microvm.yaml.tmpl`,
 stages them into the cluster's object store under `microvm-assets/<arch>/<sha256>`
 (the shared `rustfs` bucket on kind, and `<BUCKET_NAME>-assets` on GKE, the only
-bucket substrate-gke's `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`
+bucket `setup-gcp` lets nodes read), and applies the cluster-wide `microvm`
 `SandboxConfig`. Assets must not be stored under a snapshot location (an
 ActorTemplate's `snapshotConfig.location` followed by `/atespaces/`), as the
 node's object-store plugin refuses to serve anything there as an asset.

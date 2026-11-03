@@ -23,7 +23,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -170,39 +169,30 @@ func actorLeafMemory(root, actorUID string) (int64, error) {
 	return current, nil
 }
 
-// PodMemory returns the worker pod's memory limit and what it uses besides
-// clean page cache, which the kernel can reclaim. Both are 0 when the pod has no
-// limit.
-func PodMemory() (limit, unreclaimable int64, err error) {
+// PodMemory returns the worker pod's memory limit and usage. limit is 0 when
+// the pod has none.
+func PodMemory() (limit, current int64, err error) {
 	return podMemory(Root)
 }
 
-func podMemory(root string) (limit, unreclaimable int64, err error) {
+func podMemory(root string) (limit, current int64, err error) {
 	raw, err := os.ReadFile(filepath.Join(root, "memory.max"))
 	if err != nil {
 		return 0, 0, err
 	}
-	if strings.TrimSpace(string(raw)) == "max" {
-		return 0, 0, nil
+	if v := strings.TrimSpace(string(raw)); v != "max" {
+		if limit, err = parseBytes(raw); err != nil {
+			return 0, 0, fmt.Errorf("while parsing memory.max %q: %w", raw, err)
+		}
 	}
-	if limit, err = parseBytes(raw); err != nil {
-		return 0, 0, fmt.Errorf("while parsing memory.max %q: %w", raw, err)
-	}
-	if unreclaimable, err = memoryUnreclaimable(root); err != nil {
+	if raw, err = os.ReadFile(filepath.Join(root, "memory.current")); err != nil {
 		return 0, 0, err
 	}
-	return limit, unreclaimable, nil
+	if current, err = parseBytes(raw); err != nil {
+		return 0, 0, fmt.Errorf("while parsing memory.current %q: %w", raw, err)
+	}
+	return limit, current, nil
 }
-
-// memoryUnreclaimable is memoryUsed plus page cache that is dirty or under
-// writeback, which reclaim can't drop either.
-func memoryUnreclaimable(root string) (int64, error) {
-	sum, err := sumMemoryStat(root, memoryUnreclaimableStats...)
-	return int64(sum), err
-}
-
-// memoryUnreclaimableStats are the memory.stat keys memoryUnreclaimable sums
-var memoryUnreclaimableStats = slices.Concat(memoryUsedStats, []string{"file_dirty", "file_writeback"})
 
 func parseBytes(raw []byte) (int64, error) {
 	return strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)

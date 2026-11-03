@@ -57,14 +57,16 @@ type MicroVMOptions struct {
 	ContainerName string
 }
 
-// ShapeMicroVM repoints volume bind mounts to guest share paths, applies
-// containerd's default read-only paths and the subset of its default masked
-// paths that exists in the guest, fills in kata's default resources, and lifts
-// the guest's privileged-port limit. It must run on an unshaped spec, and
-// errors on a bind it cannot place in the guest.
+// ShapeMicroVM replaces host system mounts with guest mounts, repoints volume
+// bind mounts to guest share paths, applies containerd's default read-only
+// paths and the subset of its default masked paths that exists in the guest,
+// fills in kata's default resources, and lifts the guest's privileged-port
+// limit. It must run on an unshaped spec, and errors on a bind it cannot place
+// in the guest.
 func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
-	for i := range spec.Mounts {
-		m := &spec.Mounts[i]
+	// Translate volume bind mounts into guest share paths.
+	volumes := make([]specs.Mount, 0, len(spec.Mounts))
+	for _, m := range spec.Mounts {
 		if m.Type != "bind" {
 			continue
 		}
@@ -75,17 +77,14 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 		m.Source = src
 		// Use rbind, so nested mount points come across.
 		m.Options = slices.Clone(m.Options)
-		for j, opt := range m.Options {
+		for i, opt := range m.Options {
 			if opt == "bind" {
-				m.Options[j] = "rbind"
+				m.Options[i] = "rbind"
 			}
 		}
+		volumes = append(volumes, m)
 	}
-	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
-	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350
-	for _, dir := range guestMaskedDirPaths(runtime.GOARCH) {
-		spec.Mounts = append(spec.Mounts, specs.Mount{Destination: dir, Type: "tmpfs", Source: "tmpfs", Options: []string{"ro", "nr_blocks=1", "nr_inodes=1"}})
-	}
+	spec.Mounts = append(guestSystemMounts(), volumes...)
 
 	if spec.Linux == nil {
 		spec.Linux = &specs.Linux{}
@@ -148,6 +147,26 @@ func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, contai
 		}
 	}
 	return "", fmt.Errorf("host path %q is not staged into the guest share", hostPath)
+}
+
+// guestSystemMounts returns the standard kata guest mount set, followed by a
+// read-only tmpfs over each of guestMaskedDirPaths.
+func guestSystemMounts() []specs.Mount {
+	mounts := []specs.Mount{
+		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+		{Destination: "/dev/pts", Type: "devpts", Source: "devpts", Options: []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"}},
+		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
+		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
+		{Destination: "/run", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+	}
+	// Mask each directory with a read-only tmpfs, as runc's maskDir does.
+	// https://github.com/opencontainers/runc/blob/7d36b05953ebb377900a0a565d8b0754e464be0b/libcontainer/rootfs_linux.go#L1338-L1350
+	for _, dir := range guestMaskedDirPaths(runtime.GOARCH) {
+		mounts = append(mounts, specs.Mount{Destination: dir, Type: "tmpfs", Source: "tmpfs", Options: []string{"ro", "nr_blocks=1", "nr_inodes=1"}})
+	}
+	return mounts
 }
 
 // guestMaskedDirPaths returns containerd's default masked directories that

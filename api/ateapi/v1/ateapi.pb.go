@@ -1102,7 +1102,8 @@ type ExternalVolumeStatus struct {
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	// +k8s:update=NoModify
-	// +k8s:update=NoUnset # set-once; immutable would reject the create ratchet's nil->set when the final object is validated as an update
+	// +k8s:update=NoUnset # set-once; immutable would reject the create
+	// ratchet's nil->set when the final object is validated as an update
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// The globally unique volume_id returned from the storage system.
 	// This will be initially empty during volume creation. Its format is the
@@ -1204,11 +1205,7 @@ type Actor struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// actor_template references the ActorTemplate this Actor is based on.
-	//
-	// (-- TODO: replace with full actor_template spec if we decide to make each
-	// Actor self-contained. --)
-	//
+	// TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	// +k8s:mutable
@@ -1940,7 +1937,7 @@ func (x *HttpRuleEffects) GetReplaceHeaders() []*CredentialHeader {
 
 // CredentialHeader replaces the value of an HTTP request header with a
 // credential. The Actor sends the header with a placeholder value, such as
-// `Authorization: <something>`; the gateway discards that value and forwards
+// "Authorization: <something>"; the gateway discards that value and forwards
 // the header with the credential instead. The placeholder itself is not
 // inspected, so any value works. A request without the header is not
 // modified.
@@ -1958,7 +1955,7 @@ type CredentialHeader struct {
 	// +k8s:customValidation # format
 	Prefix string `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	// Source-agnostic reference interpreted by a registered credential provider:
-	// `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`
+	// ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
 	//
 	// Exactly one of credential_uri and actor_jwt must be set.
 	//
@@ -3026,7 +3023,7 @@ type GoldenSnapshotStatus struct {
 	// +k8s:optional
 	SnapshotTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
 	// error_message is set when the golden snapshot build fails and will not be
-	// retried, formatted as `<Reason>: <detail>`. A nonempty value is terminal.
+	// retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=4096
@@ -4365,12 +4362,11 @@ type VolumeMount struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// mount_path within the container. Must be a clean absolute Unix path:
 	// must start with '/', not be '/', and contain no ':', '..', '.', '//',
-	// trailing '/', or control characters. Must not be /dev, and must not be
-	// /dev/pts, /proc, /sys, or a path under them.
+	// trailing '/', or control characters.
 	//
 	// +k8s:required
 	// +k8s:maxLength=4096
-	// +k8s:customValidation # clean absolute path, not /dev, outside /dev/pts, /proc and /sys
+	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -7602,9 +7598,8 @@ type WorkerSandboxRuntime struct {
 	// Compatibility version stamped onto an actor's snapshot when a checkpoint
 	// is taken on this runtime. Snapshots matching it can warm-boot on this
 	// runtime.
-	//
-	// (-- TODO: Add the additional compatibility versions this runtime can also
-	// restore snapshots from. --)
+	// TODO: Add the additional compatibility versions this runtime can also
+	// restore snapshots from.
 	//
 	// +k8s:required
 	Version *VersionedSandboxCompat `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
@@ -8737,12 +8732,9 @@ func (x *MintWorkerActorJwtResponse) GetExpireTime() *timestamppb.Timestamp {
 	return nil
 }
 
-// RequestActorSuspendRequest asks to suspend an Actor the calling Worker hosts.
-// The suspend uses SuspendActor's default mode.
-//
-// (-- TODO: add a durability mode, carried through atelet's
+// TODO: add a durability mode, carried through atelet's
 // RequestActorSuspendRequest, so the Worker can choose how the snapshot is
-// made durable. --)
+// made durable. Until then the suspend uses SuspendActor's default mode.
 type RequestActorSuspendRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker making the request. atespace is always empty; Workers are

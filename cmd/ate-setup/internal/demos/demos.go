@@ -49,10 +49,9 @@ type Demo interface {
 	Settings() []config.Setting
 	// Deploy installs the demo.
 	Deploy(ctx context.Context, e *steps.Env) error
-	// Delete removes the demo and returns the namespaces it left terminating,
-	// for the caller to wait on. It must succeed on a cluster where the demo
-	// was never installed, because DeleteAll runs every demo's Delete.
-	Delete(ctx context.Context, e *steps.Env) ([]string, error)
+	// Delete removes the demo. It must succeed on a cluster where the demo was
+	// never installed, because DeleteAll runs every demo's Delete.
+	Delete(ctx context.Context, e *steps.Env) error
 }
 
 // registry holds every demo, keyed by name.

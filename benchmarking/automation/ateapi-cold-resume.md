@@ -86,7 +86,7 @@ The orchestrator copies `<targetCluster>.sh` from the `--target-cluster-dir`
 directory into the clone as `.ate-dev-env.sh`. Both tests use
 `targetCluster: dev`, so step 6 copies your `.ate-dev-env.sh` there as
 `dev.sh`. Create it from
-the GKE [ate-dev-env.sh.example](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/ate-dev-env.sh.example) in substrate-gke
+[hack/ate-dev-env.sh.example](../../hack/ate-dev-env.sh.example)
 if you don't have one. The install needs `PROJECT_ID`, `CLUSTER_NAME`,
 `CLUSTER_LOCATION`, `KO_DOCKER_REPO`, `SNAPSHOT_LOCATION`,
 `SNAPSHOT_TRANSFER_GSA_NAME` and `ATE_CREDENTIAL_PROVIDER`.

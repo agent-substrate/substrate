@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
-	"go.ate.dev/substrate/internal/apiconfig"
 )
 
 // trustBundleNames are the ClusterTrustBundles the podcertificate controller
@@ -31,15 +30,15 @@ var trustBundleNames = []string{
 	"postgres.podcert.ate.dev:identity:primary-bundle",
 }
 
-// EnsureAPIServerPrerequisites creates or reconciles the secrets and
-// ConfigMaps ate-api-server needs. Existing secrets are kept, PostgreSQL
-// settings are always reconciled, and the server and authentication
-// ConfigMaps are rewritten when missing, invalid, or explicitly overridden by
-// flags.
+// EnsureAPIServerPrerequisites creates the secrets and config ate-api-server
+// needs, skipping anything already present. The PostgreSQL settings and an
+// explicitly requested log level are rewritten every time.
 func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	log.Step("ensure_apiserver_prerequisites")
 
-	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDJWTPool, e.CreateJWTAuthorityPoolSecret); err != nil {
+	// Not through ensureSecret: an existing pool Secret may still need its
+	// public keys published, which CreateJWTAuthorityPoolSecret handles.
+	if err := e.CreateJWTAuthorityPoolSecret(ctx); err != nil {
 		return err
 	}
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCAPool, e.CreateActorIDCAPoolSecret); err != nil {
@@ -59,63 +58,31 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 		return err
 	}
 
-	if err := e.ensureAPIAuthenticationConfig(ctx); err != nil {
+	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIAuthn)
+	if err != nil {
 		return err
+	}
+	if !exists {
+		return e.CreateAPIAuthenticationConfig(ctx)
 	}
 	return nil
 }
 
-// ensureAPIAuthenticationConfig writes the ate-api-server authentication config
-// when it is missing or when the stored configuration fails schema validation
-// (e.g. after an upgrade changes the config schema or a rollback leaves
-// unsupported fields). When an expected JWT issuer is set explicitly and the
-// existing config is valid, only the kubernetes provider entry is updated so
-// any additional JWT providers are preserved.
-func (e *Env) ensureAPIAuthenticationConfig(ctx context.Context) error {
-	var parsed *apiconfig.AuthenticationConfig
-	var update func(context.Context) error
-	if e.Cfg.ExpectedJWTIssuer != "" {
-		update = func(ctx context.Context) error {
-			setKubernetesJWTProvider(parsed, e.Cfg.ExpectedJWTIssuer)
-			return e.applyAPIAuthenticationConfig(ctx, parsed)
-		}
-	}
-	return e.ensureConfigMap(
-		ctx,
-		ConfigMapAPIAuthn,
-		"authentication.yaml",
-		"any custom jwtProviders or custom issuer were reset to cluster defaults",
-		func(b []byte) error {
-			var err error
-			parsed, err = apiconfig.ParseAuthenticationConfig(b)
-			return err
-		},
-		e.CreateAPIAuthenticationConfig,
-		update,
-	)
-}
-
-// ensureAPIConfig writes the ate-api-server config file when it is missing,
-// when a log level was asked for explicitly, or when the stored configuration
-// fails schema or log-level validation. Otherwise an existing config, possibly
+// ensureAPIConfig writes the ate-api-server config file when it is missing or
+// a log level was asked for explicitly. Otherwise an existing config, possibly
 // edited by hand, is kept.
 func (e *Env) ensureAPIConfig(ctx context.Context) error {
-	var update func(context.Context) error
 	if e.Cfg.APILogLevel != "" {
-		update = e.CreateAPIConfig
+		return e.CreateAPIConfig(ctx)
 	}
-	return e.ensureConfigMap(
-		ctx,
-		ConfigMapAPIConfig,
-		"apiconfig.textproto",
-		"resetting to default configuration",
-		func(b []byte) error {
-			_, err := apiconfig.ParseTextProto(b)
-			return err
-		},
-		e.CreateAPIConfig,
-		update,
-	)
+	exists, err := e.Kube.ConfigMapExists(ctx, e.Namespace(), ConfigMapAPIConfig)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return e.CreateAPIConfig(ctx)
+	}
+	return nil
 }
 
 // EnsurePodCertificateCAs creates the podcertificate signer pools if any is
@@ -155,33 +122,6 @@ name mismatch after an upgrade). Investigate with:
   kubectl -n podcertificate-controller-system logs deploy/podcertificate-controller --tail=200
   kubectl -n podcertificate-controller-system get pods,secrets,configmaps
   kubectl -n podcertificate-controller-system get events --sort-by=.lastTimestamp | tail -20`
-
-// ensureConfigMap runs create when the named ConfigMap is absent or its data
-// under key fails validate. When the existing ConfigMap is valid, update is
-// run if non-nil.
-func (e *Env) ensureConfigMap(
-	ctx context.Context,
-	name, key, resetNote string,
-	validate func([]byte) error,
-	create func(context.Context) error,
-	update func(context.Context) error,
-) error {
-	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), name)
-	if err != nil {
-		return err
-	}
-	if cm == nil {
-		return create(ctx)
-	}
-	if err := validate([]byte(cm.Data[key])); err != nil {
-		log.Warnf("Rewriting %s/%s: existing %s is invalid (%v); %s", e.Namespace(), name, key, err, resetNote)
-		return create(ctx)
-	}
-	if update != nil {
-		return update(ctx)
-	}
-	return nil
-}
 
 // ensureSecret runs create when the named Secret is absent.
 func (e *Env) ensureSecret(ctx context.Context, namespace, name string, create func(context.Context) error) error {

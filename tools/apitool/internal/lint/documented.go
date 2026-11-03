@@ -15,6 +15,8 @@
 package lint
 
 import (
+	"strings"
+
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
@@ -30,29 +32,52 @@ var Documented = Rule{
 }
 
 func checkMessageDocumented(m model.Message) []Finding {
-	if model.PublicDoc(m.Comment) == "" {
+	if docText(m.Comment) == "" {
 		return []Finding{findingf(m.FullName, "message has no doc comment")}
 	}
 	return nil
 }
 
 func checkFieldDocumented(m model.Message, f model.Field) []Finding {
-	if model.PublicDoc(f.Comment) == "" {
+	if docText(f.Comment) == "" {
 		return []Finding{findingf(m.FullName.Append(f.Name), "field has no doc comment")}
 	}
 	return nil
 }
 
 func checkEnumDocumented(e model.Enum) []Finding {
-	if model.PublicDoc(e.Comment) == "" {
+	if docText(e.Comment) == "" {
 		return []Finding{findingf(e.FullName, "enum has no doc comment")}
 	}
 	return nil
 }
 
 func checkMethodDocumented(rpc model.Method) []Finding {
-	if model.PublicDoc(rpc.Comment) == "" {
+	if docText(rpc.Comment) == "" {
 		return []Finding{findingf(subjectOf(rpc), "method has no doc comment")}
 	}
 	return nil
+}
+
+func docText(comment string) string {
+	var kept []string
+	for _, line := range strings.Split(comment, "\n") {
+		if isValidationGenTag(line) || isAteCommentTag(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// isValidationGenTag reports whether line is a validation-gen Declarative
+// Validation tag, e.g. "+k8s:required" or "+k8s:format=k8s-short-name".
+func isValidationGenTag(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "+k8s:")
+}
+
+// isAteCommentTag reports whether line is one of our own metadata tags,
+// e.g. +ate:preview.
+func isAteCommentTag(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "+ate:")
 }

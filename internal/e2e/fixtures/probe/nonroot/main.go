@@ -37,8 +37,7 @@ type identityResponse struct {
 	Cwd    string `json:"cwd"`
 	// CapEff is the CapEff mask from /proc/self/status, in hex.
 	CapEff string `json:"capEff"`
-	// WriteError is why creating a file in the working directory, /tmp, or
-	// /dev/shm failed.
+	// WriteError is why creating a file in the working directory failed.
 	WriteError string `json:"writeError,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
@@ -64,15 +63,13 @@ func identity(w http.ResponseWriter, _ *http.Request) {
 	} else {
 		resp.Error += "reading /proc/self/status: " + err.Error() + "; "
 	}
-	for _, dir := range []string{".", "/tmp", "/dev/shm"} {
-		f, err := os.CreateTemp(dir, "write-check-")
-		if err == nil {
-			_ = f.Close()
-			err = os.Remove(f.Name())
+	if f, err := os.CreateTemp(".", "write-check-"); err == nil {
+		_ = f.Close()
+		if err := os.Remove(f.Name()); err != nil {
+			resp.WriteError = err.Error()
 		}
-		if err != nil {
-			resp.WriteError += err.Error() + "; "
-		}
+	} else {
+		resp.WriteError = err.Error()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

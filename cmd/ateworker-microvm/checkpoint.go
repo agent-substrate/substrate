@@ -215,7 +215,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		g.Go(func() error {
 			t := time.Now()
 			var err error
-			durableFiles, err = s.tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
+			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
@@ -223,7 +223,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if shipsRootfs {
 		g.Go(func() error {
 			t := time.Now()
-			err := s.tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
+			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})
@@ -290,8 +290,7 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 
 	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", actorUID), slog.String("dir", checkpointDir))
 	tSnapshot := time.Now()
-	borrowed, err := s.writeSnapshot(ctx, client, ra, actorUID, checkpointDir)
-	if err != nil {
+	if err := s.writeSnapshot(ctx, client, ra, actorUID, checkpointDir); err != nil {
 		return 0, err
 	}
 	dSnapshot := time.Since(tSnapshot)
@@ -311,17 +310,11 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 	} else if ra != nil && ra.restoreSourceDir != "" {
 		tMerge := time.Now()
 		if err := mergeOnDemandDelta(ctx, ra.restoreSourceDir, checkpointDir, ra.preserveRestoreSource); err != nil {
-			s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
 			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
 			slog.String("id", actorUID), slog.Duration("merge", time.Since(tMerge)))
 	}
-
-	// Clean pages can be reclaimed, and dropped once a restore has read them.
-	// Start writeback after mergeOnDemandDelta so it tracks the final merged
-	// memory-ranges inode rather than the unlinked delta file.
-	s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
 
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
@@ -344,17 +337,13 @@ const (
 // the whole pod, and every actor on it, so the leaf may only grow into what the
 // actor booked and the guest left untouched, plus what it can borrow, and the
 // kernel throttles CH to the disk past that.
-//
-// It returns what it borrowed, for the caller to Return once the snapshot is on
-// disk. On error the loan comes back once whatever CH wrote is on disk or
-// removed.
-func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (int64, error) {
+func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) error {
 	if s.snapshotWrites != nil {
 		select {
 		case s.snapshotWrites <- struct{}{}:
 			defer func() { <-s.snapshotWrites }()
 		case <-ctx.Done():
-			return 0, fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
+			return fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
 		}
 	}
 	// the page cache the write adds isn't the actor running away
@@ -391,15 +380,11 @@ func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client,
 		}
 	}
 	if err := client.Snapshot(ctx, checkpointDir); err != nil {
-		s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
-		return 0, fmt.Errorf("while snapshotting guest: %w", err)
+		s.borrow.Return(borrowed)
+		return fmt.Errorf("while snapshotting guest: %w", err)
 	}
-	return borrowed, nil
-}
-
-// writeBackSnapshot returns borrowed once the snapshot files in checkpointDir
-// are on disk or removed, or right away if there are none.
-func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, checkpointDir string, borrowed int64) {
+	// clean pages can be reclaimed, and dropped once a restore has read them.
+	// the tars sync themselves
 	var written []string
 	for _, name := range []string{"config.json", "state.json", memoryRangesFile} {
 		p := filepath.Join(checkpointDir, name)
@@ -411,6 +396,7 @@ func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, chec
 		s.borrow.Return(borrowed)
 		slog.WarnContext(ctx, "Failed to start snapshot writeback", slog.String("id", actorUID), slog.Any("err", err))
 	}
+	return nil
 }
 
 // mergeOnDemandDelta merges the OnDemand delta in checkpointDir with the base in

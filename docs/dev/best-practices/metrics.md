@@ -469,6 +469,13 @@ instrument kind, and one sentence on what it measures with the label list. If
 the label semantics need more than a sentence (as the snapshot labels did), add
 a short paragraph below the table rather than growing the row.
 
+### Dashboards
+
+Cloud Monitoring dashboards live in `tools/setup-gcp/dashboards/`. A new metric
+does not need a new dashboard in the same PR, but a metric an operator will
+alert on should get a panel in a follow-up, and the PR description should say
+which question the panel answers.
+
 ## Worked example: a node-local snapshot cache
 
 A cache in front of snapshot downloads, in atelet, wants to answer: is the cache
