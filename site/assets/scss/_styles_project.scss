@@ -2729,6 +2729,12 @@ footer {
     color: inherit;
   }
 
+  &--preview {
+    background: #21162d;
+    border-color: #58397a;
+    color: #d2a8ff;
+  }
+
   &--experimental {
     background: #2a2412;
     border-color: #6b5a1e;
@@ -2764,6 +2770,11 @@ footer {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   vertical-align: middle;
+
+  &--preview {
+    background: #21162d;
+    color: #d2a8ff;
+  }
 
   &--experimental {
     background: #2a2412;

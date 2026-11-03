@@ -17,7 +17,7 @@ limitations under the License.
 {{/*
 Returns the page's params merged over the front matter of its repo_source
 file, so a stub's own keys win. Fails the build if status is set to anything
-but experimental, deprecated or planned. Call as:
+but preview, experimental, deprecated or planned. Call as:
   partialCached "page-params.html" $page $page.Path
 */ -}}
 
@@ -27,8 +27,8 @@ but experimental, deprecated or planned. Call as:
   {{- $params = merge $doc.params $params -}}
 {{- end -}}
 {{- with $params.status -}}
-  {{- if not (in (slice "experimental" "deprecated" "planned") .) -}}
-    {{- errorf "page-params: %s (repo_source %q): status %q is not one of: experimental, deprecated, planned" $.Path ($.Params.repo_source | default "") (printf "%v" .) -}}
+  {{- if not (in (slice "preview" "experimental" "deprecated" "planned") .) -}}
+    {{- errorf "page-params: %s (repo_source %q): status %q is not one of: preview, experimental, deprecated, planned" $.Path ($.Params.repo_source | default "") (printf "%v" .) -}}
   {{- end -}}
 {{- end -}}
 {{- return $params -}}

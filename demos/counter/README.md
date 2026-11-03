@@ -191,7 +191,8 @@ kubectl ate delete actor my-counter-1 -a ate-demo-counter-microvm
 
 Pass `--with-external-volume` to attach a CSI-backed external volume mounted at `/external-data`. That flag sets `--validate-existing-file-path=/external-data/test.txt` on `counter.go`, so `curl` returns `failed to read test file: open /external-data/test.txt: no such file or directory` until `/external-data/test.txt` exists on the volume.
 
-External volumes require the `ExternalVolumes` preview feature gate and an adapted CSI driver with a `CSIDriverConfig` (see [CSI Driver Deployment](../../docs/guides/csi-deployment.md)):
+> [!IMPORTANT]
+> External volumes are a **preview** feature and require the `ExternalVolumes` preview feature gate plus an adapted CSI driver with a `CSIDriverConfig` (see [CSI Volumes](../../docs/guides/csi-volumes.md) and [Deploying CSI Drivers](../../docs/guides/csi-deployment.md)):
 
 ```bash
 # 1. Deploy ate-system with the ExternalVolumes preview gate enabled

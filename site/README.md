@@ -62,7 +62,7 @@ A doc can declare its status in its own front matter:
 
 ```yaml
 ---
-status: deprecated          # or: experimental, planned
+status: deprecated          # or: preview, experimental, planned
 status_note: >              # optional; replaces the default banner text
   Replaced by the [Egress guide](egress.md).
 ---
