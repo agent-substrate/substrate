@@ -10,7 +10,7 @@ description: >
 
 # Claude Code Multiplex Demo
 
-A demo of three Claude-Code-driven agents sharing two Agent Substrate pods. Substrate suspends idle agents and resumes them on demand, so the cluster runs *fewer pods than agents*.
+A demo of three Claude-Code-driven agents sharing two Agent Substrate pods. The dashboard resumes an agent when it gets a task and suspends it when the task ends, so the cluster runs *fewer pods than agents*.
 
 **Walkthrough video (150s):** https://storage.googleapis.com/yojowa-claw-demo-screenshots/multiplex-demo-2026-05-18-captions.webm
 
@@ -23,7 +23,7 @@ The video shows the three-agent rotation end-to-end: queued → running → comp
 
 - Three Claude Code agents (`luna`, `mars`, `orion`) registered as Substrate actors.
 - A `WorkerPool` of two pods.
-- A small web UI that drives "give a task" against random idle agents and renders the queued/running/completed badge state per agent.
+- A small web UI that drives "give a task" against random idle agents, renders the queued/running/completed badge state per agent, and resumes and suspends the agents to match.
 - Substrate handles the hard parts: state snapshot on suspend, scheduling decisions, resume-correctness when a pod becomes available.
 
 This demo uses the ateapi control plane to manage Actors and does not send
@@ -39,15 +39,11 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
   (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
 - `kubectl` configured against that cluster (the dashboard uses the operator's kubeconfig via [`client-go`](https://github.com/kubernetes/client-go) for pod-log reads).
-- Network reach to the substrate **api** gRPC service (`api.ate-system:443`). If you run the dashboard as a pod in the cluster, label its namespace `ate.dev/api-access=true`, because ate-system's NetworkPolicies admit API clients only from labeled namespaces (see [`ate-system-networkpolicies.yaml`](../../manifests/ate-install/ate-system-networkpolicies.yaml)). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
-  ```bash
-  # Terminal 1: api port-forward
-  kubectl port-forward svc/api 8080:443 -n ate-system
-  ```
+- Network reach to the substrate **api** gRPC service (`api.ate-system:443`). From outside the cluster, the dashboard port-forwards to it by itself. If you run the dashboard as a pod in the cluster, label its namespace `ate.dev/api-access=true`, because ate-system's NetworkPolicies admit API clients only from labeled namespaces (see [`ate-system-networkpolicies.yaml`](../../manifests/ate-install/ate-system-networkpolicies.yaml)).
 - An **Anthropic API key** (the agents call Claude).
 - A snapshot location set at install (`SNAPSHOT_LOCATION`). The agents' snapshots are stored there.
 - The image registry (`KO_DOCKER_REPO`) that your Substrate install uses. The deploy step builds and pushes the workload image to that registry with a sha256-pinned reference.
-- `docker buildx` (the deploy function builds the workload image — a Dockerfile-based Python + Claude Code wrapper, not a Go binary, so `ko` doesn't apply for the workload itself).
+- `docker buildx` (the deploy function builds the workload image — a Dockerfile-based `node:20-slim` + Claude Code wrapper, not a Go binary, so `ko` doesn't apply for the workload itself). `docker` also needs push access to that registry; for `gcr.io`, run `gcloud auth configure-docker gcr.io`.
 
 ## Components
 
@@ -70,17 +66,17 @@ ANTHROPIC_API_KEY=sk-ant-... \
 go run ./cmd/ate-setup deploy demo claude-code-multiplex
 ```
 
-This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference and `ANTHROPIC_API_KEY` into the agent templates at apply time.
+This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, waits for each template's golden snapshot, and creates the three actors (`luna`, `mars`, `orion`), each with an egress policy that lets it reach `api.anthropic.com:443`. The egress gateway passes that TLS through, and denies all traffic from an actor without a policy. The actors start suspended; the dashboard resumes them. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference and `ANTHROPIC_API_KEY` into the agent templates at apply time.
 
 ### 2. Start the dashboard
 
-The dashboard is a small Go HTTP server that reads worker and actor state from the substrate **ateapi** gRPC service (mirroring the pattern in `demos/sandbox/client/main.go`) and pod logs from the Kubernetes API via [`client-go`](https://github.com/kubernetes/client-go). No `kubectl` process invocations.
+The dashboard is a small Go HTTP server that reads worker and actor state from the substrate **ateapi** gRPC service (mirroring the pattern in `demos/sandbox/client/main.go`) and pod logs from the Kubernetes API via [`client-go`](https://github.com/kubernetes/client-go), and resumes and suspends the agents as their tasks start and end. No `kubectl` process invocations.
 
-Make sure the ateapi port-forward from the [Prerequisites](#prerequisites) is still running, then:
+From the repo root:
 
 ```bash
 cd demos/claude-code-multiplex/ui
-PORT=8090 ATEAPI_ADDR=localhost:8080 go run .
+PORT=8090 go run .
 ```
 
 Or build a binary:
@@ -88,32 +84,29 @@ Or build a binary:
 ```bash
 cd demos/claude-code-multiplex/ui
 go build -o ui-server .
-PORT=8090 ATEAPI_ADDR=localhost:8080 ./ui-server
+PORT=8090 ./ui-server
 ```
 
-Either way, the UI is served on `http://localhost:8090` (or whatever `PORT` you pick — pick something that doesn't collide with the ateapi port-forward).
+Either way, the UI is served on `http://localhost:8090` (or whatever `PORT` you pick).
 
 Env vars:
 
 | Var | Default | Purpose |
 |---|---|---|
-| `PORT` | `8080` | TCP port the dashboard binds (pick `≠ ATEAPI_ADDR`'s port when both run on the same host). |
-| `ATEAPI_ADDR` | `localhost:8080` | Address of the substrate ateapi gRPC service. |
+| `PORT` | `8080` | TCP port the dashboard binds (pick `≠ ATEAPI_ADDR`'s port when both are on the same host). |
+| `ATEAPI_ADDR` | empty | Address of the substrate ateapi gRPC service. Empty: the dashboard port-forwards to `svc/api` in `ate-system` itself. |
 | `DEMO_NAMESPACE` | `claude-multiplex-demo` | Kubernetes namespace the dashboard filters to and reads pod logs from. |
 
 `GET /healthz` reports whether the kube client picked up a cluster context (`logs:true|false`) — useful for quick smoke-tests after starting the server.
 
 ### 3. Drive the demo
 
-Click "Give a task". The UI picks a random idle agent and creates a task for it. Watch:
+Click "Give a task". The UI picks a random idle agent and gives it a task for a fixed time. The task and its timing live only in the dashboard; a resumed agent runs `claude --print` in a loop (see [`workload/run.sh`](workload/run.sh)), and its log shows the replies. Watch:
 
-- Badge flips to `queued` (the agent has work but isn't bound to a pod yet).
-- Substrate finds a free pod and binds the agent. Badge flips to `running`.
-- The agent calls Claude, writes a result, exits. Badge flips to `completed`.
-- Substrate notices the inactivity and suspends the agent after a short idle window.
-- The released pod becomes available for the next queued task on a different agent.
+- The badge shows `queued` until the dashboard has resumed the agent, then `running`. If both pods hold agents with running tasks, the task stays `queued` until one of them finishes.
+- When the time is up, the badge flips to `completed` and the dashboard suspends the agent, snapshotting its state and freeing its pod for the next task.
 
-With three agents and two pods, the third agent stays suspended (state snapshotted) until a pod opens up.
+With three agents and two pods, at most two agents run at once, and the third task waits for a pod.
 
 ## Settings
 
@@ -135,6 +128,8 @@ This demo currently applies workarounds at runtime for two Substrate issues. See
 - **`#197` Bug 3** — Atelet symlink resolution.
 
 ## Teardown
+
+From the repo root:
 
 ```bash
 go run ./cmd/ate-setup delete demo claude-code-multiplex
