@@ -21,7 +21,7 @@ internet, so the default in-cluster issuer, `https://idp.<namespace>.svc`,
 does not work.
 
 1. Pick a host you own, for example `idp.example.com`, and put an Ingress,
-   Gateway, or load balancer on it with a publicly trusted certificate.
+   Gateway, or load balancer on it with a publicly trusted WebPKI certificate.
 2. Route `/.well-known/openid-configuration` and `/openid/v1/jwks` to the `idp`
    Service in the system namespace, port 443, over HTTPS. The pods present a
    certificate from the cluster's `servicedns.podcert.ate.dev/identity`
@@ -38,10 +38,10 @@ does not work.
      --actor-jwt-issuer=https://idp.example.com
    ```
 
-   A record leaves out secrets, such as database connection strings, so supply
-   those again.
+   The record doesn't include secrets, such as database connection strings, so
+   you need to pass secrets again. See
    [Install runs record what they used](operator-install.md#install-runs-record-what-they-used)
-   says where records are kept.
+   for where records are kept.
 
 5. Check from outside the cluster that the document names the same issuer:
 
@@ -59,14 +59,11 @@ Configure the relying party with:
 - The audience it expects. The egress policy's `actorJwt.audiences` has to
   include it; see [Actor JWTs](egress-credential-injection.md#actor-jwts) in
   the egress guide.
-- A condition that admits only a `sub` starting with `actor/`, as in
-  [Verifying a token](actor-jwts.md#verifying-a-token).
+- Authorization rules for the subjects that should have access. An actor's
+  `sub` is `actor/<atespace>/<name>`.
 
-If the relying party limits the subject to fewer than 133 bytes, map it from
-`sub` without the `actor/` prefix, which is at most 127. If it doesn't accept
-ES256, [switch the pool to RS256](actor-jwt-key-rotation.md#changing-the-algorithm).
-To grant access to every actor in an atespace, match on the `atespace` field
-of the `actor.ate.dev` claim, if the relying party supports custom claims.
+If the relying party doesn't accept ES256,
+[switch the pool to RS256](actor-jwt-key-rotation.md#changing-the-algorithm).
 
 To check the setup, have an egress policy inject a token for the relying
 party's audience into a request to a server you control, and present that
