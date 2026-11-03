@@ -20,16 +20,17 @@
   </div>
 
   {{range .Resources}}
-  <section id="{{.Anchor}}" class="group resource-page" hidden>
+  <section id="{{.Anchor}}" class="group resource-page{{if .APIVersion}} k8s-page{{end}}" hidden>
     <section class="page-section single">
       <div class="section-main">
-        <h1 class="resource-title">{{.Page.Message.Name}}</h1>
+        <h1 class="resource-title">{{.Name}}</h1>
         <p class="resource-labels">
-          {{if .Page.Scope}}<span class="tag">{{.Page.Scope}}</span>{{end}}
-          {{if .Page.Parent}}<span class="tag">subresource of {{if .ParentAnchor}}<a class="mono" href="#{{.ParentAnchor}}">{{.Page.Parent}}</a>{{else}}<span class="mono">{{.Page.Parent}}</span>{{end}}</span>{{end}}
-          {{if .Page.Singleton}}<span class="tag">singleton</span>{{end}}
+          {{if .APIVersion}}<span class="tag mono">{{.APIVersion}}</span>{{end}}
+          {{if .Scope}}<span class="tag">{{.Scope}}</span>{{end}}
+          {{if .Parent}}<span class="tag">subresource of {{if .ParentAnchor}}<a class="mono" href="#{{.ParentAnchor}}">{{.Parent}}</a>{{else}}<span class="mono">{{.Parent}}</span>{{end}}</span>{{end}}
+          {{if .Singleton}}<span class="tag">singleton</span>{{end}}
         </p>
-        {{if .Page.Message.Comment}}<div class="description">{{fullDoc .Page.Message.Comment}}</div>{{end}}
+        {{if .Doc}}<div class="description">{{fullDoc .Doc}}</div>{{end}}
         {{if .Subresources}}
         <p class="section-label">Subresources</p>
         <ul class="subresource-list">
@@ -65,12 +66,12 @@
         <p class="empty-note">No fields.</p>
         {{end}}
       </div>
-      {{with .Example}}
+      {{if .Example}}
       <div class="section-rail">
         <div class="rail-sticky">
           <div class="rail-card definition">
             <h2>Example</h2>
-            <pre>{{codeLines (highlightJSON .)}}</pre>
+            <pre>{{codeLines (highlightYAML .Example)}}</pre>
           </div>
         </div>
       </div>
@@ -113,7 +114,7 @@
   </section>
   {{end}}
 
-  <section class="group">
+  <section class="group proto-types">
     <h1>Messages</h1>
     {{range .OtherMessages}}
     <article id="{{msgAnchor .FullName}}" class="type-card">
@@ -140,7 +141,7 @@
     {{end}}
   </section>
 
-  <section class="group">
+  <section class="group proto-types">
     <h1>Enums</h1>
     {{range .API.Enums}}
     <article id="{{enumAnchor .FullName}}" class="type-card">
@@ -172,10 +173,10 @@
 {{define "attrRow"}}
 <div class="attr-row">
   <div class="attr-head">
-    <span class="attr-name">{{.Field.Name}}{{if .Field.OneofName}} <span class="tag">oneof {{.Field.OneofName}}</span>{{end}}{{if .Field.Proto3Optional}} <span class="tag">optional</span>{{end}}</span>
-    <span class="attr-type">{{template "fieldType" .Field}}</span>
+    <span class="attr-name">{{.Name}}{{range .Tags}} <span class="tag">{{.}}</span>{{end}}</span>
+    <span class="attr-type">{{if .TypeAnchor}}<a href="#{{.TypeAnchor}}">{{.Type}}</a>{{else}}{{.Type}}{{end}}</span>
   </div>
-  {{if .Field.Comment}}<div class="attr-desc">{{fullDoc .Field.Comment}}</div>{{end}}
+  {{if .Doc}}<div class="attr-desc">{{fullDoc .Doc}}</div>{{end}}
   {{if .Children}}
   {{$cid := nextAttrID}}
   <button class="expand-toggle" type="button" aria-expanded="false" aria-controls="{{$cid}}"><span class="sign">+</span> Show fields</button>

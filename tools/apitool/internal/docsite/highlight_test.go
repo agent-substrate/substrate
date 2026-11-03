@@ -30,29 +30,47 @@ func TestCodeLines(t *testing.T) {
 	}
 }
 
-func TestHighlightJSON(t *testing.T) {
-	in := `{
-  "name": "a \"b\" <c>",
-  "count": -1.5e3,
-  "ok": true,
-  "none": null,
-  "list": []
-}`
-	want := `<span class="tok-punct">{</span>
-  <span class="tok-type">&#34;name&#34;</span><span class="tok-punct">:</span> <span class="tok-string">&#34;a \&#34;b\&#34; &lt;c&gt;&#34;</span><span class="tok-punct">,</span>
-  <span class="tok-type">&#34;count&#34;</span><span class="tok-punct">:</span> <span class="tok-number">-1.5e3</span><span class="tok-punct">,</span>
-  <span class="tok-type">&#34;ok&#34;</span><span class="tok-punct">:</span> <span class="tok-keyword">true</span><span class="tok-punct">,</span>
-  <span class="tok-type">&#34;none&#34;</span><span class="tok-punct">:</span> <span class="tok-keyword">null</span><span class="tok-punct">,</span>
-  <span class="tok-type">&#34;list&#34;</span><span class="tok-punct">:</span> <span class="tok-punct">[</span><span class="tok-punct">]</span>
-<span class="tok-punct">}</span>`
-	got, err := highlightJSON(in)
-	if err != nil {
-		t.Fatalf("highlightJSON() error = %v", err)
-	}
-	if string(got) != want {
-		t.Errorf("highlightJSON() =\n%s\nwant:\n%s", got, want)
-	}
-	if _, err := highlightJSON(`{"name": }`); err == nil {
-		t.Error("highlightJSON() of invalid JSON: got nil error, want one")
+func TestHighlightYAML(t *testing.T) {
+	for _, tc := range []struct {
+		name, in, want string
+	}{
+		{
+			name: "mappings and lists",
+			in: `spec:
+  count: 2
+  ok: true
+  quoted: "true"
+  url: gs://a/b # note
+  tag: a <b>
+  items:
+  - name: a`,
+			want: `<span class="tok-type">spec</span><span class="tok-punct">:</span>
+  <span class="tok-type">count</span><span class="tok-punct">:</span> <span class="tok-number">2</span>
+  <span class="tok-type">ok</span><span class="tok-punct">:</span> <span class="tok-keyword">true</span>
+  <span class="tok-type">quoted</span><span class="tok-punct">:</span> <span class="tok-string">&#34;true&#34;</span>
+  <span class="tok-type">url</span><span class="tok-punct">:</span> <span class="tok-string">gs://a/b</span> # note
+  <span class="tok-type">tag</span><span class="tok-punct">:</span> <span class="tok-string">a &lt;b&gt;</span>
+  <span class="tok-type">items</span><span class="tok-punct">:</span>
+  - <span class="tok-type">name</span><span class="tok-punct">:</span> <span class="tok-string">a</span>`,
+		},
+		{
+			name: "multiline token",
+			in: `note: |
+  one
+  two`,
+			want: `<span class="tok-type">note</span><span class="tok-punct">:</span> <span class="tok-punct">|</span>
+  <span class="tok-string">one</span>
+  <span class="tok-string">two</span>`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := highlightYAML(tc.in)
+			if err != nil {
+				t.Fatalf("highlightYAML() error = %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("highlightYAML() =\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
 	}
 }

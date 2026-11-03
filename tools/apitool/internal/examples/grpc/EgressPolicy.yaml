@@ -1,0 +1,35 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+metadata:
+  atespace: prod
+  name: default
+  uid: 1a2b3c4d-5e6f-4a3b-8c9d-0e1f2a3b4c5d
+  version: "2"
+  createTime: "2026-08-01T18:22:04Z"
+  updateTime: "2026-08-02T11:05:40Z"
+rules:
+- https:
+    hostnames:
+    - api.example.com
+    effects:
+      replaceHeaders:
+      - header: Authorization
+        prefix: 'Bearer '
+        credentialUri: ate-secret://example-provider/prod/checkout-api-key
+- tlsPassthrough:
+    hostnames:
+    - '*.example.com'
+    ports:
+      numbers:
+      - 443

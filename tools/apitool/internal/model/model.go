@@ -16,6 +16,8 @@
 // to represent metadata for the Substrate API.
 package model
 
+// TODO: Rename to grpcmodel to match k8smodel.
+
 import (
 	"context"
 	"fmt"

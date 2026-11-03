@@ -41,10 +41,9 @@ go test ./internal/validate/... -run TestExemptions
 Generates the website's API reference. `hack/site.sh content` runs it before
 each site build, writing to `site/assets/api-reference/`:
 
-- `latest/`, from this checkout's `ateapi.proto`, and with `--releases-since`
-  a directory per release tagged since, read from git. Each holds
-  `reference.html`, the page body, and `nav.json`, the resource tree the
-  site's sidebar lists.
+- `latest/`, from this checkout, and with `--releases-since` a directory per
+  release tagged since, read from git. Each holds `reference.html`, the page
+  body, and `nav.json`, the resource tree the site's sidebar lists.
 - `versions.json`, the version names, newest first.
 - `style.css` and `search.js`, which every version's page loads. The site's
   theme sets the colors (see `site/README.md`).

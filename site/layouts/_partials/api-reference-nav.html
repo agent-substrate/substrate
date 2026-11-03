@@ -16,13 +16,18 @@ limitations under the License.
 
 {{/*
 Renders the API reference's resource tree in the sidebar, under the
-reference page's link. Call with the decoded nodes of apitool's nav.json.
+reference page's link. Call with the decoded nodes of apitool's nav.json. A
+node without an anchor groups the resources of one API.
 */ -}}
 
 <ul class="as-sb__tree">
   {{- range . }}
   <li>
+    {{- if .anchor }}
     <a href="#{{ .anchor }}" class="as-sb__tree-link">{{ .label }}</a>
+    {{- else }}
+    <span class="as-sb__tree-group">{{ .label }}</span>
+    {{- end }}
     {{- with .children }}{{ partial "api-reference-nav.html" . }}{{ end }}
   </li>
   {{- end }}

@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package docsite renders a model.API into an HTML fragment for the project
-// website. The fragment needs the stylesheet and script in Assets, and takes
-// its colors from CSS variables the site defines.
+// Package docsite renders a model.API and a k8smodel.API into an HTML fragment
+// for the project website. The fragment needs the stylesheet and script in
+// Assets, and takes its colors from CSS variables the site defines.
 package docsite
+
+// TODO: Move the gRPC code to grpc.go and prefix its names with grpc, as
+// k8s.go does with k8s.
 
 import (
 	"bytes"
@@ -29,6 +32,7 @@ import (
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"go.ate.dev/substrate/tools/apitool/internal/k8smodel"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
@@ -54,16 +58,25 @@ type indexEntry struct {
 
 type pageData struct {
 	API           *model.API
-	Resources     []resourceView  // one per resourcePage, each with its own attribute tree and methods
+	Resources     []resourceView  // one per resourcePage and Kubernetes resource, each with its own attribute tree and methods
 	OtherMessages []model.Message // API.Messages minus the resource messages, which get their own Resources view instead
-	Index         template.JS     // proto-derived, but already JSON-escaped by buildIndex
+	Index         template.JS     // already JSON-escaped by buildIndex
 }
 
-// resourceView is a resourcePage with everything the template needs
-// resolved: anchors, field trees, and proto definitions.
+// resourceView is one page of a gRPC or Kubernetes resource, with everything
+// the template needs resolved: anchors, field trees, and proto definitions.
 type resourceView struct {
-	Page   resourcePage
-	Anchor string
+	Name string
+	Doc  string
+	// APIVersion is a Kubernetes resource's apiVersion, or "" for a gRPC
+	// resource. For example, "ate.dev/v1".
+	APIVersion string
+	// Scope, Parent, and Singleton are a gRPC resource's, as resourcePage
+	// holds them. A Kubernetes resource has a Scope only.
+	Scope     string
+	Parent    string
+	Singleton bool
+	Anchor    string
 	// FieldsAnchor is the anchor of the page's Fields section.
 	FieldsAnchor string
 	// ParentAnchor links to the parent resource's page, or is "" for a
@@ -71,7 +84,7 @@ type resourceView struct {
 	ParentAnchor string
 	Subresources []resourceLink
 	Attrs        []attrNode
-	// Example is the resource's example, as JSON, or "" if it has none.
+	// Example is the resource's example YAML, or "" if it has none.
 	Example string
 	Methods []methodView
 }
@@ -97,11 +110,11 @@ type methodView struct {
 	Sources []model.Message
 }
 
-// treeNode is one resource page in the site's navigation, with the pages of
-// its subresources under it.
+// treeNode is one entry in the site's navigation: a resource page with the
+// pages of its subresources under it, or a group of pages, which has no Anchor.
 type treeNode struct {
 	Label    string     `json:"label"`
-	Anchor   string     `json:"anchor"`
+	Anchor   string     `json:"anchor,omitempty"`
 	Children []treeNode `json:"children,omitempty"`
 }
 
@@ -109,17 +122,18 @@ type treeNode struct {
 type Page struct {
 	// Body is the HTML fragment, which needs the files in Assets.
 	Body []byte
-	// Nav lists the resource pages for the site's navigation, as a JSON
-	// array of {"label", "anchor", "children"} objects. Each anchor is an
-	// element id in Body.
+	// Nav lists the resource pages for the site's navigation, grouped by API,
+	// as a JSON array of {"label", "anchor", "children"} objects. Each anchor
+	// is an element id in Body.
 	Nav []byte
 }
 
-// Render produces the reference for api, which must be scoped
-// to the one service the page documents (e.g. via model.ScopeToService).
-// examples holds each resource's example JSON, keyed by message name. A
-// resource without one is shown without an example.
-func Render(api *model.API, examples map[string]string) (Page, error) {
+// Render produces the reference for api, which must be scoped to the one
+// service the page documents (e.g. via model.ScopeToService), and for k8sAPI.
+// examples holds each gRPC resource's example YAML, keyed by message name, and
+// k8sExamples each Kubernetes resource's, keyed by kind. A resource without one
+// is shown without an example.
+func Render(api *model.API, examples map[string]string, k8sAPI *k8smodel.API, k8sExamples map[string]string) (Page, error) {
 	sorted := sortedAPI(api)
 	pages, err := resourcePages(sorted)
 	if err != nil {
@@ -127,7 +141,7 @@ func Render(api *model.API, examples map[string]string) (Page, error) {
 	}
 	anchors := newResourceAnchors(pages)
 
-	index, err := buildIndex(sorted, pages)
+	index, err := buildIndex(sorted, pages, k8sAPI)
 	if err != nil {
 		return Page{}, fmt.Errorf("while building search index: %w", err)
 	}
@@ -140,14 +154,17 @@ func Render(api *model.API, examples map[string]string) (Page, error) {
 	var buf bytes.Buffer
 	data := pageData{
 		API:           sorted,
-		Resources:     buildResourceViews(sorted, pages, examples, anchors),
+		Resources:     append(buildResourceViews(sorted, pages, examples, anchors), buildK8sViews(k8sAPI, k8sExamples)...),
 		OtherMessages: nonResourceMessages(sorted.Messages),
 		Index:         template.JS(index),
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return Page{}, fmt.Errorf("while executing template: %w", err)
 	}
-	nav, err := json.Marshal(buildResourceTree(pages))
+	nav, err := json.Marshal([]treeNode{
+		{Label: "gRPC API", Children: buildResourceTree(pages)},
+		{Label: "Kubernetes API", Children: buildK8sTree(k8sAPI)},
+	})
 	if err != nil {
 		return Page{}, fmt.Errorf("while building navigation: %w", err)
 	}
@@ -161,7 +178,7 @@ func parsePageTemplate(anchors resourceAnchors) (*template.Template, error) {
 		"enumAnchor":    enumAnchor,
 		"typeAnchor":    anchors.typeAnchor,
 		"fieldAnchor":   anchors.fieldAnchor,
-		"highlightJSON": highlightJSON,
+		"highlightYAML": highlightYAML,
 		"codeLines":     codeLines,
 		"nextAttrID":    newAttrIDFunc(),
 		"fullDoc":       fullDoc,
@@ -192,18 +209,32 @@ func buildResourceViews(api *model.API, pages []resourcePage, examples map[strin
 
 func (b viewBuilder) resourceView(page resourcePage) resourceView {
 	rv := resourceView{
-		Page:         page,
+		Name:         page.Message.Name,
+		Doc:          page.Message.Comment,
+		Scope:        page.Scope,
+		Parent:       page.Parent,
+		Singleton:    page.Singleton,
 		Anchor:       pageAnchor(page),
 		FieldsAnchor: fieldsAnchor(page),
 		ParentAnchor: b.anchors.parentAnchor(page),
 		Subresources: subresourceLinks(b.pages, page),
-		Attrs:        buildAttrTree(b.messages, page.Message.Fields),
-		Example:      b.examples[page.Message.Name],
+		Attrs:        b.attrTree(page.Message.Fields),
+		Example:      trimLicenseHeader(b.examples[page.Message.Name]),
 	}
 	for _, m := range page.Methods {
 		rv.Methods = append(rv.Methods, b.methodView(page, m))
 	}
 	return rv
+}
+
+// trimLicenseHeader drops the comment lines that start example, its license
+// header.
+func trimLicenseHeader(example string) string {
+	lines := strings.Split(strings.TrimSpace(example), "\n")
+	for len(lines) > 0 && (strings.HasPrefix(lines[0], "#") || strings.TrimSpace(lines[0]) == "") {
+		lines = lines[1:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b viewBuilder) methodView(page resourcePage, m model.Method) methodView {
@@ -213,14 +244,14 @@ func (b viewBuilder) methodView(page resourcePage, m model.Method) methodView {
 		OutputAnchor: b.anchors.typeAnchorOn(page, m.OutputName),
 	}
 	if req, ok := b.messages[m.InputName]; ok {
-		mv.Params = buildAttrTree(b.messages, req.Fields)
+		mv.Params = b.attrTree(req.Fields)
 		mv.Sources = append(mv.Sources, req)
 	}
 	if resp, ok := b.messages[m.OutputName]; ok {
 		if resp.IsResource() {
 			mv.ReturnsResource = true
 		} else {
-			mv.Response = buildAttrTree(b.messages, resp.Fields)
+			mv.Response = b.attrTree(resp.Fields)
 			mv.Sources = append(mv.Sources, resp)
 		}
 	}
@@ -229,27 +260,46 @@ func (b viewBuilder) methodView(page resourcePage, m model.Method) methodView {
 
 // attrNode is one row of a field list, with the fields of its message type,
 // or map value type, as Children: what its "Show fields" toggle expands.
-// Children is nil for a scalar, an enum, or a message type this API doesn't
-// declare, such as google.protobuf.Timestamp.
+// Children is nil for a scalar, an enum, or a type the API doesn't declare,
+// such as google.protobuf.Timestamp.
 type attrNode struct {
-	Field    model.Field
+	Name string
+	// Type is the field's type as shown, such as "string" or "[]object".
+	Type string
+	// TypeAnchor is the anchor Type links to, or "" if it links nowhere.
+	TypeAnchor string
+	Doc        string
+	// Tags label the row, such as "optional" or a Kubernetes field's
+	// "required".
+	Tags     []string
 	Children []attrNode
 }
 
-// maxAttrTreeDepth bounds how deep buildAttrTree expands fields.
+// maxAttrTreeDepth bounds how deep attrTree expands fields.
 const maxAttrTreeDepth = 6
 
-// buildAttrTree turns fields into a tree of attrNode, resolving message
-// types against messages. A type already on the path from the root isn't
-// expanded again, so a recursive message doesn't recurse forever.
-func buildAttrTree(messages map[protoreflect.FullName]model.Message, fields []model.Field) []attrNode {
-	return buildAttrNodes(messages, fields, map[protoreflect.FullName]bool{}, 0)
+// attrTree turns fields into a tree of attrNode, resolving message types
+// against b.messages. A type already on the path from the root isn't expanded
+// again, so a recursive message doesn't recurse forever.
+func (b viewBuilder) attrTree(fields []model.Field) []attrNode {
+	return b.attrNodes(fields, map[protoreflect.FullName]bool{}, 0)
 }
 
-func buildAttrNodes(messages map[protoreflect.FullName]model.Message, fields []model.Field, ancestors map[protoreflect.FullName]bool, depth int) []attrNode {
+func (b viewBuilder) attrNodes(fields []model.Field, ancestors map[protoreflect.FullName]bool, depth int) []attrNode {
 	nodes := make([]attrNode, len(fields))
 	for i, f := range fields {
-		nodes[i] = attrNode{Field: f}
+		nodes[i] = attrNode{
+			Name:       string(f.Name),
+			Type:       f.TypeDisplay,
+			TypeAnchor: b.anchors.fieldAnchor(f),
+			Doc:        f.Comment,
+		}
+		if f.OneofName != "" {
+			nodes[i].Tags = append(nodes[i].Tags, "oneof "+string(f.OneofName))
+		}
+		if f.Proto3Optional {
+			nodes[i].Tags = append(nodes[i].Tags, "optional")
+		}
 
 		var childTypeName protoreflect.FullName
 		switch {
@@ -263,14 +313,14 @@ func buildAttrNodes(messages map[protoreflect.FullName]model.Message, fields []m
 		if depth >= maxAttrTreeDepth || ancestors[childTypeName] {
 			continue
 		}
-		child, ok := messages[childTypeName]
+		child, ok := b.messages[childTypeName]
 		if !ok {
 			continue
 		}
 
 		nextAncestors := maps.Clone(ancestors)
 		nextAncestors[childTypeName] = true
-		nodes[i].Children = buildAttrNodes(messages, child.Fields, nextAncestors, depth+1)
+		nodes[i].Children = b.attrNodes(child.Fields, nextAncestors, depth+1)
 	}
 	return nodes
 }
@@ -408,7 +458,7 @@ func sortedAPI(api *model.API) *model.API {
 	}
 }
 
-func buildIndex(api *model.API, pages []resourcePage) ([]byte, error) {
+func buildIndex(api *model.API, pages []resourcePage, k8sAPI *k8smodel.API) ([]byte, error) {
 	var entries []indexEntry
 	for _, page := range pages {
 		entries = append(entries, resourcePageEntries(page)...)
@@ -420,6 +470,7 @@ func buildIndex(api *model.API, pages []resourcePage) ([]byte, error) {
 	for _, e := range api.Enums {
 		entries = append(entries, enumEntries(e)...)
 	}
+	entries = append(entries, k8sEntries(k8sAPI)...)
 	// See indexEntry on why this keeps json.Marshal's HTML escaping.
 	return json.Marshal(entries)
 }

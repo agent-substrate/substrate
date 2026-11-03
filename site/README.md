@@ -42,7 +42,7 @@ relative links:
 from `assets/api-reference/`, and the sidebar lists its resources from
 `nav.json` there. `hack/site.sh` fills that directory with
 `apitool generate-docs` (see `tools/apitool/README.md`), which generates the
-reference from `ateapi.proto` for main and for each release since v1.0.0.
+reference for main and for each release since v1.0.0.
 `api.md` is the page for main. The content adapter
 `adapters/docs/reference/api/_content.gotmpl` adds a hidden page for each
 release, which the page's version menu links to. The `.apiref` variables in

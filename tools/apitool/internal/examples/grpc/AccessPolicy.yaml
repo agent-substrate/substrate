@@ -1,0 +1,26 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+metadata:
+  name: default
+  uid: 6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c
+  version: "4"
+  createTime: "2026-06-01T00:05:00Z"
+  updateTime: "2026-08-10T16:30:00Z"
+bindings:
+- role: owner
+  members:
+  - user:alice@example.com
+- role: viewer
+  members:
+  - user:sa-ci-runner
