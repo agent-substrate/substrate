@@ -73,7 +73,11 @@ func init() {
 			Short: "Delete " + demo.Name(),
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return demo.Delete(cmd.Context(), env)
+				namespaces, err := demo.Delete(cmd.Context(), env)
+				if err != nil {
+					return err
+				}
+				return env.WaitNamespacesDeleted(cmd.Context(), namespaces)
 			},
 		})
 	}
