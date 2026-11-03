@@ -41,8 +41,8 @@ import (
 // changes atecontroller refuses while keeping the pool on its SandboxConfig,
 // and a switch to another SandboxConfig of the same class while an actor
 // runs. A second pool on that config is up before the switch, so the resume
-// in step 3 also shows the scheduler prefers the pool advertising the
-// snapshot's runtime.
+// in step 3 also shows a worker that cannot restore the snapshot's runtime
+// is filtered out while one that can has room.
 //  1. An actor boots on poolA (configA at v1), increments its counters twice
 //     (memory=2, file=2, rootfs=2), and suspends with a v1-stamped snapshot.
 //     poolB (configB at v2) starts in the same namespace with poolA's labels.
