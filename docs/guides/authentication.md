@@ -363,7 +363,8 @@ jwtProviders:
   provider. `discoveryTokenFile` requires it, and sends the token in that file
   to the issuer and to any `/openid/v1/jwks` URL. The example points it at
   `ate-api-server`'s own ServiceAccount token, so set it only for the
-  Substrate cluster's own issuer.
+  Substrate cluster's own issuer. `ate-api-server` re-reads both files when
+  they change.
 - The Google values are what the Google Cloud CLI issues today: issuer
   `https://accounts.google.com`, and the Cloud SDK's shared client ID as the
   audience. They are examples, not built-in defaults; check the claims your
