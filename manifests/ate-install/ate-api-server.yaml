@@ -104,10 +104,11 @@ spec:
         # discovery, and reaches ate-api-server over the loopback with the pod
         # identity certificate. The issuer must be the one ate-api-server
         # mints with, so both read it from the same ConfigMap key. The issuer
-        # certificate is verified against the system roots and the service
-        # DNS trust bundle. One that does not verify stops the sidecar at
-        # start. On GCS it downscopes a token for the snapshot transfer
-        # service account, which it impersonates.
+        # certificate is verified against the service DNS trust bundle, and
+        # also the system roots unless the issuer's host ends in .svc. One
+        # that does not verify stops the sidecar at start. On GCS it
+        # downscopes a token for the snapshot transfer service account, which
+        # it impersonates.
         - --exchange-listen=:8445
         - --actor-jwt-issuer=$(ATE_API_ACTOR_JWT_ISSUER)
         - --transfer-service-account=$(ATE_API_SNAPSHOT_TRANSFER_SERVICE_ACCOUNT)

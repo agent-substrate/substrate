@@ -36,9 +36,10 @@ token. The exchange fetches the issuer's public keys through OpenID Connect
 discovery at `<issuer>/.well-known/openid-configuration`, at sidecar start
 and then as `oidcjwt.Verifier` refreshes them. An issuer it cannot reach
 fails the exchange with `UNAVAILABLE`.
-The issuer's certificate must verify against the system roots or the CA
-bundle `--actor-jwt-issuer-ca-file` names, by default the service DNS trust
-bundle. The sidecar re-reads the bundle when it changes, so a rotated bundle
+The issuer's certificate must verify against the CA bundle
+`--actor-jwt-issuer-ca-file` names, by default the service DNS trust bundle.
+For an issuer whose host ends in `.svc`, only that bundle is trusted. For any
+other issuer, the system roots are trusted too. The sidecar re-reads the bundle when it changes, so a rotated bundle
 takes effect without a restart. If a re-read fails, it keeps the last bundle
 and logs a warning. If the issuer's certificate does not verify at start, the
 sidecar exits. Any other error at start is logged, and the sidecar serves and

@@ -22,11 +22,14 @@ package actorauthz
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -66,21 +69,40 @@ func NewVerifier(issuer string, client *http.Client) *oidcjwt.Verifier {
 }
 
 // StartVerifier returns NewVerifier's verifier and its client after one
-// attempt to fetch issuer's keys. The client trusts the system roots and
-// caFile, re-read when it changes. Every exchange builds its verifier with
-// it. A caller that stops using the verifier calls the client's
+// attempt to fetch issuer's keys. The client trusts the roots issuerRoots
+// picks, re-reading caFile when it changes. Every exchange builds its
+// verifier with it. A caller that stops using the verifier calls the client's
 // CloseIdleConnections.
 func StartVerifier(ctx context.Context, issuer, caFile string) (*oidcjwt.Verifier, *http.Client, error) {
-	client, err := oidcjwt.NewHTTPClientWithRoots(credbundle.SystemPoolLoader(caFile))
+	loadRoots, trusted, err := issuerRoots(issuer, caFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := oidcjwt.NewHTTPClientWithRoots(loadRoots)
 	if err != nil {
 		return nil, nil, fmt.Errorf("while setting up the actor JWT issuer client: %w", err)
 	}
 	verifier := NewVerifier(issuer, client)
-	if err := checkIssuerCertificate(ctx, issuer, caFile, verifier); err != nil {
+	if err := checkIssuerCertificate(ctx, issuer, trusted, verifier); err != nil {
 		client.CloseIdleConnections()
 		return nil, nil, err
 	}
 	return verifier, client, nil
+}
+
+// issuerRoots returns the roots that verify issuer's certificate, and names
+// them for errors. A .svc host is trusted only through caFile: public CAs
+// cannot issue internal names, so only the service DNS signer can vouch for
+// it. Any other host is trusted through the system roots or caFile.
+func issuerRoots(issuer, caFile string) (loadRoots func() (*x509.CertPool, error), trusted string, err error) {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid actor JWT issuer: %w", err)
+	}
+	if host := strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")); strings.HasSuffix(host, ".svc") {
+		return credbundle.PoolLoader(caFile), caFile, nil
+	}
+	return credbundle.SystemPoolLoader(caFile), "the system roots or " + caFile, nil
 }
 
 // issuerCheckTimeout bounds the start-time fetch from the actor JWT issuer.
@@ -89,13 +111,14 @@ const issuerCheckTimeout = 10 * time.Second
 // checkIssuerCertificate fetches the issuer's keys into verifier's cache so a
 // certificate the client does not trust fails the start instead of every
 // exchange. Other errors may be transient, such as an issuer that is not up
-// yet, so they are logged and the exchange serves.
-func checkIssuerCertificate(ctx context.Context, issuer, caFile string, verifier *oidcjwt.Verifier) error {
+// yet, so they are logged and the exchange serves. trusted names the roots
+// the client verifies against.
+func checkIssuerCertificate(ctx context.Context, issuer, trusted string, verifier *oidcjwt.Verifier) error {
 	ctx, cancel := context.WithTimeout(ctx, issuerCheckTimeout)
 	defer cancel()
 	err := verifier.Refresh(ctx, time.Now())
 	if certErr := (*tls.CertificateVerificationError)(nil); errors.As(err, &certErr) {
-		return fmt.Errorf("actor JWT issuer serves a certificate that does not verify against the system roots or %s: %w", caFile, err)
+		return fmt.Errorf("actor JWT issuer serves a certificate that does not verify against %s: %w", trusted, err)
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "Could not fetch actor JWT signing keys at start; exchanges retry the fetch", slog.String("issuer", issuer), slog.Any("err", err))

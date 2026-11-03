@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -39,6 +40,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/localjwtauthority"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
@@ -511,4 +513,49 @@ func writeServerCA(t *testing.T, srv *httptest.Server) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestIssuerRoots checks that a .svc issuer is verified against the CA file
+// alone and any other issuer against the system roots as well.
+func TestIssuerRoots(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+	caFile := writeServerCA(t, srv)
+	bundleOnly, err := credbundle.PoolLoader(caFile)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSystem, err := credbundle.SystemPoolLoader(caFile)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		issuer string
+		want   *x509.CertPool
+	}{
+		{"https://idp.ate-system.svc", bundleOnly},
+		{"https://IDP.ATE-SYSTEM.SVC.", bundleOnly},
+		{"https://idp.ate-system.svc:443", bundleOnly},
+		{"https://idp.example.com", withSystem},
+		{"https://svc.example.com", withSystem},
+		{"https://idp.svc.example.com", withSystem},
+		{"https://idp.ate-system.svc.cluster.local", withSystem},
+	} {
+		t.Run(tc.issuer, func(t *testing.T) {
+			loadRoots, _, err := issuerRoots(tc.issuer, caFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := loadRoots()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Equal(tc.want) {
+				t.Errorf("roots for %s are not the expected pool", tc.issuer)
+			}
+		})
+	}
+	if _, _, err := issuerRoots("https://[::1", caFile); err == nil {
+		t.Error("issuerRoots accepted an issuer url.Parse rejects")
+	}
 }
