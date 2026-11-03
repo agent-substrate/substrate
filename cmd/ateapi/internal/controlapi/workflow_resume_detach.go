@@ -57,6 +57,9 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	constraints.RequiredNodes = nil
 	constraints.RequiredRuntime = hardware.Requirement{}
 	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
+		if errors.Is(err, scheduling.ErrDoesNotFit) {
+			return nil, apierror.FailedPrecondition("%w", errActorDoesNotFit)
+		}
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			return nil, assignErr
 		}

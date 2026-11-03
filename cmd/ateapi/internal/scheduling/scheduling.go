@@ -71,10 +71,15 @@ type Constraints struct {
 // the constraints at all.
 var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 
+// ErrDoesNotFit wraps ErrNoCapacity. Schedule returns it when the actor exceeds
+// the whole capacity of every worker that meets the constraints.
+var ErrDoesNotFit = fmt.Errorf("%w: the actor exceeds the capacity of every such worker", ErrNoCapacity)
+
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
 	// Schedule returns a worker that meets constraints and has room.
-	// Returns ErrNoCapacity when no worker that meets constraints has room.
+	// Returns ErrNoCapacity when no worker that meets constraints has room,
+	// or ErrDoesNotFit when the actor exceeds the capacity of each of them.
 	Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error)
 
 	// Applies reports whether worker satisfies non-capacity constraints. Capacity
@@ -127,20 +132,29 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	}
 
 	var candidates []candidate
+	var eligible, fits bool
 	for _, worker := range workers {
 		if !s.Applies(worker, constraints) {
 			continue
 		}
+		eligible = true
 		booking, ok := Booking(worker, constraints)
 		if !ok {
 			continue
 		}
 		if cand, ok := checkRoom(worker, booking); ok {
 			candidates = append(candidates, cand)
+			fits = true
+		} else if !fits {
+			// Would it fit the worker, if it had no assignments?
+			fits = fitsEmpty(worker, booking)
 		}
 	}
 
 	if len(candidates) == 0 {
+		if eligible && !fits {
+			return nil, ErrDoesNotFit
+		}
 		return nil, ErrNoCapacity
 	}
 	if len(candidates) == 1 {
@@ -316,6 +330,13 @@ func sum(vs ...int64) (int64, bool) {
 		total += v
 	}
 	return total, true
+}
+
+// fitsEmpty reports whether want fits the worker's whole capacity.
+func fitsEmpty(worker *ateapi.Worker, want *ateapi.Resources) bool {
+	empty := &ateapi.Worker{Status: &ateapi.WorkerStatus{Capacity: worker.GetStatus().GetCapacity()}}
+	_, ok := checkRoom(empty, want)
+	return ok
 }
 
 func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) {

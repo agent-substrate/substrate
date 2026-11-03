@@ -6188,6 +6188,90 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 	}
 }
 
+// TestResumeActor_ActorLargerThanWorker resumes a suspended actor pinned to
+// node1 after moving it to a template larger than node1's worker.
+func TestResumeActor_ActorLargerThanWorker(t *testing.T) {
+	tests := []struct {
+		name string
+		// otherNodeFitsActor adds a worker on node2 that fits the actor.
+		otherNodeFitsActor bool
+		wantCode           codes.Code
+		// wantNode is the actor's persisted assigned_node after the resume.
+		wantNode string
+	}{
+		{
+			name:               "a worker on another node fits: detaches from node1 and resumes on node2",
+			otherNodeFitsActor: true,
+			wantCode:           codes.OK,
+			wantNode:           "node2",
+		},
+		{
+			name:     "no worker fits: FailedPrecondition, stays pinned to node1",
+			wantCode: codes.FailedPrecondition,
+			wantNode: "node1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-resume-pinned-too-large")
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+			ctx := context.Background()
+
+			tmpl := createTemplate(t, tc, ns)
+			largerTmpl := proto.CloneOf(tmpl)
+			largerTmpl.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl2"}
+			largerTmpl.Status = nil
+			largerTmpl.Resources = &ateapi.ResourceRequirements{Limits: resources.CPUMemory(2000, 512<<20)}
+			if _, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: largerTmpl}); err != nil {
+				t.Fatalf("CreateActorTemplate(tmpl2): %v", err)
+			}
+			workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+			ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-pinned"}
+			if _, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: ref.GetName()},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			}}); err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+			if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
+				t.Fatalf("initial ResumeActor: %v", err)
+			}
+			suspended, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+				Actor:   ref,
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS},
+			})
+			if err != nil {
+				t.Fatalf("SuspendActor: %v", err)
+			}
+			waitForWorkerAvailable(t, tc, workerName)
+			toUpdate := proto.CloneOf(suspended.GetActor())
+			toUpdate.ActorTemplate = &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl2"}
+			if _, err := tc.client.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: toUpdate}); err != nil {
+				t.Fatalf("UpdateActor(tmpl2): %v", err)
+			}
+			assertAssignedNode(t, tc, ref.GetName(), "after the template update", "node1")
+			if tt.otherNodeFitsActor {
+				worker2 := createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+				reportWorkerCapacity(t, tc, worker2, 2)
+				setupAteletOnNode(t, tc, "atelet-node2", "node2")
+			}
+
+			_, err = tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("ResumeActor() = %v, want code %v", err, tt.wantCode)
+			}
+			assertAssignedNode(t, tc, ref.GetName(), "after resume", tt.wantNode)
+			tc.fakeAtelet.Lock.Lock()
+			detached := tc.fakeAtelet.DetachCalled
+			tc.fakeAtelet.Lock.Unlock()
+			if detached != tt.otherNodeFitsActor {
+				t.Errorf("DetachActor called = %t, want %t", detached, tt.otherNodeFitsActor)
+			}
+		})
+	}
+}
+
 // TestLifecycleOpPoolAttributesOnSuccess is the regression test for #957: a
 // successful sync or async suspend must stamp the pool it ran on. Both recorded
 // the histogram from a defer that read the finalized record, whose assignment

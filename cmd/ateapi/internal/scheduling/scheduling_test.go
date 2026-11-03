@@ -36,6 +36,8 @@ func TestSchedule(t *testing.T) {
 		fleet       fleet
 		constraints Constraints
 		wantPod     string // "" means ErrNoCapacity expected
+		// wantDoesNotFit, with no wantPod, expects ErrDoesNotFit.
+		wantDoesNotFit bool
 	}{
 		{
 			// Two full workers precede w-free so pair sampling cannot reach w-free
@@ -150,11 +152,33 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-big",
 		},
 		{
-			name: "no worker with enough capacity yields ErrNoCapacity",
+			name: "an actor larger than every worker yields ErrDoesNotFit",
 			fleet: fleet{
 				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
 			},
+			constraints:    Constraints{Limits: resources.CPUMemory(2000, 0)},
+			wantDoesNotFit: true,
+		},
+		{
+			name: "a full worker the actor would fit when empty yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
+				worker("w-full", "gvisor", "node-a", tierTwo, withMaxActors(2), withCapacity(4000, 4<<30),
+					assignedFor("demo", "other", resources.CPUMemory(3000, 0))),
+			},
 			constraints: Constraints{Limits: resources.CPUMemory(2000, 0)},
+		},
+		{
+			name: "a large worker the selectors exclude does not fit the actor",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
+				worker("w-big", "gvisor", "node-a", tierOne, withCapacity(4000, 4<<30)),
+			},
+			constraints: Constraints{
+				TemplateSelector: labels.SelectorFromSet(tierTwo),
+				Limits:           resources.CPUMemory(2000, 0),
+			},
+			wantDoesNotFit: true,
 		},
 		{
 			// A Worker reports everything it has, so one that has reported no
@@ -163,7 +187,8 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-unknown", "gvisor", "node-a", tierTwo),
 			},
-			constraints: Constraints{Limits: resources.CPUMemory(2000, 2<<30)},
+			constraints:    Constraints{Limits: resources.CPUMemory(2000, 2<<30)},
+			wantDoesNotFit: true,
 		},
 		{
 			// An Actor that declares nothing still fits: it asks for no
@@ -363,6 +388,9 @@ func TestSchedule(t *testing.T) {
 
 			if !errors.Is(err, ErrNoCapacity) {
 				t.Fatalf("Schedule() error = %v, want ErrNoCapacity", err)
+			}
+			if got := errors.Is(err, ErrDoesNotFit); got != tc.wantDoesNotFit {
+				t.Fatalf("Schedule() error = %v, ErrDoesNotFit = %t, want %t", err, got, tc.wantDoesNotFit)
 			}
 		})
 	}
