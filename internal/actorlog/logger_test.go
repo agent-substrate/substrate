@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -464,7 +465,7 @@ func TestLabelsKeyFor(t *testing.T) {
 
 func TestRecentLogs(t *testing.T) {
 	var buf bytes.Buffer
-	al := NewActorLogger(&buf, false)
+	al := NewActorLogger(NewSyncedWriter(&buf), false)
 
 	// Ingest several log lines for container-a
 	input := strings.NewReader("line 1\nline 2\n{\"message\": \"json line 3\"}\nline 4\n")
@@ -478,9 +479,67 @@ func TestRecentLogs(t *testing.T) {
 		t.Errorf("RecentLogs content unexpected: %v", logs)
 	}
 
+	// Verify ring buffer eviction when more than maxRecentLines are logged.
+	var manyLines strings.Builder
+	for i := 1; i <= 15; i++ {
+		fmt.Fprintf(&manyLines, "entry %d\n", i)
+	}
+	al.WrapContainerLogs(strings.NewReader(manyLines.String()), testAttribution, "container-b")
+	bLogs := al.RecentLogs(testAttribution.UID, "container-b")
+	if len(bLogs) != maxRecentLines {
+		t.Fatalf("RecentLogs got %d lines, want %d: %v", len(bLogs), maxRecentLines, bLogs)
+	}
+	for i, want := range []string{"entry 6", "entry 7", "entry 8", "entry 9", "entry 10", "entry 11", "entry 12", "entry 13", "entry 14", "entry 15"} {
+		if bLogs[i] != want {
+			t.Errorf("bLogs[%d] = %q, want %q", i, bLogs[i], want)
+		}
+	}
+
 	// Verify ClearRecentLogs
 	al.ClearRecentLogs(testAttribution.UID)
 	if got := al.RecentLogs(testAttribution.UID, "container-a"); got != nil {
 		t.Errorf("RecentLogs after ClearRecentLogs = %v, want nil", got)
 	}
+	if got := al.RecentLogs(testAttribution.UID, "container-b"); got != nil {
+		t.Errorf("RecentLogs after ClearRecentLogs = %v, want nil", got)
+	}
+}
+
+func TestRecentLogs_ConcurrentStreams(t *testing.T) {
+	var buf bytes.Buffer
+	al := NewActorLogger(NewSyncedWriter(&buf), false)
+
+	const numActors = 8
+	var wg sync.WaitGroup
+	wg.Add(numActors)
+	for i := range numActors {
+		go func(idx int) {
+			defer wg.Done()
+			attr := testAttribution
+			attr.UID = fmt.Sprintf("uid-%d", idx)
+			pw, err := al.StartJSONLogPipe(attr, "app")
+			if err != nil {
+				t.Errorf("StartJSONLogPipe: %v", err)
+				return
+			}
+			for j := range 20 {
+				if _, err := fmt.Fprintf(pw, "actor-%d-line-%d\n", idx, j); err != nil {
+					t.Errorf("Write: %v", err)
+					return
+				}
+			}
+			_ = pw.Close()
+			got := al.RecentLogs(attr.UID, "app")
+			if len(got) != maxRecentLines {
+				t.Errorf("actor %d RecentLogs len = %d, want %d", idx, len(got), maxRecentLines)
+				return
+			}
+			wantLast := fmt.Sprintf("actor-%d-line-19", idx)
+			if got[len(got)-1] != wantLast {
+				t.Errorf("actor %d last line = %q, want %q", idx, got[len(got)-1], wantLast)
+			}
+			al.ClearRecentLogs(attr.UID)
+		}(i)
+	}
+	wg.Wait()
 }

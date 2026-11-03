@@ -64,14 +64,59 @@ func NewSyncedWriter(w io.Writer) *SyncedWriter {
 // for diagnostic error messages when a container exits unexpectedly.
 const maxRecentLines = 10
 
+// streamState holds the recent log ring buffer and pipe completion channel for a
+// single (actorUID, containerName) stream.
+type streamState struct {
+	mu       sync.Mutex
+	lines    []string
+	pipeDone chan struct{}
+}
+
+func (s *streamState) setPipeDone(done chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pipeDone = done
+}
+
+func (s *streamState) record(line string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.lines) >= maxRecentLines {
+		copy(s.lines, s.lines[1:])
+		s.lines[len(s.lines)-1] = line
+		return
+	}
+	s.lines = append(s.lines, line)
+}
+
+func (s *streamState) recentLines() []string {
+	s.mu.Lock()
+	done := s.pipeDone
+	s.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.lines) == 0 {
+		return nil
+	}
+	cp := make([]string, len(s.lines))
+	copy(cp, s.lines)
+	return cp
+}
+
 // ActorLogger handles structured logging for actor sandboxes and lifecycle events.
 type ActorLogger struct {
 	writer    io.Writer
 	labelsKey string
 
-	mu          sync.Mutex
-	recentLines map[string][]string
-	pipeDone    map[string]chan struct{}
+	mu      sync.Mutex
+	streams map[string]*streamState
 }
 
 // The two spellings of the label group. Cloud Logging promotes the second into
@@ -120,15 +165,11 @@ func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerN
 		return nil, err
 	}
 	done := make(chan struct{})
-	al.mu.Lock()
-	if al.pipeDone == nil {
-		al.pipeDone = make(map[string]chan struct{})
-	}
-	al.pipeDone[a.UID+"/"+containerName] = done
-	al.mu.Unlock()
+	stream := al.stream(a.UID, containerName)
+	stream.setPipeDone(done)
 	go func() {
 		defer close(done)
-		al.WrapContainerLogs(pr, a, containerName)
+		al.wrapContainerLogs(pr, a, containerName, stream)
 		pr.Close()
 	}()
 	return pw, nil
@@ -138,6 +179,10 @@ func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerN
 // structured format. containerName is added as the ate.actor.container.name label
 // so multi-container actors can be demultiplexed.
 func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttribution, containerName string) {
+	al.wrapContainerLogs(r, a, containerName, al.stream(a.UID, containerName))
+}
+
+func (al *ActorLogger) wrapContainerLogs(r io.Reader, a resources.ActorAttribution, containerName string, stream *streamState) {
 	rdr := bufio.NewReader(r)
 	for {
 		lineBytes, err := rdr.ReadBytes('\n')
@@ -195,7 +240,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttributi
 				envelope = m
 			}
 
-			al.recordRecentLine(a.UID, containerName, lineStr)
+			stream.record(lineStr)
 			al.write(envelope)
 		}
 
@@ -212,18 +257,19 @@ func (al *ActorLogger) write(envelope map[string]any) {
 	}
 }
 
-func (al *ActorLogger) recordRecentLine(actorUID, containerName, line string) {
+func (al *ActorLogger) stream(actorUID, containerName string) *streamState {
+	key := actorUID + "/" + containerName
 	al.mu.Lock()
 	defer al.mu.Unlock()
-	if al.recentLines == nil {
-		al.recentLines = make(map[string][]string)
+	if al.streams == nil {
+		al.streams = make(map[string]*streamState)
 	}
-	key := actorUID + "/" + containerName
-	lines := al.recentLines[key]
-	if len(lines) >= maxRecentLines {
-		lines = lines[1:]
+	s, ok := al.streams[key]
+	if !ok {
+		s = &streamState{}
+		al.streams[key] = s
 	}
-	al.recentLines[key] = append(lines, line)
+	return s
 }
 
 // RecentLogs returns a copy of the most recent log lines recorded for containerName in actorUID.
@@ -232,30 +278,15 @@ func (al *ActorLogger) recordRecentLine(actorUID, containerName, line string) {
 func (al *ActorLogger) RecentLogs(actorUID, containerName string) []string {
 	key := actorUID + "/" + containerName
 	al.mu.Lock()
-	var done <-chan struct{}
-	if al.pipeDone != nil {
-		done = al.pipeDone[key]
+	var stream *streamState
+	if al.streams != nil {
+		stream = al.streams[key]
 	}
 	al.mu.Unlock()
-	if done != nil {
-		select {
-		case <-done:
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-
-	al.mu.Lock()
-	defer al.mu.Unlock()
-	if al.recentLines == nil {
+	if stream == nil {
 		return nil
 	}
-	lines := al.recentLines[key]
-	if len(lines) == 0 {
-		return nil
-	}
-	cp := make([]string, len(lines))
-	copy(cp, lines)
-	return cp
+	return stream.recentLines()
 }
 
 // ClearRecentLogs removes all retained log lines for the given actorUID.
@@ -263,14 +294,9 @@ func (al *ActorLogger) ClearRecentLogs(actorUID string) {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 	prefix := actorUID + "/"
-	for k := range al.recentLines {
+	for k := range al.streams {
 		if strings.HasPrefix(k, prefix) {
-			delete(al.recentLines, k)
-		}
-	}
-	for k := range al.pipeDone {
-		if strings.HasPrefix(k, prefix) {
-			delete(al.pipeDone, k)
+			delete(al.streams, k)
 		}
 	}
 }
