@@ -95,11 +95,15 @@ roleRef:
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
 ---
-# 5. Allow system-node-critical pods in ate-system
-# atelet runs at system-node-critical because a node can't host actors
-# without it. The kubelet neither evicts it under node pressure nor rejects
-# its replacement. Some clusters, like GKE, admit critical pods outside
-# kube-system only with a quota scoped to their class.
+# 5. Allow critical pods in ate-system
+# atelet runs at system-cluster-critical so the kubelet neither evicts it
+# under node pressure nor rejects its replacement. Only atelet frees what
+# substrate writes under /var/lib/ate, so a node can't recover from
+# DiskPressure without it. system-node-critical also shields atelet from the
+# kernel OOM killer, so switch to it only once atelet and objectstore-plugin
+# have memory limits. Some clusters, like GKE, admit critical pods outside
+# kube-system only with a quota scoped to their class, so the quota allows
+# both classes.
 # https://kubernetes.io/docs/concepts/policy/resource-quotas/#limiting-priorityclass-consumption-by-default
 # The limit matches the upstream kube-system quota for critical pods, so it
 # never blocks atelet.
@@ -116,7 +120,7 @@ spec:
     matchExpressions:
     - scopeName: PriorityClass
       operator: In
-      values: ["system-node-critical"]
+      values: ["system-node-critical", "system-cluster-critical"]
 
 ---
 # 6. Create DaemonSet
@@ -140,7 +144,7 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
-      priorityClassName: system-node-critical
+      priorityClassName: system-cluster-critical
       # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
       # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
       # multi-GiB snapshots and must not be force-cancelled mid-upload. The sum
