@@ -37,7 +37,9 @@ service CredentialExchange {
   //   - FAILED_PRECONDITION: the exchange is not allowed to read actors.
   //   - INTERNAL: the actor's grants cannot be derived or expressed as an
   //     access boundary.
-  //   - UNAVAILABLE: ate-api-server or the credential issuer cannot be reached.
+  //   - UNAVAILABLE: ate-api-server or the credential issuer cannot be
+  //     reached, or the actor JWT signing keys cannot be fetched from their
+  //     issuer.
   //   - CANCELLED, DEADLINE_EXCEEDED: the caller gave up first.
   rpc ExchangeActorJwt(ExchangeActorJwtRequest) returns (ExchangeActorJwtResponse);
 }
