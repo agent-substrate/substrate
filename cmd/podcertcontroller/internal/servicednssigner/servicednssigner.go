@@ -160,10 +160,9 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	// check subjectPublicKey, and deny the PCR with a SuggestedKeyType
 	// condition on it.
 
-	lifetime := 24 * time.Hour
-	requestedLifetime := time.Duration(*pcr.Spec.MaxExpirationSeconds) * time.Second
-	if requestedLifetime < lifetime {
-		lifetime = requestedLifetime
+	lifetime, err := podcertificate.Lifetime(pcr)
+	if err != nil {
+		return err
 	}
 
 	notBefore := time.Now().Add(-2 * time.Minute)
