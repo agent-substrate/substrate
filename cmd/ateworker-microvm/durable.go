@@ -108,14 +108,14 @@ func (s *AteWorkerService) stageDurableVolumes(ctx context.Context, actorUID, sr
 //
 // Sockets the workload left behind are skipped rather than archived (tarutil
 // logs them); they hold no data and the workload recreates them on start.
-func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
+func (s *AteWorkerService) tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
 	var files []string
 	for _, vol := range volumes {
 		name, err := durableTarFile(vol)
 		if err != nil {
 			return nil, err
 		}
-		if err := tarutil.CreateWithRoot(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol)); err != nil {
+		if err := s.archiveDir(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol)); err != nil {
 			return nil, fmt.Errorf("while archiving durable-dir volume %q: %w", vol, err)
 		}
 		files = append(files, name)

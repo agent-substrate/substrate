@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,32 +132,38 @@ func memoryCurrent(dir string) (uint64, error) {
 // used.
 // https://github.com/torvalds/linux/blob/v7.0/mm/memcontrol.c#L561-L564
 func memoryUsed(dir string) (uint64, error) {
+	return sumMemoryStat(dir, memoryUsedStats...)
+}
+
+// memoryUsedStats are the memory.stat keys memoryUsed sums
+var memoryUsedStats = []string{"anon", "shmem", "kernel", "sock"}
+
+// sumMemoryStat sums keys from one read of dir's memory.stat, which must have
+// anon.
+func sumMemoryStat(dir string, keys ...string) (uint64, error) {
 	path := filepath.Join(dir, "memory.stat")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
 	}
-	var used uint64
+	var sum uint64
 	var anon bool
 	for line := range bytes.Lines(b) {
 		f := bytes.Fields(line)
-		if len(f) != 2 {
+		if len(f) != 2 || !slices.Contains(keys, string(f[0])) {
 			continue
 		}
-		switch k := string(f[0]); k {
-		case "anon", "shmem", "kernel", "sock":
-			v, err := strconv.ParseUint(string(f[1]), 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("parsing %s in %q: %w", k, path, err)
-			}
-			used += v
-			anon = anon || k == "anon"
+		v, err := strconv.ParseUint(string(f[1]), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parsing %s in %q: %w", f[0], path, err)
 		}
+		sum += v
+		anon = anon || string(f[0]) == "anon"
 	}
 	if !anon {
 		return 0, fmt.Errorf("no anon in %q", path)
 	}
-	return used, nil
+	return sum, nil
 }
 
 // memoryStall is memory.pressure's some total: microseconds during which at
