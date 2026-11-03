@@ -70,3 +70,4 @@ Thumbs.db
 .agents/scratch/
 /cmd/benchmarking/isolate/fake-atelet/fake-atelet
 /cmd/benchmarking/isolate/fake-workersync/fake-workersync
+/demos/claude-code-multiplex/ui/ui-server
