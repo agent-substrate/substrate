@@ -21,7 +21,10 @@ package actorauthz
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -31,6 +34,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
 	"go.ate.dev/substrate/internal/oidcjwt"
@@ -61,6 +65,44 @@ func NewVerifier(issuer string, client *http.Client) *oidcjwt.Verifier {
 	return oidcjwt.NewVerifier(issuer, []string{Audience}, oidcjwt.HTTPKeySource(issuer, client), oidcjwt.WithSubstrateClaims())
 }
 
+// StartVerifier returns NewVerifier's verifier and its client after one
+// attempt to fetch issuer's keys. The client trusts the system roots and
+// caFile, re-read when it changes. Every exchange builds its verifier with
+// it. A caller that stops using the verifier calls the client's
+// CloseIdleConnections.
+func StartVerifier(ctx context.Context, issuer, caFile string) (*oidcjwt.Verifier, *http.Client, error) {
+	client, err := oidcjwt.NewHTTPClientWithRoots(credbundle.SystemPoolLoader(caFile))
+	if err != nil {
+		return nil, nil, fmt.Errorf("while setting up the actor JWT issuer client: %w", err)
+	}
+	verifier := NewVerifier(issuer, client)
+	if err := checkIssuerCertificate(ctx, issuer, caFile, verifier); err != nil {
+		client.CloseIdleConnections()
+		return nil, nil, err
+	}
+	return verifier, client, nil
+}
+
+// issuerCheckTimeout bounds the start-time fetch from the actor JWT issuer.
+const issuerCheckTimeout = 10 * time.Second
+
+// checkIssuerCertificate fetches the issuer's keys into verifier's cache so a
+// certificate the client does not trust fails the start instead of every
+// exchange. Other errors may be transient, such as an issuer that is not up
+// yet, so they are logged and the exchange serves.
+func checkIssuerCertificate(ctx context.Context, issuer, caFile string, verifier *oidcjwt.Verifier) error {
+	ctx, cancel := context.WithTimeout(ctx, issuerCheckTimeout)
+	defer cancel()
+	err := verifier.Refresh(ctx, time.Now())
+	if certErr := (*tls.CertificateVerificationError)(nil); errors.As(err, &certErr) {
+		return fmt.Errorf("actor JWT issuer serves a certificate that does not verify against the system roots or %s: %w", caFile, err)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "Could not fetch actor JWT signing keys at start; exchanges retry the fetch", slog.String("issuer", issuer), slog.Any("err", err))
+	}
+	return nil
+}
+
 // Decision is what Authorize allowed: the UID of the actor a credential may
 // be issued for, and the storage grants the credential must be limited to.
 type Decision struct {
@@ -75,7 +117,8 @@ type Authorizer struct {
 	now      func() time.Time
 }
 
-// New returns an Authorizer. The verifier must accept only Audience.
+// New returns an Authorizer. The verifier must accept only Audience, as one
+// from NewVerifier or StartVerifier does.
 func New(v Verifier, l Lookup) *Authorizer {
 	return &Authorizer{verifier: v, lookup: l, now: time.Now}
 }

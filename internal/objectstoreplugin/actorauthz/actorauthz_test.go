@@ -21,10 +21,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -404,4 +407,108 @@ func TestAuthorize_IssuerRecovers(t *testing.T) {
 	if _, err := a.Authorize(t.Context(), jwt); err != nil {
 		t.Fatalf("Authorize after the issuer recovered = %v", err)
 	}
+}
+
+// TestCheckIssuerCertificate checks that errors other than an untrusted
+// certificate let StartVerifier return the verifier.
+func TestCheckIssuerCertificate(t *testing.T) {
+	trusted := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(trusted.Close)
+	closed := httptest.NewTLSServer(http.NotFoundHandler())
+	closed.Close()
+	for _, tc := range []struct {
+		name   string
+		issuer string
+		client *http.Client
+	}{
+		{"unreachable issuer", closed.URL, closed.Client()},
+		{"issuer without discovery", trusted.URL, trusted.Client()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := checkIssuerCertificate(t.Context(), tc.issuer, "ca.pem", NewVerifier(tc.issuer, tc.client)); err != nil {
+				t.Fatalf("checkIssuerCertificate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestStartVerifierWarmsCache checks that the start check fills the cache
+// of the verifier it returns, and that a failed start check leaves the first
+// Verify to fetch right away.
+func TestStartVerifierWarmsCache(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// startFails makes the issuer answer 503 to the start check only.
+		startFails bool
+		// wantFetches is the JWKS fetch count after the start and one Verify.
+		wantFetches int32
+	}{
+		{"start check fills the cache", false, 1},
+		{"failed start check retries on first use", true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := newPool(t)
+			keys, err := pool.VerificationKeys()
+			if err != nil {
+				t.Fatal(err)
+			}
+			jwks, err := localjwtauthority.JWKS(keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fetches atomic.Int32
+			failNext := &atomic.Bool{}
+			failNext.Store(tc.startFails)
+			mux := http.NewServeMux()
+			var srv *httptest.Server
+			mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "jwks_uri": srv.URL + "/jwks"})
+			})
+			mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+				fetches.Add(1)
+				if failNext.Swap(false) {
+					http.Error(w, "down", http.StatusServiceUnavailable)
+					return
+				}
+				_, _ = w.Write(jwks)
+			})
+			srv = httptest.NewTLSServer(mux)
+			t.Cleanup(srv.Close)
+
+			verifier, _, err := StartVerifier(t.Context(), srv.URL, writeServerCA(t, srv))
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			token, err := pool.SignJWT(&actoridjwt.Claims{
+				Kind:       actoridjwt.KindWorkerForActor,
+				Issuer:     srv.URL,
+				Subject:    actoridjwt.KindWorkerForActor.SubjectPrefix() + "/team-a/bot",
+				Audiences:  []string{Audience},
+				Expiration: now.Add(time.Hour),
+				NotBefore:  now.Add(-time.Minute),
+				IssuedAt:   now,
+				Substrate:  actoridjwt.SubstrateClaims{Atespace: "team-a", ActorName: "bot", ActorUID: "uid", Node: "node-1"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := verifier.Verify(t.Context(), token, now); err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if got := fetches.Load(); got != tc.wantFetches {
+				t.Fatalf("JWKS fetches = %d, want %d", got, tc.wantFetches)
+			}
+		})
+	}
+}
+
+// writeServerCA writes srv's certificate to a PEM file and returns its path.
+func writeServerCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "issuer-ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
