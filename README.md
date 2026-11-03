@@ -267,6 +267,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Observability Guide](docs/guides/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Extending Substrate](docs/security/extensibility.md): How to augment or replace the built-in ingress and egress gateways.
 * [Authentication Guide](docs/guides/authentication.md): Which credential people, pods and CI jobs should use with the Substrate API, and how to trust more JWT issuers.
+* [Actor JWTs](docs/guides/actor-jwts.md): What an actor JWT contains, how relying parties verify it, and how to rotate the signing key.
 * [Egress Traffic](docs/guides/egress-traffic.md): Which protocols an Actor may reach the outside world with and which are blocked.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/guides/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/concepts/request-parking.md): How the router parks requests through transient worker-pool saturation.
