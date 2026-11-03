@@ -114,8 +114,15 @@ func workersHostingAtespace(ctx context.Context, lister ActorLister, atespace st
 	}
 }
 
+func workerRPCError(msg string, err error) error {
+	if status.Code(err) == codes.PermissionDenied {
+		return fmt.Errorf("%s: %w (workers are global objects and require global viewer permission)", msg, err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
+}
+
 // listAllWorkers pages through ListWorkers and returns all workers.
-func listAllWorkers(ctx context.Context, lister WorkerLister, atespace string) ([]*ateapi.Worker, error) {
+func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapi.Worker, error) {
 	var workers []*ateapi.Worker
 	pageToken := ""
 	for {
@@ -123,10 +130,7 @@ func listAllWorkers(ctx context.Context, lister WorkerLister, atespace string) (
 			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
-			if atespace != "" && status.Code(err) == codes.PermissionDenied {
-				return nil, fmt.Errorf("failed to list workers: %w (workers are global objects; -a/--atespace filters the global list and requires global viewer permission)", err)
-			}
-			return nil, fmt.Errorf("failed to list workers: %w", err)
+			return nil, workerRPCError("failed to list workers", err)
 		}
 		workers = append(workers, resp.GetWorkers()...)
 		pageToken = resp.GetNextPageToken()
@@ -201,7 +205,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 		for _, name := range r.names {
 			worker, err := r.workerGetter.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}})
 			if err != nil {
-				return fmt.Errorf("failed to get worker %q: %w", name, err)
+				return workerRPCError(fmt.Sprintf("failed to get worker %q", name), err)
 			}
 			workers = append(workers, worker)
 		}
@@ -211,7 +215,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 		return printer.PrintWorkersTo(r.out, workers, r.outputFmt)
 	}
 
-	workers, err := listAllWorkers(ctx, r.workerLister, r.atespace)
+	workers, err := listAllWorkers(ctx, r.workerLister)
 	if err != nil {
 		return err
 	}
@@ -301,7 +305,7 @@ type TopWorkersRunner struct {
 }
 
 func (r *TopWorkersRunner) Run(ctx context.Context) error {
-	allWorkers, err := listAllWorkers(ctx, r.workerLister, r.atespace)
+	allWorkers, err := listAllWorkers(ctx, r.workerLister)
 	if err != nil {
 		return err
 	}

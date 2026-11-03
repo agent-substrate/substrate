@@ -570,36 +570,74 @@ func TestTopWorkersRunner_InvalidSelector(t *testing.T) {
 }
 
 func TestWorkersRunner_PermissionDenied(t *testing.T) {
-	deniedErr := status.Error(codes.PermissionDenied, `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`)
-	const clarification = "workers are global objects; -a/--atespace filters the global list and requires global viewer permission"
+	listDeniedErr := status.Error(codes.PermissionDenied, `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`)
+	getDeniedErr := status.Error(codes.PermissionDenied, `permission denied: principal "alice" lacks "can_get" on "worker:worker-1"`)
+	unavailableErr := status.Error(codes.Unavailable, "connection refused")
+	const clarification = "workers are global objects and require global viewer permission"
 
 	tests := []struct {
 		name              string
 		run               func(ctx context.Context) error
+		wantCode          codes.Code
+		wantErr           string
 		wantClarification bool
 	}{
 		{
-			name: "get workers with -a",
+			name: "get workers without -a",
 			run: (&GetWorkersRunner{
-				workerLister: &mockWorkerLister{err: deniedErr},
-				atespace:     "space-a",
+				workerLister: &mockWorkerLister{err: listDeniedErr},
 			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
 			wantClarification: true,
 		},
 		{
-			name: "get workers without -a",
+			name: "get workers with -a",
 			run: (&GetWorkersRunner{
-				workerLister: &mockWorkerLister{err: deniedErr},
+				workerLister: &mockWorkerLister{err: listDeniedErr},
+				atespace:     "space-a",
 			}).Run,
-			wantClarification: false,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
+			wantClarification: true,
+		},
+		{
+			name: "get worker by name",
+			run: (&GetWorkersRunner{
+				workerGetter: &mockWorkerGetter{err: getDeniedErr},
+				names:        []string{"worker-1"},
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `failed to get worker "worker-1": rpc error: code = PermissionDenied desc = permission denied: principal "alice" lacks "can_get" on "worker:worker-1"`,
+			wantClarification: true,
+		},
+		{
+			name: "top worker without -a",
+			run: (&TopWorkersRunner{
+				workerLister: &mockWorkerLister{err: listDeniedErr},
+			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
+			wantClarification: true,
 		},
 		{
 			name: "top worker with -a",
 			run: (&TopWorkersRunner{
-				workerLister: &mockWorkerLister{err: deniedErr},
+				workerLister: &mockWorkerLister{err: listDeniedErr},
 				atespace:     "space-a",
 			}).Run,
+			wantCode:          codes.PermissionDenied,
+			wantErr:           `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`,
 			wantClarification: true,
+		},
+		{
+			name: "non-permission error omits clarification",
+			run: (&GetWorkersRunner{
+				workerLister: &mockWorkerLister{err: unavailableErr},
+			}).Run,
+			wantCode:          codes.Unavailable,
+			wantErr:           "connection refused",
+			wantClarification: false,
 		},
 	}
 
@@ -607,10 +645,13 @@ func TestWorkersRunner_PermissionDenied(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.run(context.Background())
 			if err == nil {
-				t.Fatal("expected PermissionDenied error, got nil")
+				t.Fatal("expected error, got nil")
 			}
-			if !strings.Contains(err.Error(), `permission denied: principal "alice" lacks "can_list_workers" on "global:root"`) {
-				t.Errorf("error %q does not contain underlying gRPC error message", err.Error())
+			if got := status.Code(err); got != tc.wantCode {
+				t.Errorf("status.Code(err) = %v, want %v", got, tc.wantCode)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
 			if got := strings.Contains(err.Error(), clarification); got != tc.wantClarification {
 				t.Errorf("error %q contains clarification = %v, want %v", err.Error(), got, tc.wantClarification)
