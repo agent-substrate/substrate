@@ -387,6 +387,46 @@ func Validate_Actor(
 	return errs
 }
 
+// Validate_ActorAssignmentsStatus validates an instance of ActorAssignmentsStatus according
+// to declarative validation rules in the API schema.
+func Validate_ActorAssignmentsStatus(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.ActorAssignmentsStatus) (errs field.ErrorList) {
+
+	{ // field v1.ActorAssignmentsStatus.Total
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ActorAssignmentsStatus) *int64 {
+				return &oldObj.Total
+			})
+		errs = append(errs, fn(fldPath.Child("total"), &obj.Total, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_ActorCrash validates an instance of ActorCrash according
 // to declarative validation rules in the API schema.
 func Validate_ActorCrash(
@@ -11378,6 +11418,36 @@ func Validate_WorkerStatus(
 				return &oldObj.RegisteredEpoch
 			})
 		errs = append(errs, fn(fldPath.Child("registered_epoch"), &obj.RegisteredEpoch, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.WorkerStatus.Assignments
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ActorAssignmentsStatus,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorAssignmentsStatus(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.WorkerStatus) *v1.ActorAssignmentsStatus {
+				return oldObj.Assignments
+			})
+		errs = append(errs, fn(fldPath.Child("assignments"), obj.Assignments, oldVal, oldObj != nil)...)
 	}
 
 	return errs
