@@ -275,7 +275,9 @@ kubectl ate --token-file me.token delete access-policy -a team-a
   since.
 - The global policy can't be deleted; update it with no bindings instead.
 - Deleting an atespace deletes its policy, so a recreated atespace starts
-  with none.
+  with none. A request authorized against the old atespace and still in
+  flight across the delete and recreate can apply to the new one. See
+  [Known limitations](#known-limitations).
 - Changes take effect on the next call.
 
 ## Recovering access
@@ -311,6 +313,13 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 ## Known limitations
 
+- **Atespace names must not be reused.** Grants are keyed by atespace name,
+  and calls are authorized before the write runs. If an atespace is deleted
+  and recreated under the same name, a request authorized against the old
+  atespace and still in flight across the delete and recreate can land on
+  the new one, including granting access to it or deleting it. Nothing
+  enforces unique names. Once an atespace is deleted, don't create another
+  one under that name; use a fresh name instead.
 - **Tags can copy an actor's data.** A tag is a durable copy of an actor's
   memory and disk, including secrets, and outlives the actor. Any atespace
   editor can tag, publish and clone any actor in the atespace.
