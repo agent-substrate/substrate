@@ -860,3 +860,17 @@ func TestSchedulePinnedResumeIgnoresAssignments(t *testing.T) {
 		t.Errorf("Schedule() = %q, want w-0, the first sample on a tie in utilization", got.GetWorkerPod())
 	}
 }
+
+func TestSchedulePrefersTheWorkerKeepingTheAssignment(t *testing.T) {
+	f := fleet{
+		worker("w-0", "gvisor", "node-a", nil, named("w-0"), withMaxActors(100)),
+		worker("w-1", "gvisor", "node-a", nil, named("w-1"), withMaxActors(100), assigned("demo", "other")),
+	}
+	got, err := New(f, WithIntn(seqIntn(0, 0))).Schedule(context.Background(), Constraints{RequiredNodes: []string{"node-a"}, PreferredWorker: "w-1"})
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if got.GetWorkerPod() != "w-1" {
+		t.Errorf("Schedule() = %q, want w-1", got.GetWorkerPod())
+	}
+}

@@ -509,6 +509,10 @@ func (p *Persistence) GetWorkerAssignment(ctx context.Context, workerName, actor
 	return assignment, nil
 }
 
+func (p *Persistence) GetActorAssignment(ctx context.Context, actorUID string) (*ateapi.ActorAssignment, string, error) {
+	return getAssignmentRow(ctx, p.pool, actorUID)
+}
+
 func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorAssignment], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {

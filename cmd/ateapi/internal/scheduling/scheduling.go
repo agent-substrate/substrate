@@ -64,6 +64,11 @@ type Constraints struct {
 	// Limits are the actor's declared resource limits, in the units a Worker
 	// reports its capacity in, so the two subtract.
 	Limits *ateapi.Resources
+
+	// PreferredWorker, when it names a candidate, is picked over the others.
+	// Used for a resume onto the Worker that kept the actor's suspended
+	// assignment, which saves moving it.
+	PreferredWorker string
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -145,6 +150,13 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity
+	}
+	if constraints.PreferredWorker != "" {
+		for _, c := range candidates {
+			if c.worker.GetMetadata().GetName() == constraints.PreferredWorker {
+				return c.worker, nil
+			}
+		}
 	}
 	if len(candidates) == 1 {
 		return candidates[0].worker, nil

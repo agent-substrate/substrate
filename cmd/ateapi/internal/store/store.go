@@ -327,6 +327,10 @@ type Interface interface {
 	// or suspended, or ErrNotFound when the Worker holds none.
 	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error)
 
+	// GetActorAssignment returns actorUID's assignment, running or suspended,
+	// and the name of the Worker holding it, or ErrNotFound when none does.
+	GetActorAssignment(ctx context.Context, actorUID string) (*ateapi.ActorAssignment, string, error)
+
 	// ListWorkerAssignments returns a page of a Worker's assignments, running
 	// and suspended.
 	ListWorkerAssignments(ctx context.Context, workerName string, opts ListOptions) (ListResponse[*ateapi.ActorAssignment], error)

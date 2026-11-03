@@ -3268,6 +3268,27 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		}
 	})
 
+	t.Run("GetActorAssignment_NamesTheHolder", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		newNodeWorker(t, s, otherTestWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		if _, _, err := s.GetActorAssignment(ctx, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorAssignment before binding = %v, want ErrNotFound", err)
+		}
+
+		resumeOn(t, s, otherTestWorkerName, "node-1", assignment)
+		suspendOn(t, s, assignment, "node-1")
+		got, holder, err := s.GetActorAssignment(ctx, assignment.GetActorUid())
+		if err != nil {
+			t.Fatalf("GetActorAssignment failed: %v", err)
+		}
+		if holder != otherTestWorkerName || got.GetState() != ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED {
+			t.Errorf("GetActorAssignment = %v on %q, want suspended on %q", got.GetState(), holder, otherTestWorkerName)
+		}
+	})
+
 	t.Run("AssignmentState_UnbindingDropsTheSuspendedAssignment", func(t *testing.T) {
 		for _, tc := range []struct {
 			name  string

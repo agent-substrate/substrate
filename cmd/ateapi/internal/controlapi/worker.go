@@ -221,6 +221,10 @@ func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actor
 	return s.store.GetWorkerAssignment(ctx, workerName, actorUID)
 }
 
+func (s *ServiceImpl) GetActorAssignment(ctx context.Context, actorUID string) (*ateapi.ActorAssignment, string, error) {
+	return s.store.GetActorAssignment(ctx, actorUID)
+}
+
 func (s *ServiceImpl) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorAssignment], error) {
 	return s.store.ListWorkerAssignments(ctx, workerName, opts)
 }
