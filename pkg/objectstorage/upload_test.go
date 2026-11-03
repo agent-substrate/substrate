@@ -119,6 +119,63 @@ func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
 	}
 }
 
+func TestUploaderSplitsFragmentedSparseNearCompositeMin(t *testing.T) {
+	// 254 * 256 KiB = 63.5 MiB populated: below sparsePartTarget and below
+	// uploadCompositeMin as a single extent, but per-extent framing pushes the
+	// encoded bound past uploadCompositeMin when split across 254 extents.
+	const (
+		extentCount = 254
+		extentBytes = 256 << 10
+		populated   = extentCount * extentBytes
+	)
+	if sparseEncodedBound(populated, 1) >= uploadCompositeMin {
+		t.Fatalf("single-extent bound %d already >= %d", sparseEncodedBound(populated, 1), uploadCompositeMin)
+	}
+	if sparseEncodedBound(populated, extentCount) < uploadCompositeMin {
+		t.Fatalf("fragmented bound %d < %d", sparseEncodedBound(populated, extentCount), uploadCompositeMin)
+	}
+
+	dir := t.TempDir()
+	contigPath := filepath.Join(dir, "contiguous")
+	writeSparseSource(t, contigPath, 2<<30, []region{{0, populated, 0x5a}})
+	contig, err := os.Open(contigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer contig.Close()
+
+	regions := make([]region, extentCount)
+	for i := range regions {
+		regions[i] = region{off: int64(i) * (512 << 10), len: extentBytes, fill: 0x5a}
+	}
+	fragPath := filepath.Join(dir, "fragmented")
+	writeSparseSource(t, fragPath, 2<<30, regions)
+	frag, err := os.Open(fragPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer frag.Close()
+
+	u, err := NewUploader(&gcsClient{}, DefaultUploadMemory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contigPlan, err := u.plan(contig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contigPlan.parts != 1 {
+		t.Errorf("contiguous 63.5 MiB plan = %+v, want 1 part", contigPlan)
+	}
+	fragPlan, err := u.plan(frag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fragPlan.parts != 2 || fragPlan.memory != 2*sparseUploadMemory {
+		t.Errorf("fragmented 63.5 MiB plan = %+v, want 2 parts reserving %d", fragPlan, 2*sparseUploadMemory)
+	}
+}
+
 func TestUploaderReservesOnlyTheChosenPath(t *testing.T) {
 	previous := runtime.GOMAXPROCS(192)
 	defer runtime.GOMAXPROCS(previous)

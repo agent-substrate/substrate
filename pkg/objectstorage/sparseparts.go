@@ -106,8 +106,8 @@ func planSparseParts(exts []extentRange, populated int64, n int) [][]extentRange
 // whose encoded stream can reach uploadCompositeMin (64 MiB) splits into at
 // least two range parts so it does not fall back to a single-stream composite
 // upload.
-func sparsePartCount(populated int64) int {
-	if populated < sparsePartTarget && sparseEncodedBound(populated, 1) < uploadCompositeMin {
+func sparsePartCount(populated int64, extents int) int {
+	if populated < sparsePartTarget && sparseEncodedBound(populated, extents) < uploadCompositeMin {
 		return 1
 	}
 	return min(max(int(populated/sparsePartTarget), 2), sparseMaxParts)
