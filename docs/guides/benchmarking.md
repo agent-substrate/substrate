@@ -846,7 +846,9 @@ them are checked into the repository.
   value and limit it compared and every value its sources read. `stats.jsonl`
   then also has one `evaluation_<name>` row per evaluation and an
   `evaluation_summary` row. Evaluations never change `status.json` or the exit
-  code. See [evaluate/README.md](../../benchmarking/evaluate/README.md).
+  code. See [evaluate/README.md](../../benchmarking/evaluate/README.md); to
+  judge a stored run again, run `python3 -m evaluate <run> --from-run` from
+  `benchmarking/`.
 
 ### Density frontiers
 

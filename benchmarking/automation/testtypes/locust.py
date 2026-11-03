@@ -24,7 +24,8 @@ as installed.
 Optional `evaluations:` go to the runner, which judges the run against them
 (benchmarking/evaluate/README.md). This image doesn't ship the evaluate
 package, so validate checks their shape only; the runner checks the rest
-before its run.
+before its run, and `python -m evaluate --check-config` checks a tests file
+offline.
 """
 
 import os

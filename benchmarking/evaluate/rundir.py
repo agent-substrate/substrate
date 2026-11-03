@@ -29,13 +29,13 @@ import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Optional
 
 from .sources.base import BenchmarkRunContext
 from .sources.run_results import read_stats
 
-# The files sources read.
-RUN_FILES = ("logs.txt", "stats.jsonl", "server_summary.json", "stats_history.csv")
+# The files sources read, plus evaluation.json for `python -m evaluate --from-run`.
+RUN_FILES = ("logs.txt", "stats.jsonl", "server_summary.json", "stats_history.csv", "evaluation.json")
 RUN_PATH = re.compile(r"^(?P<root>.*)/runs/(?P<test>[^/]+)/run_date=(?P<date>[^/]+)/run_ts=(?P<ts>\d+)"
                       r"/run_tag=(?P<tag>[^/]+)/?$")
 DEFAULT_MAX_AGE_S = 6 * 3600
@@ -70,6 +70,12 @@ def open_run(uri: str, tmp: Path) -> BenchmarkRunContext:
     return BenchmarkRunContext(files={name: local / name for name in RUN_FILES}, label=uri)
 
 
+def dest_of(uri: str) -> Optional[str]:
+    """The <dest> a run stored in the runner's layout lives under; None otherwise."""
+    m = RUN_PATH.match(uri.rstrip("/"))
+    return m["root"] if m else None
+
+
 def find_paired_run(dest: str, test_name: str, tag: str, before_ts: int, max_age_s: int = DEFAULT_MAX_AGE_S) -> str:
     """The stored run of test_name paired with a run of tag at before_ts; raises LookupError when there is none.
 
@@ -99,6 +105,13 @@ def cluster_name(files: Mapping[str, Path]) -> str:
     measurements = trial.get("measurements")
     name = measurements.get("metadata_cluster_name") if isinstance(measurements, dict) else None
     return str(name) if name else ""
+
+
+def data_timestamp(files: Mapping[str, Path]) -> str:
+    """The timestamp the run's stats.jsonl rows carry (trial_summary's); "" without one."""
+    stats = read_stats(files.get("stats.jsonl"))
+    row = stats.get("trial_summary") or next(iter(stats.values()), {})
+    return str(row.get("timestamp") or "")
 
 
 def paired_run_finder(dest: str, tag: str, run_ts: int, files: Mapping[str, Path], tmp: Path,

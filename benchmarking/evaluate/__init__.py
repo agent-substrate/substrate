@@ -19,7 +19,8 @@ files into values (sources/), and threshold conditions over those values
 (checks.py). evaluator.py judges them; outputs.py writes evaluation.json and
 stats.jsonl rows. runner.py calls prepare when a run starts and write once it
 has finished; rundir.py finds the runs a run is paired with under the
-runner's --dest. Standard library only, plus cel-expr-python for the cel
+runner's --dest. `python -m evaluate` (__main__.py) judges a stored run with
+the same code. Standard library only, plus cel-expr-python for the cel
 source (requirements.txt). See README.md.
 """
 

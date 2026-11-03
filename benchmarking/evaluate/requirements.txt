@@ -13,6 +13,6 @@
 # limitations under the License.
 
 # The package is standard library only, plus the CEL runtime of the cel source.
-# PyYAML is for the tests.
+# PyYAML is for the tests and for `python -m evaluate --tests-file`.
 cel-expr-python==0.1.3
 PyYAML

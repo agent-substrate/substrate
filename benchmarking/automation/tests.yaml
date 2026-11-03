@@ -117,7 +117,8 @@
 # to stats.jsonl; they never fail the run. A cel variable's `baseline_test`
 # (kind: sweperf_tasks) names the suite's 1-user test, whose latest run
 # under the same --dest with the same tag (at most 6h older, on the same
-# cluster) is its baseline. See benchmarking/evaluate/README.md.
+# cluster) is its baseline. See benchmarking/evaluate/README.md; check a file
+# with `cd benchmarking && python3 -m evaluate --check-config --tests-file F`.
 #
 #   evaluations:
 #   - name: envelope
