@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -40,6 +41,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
 	"go.ate.dev/substrate/internal/apiconfig"
+	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/ateinterceptors"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/installdefaults"
@@ -74,6 +76,7 @@ const minResyncInterval = 250 * time.Millisecond
 
 var (
 	configFile = pflag.String("config-file", "", "API server config file")
+	kubeconfig = pflag.String("kubeconfig", "", "Path to kubeconfig. If empty, KUBECONFIG is used before falling back to in-cluster config.")
 
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
@@ -218,7 +221,11 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to load authentication config", err)
 	}
-	authCfg, err := buildJWTProviders(ctx, authenticationConfig)
+	restConfig, err := loadRESTConfig(*kubeconfig)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to load Kubernetes config", err)
+	}
+	authCfg, err := buildJWTProviders(ctx, authenticationConfig, restConfig)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
@@ -267,7 +274,7 @@ func main() {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	clientset, ateClient, err := newKubeClients()
+	clientset, ateClient, err := newKubeClients(restConfig)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
 	}
@@ -595,13 +602,8 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 	return nil, fmt.Errorf("connect to PostgreSQL after %d attempts: %w", postgresConnectTries, connectErr)
 }
 
-// newKubeClients builds the standard Kubernetes clientset and the ate
-// (substrate CRD) clientset from in-cluster config.
-func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, nil, fmt.Errorf("get cluster config: %w", err)
-	}
+// newKubeClients builds the standard Kubernetes clientset and the ate clientset.
+func newKubeClients(config *rest.Config) (*kubernetes.Clientset, versioned.Interface, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create clientset: %w", err)
@@ -611,6 +613,29 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 		return nil, nil, fmt.Errorf("create ate clientset: %w", err)
 	}
 	return clientset, ateClient, nil
+}
+
+func loadRESTConfig(kubeconfigPath string) (*rest.Config, error) {
+	if kubeconfigPath != "" {
+		config, err := ateclient.LoadKubeConfig(kubeconfigPath, "")
+		if err != nil {
+			return nil, fmt.Errorf("load kubeconfig %q: %w", kubeconfigPath, err)
+		}
+		return config, nil
+	}
+	if os.Getenv("KUBECONFIG") != "" {
+		config, err := ateclient.LoadKubeConfig("", "")
+		if err != nil {
+			return nil, fmt.Errorf("load KUBECONFIG: %w", err)
+		}
+		return config, nil
+	}
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("get in-cluster config: %w", err)
+	}
+	return config, nil
 }
 
 // buildServerCreds composes gRPC TransportCredentials over the server bundle
@@ -664,10 +689,13 @@ func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath strin
 	}, nil
 }
 
-func buildJWTProviders(ctx context.Context, cfg *apiconfig.AuthenticationConfig) (apiauthn.ServerConfig, error) {
+func buildJWTProviders(ctx context.Context, cfg *apiconfig.AuthenticationConfig, restConfig *rest.Config) (apiauthn.ServerConfig, error) {
 	var serverCfg apiauthn.ServerConfig
 	for _, providerCfg := range cfg.JWTProviders {
-		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
+		var httpClient *http.Client
+		var err error
+		httpClient, err = oidcjwt.NewHTTPClientWithClientConfig(
+			providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile, restConfig)
 		if err != nil {
 			return apiauthn.ServerConfig{}, fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
