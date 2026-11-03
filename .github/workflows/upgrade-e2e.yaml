@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Upgrades a cluster running a release to this checkout, with actors on it,
-# following docs/upgrade.md, and checks that every actor survives (see
+# following docs/guides/upgrade.md, and checks that every actor survives (see
 # internal/e2e/upgrade). Two installs on one kind cluster take too long for
 # every PR, so this runs for every push to a release branch, before a patch
 # release is tagged from it, plus on demand for any branch.
@@ -73,7 +73,7 @@ jobs:
         path: old
     - name: Setup Go
       if: steps.from.outputs.tag != ''
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: new/go.mod
         cache-dependency-path: |

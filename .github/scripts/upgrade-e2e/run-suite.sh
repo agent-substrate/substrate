@@ -28,4 +28,4 @@
 set -o errexit -o nounset -o pipefail
 
 cp "${ATE_RECORD_DIR}"/installs/*.yaml "${E2E_ATE_SETUP_CONFIG}"
-hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 90m -v -args --no-color --preview=""
+hack/run-e2e-kind.sh ./internal/e2e/upgrade -timeout 90m -args --no-color --preview=""

@@ -14,7 +14,7 @@
 
 // Package upgrade is the rolling upgrade suite. It takes a cluster that runs
 // the previous release with actors on it and upgrades it to this checkout in
-// the order of docs/upgrade.md: podcertificate-controller, atelet, the
+// the order of docs/guides/upgrade.md: podcertificate-controller, atelet, the
 // WorkerPool's workerImage, the API server, ate-controller, atenet, the
 // SandboxConfig, then the rest of the system bundle. Every step except the
 // workerImage edit is one ate-setup command. The suite stands in for the
