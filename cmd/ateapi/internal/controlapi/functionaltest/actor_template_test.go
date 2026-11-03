@@ -17,10 +17,12 @@ package functionaltest
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/status"
@@ -323,6 +325,92 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef()}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestGoldenActorWaitsForLargerWorker starts with a worker too small for the
+// template. The golden snapshot and the actor's resume succeed once a larger
+// worker registers.
+func TestGoldenActorWaitsForLargerWorker(t *testing.T) {
+	ns := namespaceForTest("golden-too-large")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	// createWorkerPod gives the worker 1000m for its one actor slot.
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "too-large"},
+		Containers: []*ateapi.Container{{
+			Name:    "main",
+			Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Command: []string{"/main"},
+			// Skips the golden snapshot warmup.
+			WakeupProbe: &ateapi.WakeupProbe{HttpGet: &ateapi.HttpGetAction{Path: "/healthz", Port: 8080}},
+		}},
+		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+		Resources:      &ateapi.ResourceRequirements{Limits: resources.CPUMemory(2000, 512<<20)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
+	actor, err := tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
+		ActorTemplate: templateRef,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actorRef := resources.ActorRefFromActor(actor).ToObjectRef()
+	_, err = tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ResumeActor() = %v, want FailedPrecondition", err)
+	}
+
+	control := &resumeFailureSignal{RPCService: tc.service, failed: make(chan struct{})}
+	// A short resync retries the golden actor soon after the larger worker registers.
+	controlapi.NewActorTemplateReconciler(tc.persistence, control, 100*time.Millisecond).Start(ctx)
+	select {
+	case <-control.failed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the golden actor's resume to fail")
+	}
+	worker2 := createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	reportWorkerCapacity(t, tc, worker2, 2)
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+
+	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		current, err := tc.client.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{ActorTemplate: templateRef})
+		if msg := current.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage(); msg != "" {
+			return false, fmt.Errorf("golden snapshot failed: %s", msg)
+		}
+		return current.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil, err
+	})
+	if err != nil {
+		t.Fatalf("waiting for the golden tag: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, worker2)
+	if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor() after the larger worker registered: %v", err)
+	}
+	assertAssignedNode(t, tc, actorRef.GetName(), "after resume", "node2")
+}
+
+// resumeFailureSignal closes failed the first time ResumeActor returns
+// FailedPrecondition.
+type resumeFailureSignal struct {
+	*controlapi.RPCService
+	once   sync.Once
+	failed chan struct{}
+}
+
+func (s *resumeFailureSignal) ResumeActor(ctx context.Context, req *ateapi.ResumeActorRequest) (*ateapi.ResumeActorResponse, error) {
+	resp, err := s.RPCService.ResumeActor(ctx, req)
+	if apierror.Code(err) == codes.FailedPrecondition {
+		s.once.Do(func() { close(s.failed) })
+	}
+	return resp, err
 }
 
 func TestListActorTemplates_InvalidPageToken(t *testing.T) {
