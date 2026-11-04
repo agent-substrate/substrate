@@ -49,7 +49,7 @@ type Script struct {
 	// MinActorMemory is the smallest actor memory limit the script is known
 	// to run under, in bytes. The driver refuses to start against a smaller
 	// template. Required, and at least the script's declared RAM plus disk
-	// (the data dir is tmpfs).
+	// (see Budget).
 	MinActorMemory int64
 	Steps          []Step
 }
