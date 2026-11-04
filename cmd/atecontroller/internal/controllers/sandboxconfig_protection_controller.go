@@ -163,7 +163,7 @@ func removeProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1.S
 // This reconciler asks the manager for two things:
 //
 //   - A cache index from a SandboxConfig's name to the WorkerPools whose
-//     status uses it. usedByWorkerPool looks up users through the index
+//     status uses it. workerPoolsUsing looks up users through the index
 //     instead of listing every WorkerPool.
 //   - Reconcile calls for a SandboxConfig when it changes, which includes
 //     being marked for deletion, and for every SandboxConfig a WorkerPool's
