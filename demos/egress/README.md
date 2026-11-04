@@ -65,7 +65,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 
 The dataplane is selected when installing `ate-system`, not when installing this demo. Install as
 in the [Quickstart](../../README.md#quickstart-development) or
-[GKE Quickstart](../../README.md#gke-quickstart-development); for agentgateway, add
+[GKE Quickstart](../../README.md#gke-quickstart); for agentgateway, add
 `--atenet-dataplane=agentgateway` to `deploy ate-system`. The Actor, ActorTemplate, worker pool,
 test, and manual walkthrough are otherwise the same.
 
@@ -103,7 +103,7 @@ rejects that option with agentgateway rather than silently omitting it.
 ## Prerequisites
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development), with the dataplane
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart), with the dataplane
   [chosen above](#choose-a-dataplane). Egress is enabled by the ateapi flag above.
 - `kubectl` and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
 
