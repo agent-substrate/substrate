@@ -125,7 +125,7 @@ func (h *dnsHandler) onRequestCommon(raw []byte) (dnsmessage.Header, dnsmessage.
 	// error codes such as REFUSED.
 	cq := canonicalizeQuestion(q)
 	allowed := h.allow(cq)
-	h.instruments.recordQuery(cq, allowed)
+	h.instruments.recordQuery(allowed)
 	if !allowed {
 		return hdr, dnsmessage.Question{}, action{
 			kind:    actionReply,

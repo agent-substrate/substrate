@@ -22,25 +22,17 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestReadResolvConf(t *testing.T) {
+func TestResolvConfNameservers(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		content    string
-		want       []string
-		wantSearch []string
-		wantErr    bool
+		name    string
+		content string
+		want    []string
+		wantErr bool
 	}{
 		{
-			name:       "cluster resolv.conf",
-			content:    "search ate-system.svc.cluster.local svc.cluster.local\nnameserver 10.96.0.10\noptions ndots:5\n",
-			want:       []string{"10.96.0.10:53"},
-			wantSearch: []string{"ate-system.svc.cluster.local", "svc.cluster.local"},
-		},
-		{
-			name:       "last search line wins",
-			content:    "search first.example\nnameserver 10.96.0.10\nsearch  cluster.local  google.internal # node\n",
-			want:       []string{"10.96.0.10:53"},
-			wantSearch: []string{"cluster.local", "google.internal"},
+			name:    "cluster resolv.conf",
+			content: "search ate-system.svc.cluster.local svc.cluster.local\nnameserver 10.96.0.10\noptions ndots:5\n",
+			want:    []string{"10.96.0.10:53"},
 		},
 		{
 			name:    "several, in order",
@@ -60,21 +52,18 @@ func TestReadResolvConf(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			got, gotSearch, err := readResolvConf(path)
+			got, err := resolvConfNameservers(path)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("readResolvConf() = %v, want an error", got)
+					t.Fatalf("resolvConfNameservers() = %v, want an error", got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("readResolvConf: %v", err)
+				t.Fatalf("resolvConfNameservers: %v", err)
 			}
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("nameservers mismatch (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.wantSearch, gotSearch); diff != "" {
-				t.Errorf("search domains mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

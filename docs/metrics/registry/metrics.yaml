@@ -657,15 +657,6 @@ groups:
                 policy and holds no earlier copy. The relay answers NXDOMAIN.
                 Thus the actor sees the same error as for a name that does not
                 exist.
-            - id: denied_search_domain
-              stability: development
-              value: denied_search_domain
-              brief: >
-                The same as denied, for a name under one of the search domains
-                of the worker pod. The sandbox keeps those search domains and
-                ndots:5. Thus a stub resolver tries them before most names, and
-                most lookups cause these denials. A denied cluster name, such as
-                a service in another namespace, is also counted here.
 
   - id: registry.ate.stats
     type: attribute_group
@@ -1638,10 +1629,13 @@ groups:
     stability: development
     brief: The number of actor DNS queries that the DNS relay of the sandbox checked against the egress policy, by decision.
     note: >
-      A denied rate above zero means that egress policies block external names
-      that actors look up. The actor sees only "bad address" or "could not
-      resolve host". The relay does not count a query that it drops or rejects
-      before the policy check, such as a malformed query.
+      The sandbox keeps the search domains of the worker pod and ndots:5. Thus
+      a stub resolver tries the search domains before most names, and most
+      lookups cause denials, even when a rule allows the name. Compare the
+      denied rate with its usual level. A rise means that egress policies block
+      names that actors look up. The actor sees only "bad address" or "could
+      not resolve host". The relay does not count a query that it drops or
+      rejects before the policy check, such as a malformed query.
     annotations:
       substrate:
         emitted_by: [ateworker-gvisor, ateworker-microvm]
