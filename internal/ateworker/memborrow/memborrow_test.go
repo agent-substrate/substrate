@@ -18,6 +18,7 @@ package memborrow
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,6 +82,33 @@ func TestTakeWithoutPodLimit(t *testing.T) {
 	}
 	if err := l.Wait(context.Background()); err != nil {
 		t.Errorf("Wait() without a pod limit = %v", err)
+	}
+	if l.Tight(want) {
+		t.Error("Tight() without a pod limit = true, want false")
+	}
+}
+
+func TestTight(t *testing.T) {
+	unbooked := unbookedOf(4 << 30)
+	l := ledger(8<<30, 1<<30, unbooked)
+	borrowed := l.Take(1 << 30)
+	if l.Tight(borrowed) {
+		t.Error("Tight() with room to spare = true, want false")
+	}
+	// a placement books what the write borrowed
+	unbooked.Store(1 << 30)
+	if !l.Tight(borrowed) {
+		t.Error("Tight() once unbooked memory is spoken for = false, want true")
+	}
+	if !l.Tight(0) {
+		t.Error("Tight(0) with nothing lent = false, want true")
+	}
+	failing := &Ledger{
+		Unbooked:  func(int64) int64 { return 4 << 30 },
+		PodMemory: func() (int64, int64, error) { return 0, 0, errors.New("no cgroup") },
+	}
+	if !failing.Tight(borrowed) {
+		t.Error("Tight() when pod memory can't be read = false, want true")
 	}
 }
 

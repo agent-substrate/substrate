@@ -407,7 +407,7 @@ func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, chec
 			written = append(written, p)
 		}
 	}
-	if err := snapshotcache.StartWriteback(written, func() { s.borrow.Return(borrowed) }); err != nil {
+	if err := snapshotcache.StartWriteback(written, func() bool { return s.borrow.Tight(borrowed) }, func() { s.borrow.Return(borrowed) }); err != nil {
 		s.borrow.Return(borrowed)
 		slog.WarnContext(ctx, "Failed to start snapshot writeback", slog.String("id", actorUID), slog.Any("err", err))
 	}

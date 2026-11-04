@@ -125,10 +125,12 @@ func DropFiles(files []File) bool {
 
 // StartWriteback opens paths and, in the background, waits for each file's
 // dirty pages to be written back or for the file to be unlinked, then calls done
-// once. If a path can't be opened it returns the error, holds nothing, and never
-// calls done.
-func StartWriteback(paths []string, done func()) error {
-	return startWriteback(kernelPageCache{}, writebackPollDelays, paths, done)
+// once. A pass starts write-out of dirty pages only if flush is nil or returns
+// true; otherwise they stay cached until the file is unlinked or the kernel
+// writes them back. If a path can't be opened it returns the error, holds
+// nothing, and never calls done.
+func StartWriteback(paths []string, flush func() bool, done func()) error {
+	return startWriteback(kernelPageCache{}, writebackPollDelays, paths, flush, done)
 }
 
 // pageCache is the page cache state and write-out startWriteback uses
@@ -156,7 +158,7 @@ func (kernelPageCache) writeOut(f *os.File) error {
 	return unix.SyncFileRange(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
 }
 
-func startWriteback(pc pageCache, delays []time.Duration, paths []string, done func()) error {
+func startWriteback(pc pageCache, delays []time.Duration, paths []string, flush func() bool, done func()) error {
 	var files []*os.File
 	for _, p := range paths {
 		f, err := os.Open(p)
@@ -181,16 +183,17 @@ func startWriteback(pc pageCache, delays []time.Duration, paths []string, done f
 		}()
 		// poll instead of waiting on write-out, so a file unlinked meanwhile is
 		// closed and its dirty pages dropped instead of written back
-		for i := 0; pollWritebackFiles(pc, files); i++ {
+		for i := 0; pollWritebackFiles(pc, files, flush == nil || flush()); i++ {
 			time.Sleep(delays[min(i, len(delays)-1)])
 		}
 	}()
 	return nil
 }
 
-// pollWritebackFiles closes and clears each file that is clean or unlinked,
-// starts write-out of any that are still dirty, and reports whether any are left.
-func pollWritebackFiles(pc pageCache, files []*os.File) bool {
+// pollWritebackFiles closes and clears each file that is clean or unlinked, and
+// reports whether any are left. If flush is true, it also starts write-out of
+// files that are still dirty.
+func pollWritebackFiles(pc pageCache, files []*os.File, flush bool) bool {
 	anyRemaining := false
 	for i, f := range files {
 		if f == nil {
@@ -215,7 +218,7 @@ func pollWritebackFiles(pc pageCache, files []*os.File) bool {
 			files[i] = nil
 			continue
 		}
-		if cstat.Dirty > 0 && !startWriteOut(pc, f) {
+		if cstat.Dirty > 0 && flush && !startWriteOut(pc, f) {
 			_ = f.Close()
 			files[i] = nil
 			continue
