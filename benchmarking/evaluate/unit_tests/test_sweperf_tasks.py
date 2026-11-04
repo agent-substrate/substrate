@@ -126,7 +126,7 @@ def line(sec: float, msg: str, actor: str = "", **kw) -> str:
     return parse.LOG_PREFIX + json.dumps(j)
 
 
-def record(sec: float, actor: str = A, msg: str = parse.MSG_TASK_RECORD_SWEPERF, **kw) -> str:
+def record(sec: float, actor: str = A, msg: str = parse.MSG_TASK_RECORD, **kw) -> str:
     """A task record logged and ending at T0 + sec: a clean 4-cycle task by default."""
     j = {"time": ts(sec), "level": "INFO", "msg": msg, "v": 1, "user": 1, "actor": actor,
          "template": "sweperf-astropy-7336", "cycles": 4, "steps": 21, "task_start": ts(sec - 30),
@@ -216,10 +216,10 @@ def query(run: BenchmarkRunContext, cfg: dict) -> tuple[dict, Optional[str]]:
 class ParseTest(unittest.TestCase):
     def test_real_lines(self):
         ev = {k: parse.parse_line(v) for k, v in REAL.items()}
-        self.assertEqual((ev["resume_fail"].msg, ev["resume_fail"].cycle), (parse.MSG_RESUME_FAIL, 3))
+        self.assertEqual(ev["resume_fail"].msg, parse.MSG_RESUME_FAIL)
         self.assertAlmostEqual(ev["resume_fail"].t, parse.parse_time("2026-10-11T07:02:29.268099898Z"))
-        self.assertEqual((ev["exec_fail"].msg, ev["exec_fail"].cycle), (parse.MSG_EXEC_FAIL, 3))
-        self.assertEqual((ev["suspend_fail"].msg, ev["suspend_fail"].cycle), (parse.MSG_SUSPEND_FAIL, None))
+        self.assertEqual(ev["exec_fail"].msg, parse.MSG_EXEC_FAIL)
+        self.assertEqual(ev["suspend_fail"].msg, parse.MSG_SUSPEND_FAIL)
         self.assertEqual(ev["suspend_async_fail"].msg, parse.MSG_SUSPEND_ASYNC_FAIL)
         self.assertEqual((ev["onstart_fail"].user, ev["onstart_fail"].actor),
                          (81, "sb-a2b7fb28-ce3b-4f2b-a87a-a3f22949df7f"))
@@ -229,28 +229,22 @@ class ParseTest(unittest.TestCase):
 
     def test_real_records(self):
         g = parse.parse_record(REAL["record_gvisor"])
-        self.assertEqual((g.actor, g.user, g.template, g.cycles, g.steps, g.workload),
-                         ("sb-a597c5ed-9f70-47cb-96c6-67e267d7dd7a", 372, "sweperf-astropy-7336", 4, 21, "sweperf"))
+        self.assertEqual((g.actor, g.user, g.cycles, g.steps), ("sb-a597c5ed-9f70-47cb-96c6-67e267d7dd7a", 372, 4, 21))
         self.assertEqual((g.wall_ms, g.cel_ms, g.resume_max_ms, g.ttfe_max_ms),
                          (12584.251139, 10301.58, 208.538, 216.560976))
-        self.assertEqual((g.failed, g.fail_step, g.fail_cycle, g.retries), (False, "", None, 0))
+        self.assertEqual((g.failed, g.fail_step, g.retries), (False, "", 0))
         self.assertAlmostEqual(g.t, parse.parse_time("2026-10-18T02:29:42.61358281Z"))
         self.assertAlmostEqual(g.end, parse.parse_time("2026-10-18T02:29:42.613576352Z"))
-        self.assertAlmostEqual(g.task_start, parse.parse_time("2026-10-18T02:28:49.610791521Z"))
         m = parse.parse_record(REAL["record_microvm"])
         self.assertEqual((m.resume_max_ms, m.ttfe_max_ms), (7232.807, 7240.629771))
 
-    def test_neutral_record_names_its_workload(self):
-        r = parse.parse_record(record(5, msg=parse.MSG_TASK_RECORD, workload="agentsession"))
-        self.assertEqual((r.workload, r.wall_ms), ("agentsession", 8000.0))
-        self.assertEqual(parse.parse_record(record(5, msg=parse.MSG_TASK_RECORD)).workload, "")
-        # A sweperf task record is sweperf's, whatever else the line carries.
-        self.assertEqual(parse.parse_record(record(5, workload="other")).workload, "sweperf")
-        self.assertIsNone(parse.parse_record(record(5, msg="agent task record")))
+    def test_only_sweperf_task_records(self):
+        for msg in ("task record", "agent task record"):
+            self.assertIsNone(parse.parse_record(record(5, msg=msg)), msg)
 
     def test_failed_record_without_ttfe(self):
         r = parse.parse_record(record(5, failed=True, fail_step="suspend", fail_cycle=3, retries=2, ttfe_max_ms=None))
-        self.assertEqual((r.failed, r.fail_step, r.fail_cycle, r.retries, r.ttfe_max_ms), (True, "suspend", 3, 2, None))
+        self.assertEqual((r.failed, r.fail_step, r.retries, r.ttfe_max_ms), (True, "suspend", 2, None))
 
     def test_missing_optional_fields_are_none(self):
         missing = ("cycles", "steps", "startup_ms", "think_ms", "retries", "ttfe_max_ms")
@@ -261,8 +255,7 @@ class ParseTest(unittest.TestCase):
 
     def test_unusable_records_raise(self):
         for bad in (record(5, v=2), record(5, actor=""), record(5, wall_ms="12s"), record(5, failed="no"),
-                    record(5, end=None), record(5, time="yesterday"),
-                    record(5, msg=parse.MSG_TASK_RECORD, workload="x", v=None)):
+                    record(5, end=None), record(5, time="yesterday"), record(5, v=None)):
             with self.assertRaises(ValueError, msg=bad):
                 parse.parse_record(bad)
 
@@ -270,7 +263,7 @@ class ParseTest(unittest.TestCase):
         run = run_log(["==== Run config ====", "  extra flags:", "    --lifecycle-mode sync",
                        REAL["start"], record(5), record(6, v=2), REAL["resume_fail"], REAL["onstart_fail"],
                        REAL["traced_span"], line(9, parse.MSG_SHUTDOWN),
-                       record(10, actor=B, msg=parse.MSG_TASK_RECORD, workload="sweperf"), REAL["quit"]])
+                       record(10, actor=B), REAL["quit"]])
         self.assertEqual([r.actor for r in run.records], [A, B])
         self.assertEqual(run.skipped_records, 1)
         self.assertEqual(run.lifecycle_flag, "sync")
@@ -279,13 +272,12 @@ class ParseTest(unittest.TestCase):
 
     def test_lifecycle_mode(self):
         rows = {m: {"metric": m} for m in ("grpc_SuspendActorAsync", "grpc_ResumeActor")}
-        self.assertEqual(parse.lifecycle_mode(rows, "sync"), ("async", "stats"))  # what ran beats the flag
-        self.assertEqual(parse.lifecycle_mode({"grpc_SuspendActor": {}}, ""), ("sync", "stats"))
-        self.assertEqual(parse.lifecycle_mode({"grpc_SuspendActor": {}, "grpc_SuspendActorAsync": {}}, ""),
-                         ("mixed", "stats"))
-        self.assertEqual(parse.lifecycle_mode({}, "async"), ("async", "flag"))
-        self.assertEqual(parse.lifecycle_mode({}, "none"), ("", "none"))  # resident actors: no suspend at all
-        self.assertEqual(parse.lifecycle_mode({}, ""), ("", "none"))
+        self.assertEqual(parse.lifecycle_mode(rows, "sync"), "async")  # what ran beats the flag
+        self.assertEqual(parse.lifecycle_mode({"grpc_SuspendActor": {}}, ""), "sync")
+        self.assertEqual(parse.lifecycle_mode({"grpc_SuspendActor": {}, "grpc_SuspendActorAsync": {}}, ""), "mixed")
+        self.assertEqual(parse.lifecycle_mode({}, "async"), "async")
+        self.assertEqual(parse.lifecycle_mode({}, "none"), "")  # resident actors: no suspend at all
+        self.assertEqual(parse.lifecycle_mode({}, ""), "")
         # Only the run config counts: the flag is read up to its end line.
         config = "==== Run config ====\n  extra flags:\n    --lifecycle-mode=sync\n====================\n"
         self.assertEqual(run_log([config + "    --lifecycle-mode async"]).lifecycle_flag, "sync")
@@ -334,10 +326,9 @@ class TaskTest(unittest.TestCase):
         built, startup = tasks.build_tasks(run, cut)
         self.assertEqual([(t.actor, t.finished) for t in built], [(C, False), (A, True), (B, True), (E, True)])
         unfinished = built[0]
-        self.assertEqual((unfinished.fail_step, unfinished.fail_cycle, unfinished.first_failure_t),
-                         ("resume", 2, T0 + 8))
+        self.assertEqual((unfinished.fail_step, unfinished.first_failure_t), ("resume", T0 + 8))
         self.assertEqual(judge(unfinished, RELAXED), [tasks.REASON_RESUME])
-        self.assertEqual((built[2].fail_step, built[2].fail_cycle, built[2].failures), ("resume", 2, []))
+        self.assertEqual((built[2].fail_step, built[2].failures), ("resume", []))
         self.assertEqual(built[3].end, T0 + 20)
         self.assertEqual([s.user for s in startup], [7])
 

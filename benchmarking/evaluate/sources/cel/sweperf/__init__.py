@@ -272,7 +272,7 @@ def load_run(run: BenchmarkRunContext) -> Run:
         windows={"steady": steady_window(meta, run.file("stats_history.csv"), log_ts, cut),
                  "whole": (whole, "run" if start else "log")},
         capacity={k: parse.num(trial.get(k)) for k in ("node_count", "allocatable_cores", "allocatable_ram_gb")},
-        lifecycle_mode=parse.lifecycle_mode(stats, log.lifecycle_flag)[0])
+        lifecycle_mode=parse.lifecycle_mode(stats, log.lifecycle_flag))
 
 
 def refs_from_records(records: list[parse.TaskRecord]) -> dict[str, float]:

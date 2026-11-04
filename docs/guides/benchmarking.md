@@ -273,9 +273,7 @@ run evaluations, whose rules judge from them whether a task was good (`sweperf_t
   (slowest non-no-op resume), `ttfe_max_ms` (slowest `ttfe_ms`; omitted when no cycle after
   the no-op resume got an asynchronous ack, so always for a one-cycle task), `retries`
   (failed resumes), `failed`, and the first failure's `fail_step` (`resume`, `execute` or
-  `suspend`) and `fail_cycle`. `sweperf_tasks` also accepts these fields as a
-  workload-neutral `task record` line with a `workload` field; only sweperf logs a
-  task record today.
+  `suspend`) and `fail_cycle`.
 * `SuspendActorAsync failed` (`SuspendActor failed` in the sync lifecycle mode): `actor` and
   `err`. Like the other failure lines, it ties a task that never logged a record to its actor.
 * `sweperf on_start failed`: also carries `user`, to tie a failed start to its user.

@@ -27,12 +27,8 @@ from typing import Any, Optional
 # Each is a "[boomer] {json}" line with "time" and "msg"; see "Sweperf Log Lines"
 # in docs/guides/benchmarking.md for the fields.
 LOG_PREFIX = "[boomer] "
-# One task record per finished task; interrupted tasks log none. The
-# workload-neutral form names its workload in a `workload` field. Sweperf logs
-# the older form, which implies its workload.
-MSG_TASK_RECORD = "task record"
-MSG_TASK_RECORD_SWEPERF = "sweperf task record"
-RECORD_MSGS = {MSG_TASK_RECORD: None, MSG_TASK_RECORD_SWEPERF: "sweperf"}
+# One task record per finished task; interrupted tasks log none.
+MSG_TASK_RECORD = "sweperf task record"
 RECORD_VERSION = 1
 MSG_RESUME_FAIL = "ResumeActor failed in step"
 MSG_EXEC_FAIL = "execute steps failed"
@@ -63,7 +59,6 @@ class Event:
     t: float  # unix seconds
     msg: str
     actor: str = ""
-    cycle: Optional[int] = None
     user: Optional[int] = None
 
 
@@ -80,18 +75,14 @@ class TaskRecord:
     cel_ms: float
     resume_max_ms: float
     failed: bool
-    workload: str = ""
     user: Optional[int] = None
-    template: str = ""
     cycles: Optional[int] = None
     steps: Optional[int] = None
-    task_start: Optional[float] = None
     startup_ms: Optional[float] = None
     think_ms: Optional[float] = None
     ttfe_max_ms: Optional[float] = None
     retries: Optional[int] = None
     fail_step: str = ""
-    fail_cycle: Optional[int] = None  # None unless the task failed
 
 
 @dataclass
@@ -153,42 +144,37 @@ def parse_line(line: str) -> Optional[Event]:
         t = parse_time(j["time"])
     except ValueError:
         return None
-    return Event(t=t, msg=msg, actor=str(j.get("actor") or ""), cycle=_int(j.get("cycle")), user=_int(j.get("user")))
+    return Event(t=t, msg=msg, actor=str(j.get("actor") or ""), user=_int(j.get("user")))
 
 
 def parse_record(line: str) -> Optional[TaskRecord]:
-    """A TaskRecord for a task record line (either form), else None.
+    """A TaskRecord for a task record line, else None.
 
     Raises ValueError for a task record line of another version or with a
     missing or mistyped required field.
     """
-    if MSG_TASK_RECORD not in line:  # a substring of both forms
+    if MSG_TASK_RECORD not in line:
         return None
     j = _json_line(line)
-    if j is None or not isinstance(j.get("msg"), str) or j["msg"] not in RECORD_MSGS:
+    if j is None or j.get("msg") != MSG_TASK_RECORD:
         return None
     if j.get("v") != RECORD_VERSION:
         raise ValueError(f"task record version {j.get('v')!r}, want {RECORD_VERSION}")
     try:
         t = parse_time(j["time"])
         end = parse_time(j["end"])
-        task_start = parse_time(j["task_start"]) if isinstance(j.get("task_start"), str) else None
     except (KeyError, AttributeError, ValueError) as e:
         raise ValueError(f"task record with a missing or bad time: {e}") from e
     actor, failed = j.get("actor"), j.get("failed")
     wall, cel, resume = _float(j.get("wall_ms")), _float(j.get("cel_ms")), _float(j.get("resume_max_ms"))
     if not isinstance(actor, str) or not actor or not isinstance(failed, bool) or None in (wall, cel, resume):
         raise ValueError("task record missing actor, failed, wall_ms, cel_ms or resume_max_ms")
-    workload = RECORD_MSGS[j["msg"]] or str(j.get("workload") or "")
     return TaskRecord(
         t=t, actor=actor, end=end, wall_ms=wall, cel_ms=cel, resume_max_ms=resume, failed=failed,
-        workload=workload, user=_int(j.get("user")), template=str(j.get("template") or ""),
-        cycles=_int(j.get("cycles")), steps=_int(j.get("steps")), task_start=task_start,
+        user=_int(j.get("user")), cycles=_int(j.get("cycles")), steps=_int(j.get("steps")),
         startup_ms=_float(j.get("startup_ms")), think_ms=_float(j.get("think_ms")),
         ttfe_max_ms=_float(j.get("ttfe_max_ms")), retries=_int(j.get("retries")),
-        fail_step=str(j.get("fail_step") or ""),
-        # Cycles are 1-based; the benchmark logs fail_cycle 0 for a task that didn't fail.
-        fail_cycle=(_int(j.get("fail_cycle")) or None) if failed else None)
+        fail_step=str(j.get("fail_step") or ""))
 
 
 def read_run(path: Path) -> RunLog:
@@ -216,21 +202,21 @@ def read_run(path: Path) -> RunLog:
     return run
 
 
-def lifecycle_mode(stats: dict[str, dict[str, Any]], flag: str) -> tuple[str, str]:
-    """How the run suspended actors, and what says so.
+def lifecycle_mode(stats: dict[str, dict[str, Any]], flag: str) -> str:
+    """How the run suspended actors.
 
     The suspend RPC rows in stats.jsonl come first, as they show what the run
     did: "async" (SuspendActorAsync), "sync" (SuspendActor) or "mixed". Then
-    the run's --lifecycle-mode flag. Otherwise ("", "none"). A task's wall_ms
-    covers the snapshot upload only in the sync mode, so tasks of the two
-    modes don't compare.
+    the run's --lifecycle-mode flag. Otherwise "". A task's wall_ms covers the
+    snapshot upload only in the sync mode, so tasks of the two modes don't
+    compare.
     """
     seen = sorted({mode for metric, mode in SUSPEND_METRICS.items() if metric in stats})
     if seen:
-        return ("mixed" if len(seen) > 1 else seen[0]), "stats"
+        return "mixed" if len(seen) > 1 else seen[0]
     if flag in LIFECYCLE_MODES:
-        return flag, "flag"
-    return "", "none"
+        return flag
+    return ""
 
 
 def read_server_metadata(path: Optional[Path]) -> dict[str, Any]:

@@ -34,8 +34,7 @@ FAILURE_REASON_ORDER = (*STEP_REASON.values(), REASON_FAILED)
 LINE_STEP = {parse.MSG_RESUME_FAIL: "resume", parse.MSG_EXEC_FAIL: "execute", parse.MSG_SUSPEND_FAIL: "suspend",
              parse.MSG_SUSPEND_ASYNC_FAIL: "suspend"}
 
-# Task record measurements a rule (and a baseline) can use. Not timestamps,
-# ids or fail_cycle, which is a cycle index rather than a measurement.
+# Task record measurements a rule (and a baseline) can use. Not timestamps or ids.
 FIELDS = ("wall_ms", "cel_ms", "resume_max_ms", "ttfe_max_ms", "startup_ms", "think_ms",
           "retries", "cycles", "steps")
 
@@ -57,12 +56,6 @@ class Task:
         if self.record:
             return self.record.fail_step
         return LINE_STEP[self.failures[0].msg]
-
-    @property
-    def fail_cycle(self) -> Optional[int]:
-        if self.record:
-            return self.record.fail_cycle
-        return self.failures[0].cycle
 
     @property
     def first_failure_t(self) -> Optional[float]:
