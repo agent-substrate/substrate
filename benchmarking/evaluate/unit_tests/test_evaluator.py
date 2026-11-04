@@ -140,6 +140,11 @@ class ConfigTest(unittest.TestCase):
             "names no variable of this evaluation": broken("conditions.0.check.value", "gp.goodput_ratio_pct"),
             "is not <variable>.<value>": broken("conditions.0.check.value", "aggregate_failure_ratio"),
             "'Ratio' is not a value name": broken("conditions.0.check.value", "trial.Ratio"),
+            "'trial.aggregate_failure_rate': trial gives no value 'aggregate_failure_rate' (it gives "
+            "aggregate_failure_ratio, allocatable_ram_gb)": broken("conditions.0.check.value",
+                                                                   "trial.aggregate_failure_rate"),
+            "check.limit.ref: 'trial.ram_gb': trial gives no value": broken("conditions.1.check.limit.ref",
+                                                                           "trial.ram_gb"),
             "condition names repeated": broken("conditions", evaluations()[0]["conditions"] * 2),
             "variable names repeated": broken("variables.1.name", "trial"),
         }

@@ -72,6 +72,11 @@ conditions are `invalid`. Any other exception from a hook makes the source's
 variables `invalid` with the error. Sources never write files. A new source is
 a class in `sources/` and a line in `SOURCES`.
 
+A source can also give, from the classmethod `value_names(cfg)`, the names of
+the values `query` returns for `cfg` (`run_results`: its `measurements`). A
+condition that reads another value then fails to load. The default, `None`,
+means the source can't tell before the run.
+
 ### `run_results`
 
 The measurements of one `stats.jsonl` row:

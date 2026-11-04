@@ -25,13 +25,14 @@
       check: {value: trial.aggregate_failure_ratio, op: "<=", limit: 0.001}
 
 Everything is checked up front, source_cfg included (by its source's validate
-hook), so a typo fails before a run is read rather than passing it. Unknown
+hook), and the values conditions read (when the source's value_names can
+tell), so a typo fails before a run is read rather than passing it. Unknown
 keys are errors. There is no version field while the schema is experimental.
 """
 
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from . import checks
 from .sources import SOURCES
@@ -130,7 +131,7 @@ def _evaluation(e: Any, where: str) -> Evaluation:
         raise ConfigError(f"{where}: needs conditions, a non-empty list")
     variables = tuple(_variable(v, f"{where} variables[{i}]") for i, v in enumerate(raw_vars))
     _unique([v.name for v in variables], "variable", where)
-    known = {v.name for v in variables}
+    known = {v.name: SOURCES[v.source].value_names(v.source_cfg) for v in variables}
     conditions = tuple(_condition(c, f"{where} conditions[{i}]", known) for i, c in enumerate(raw_conds))
     _unique([c.name for c in conditions], "condition", where)
     return Evaluation(name, description, variables, conditions)
@@ -154,7 +155,8 @@ def _variable(v: Any, where: str) -> Variable:
     return Variable(name, source, _canonical(cfg))
 
 
-def _condition(c: Any, where: str, variables: set[str]) -> Condition:
+def _condition(c: Any, where: str, variables: Mapping[str, Optional[set[str]]]) -> Condition:
+    """A condition; variables maps each variable to the names of its values (None when its source can't tell)."""
     _keys(c, CONDITION_KEYS, where)
     name = _name(c, where)
     where = f"{where.rsplit(' ', 1)[0]} condition {name!r}"
@@ -172,6 +174,9 @@ def _condition(c: Any, where: str, variables: set[str]) -> Condition:
             return f"{ref!r} names no variable of this evaluation ({', '.join(sorted(variables))})"
         if not valid_name(parts[1]):
             return f"{ref!r}: {parts[1]!r} is not a value name"
+        names = variables[parts[0]]
+        if names is not None and parts[1] not in names:
+            return f"{ref!r}: {parts[0]} gives no value {parts[1]!r} (it gives {', '.join(sorted(names))})"
         return None
 
     try:

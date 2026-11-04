@@ -23,6 +23,9 @@ A source is a class, picked by a variable's `source` key, with three hooks:
   query(cfg)     Once per distinct source_cfg, after the run: named values, or
                  SourceInvalid when the source can't judge the run.
 
+A source can also say, with the value_names classmethod, which values query
+gives for a valid cfg, so a condition that reads another fails at load.
+
 Sources read only what the BenchmarkRunContext gives them and never write files, so the
 same code serves the runner, which evaluates the run it just finished, and a
 re-evaluation of a stored run.
@@ -78,6 +81,11 @@ class Source:
     @classmethod
     def validate(cls, cfg: Mapping[str, Any]) -> None:
         raise NotImplementedError
+
+    @classmethod
+    def value_names(cls, cfg: Mapping[str, Any]) -> Optional[set[str]]:
+        """The names of the values query gives for a valid cfg; None when the source can't tell before the run."""
+        return None
 
     def init(self, run: BenchmarkRunContext) -> None:
         self.run = run

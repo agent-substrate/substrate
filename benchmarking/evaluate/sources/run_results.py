@@ -80,6 +80,10 @@ class RunResults(Source):
         if len(set(names)) != len(names):
             raise ValueError("measurements: listed twice")
 
+    @classmethod
+    def value_names(cls, cfg: Mapping[str, Any]) -> Optional[set[str]]:
+        return set(cfg["measurements"])
+
     def init(self, run) -> None:
         super().init(run)
         self._rows: Optional[dict[str, dict[str, Any]]] = None
