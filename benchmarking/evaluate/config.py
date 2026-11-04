@@ -102,7 +102,7 @@ def _keys(obj: Any, allowed: set[str], where: str) -> None:
     if not isinstance(obj, Mapping):
         raise ConfigError(f"{where}: not a mapping")
     if unknown := set(obj) - allowed:
-        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown, key=repr)}")
 
 
 def _unique(names: list[str], what: str, where: str) -> None:

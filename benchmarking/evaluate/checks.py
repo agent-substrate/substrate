@@ -69,7 +69,7 @@ def validate(check: Any, ref_ok: Callable[[str], Optional[str]]) -> None:
     if not isinstance(check, Mapping):
         raise ValueError("check: not a mapping")
     if unknown := set(check) - set(CHECK_KEYS):
-        raise ValueError(f"check: unknown keys {sorted(unknown)}")
+        raise ValueError(f"check: unknown keys {sorted(unknown, key=repr)}")
     if missing := [k for k in CHECK_KEYS if k not in check]:
         raise ValueError(f"check: needs {missing[0]!r}")
     _validate_ref(check["value"], "check.value", ref_ok)
@@ -79,7 +79,7 @@ def validate(check: Any, ref_ok: Callable[[str], Optional[str]]) -> None:
     limit = check["limit"]
     if isinstance(limit, Mapping):
         if unknown := set(limit) - LIMIT_KEYS:
-            raise ValueError(f"check.limit: unknown keys {sorted(unknown)}")
+            raise ValueError(f"check.limit: unknown keys {sorted(unknown, key=repr)}")
         if "ref" not in limit:
             raise ValueError("check.limit: a relative limit needs 'ref'")
         _validate_ref(limit["ref"], "check.limit.ref", ref_ok)

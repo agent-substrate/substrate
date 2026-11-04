@@ -128,6 +128,7 @@ class ConfigTest(unittest.TestCase):
             "type ['threshold'] is not one of": broken("conditions.0.type", ["threshold"]),
             "unknown keys ['severity']": broken("severity", "record"),
             "unknown keys ['actions']": broken("actions", []),
+            "unknown keys ['severity', 7]": [{**evaluations()[0], "severity": "record", 7: "x"}],
             "name 'Envelope'": broken("name", "Envelope"),
             "the name is reserved": broken("name", "summary"),
             "needs variables": broken("variables", []),
@@ -207,7 +208,9 @@ class RunResultsTest(unittest.TestCase):
                              "listed twice": {"metric": "m", "measurements": ["a", "a"]},
                              "'a__b' is not a value name": {"metric": "m", "measurements": ["a__b"]},
                              "'p99.9' is not a value name": {"metric": "m", "measurements": ["p99.9"]},
-                             "unknown keys ['run']": {"metric": "m", "measurements": ["a"], "run": "baseline"}}.items():
+                             "unknown keys ['run']": {"metric": "m", "measurements": ["a"], "run": "baseline"},
+                             "unknown keys ['run', 0]": {"metric": "m", "measurements": ["a"], "run": "b",
+                                                         0: "x"}}.items():
             with self.assertRaisesRegex(ValueError, re.escape(message), msg=message):
                 RunResults.validate(cfg)
 

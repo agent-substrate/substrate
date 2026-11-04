@@ -68,7 +68,7 @@ class RunResults(Source):
     @classmethod
     def validate(cls, cfg: Mapping[str, Any]) -> None:
         if unknown := set(cfg) - CFG_KEYS:
-            raise ValueError(f"unknown keys {sorted(unknown)}")
+            raise ValueError(f"unknown keys {sorted(unknown, key=repr)}")
         if not isinstance(cfg.get("metric"), str) or not cfg["metric"]:
             raise ValueError("needs metric, the stats.jsonl row to read")
         names = cfg.get("measurements")

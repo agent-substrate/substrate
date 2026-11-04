@@ -93,6 +93,8 @@ class ThresholdTest(unittest.TestCase):
         cases = {
             "check: not a mapping": [],
             "unknown keys ['limits']": {**threshold("v.x", "<", 1), "limits": 2},
+            "check: unknown keys ['limits', 0]": {**threshold("v.x", "<", 1), "limits": 2, 0: 1},  # YAML {0: x}
+            "check.limit: unknown keys ['x', 2]": threshold("v.x", "<", {"ref": "v.y", "x": 1, 2: 3}),
             "needs 'limit'": {"value": "v.x", "op": "<"},
             "check.op: '=~'": threshold("v.x", "=~", 1),
             "< needs a number, got 'one'": threshold("v.x", "<", "one"),
