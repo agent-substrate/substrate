@@ -15,7 +15,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/internal/actoridjwt"
@@ -189,6 +192,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 
+	components, err := resolveComponents(r)
+	if err != nil {
+		return nil, err
+	}
+
 	kubeconfig, kubeconfigEnv := splitKubeconfig(r)
 
 	// One configured connection serves both pools; both empty selects the
@@ -270,6 +278,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
 		E2ETuning:                      r.Bool("e2e.tuning"),
+		Components:                     components,
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
@@ -287,6 +296,63 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// resolveComponents makes the component paths absolute and checks each is a
+// kustomize Component, so a bad path fails before anything is applied. The
+// file already resolved its relative paths against its own directory; the
+// flag and the environment resolve against the working directory. The
+// absolute paths are written back so the report and the record name them.
+func resolveComponents(r *Resolved) ([]string, error) {
+	v, _ := r.Value("components")
+	paths := r.PathList("components")
+	for i, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, err
+		}
+		paths[i] = abs
+		if err := checkComponent(abs); err != nil {
+			return nil, fmt.Errorf("%s: %w (from %s)", v.Setting.Key, err, v.From.Describe(v.Setting))
+		}
+	}
+	if joined := strings.Join(paths, string(os.PathListSeparator)); joined != v.Raw {
+		r.set("components", joined, v.From)
+	}
+	return paths, nil
+}
+
+// checkComponent reports whether dir holds a kustomization of kind Component.
+func checkComponent(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	// The file names kustomize accepts, in the order it looks for them.
+	for _, name := range []string{"kustomization.yaml", "kustomization.yml", "Kustomization"} {
+		path := filepath.Join(dir, name)
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var header struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal(raw, &header); err != nil {
+			return fmt.Errorf("parsing %s: %w", path, err)
+		}
+		if header.Kind != "Component" {
+			return fmt.Errorf("%s must declare kind: Component, got %q", path, header.Kind)
+		}
+		return nil
+	}
+	return fmt.Errorf("%s has no kustomization.yaml", dir)
 }
 
 // splitList splits a comma-separated value, dropping empty items, so an empty

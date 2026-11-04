@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -902,6 +903,41 @@ func TestRenderE2ETuning(t *testing.T) {
 			t.Errorf("fake-atelet args = %v, want none", args)
 		}
 	})
+}
+
+// Operator components compose after ours, in the order given, so they patch
+// the result of the installer's own components.
+func TestRenderOperatorComponentsAfterOurs(t *testing.T) {
+	// Each replaces atelet's args; the last one composed wins.
+	component := func(arg string) string {
+		dir := t.TempDir()
+		body := `apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: DaemonSet
+      name: atelet
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value: [` + arg + `]
+`
+		if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	first, second := component("--first"), component("--second")
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), E2ETuning: true, Components: []string{first, second}}}
+
+	rendered, err := e.render(e.Cfg.Manifest("atelet.yaml"))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	daemonSets, _ := dataPlaneWorkloads(t, rendered)
+	if args, want := daemonSets["atelet"].Spec.Template.Spec.Containers[0].Args, []string{"--second"}; !slices.Equal(args, want) {
+		t.Errorf("atelet args = %v, want %v", args, want)
+	}
 }
 
 // Both paths that deliver the Envoy router pass it the install's allowlist,

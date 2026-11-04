@@ -230,6 +230,11 @@ type Config struct {
 	// data plane applies (ATE_INSTALL_E2E_TUNING).
 	E2ETuning bool
 
+	// Components are absolute paths of operator kustomize components,
+	// composed in order into every control plane apply after the
+	// installer's own (ATE_INSTALL_COMPONENTS).
+	Components []string
+
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
 	// Empty means no client may reach actors through the router.

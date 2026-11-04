@@ -149,6 +149,8 @@ func kindDescription(k ValueKind) string {
 		return "an integer"
 	case KindDuration:
 		return "a duration such as 60s or 5m"
+	case KindPathList:
+		return "a list of paths"
 	default:
 		return "a string"
 	}
@@ -227,6 +229,20 @@ func (r *Resolved) Duration(key string) time.Duration {
 	}
 	d, _ := parsed.(time.Duration)
 	return d
+}
+
+// PathList returns the resolved paths for key.
+func (r *Resolved) PathList(key string) []string {
+	v, ok := r.values[key]
+	if !ok {
+		return nil
+	}
+	parsed, err := v.Setting.parse(v.Raw)
+	if err != nil {
+		return nil
+	}
+	paths, _ := parsed.([]string)
+	return paths
 }
 
 // Supplied reports whether any channel set the key, as opposed to it holding
