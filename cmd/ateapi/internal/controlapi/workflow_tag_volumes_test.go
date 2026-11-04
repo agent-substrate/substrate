@@ -711,18 +711,22 @@ func seedCreatingVolumeTag(t *testing.T, ctx context.Context, persistence store.
 // by a create that died still has every snapshot collected: recorded handles
 // are released directly, and a row without one has its handle recovered by
 // repeating the create's idempotent CreateSnapshot against the recorded source
-// volume.
+// volume. The recovered handle is released even when writing it to the row
+// fails.
 func TestDeleteTag_RecoversUnrecordedVolumeSnapshots(t *testing.T) {
 	for _, tc := range []struct {
-		name string
+		name      string
+		failWrite bool
 	}{
-		{name: "handle recovered"},
+		{name: "handle recorded"},
+		{name: "handle write fails", failWrite: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 			plugin := newFakeSnapshotPlugin()
-			w, _ := newVolumeTagWorkflow(persistence, plugin)
+			faulty := &faultyEVSStore{Interface: persistence, failUpdate: tc.failWrite}
+			w, _ := newVolumeTagWorkflow(faulty, plugin)
 
 			pending := seedCreatingVolumeTag(t, ctx, persistence, map[string]*ateapi.ExternalVolumeSnapshotStatus{
 				"data":    {SnapshotId: "snap-stranded"},
@@ -878,6 +882,11 @@ func TestDeleteTag_TransientFailureKeepsTag(t *testing.T) {
 			if diff := cmp.Diff(wantDeleted, plugin.snapshotsDeleted()); diff != "" {
 				t.Errorf("released snapshots mismatch (-want +got):\n%s", diff)
 			}
+			// A handle recovered by the failed attempt is recorded, so the
+			// retry deletes it without cutting the snapshot again.
+			if diff := cmp.Diff([]string{snapshot}, plugin.snapshotsCreated()); diff != "" {
+				t.Errorf("snapshots cut mismatch (-want +got):\n%s", diff)
+			}
 			if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("GetTag after the retried delete = %v, want ErrNotFound", err)
 			}
@@ -889,6 +898,8 @@ func TestDeleteTag_TransientFailureKeepsTag(t *testing.T) {
 // request and counting batch updates.
 type faultyEVSStore struct {
 	store.Interface
+	// failUpdate fails UpdateExternalVolumeSnapshot.
+	failUpdate bool
 	// failBatch fails UpdateTagExternalVolumeSnapshots.
 	failBatch bool
 	// failDelete fails DeleteExternalVolumeSnapshot.
@@ -896,6 +907,13 @@ type faultyEVSStore struct {
 
 	mu           sync.Mutex
 	batchUpdates int
+}
+
+func (s *faultyEVSStore) UpdateExternalVolumeSnapshot(ctx context.Context, ref resources.ExternalVolumeSnapshotRef, precondition store.Precondition, mutate func(*ateapi.ExternalVolumeSnapshot) error) (*ateapi.ExternalVolumeSnapshot, error) {
+	if s.failUpdate {
+		return nil, errors.New("simulated UpdateExternalVolumeSnapshot failure")
+	}
+	return s.Interface.UpdateExternalVolumeSnapshot(ctx, ref, precondition, mutate)
 }
 
 func (s *faultyEVSStore) UpdateTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string, mutate func(*ateapi.ExternalVolumeSnapshot) error) ([]*ateapi.ExternalVolumeSnapshot, error) {
@@ -991,5 +1009,23 @@ func TestTagActorSnapshot_HandleWriteFailureIsRecoveredOnDelete(t *testing.T) {
 	}
 	if diff := cmp.Diff(created, plugin.snapshotsDeleted(), sortStrings); diff != "" {
 		t.Errorf("snapshots created but not deleted (-created +deleted):\n%s", diff)
+	}
+}
+
+// TestTagVolumeSnapshotID verifies the snapshot name fits the 63 characters
+// some drivers allow for any volume name, and differs per volume.
+func TestTagVolumeSnapshotID(t *testing.T) {
+	const tagUID = "0b8f4a52-6f53-4a2e-9d0c-3c1f7e5a9b21"
+	long := strings.Repeat("v", 63)
+	names := map[string]bool{}
+	for _, vol := range []string{"a", "data", long} {
+		name := tagVolumeSnapshotID(tagUID, vol)
+		if len(name) > 63 {
+			t.Errorf("tagVolumeSnapshotID(%q) = %q, %d characters, want at most 63", vol, name, len(name))
+		}
+		names[name] = true
+	}
+	if len(names) != 3 {
+		t.Errorf("tagVolumeSnapshotID gave %d distinct names for 3 volumes", len(names))
 	}
 }

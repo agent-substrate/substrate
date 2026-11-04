@@ -282,7 +282,10 @@ func (w *ActorWorkflow) releaseTagVolumeSnapshot(ctx context.Context, snap *atea
 			w.recordVolumeSnapshotStatus(ctx, snap, tagVolumeSnapshotFailed(err))
 			return err
 		}
-		handle = recovered.SnapshotID
+		if recovered.SnapshotID != "" {
+			w.recordVolumeSnapshotStatus(ctx, snap, tagVolumeSnapshotTaken(recovered))
+			handle = recovered.SnapshotID
+		}
 	}
 	if handle != "" {
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, snap.GetDriverName())
@@ -300,9 +303,11 @@ func (w *ActorWorkflow) releaseTagVolumeSnapshot(ctx context.Context, snap *atea
 	return nil
 }
 
-// recordVolumeSnapshotStatus writes the error that kept a recovery from
-// finishing to its row. A failed write is logged and otherwise ignored: the
-// caller goes on with what it holds.
+// recordVolumeSnapshotStatus writes the outcome of a recovery to its row: the
+// recovered handle, so a retry deletes the snapshot by handle instead of
+// recovering it again, or the error that kept the delete from finishing. A
+// failed write is logged and otherwise ignored: the caller goes on with what
+// it holds, and a retry recovers the handle again if it could not.
 func (w *ActorWorkflow) recordVolumeSnapshotStatus(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot, newStatus *ateapi.ExternalVolumeSnapshotStatus) {
 	ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(snap)
 	_, err := w.store.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(snap), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
