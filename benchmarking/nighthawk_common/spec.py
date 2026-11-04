@@ -14,6 +14,7 @@
 
 """Shared AdaptiveLoadSessionSpec builder and descriptor-pool textproto serializer."""
 
+from pathlib import Path
 
 SPEC_MESSAGE = "nighthawk.adaptive_load.AdaptiveLoadSessionSpec"
 OUTPUT_MESSAGE = "nighthawk.adaptive_load.AdaptiveLoadSessionOutput"
@@ -113,7 +114,7 @@ def build_session_spec(
         thresholds.append(
             _binary_threshold("send-rate", lower_threshold=send_rate_threshold)
         )
-    if tail_latency_slo_ms is not None:
+    if tail_latency_slo_ms is not None and tail_latency_slo_ms > 0:
         thresholds.append(
             _binary_threshold(
                 "latency-ns-mean-plus-2stdev",
@@ -145,7 +146,7 @@ def build_session_spec(
 # protobuf installed.
 
 
-def load_pool(desc_path: str):
+def load_pool(desc_path: str | Path):
     from google.protobuf import descriptor_pb2
     from google.protobuf import descriptor_pool
 
@@ -164,7 +165,7 @@ def message_class(pool, full_name: str):
     return message_factory.GetMessageClass(pool.FindMessageTypeByName(full_name))
 
 
-def spec_dict_to_textproto(spec_dict: dict, desc_path: str) -> str:
+def spec_dict_to_textproto(spec_dict: dict, desc_path: str | Path) -> str:
     """Validate the dict against the real protos and render textproto.
 
     No descriptor_pool for MessageToString: expanded-form Any is not

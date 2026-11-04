@@ -196,6 +196,23 @@ def test_capacity_summary_no_testing_stage():
     assert "max_total_rps" not in summary
 
 
+def test_subsecond_duration_recomputes_exact_rps_and_send_rate():
+    stage = benchmark_result(rps=25, http_2xx=1999)
+    stage["nighthawk_service_output"]["results"][0]["execution_duration"] = "19.990s"
+    # Nighthawk C++ metrics_plugin_impl.cc truncates 19.990s -> 19s via DurationToSeconds.
+    for ev in stage["metric_evaluations"]:
+        if ev["metric_id"].endswith("/achieved-rps"):
+            ev["metric_value"] = 1999.0 / 19.0
+        elif ev["metric_id"].endswith("/send-rate"):
+            ev["metric_value"] = (1999.0 / 19.0) / 100.0
+    rows = output_mod.stage_rows({"adjusting_stage_results": [stage]})
+    row = rows[0]
+    assert abs(row["metric_nighthawk.builtin_achieved_rps"] - 100.0) < 1e-6
+    assert abs(row["metric_nighthawk.builtin_send_rate"] - 1.0) < 1e-6
+    assert abs(row["metric_nighthawk.builtin_achieved_rps_cpp"] - (1999.0 / 19.0)) < 1e-3
+    assert abs(row["metric_nighthawk.builtin_send_rate_cpp"] - ((1999.0 / 19.0) / 100.0)) < 1e-3
+
+
 if __name__ == "__main__":
     for fn_name, fn in sorted(dict(globals()).items()):
         if fn_name.startswith("test_") and callable(fn):

@@ -12,28 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transforms Nighthawk's AdaptiveLoadSessionOutput textproto into the run
-artifacts runner.py uploads:
-
-  results.json   parse_output_textproto() — the session as JSON, 1:1.
-  stats.jsonl    stage_rows() -> stats_records() — one record per stage,
-                 shaped {timestamp, tag, test_name, metric, measurements}
-                 for compatibility with the locust pipeline.
-  capacity.json  capacity_summary() — one-record verdict.
-
-Measurement keys come in three tiers: metric_nighthawk.builtin_* (verbatim
-builtin metrics), plain counters / *_ms conversions, and derived verdicts
-(slo_max_rps, failed_thresholds, binding_threshold — the last two use
-short native metric names, identifying thresholds).
-"""
+"""Shared AdaptiveLoadSessionOutput parser and stage/capacity summary builders."""
 
 import json
+from pathlib import Path
 import re
 
 from nighthawk_common import spec as spec_mod
 
 # Statistic carrying client-measured end-to-end request latency.
 LATENCY_STAT_ID = "benchmark_http_client.request_to_response"
+CONNECT_STAT_ID = "benchmark_http_client.queue_to_connect"
+SEQUENCER_BLOCKING_STAT_ID = "sequencer.blocking"
 
 # First line of a textproto field: `name {` or `name: value`.
 _FIELD_LINE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*[:{]")
@@ -59,12 +49,12 @@ COUNTERS_OF_INTEREST = (
 BUILTIN_PREFIX = "metric_nighthawk.builtin_"
 
 
-def _builtin_key(metric_name: str) -> str:
+def builtin_key(metric_name: str) -> str:
     """'attempted-rps' -> 'metric_nighthawk.builtin_attempted_rps'."""
     return BUILTIN_PREFIX + metric_name.replace("-", "_")
 
 
-def parse_output_textproto(text: str, desc_path: str) -> dict:
+def parse_output_textproto(text: str, desc_path: str | Path) -> dict:
     # Imported here rather than at module level: this is the only function
     # that needs protobuf. Everything below transforms plain dicts, so the
     # unit tests (which feed canned dicts) run without the runner image's
@@ -96,7 +86,7 @@ def _duration_seconds(value) -> float:
     return float(str(value).rstrip("s") or 0)
 
 
-def _global_result(nighthawk_output: dict) -> dict:
+def global_result(nighthawk_output: dict) -> dict:
     results = nighthawk_output.get("results", [])
     for r in results:
         if r.get("name") == "global":
@@ -104,7 +94,7 @@ def _global_result(nighthawk_output: dict) -> dict:
     return results[0] if results else {}
 
 
-def _counters(result: dict) -> dict:
+def counters(result: dict) -> dict:
     return {
         c.get("name", ""): int(c.get("value", 0))
         for c in result.get("counters", [])
@@ -118,6 +108,8 @@ def _latency_ms(result: dict) -> dict:
         if stat.get("id") != LATENCY_STAT_ID:
             continue
         out["latency_mean_ms"] = _duration_seconds(stat.get("mean")) * 1000.0
+        if stat.get("pstdev") is not None:
+            out["latency_pstdev_ms"] = _duration_seconds(stat.get("pstdev")) * 1000.0
         out["latency_min_ms"] = _duration_seconds(stat.get("min")) * 1000.0
         out["latency_max_ms"] = _duration_seconds(stat.get("max")) * 1000.0
         percentiles = stat.get("percentiles", [])
@@ -131,11 +123,46 @@ def _latency_ms(result: dict) -> dict:
     return out
 
 
+def _connect_latency_ms(result: dict) -> dict:
+    out: dict = {}
+    for stat in result.get("statistics", []):
+        if stat.get("id") != CONNECT_STAT_ID:
+            continue
+        out["queue_to_connect_count"] = int(stat.get("count", 0))
+        out["queue_to_connect_mean_ms"] = _duration_seconds(stat.get("mean")) * 1000.0
+        if stat.get("pstdev") is not None:
+            out["queue_to_connect_pstdev_ms"] = _duration_seconds(stat.get("pstdev")) * 1000.0
+        out["queue_to_connect_max_ms"] = _duration_seconds(stat.get("max")) * 1000.0
+        percentiles = stat.get("percentiles", [])
+        for label, target in PERCENTILE_TARGETS.items():
+            for p in percentiles:
+                if float(p.get("percentile", 0)) >= target:
+                    out[f"queue_to_connect_{label}_ms"] = _duration_seconds(p.get("duration")) * 1000.0
+                    break
+        break
+    return out
+
+
+def _sequencer_blocking_ms(result: dict) -> dict:
+    out: dict = {}
+    for stat in result.get("statistics", []):
+        if stat.get("id") != SEQUENCER_BLOCKING_STAT_ID:
+            continue
+        out["sequencer_blocking_mean_ms"] = _duration_seconds(stat.get("mean")) * 1000.0
+        out["sequencer_blocking_max_ms"] = _duration_seconds(stat.get("max")) * 1000.0
+        for p in stat.get("percentiles", []):
+            if float(p.get("percentile", 0)) >= 0.99:
+                out["sequencer_blocking_p99_ms"] = _duration_seconds(p.get("duration")) * 1000.0
+                break
+        break
+    return out
+
+
 def _stage_row(stage: str, benchmark_result: dict) -> dict:
     nh_output = benchmark_result.get("nighthawk_service_output", {})
     options = nh_output.get("options", {})
-    result = _global_result(nh_output)
-    counters = _counters(result)
+    result = global_result(nh_output)
+    counts = counters(result)
     duration_s = _duration_seconds(result.get("execution_duration"))
 
     per_worker_rps = int(options.get("requests_per_second", 0))
@@ -154,26 +181,37 @@ def _stage_row(stage: str, benchmark_result: dict) -> dict:
     for ev in benchmark_result.get("metric_evaluations", []):
         name = ev.get("metric_id", "").split("/")[-1]
         if name:
-            row[_builtin_key(name)] = ev.get("metric_value", 0.0)
+            row[builtin_key(name)] = ev.get("metric_value", 0.0)
+            if name in ("achieved-rps", "send-rate"):
+                row[f"{builtin_key(name)}_cpp"] = ev.get("metric_value", 0.0)
         if float(ev.get("threshold_score", 0)) < 0:
             failed.append(name)
-    # Fallbacks per the native formulas when an evaluation is absent.
-    sent = counters.get("upstream_rq_total", 0)
-    http_2xx = counters.get("benchmark.http_2xx", 0)
-    attempted_key = _builtin_key("attempted-rps")
-    achieved_key = _builtin_key("achieved-rps")
+    # Nighthawk C++ metrics_plugin_impl.cc truncates execution_duration to whole
+    # seconds via DurationToSeconds, inflating achieved-rps and send-rate on
+    # sub-second stage edges (e.g. 19.99s -> 19s). Always compute both from exact
+    # nanosecond duration_s when duration_s > 0.
+    sent = counts.get("upstream_rq_total", 0)
+    http_2xx = counts.get("benchmark.http_2xx", 0)
+    attempted_key = builtin_key("attempted-rps")
+    achieved_key = builtin_key("achieved-rps")
+    send_rate_key = builtin_key("send-rate")
     row.setdefault(attempted_key, per_worker_rps * concurrency)
-    row.setdefault(achieved_key, (sent / duration_s) if duration_s else 0.0)
+    if duration_s > 0:
+        row[achieved_key] = sent / duration_s
+        row[send_rate_key] = (
+            (row[achieved_key] / row[attempted_key]) if row[attempted_key] else 0.0
+        )
+    else:
+        row.setdefault(achieved_key, 0.0)
+        row.setdefault(send_rate_key, 0.0)
     row.setdefault(
-        _builtin_key("send-rate"),
-        (row[achieved_key] / row[attempted_key]) if row[attempted_key] else 0.0,
-    )
-    row.setdefault(
-        _builtin_key("success-rate"), (http_2xx / sent) if sent else 0.0
+        builtin_key("success-rate"), (http_2xx / sent) if sent else 0.0
     )
     for name in COUNTERS_OF_INTEREST:
-        row[name.replace("benchmark.", "")] = counters.get(name, 0)
+        row[name.replace("benchmark.", "")] = counts.get(name, 0)
     row.update(_latency_ms(result))
+    row.update(_connect_latency_ms(result))
+    row.update(_sequencer_blocking_ms(result))
     row["failed_thresholds"] = sorted(failed)
     return row
 
@@ -217,7 +255,7 @@ def capacity_summary(
     output_dict: dict,
     *,
     envoy_cpu: int,
-    actors: int,
+    actors: int | None = None,
     client_concurrency: int | None = None,
     tail_latency_slo_ms: float | None = None,
 ) -> dict:
@@ -231,18 +269,17 @@ def capacity_summary(
     # conservative counterpart.
     clean = [r for r in rows if not r.get("failed_thresholds")]
     best_clean = max(
-        clean, key=lambda r: r[_builtin_key("attempted-rps")], default=None
+        clean, key=lambda r: r[builtin_key("attempted-rps")], default=None
     )
     summary = {
         "envoy_cpu": envoy_cpu,
-        "actors": actors,
         "client_concurrency": client_concurrency,
         "tail_latency_slo_ms": tail_latency_slo_ms,
         "binding_threshold": binding,
         # achieved-rps of a clean stage is within successRateThreshold of
         # its successful throughput, so no derived 2xx/s metric is kept.
         "slo_max_rps": (
-            best_clean[_builtin_key("achieved-rps")] if best_clean else None
+            best_clean[builtin_key("achieved-rps")] if best_clean else None
         ),
         "slo_max_stage": best_clean["stage"] if best_clean else None,
         "converged": session_succeeded(output_dict) and testing is not None,
@@ -250,9 +287,11 @@ def capacity_summary(
     }
     if testing:
         for name in ("attempted-rps", "achieved-rps", "send-rate", "success-rate"):
-            summary[_builtin_key(name)] = testing.get(_builtin_key(name))
+            summary[builtin_key(name)] = testing.get(builtin_key(name))
         for name in ("p50_ms", "p95_ms", "p99_ms"):
             summary[name] = testing.get(name)
+    if actors is not None:
+        summary["actors"] = actors
     return summary
 
 
