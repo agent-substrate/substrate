@@ -158,8 +158,9 @@ func TestRollingUpgrade(t *testing.T) {
 	for i := range installed.workers - 1 {
 		running = append(running, newActor(fmt.Sprintf("running-%d", i), startRunning))
 	}
+	paused := newActor("paused", startPaused)
 	suspended := newActor("suspended", startSuspended)
-	actors := append(slices.Clone(running), newActor("paused", startPaused), suspended)
+	actors := append(slices.Clone(running), paused, suspended)
 	router := newRouter(ctx, t)
 	for _, a := range actors {
 		createActor(ctx, t, api, fixture, a)
@@ -193,6 +194,10 @@ func TestRollingUpgrade(t *testing.T) {
 		if newImage == installed.workerImage {
 			t.Fatalf("the new worker image %s is the installed one; nothing to upgrade", newImage)
 		}
+		// The paused actor's snapshot, which the old atelet wrote, has to be
+		// on the node only, so the new atelet restores it at the end. atelet
+		// uploads it after its 5m --snapshot-upload-delay.
+		assertSnapshotPending(ctx, t, api, paused)
 		rollPool(ctx, t, api.get(), fixture.PoolNamespace, fixture.PoolName, newImage)
 		// Every old worker is gone, so the harness has suspended these.
 		for _, a := range onOldWorkers {
@@ -382,6 +387,21 @@ func getActor(ctx context.Context, t *testing.T, api *api, a *actor) *ateapi.Act
 		t.Fatalf("failed to get Actor %q: %v", a.name, err)
 	}
 	return act
+}
+
+// assertSnapshotPending fails if atelet has uploaded a's newest snapshot.
+func assertSnapshotPending(ctx context.Context, t *testing.T, api *api, a *actor) {
+	t.Helper()
+	var newest *ateapi.Snapshot
+	for _, snapshot := range getActor(ctx, t, api, a).GetStatus().GetSnapshots() {
+		if newest == nil || snapshot.GetGeneration() > newest.GetGeneration() {
+			newest = snapshot
+		}
+	}
+	if got := newest.GetDurableSnapshot().GetState(); got != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING {
+		t.Fatalf("actor %q: snapshot generation %d is %v, want PENDING: the run took longer than atelet's upload delay",
+			a.name, newest.GetGeneration(), got)
+	}
 }
 
 func state(ctx context.Context, t *testing.T, api *api, a *actor) ateapi.ActorState {
