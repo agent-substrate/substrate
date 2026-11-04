@@ -132,4 +132,3 @@ func TestWriteSnapshotRestoresGuardOnSnapshotError(t *testing.T) {
 		t.Errorf("ra.memory limit after failed writeSnapshot() = %d, want %d", got, uint64(limit))
 	}
 }
-

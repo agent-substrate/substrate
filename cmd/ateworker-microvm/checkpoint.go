@@ -249,9 +249,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
-	// already on disk for atelet to ship. Once teardown begins, the guest is
-	// stopped and its leaf cgroup removed, so the pre-snapshot memory.high and
-	// memory watch must not be restored.
+	// already on disk for atelet to ship. Teardown removes the leaf, so there is
+	// no memory.high or memory watch to put back.
 	snapshotRelease = nil
 	tTeardown := time.Now()
 	if err := s.terminateWorkload(ctx, attribution, actorDirs); err != nil {
@@ -281,9 +280,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
 // (config.json + state.json + memory-ranges) plus the base-id the restore side
-// needs, and returns how long the snapshot itself took along with a release
-// func that restores the actor leaf's memory limit if teardown does not remove
-// the leaf first.
+// needs, and returns how long the snapshot itself took and writeSnapshot's
+// release func.
 func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (time.Duration, func(), error) {
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
 	// to, <baseID>/rootfs). For a cold-run actor this is its own id; for a restored
@@ -359,10 +357,9 @@ const (
 // kernel throttles CH to the disk past that.
 //
 // It returns what it borrowed, for the caller to Return once the snapshot is on
-// disk, and a release func that restores the leaf's memory.high and memory
-// watch once the guest has been torn down (Putting memory.high back while the
-// paused guest still holds its RAM alongside the newly written snapshot page
-// cache would force synchronous cgroup reclaim of the snapshot page cache).
+// disk, and a func that puts the leaf's memory.high and memory watch back, for
+// when the guest keeps running. Putting memory.high back while the paused guest
+// still holds its memory makes the kernel reclaim the snapshot CH just wrote.
 // On error the loan comes back once whatever CH wrote is on disk or removed.
 func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (int64, func(), error) {
 	if s.snapshotWrites != nil {
@@ -381,8 +378,8 @@ func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client,
 	}
 	// the page cache the write adds isn't the actor running away
 	if ra != nil {
-		epoch := ra.memory.Pause()
-		releases = append(releases, func() { ra.memory.Resume(epoch) })
+		limit := ra.memory.Pause()
+		releases = append(releases, func() { ra.memory.Resume(limit) })
 	}
 	var borrowed int64
 	// the write caches about as much as the guest has populated, which is
