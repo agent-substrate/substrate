@@ -255,6 +255,20 @@ class EvaluateTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not JSON compliant"):
                 outputs.write_evaluation_json({"value": float("nan")}, Path(tmp) / "evaluation.json")
 
+    def test_a_numeric_string_limit_is_a_number(self):
+        """A limit reads a numeric string as run_results reads a measurement."""
+        def condition(name: str, ref: str, limit: str) -> dict:
+            return {"name": name, "type": "threshold", "check": threshold(ref, "==", limit)}
+        build = {"metric": "build", "measurements": ["version", "tag"]}
+        evs = [{"name": "build", "variables": [{"name": "build", "source": "run_results", "source_cfg": build}],
+                "conditions": [condition("same", "build.version", "1.10"),
+                               condition("fewer_digits", "build.version", "1.1"),
+                               condition("words", "build.tag", "v1.10")]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            report = judge(write_run(Path(tmp), [stats_row("build", version="1.10", tag="v1.10")]), evs)
+        self.assertEqual([(c["status"], c["limit"]) for c in report["evaluations"][0]["conditions"]],
+                         [("pass", 1.1), ("pass", 1.1), ("pass", "v1.10")])
+
     def test_null_measurement_is_invalid_not_zero(self):
         """A measurement recorded as null (e.g. a Prometheus-backed count on a cluster without
         Prometheus) makes its condition invalid; it never passes as 0."""

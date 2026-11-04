@@ -25,14 +25,12 @@ measured), as is a number that isn't finite.
 
 import json
 import math
-import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .base import Scalar, Source, SourceInvalid, valid_value_name
+from .base import NUMBER, Scalar, Source, SourceInvalid, valid_value_name
 
 CFG_KEYS = {"metric", "measurements"}
-NUMBER = re.compile(r"^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$")
 
 
 def read_stats(path: Optional[Path]) -> dict[str, dict[str, Any]]:

@@ -71,16 +71,25 @@ class ThresholdTest(unittest.TestCase):
         self.assertEqual(status("==", 1, True), "invalid")
         self.assertEqual(status("!=", "true", True), "invalid")
 
+    def test_a_numeric_string_limit_is_a_number(self):
+        def verdict(op, limit, value):
+            return checks.threshold(threshold("v.x", op, limit), lookup({"v.x": value}))
+        self.assertEqual(verdict("==", "1.10", 1.1)[:3], ("pass", 1.1, 1.1))
+        self.assertEqual(verdict("<", "2", 1.0).status, "pass")
+        self.assertEqual(verdict("==", "v1.10", "v1.10")[:3], ("pass", "v1.10", "v1.10"))  # not a number: a string
+
     def test_validate(self):
         ok = lambda ref: None  # noqa: E731
         checks.validate(threshold("v.x", "<", 1), ok)
         checks.validate(threshold("v.x", "==", "async"), ok)
+        checks.validate(threshold("v.x", "<", "1"), ok)  # a numeric string is a number
         cases = {
             "check: not a mapping": [],
             "unknown keys ['limits']": {**threshold("v.x", "<", 1), "limits": 2},
             "needs 'limit'": {"value": "v.x", "op": "<"},
             "check.op: '=~'": threshold("v.x", "=~", 1),
-            "< needs a number": threshold("v.x", "<", "1"),
+            "< needs a number, got 'one'": threshold("v.x", "<", "one"),
+            "needs a number, bool or string, got '1e999'": threshold("v.x", "==", "1e999"),
             "a relative limit needs 'ref'": threshold("v.x", "<", {"times": 2}),
             "a relative limit needs one of": threshold("v.x", "==", {"ref": "v.y"}),
             "at_least is above at_most": threshold("v.x", "<", {"ref": "v.y", "at_least": 2, "at_most": 1}),

@@ -54,7 +54,8 @@ checks two envelope health gates:
 - A threshold `check` is `{value, op, limit}`. `op` is one of `<= < >= > ==
   !=`; `< <= > >=` compare numbers only, and `==` and `!=` also compare bools
   and strings. `limit` is a literal, or relative: `{ref, times (default 1),
-  at_least, at_most}`.
+  at_least, at_most}`. A numeric string limit is a number, as `run_results`
+  reads measurements: `"1.10"` equals a measurement `"1.1"`.
 - A value that is missing or null (not measured), or whose variable is
   invalid, makes the condition `invalid`, never 0.
 

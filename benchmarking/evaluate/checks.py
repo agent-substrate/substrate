@@ -19,7 +19,8 @@
 
 A limit is a literal (number, bool or string) or relative to another value:
 times (default 1) times the value of ref, clamped to at_least and at_most when
-given. < <= > >= compare numbers only (a bool is not a number); == and != also
+given. A numeric string limit is a number, as run_results reads measurements.
+< <= > >= compare numbers only (a bool is not a number); == and != also
 compare a bool with a bool and a string with a string. Anything else is
 invalid, never a pass. The caller resolves refs.
 """
@@ -27,6 +28,8 @@ invalid, never a pass. The caller resolves refs.
 import math
 import operator
 from typing import Any, Callable, Mapping, NamedTuple, Optional
+
+from .sources.base import NUMBER
 
 NUMERIC_OPS = {"<=": operator.le, "<": operator.lt, ">=": operator.ge, ">": operator.gt}
 EQUALITY_OPS = {"==": operator.eq, "!=": operator.ne}
@@ -51,6 +54,11 @@ class Verdict(NamedTuple):
 def is_number(v: Any) -> bool:
     """A number that compares: bools, NaN and infinities are not."""
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def literal(limit: Any) -> Any:
+    """A literal limit as it compares: a numeric string is a number."""
+    return float(limit) if isinstance(limit, str) and NUMBER.match(limit) else limit
 
 
 def validate(check: Any, ref_ok: Callable[[str], Optional[str]]) -> None:
@@ -83,9 +91,9 @@ def validate(check: Any, ref_ok: Callable[[str], Optional[str]]) -> None:
         if "at_least" in limit and "at_most" in limit and limit["at_least"] > limit["at_most"]:
             raise ValueError("check.limit: at_least is above at_most")
     elif op in NUMERIC_OPS:
-        if not is_number(limit):
+        if not is_number(literal(limit)):
             raise ValueError(f"check.limit: {op} needs a number, got {limit!r}")
-    elif not (is_number(limit) or isinstance(limit, (bool, str))):
+    elif not (is_number(literal(limit)) or isinstance(literal(limit), (bool, str))):
         raise ValueError(f"check.limit: needs a number, bool or string, got {limit!r}")
 
 
@@ -100,7 +108,7 @@ def effective_limit(check: Mapping[str, Any], lookup: Callable[[str], Any]) -> A
     """The limit to compare against; raises Missing when a relative limit's ref has no number."""
     limit = check["limit"]
     if not isinstance(limit, Mapping):
-        return limit
+        return literal(limit)
     base = lookup(limit["ref"])
     if not is_number(base):
         raise Missing(f"{limit['ref']} = {base!r} is not a number")

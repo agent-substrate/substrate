@@ -45,6 +45,9 @@ NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 # stats.jsonl row gives it (locust_ResumeActor).
 VALUE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 NAME_MAX = 64
+# A numeric string: run_results reads a measurement like this as a number, and
+# a check reads its limit the same way.
+NUMBER = re.compile(r"^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$")
 
 
 def valid_name(name: Any) -> bool:
