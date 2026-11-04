@@ -13,6 +13,7 @@ require (
 	github.com/yuin/goldmark v1.8.5
 	go.ate.dev/substrate v0.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.12
+	k8s.io/gengo/v2 v2.0.0-20260408192533-25e2208e0dc3
 )
 
 require (

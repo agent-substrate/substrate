@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/tools/apitool/internal/exemption"
 	"go.ate.dev/substrate/tools/apitool/internal/lint"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
@@ -47,8 +49,33 @@ func API(ctx context.Context) (*model.API, error) {
 	return model.ScopeToService(api, serviceName), nil
 }
 
+// protoSources are the protos the lint.CrossProto rules run over: the
+// public API and the two internal hops a request takes from it, to atelet
+// and on to the worker.
+var protoSources = []struct{ name, source string }{
+	{name: "ateapi.proto", source: ateapi.Source},
+	{name: "atelet.proto", source: ateletpb.Source},
+	{name: "ateworker.proto", source: ateworkerpb.Source},
+}
+
+// Protos builds one model.API holding every message of protoSources,
+// unscoped. None of them imports another, so each builds on its own.
+func Protos(ctx context.Context) (*model.API, error) {
+	all := &model.API{}
+	for _, p := range protoSources {
+		api, err := model.Build(ctx, p.source)
+		if err != nil {
+			return nil, fmt.Errorf("while building %s model: %w", p.name, err)
+		}
+		all.Services = append(all.Services, api.Services...)
+		all.Messages = append(all.Messages, api.Messages...)
+		all.Enums = append(all.Enums, api.Enums...)
+	}
+	return all, nil
+}
+
 // RuleFindings pairs one rule with the findings it raised against an API,
-// preserving lint.All's order.
+// preserving the order of the rule list it came from (e.g., lint.All or lint.CrossProto)
 type RuleFindings struct {
 	Rule     lint.Rule
 	Findings []lint.Finding
@@ -56,8 +83,18 @@ type RuleFindings struct {
 
 // All runs every rule in lint.All against api.
 func All(api *model.API) ([]RuleFindings, error) {
+	return run(lint.All, api)
+}
+
+// CrossProto runs every rule in lint.CrossProto against protos. Its findings
+// cannot be exempted.
+func CrossProto(protos *model.API) ([]RuleFindings, error) {
+	return run(lint.CrossProto, protos)
+}
+
+func run(rules []lint.Rule, api *model.API) ([]RuleFindings, error) {
 	var out []RuleFindings
-	for _, rule := range lint.All {
+	for _, rule := range rules {
 		findings, err := rule.Check(api)
 		if err != nil {
 			return nil, fmt.Errorf("rule %s: %w", rule.Name, err)
