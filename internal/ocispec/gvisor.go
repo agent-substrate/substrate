@@ -70,13 +70,14 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	}
 
 	// runsc replaces /dev and /dev/pts with its own mounts and ignores mqueue
-	// mounts and the nodev and strictatime options, logging a warning for each.
+	// mounts and the strictatime option, logging a warning for each. It keeps
+	// nodev, which it applies to the host bind mount.
 	spec.Mounts = slices.DeleteFunc(spec.Mounts, func(m specs.Mount) bool {
 		return m.Destination == "/dev" || m.Destination == "/dev/pts" || m.Type == "mqueue"
 	})
 	for i := range spec.Mounts {
 		spec.Mounts[i].Options = slices.DeleteFunc(slices.Clone(spec.Mounts[i].Options), func(opt string) bool {
-			return opt == "nodev" || opt == "strictatime"
+			return opt == "strictatime"
 		})
 	}
 	// runsc's tmpfs defaults to half of the node's memory. Cap /tmp at half the

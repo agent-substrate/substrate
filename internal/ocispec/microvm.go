@@ -97,6 +97,11 @@ func ShapeMicroVM(spec *specs.Spec, o MicroVMOptions) error {
 	if _, ok := spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"]; !ok {
 		spec.Linux.Sysctl["net.ipv4.ip_unprivileged_port_start"] = "0"
 	}
+	// Containers cannot add NET_RAW, so let every group open ICMP echo
+	// sockets for ping.
+	if _, ok := spec.Linux.Sysctl["net.ipv4.ping_group_range"]; !ok {
+		spec.Linux.Sysctl["net.ipv4.ping_group_range"] = "0 2147483647"
+	}
 	// gVisor needs neither list: its procfs and sysfs leave out the masked
 	// files and keep most of /proc/sys read-only.
 	spec.Linux.MaskedPaths = guestMaskedFilePaths()
