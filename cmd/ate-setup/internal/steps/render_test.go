@@ -195,7 +195,11 @@ func TestRenderAteSystem(t *testing.T) {
 				issuer = inClusterIssuer
 			}
 			authn, _, _ := unstructured.NestedString(byName["ConfigMap/"+ConfigMapAPIAuthn].Object, "data", "authentication.yaml")
-			if want := buildAuthenticationConfig(issuer); authn != want {
+			want, err := buildAuthenticationConfig(issuer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if authn != want {
 				t.Errorf("authentication.yaml = %q, want %q", authn, want)
 			}
 
@@ -211,8 +215,10 @@ func TestRenderAteSystem(t *testing.T) {
 
 			// The digest on the pod template is the one deploy ate-system
 			// computes from the rendered settings objects. With an external
-			// database it covers only the ConfigMap.
+			// database it leaves out the Secret.
 			configMap, _, _ := unstructured.NestedStringMap(byName["ConfigMap/"+ConfigMapAPIEnvVars].Object, "data")
+			authnData, _, _ := unstructured.NestedStringMap(byName["ConfigMap/"+ConfigMapAPIAuthn].Object, "data")
+			apiConfigData, _, _ := unstructured.NestedStringMap(byName["ConfigMap/"+ConfigMapAPIConfig].Object, "data")
 			var secretData map[string][]byte
 			if secret != nil {
 				stringData, _, _ := unstructured.NestedStringMap(secret.Object, "stringData")
@@ -223,7 +229,7 @@ func TestRenderAteSystem(t *testing.T) {
 			}
 			got, _, _ := unstructured.NestedString(byName["Deployment/ate-api-server"].Object,
 				"spec", "template", "metadata", "annotations", envHashAnnotation)
-			if want := envHash(configMap, secretData); got != want {
+			if want := envHash(configMap, authnData, apiConfigData, secretData); got != want {
 				t.Errorf("ate-api-server %s = %q, want %q", envHashAnnotation, got, want)
 			}
 		})

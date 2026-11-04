@@ -87,6 +87,8 @@ read from a cluster:
 - The bundled PostgreSQL identities are not created: deploy ate-system and
   deploy postgres create them by running SQL in the postgres pod, which no
   manifest does yet. The CSI drivers are not written either.
+- Only the gVisor SandboxConfig is written. deploy ate-system builds the
+  microVM one from assets it stages for the cluster (--sandbox-classes).
 - With an external database (ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING),
   ate-api-server-secret-envvars is not written, so its connection strings stay
   out of the directory. Create it before applying, with keys

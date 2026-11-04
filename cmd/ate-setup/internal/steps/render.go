@@ -59,6 +59,9 @@ type renderedFile struct {
 //   - The bundled PostgreSQL identities, which deploy creates by running SQL
 //     in the postgres pod.
 //   - The CSI drivers.
+//   - The microVM SandboxConfig and its dependencies, which deploy builds from
+//     assets it stages for the cluster. Only the gVisor SandboxConfig is
+//     written.
 //
 // It also skips deploy's checks against an existing install. The service
 // account issuer is the one configuredJWTIssuer names, or the in-cluster
@@ -74,7 +77,7 @@ func (e *Env) RenderAteSystem(ctx context.Context, dir string) error {
 	if !e.Cfg.Images.IsPrebuilt() {
 		return errors.New("render ate-system pins published images; set --image-repo and --image-tag (ATE_IMAGE_REPO, ATE_IMAGE_TAG)")
 	}
-	provider, err := e.renderCredentialProvider()
+	providers, err := e.renderCredentialProviders()
 	if err != nil {
 		return err
 	}
@@ -160,7 +163,7 @@ func (e *Env) RenderAteSystem(ctx context.Context, dir string) error {
 		return err
 	}
 
-	if provider.Kubernetes() {
+	if config.HasKubernetesProvider(providers) {
 		credentialProvider, err := e.renderResolve(ctx, e.k8sCredentialProviderPath(k8sCredentialProviderManifest))
 		if err != nil {
 			return err
@@ -168,7 +171,7 @@ func (e *Env) RenderAteSystem(ctx context.Context, dir string) error {
 		add("07-k8s-credential-provider.yaml", credentialProvider)
 	}
 
-	egress, err := e.renderAtenetEgressManifest(ctx, provider)
+	egress, err := e.renderAtenetEgressManifest(ctx, providers)
 	if err != nil {
 		return err
 	}
@@ -187,19 +190,19 @@ func (e *Env) RenderAteSystem(ctx context.Context, dir string) error {
 	return nil
 }
 
-// renderCredentialProvider is the configured credential provider, or the
+// renderCredentialProviders are the configured credential providers, or the
 // bundled Kubernetes Secrets provider when none is set. The bundled provider
 // runs in the install namespace and needs nothing outside the cluster, which
 // is why kind installs use it too.
-func (e *Env) renderCredentialProvider() (config.CredentialProvider, error) {
+func (e *Env) renderCredentialProviders() ([]config.CredentialProvider, error) {
 	if e.Cfg.CredentialProviderJSON == "" {
 		log.Infof("no credential provider set; rendering the bundled %s provider", config.K8sCredentialProviderName)
-		return config.CredentialProvider{
+		return []config.CredentialProvider{{
 			Name:    config.K8sCredentialProviderName,
 			Address: config.K8sCredentialProviderAddress,
-		}, nil
+		}}, nil
 	}
-	return e.Cfg.CredentialProvider()
+	return e.Cfg.CredentialProviders()
 }
 
 // takeOtelConfig removes the ate-otel-config ConfigMap from objs and returns
@@ -276,12 +279,18 @@ func (e *Env) apiServerSettingsObjects(snapshotLocation string) ([]*unstructured
 	if issuer == "" {
 		issuer = inClusterIssuer
 	}
+	authn, err := buildAuthenticationConfig(issuer)
+	if err != nil {
+		return nil, "", err
+	}
 	configVars := e.apiServerConfigVars(e.Cfg.PostgresReadWriteRole, e.Cfg.PostgresOwnerRole,
 		e.Cfg.PostgresPoolMaxConns, snapshotLocation)
+	authnData := map[string]string{"authentication.yaml": authn}
+	apiConfigData := map[string]string{"apiconfig.textproto": apiConfig}
 
 	objs := []*unstructured.Unstructured{
-		e.configMapObject(ConfigMapAPIConfig, map[string]string{"apiconfig.textproto": apiConfig}),
-		e.configMapObject(ConfigMapAPIAuthn, map[string]string{"authentication.yaml": buildAuthenticationConfig(issuer)}),
+		e.configMapObject(ConfigMapAPIConfig, apiConfigData),
+		e.configMapObject(ConfigMapAPIAuthn, authnData),
 		e.configMapObject(ConfigMapAPIEnvVars, configVars),
 	}
 
@@ -310,7 +319,7 @@ func (e *Env) apiServerSettingsObjects(snapshotLocation string) ([]*unstructured
 		}
 		objs = append(objs, e.secretObject(SecretPostgresServerCA, map[string]string{"server-ca.pem": string(pem)}))
 	}
-	return objs, envHash(configVars, secretData), nil
+	return objs, envHash(configVars, authnData, apiConfigData, secretData), nil
 }
 
 // configMapObject is the ConfigMap ApplyConfigMap would write.

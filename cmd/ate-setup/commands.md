@@ -180,7 +180,9 @@ edit it, and reapplying it would reset their policy, so create it once with
 `kubectl apply -f manifests/egress-credential-injection/namespace-policy.yaml`.
 The bundled PostgreSQL identities are not created: `deploy ate-system` and
 `deploy postgres` create them by running SQL in the postgres pod, which no
-manifest does yet. The CSI drivers are not written. None of deploy's checks
+manifest does yet. The CSI drivers are not written. Only the gVisor
+SandboxConfig is written: `deploy ate-system` builds the microVM one from
+assets it stages for the cluster (`--sandbox-classes`). None of deploy's checks
 against an existing install run, so do not apply the output over a running
 install. The service account issuer is `EXPECTED_JWT_ISSUER`,
 else the GKE issuer when the `--gcp-*` cluster settings are set, else the
