@@ -29,3 +29,11 @@ spec:
   workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
+  template:
+    resources:
+      requests:
+        cpu: "12"
+        memory: "8Gi"
+      limits:
+        cpu: "18"
+        memory: "10Gi"
