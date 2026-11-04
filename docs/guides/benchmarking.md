@@ -210,11 +210,26 @@ Then start the run with `--sweperf-template sweperf-django-11099` and
 and `LOCUST_SWEPERF_TOTAL_STEPS`. The client takes the step count from that option, not
 from the template, so it must match the catalog.
 
+* `--sweperf-resume-retry-budget`: seconds a cycle keeps retrying a `ResumeActor` the fleet
+  had no room for (`ResourceExhausted` or `Unavailable`), with 50ms-to-4s backoff, before
+  giving the cycle up. Default `0` (off): every refusal fails the task, so overload shows up
+  as task failures. Keep it at `0` for goodput and host-scale sweeps. Set it (about the size
+  of the wake SLO) only to count completed tasks on a capacity-limited run; refusals then
+  become wake latency, so read `ResumeWithRetry` as the wake time.
+
 #### Sweperf Reported Metrics
 
 All rows are in milliseconds. CEL (command execution latency) is the time the trace commands
 ran inside the sandbox, as reported by `replay.py`.
 
+* `ResumeWithRetry`: Full resume wall time from the first `ResumeActor` attempt until
+  `ResumeActor` finishes, including any capacity-retry backoff wait (only the final attempt
+  is recorded on `ResumeActor`; retried refusals are on `ResumeActorRefused`).
+* `ResumeActorRefused`: retried `ResumeActor` attempts the fleet had no room for (only with a
+  retry budget); its requests/s is the refused attempt rate. These attempts are not recorded
+  on `ResumeActor` or `ResumeActor_rtt`. Not on the dashboard yet.
+* `ResumeRetryGiveUp`: Resumes that still failed with `ResourceExhausted` or `Unavailable`
+  after `--sweperf-resume-retry-budget` expired.
 * `ResumeToFirstExec`: Resume RPC start until the sandbox accepts the cycle's `/execute`.
 * `CycleCEL`: CEL for one cycle.
 * `TaskCEL`: CEL summed over one task.
@@ -230,7 +245,8 @@ ran inside the sandbox, as reported by `replay.py`.
 
 The liveness check on a new actor already has it running, so the first cycle of every task
 runs on a freshly started actor and its resume is a no-op. Its successful `ResumeActor`,
-`ResumeActor_rtt` and `ResumeToFirstExec` samples are not recorded; failures still are.
+`ResumeActor_rtt`, `ResumeWithRetry` and `ResumeToFirstExec` samples are not recorded;
+failures still are.
 
 The last cycle of a task is not suspended: the actor is deleted straight from running. A
 task of `n` cycles therefore records `n - 1` `SuspendActor` samples, and `TaskWallClock`
@@ -257,11 +273,13 @@ nothing. Durations are in milliseconds.
 
 * `Completed sweperf cycle`: `actor`, `cycle`, `cel_ms` (0 when the execute failed),
   `wall_ms` (resume start to cycle end), `ok` (the execute succeeded, and so did the suspend
-  if there was one), `resume_ms` (as on the `ResumeActor` row; omitted for a no-op resume)
-  and `ttfe_ms` (resume start to the asynchronous ack; omitted without one, and for a no-op
-  resume even when its execute got one).
-* `ResumeActor failed in step`: also carries `wall_ms`. The cycle is retried on the next
-  iteration, and the failed attempt's time counts toward the task's `wall_ms`.
+  if there was one), `resume_ms` (as on the `ResumeActor` row), `resume_with_retry_ms` (as
+  on the `ResumeWithRetry` row) and `resume_retries` (refused attempts retried), all three
+  omitted for a no-op resume, and `ttfe_ms` (resume start to the asynchronous ack; omitted
+  without one, and for a no-op resume even when its execute got one).
+* `ResumeActor failed in step`: also carries `wall_ms`, `resume_retries` and `gave_up` (the
+  retry budget ran out). The cycle is retried on the next iteration, and the failed
+  attempt's time counts toward the task's `wall_ms`.
 * `sweperf task record`, one per finished task: `v` (1), `user` (boomer goroutine ID, unique
   per boomer process), `actor`, `template`, `cycles` and `steps` (the cycle and trace step
   counts the task ran, resolved when it started, so a mid-run change to
@@ -269,9 +287,11 @@ nothing. Durations are in milliseconds.
   capped at `steps`), `task_start` (when the session started) and `end`, `startup_ms`
   (`CreateActor` until the sandbox answers `/status`), `cel_ms` and `wall_ms` (as in `TaskCEL`
   and `TaskWallClock`), `think_ms` (think time between the task's cycles), `resume_max_ms`
-  (slowest non-no-op resume), `ttfe_max_ms` (slowest `ttfe_ms`; omitted when no cycle after
+  (slowest non-no-op resume: server time, or client wall time including capacity-retry waits
+  when the resume was retried), `ttfe_max_ms` (slowest `ttfe_ms`; omitted when no cycle after
   the no-op resume got an asynchronous ack, so always for a one-cycle task), `retries`
-  (failed resumes), `failed`, and the first failure's `fail_step` (`resume`, `execute` or
+  (failed resumes), `capacity_retries` (ResumeActor attempts refused for capacity and retried
+  within the budget), `failed`, and the first failure's `fail_step` (`resume`, `execute` or
   `suspend`) and `fail_cycle`.
 * `sweperf on_start failed`: also carries `user`, to tie a failed start to its user.
 * `sweperf shutdown started`: the worker began tearing down. Startups and cycles in flight
@@ -407,7 +427,7 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
   the step up until its next think gap (default 60; `0` gives the wake one
   attempt). Each attempt is its own
   `ResumeActor` or `WakeFirstTouch` sample; the whole wait lands in
-  `TimeToWake`.
+  `TimeToWake` (for `sweperf`, see `--sweperf-resume-retry-budget`).
 * `--agentsession-awake` — turnover mode when above 0 (default 0, off). Each
   session registers by creating its actor, running step 1, and parking it.
   After registration is idle for 1 minute, the worker wakes this many sessions
