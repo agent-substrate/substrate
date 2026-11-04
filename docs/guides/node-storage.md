@@ -51,24 +51,35 @@ the latest snapshot first if it isn't durable yet, and keeps it until the upload
 succeeds, so a failing object store fills the disk faster.
 
 Size the disk that holds `/var/lib/ate/snapshots` for this. On the boot disk, it
-has to fit above the kubelet's `nodefs.available` eviction threshold, which is
-10% of the disk on GKE. A dedicated snapshot disk keeps this data off the boot
-disk, but it needs the same size. The kubelet doesn't watch that disk, so when
-it fills, the node gets no condition and atelet can't write new snapshots there.
+has to fit above the kubelet's `nodefs.available` eviction threshold, which
+[defaults to 10% of the disk](https://github.com/kubernetes/kubernetes/blob/a972b672c7612c4892557f3d6d2a952c741c5d1f/pkg/kubelet/eviction/defaults_linux.go#L24).
+A dedicated snapshot disk keeps this data off the boot disk, but it needs the
+same size. The kubelet doesn't watch that disk, so when it fills, the node gets
+no condition and atelet can't write new snapshots there.
 
 ## When the Boot Disk Runs Out of Space
 
 When free space on the boot disk falls below the kubelet's threshold, the node
 gets the `DiskPressure` condition. The kubelet evicts pods, including the
 workers, and admits only critical pods until the condition clears. No worker
-runs on the node in the meantime. atelet runs at `system-node-critical`, so the
-kubelet neither evicts nor rejects it, and its uploads and detaches go on.
+runs on the node in the meantime. atelet runs at `system-cluster-critical`, so
+the kubelet neither evicts nor rejects it, and its uploads and detaches go on.
 
 Snapshot files belong to no pod, so evicting pods frees almost none of the
 space. The node recovers when atelet detaches the snapshots,
 `--snapshot-detach-delay` after each actor's latest suspend. Until then the
 condition can clear and return, and the kubelet evicts the replacement workers
 each time.
+
+On GKE, [node auto-repair](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/node-auto-repair)
+recreates a node whose boot disk stays out of space for about 30 minutes. The
+default `--snapshot-detach-delay` is also 30 minutes, so snapshots alone can
+hold the disk that long. The new boot disk starts empty, so any snapshot not
+yet uploaded is lost, along with every actor still running on the node.
+
+To recover sooner, lower `--snapshot-detach-delay`. It can't be shorter than
+`--snapshot-upload-delay`, which defaults to 5 minutes. An actor that resumes
+after its detach reads the snapshot from object storage.
 
 To check a node, look at its conditions and eviction events, and at the pods
 running on it:
