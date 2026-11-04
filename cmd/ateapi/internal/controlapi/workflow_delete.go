@@ -179,6 +179,13 @@ func workloadSpecForDelete(ctx context.Context, actor *ateapi.Actor, template *a
 	if template == nil {
 		return fallback
 	}
+	// Keep container identities so the runtime can stop them even when the
+	// template's volume layout no longer describes the actor.
+	for _, ctr := range template.GetContainers() {
+		fallback.Containers = append(fallback.Containers, &ateletpb.Container{
+			Name: ctr.GetName(), Image: ctr.GetImage(),
+		})
+	}
 	spec, err := workloadSpecFromActorTemplate(template, actor, nil)
 	if err != nil {
 		slog.WarnContext(ctx, "actor template cannot describe the workload during delete", slog.Any("err", err))
@@ -200,6 +207,11 @@ func workloadSpecForDelete(ctx context.Context, actor *ateapi.Actor, template *a
 			continue
 		}
 		spec.Volumes = append(spec.Volumes, recorded)
+	}
+	// The replacement template and recorded volumes can exceed WorkloadSpec's
+	// 32-volume bound. The recorded volumes alone stay within that bound.
+	if len(spec.GetVolumes()) > 32 {
+		return fallback
 	}
 	return spec
 }

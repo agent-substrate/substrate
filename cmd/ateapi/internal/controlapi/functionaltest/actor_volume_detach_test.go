@@ -17,6 +17,7 @@ package functionaltest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -245,6 +246,7 @@ func TestActorTemplateVolumeMismatch(t *testing.T) {
 		{name: "delete resuming actor with missing record", layout: "missing record"},
 		{name: "delete removed volume", layout: "removed"},
 		{name: "delete unmounted volume", layout: "unmounted"},
+		{name: "delete replacement at volume limit", layout: "volume limit"},
 		{name: "delete changed volume type", layout: "changed type"},
 		{name: "delete missing template with gate disabled", layout: "missing template", gateOff: true},
 		{name: "retry failed termination with mismatched template", layout: "removed", failure: "terminate"},
@@ -300,6 +302,14 @@ func TestActorTemplateVolumeMismatch(t *testing.T) {
 				replacement.Containers[0].VolumeMounts = nil
 			case "unmounted":
 				replacement.Containers[0].VolumeMounts = nil
+			case "volume limit":
+				replacement.Volumes = nil
+				replacement.Containers[0].VolumeMounts = nil
+				for i := range 32 {
+					replacement.Volumes = append(replacement.Volumes, &ateapi.Volume{
+						Name: fmt.Sprintf("new-vol-%d", i), DurableDir: &ateapi.DurableDirVolumeSource{},
+					})
+				}
 			case "changed type":
 				replacement.Volumes = []*ateapi.Volume{{Name: "vol1", DurableDir: &ateapi.DurableDirVolumeSource{}}}
 			}
@@ -373,6 +383,17 @@ func TestActorTemplateVolumeMismatch(t *testing.T) {
 			if request == nil {
 				t.Fatal("Terminate was not sent")
 			}
+			if tt.layout != "missing template" {
+				containers := request.GetSpec().GetContainers()
+				if len(containers) != 1 || containers[0].GetName() != tmpl.GetContainers()[0].GetName() {
+					t.Fatalf("lost container identity during cleanup: %v", containers)
+				}
+				if tt.layout == "missing record" || tt.layout == "changed type" || tt.layout == "volume limit" {
+					if len(containers[0].GetVolumeMounts()) != 0 {
+						t.Errorf("fallback retained mismatched volume mounts: %v", containers[0].GetVolumeMounts())
+					}
+				}
+			}
 			if tt.layout != "missing record" {
 				want := actor.GetStatus().GetExternalVolumes().GetVolumes()[0].GetStorageVolumeId()
 				if len(request.GetSpec().GetVolumes()) != 1 || request.GetSpec().GetVolumes()[0].GetExternal().GetStorageVolumeId() != want {
@@ -383,9 +404,6 @@ func TestActorTemplateVolumeMismatch(t *testing.T) {
 				plugin.mu.Unlock()
 				if !slices.Contains(ids, want) {
 					t.Errorf("detached IDs = %v, want %q", ids, want)
-				}
-				if tt.layout != "changed type" && tt.layout != "missing template" && len(request.GetSpec().GetContainers()) == 0 {
-					t.Error("lost containers from usable template")
 				}
 			}
 		})
