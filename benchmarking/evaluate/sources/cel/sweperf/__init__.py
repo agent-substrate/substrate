@@ -28,7 +28,7 @@ and a re-evaluation, with no new benchmark run.
   values:
     good_per_vcpu_hour: "round(good / window_hours / vcpus, 4)"
 
-A task that failed is bad whatever the rules say (G1), with its failure as the
+A task that failed is bad whatever the rules say, with its failure as the
 reason (tasks.py). Rules read task.<field>, from the task's record, and
 baseline.<field>, the median over the finished tasks without failures of the
 run of baseline_test that BenchmarkRunContext.paired_run returns. Without one,

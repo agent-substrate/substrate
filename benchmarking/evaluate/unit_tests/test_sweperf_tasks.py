@@ -45,12 +45,12 @@ def rule(name: str, cel: str) -> dict:
 STRICT = [
     rule("slow_resume", "task.resume_max_ms <= 1500.0"),
     rule("slow_ttfe", "task.ttfe_max_ms <= 1000.0"),
-    rule("slow_cel", "task.cel_ms <= 1.5 * baseline.cel_ms"),
+    rule("slow_commands", "task.cel_ms <= 1.5 * baseline.cel_ms"),
     rule("slow_wall", "task.wall_ms <= 1.5 * baseline.wall_ms"),
 ]
-G2 = STRICT[:2]  # the rules that read no baseline
+WAKE = STRICT[:2]  # the wake latency rules, which read no baseline
 RELAXED = [
-    rule("slow_cel", "task.cel_ms <= 2.0 * baseline.cel_ms"),
+    rule("slow_commands", "task.cel_ms <= 2.0 * baseline.cel_ms"),
     rule("slow_wall", "task.wall_ms <= 2.0 * baseline.wall_ms"),
 ]
 # The goodput values, as the README defines them.
@@ -352,7 +352,7 @@ class TaskTest(unittest.TestCase):
 class RuleTest(unittest.TestCase):
     REFS = {"cel_ms": 4000.0, "wall_ms": 5000.0}  # the default task: cel_ms 6000 (1.5x), wall_ms 8000 (1.6x)
 
-    def test_g1_from_the_record(self):
+    def test_a_failed_task_is_bad_whatever_the_rules(self):
         self.assertEqual(judge(task(failed=True, fail_step="suspend", fail_cycle=3), RELAXED),
                          [tasks.REASON_SUSPEND])
         self.assertEqual(judge(task(failed=True), RELAXED), [tasks.REASON_FAILED])
@@ -361,22 +361,22 @@ class RuleTest(unittest.TestCase):
 
     def test_whole_numbers_are_doubles(self):
         rules = [rule("slow_resume", "task.resume_max_ms <= 1500"),
-                 rule("slow_cel", "task.cel_ms <= 2 * baseline.cel_ms")]
-        self.assertEqual(judge(task(resume_max_ms=1500.0, cel_ms=8001.0), rules, self.REFS), ["slow_cel"])
+                 rule("slow_commands", "task.cel_ms <= 2 * baseline.cel_ms")]
+        self.assertEqual(judge(task(resume_max_ms=1500.0, cel_ms=8001.0), rules, self.REFS), ["slow_commands"])
         self.assertEqual(judge(task(resume_max_ms=1501.0, cel_ms=8000.0), rules, self.REFS), ["slow_resume"])
 
     def test_limit_rules(self):
         slow = task(resume_max_ms=1600.0, ttfe_max_ms=1100.0)
-        self.assertEqual(judge(slow, G2), ["slow_resume", "slow_ttfe"])
+        self.assertEqual(judge(slow, WAKE), ["slow_resume", "slow_ttfe"])
         self.assertEqual(judge(slow, RELAXED, self.REFS), [])
-        self.assertEqual(judge(task(resume_max_ms=1500.0), G2), [])
+        self.assertEqual(judge(task(resume_max_ms=1500.0), WAKE), [])
 
     def test_a_task_without_a_field_a_rule_reads_makes_the_run_invalid(self):
         start = rule("slow_start", "task.startup_ms + task.ttfe_max_ms <= 700.0")  # 600 + 210 by default
-        self.assertEqual(judge(task(), G2 + [start]), ["slow_start"])
+        self.assertEqual(judge(task(), WAKE + [start]), ["slow_start"])
         lacks = f"rule 'slow_ttfe' reads task.ttfe_max_ms, which {A} lacks"
         with self.assertRaisesRegex(SourceInvalid, re.escape(lacks)):
-            judge(task(ttfe_max_ms=None), G2 + [start])
+            judge(task(ttfe_max_ms=None), WAKE + [start])
 
     def test_int_fields_are_doubles(self):
         rules = [rule("retried", "task.retries <= 0.0"), rule("long", "task.steps / task.cycles <= 5.0")]
@@ -386,14 +386,14 @@ class RuleTest(unittest.TestCase):
     def test_baseline_ref_rules(self):
         self.assertEqual(judge(task(), STRICT, self.REFS), ["slow_wall"])
         self.assertEqual(judge(task(), RELAXED, self.REFS), [])
-        self.assertEqual(judge(task(cel_ms=6001.0), STRICT, self.REFS), ["slow_cel", "slow_wall"])
+        self.assertEqual(judge(task(cel_ms=6001.0), STRICT, self.REFS), ["slow_commands", "slow_wall"])
         # A baseline of 0 is a value.
-        self.assertEqual(judge(task(), STRICT, {"cel_ms": 0.0, "wall_ms": 0.0}), ["slow_cel", "slow_wall"])
+        self.assertEqual(judge(task(), STRICT, {"cel_ms": 0.0, "wall_ms": 0.0}), ["slow_commands", "slow_wall"])
         self.assertEqual(sweperf.ratio_fields(compile_rules(STRICT)), ["cel_ms", "wall_ms"])
 
     def test_every_failing_rule_is_a_reason(self):
         t = task(ttfe_max_ms=1200.0, cel_ms=7000.0)
-        self.assertEqual(judge(t, STRICT, self.REFS), ["slow_ttfe", "slow_cel", "slow_wall"])
+        self.assertEqual(judge(t, STRICT, self.REFS), ["slow_ttfe", "slow_commands", "slow_wall"])
 
     def test_rules_over_several_values(self):
         floor = rule("slow_wall", "task.wall_ms <= 1.5 * baseline.wall_ms || task.wall_ms <= 9000.0")
@@ -406,7 +406,7 @@ class RuleTest(unittest.TestCase):
 
     def test_a_rule_reads_the_variables_the_checker_binds(self):
         commented = rule("slow_wall", "task.wall_ms <= 9000.0 // was 1.5 * baseline.wall_ms")
-        parenthesized = rule("slow_cel", "task.cel_ms <= 1.5 * (baseline).cel_ms")
+        parenthesized = rule("slow_commands", "task.cel_ms <= 1.5 * (baseline).cel_ms")
         rules = compile_rules([commented, parenthesized])
         self.assertEqual([r.reads for r in rules], [("task.wall_ms",), ("task.cel_ms", "baseline.cel_ms")])
 
@@ -519,8 +519,8 @@ class ComputeTest(unittest.TestCase):
         meta = {"start_ts": T0, "end_ts": T0 + 40, "steady_start_ts": T0 + 5, "steady_end_ts": T0 + 30}
         with tempfile.TemporaryDirectory() as tmp:
             run = write_run(Path(tmp), logs, meta, stats=[stats_row("grpc_SuspendActorAsync")])
-            v, invalid = query(run, {"rules": G2})
-            whole, _ = query(run, {"rules": G2, "window": "whole"})
+            v, invalid = query(run, {"rules": WAKE})
+            whole, _ = query(run, {"rules": WAKE, "window": "whole"})
             finished, _ = query(run, {"rules": [], "values": {"finished": "records - unfinished"}})
         self.assertIsNone(invalid)
         self.assertEqual((v["records"], v["good"], v["bad"], v["unfinished"]), (5, 3, 2, 1))
@@ -543,7 +543,7 @@ class ComputeTest(unittest.TestCase):
         self.assertTrue(all(valid_name(k) for k in v), sorted(v))
         own = set(v) - set(VALUES) - {"records", "good", "bad"}
         self.assertEqual({k for k in own if not k.startswith("bad_")},
-                         sweperf.SweperfTasks.value_names(compile_rules(G2)))
+                         sweperf.SweperfTasks.value_names(compile_rules(WAKE)))
 
     def test_keys_do_not_change_from_run_to_run(self):
         """Dashboards read <variable>__<value> columns: a run without capacity or
@@ -568,7 +568,7 @@ class ComputeTest(unittest.TestCase):
             run = write_run(d / "run", [record(11, A)], meta, stats=[stats_row("grpc_SuspendActorAsync")])
             sync = write_run(d / "sync", [record(11, wall_ms=1000.0)], meta, stats=[stats_row("grpc_SuspendActor")])
             v, invalid = query(pair(run, sync), {"rules": STRICT, "baseline_test": "t1"})
-        self.assertEqual((v, invalid), ({}, "rule 'slow_cel' reads baseline.cel_ms, which the run lacks "
+        self.assertEqual((v, invalid), ({}, "rule 'slow_commands' reads baseline.cel_ms, which the run lacks "
                                             "(baseline unavailable: lifecycle mode differs (async vs sync))"))
 
     def test_invalid_runs(self):
@@ -605,23 +605,23 @@ class ComputeTest(unittest.TestCase):
             r, invalid = query(pair(run, one_user), strict)
             missing, missing_invalid = query(pair(run), strict)
             _, broken_invalid = query(pair(run, write_run(d / "empty", [REAL["quit"]], meta)), strict)
-            no_cel, no_cel_invalid = query(pair(run, write_run(d / "no_cel", [record(11, cel_ms=0.0)], meta)), strict)
+            zero, zero_invalid = query(pair(run, write_run(d / "zero", [record(11, cel_ms=0.0)], meta)), strict)
             unasked, unasked_invalid = query(pair(run, one_user), {"rules": STRICT})
         self.assertIsNone(invalid)
         # wall 8000 and 6500 against 4000 (the failed task stays out of the baseline) both break 1.5x.
-        self.assertEqual((r["good"], r["bad_slow_wall"], r["bad_slow_cel"]), (0, 2, 0))
+        self.assertEqual((r["good"], r["bad_slow_wall"], r["bad_slow_commands"]), (0, 2, 0))
         self.assertEqual((r["baseline_run"], r["baseline_tasks"]), (str(d / "one_user"), 1))
         self.assertEqual((r["baseline_wall_ms"], r["baseline_cel_ms"]), (4000.0, 6000.0))
         self.assertEqual((r["wall_ms_ratio_p50"], r["cel_ms_ratio_p50"]), (1.812, 1.0))
         # Without a baseline, a rule that reads it makes the run invalid, with no values.
-        lacks = "rule 'slow_cel' reads baseline.cel_ms, which the run lacks (baseline unavailable: "
+        lacks = "rule 'slow_commands' reads baseline.cel_ms, which the run lacks (baseline unavailable: "
         self.assertEqual((missing, missing_invalid), ({}, lacks + "no run of t1 with tag abc)"))
         self.assertEqual(broken_invalid, lacks + f"t1 run {d / 'empty'}: no task records in logs.txt: no task "
                          "finished, or the workload logs none)")
         self.assertEqual((unasked, unasked_invalid), ({}, lacks + "no baseline_test in source_cfg)"))
         # A baseline of 0 applies; its ratios are null.
-        self.assertEqual((no_cel_invalid, no_cel["baseline_cel_ms"], no_cel["bad_slow_cel"]), (None, 0.0, 2))
-        self.assertIsNone(no_cel["cel_ms_ratio_p50"])
+        self.assertEqual((zero_invalid, zero["baseline_cel_ms"], zero["bad_slow_commands"]), (None, 0.0, 2))
+        self.assertIsNone(zero["cel_ms_ratio_p50"])
 
     def test_reads_each_run_once(self):
         """However many queries: one read of the run, and one lookup and read per baseline_test."""

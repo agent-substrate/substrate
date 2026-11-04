@@ -16,7 +16,7 @@
 
 A finished task is one task record. Each task runs on a fresh actor, so an
 actor that logged a failure before the cut-off but no record is one task that
-never finished. A task that failed is bad (G1), named by its first failure.
+never finished. A task that failed is bad, named by its first failure.
 """
 
 from dataclasses import dataclass, field
@@ -122,7 +122,7 @@ def startup_episodes(startup: list[parse.Event], records: list[parse.TaskRecord]
 
 
 def failure(task: Task) -> str:
-    """The reason task is bad whatever the rules say: its first failure (G1). "" when it didn't fail."""
+    """The reason task is bad whatever the rules say: its first failure. "" when it didn't fail."""
     if not task.finished:
         return STEP_REASON[task.fail_step]
     if task.record.failed:

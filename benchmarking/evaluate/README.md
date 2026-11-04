@@ -117,22 +117,22 @@ breaks no rule.
 Which SWE-Perf tasks were good. A task is one task record line in `logs.txt`
 (see "Sweperf Log Lines" in
 [docs/guides/benchmarking.md](../../docs/guides/benchmarking.md)): a finished
-task is good when it did not fail (G1, built in) and passes every rule. A task
-that logged a failure but no record never finished, and is bad.
+task is good when it didn't fail (built in) and passes every rule. A task that
+logged a failure but no record never finished, and is bad. The goodput rules
+below test:
 
-- **G1:** no unrecovered error.
-- **G2:** wake latency: the slowest resume (`resume_max_ms`) and TTFE, resume to
-  first execute (`ttfe_max_ms`), within limits (1.5 s and 1 s below).
-- **G3:** slowdown against the 1-user run: `cel_ms` (command execution
-  latency, the time the task's commands ran in the sandbox) and `wall_ms`
-  within a multiple of the 1-user run's medians (1.5x below).
+- Wake latency: the slowest resume (`resume_max_ms`) and the slowest time from
+  a resume to the first execute (`ttfe_max_ms`), within limits (1.5 s and 1 s).
+- Slowdown against the 1-user run: command execution latency (`cel_ms`, the
+  time the task's commands ran in the sandbox) and wall time (`wall_ms`),
+  within a multiple of the 1-user run's medians (1.5x).
 
 ```yaml
 - name: sweperf_astropy_150_users_think
   # ...
   evaluations:
   - name: goodput_strict
-    description: "No failure (G1), resume <= 1.5 s and TTFE <= 1 s (G2), CEL and wall <= 1.5x the 1-user run (G3)"
+    description: "No failure; slowest resume <= 1.5 s and time to first execute <= 1 s; command execution and wall time <= 1.5x the 1-user run's medians"
     variables:
     - name: goodput
       source: cel
@@ -141,9 +141,9 @@ that logged a failure but no record never finished, and is bad.
         rules:
         - {name: slow_resume, cel: "task.resume_max_ms <= 1500.0"}
         - {name: slow_ttfe, cel: "task.ttfe_max_ms <= 1000.0"}
-        - {name: slow_cel, cel: "task.cel_ms <= 1.5 * baseline.cel_ms"}
+        - {name: slow_commands, cel: "task.cel_ms <= 1.5 * baseline.cel_ms"}
         - {name: slow_wall, cel: "task.wall_ms <= 1.5 * baseline.wall_ms"}
-        baseline_test: sweperf_astropy_1_user   # without its run, the G3 rules can't judge: invalid
+        baseline_test: sweperf_astropy_1_user   # without its run, the slowdown rules can't judge: invalid
         values:
           good_ratio_pct: "round(100.0 * good / records, 2)"
           good_per_hour: "round(good / window_hours, 3)"
