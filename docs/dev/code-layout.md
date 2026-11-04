@@ -74,6 +74,10 @@ only substrate's public `api/` and `pkg/` packages, and each repository is named
 for the plugin API it implements and then its backend, as in
 [credprovider-gcp-secret-manager](https://github.com/agent-substrate-plugins/credprovider-gcp-secret-manager).
 
+An object store plugin runs as sidecars that `ate-setup` installs from a
+kustomize component. See
+[the object store plugin sidecar contract](../reference/object-store-plugin-sidecar.md).
+
 ### `cmd/<binary>/`
 
 Each subdirectory of `cmd/` corresponds to one compiled binary:
