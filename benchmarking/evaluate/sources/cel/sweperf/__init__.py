@@ -60,7 +60,7 @@ WINDOWS = ("steady", "whole")
 INPUTS = ("logs.txt", "stats.jsonl", "server_summary.json", "stats_history.csv")
 UNAVAILABLE = "baseline unavailable: "
 TASK, BASELINE = "task", "baseline"
-# Every field is a double, so the type checker rejects ints mixed with doubles.
+# Every field is a double, and so is every whole number in a rule (rules.Env).
 ENV = rules.Env({f"{ns}.{f}": cel.Type.DOUBLE for ns in (TASK, BASELINE) for f in tasks.FIELDS})
 FACTS = ("unfinished", "window_hours", "nodes", "vcpus", "gb_ram")
 CAPACITY = {"nodes": "node_count", "vcpus": "allocatable_cores", "gb_ram": "allocatable_ram_gb"}

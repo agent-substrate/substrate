@@ -95,13 +95,14 @@ breaks no rule.
   bad. `rules: []` applies no rule.
 - `values` (optional) maps more value names to CEL expressions over the
   counts (`records`, `good`, `bad`) and the kind's facts, all doubles: for
-  example `good_ratio_pct: "round(100.0 * good / records, 2)"`, where
-  `round(x, digits)` rounds as Python does. An expression gives a double or a
-  bool and can't read another value. A value is null when it reads a fact the
-  run lacks, or when it isn't finite (x / 0).
-- Loading the evaluations compiles the rules and values: an unknown name, an
-  int mixed with a double, a result of the wrong type or a value name the
-  source gives is an error. A rule or value that fails to evaluate makes the
+  example `good_ratio_pct: "round(100 * good / records, 2)"`, where
+  `round(x, digits)` rounds as Python does. A whole number is a double here
+  too. An expression gives a double or a bool and can't read another value. A
+  value is null when it reads a fact the run lacks, or when it isn't finite
+  (x / 0).
+- Loading the evaluations compiles the rules and values: an unknown name, a
+  type error, a result of the wrong type or a value name the source gives is
+  an error. A rule or value that fails to evaluate makes the
   variable `invalid`.
 - The source gives `records`, `good`, `bad`, `bad_<reason>` for every rule and
   reason of the kind (0 when none, null for a skipped rule), `rules_applied`,
@@ -159,10 +160,11 @@ that logged a failure but no record never finished, and is bad.
   the tasks that ended in it, and the unfinished ones that first failed in it.
 - Rules read `task.<field>` (the task's record) and `baseline.<field>`.
   Fields: `wall_ms`, `cel_ms`, `resume_max_ms`, `ttfe_max_ms`, `startup_ms`,
-  `think_ms`, `retries`, `cycles`, `steps`. They are doubles, so numbers need a
-  decimal point (`1500.0`). A task without a field a rule reads isn't judged
-  by that rule, and rules can't test for a field with `has()`. The built-in
-  reasons are `resume_failed`, `execute_failed`, `suspend_failed` and `failed`.
+  `think_ms`, `retries`, `cycles`, `steps`. They are doubles, and so is every
+  whole number in a rule (`1500` is `1500.0`). A task without a field a rule
+  reads isn't judged by that rule, and rules can't test for a field with
+  `has()`. The built-in reasons are `resume_failed`, `execute_failed`,
+  `suspend_failed` and `failed`.
 - `baseline.<field>` is the median over the clean finished tasks of the run
   of `baseline_test` that `paired_run` returns: the latest run of that test
   from the same invocation. Without one (no `baseline_test`, no such run, a

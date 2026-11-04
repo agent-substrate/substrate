@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from evaluate.sources import cel  # noqa: E402
 from evaluate.sources.base import BenchmarkRunContext, SourceInvalid  # noqa: E402
+from evaluate.sources.cel import rules  # noqa: E402
 
 FAILED = {"name": "failed_requests", "cel": "line.measurements.failure_count == 0.0"}
 GRPC = 'line.metric.startsWith("grpc_")'
@@ -122,6 +123,33 @@ class ValuesTest(unittest.TestCase):
                          ({}, "value 'too_big': OUT_OF_RANGE: double out of int64 range"))
 
 
+class WholeNumberTest(unittest.TestCase):
+    def test_integer_literals_become_doubles(self):
+        for written, compiled in (("task.resume_max_ms <= 1500", "task.resume_max_ms <= 1500.0"),
+                                  ("-1 + 2 * 3", "-1.0 + 2.0 * 3.0"), ("p99 <= 1 // 2", "p99 <= 1.0 // 2")):
+            self.assertEqual(rules.ints_as_doubles(written), compiled)
+
+    def test_other_tokens_stay(self):
+        for kept in ('"1500" + \'1\'', '"""a "1" \'2\' b"""', "\'\'\'3\'\'\'", 'r"\\d1"', 'b"1"', 'rb"1"',
+                     'BR\'1\'', '"\\"1"', 'r"""\\"1"""', "x_1 + p99", "0x1F + 1u + 1e3 + 1.5 + .5 + 2E-3",
+                     "a.`b1`", "// 1"):
+            self.assertEqual(rules.ints_as_doubles(kept), kept)
+
+    def test_where_doubles_are_all_there_is(self):
+        good, _ = query(ValuesTest.LINES, {"rules": [FAILED], "values": {"pct": "round(100 * good / records, 2)"}})
+        self.assertEqual(good["pct"], 50.0)
+        self.assertEqual(query(ValuesTest.LINES, {"rules": [], "values": {"x": "round(good, 2.5)"}}),
+                         ({}, "value 'x': OUT_OF_RANGE: round: digits 2.5 isn't a whole number"))
+        # json_lines keeps CEL's own types: line is dyn, and size() gives an int.
+        sized, _ = query(ValuesTest.LINES, {"rules": [{"name": "named", "cel": "size(line.metric) > 0"}]})
+        self.assertEqual(sized["good"], 2)
+
+    def test_errors_quote_the_rule_as_compiled(self):
+        with self.assertRaisesRegex(ValueError, re.escape("undeclared reference to 'task.nope' (in container '')\n"
+                                                          " | 1.0 + 2.0 <= task.nope")):
+            cel.Cel.validate({"kind": "sweperf_tasks", "rules": [{"name": "x", "cel": "1 + 2 <= task.nope"}]})
+
+
 class ConfigTest(unittest.TestCase):
     def test_valid(self):
         for cfg in ({"kind": "json_lines", "file": "stats.jsonl", "rules": []},
@@ -153,7 +181,7 @@ class ConfigTest(unittest.TestCase):
             "values: 'cel_ms_ratio_p50' is a value the source gives": {
                 "kind": "sweperf_tasks", "rules": [{"name": "x", "cel": "task.cel_ms <= 1.5 * baseline.cel_ms"}],
                 "values": {"cel_ms_ratio_p50": "good"}},
-            "'_/_' applied to '(double, int)'": {**json_lines, "values": {"x": "good / 2"}},
+            "'_/_' applied to '(double, int)'": {**json_lines, "values": {"x": "good / int(2)"}},
             "value 'x': must give a double or a bool, gives STRING": {**json_lines, "values": {"x": "string(good)"}},
             "undeclared reference to 'good_ratio_pct'": {**json_lines, "values": {**RATIO, "x": "good_ratio_pct"}},
             "undeclared reference to 'vcpus'": {**json_lines, "values": {"x": "good / vcpus"}},

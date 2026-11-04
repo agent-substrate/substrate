@@ -370,6 +370,12 @@ class RuleTest(unittest.TestCase):
         slow_and_failed = task(failed=True, fail_step="execute", resume_max_ms=9000.0)
         self.assertEqual(judge(slow_and_failed, STRICT, self.REFS), [tasks.REASON_EXECUTE])
 
+    def test_whole_numbers_are_doubles(self):
+        rules = [rule("slow_resume", "task.resume_max_ms <= 1500"),
+                 rule("slow_cel", "task.cel_ms <= 2 * baseline.cel_ms")]
+        self.assertEqual(judge(task(resume_max_ms=1500.0, cel_ms=8001.0), rules, self.REFS), ["slow_cel"])
+        self.assertEqual(judge(task(resume_max_ms=1501.0, cel_ms=8000.0), rules, self.REFS), ["slow_resume"])
+
     def test_limit_rules(self):
         slow = task(resume_max_ms=1600.0, ttfe_max_ms=1100.0)
         self.assertEqual(judge(slow, STRICT), ["slow_resume", "slow_ttfe"])
@@ -471,8 +477,7 @@ class ConfigTest(unittest.TestCase):
             "undeclared reference to 'task.fail_cycle'": {"rules": [r(cel="task.fail_cycle <= 1.0")]},
             "undeclared reference to 'cel_ms'": {"rules": [r(cel="cel_ms <= 1.0")]},
             "undeclared reference to 'task'": {"rules": [r(cel='task["cel_ms"] <= 1.0')]},
-            "'_<=_' applied to '(double, int)'": {"rules": [r(cel="task.resume_max_ms <= 1500")]},
-            "'_*_' applied to '(double, int)'": {"rules": [r(cel="task.cel_ms <= baseline.cel_ms * 2")]},
+            "'_<=_' applied to '(int, double)'": {"rules": [r(cel="int(task.retries) <= 1")]},
             "cel: must give a bool, gives DOUBLE": {"rules": [r(cel="task.cel_ms * 2.0")]},
             "own name": {"rules": [r(), r()]},
             "are reasons the records give": {"rules": [r(name="resume_failed")]},
@@ -617,7 +622,7 @@ class ComputeTest(unittest.TestCase):
     def test_a_rule_that_fails_to_evaluate_makes_the_run_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = write_run(Path(tmp), [record(11, A)], {"start_ts": T0, "end_ts": T0 + 30})
-            values, invalid = query(run, {"rules": [rule("too_big", "int(task.wall_ms * 1e300) > 0")]})
+            values, invalid = query(run, {"rules": [rule("too_big", "double(int(task.wall_ms * 1e300)) > 0")]})
         self.assertEqual(invalid, f"rule 'too_big' on {A}: OUT_OF_RANGE: double out of int64 range")
         self.assertEqual(values, {})
 
