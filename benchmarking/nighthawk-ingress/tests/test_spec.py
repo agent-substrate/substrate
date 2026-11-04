@@ -28,7 +28,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from nighthawk_common import spec as spec_mod
+import spec as spec_mod
+from nighthawk_common import spec as common_spec
 
 
 def build(**overrides):
@@ -104,7 +105,7 @@ def test_actor_reference_rotation_covers_all_actors():
     actor_names = [f"sb-{i}" for i in range(5)]
     spec = build(actor_names=actor_names)
     plugin = spec["nighthawk_traffic_template"]["request_source_plugin_config"]
-    assert plugin["name"] == spec_mod.REQUEST_SOURCE_PLUGIN
+    assert plugin["name"] == common_spec.REQUEST_SOURCE_PLUGIN
     options = plugin["typed_config"]["options_list"]["options"]
     got = [
         {header["header"]["key"]: header["header"]["value"] for header in o["request_headers"]}
@@ -124,7 +125,7 @@ def test_actor_reference_rotation_covers_all_actors():
 def test_initial_rps_is_per_worker():
     spec = build(initial_total_rps=1000, client_concurrency=4)
     controller = spec["step_controller_config"]
-    assert controller["name"] == spec_mod.STEP_CONTROLLER_PLUGIN
+    assert controller["name"] == common_spec.STEP_CONTROLLER_PLUGIN
     assert controller["typed_config"]["initial_value"] == 250.0
 
 
@@ -137,7 +138,7 @@ def test_thresholds_and_durations():
     ]
     assert names == ["success-rate", "send-rate"]
     scoring = spec["metric_thresholds"][0]["threshold_spec"]["scoring_function"]
-    assert scoring["name"] == spec_mod.BINARY_SCORING_PLUGIN
+    assert scoring["name"] == common_spec.BINARY_SCORING_PLUGIN
     assert scoring["typed_config"]["lower_threshold"] == 0.999
     assert spec["measuring_period"] == "10s"
     assert spec["convergence_deadline"] == "600s"
@@ -166,9 +167,9 @@ def test_spec_round_trips_through_real_protos():
         return
     from google.protobuf import text_format
 
-    text = spec_mod.spec_dict_to_textproto(build(tail_latency_slo_ms=25), desc)
-    pool = spec_mod.load_pool(desc)
-    msg = spec_mod.message_class(pool, spec_mod.SPEC_MESSAGE)()
+    text = common_spec.spec_dict_to_textproto(build(tail_latency_slo_ms=25), desc)
+    pool = common_spec.load_pool(desc)
+    msg = common_spec.message_class(pool, common_spec.SPEC_MESSAGE)()
     text_format.Parse(text, msg, descriptor_pool=pool)
     assert msg.nighthawk_traffic_template.concurrency.value == "4"
     assert msg.measuring_period.seconds == 10

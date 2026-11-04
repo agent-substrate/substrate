@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AdaptiveLoadSessionSpec builder.
+"""Shared AdaptiveLoadSessionSpec builder and descriptor-pool textproto serializer."""
 
-Specs are plain dicts, validated and rendered to textproto through the
-FileDescriptorSet built by protogen/generate_descriptor.sh — field names
-are checked against the real Nighthawk protos at spec-build time.
-"""
 
 SPEC_MESSAGE = "nighthawk.adaptive_load.AdaptiveLoadSessionSpec"
 OUTPUT_MESSAGE = "nighthawk.adaptive_load.AdaptiveLoadSessionOutput"
@@ -37,10 +33,6 @@ REQUEST_SOURCE_PLUGIN = "nighthawk.in-line-options-list-request-source-plugin"
 REQUEST_SOURCE_TYPE_URL = (
     "type.googleapis.com/nighthawk.request_source.InLineOptionsListRequestSourceConfig"
 )
-
-ROUTER_SNI = "atenet-router.ate-system.svc"
-CA_FILE = "/run/servicedns-ca/ca.crt"
-CRED_BUNDLE = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 
 # The default failure predicates (all 0) abort an execution on the first
 # 4xx/5xx; measuring periods must instead run to completion so overload
@@ -87,14 +79,10 @@ def _binary_threshold(
     }
 
 
-def build_spec_dict(
+def build_session_spec(
+    traffic_template: dict,
     *,
-    uri: str,
-    actor_names: list[str],
-    atespace: str,
     client_concurrency: int,
-    connections: int,
-    max_pending_requests: int,
     initial_total_rps: int,
     exponential_factor: float,
     measuring_period_s: int,
@@ -105,28 +93,13 @@ def build_spec_dict(
     tail_latency_slo_ms: float | None = None,
     benchmark_cooldown_s: int = 5,
 ) -> dict:
-    """Assemble the AdaptiveLoadSessionSpec as a JSON-shaped dict.
+    """Wrap a traffic_template dict in an AdaptiveLoadSessionSpec dict.
 
-    The controller varies the *per-worker* requests_per_second, so
+    The controller varies the per-worker requests_per_second, so
     initial_value = initial_total_rps / client_concurrency. The template
     must not set duration (the controller rejects it); open_loop is forced
     true by the controller.
     """
-    request_variants = [
-        {
-            "request_method": "POST",
-            "request_headers": [
-                {
-                    "header": {
-                        "key": "ate-target-actor",
-                        "value": f"{atespace}/{actor_name}",
-                    },
-                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
-                },
-            ],
-        }
-        for actor_name in actor_names
-    ]
     # Threshold roles: tail latency (mean+2stdev, ~p95 proxy — no true
     # percentiles in the builtin adaptive metrics) is the SLO bound;
     # success-rate catches fast-error saturation (503/504) that latency and
@@ -147,48 +120,6 @@ def build_spec_dict(
                 upper_threshold=tail_latency_slo_ms * 1_000_000.0,
             )
         )
-    if not uri.startswith("https://"):
-        raise ValueError(f"router URI must use https://, got {uri!r}")
-
-    traffic_template: dict = {
-        "uri": uri,
-        "concurrency": str(client_concurrency),
-        "connections": connections,
-        "max_pending_requests": max_pending_requests,
-        "open_loop": True,
-        "failure_predicates": dict(PERMISSIVE_FAILURE_PREDICATES),
-        # request_options shares a oneof with this field: method and
-        # headers must come from the per-variant RequestOptions.
-        "request_source_plugin_config": {
-            "name": REQUEST_SOURCE_PLUGIN,
-            "typed_config": {
-                "@type": REQUEST_SOURCE_TYPE_URL,
-                "options_list": {"options": request_variants},
-                # 0 = cycle through options_list indefinitely.
-                "num_requests": 0,
-            },
-        },
-        "tls_context": {
-            "sni": ROUTER_SNI,
-            "common_tls_context": {
-                "tls_certificates": [
-                    {
-                        "certificate_chain": {"filename": CRED_BUNDLE},
-                        "private_key": {"filename": CRED_BUNDLE},
-                    },
-                ],
-                "validation_context": {
-                    "trusted_ca": {"filename": CA_FILE},
-                    "match_typed_subject_alt_names": [
-                        {
-                            "san_type": "DNS",
-                            "matcher": {"exact": ROUTER_SNI},
-                        },
-                    ],
-                },
-            },
-        },
-    }
     return {
         "nighthawk_traffic_template": traffic_template,
         "metric_thresholds": thresholds,

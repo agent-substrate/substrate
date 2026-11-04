@@ -42,7 +42,8 @@ from typing import IO, TextIO
 
 import actors
 from nighthawk_common import output as output_mod
-from nighthawk_common import spec as spec_mod
+import spec as spec_mod
+from nighthawk_common import spec as common_spec
 
 NIGHTHAWK_SERVICE = "nighthawk_service"
 ADAPTIVE_CLIENT = "nighthawk_adaptive_load_client"
@@ -293,7 +294,7 @@ def main() -> None:
                 ),
             )
             spec_path.write_text(
-                spec_mod.spec_dict_to_textproto(spec_dict, DESC_PATH)
+                common_spec.spec_dict_to_textproto(spec_dict, DESC_PATH)
             )
             tee(logs, f"Wrote spec to {spec_path}")
 
