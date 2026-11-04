@@ -58,17 +58,18 @@ func ValidateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal 
 }
 
 func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapi.CreateTagRequest) field.ErrorList {
-	var errs field.ErrorList
 	tag := req.GetTag()
 	sourceActorAtespace := tag.GetSourceActor().GetAtespace()
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	if sourceActorAtespace == "" || tagAtespace == "" {
-		return errs // regular DV will handle it
+		return nil // regular DV will handle it
 	}
 	if tagAtespace != sourceActorAtespace {
-		errs = append(errs, field.Invalid(p.Child("tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"))
+		return field.ErrorList{
+			field.Invalid(p.Child("tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
+		}
 	}
-	return errs
+	return nil
 }
 
 // This exists only because nested subfield tags are not supported yet.

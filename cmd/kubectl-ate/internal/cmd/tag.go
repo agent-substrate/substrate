@@ -227,11 +227,15 @@ const allVolumes = "*"
 // selects only those. Left unset, sel stays nil and no volume is captured.
 type volumeSelectionValue struct {
 	sel *ateapi.ExternalVolumeSelection
-	all bool
+}
+
+// all reports whether every external volume is selected.
+func (v *volumeSelectionValue) all() bool {
+	return v.sel != nil && len(v.sel.GetNames()) == 0
 }
 
 func (v *volumeSelectionValue) String() string {
-	if v.all {
+	if v.all() {
 		return allVolumes
 	}
 	return strings.Join(v.sel.GetNames(), ",")
@@ -241,15 +245,13 @@ func (v *volumeSelectionValue) Set(s string) error {
 	if s == "" {
 		return fmt.Errorf("no volume names after =; drop the = to capture every volume")
 	}
-	isAll := s == allVolumes
-	if v.sel != nil && isAll != v.all {
+	if v.sel != nil && (s == allVolumes) != v.all() {
 		return fmt.Errorf("cannot both capture every volume and name volumes")
 	}
 	if v.sel == nil {
 		v.sel = &ateapi.ExternalVolumeSelection{}
 	}
-	v.all = isAll
-	if !isAll {
+	if s != allVolumes {
 		v.sel.Names = append(v.sel.Names, strings.Split(s, ",")...)
 	}
 	return nil
@@ -269,7 +271,7 @@ func addWithVolumesFlag(cmd *cobra.Command, v *volumeSelectionValue) {
 // read them as an argument.
 func createTagArgs(cmd *cobra.Command, args []string) error {
 	err := exactlyOneArg("<tag-name>", "atespace", "actor")(cmd, args)
-	if err != nil && len(args) > 1 && createTagWithVolumesFlag.all {
+	if err != nil && len(args) > 1 && createTagWithVolumesFlag.all() {
 		return usageErrorf("%v; to capture only some volumes, join the names to the flag with =, e.g. --with-volumes=%s", err, args[len(args)-1])
 	}
 	return err
