@@ -541,6 +541,16 @@ func TestTagActorSnapshot_RejectedBeforeReserve(t *testing.T) {
 			name:   "volume not provisioned",
 			status: func(s *ateapi.ActorStatus) { s.ExternalVolumes.Volumes[0].StorageVolumeId = "" },
 		},
+		{
+			name: "latest snapshot pending on a lost node",
+			status: func(s *ateapi.ActorStatus) {
+				pending := proto.CloneOf(s.Snapshots[0])
+				pending.Generation = 2
+				pending.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+				s.Snapshots = append(s.Snapshots, pending)
+				s.LastAssignedGeneration = 2
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
