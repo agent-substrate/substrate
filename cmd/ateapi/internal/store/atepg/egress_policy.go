@@ -74,8 +74,7 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 	if err := mutate(dbPolicy); err != nil {
 		return nil, err
 	}
-	dbPolicy.Metadata = oldMeta
-	setUpdateMetadata(dbPolicy.Metadata, oldMeta)
+	dbPolicy.Metadata = setUpdateMetadata(oldMeta)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling updated egress policy: %w", err)

@@ -131,7 +131,7 @@ func (p *Persistence) updateWorker(ctx context.Context, name string, preconditio
 		}
 		// Stored metadata is authoritative; discard any metadata edits made by
 		// the closure and derive the next revision from the row we locked.
-		setUpdateMetadata(dbWorker.Metadata, oldMeta)
+		dbWorker.Metadata = setUpdateMetadata(oldMeta)
 		if markForDeletion && dbWorker.Metadata.DeleteTime == nil {
 			dbWorker.Metadata.DeleteTime = proto.CloneOf(dbWorker.Metadata.UpdateTime)
 		}
