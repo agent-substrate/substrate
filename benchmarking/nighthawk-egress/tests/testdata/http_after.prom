@@ -1,0 +1,33 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# gateway_after.prom from the egress_gatewaycap_http_1cpu suite at 384d7d228,
+# trimmed to the series output.py matches.
+# SCRAPED_IPS: 10.124.0.22
+envoy_cluster_upstream_cx_overflow{envoy_cluster_name="egress_forward_proxy"} 0
+envoy_cluster_upstream_cx_overflow{envoy_cluster_name="egress_forward_proxy_cleartext"} 0
+envoy_cluster_upstream_cx_overflow{envoy_cluster_name="egress_forward_proxy_grpc"} 0
+envoy_cluster_upstream_cx_overflow{envoy_cluster_name="egress_forward_proxy_passthrough"} 0
+envoy_cluster_upstream_rq_pending_overflow{envoy_cluster_name="egress_forward_proxy"} 0
+envoy_cluster_upstream_rq_pending_overflow{envoy_cluster_name="egress_forward_proxy_cleartext"} 0
+envoy_cluster_upstream_rq_pending_overflow{envoy_cluster_name="egress_forward_proxy_grpc"} 0
+envoy_cluster_upstream_rq_pending_overflow{envoy_cluster_name="egress_forward_proxy_passthrough"} 0
+envoy_cluster_upstream_rq_total{envoy_cluster_name="ext_proc_server"} 2059938
+envoy_http_downstream_cx_total{envoy_http_conn_manager_prefix="egress_connect"} 5
+envoy_http_downstream_rq_xx{envoy_response_code_class="2",envoy_http_conn_manager_prefix="egress_connect"} 4053
+envoy_http_ext_proc_egress_policy_cleartext_streams_started{envoy_http_conn_manager_prefix="mitm_cleartext"} 2055885
+envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_prefix="mitm_http"} 0
+envoy_listener_downstream_cx_total{envoy_listener_address="mitm"} 4053
+envoy_listener_ssl_handshake{envoy_listener_address="mitm"} 0
+envoy_tcp_downstream_cx_total{envoy_tcp_prefix="passthrough"} 0
