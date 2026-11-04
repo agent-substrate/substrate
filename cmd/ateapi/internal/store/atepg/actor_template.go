@@ -83,20 +83,35 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return p.updateActorTemplate(ctx, templateRef, store.DeletePreconditions(precondition), mutate, false)
+	return updateActorTemplate(ctx, p.pool, templateRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
 func (p *Persistence) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
-	return p.updateActorTemplate(ctx, templateRef, precondition, mutate, true)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning mark of actor template %s for deletion: %w", templateRef, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	marked, err := updateActorTemplate(ctx, tx, templateRef, precondition, mutate, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing mark of actor template %s for deletion: %w", templateRef, err)
+	}
+	return marked, nil
 }
 
-func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
+// updateActorTemplate applies mutate to the stored template through q. When
+// markForDeletion is set, q must be a transaction, as for updateActor.
+func updateActorTemplate(ctx context.Context, q querier, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions, mutate func(*ateapi.ActorTemplate) error, markForDeletion bool) (*ateapi.ActorTemplate, error) {
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
-	if err := p.pool.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actor_templates
-			WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
+			WHERE atespace = $1 AND name = $2`+lockClause(markForDeletion), templateRef.Atespace, templateRef.Name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
@@ -133,7 +148,7 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	commandTag, err := q.Exec(ctx, `
 			UPDATE actor_templates SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
 		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name, currentUID, currentVersion)

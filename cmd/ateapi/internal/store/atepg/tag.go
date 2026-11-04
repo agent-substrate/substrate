@@ -224,21 +224,36 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return p.updateTag(ctx, tagRef, store.DeletePreconditions(precondition), mutate, false)
+	return updateTag(ctx, p.pool, tagRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
 func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error) (*ateapi.Tag, error) {
-	return p.updateTag(ctx, tagRef, precondition, mutate, true)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning mark of tag %s for deletion: %w", tagRef, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	marked, err := updateTag(ctx, tx, tagRef, precondition, mutate, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing mark of tag %s for deletion: %w", tagRef, err)
+	}
+	return marked, nil
 }
 
-func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error, markForDeletion bool) (*ateapi.Tag, error) {
+// updateTag applies mutate to the stored tag through q. When markForDeletion
+// is set, q must be a transaction, as for updateActor.
+func updateTag(ctx context.Context, q querier, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapi.Tag) error, markForDeletion bool) (*ateapi.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
-	if err := p.pool.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 			SELECT uid, version, proto FROM tags
-			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
+			WHERE atespace = $1 AND name = $2`+lockClause(markForDeletion), atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
@@ -280,7 +295,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
 	}
-	commandTag, err := p.pool.Exec(ctx, `
+	commandTag, err := q.Exec(ctx, `
 			UPDATE tags
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,

@@ -87,11 +87,26 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 }
 
 func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	return updateActor(ctx, p.pool, actorRef, precondition, mutate, true)
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning mark of actor %s for deletion: %w", actorRef, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	marked, err := updateActor(ctx, tx, actorRef, precondition, mutate, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing mark of actor %s for deletion: %w", actorRef, err)
+	}
+	return marked, nil
 }
 
 // updateActor applies mutate to the stored actor through q, which is the pool
-// or a transaction the write must commit with.
+// or a transaction the write must commit with. When markForDeletion is set, q
+// must be a transaction: precondition may waive the version, so the read locks
+// the row to keep a concurrent write from failing the version guard below.
 func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
@@ -99,7 +114,7 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	var currentBytes []byte
 	if err := q.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actors
-			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
+			WHERE atespace = $1 AND name = $2`+lockClause(markForDeletion), atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}

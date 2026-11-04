@@ -108,8 +108,8 @@ type Interface interface {
 	// MarkActorForDeletion initiates the deletion of an actor. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the actor's status. Returns ErrNotFound if missing,
-	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
-	// write wins, or mutate's error.
+	// ErrUIDConflict/ErrVersionConflict if precondition fails, or mutate's
+	// error.
 	MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Actor) error) (*ateapi.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
@@ -170,8 +170,8 @@ type Interface interface {
 	// MarkTagForDeletion initiates the deletion of a tag. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the tag's status. Returns ErrNotFound if missing,
-	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
-	// write wins, or mutate's error.
+	// ErrUIDConflict/ErrVersionConflict if precondition fails, or mutate's
+	// error.
 	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing, or
@@ -240,8 +240,8 @@ type Interface interface {
 	// MarkActorTemplateForDeletion initiates the deletion of an actor
 	// template. It sets metadata.delete_time if unset and applies mutate, if
 	// non-nil, so callers can update the template's status. Returns ErrNotFound
-	// if missing, ErrUIDConflict/ErrVersionConflict if precondition fails or a
-	// concurrent write wins, or mutate's error.
+	// if missing, ErrUIDConflict/ErrVersionConflict if precondition fails, or
+	// mutate's error.
 	MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
@@ -276,8 +276,8 @@ type Interface interface {
 	// MarkWorkerForDeletion initiates the deletion of a worker. It sets
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the worker's status. Returns ErrNotFound if missing,
-	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
-	// write wins, or mutate's error.
+	// ErrUIDConflict/ErrVersionConflict if precondition fails, or mutate's
+	// error.
 	MarkWorkerForDeletion(ctx context.Context, name string, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Worker) error) (*ateapi.Worker, error)
 
 	// Removes a worker by name and returns the deleted resource. Returns

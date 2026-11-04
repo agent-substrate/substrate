@@ -376,6 +376,15 @@ func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
 	p.policyManager = pm
 }
 
+// lockClause returns FOR UPDATE when lock is set, to append to a SELECT that
+// runs in a transaction.
+func lockClause(lock bool) string {
+	if lock {
+		return " FOR UPDATE"
+	}
+	return ""
+}
+
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
 // run either directly against the pool or inside an in-flight transaction.
 type querier interface {
