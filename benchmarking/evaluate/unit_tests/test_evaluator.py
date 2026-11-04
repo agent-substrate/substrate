@@ -139,7 +139,7 @@ class ConfigTest(unittest.TestCase):
             "type 'cel' is not one of ['threshold']": broken("conditions.0.type", "cel"),
             "names no variable of this evaluation": broken("conditions.0.check.value", "gp.goodput_ratio_pct"),
             "is not <variable>.<value>": broken("conditions.0.check.value", "aggregate_failure_ratio"),
-            "'Ratio' is not a value name": broken("conditions.0.check.value", "trial.Ratio"),
+            "'a__b' is not a value name": broken("conditions.0.check.value", "trial.a__b"),
             "'trial.aggregate_failure_rate': trial gives no value 'aggregate_failure_rate' (it gives "
             "aggregate_failure_ratio, allocatable_ram_gb)": broken("conditions.0.check.value",
                                                                    "trial.aggregate_failure_rate"),
@@ -173,12 +173,15 @@ class RunResultsTest(unittest.TestCase):
     def test_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = write_run(Path(tmp), [stats_row("grpc_ResumeActor", p90=420), stats_row("grpc_ResumeActor", p90=430),
-                                        stats_row("server_summary", oom_events_node=None, mode="async")])
+                                        stats_row("server_summary", oom_events_node=None, mode="async"),
+                                        stats_row("phases", locust_ResumeActor=812.5)])
             self.assertEqual(self.query(run, {"metric": "trial_summary", "measurements": ["ok", "allocatable_ram_gb",
                                                                                           "nope"]}),
                              {"ok": True, "allocatable_ram_gb": 400.0, "nope": None})
             self.assertEqual(self.query(run, {"metric": "grpc_ResumeActor", "measurements": ["p90"]}),
                              {"p90": 430.0})  # the last row of a metric wins
+            self.assertEqual(self.query(run, {"metric": "phases", "measurements": ["locust_ResumeActor"]}),
+                             {"locust_ResumeActor": 812.5})  # as the row writes it
             self.assertEqual(self.query(run, {"metric": "server_summary", "measurements": ["oom_events_node", "mode"]}),
                              {"oom_events_node": None, "mode": "async"})
 
@@ -194,6 +197,7 @@ class RunResultsTest(unittest.TestCase):
         for message, cfg in {"needs metric": {}, "needs measurements": {"metric": "m"},
                              "a non-empty list": {"metric": "m", "measurements": []},
                              "listed twice": {"metric": "m", "measurements": ["a", "a"]},
+                             "'a__b' is not a value name": {"metric": "m", "measurements": ["a__b"]},
                              "'p99.9' is not a value name": {"metric": "m", "measurements": ["p99.9"]},
                              "unknown keys ['run']": {"metric": "m", "measurements": ["a"], "run": "baseline"}}.items():
             with self.assertRaisesRegex(ValueError, re.escape(message), msg=message):
@@ -225,6 +229,18 @@ class EvaluateTest(unittest.TestCase):
                                                    "invalid": "", "error": ""})
         self.assertEqual(outputs.summary_lines(report)[0].splitlines()[0],
                          "evaluation envelope_health: fail (failed: worker_memory)")
+
+    def test_a_measurement_name_as_written(self):
+        evs = [{"name": "phases", "variables": [{"name": "phases", "source": "run_results", "source_cfg": {
+                    "metric": "phase_breakdown_summary", "measurements": ["locust_ResumeActor"]}}],
+                "conditions": [{"name": "resume", "type": "threshold",
+                                "check": threshold("phases.locust_ResumeActor", "<=", 1000)}]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            run = write_run(Path(tmp), [stats_row("phase_breakdown_summary", locust_ResumeActor=812.5)])
+            report = judge(run, evs)
+        self.assertEqual(report["summary"]["status"], "pass")
+        self.assertEqual(outputs.stats_rows(report, "ts", TAG, "t")[0]["measurements"]["phases__locust_ResumeActor"],
+                         "812.5")
 
     def test_null_measurement_is_invalid_not_zero(self):
         """A measurement recorded as null (e.g. a Prometheus-backed count on a cluster without
@@ -299,7 +315,7 @@ class HooksTest(unittest.TestCase):
         self.assertEqual(report["evaluations"][0]["variables"][0]["invalid_reason"], "init failed: OSError: no disk")
 
     def test_values_contract(self):
-        for values, why in (({"Answer": 1}, "value names that aren't names: ['Answer']"),
+        for values, why in (({"an__swer": 1}, "value names that aren't names: ['an__swer']"),
                             ({"invalid_reason": "x"}, "reserved value names ['invalid_reason']"),
                             ({"answer": [1, 2]}, "values that aren't scalars: ['answer']")):
             with mock.patch.object(Fake, "query", return_value=values):

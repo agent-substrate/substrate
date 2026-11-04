@@ -41,11 +41,18 @@ Scalar = Union[int, float, bool, str, None]
 # Names of evaluations, variables, conditions and values: lower snake case,
 # without "__", which separates a variable from its value in the stats rows.
 NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+# A value's name may also have capitals, so a measurement keeps the name its
+# stats.jsonl row gives it (locust_ResumeActor).
+VALUE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 NAME_MAX = 64
 
 
 def valid_name(name: Any) -> bool:
     return isinstance(name, str) and bool(NAME.match(name)) and "__" not in name and len(name) <= NAME_MAX
+
+
+def valid_value_name(name: Any) -> bool:
+    return isinstance(name, str) and bool(VALUE_NAME.match(name)) and "__" not in name and len(name) <= NAME_MAX
 
 
 @dataclass(frozen=True)

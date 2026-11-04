@@ -36,7 +36,7 @@ from typing import Any, Mapping, Optional
 
 from . import checks
 from .sources import SOURCES
-from .sources.base import NAME, NAME_MAX, valid_name
+from .sources.base import NAME, NAME_MAX, valid_name, valid_value_name
 
 TYPES = ("threshold",)
 EVALUATION_KEYS = {"name", "description", "variables", "conditions"}
@@ -172,7 +172,7 @@ def _condition(c: Any, where: str, variables: Mapping[str, Optional[set[str]]]) 
             return f"{ref!r} is not <variable>.<value>"
         if parts[0] not in variables:
             return f"{ref!r} names no variable of this evaluation ({', '.join(sorted(variables))})"
-        if not valid_name(parts[1]):
+        if not valid_value_name(parts[1]):
             return f"{ref!r}: {parts[1]!r} is not a value name"
         names = variables[parts[0]]
         if names is not None and parts[1] not in names:

@@ -30,7 +30,7 @@ from typing import Any, Mapping, NamedTuple, Optional
 from . import checks
 from .config import Condition, Evaluation, to_json
 from .sources import SOURCES
-from .sources.base import BenchmarkRunContext, Scalar, Source, SourceInvalid, valid_name
+from .sources.base import BenchmarkRunContext, Scalar, Source, SourceInvalid, valid_value_name
 
 # The stats rows report an invalid variable as <variable>__invalid_reason.
 RESERVED_VALUES = {"invalid_reason"}
@@ -111,7 +111,7 @@ def _combine(items: list[dict[str, Any]]) -> tuple[str, list[str], list[str]]:
 
 def _bad_values(values: dict[str, Any]) -> str:
     """What breaks the values contract (names, reserved names, scalar values); "" when nothing does."""
-    if bad := sorted(str(k) for k in values if not valid_name(k)):
+    if bad := sorted(str(k) for k in values if not valid_value_name(k)):
         return f"value names that aren't names: {bad}"
     if taken := sorted(RESERVED_VALUES & set(values)):
         return f"reserved value names {taken}"

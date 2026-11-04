@@ -27,7 +27,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .base import Scalar, Source, SourceInvalid, valid_name
+from .base import Scalar, Source, SourceInvalid, valid_value_name
 
 CFG_KEYS = {"metric", "measurements"}
 NUMBER = re.compile(r"^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$")
@@ -75,8 +75,8 @@ class RunResults(Source):
         if not isinstance(names, list) or not names:
             raise ValueError("needs measurements, a non-empty list of measurement names")
         for name in names:
-            if not valid_name(name):
-                raise ValueError(f"measurements: {name!r} is not a value name (lower snake case, without '__')")
+            if not valid_value_name(name):
+                raise ValueError(f"measurements: {name!r} is not a value name (letters, digits and _, without '__')")
         if len(set(names)) != len(names):
             raise ValueError("measurements: listed twice")
 

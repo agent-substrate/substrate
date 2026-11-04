@@ -47,8 +47,10 @@ checks two envelope health gates:
 ```
 
 - Names match `^[a-z][a-z0-9_]*$`, without `__`, at most 64 characters, and
-  are unique where they live. `summary` is reserved. Unknown keys are errors.
-  There is no version field while the schema is experimental.
+  are unique where they live. A value's name may also have capitals, so a
+  measurement keeps the name its row gives it (`locust_ResumeActor`).
+  `summary` is reserved. Unknown keys are errors. There is no version field
+  while the schema is experimental.
 - A threshold `check` is `{value, op, limit}`. `op` is one of `<= < >= > ==
   !=`; `< <= > >=` compare numbers only, and `==` and `!=` also compare bools
   and strings. `limit` is a literal, or relative: `{ref, times (default 1),
