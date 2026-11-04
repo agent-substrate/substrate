@@ -155,7 +155,7 @@ func (h *Handler) providerCredential(ctx context.Context, ref resources.ActorRef
 			return nil, extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
 		}
 		if provider = h.providers[name]; provider == nil {
-			slog.ErrorContext(ctx, "egress denied: credential URI names a provider this gateway does not serve",
+			slog.ErrorContext(ctx, "egress denied: requested credential provider is not configured",
 				slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("uri", uri),
 				slog.String("provider", name), slog.Any("serves", slices.Sorted(maps.Keys(h.providers))))
 			return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
