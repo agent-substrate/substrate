@@ -35,7 +35,7 @@ RUN_TS = 1791701190  # 2026-10-11T07:26:30Z
 EVALUATIONS = [{
     "name": "goodput_strict",
     "variables": [{"name": "goodput", "source": "cel", "source_cfg": {
-        "records": "sweperf_tasks",
+        "kind": "sweperf_tasks",
         "rules": [
             {"name": "slow_resume", "cel": "task.resume_max_ms <= 1500.0"},
             {"name": "slow_wall", "cel": "task.wall_ms <= 1.5 * baseline.wall_ms"}],
@@ -99,22 +99,21 @@ class RunEvaluationsTest(unittest.TestCase):
 
     def test_judges_the_run_and_appends_rows(self):
         report, metrics, log = self.run_step(args(json.dumps(EVALUATIONS), str(self.dest)))
-        values = report["evaluations"][0]["variables"][0]["values"]
-        self.assertEqual((report["summary"]["status"], values["good"]), ("pass", 1))
-        # No run of t1 under --dest: recorded, and slow_wall skipped.
-        self.assertEqual(values["baseline_note"], f"baseline unavailable: no run of t1 with tag abc under "
-                                                  f"{self.dest}/runs/ in the 6 h before run_ts {RUN_TS}")
-        self.assertEqual((values["baseline_run"], values["rules_skipped"]), ("", "slow_wall"))
+        variable = report["evaluations"][0]["variables"][0]
+        self.assertEqual((report["summary"]["status"], variable["values"]), ("invalid", {}))
+        # No run of t1 under --dest: slow_wall can't judge, and the reason says why.
+        self.assertEqual(variable["invalid_reason"], "rule 'slow_wall' reads baseline.wall_ms, which the run lacks "
+                         f"(baseline unavailable: no run of t1 with tag abc under {self.dest}/runs/ in the 6 h "
+                         f"before run_ts {RUN_TS})")
         self.assertEqual(metrics, ["trial_summary", "evaluation_goodput_strict", "evaluation_summary"])
-        self.assertIn("evaluation goodput_strict: pass", log)
+        self.assertIn("evaluation goodput_strict: invalid (invalid: good_ratio)", log)
 
     def test_paired_run_from_dest(self):
         paired = self.dest / "runs/t1/run_date=2026-10-11" / f"run_ts={RUN_TS - 600}/run_tag=abc"
         write_run(paired / "logs.txt", paired / "stats.jsonl", RUN_TS - 600, wall_ms=4000.0)
         report, _, log = self.run_step(args(json.dumps(EVALUATIONS), str(self.dest)))
         values = report["evaluations"][0]["variables"][0]["values"]
-        self.assertEqual((values["baseline_run"], values["baseline_note"], values["baseline_wall_ms"]),
-                         (str(paired), "", 4000.0))
+        self.assertEqual((values["baseline_run"], values["baseline_wall_ms"]), (str(paired), 4000.0))
         # 8000 ms against 1.5 x the 1-user run's 4000 ms.
         self.assertEqual((values["bad_slow_wall"], report["summary"]["status"]), (1, "fail"))
         self.assertIn("evaluation goodput_strict: fail (failed: good_ratio)", log)

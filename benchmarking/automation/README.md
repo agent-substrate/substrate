@@ -168,8 +168,8 @@ gcloud projects add-iam-policy-binding <TEST_PROJECT_ID> \
 test cluster's project) needs `roles/storage.objectCreator` on the destination
 bucket so `runner.py` can upload results, and `roles/storage.objectViewer` so
 that a `cel` variable with a `baseline_test` can find and read the paired
-1-user run under `--dest` (without it, the evaluation skips its baseline rules
-and says why):
+1-user run under `--dest` (without it, the evaluation is `invalid` and says
+why):
 
 ```bash
 RUNNER_PRINCIPAL="principal://iam.googleapis.com/projects/<TEST_PROJECT_NUMBER>/locations/global/workloadIdentityPools/<TEST_PROJECT_ID>.svc.id.goog/subject/ns/benchmarking/sa/benchmark-runner"
