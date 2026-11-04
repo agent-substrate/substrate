@@ -234,15 +234,16 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		APIAuthzBootstrapOwners:     bootstrapOwners,
 		EgressGatewayExtraSPIFFEIDs: splitList(r.String("ateapi.authz.egressGatewayExtraSPIFFEIDs")),
 
-		StorageBackend:     r.String("storage.backend"),
-		BucketName:         r.String("storage.bucketName"),
-		SnapshotLocation:   r.String("storage.snapshotLocation"),
-		TransferGSAName:    r.String("storage.transferGSAName"),
-		KODockerRepo:       r.String("ko.dockerRepo"),
-		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
-		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
-		ActorJWTIssuer:     actorJWTIssuer,
-		DockerBuildFlags:   strings.Fields(r.String("docker.buildFlags")),
+		StorageBackend:       r.String("storage.backend"),
+		BucketName:           r.String("storage.bucketName"),
+		SnapshotLocation:     r.String("storage.snapshotLocation"),
+		MicroVMAssetLocation: r.String("storage.microVMAssetLocation"),
+		TransferGSAName:      r.String("storage.transferGSAName"),
+		KODockerRepo:         r.String("ko.dockerRepo"),
+		KODefaultPlatforms:   r.String("ko.defaultPlatforms"),
+		ActorJWTAlgorithm:    r.String("actorJWT.algorithm"),
+		ActorJWTIssuer:       actorJWTIssuer,
+		DockerBuildFlags:     strings.Fields(r.String("docker.buildFlags")),
 		Images: images.Source{
 			Repo: strings.TrimSuffix(r.String("images.repo"), "/"),
 			Tag:  r.String("images.tag"),
@@ -465,6 +466,11 @@ func validateStorageBackend(cfg *Config, r *Resolved) error {
 	default:
 		return &InvalidError{Value: backend, Want: strings.Join(
 			[]string{StorageBackendGCS, StorageBackendS3, StorageBackendExternal}, ", ")}
+	}
+	if cfg.MicroVMAssetLocation != "" && cfg.StorageBackend != StorageBackendExternal {
+		location, _ := r.Value("storage.microVMAssetLocation")
+		return &ConflictError{A: location, B: backend,
+			Why: "ate-setup stages the microVM assets itself on " + cfg.StorageBackend}
 	}
 	return nil
 }

@@ -158,6 +158,11 @@ type Config struct {
 	// not set storageLocation.
 	SnapshotLocation string
 
+	// MicroVMAssetLocation is the URI the microvm SandboxConfig fetches guest
+	// assets under when StorageBackend is external, where ate-setup does not
+	// stage them (MICROVM_ASSET_LOCATION).
+	MicroVMAssetLocation string
+
 	// TransferGSAName is the name of the Google service account snapshot
 	// transfers run as on GCS, in ProjectID (SNAPSHOT_TRANSFER_GSA_NAME).
 	// Only the in-tree GCS backend uses it. See TransferServiceAccount.

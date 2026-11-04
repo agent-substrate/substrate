@@ -202,6 +202,21 @@ func TestLoadStorageBackend(t *testing.T) {
 			env:  map[string]string{"STORAGE_BACKEND": "external", "ATE_INSTALL_COMPONENTS": component},
 			want: StorageBackendExternal, wantFrom: OriginEnv,
 		},
+		{
+			name: "external with a microVM asset location",
+			env: map[string]string{"STORAGE_BACKEND": "external", "ATE_INSTALL_COMPONENTS": component,
+				"MICROVM_ASSET_LOCATION": "az://acct/assets"},
+			want: StorageBackendExternal, wantFrom: OriginEnv,
+		},
+		{
+			name: "microVM asset location on gcs", env: map[string]string{"MICROVM_ASSET_LOCATION": "gs://b/assets"},
+			wantErr: []string{"storage.microVMAssetLocation", "stages the microVM assets"},
+		},
+		{
+			name: "microVM asset location on kind", opts: Options{Kind: true},
+			env:     map[string]string{"MICROVM_ASSET_LOCATION": "s3://b/assets"},
+			wantErr: []string{"storage.microVMAssetLocation", "stages the microVM assets"},
+		},
 		{name: "unknown", env: map[string]string{"STORAGE_BACKEND": "azure"}, wantErr: []string{"gcs, s3, external", "STORAGE_BACKEND"}},
 		{name: "s3 off kind", env: map[string]string{"STORAGE_BACKEND": "s3"}, wantErr: []string{"only on kind"}},
 		{name: "gcs on kind", opts: Options{Kind: true}, env: map[string]string{"STORAGE_BACKEND": "gcs"}, wantErr: []string{"rustfs"}},
