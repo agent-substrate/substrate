@@ -210,7 +210,7 @@ func TestStartWriteback(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	if err := StartWriteback([]string{p}, func() { close(done) }); err != nil {
+	if err := StartWriteback([]string{p}, nil, func() { close(done) }); err != nil {
 		t.Fatalf("StartWriteback: %v", err)
 	}
 	select {
@@ -258,7 +258,7 @@ func startFakeWriteback(t *testing.T, pc pageCache) (string, <-chan struct{}) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, nil, func() { close(done) }); err != nil {
 		t.Fatalf("startWriteback: %v", err)
 	}
 	return p, done
@@ -311,6 +311,30 @@ func TestStartWritebackDropsUnlinkedDirtyFile(t *testing.T) {
 	}
 }
 
+func TestStartWritebackWithoutFlush(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 4<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pc := &fakePageCache{}
+	done := make(chan struct{})
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() bool { return false }, func() { close(done) }); err != nil {
+		t.Fatalf("startWriteback: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if got := pc.writeOuts.Load(); got != 0 {
+		t.Fatalf("write-out started %d times without flush, want 0", got)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran after unlinking file")
+	}
+}
+
 func TestStartWritebackStopsWriteOutOnUnlink(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "memory-ranges")
 	if err := os.WriteFile(p, nil, 0o600); err != nil {
@@ -321,7 +345,7 @@ func TestStartWritebackStopsWriteOutOnUnlink(t *testing.T) {
 	}
 	pc := &fakePageCache{onWriteOut: func() { _ = os.Remove(p) }}
 	done := make(chan struct{})
-	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, nil, func() { close(done) }); err != nil {
 		t.Fatalf("startWriteback: %v", err)
 	}
 	select {
@@ -341,7 +365,7 @@ func TestStartWritebackStartsWriteOutRightAway(t *testing.T) {
 	}
 	pc := &fakePageCache{}
 	t.Cleanup(func() { pc.clean.Store(true) })
-	if err := startWriteback(pc, []time.Duration{30 * time.Second}, []string{p}, nil); err != nil {
+	if err := startWriteback(pc, []time.Duration{30 * time.Second}, []string{p}, nil, nil); err != nil {
 		t.Fatalf("startWriteback: %v", err)
 	}
 	deadline := time.Now().Add(10 * time.Second)

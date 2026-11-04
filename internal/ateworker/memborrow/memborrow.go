@@ -102,6 +102,29 @@ func (l *Ledger) Return(n int64) {
 	l.returned = make(chan struct{})
 }
 
+// Tight reports whether the pod has less than n of unbooked or free memory
+// left, so pages borrowed for a write should go to disk now. Without a pod
+// memory limit it reports false: there's no limit to run into, and the
+// kernel writes the pages back on its own.
+func (l *Ledger) Tight(n int64) bool {
+	// nothing was lent, so the pod had no room to spare
+	if l == nil || n <= 0 {
+		return true
+	}
+	limit, unreclaimable, err := l.podMemory()
+	if err != nil {
+		// like take, assume the worst: writing out early only costs disk
+		// bandwidth, not writing out can run the pod out of memory
+		return true
+	}
+	if limit == 0 {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.Unbooked(limit)-l.bytes < n || limit-unreclaimable-margin < n
+}
+
 // Wait holds a newly hosted actor, already counted by Unbooked, until what is
 // borrowed fits in what is still unbooked, so it doesn't grow into dirty page
 // cache.
