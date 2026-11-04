@@ -51,6 +51,13 @@ class ThresholdTest(unittest.TestCase):
         self.assertEqual(checks.threshold(rel, lookup({"v.p90": 1200, "base.p90": 900})).reason,
                          "v.p90 = 1200, needs <= 1500 (2 x base.p90, at_least 1000, at_most 1500)")
 
+    def test_a_limit_that_overflows_is_invalid(self):
+        rel = threshold("v.x", "<=", {"ref": "b.x", "times": 10.0})
+        v = checks.threshold(rel, lookup({"v.x": 1.0, "b.x": 1e308}))
+        self.assertEqual((v.status, v.limit, v.reason), ("invalid", None, "10 x b.x is not a finite number"))
+        clamped = threshold("v.x", "<=", {"ref": "b.x", "times": 10.0, "at_most": 5.0})
+        self.assertEqual(checks.threshold(clamped, lookup({"v.x": 1.0, "b.x": 1e308})).limit, 5.0)
+
     def test_missing_values_are_invalid_never_zero(self):
         v = checks.threshold(threshold("v.x", "<=", 5), lookup({}))
         self.assertEqual((v.status, v.reason), ("invalid", "v.x not measured"))

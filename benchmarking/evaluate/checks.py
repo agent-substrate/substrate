@@ -105,7 +105,8 @@ def _validate_ref(ref: Any, where: str, ref_ok: Callable[[str], Optional[str]]) 
 
 
 def effective_limit(check: Mapping[str, Any], lookup: Callable[[str], Any]) -> Any:
-    """The limit to compare against; raises Missing when a relative limit's ref has no number."""
+    """The limit to compare against; raises Missing when a relative limit's ref
+    has no number, or times the ref isn't a finite number."""
     limit = check["limit"]
     if not isinstance(limit, Mapping):
         return literal(limit)
@@ -117,6 +118,8 @@ def effective_limit(check: Mapping[str, Any], lookup: Callable[[str], Any]) -> A
         v = max(v, float(limit["at_least"]))
     if "at_most" in limit:
         v = min(v, float(limit["at_most"]))
+    if not math.isfinite(v):  # times x ref overflowed, and no clamp caught it
+        raise Missing(f"{_fmt(limit.get('times', 1))} x {limit['ref']} is not a finite number")
     return v
 
 
