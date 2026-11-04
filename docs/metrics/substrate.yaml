@@ -236,7 +236,8 @@ blind_spots:
       above, gRPC requests with a grpc-status other than OK, any response
       flag, and a 1% sample of the rest. The runtime keys
       access_log.min_status and access_log.sample on the admin port restore
-      full logging while you debug.
+      full logging while you debug. An override applies to one replica and
+      lasts until that pod restarts.
   - area: ate-idp-server
     code: cmd/ate-idp-server
     brief: >
