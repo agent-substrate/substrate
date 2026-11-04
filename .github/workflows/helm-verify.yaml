@@ -30,6 +30,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
       - name: Lint the chart
-        run: helm lint charts/substrate charts/substrate-crds charts/substrate-podcert
+        run: helm lint charts/substrate charts/substrate-crds charts/substrate-podcert charts/substrate-atelet
       - name: Verify committed manifests match the chart output
         run: hack/render-manifests.sh --check

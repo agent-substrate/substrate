@@ -1,0 +1,106 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for the substrate-atelet chart.
+#
+# These keys have the same paths and defaults as in the substrate chart, so the
+# values file for the substrate release also configures this one.
+
+# Release name of the substrate chart this atelet serves. Install this chart in
+# that release's namespace. Object names follow the substrate release, so
+# atelet keeps the names the substrate release references.
+substrateReleaseName: substrate
+
+# Preview gates for atelet. Match the substrate release's preview gates.
+preview: []
+
+# Bundled RustFS settings from the substrate release. When enabled, the
+# object-store plugin uses the in-cluster RustFS endpoint and credentials.
+rustfs:
+  enabled: true
+  accessKey: rustfsadmin
+  secretKey: rustfsadmin
+
+# atelet daemonset overrides. Defaults use the in-cluster RustFS deployment for
+# snapshots. Set rustfs.enabled=false and override these fields when using
+# external storage.
+# extraArgs / extraEnv are appended verbatim for installer-specific knobs
+# (e.g. registry replacement for kind).
+atelet:
+  # Host paths for the node's kubelet credential provider. Set both to enable
+  # private registry authentication (GKE: /etc/srv/kubernetes/cri_auth_config.yaml
+  # and /home/kubernetes/bin). Leave empty on nodes without a provider, like Kind.
+  imageCredentialProviderConfig: ""
+  # The config itself, rendered into a ConfigMap, for nodes whose image owns
+  # the kubelet's copy (EKS) and for a provider environment that has to differ
+  # from the kubelet's. Set this or imageCredentialProviderConfig, not both;
+  # either one still needs the bin directory.
+  imageCredentialProviderConfigYAML: ""
+  imageCredentialProviderBinDir: ""
+  storageBackend: s3
+  extraArgs: []
+  extraEnv: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+# Object storage credentials/settings for the node object-store plugin.
+objectStorePlugin:
+  extraEnv: []
+  node:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+
+# OTLP export, following the OpenTelemetry SDK environment variable spec.
+# endpoint applies to every signal; a signal's own endpoint overrides it.
+# A signal exports only when it is enabled and resolves to an endpoint.
+otel:
+  endpoint: ""
+  traces:
+    enabled: true
+    endpoint: ""
+    samplingRatio: 0.01
+  metrics:
+    enabled: true
+    endpoint: ""
+  logs:
+    enabled: true
+    endpoint: ""
+
+# Values under `global` are visible to this chart and to every subchart.
+global:
+  # -- Mirror registry that overrides where every image is pulled from. It wins
+  # over image.registry. Repository paths are preserved.
+  imageRegistry: ""
+  # -- Pull secrets merged (union) into each pod's own imagePullSecrets list.
+  imagePullSecrets: []
+  # -- Fallback imagePullPolicy where a container does not set one.
+  imagePullPolicy: ""
+
+# Pull secrets for every pod this chart renders. Merged with global.imagePullSecrets.
+imagePullSecrets: []
+
+image:
+  # Registry host for the component images, and nothing else. A path inside
+  # `registry` fails the render.
+  registry: ghcr.io
+  # Image path prefix under the registry, ahead of each component name.
+  repository: kagent-dev/substrate
+  tag: ""

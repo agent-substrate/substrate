@@ -18,10 +18,12 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -228,5 +230,70 @@ func TestHelmGVisorSandboxConfigMatchesManifest(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Spec, want.Spec) {
 		t.Errorf("Helm sandbox config must match the runtime assets in the upstream manifest: got %+v, want %+v", got.Spec, want.Spec)
+	}
+}
+
+// helmTemplate returns the rendered manifests without their "# Source:"
+// comments, which name the chart. It reads stdout only, because Helm logs the
+// substrate-atelet chart's symlinked templates on stderr.
+func helmTemplate(t *testing.T, args ...string) string {
+	t.Helper()
+	var stderr strings.Builder
+	cmd := exec.CommandContext(t.Context(), "helm", append([]string{"template"}, args...)...)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("helm template %v: %v\n%s", args, err, stderr.String())
+	}
+	return regexp.MustCompile(`(?m)^# Source: .*\n`).ReplaceAllString(string(out), "")
+}
+
+func TestHelmAteletChartMatchesSubstrateChart(t *testing.T) {
+	for _, tc := range []struct {
+		name, release, namespace string
+		values                   []string
+	}{
+		{name: "defaults", release: "substrate", namespace: "ate-system"},
+		{
+			name:      "shared values",
+			release:   "team",
+			namespace: "custom",
+			values: []string{
+				"--set", "preview[0]=ALL",
+				"--set", "otel.endpoint=http://collector:4317",
+				"--set", "rustfs.enabled=false",
+				"--set", "ateApi.snapshotLocation=gs://snapshots/",
+				"--set", "atelet.storageBackend=gcs",
+				"--set", "image.tag=test",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := helmTemplate(t, append([]string{tc.release, "../../charts/substrate", "-n", tc.namespace,
+				"--show-only", "templates/atelet.yaml"}, tc.values...)...)
+			got := helmTemplate(t, append([]string{"atelet", "../../charts/substrate-atelet", "-n", tc.namespace,
+				"--set", "substrateReleaseName=" + tc.release}, tc.values...)...)
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("substrate-atelet renders a different atelet than the substrate chart (-substrate +substrate-atelet):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestHelmAteletOptOut(t *testing.T) {
+	out := helmTemplate(t, "substrate", "../../charts/substrate", "--set", "atelet.enabled=false")
+	for _, doc := range strings.Split(out, "\n---\n") {
+		var obj struct {
+			Kind     string
+			Metadata struct{ Name string }
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatal(err)
+		}
+		// The NetworkPolicy still guards an atelet installed by substrate-atelet.
+		if obj.Kind == "DaemonSet" || obj.Kind == "PriorityClass" ||
+			(obj.Kind != "NetworkPolicy" && strings.HasPrefix(obj.Metadata.Name, "atelet")) {
+			t.Errorf("atelet.enabled=false still renders %s %s", obj.Kind, obj.Metadata.Name)
+		}
 	}
 }

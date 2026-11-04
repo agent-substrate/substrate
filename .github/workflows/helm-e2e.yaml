@@ -101,6 +101,18 @@ jobs:
           --set image.tag=helm-e2e \
           --set 'preview[0]=ALL' \
           --set 'atenetRouter.ingressAllowedSPIFFEIDs[0]=spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client' \
+          --set atelet.enabled=false \
+          --set otel.endpoint=http://opentelemetry-collector.otel-system.svc:4317 \
+          --wait --timeout=10m
+    - name: Install atelet as a separate release
+      # TestHelmAteletChartMatchesSubstrateChart checks that this release
+      # renders the same atelet as the substrate chart.
+      run: |
+        helm upgrade --install substrate-atelet charts/substrate-atelet \
+          --namespace ate-system \
+          --set image.registry=localhost:5001 \
+          --set image.tag=helm-e2e \
+          --set 'preview[0]=ALL' \
           --set 'atelet.extraArgs[0]=--localhost-registry-replacement=kind-registry:5000' \
           --set 'atelet.extraArgs[1]=--snapshot-upload-delay=2s' \
           --set 'atelet.extraArgs[2]=--snapshot-detach-delay=30s' \

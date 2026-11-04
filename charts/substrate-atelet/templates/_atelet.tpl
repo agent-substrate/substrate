@@ -1,0 +1,1 @@
+../../substrate/templates/_atelet.tpl

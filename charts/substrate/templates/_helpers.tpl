@@ -33,14 +33,18 @@ The check is on the literal release name "substrate" rather than
 $ctx.Chart.Name so this helper is context-safe: a parent chart can invoke it
 with its own `.` (where .Chart.Name is the parent, not "substrate") and still
 get the same prefixed name that this subchart's own templates render.
+
+The substrate-atelet chart sets substrateReleaseName to the substrate release
+it serves, so its names match the ones that release renders and references.
 */}}
 {{- define "substrate.fullname" -}}
 {{- $name := index . 0 -}}
 {{- $ctx := index . 1 -}}
-{{- if eq $ctx.Release.Name "substrate" -}}
+{{- $release := $ctx.Values.substrateReleaseName | default $ctx.Release.Name -}}
+{{- if eq $release "substrate" -}}
 {{- $name -}}
 {{- else -}}
-{{- printf "%s-%s" $ctx.Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" $release $name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 

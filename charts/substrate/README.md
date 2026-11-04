@@ -36,6 +36,10 @@ interception. Create the `egress-mitm-ca-pool` Secret and configure actor trust
 as described in the [credential provider setup](../../docs/kubernetes-credential-provider.md).
 Namespace grants default to an empty list, denying credential access.
 
+This chart installs atelet by default. To upgrade atelet on its own schedule,
+set `atelet.enabled=false` and install the
+[substrate-atelet](../substrate-atelet/README.md) chart as a second release.
+
 ## Render manifests without applying
 
 ```bash
@@ -62,6 +66,7 @@ See `values.yaml` for the full set; the important keys:
 | `<component>.resources` | see `values.yaml` | Requests and limits for each container, e.g. `ateApi.resources` and `atenetRouter.agentgateway.resources` |
 | `rustfs.enabled` | `true` | Deploy an in-cluster S3-compatible RustFS bucket for snapshots |
 | `ateApi.snapshotLocation` | `""` | Cluster-wide snapshot URI; defaults to `gs://<rustfs.bucket>/` with bundled RustFS |
+| `atelet.enabled` | `true` | Set to `false` to install atelet with the [substrate-atelet](../substrate-atelet/README.md) chart and upgrade it separately |
 | `atelet.storageBackend` | `s3` | Default snapshot backend, wired to RustFS when `rustfs.enabled=true` |
 | `atelet.imageCredentialProviderConfig` | `""` | Host path to the kubelet credential provider config; set together with the bin directory |
 | `atelet.imageCredentialProviderConfigYAML` | `""` | Credential provider config as text, rendered into a ConfigMap, for nodes where that file cannot be authored or must differ from the kubelet's; mutually exclusive with the host path |

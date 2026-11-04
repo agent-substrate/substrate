@@ -28,7 +28,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 package_dir="$(mktemp -d)"
 trap 'rm -rf "${package_dir}"' EXIT
 version="${VERSION#v}"
-charts=(substrate-crds substrate substrate-podcert)
+charts=(substrate-crds substrate substrate-podcert substrate-atelet)
 
 # Package the complete set before writing to the registry.
 for chart in "${charts[@]}"; do
