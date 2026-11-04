@@ -72,7 +72,7 @@ def threshold(value: str, op: str, limit) -> dict:
 
 def evaluations(limit: float = 90) -> list[dict]:
     """goodput_strict against the run of t1 (the 1-user run), and an envelope check."""
-    goodput_cfg = {"records": "sweperf_tasks", "rules": [
+    goodput_cfg = {"kind": "sweperf_tasks", "rules": [
         {"name": "slow_resume", "cel": "task.resume_max_ms <= 1500.0"},
         {"name": "slow_wall", "cel": "task.wall_ms <= 1.5 * baseline.wall_ms"}],
         "values": {"good_ratio_pct": "round(100.0 * good / records, 2)"}, "baseline_test": "t1"}
@@ -88,8 +88,9 @@ def evaluations(limit: float = 90) -> list[dict]:
     ]
 
 
-def goodput_values(out: Path) -> dict:
-    return json.loads((out / "evaluation.json").read_text())["evaluations"][0]["variables"][0]["values"]
+def goodput(out: Path) -> dict:
+    """The goodput variable of the evaluation.json in out."""
+    return json.loads((out / "evaluation.json").read_text())["evaluations"][0]["variables"][0]
 
 
 class CliTest(unittest.TestCase):
@@ -114,9 +115,8 @@ class CliTest(unittest.TestCase):
             self.assertEqual(len(rows), 3)
             # t1's run is the baseline: a2's 13 s is over 1.5 x its 8.5 s median.
             self.assertIn("evaluation goodput_strict: fail (failed: good_ratio)", printed)
-            values = goodput_values(out)
-            self.assertEqual((values["baseline_run"], values["baseline_note"], values["bad_slow_wall"]),
-                             (str(t1), "", 1))
+            values = goodput(out)["values"]
+            self.assertEqual((values["baseline_run"], values["bad_slow_wall"]), (str(t1), 1))
             report = json.loads((out / "evaluation.json").read_text())
             self.assertEqual((report["run"]["test_name"], report["run"]["run_ts"]), ("t150", str(T0 + 600)))
             self.assertFalse((run / "evaluation.json").exists())  # never writes into the stored run
@@ -129,11 +129,12 @@ class CliTest(unittest.TestCase):
     def test_paired_runs_need_the_runners_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            stored(root, "t1", T0)
+            t1 = stored(root, "t1", T0)
             flat = write_run(root / "flat", [record(10, "a1")])
             rc, _, _ = self.run_cli(str(flat), "--evaluations", json.dumps(evaluations()), "--out", str(root / "o1"))
             self.assertEqual(rc, 0)
-            self.assertEqual(goodput_values(root / "o1")["baseline_note"], "baseline unavailable: no run of t1 to pair with")
+            self.assertEqual(goodput(root / "o1")["invalid_reason"], "rule 'slow_wall' reads baseline.wall_ms, which the "
+                             "run lacks (baseline unavailable: no run of t1 to pair with)")
             # A symlink into a runs/ tree is stored there: its path gives the identity and the dest.
             link = Path(rundir.run_uri(tmp, "t150", "2026-10-11", str(T0 + 600), TAG))
             link.parent.mkdir(parents=True)
@@ -142,7 +143,7 @@ class CliTest(unittest.TestCase):
             self.assertEqual(rc, 0)
             report = json.loads((root / "o2" / "evaluation.json").read_text())
             self.assertEqual(report["run"]["run_ts"], str(T0 + 600))
-            self.assertEqual(goodput_values(root / "o2")["baseline_note"], "")
+            self.assertEqual(goodput(root / "o2")["values"]["baseline_run"], str(t1))
 
     def test_gcs_run(self):
         """A gs:// RUN is copied, and its paired run found and copied, under the same gs:// dest."""
@@ -164,7 +165,7 @@ class CliTest(unittest.TestCase):
                  mock.patch.object(rundir, "_gcs_copy", side_effect=gcs_copy):
                 rc, _, _ = self.run_cli(uri, "--evaluations", json.dumps(evaluations()), "--out", f"{tmp}/out")
             self.assertEqual(rc, 0)
-            values = goodput_values(Path(tmp) / "out")
+            values = goodput(Path(tmp) / "out")["values"]
             self.assertEqual((values["baseline_run"], values["good"]), (f"gs://b/{t1.relative_to(bucket)}", 2))
 
     def test_exit_codes(self):
