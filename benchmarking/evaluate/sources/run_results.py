@@ -19,10 +19,12 @@
     measurements: [aggregate_failure_ratio]  # returned as values under the same names
 
 stats.jsonl keeps measurements as strings: numeric strings become numbers,
-"true" and "false" bools, and a measurement the row lacks is None (not measured).
+"true" and "false" bools, and a measurement the row lacks is None (not
+measured), as is a number that isn't finite.
 """
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -50,14 +52,14 @@ def read_stats(path: Optional[Path]) -> dict[str, dict[str, Any]]:
 
 
 def coerce(v: Any) -> Scalar:
-    """A measurement as a value: numbers (and numeric strings) as float, "true"/"false" as bool."""
+    """A measurement as a value: numbers (and numeric strings) as float, "true"/"false" as bool.
+    A number that isn't finite (NaN, an infinity, "1e999") is None: JSON has no such number."""
     if v is None or isinstance(v, bool):
         return v
-    if isinstance(v, (int, float)):
-        return float(v)
+    if isinstance(v, (int, float)) or (isinstance(v, str) and NUMBER.match(v)):
+        x = float(v)
+        return x if math.isfinite(x) else None
     if isinstance(v, str):
-        if NUMBER.match(v):
-            return float(v)
         if v.strip().lower() in ("true", "false"):
             return v.strip().lower() == "true"
         return v

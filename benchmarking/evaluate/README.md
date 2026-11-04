@@ -90,7 +90,7 @@ source_cfg:
 ```
 
 Numeric strings become numbers and `"true"`/`"false"` bools; a measurement the
-row lacks is null.
+row lacks, or a number that isn't finite (NaN, an infinity, `1e999`), is null.
 
 ## Outputs
 

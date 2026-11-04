@@ -32,7 +32,7 @@ SUMMARY_METRIC = "evaluation_summary"
 def write_evaluation_json(report: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+        json.dump(report, f, indent=2, allow_nan=False)
         f.write("\n")
 
 
@@ -81,7 +81,7 @@ def stats_rows(report: dict[str, Any], timestamp: str, tag: str, test_name: str)
 def append_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        f.writelines(json.dumps(r) + "\n" for r in rows)
+        f.writelines(json.dumps(r, allow_nan=False) + "\n" for r in rows)
 
 
 def summary_lines(report: dict[str, Any]) -> list[str]:

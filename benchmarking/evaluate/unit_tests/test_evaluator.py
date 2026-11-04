@@ -185,6 +185,14 @@ class RunResultsTest(unittest.TestCase):
             self.assertEqual(self.query(run, {"metric": "server_summary", "measurements": ["oom_events_node", "mode"]}),
                              {"oom_events_node": None, "mode": "async"})
 
+    def test_numbers_that_are_not_finite_are_null(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = write_run(Path(tmp))
+            with open(run.files["stats.jsonl"], "a", encoding="utf-8") as f:  # bare NaN and Infinity parse too
+                f.write('{"metric": "m", "measurements": {"nan": NaN, "inf": -Infinity, "big": "1e999", "ok": "2"}}\n')
+            self.assertEqual(self.query(run, {"metric": "m", "measurements": ["nan", "inf", "big", "ok"]}),
+                             {"nan": None, "inf": None, "big": None, "ok": 2.0})
+
     def test_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = write_run(Path(tmp))
@@ -241,6 +249,11 @@ class EvaluateTest(unittest.TestCase):
         self.assertEqual(report["summary"]["status"], "pass")
         self.assertEqual(outputs.stats_rows(report, "ts", TAG, "t")[0]["measurements"]["phases__locust_ResumeActor"],
                          "812.5")
+
+    def test_evaluation_json_refuses_nan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "not JSON compliant"):
+                outputs.write_evaluation_json({"value": float("nan")}, Path(tmp) / "evaluation.json")
 
     def test_null_measurement_is_invalid_not_zero(self):
         """A measurement recorded as null (e.g. a Prometheus-backed count on a cluster without
