@@ -107,6 +107,11 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, e
 	if err != nil {
 		return nil, err
 	}
+	// Volumes hold what the latest suspend wrote. Pairing them with an older
+	// snapshot's guest memory would make a tag that never existed.
+	if len(volumes) > 0 && snapshot.GetGeneration() != latestSnapshot(actor.GetStatus(), func(*ateapi.Snapshot) bool { return true }).GetGeneration() {
+		return nil, apierror.FailedPrecondition("Actor %s's latest snapshot is not durable, so its external volumes cannot be tagged with an older one", actorRef)
+	}
 
 	reserved, err := w.ensureTagReserved(leaseCtx, tagRef, actor, snapshot, tag)
 	if err != nil {
