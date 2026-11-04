@@ -32,6 +32,7 @@ SUITES=(
   "benchmarking/analysis ."
   "benchmarking/automation ."
   "benchmarking/locust unit_tests"
+  "benchmarking/nighthawk-egress tests"
   "benchmarking/nighthawk-ingress tests"
   "benchmarking/workloads/manifests/sweperf ."
 )

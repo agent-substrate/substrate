@@ -1114,19 +1114,19 @@ func TestEgressPolicyFromManifest_NighthawkEgress(t *testing.T) {
 		Rules: []*ateapi.EgressRule{
 			{
 				Http: &ateapi.HttpRule{
-					Hostnames: []string{"*"},
+					Hostnames: []string{"nighthawk-server.nighthawk.svc", "nighthawk-server.nighthawk.svc.cluster.local"},
 					Ports:     &ateapi.Ports{Numbers: []int32{80}},
 				},
 			},
 			{
 				Https: &ateapi.HttpsRule{
-					Hostnames: []string{"*"},
+					Hostnames: []string{"nighthawk-server.nighthawk.svc", "nighthawk-server.nighthawk.svc.cluster.local"},
 					Ports:     &ateapi.Ports{Numbers: []int32{443}},
 				},
 			},
 			{
 				TlsPassthrough: &ateapi.TlsPassthroughRule{
-					Hostnames: []string{"*"},
+					Hostnames: []string{"nighthawk-server.nighthawk.svc", "nighthawk-server.nighthawk.svc.cluster.local"},
 					Ports:     &ateapi.Ports{Numbers: []int32{8443}},
 				},
 			},

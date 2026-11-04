@@ -16,25 +16,29 @@
 # NOT a Kubernetes CRD) for Nighthawk traffic-driver actors in the `nighthawk`
 # atespace. Applied to an actor with:
 #   kubectl-ate create egress-policy <actor-name> -a nighthawk -f egress-policy.yaml
+# Actor /etc/resolv.conf sets ndots:5 (internal/ateworker/actornet/resolvconf.go), so atunnel/dns (internal/atunnel/dns/evaluator.go:66-80) receives a query for nighthawk-server.nighthawk.svc.cluster.local while Envoy matches SNI/Host nighthawk-server.nighthawk.svc.
 metadata:
   atespace: nighthawk
   name: default
 rules:
 - http:
     hostnames:
-    - "*"
+    - "nighthawk-server.nighthawk.svc"
+    - "nighthawk-server.nighthawk.svc.cluster.local"
     ports:
       numbers:
       - 80
 - https:
     hostnames:
-    - "*"
+    - "nighthawk-server.nighthawk.svc"
+    - "nighthawk-server.nighthawk.svc.cluster.local"
     ports:
       numbers:
       - 443
 - tlsPassthrough:
     hostnames:
-    - "*"
+    - "nighthawk-server.nighthawk.svc"
+    - "nighthawk-server.nighthawk.svc.cluster.local"
     ports:
       numbers:
       - 8443
