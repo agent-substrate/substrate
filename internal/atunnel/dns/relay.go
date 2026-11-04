@@ -48,7 +48,7 @@ type Relay struct {
 // NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
 // It reports its metrics on meter.
 func NewRelay(resolvConfPath string, meter metric.Meter) (*Relay, error) {
-	upstreams, search, err := readResolvConf(resolvConfPath)
+	upstreams, err := resolvConfNameservers(resolvConfPath)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func NewRelay(resolvConfPath string, meter metric.Meter) (*Relay, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.instruments, err = newInstruments(meter, search); err != nil {
+	if r.instruments, err = newInstruments(meter); err != nil {
 		return nil, err
 	}
 	return r, nil

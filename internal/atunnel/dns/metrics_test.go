@@ -18,7 +18,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -69,47 +68,36 @@ func collectQueries(t *testing.T, reader *sdkmetric.ManualReader) map[string]int
 // policy and is not counted.
 func TestQueriesCountsPolicyDecisions(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
-	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("ateworker-gvisor")
-	inst, err := newInstruments(meter, []string{"ate-workers.svc.cluster.local", "SVC.Cluster.Local."})
+	inst, err := newInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("ateworker-gvisor"))
 	if err != nil {
 		t.Fatalf("newInstruments: %v", err)
 	}
 	lim := newLimiter()
-	allow := func(q dnsmessage.Question) bool { return !strings.HasPrefix(q.Name.String(), "blocked.") }
+	allow := func(q dnsmessage.Question) bool { return q.Name.String() != "blocked.example.com." }
 	h := newDNSHandler(newPendingRequests(lim), lim, allow, inst)
+	upstreams := []string{"10.96.0.10:53"}
 
-	for i, name := range []string{
-		"example.com.",
-		"example.com.svc.cluster.local.",
-		"blocked.example.com.",
-		"blocked.notsvc.cluster.local.",
-		"blocked.example.com.ate-workers.svc.cluster.local.",
-		"Blocked.Example.COM.svc.CLUSTER.local.",
-	} {
-		raw, _ := dnsQueryForName(t, uint16(i), name)
-		h.onTCPRequest(raw)
-	}
-	allowed, _ := dnsQueryForName(t, 100, "example.com.")
-	h.onUDPRequest(allowed, nil, []string{"10.96.0.10:53"})
-	denied, _ := dnsQueryForName(t, 101, "blocked.example.com.")
-	h.onUDPRequest(denied, nil, []string{"10.96.0.10:53"})
-	h.onTCPRequest(buildTestMessage(t, dnsmessage.Header{ID: 102}, nil))
+	allowed, _ := dnsQueryForName(t, 1, "example.com.")
+	denied, _ := dnsQueryForName(t, 2, "blocked.example.com.")
+	h.onUDPRequest(allowed, nil, upstreams)
+	h.onTCPRequest(allowed)
+	h.onUDPRequest(denied, nil, upstreams)
+	h.onTCPRequest(denied)
+	h.onTCPRequest(buildTestMessage(t, dnsmessage.Header{ID: 3}, nil))
 
 	want := map[string]int64{
-		ateattr.DNSDecisionAllowed:            3,
-		ateattr.DNSDecisionDenied:             3,
-		ateattr.DNSDecisionDeniedSearchDomain: 2,
+		ateattr.DNSDecisionAllowed: 2,
+		ateattr.DNSDecisionDenied:  2,
 	}
 	if diff := cmp.Diff(want, collectQueries(t, reader)); diff != "" {
 		t.Errorf("ate.dns.queries mismatch (-want +got):\n%s", diff)
 	}
 }
 
-// TestNewRelayCountsQueries: a relay from NewRelay counts on its meter and
-// takes the search domains from the resolv.conf it reads.
+// TestNewRelayCountsQueries: a relay from NewRelay counts on its meter.
 func TestNewRelayCountsQueries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "resolv.conf")
-	if err := os.WriteFile(path, []byte("search ate-workers.svc.cluster.local\nnameserver 127.0.0.1\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("nameserver 127.0.0.1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reader := sdkmetric.NewManualReader()
@@ -117,22 +105,17 @@ func TestNewRelayCountsQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRelay: %v", err)
 	}
-	// The actor has no policy, so the relay answers every query itself.
+	// The actor has no policy, so the relay answers the query itself.
 	_, udpAddr, _ := serveLoopbackWithPolicy(t, relay, staticPolicy{})
 	conn := dialRelay(t, "udp", udpAddr)
 
-	for i, name := range []string{"example.com.", "example.com.ate-workers.svc.cluster.local."} {
-		query, q := dnsQueryForName(t, uint16(i), name)
-		if _, err := conn.Write(query); err != nil {
-			t.Fatal(err)
-		}
-		checkAnswerForQuestion(t, readWithin(t, conn), uint16(i), q, dnsmessage.RCodeNameError)
+	query, q := dnsQueryForName(t, 1, "example.com.")
+	if _, err := conn.Write(query); err != nil {
+		t.Fatal(err)
 	}
+	checkAnswerForQuestion(t, readWithin(t, conn), 1, q, dnsmessage.RCodeNameError)
 
-	want := map[string]int64{
-		ateattr.DNSDecisionDenied:             1,
-		ateattr.DNSDecisionDeniedSearchDomain: 1,
-	}
+	want := map[string]int64{ateattr.DNSDecisionDenied: 1}
 	if diff := cmp.Diff(want, collectQueries(t, reader)); diff != "" {
 		t.Errorf("ate.dns.queries mismatch (-want +got):\n%s", diff)
 	}

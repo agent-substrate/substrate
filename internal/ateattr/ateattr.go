@@ -243,9 +243,8 @@ const (
 // Values for DNSDecisionKey: whether the actor's egress policy let the sandbox
 // DNS relay forward a query. The relay answers a denied query with NXDOMAIN.
 const (
-	DNSDecisionAllowed            = "allowed"
-	DNSDecisionDenied             = "denied"
-	DNSDecisionDeniedSearchDomain = "denied_search_domain"
+	DNSDecisionAllowed = "allowed"
+	DNSDecisionDenied  = "denied"
 )
 
 // Values for FileCacheNameKey.
