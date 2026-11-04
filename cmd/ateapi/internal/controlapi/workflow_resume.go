@@ -103,7 +103,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	actor = created
 	// A deleted template can be recreated under the same name without an
 	// UpdateActor. Reject missing volume records before booking a worker.
-	if _, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil); err != nil {
+	if _, err := externalVolumesForTemplate(actorTemplate, actor); err != nil {
 		return nil, false, apierror.FailedPrecondition("actor %s does not match its template: %v", actorRef, err)
 	}
 	var worker *ateapi.Worker

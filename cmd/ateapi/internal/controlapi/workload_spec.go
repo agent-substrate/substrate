@@ -135,44 +135,48 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapi.ActorTemplate, actor *a
 // volumeMounts. volumePublishContexts carries the attachment metadata of the current
 // resume by volume name; it is nil on paths that do not mount.
 func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi.ActorTemplate, actor *ateapi.Actor, volumePublishContexts map[string]map[string]string) error {
-	if template == nil {
-		return nil
+	volumes, err := externalVolumesForTemplate(template, actor)
+	if err != nil {
+		return err
 	}
-	for _, vol := range template.GetVolumes() {
-		if vol.GetExternal().GetTemplate() != nil {
-			if !isVolumeMounted(vol.GetName(), template) {
-				continue
-			}
-			if actor == nil {
-				return fmt.Errorf("actor is required when an external volume is present")
-			}
-
-			var storageVolID string
-			var volType string
-			var volCtx map[string]string
-			for _, dbVol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
-				if dbVol.GetName() == vol.GetName() {
-					storageVolID = dbVol.GetStorageVolumeId()
-					volType = dbVol.GetVolumeType()
-					volCtx = dbVol.GetVolumeContext()
-					break
-				}
-			}
-			if storageVolID == "" {
-				return fmt.Errorf("volume %s not found for actor %s", vol.GetName(), actor.GetMetadata().GetName())
-			}
-			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-				Name: vol.GetName(),
-				External: &ateletpb.ExternalVolumeSource{
-					StorageVolumeId: storageVolID,
-					VolumeType:      volType,
-					VolumeContext:   volCtx,
-					PublishContext:  volumePublishContexts[vol.GetName()],
-				},
-			})
-		}
+	for _, vol := range volumes {
+		workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+			Name: vol.GetName(),
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: vol.GetStorageVolumeId(),
+				VolumeType:      vol.GetVolumeType(),
+				VolumeContext:   vol.GetVolumeContext(),
+				PublishContext:  volumePublishContexts[vol.GetName()],
+			},
+		})
 	}
 	return nil
+}
+
+// externalVolumesForTemplate resolves each mounted external volume to its
+// provisioned record. Resume also calls it before assigning a worker.
+func externalVolumesForTemplate(template *ateapi.ActorTemplate, actor *ateapi.Actor) ([]*ateapi.ExternalVolumeStatus, error) {
+	var volumes []*ateapi.ExternalVolumeStatus
+	for _, vol := range template.GetVolumes() {
+		if vol.GetExternal().GetTemplate() == nil || !isVolumeMounted(vol.GetName(), template) {
+			continue
+		}
+		if actor == nil {
+			return nil, fmt.Errorf("actor is required when an external volume is present")
+		}
+		var recorded *ateapi.ExternalVolumeStatus
+		for _, dbVol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+			if dbVol.GetName() == vol.GetName() {
+				recorded = dbVol
+				break
+			}
+		}
+		if recorded == nil || recorded.GetStorageVolumeId() == "" {
+			return nil, fmt.Errorf("volume %s not found for actor %s", vol.GetName(), actor.GetMetadata().GetName())
+		}
+		volumes = append(volumes, recorded)
+	}
+	return volumes, nil
 }
 
 func isVolumeMounted(volumeName string, template *ateapi.ActorTemplate) bool {
