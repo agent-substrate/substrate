@@ -102,17 +102,27 @@ The schema is updated with `ate-api-server`, and migrations follow [postgresql-s
 
 ### Data on nodes and in snapshots
 
-This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the file systems. On gVisor, `runsc` writes those file systems as `fscheckpoint` bundles (see [SandboxConfig](#sandboxconfig)). On microVM, `ateworker-microvm` writes them as tar files, which are Substrate's own data and follow the snapshot rules below.
+After an upgrade or a rollback, a release reads state that another release wrote, whether that is a different component or the same component. How long the state lives decides which rule it follows.
 
-This section is about data one release writes and another release reads, whether that is a different component or the same component after an upgrade or a rollback. Substrate's data comes in two kinds, by how long it lives.
+#### On the node
 
-* Data on the node: the directory layout and the files `atelet` keeps there.
-  * What N writes, N+1 can read. What N+1 writes, N can read.
-  * So a layout change takes two minor releases: the first reads the old and the new layout but still writes the old one, and the next writes the new one. This keeps a rollback possible. Neither step can go in a patch release: an upgrade can skip patch releases, and a rollback can land on any of them.
-  * `atelet` passes the per-actor directories to `ateworker` in the RPC. `ateworker` also reads some files `atelet` writes under the paths in `internal/nodepath`, such as `sandbox-runtimes.json`, and rejects fields it does not know in them. So a new field in those files follows the two-step rule of the RPC: `ateworker` learns it in one minor release, and `atelet` writes it from the next. The sockets `atelet` and `ateworker` use to reach each other do not change within a major.
-* Data in snapshots: `manifest.json`, which `atelet` writes and reads.
-  * Within a major, a release reads the snapshot data any earlier release of that major wrote.
-  * A new field must be safe to ignore. A release ignores manifest fields it does not know, so a snapshot taken at N+1 still restores after a rollback to N.
+`atelet` keeps a directory layout and files on each node. What N writes, N+1 can read, and what N+1 writes, N can read, so a rollback keeps working.
+
+* A layout change takes two minor releases: the first reads the old and the new layout but still writes the old one, and the next writes the new one. Neither step can go in a patch release, because an upgrade can skip patch releases and a rollback can land on any of them.
+* `atelet` passes the per-actor directories to `ateworker` in the RPC. `ateworker` also reads some files `atelet` writes under the paths in `internal/nodepath`, such as `sandbox-runtimes.json`, and rejects fields it does not know in them. So a new field in those files follows the two-step rule of the RPC: `ateworker` learns it in one minor release, and `atelet` writes it from the next.
+* The sockets `atelet` and `ateworker` use to reach each other do not change within a major.
+
+#### In snapshots
+
+A snapshot can stay in storage for months, so most of it stays readable for the whole major. It has three parts.
+
+* `manifest.json`, which `atelet` writes and reads. Within a major, a release reads the manifest any earlier release of that major wrote. A new field must be safe to ignore: a release ignores manifest fields it does not know, so a snapshot taken at N+1 still restores after a rollback to N.
+* The file systems. On microVM, `ateworker-microvm` writes them as tar files, which follow the manifest rule. On gVisor, `runsc` writes them as `fscheckpoint` bundles, which follow `runsc`'s own rules (see [SandboxConfig](#sandboxconfig)).
+* The memory state. It restores only with the snapshot's sandbox version (see [SandboxConfig](#sandboxconfig)) and the same spec `ateworker` gave the runtime: mounts, process user and working directory, capabilities.
+  * A spec change takes two minor releases, like a layout change: the first renders both specs but keeps giving new actors the old one, and the next switches. `manifest.json` records each snapshot's spec. So memory survives the roll and a rollback.
+  * An urgent change, such as a security fix, may drop memory state for old snapshots instead. It must not crash them.
+
+<!-- TODO(#3501): A restore cannot drop memory state for a spec it cannot render yet, so today such a snapshot crashes the actor. -->
 
 ### System bundle
 
