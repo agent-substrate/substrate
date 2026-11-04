@@ -14,8 +14,8 @@
 
 // This file implements the CredentialProvider plugin API backed by Kubernetes
 // Secrets. It resolves ate-secret:// URIs of the provider "k8s.io" to a Secret
-// value read from the Kubernetes API. Substrate never stores the secret at rest;
-// the provider only keeps each Secret in memory for --secret-cache-ttl.
+// value read from the Kubernetes API. Substrate never stores the secret at
+// rest, and the provider reuses each Secret it reads for --secret-cache-ttl.
 package main
 
 import (
