@@ -1,0 +1,45 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# An example component that replaces both objectstore-plugin sidecars with a
+# provider's own plugin. Upload the microVM guest assets to the asset location,
+# then install it with
+#
+#   go run ./cmd/ate-setup deploy ate-system --storage-backend=external \
+#     --component=docs/examples/object-store-provider-component \
+#     --snapshot-location=SCHEME://BUCKET/PREFIX/ \
+#     --microvm-asset-location=SCHEME://BUCKET/ASSET_PREFIX
+#
+# docs/reference/object-store-plugin-sidecar.md describes what the sidecars
+# must keep. cmd/ate-setup's render tests compose this component, so a change
+# to that contract fails them.
+
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: node-sidecar.yaml
+    target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: atelet
+      namespace: ate-system
+  - path: control-sidecar.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: ate-api-server
+      namespace: ate-system
