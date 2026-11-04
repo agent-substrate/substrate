@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package authz
+// Package pgfga is the PostgreSQL OpenFGA datastore that joins atepg's
+// transactions.
+package pgfga
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/postgres"
@@ -30,7 +34,7 @@ import (
 
 // ErrNoTransactionInContext is returned by ReadPage and Write when called
 // without an active pgx.Tx injected via ContextWithTx.
-var ErrNoTransactionInContext = errors.New("authz datastore: active pgx.Tx required in context")
+var ErrNoTransactionInContext = errors.New("pgfga: active pgx.Tx required in context")
 
 // NOTE: The SQL query and tuple write/delete/changelog execution helpers in this
 // file are 1:1 adaptations of unexported methods and package-private types in
@@ -58,7 +62,7 @@ var ErrNoTransactionInContext = errors.New("authz datastore: active pgx.Tx requi
 //   - ReadAuthorizationModel uses the active pgx.Tx when present in ctx (e.g.
 //     when fgaServer.Write validates tuples against the model), and falls back
 //     to the connection pool when called outside a transaction (e.g. during
-//     fgaServer.Check or EnsureStoreAndModel).
+//     fgaServer.Check or authz.EnsureStoreAndModel).
 //   - All other datastore methods (e.g. Read, ReadUserTuple, ReadUsersetTuples)
 //     are inherited from the embedded *postgres.Datastore and run on the pool.
 
@@ -68,9 +72,17 @@ type transactionalDatastore struct {
 	*postgres.Datastore
 }
 
-// newTransactionalDatastore wraps ds with transaction-awareness.
-func newTransactionalDatastore(ds *postgres.Datastore) *transactionalDatastore {
-	return &transactionalDatastore{Datastore: ds}
+// New returns an OpenFGA datastore on pool whose ReadPage and Write run on the
+// pgx.Tx that ContextWithTx put in ctx. Closing it leaves pool open.
+func New(pool *pgxpool.Pool) (storage.OpenFGADatastore, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("postgres pool must not be nil")
+	}
+	ds, err := postgres.NewWithDB(pool, nil, sqlcommon.NewConfig())
+	if err != nil {
+		return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
+	}
+	return &transactionalDatastore{Datastore: ds}, nil
 }
 
 // Close is a no-op because the underlying *pgxpool.Pool is owned and closed by
@@ -82,7 +94,7 @@ func (d *transactionalDatastore) Close() {}
 // during fgaServer.Write tuple validation), it queries the authorization_model
 // table on that transaction so Write never needs to check out a second connection
 // from the pool. When no pgx.Tx is in ctx (e.g. during fgaServer.Check or
-// EnsureStoreAndModel), it delegates to the underlying pool datastore.
+// authz.EnsureStoreAndModel), it delegates to the underlying pool datastore.
 //
 // 1:1 with (*postgres.Datastore).ReadAuthorizationModel (postgres.go:831-858),
 // except rows are queried via tx.Query instead of db.Query when tx is present.

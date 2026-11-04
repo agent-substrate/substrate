@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg/pgfga"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -144,7 +145,7 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}
-	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
+	if err := p.policyManager.DeleteAtespacePolicies(pgfga.ContextWithTx(ctx, tx), name); err != nil {
 		return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
