@@ -109,7 +109,7 @@ breaks no rule.
 - The source gives `records`, `good`, `bad`, `bad_<reason>` for every rule and
   reason of the kind (0 when none), the kind's own values, and those of
   `values`. The keys are the same on every valid run: null where there is
-  nothing to measure.
+  nothing to measure. A condition that reads another name fails to load.
 - Invalid: a kind with no records to judge, and the kind's own cases below.
 
 #### `sweperf_tasks`

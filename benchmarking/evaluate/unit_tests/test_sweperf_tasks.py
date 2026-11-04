@@ -541,9 +541,8 @@ class ComputeTest(unittest.TestCase):
         self.assertEqual((whole["records"], whole["unfinished"], whole["startup_failure_attempts"],
                           whole["startup_failure_episodes"], whole["window_source"]), (5, 1, 1, 1, "run"))
         self.assertTrue(all(valid_name(k) for k in v), sorted(v))
-        own = set(v) - set(VALUES) - {"records", "good", "bad"}
-        self.assertEqual({k for k in own if not k.startswith("bad_")},
-                         sweperf.SweperfTasks.value_names(compile_rules(WAKE)))
+        # The names a condition can read at load are the values a valid run gives.
+        self.assertEqual(set(v), cel.Cel.value_names({"kind": "sweperf_tasks", "rules": WAKE, "values": VALUES}))
 
     def test_keys_do_not_change_from_run_to_run(self):
         """Dashboards read <variable>__<value> columns: a run without capacity or

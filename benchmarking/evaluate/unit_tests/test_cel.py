@@ -27,6 +27,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from evaluate import config  # noqa: E402
 from evaluate.sources import cel  # noqa: E402
 from evaluate.sources.base import BenchmarkRunContext, SourceInvalid  # noqa: E402
 from evaluate.sources.cel import rules  # noqa: E402
@@ -120,6 +121,20 @@ class ValuesTest(unittest.TestCase):
     def test_a_value_that_fails_to_evaluate_makes_the_run_invalid(self):
         self.assertEqual(query(self.LINES, {"rules": [], "values": {"too_big": "double(int(good * 1e300))"}}),
                          ({}, "value 'too_big': OUT_OF_RANGE: double out of int64 range"))
+
+
+class ValueNamesTest(unittest.TestCase):
+    def test_a_condition_reads_only_values_the_source_gives(self):
+        cfg = {"kind": "json_lines", "file": "stats.jsonl", "select": GRPC, "rules": [FAILED], "values": RATIO}
+        self.assertEqual(set(query(JsonLinesTest.LINES, cfg)[0]), cel.Cel.value_names(cfg))
+
+        def evaluations(ref: str) -> list:
+            check = {"value": ref, "op": ">=", "limit": 0}
+            return [{"name": "e", "variables": [{"name": "grpc", "source": "cel", "source_cfg": cfg}],
+                     "conditions": [{"name": "c", "type": "threshold", "check": check}]}]
+        config.load(evaluations("grpc.bad_failed_requests"))
+        with self.assertRaisesRegex(config.ConfigError, "'grpc.good_ratio': grpc gives no value 'good_ratio'"):
+            config.load(evaluations("grpc.good_ratio"))
 
 
 class WholeNumberTest(unittest.TestCase):

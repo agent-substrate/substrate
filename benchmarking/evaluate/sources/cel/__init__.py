@@ -28,12 +28,12 @@ values: it reads a variable the run lacks (a baseline value) or a record lacks
 (a task field), or it fails to evaluate.
 
 The source gives records, good, bad, bad_<reason> for every rule and reason,
-the kind's own values, and those of `values:`. A value is null when it reads
-a fact the run lacks, or isn't finite (x / 0).
+the kind's own values, and those of `values:` (value_names). A value is null
+when it reads a fact the run lacks, or isn't finite (x / 0).
 """
 
 from collections import Counter
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from ..base import BenchmarkRunContext, Scalar, Source, SourceInvalid
 from . import rules
@@ -71,6 +71,13 @@ class Cel(Source):
             raise ValueError("needs rules (a list, may be empty)")
         compile_cfg(cfg, kind)
         kind.validate(cfg)
+
+    @classmethod
+    def value_names(cls, cfg: Mapping[str, Any]) -> Optional[set[str]]:
+        kind = KINDS[cfg["kind"]]
+        compiled, defined = compile_cfg(cfg, kind)
+        bad = (*kind.FAILURE_REASONS, *(r.name for r in compiled))
+        return {*COUNTS, *(f"bad_{name}" for name in bad), *kind.value_names(compiled), *(v.name for v in defined)}
 
     def init(self, run: BenchmarkRunContext) -> None:
         super().init(run)
