@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -347,18 +348,34 @@ func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 func TestWrapContainerLogs_LongLines(t *testing.T) {
 	long := func(n int) string { return strings.Repeat("a", n) }
 	longJSON := `{"msg":"` + long(maxLineBytes) + `"}`
+	cappedMessage := long(maxLineBytes - len(`{"msg":""}`))
+	cappedJSON := `{"msg":"` + cappedMessage + `"}`
 
-	tests := []struct {
+	type testCase struct {
 		name  string
 		input string
 		// slow feeds the reader one byte at a time.
-		slow bool
-		want []string
-	}{
+		slow  bool
+		want  []string
+		field string
+	}
+	tests := []testCase{
 		{
 			name:  "exactly the cap with a newline is one record",
 			input: long(maxLineBytes) + "\n",
 			want:  []string{long(maxLineBytes)},
+		},
+		{
+			name:  "JSON at the cap with a newline stays structured",
+			input: cappedJSON + "\n",
+			want:  []string{cappedMessage},
+			field: "msg",
+		},
+		{
+			name:  "JSON at the cap ending at EOF stays structured",
+			input: cappedJSON,
+			want:  []string{cappedMessage},
+			field: "msg",
 		},
 		{
 			name:  "one byte over the cap splits",
@@ -387,8 +404,22 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 			want:  []string{longJSON[:maxLineBytes], longJSON[maxLineBytes:]},
 		},
 	}
+	for _, text := range []string{"é", "界", "😀"} {
+		for offset := 1; offset < len(text); offset++ {
+			prefix := long(maxLineBytes - offset)
+			tests = append(tests, testCase{
+				name:  fmt.Sprintf("UTF-8 boundary %s byte %d", text, offset),
+				input: prefix + text + "\nafter\n",
+				slow:  true,
+				want:  []string{prefix, text, "after"},
+			})
+		}
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.field == "" {
+				tt.field = "message"
+			}
 			var buf bytes.Buffer
 			al := NewActorLogger(&buf, false)
 			var r io.Reader = strings.NewReader(tt.input)
@@ -403,9 +434,9 @@ func TestWrapContainerLogs_LongLines(t *testing.T) {
 				if err := json.Unmarshal(rec, &m); err != nil {
 					t.Fatalf("record is not JSON: %v", err)
 				}
-				msg, ok := m["message"].(string)
+				msg, ok := m[tt.field].(string)
 				if !ok {
-					t.Fatalf("record has no message: %.100s", rec)
+					t.Fatalf("record has no %s: %.100s", tt.field, rec)
 				}
 				assertLabels(t, labelGroup(t, al, m), identityLabels())
 				got = append(got, msg)

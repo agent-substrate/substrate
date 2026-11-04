@@ -20,7 +20,7 @@
 // Only the lifecycle events carry trace context: one forwarder goroutine covers a
 // whole container stream, so it cannot tell which request produced a given line.
 // An actor emitting its own trace_id/span_id keeps them, verbatim like the rest of
-// its fields.
+// its fields, unless the line exceeds maxLineBytes and is logged as text chunks.
 package actorlog
 
 import (
@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -118,8 +119,8 @@ func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerN
 	return pw, nil
 }
 
-// maxLineBytes bounds how much of one line WrapContainerLogs holds in memory.
-// A longer line is logged in chunks of this size, as plain text.
+// maxLineBytes is the largest line WrapContainerLogs parses as JSON.
+// Longer lines become plain-text chunks of at most this size, preserving UTF-8.
 const maxLineBytes = 64 << 10
 
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified
@@ -138,9 +139,19 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttributi
 		}
 		line = append(line, frag...)
 
-		for len(line) > maxLineBytes || (len(line) == maxLineBytes && !eol) {
-			al.logLine(line[:maxLineBytes], a, containerName, false)
-			line = line[:copy(line, line[maxLineBytes:])]
+		for len(line) > maxLineBytes {
+			n := maxLineBytes
+			// Keep an incomplete UTF-8 character for the next chunk.
+			for i := n - 1; i > n-utf8.UTFMax; i-- {
+				if utf8.RuneStart(line[i]) {
+					if !utf8.FullRune(line[i:n]) {
+						n = i
+					}
+					break
+				}
+			}
+			al.logLine(line[:n], a, containerName, false)
+			line = line[:copy(line, line[n:])]
 			split = true
 		}
 
