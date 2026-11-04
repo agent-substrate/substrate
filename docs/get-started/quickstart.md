@@ -99,7 +99,8 @@ kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 kubectl ate get actor my-counter-1 -a ate-demo-counter
 ```
 
-The actor is now suspended. Send another request to resume it:
+The suspend command returns after the actor reaches `SUSPENDED`; its snapshot
+upload continues in the background. Send another request to resume it:
 
 ```bash
 curl -X POST -i http://localhost:8000/
