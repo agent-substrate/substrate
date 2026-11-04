@@ -24,15 +24,37 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/manifests/ate-install/generated"
 	"go.ate.dev/substrate/tools/apitool/internal/docsite"
 	"go.ate.dev/substrate/tools/apitool/internal/examples"
+	"go.ate.dev/substrate/tools/apitool/internal/k8smodel"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // fixtureExamples holds an example for each of fixtureAPI's resources.
 var fixtureExamples = map[string]string{
-	"Widget": `{"widget": 1}`,
-	"Gadget": `{"gadget": 2}`,
+	"Widget": "# License.\n\nwidget: 1\n",
+	"Gadget": "gadget: 2\n",
+}
+
+var fixtureK8sAPI = &k8smodel.API{Resources: []k8smodel.Resource{{
+	Group:   "test.dev",
+	Version: "v1",
+	Kind:    "Sprocket",
+	Scope:   "Cluster",
+	Doc:     "Sprocket does things.",
+	Fields: []k8smodel.Field{{
+		Name: "spec",
+		Type: "object",
+		Fields: []k8smodel.Field{
+			{Name: "teeth", Type: "int32", Required: true},
+			{Name: "finish", Type: "string", Default: `"matte"`, Enum: []string{`"matte"`, `"gloss"`}},
+		},
+	}},
+}}}
+
+var fixtureK8sExamples = map[string]string{
+	"Sprocket": "# License.\n\napiVersion: test.dev/v1\nspec:\n  teeth: 12\n  ok: true\n  sizes:\n  - name: small\n",
 }
 
 func fixtureAPI(t *testing.T) *model.API {
@@ -77,7 +99,7 @@ func fixtureAPI(t *testing.T) *model.API {
 }
 
 func TestRender_Anchors(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), fixtureExamples)
+	out, err := docsite.Render(fixtureAPI(t), fixtureExamples, fixtureK8sAPI, fixtureK8sExamples)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -97,6 +119,8 @@ func TestRender_Anchors(t *testing.T) {
 		`id="msg-test.DoRequest"`,
 		`id="msg-test.DoResponse"`,
 		`id="enum-test.Color"`,
+		`id="resource-test.dev.v1.Sprocket"`,
+		`id="resource-test.dev.v1.Sprocket-fields"`,
 	} {
 		if !strings.Contains(html, id) {
 			t.Errorf("output missing anchor %s", id)
@@ -105,7 +129,7 @@ func TestRender_Anchors(t *testing.T) {
 }
 
 func TestRender_ResourceLinks(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), fixtureExamples)
+	out, err := docsite.Render(fixtureAPI(t), fixtureExamples, fixtureK8sAPI, fixtureK8sExamples)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -133,6 +157,17 @@ func TestRender_ResourceLinks(t *testing.T) {
 		{"field links its message type", `<a href="#msg-test.DoRequest">DoRequest</a>`},
 		{"field links its enum type", `<a href="#enum-test.Color">Color</a>`},
 		{"scalar field type is not a link", `<td class="mono">string</td>`},
+		{"Kubernetes page is marked", `<section id="resource-test.dev.v1.Sprocket" class="group resource-page k8s-page" hidden>`},
+		{"gRPC page is not marked", `<section id="resource-test.Widget" class="group resource-page" hidden>`},
+		{"Kubernetes resource shows its apiVersion", `<span class="tag mono">test.dev/v1</span>`},
+		{"Kubernetes resource shows its scope", `<span class="tag">cluster</span>`},
+		{"Kubernetes field shows required", `<span class="attr-name">teeth <span class="tag">required</span></span>`},
+		{"Kubernetes field shows default and enum", `<span class="tag">default: &#34;matte&#34;</span> <span class="tag">one of: &#34;matte&#34;, &#34;gloss&#34;</span>`},
+		{"Kubernetes field shows its type", `<span class="attr-type">int32</span>`},
+		{"messages show with the gRPC API only", `<section class="group proto-types">
+    <h1>Messages</h1>`},
+		{"enums show with the gRPC API only", `<section class="group proto-types">
+    <h1>Enums</h1>`},
 	} {
 		if !strings.Contains(html, tc.want) {
 			t.Errorf("%s: output missing %s", tc.name, tc.want)
@@ -141,7 +176,7 @@ func TestRender_ResourceLinks(t *testing.T) {
 }
 
 func TestRender_Nav(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), fixtureExamples)
+	out, err := docsite.Render(fixtureAPI(t), fixtureExamples, fixtureK8sAPI, fixtureK8sExamples)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -156,9 +191,14 @@ func TestRender_Nav(t *testing.T) {
 		t.Fatalf("json.Unmarshal(Nav) error = %v", err)
 	}
 	want := []node{
-		{Label: "Gadget (Global)", Anchor: "resource-test.Global.Gadget"},
-		{Label: "Widget", Anchor: "resource-test.Widget", Children: []node{
-			{Label: "Gadget", Anchor: "resource-test.Widget.Gadget"},
+		{Label: "gRPC API", Children: []node{
+			{Label: "Gadget (Global)", Anchor: "resource-test.Global.Gadget"},
+			{Label: "Widget", Anchor: "resource-test.Widget", Children: []node{
+				{Label: "Gadget", Anchor: "resource-test.Widget.Gadget"},
+			}},
+		}},
+		{Label: "Kubernetes API", Children: []node{
+			{Label: "Sprocket", Anchor: "resource-test.dev.v1.Sprocket"},
 		}},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -167,7 +207,7 @@ func TestRender_Nav(t *testing.T) {
 }
 
 func TestRender_Definitions(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), fixtureExamples)
+	out, err := docsite.Render(fixtureAPI(t), fixtureExamples, fixtureK8sAPI, fixtureK8sExamples)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -179,8 +219,9 @@ func TestRender_Definitions(t *testing.T) {
 		name, definition string
 		count            int
 	}{
-		{"example beside a resource's fields", "{&#34;widget&#34;: 1}", 1},
-		{"example on each of a resource's pages", "{&#34;gadget&#34;: 2}", 2},
+		{"example beside a resource's fields, without its license header", "widget: 1", 1},
+		{"example on each of a resource's pages", "gadget: 2", 2},
+		{"Kubernetes example without its license header", "apiVersion: test.dev/v1spec:  teeth: 12  ok: true  sizes:  - name: small", 1},
 		{"resource definition not beside a method returning it", "message Gadget {}", 0},
 		{"resource definition not beside its fields", "message Widget {}", 0},
 		{"rpc beside its method", "rpc Do(DoRequest) returns (DoResponse);", 1},
@@ -194,7 +235,7 @@ func TestRender_Definitions(t *testing.T) {
 }
 
 func TestRender_MissingExample(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), map[string]string{"Widget": `{}`})
+	out, err := docsite.Render(fixtureAPI(t), map[string]string{"Widget": `{}`}, fixtureK8sAPI, map[string]string{})
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -205,6 +246,9 @@ func TestRender_MissingExample(t *testing.T) {
 	if want := `<section class="page-section single" id="resource-test.Widget.Gadget-fields">`; !strings.Contains(html, want) {
 		t.Errorf("output missing %s, Gadget's fields without an example", want)
 	}
+	if want := `<section class="page-section single" id="resource-test.dev.v1.Sprocket-fields">`; !strings.Contains(html, want) {
+		t.Errorf("output missing %s, Sprocket's fields without an example", want)
+	}
 }
 
 // TestRender_EscapesComments is a regression test for the search index's
@@ -213,7 +257,7 @@ func TestRender_MissingExample(t *testing.T) {
 // legitimate embedded <script> block, the JSON index, which is
 // tool-authored, not proto-derived.
 func TestRender_EscapesComments(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), fixtureExamples)
+	out, err := docsite.Render(fixtureAPI(t), fixtureExamples, fixtureK8sAPI, fixtureK8sExamples)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -231,7 +275,7 @@ func TestRender_EscapesComments(t *testing.T) {
 }
 
 func TestRender_SearchIndexRoundTrips(t *testing.T) {
-	out, err := docsite.Render(fixtureAPI(t), fixtureExamples)
+	out, err := docsite.Render(fixtureAPI(t), fixtureExamples, fixtureK8sAPI, fixtureK8sExamples)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
@@ -259,8 +303,8 @@ func TestRender_SearchIndexRoundTrips(t *testing.T) {
 	}
 
 	// 3 resource pages + 3 methods + 3 messages + 4 fields (Foo's and
-	// DoRequest's) + 1 enum + 1 enum value.
-	if want := 15; len(entries) != want {
+	// DoRequest's) + 1 enum + 1 enum value + 1 Kubernetes resource + 3 fields.
+	if want := 19; len(entries) != want {
 		t.Fatalf("len(entries) = %d, want %d", len(entries), want)
 	}
 
@@ -272,6 +316,8 @@ func TestRender_SearchIndexRoundTrips(t *testing.T) {
 		{"enum value", "RED", "test.Color.RED", "enum-test.Color"},
 		{"resource", "Gadget", "test.Global.Gadget", "resource-test.Global.Gadget"},
 		{"method", "GetWidgetGadget", "test.Svc.GetWidgetGadget", "method-test.Svc.GetWidgetGadget"},
+		{"resource", "Sprocket", "test.dev.v1.Sprocket", "resource-test.dev.v1.Sprocket"},
+		{"field", "teeth", "test.dev.v1.Sprocket.spec.teeth", "resource-test.dev.v1.Sprocket"},
 	}
 	for _, w := range want {
 		found := false
@@ -294,15 +340,29 @@ func TestRender_RealAPISmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("model.Build() error = %v", err)
 	}
-	ex, err := examples.ByResource()
+	ex, err := examples.GRPCResources()
 	if err != nil {
-		t.Fatalf("examples.ByResource() error = %v", err)
+		t.Fatalf("examples.GRPCResources() error = %v", err)
 	}
-	out, err := docsite.Render(model.ScopeToService(api, "Control"), ex)
+	k8sEx, err := examples.K8sResources()
+	if err != nil {
+		t.Fatalf("examples.K8sResources() error = %v", err)
+	}
+	sources, err := generated.CRDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k8sAPI, err := k8smodel.Build(sources)
+	if err != nil {
+		t.Fatalf("k8smodel.Build() error = %v", err)
+	}
+	out, err := docsite.Render(model.ScopeToService(api, "Control"), ex, k8sAPI, k8sEx)
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	if !strings.Contains(string(out.Body), "substrate.ateapi.v1.Actor") {
-		t.Error("output does not mention substrate.ateapi.v1.Actor")
+	for _, want := range []string{"substrate.ateapi.v1.Actor", `id="resource-ate.dev.v1.WorkerPool"`} {
+		if !strings.Contains(string(out.Body), want) {
+			t.Errorf("output does not mention %s", want)
+		}
 	}
 }

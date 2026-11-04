@@ -15,80 +15,64 @@
 package docsite
 
 import (
-	"encoding/json/jsontext"
-	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"strings"
+
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 )
 
-// highlightJSON renders text, a JSON value, as HTML, coloring each token and
-// keeping the text's own formatting.
-func highlightJSON(text string) (template.HTML, error) {
+// yamlLexer tokenizes the examples.
+var yamlLexer = lexers.Get("yaml")
+
+// highlightYAML renders code, a YAML document, as HTML, coloring each token
+// and keeping the code's own formatting.
+func highlightYAML(code string) (template.HTML, error) {
+	tokens, err := yamlLexer.Tokenise(nil, code)
+	if err != nil {
+		return "", err
+	}
 	var b strings.Builder
-	dec := jsontext.NewDecoder(strings.NewReader(text))
-	for {
-		start := dec.InputOffset()
-		isName := nextIsName(dec)
-		tok, err := dec.ReadToken()
-		if errors.Is(err, io.EOF) {
-			b.WriteString(text[start:])
-			return template.HTML(b.String()), nil
+	for tok := tokens(); tok != chroma.EOF; tok = tokens() {
+		class := tokenClass(tok.Type)
+		// Keep line breaks and leading spaces outside the spans, so codeLines
+		// can split lines and measure their indentation.
+		for i, part := range strings.Split(tok.Value, "\n") {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			body := strings.TrimLeft(part, " ")
+			b.WriteString(part[:len(part)-len(body)])
+			writeToken(&b, class, body)
 		}
-		if err != nil {
-			return "", err
-		}
-		// ReadToken also reads what precedes the token: whitespace and at
-		// most one "," or ":".
-		read := text[start:dec.InputOffset()]
-		raw := strings.TrimLeft(read, " \t\r\n,:")
-		writeSeparators(&b, read[:len(read)-len(raw)])
-		writeToken(&b, jsonClass(tok.Kind(), isName), raw)
 	}
+	return template.HTML(b.String()), nil
 }
 
-// nextIsName reports whether dec's next token is the name of an object
-// member. An object counts its names and values separately, so its next token
-// is a name when the count so far is even.
-func nextIsName(dec *jsontext.Decoder) bool {
-	kind, n := dec.StackIndex(dec.StackDepth())
-	return kind == jsontext.KindBeginObject && n%2 == 0
-}
-
-// jsonClass is the class highlightJSON colors a token of the given kind with.
-func jsonClass(kind jsontext.Kind, isName bool) string {
-	switch kind {
-	case jsontext.KindString:
-		if isName {
-			return "tok-type"
-		}
-		return "tok-string"
-	case jsontext.KindNumber:
+// tokenClass is the class highlightYAML colors a token of type t with, or "" to
+// leave it uncolored.
+func tokenClass(t chroma.TokenType) string {
+	switch {
+	case t == chroma.NameTag:
+		return "tok-type"
+	case t.InSubCategory(chroma.LiteralNumber):
 		return "tok-number"
-	case jsontext.KindNull, jsontext.KindFalse, jsontext.KindTrue:
+	case t.InCategory(chroma.Literal):
+		return "tok-string"
+	case t.InCategory(chroma.Keyword):
 		return "tok-keyword"
-	default:
+	case t.InCategory(chroma.Punctuation), t.InCategory(chroma.Operator):
 		return "tok-punct"
+	default:
+		return ""
 	}
 }
 
-// writeSeparators writes the text between two tokens, coloring its "," or
-// ":".
-func writeSeparators(b *strings.Builder, text string) {
-	for _, c := range text {
-		if c == ',' || c == ':' {
-			writeToken(b, "tok-punct", string(c))
-		} else {
-			b.WriteRune(c)
-		}
-	}
-}
-
-// codeLines wraps each line of code, as highlightJSON renders it, in a
-// block whose --indent is the line's indentation. The stylesheet hangs a
-// wrapped line's continuation under its own indentation. highlightJSON only
-// breaks lines between tokens, outside any tag.
+// codeLines wraps each line of code, as highlightYAML renders it, in a block
+// whose --indent is the line's indentation. The stylesheet hangs a wrapped
+// line's continuation under its own indentation. highlightYAML only breaks
+// lines and writes indentation outside any tag.
 func codeLines(code template.HTML) template.HTML {
 	var b strings.Builder
 	for line := range strings.SplitSeq(string(code), "\n") {
@@ -98,7 +82,15 @@ func codeLines(code template.HTML) template.HTML {
 	return template.HTML(b.String())
 }
 
+// writeToken writes text, escaped, in a span of class, or bare if class is "".
 func writeToken(b *strings.Builder, class, text string) {
+	if text == "" {
+		return
+	}
+	if class == "" {
+		template.HTMLEscape(b, []byte(text))
+		return
+	}
 	b.WriteString(`<span class="`)
 	b.WriteString(class)
 	b.WriteString(`">`)

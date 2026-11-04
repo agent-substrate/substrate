@@ -17,8 +17,16 @@
 
   // Exactly one resource page is visible at a time: the one holding the
   // element the URL hash names. A hash outside every page keeps the visible
-  // page, or shows the first one on load.
+  // page, or shows the first one on load. Messages and enums belong to the
+  // gRPC API, so they show under its pages only, and a hash naming one leaves
+  // a Kubernetes resource's page for the first page, which is a gRPC
+  // resource's.
   var resourcePages = document.querySelectorAll(".resource-page");
+  var protoTypes = document.querySelectorAll(".proto-types");
+
+  function isK8sPage(page) {
+    return page.classList.contains("k8s-page");
+  }
 
   function showResourceRoute() {
     var targetId = window.location.hash.slice(1);
@@ -26,10 +34,16 @@
     var active = target ? target.closest(".resource-page") : null;
     if (!active) {
       active = document.querySelector(".resource-page:not([hidden])") || resourcePages[0];
+      if (target && target.closest(".proto-types") && isK8sPage(active)) {
+        active = resourcePages[0];
+      }
     }
 
     resourcePages.forEach(function (page) {
       page.hidden = page !== active;
+    });
+    protoTypes.forEach(function (section) {
+      section.hidden = isK8sPage(active);
     });
     document.querySelectorAll(".as-sb__tree-link").forEach(function (link) {
       link.classList.toggle("is-active", link.getAttribute("href") === "#" + active.id);
@@ -90,13 +104,15 @@
     if (!query) {
       return [];
     }
-    var out = [];
-    for (var i = 0; i < index.length && out.length < MAX_RESULTS; i++) {
-      if (matches(index[i], query)) {
-        out.push(index[i]);
-      }
-    }
-    return out;
+    // Sort before capping, so a broad query still lists the resources that
+    // come late in the index, such as Kubernetes resources.
+    var out = index.filter(function (entry) {
+      return matches(entry, query);
+    });
+    out.sort(function (a, b) {
+      return KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
+    });
+    return out.slice(0, MAX_RESULTS);
   }
 
   function render(entries) {

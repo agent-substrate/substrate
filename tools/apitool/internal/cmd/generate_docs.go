@@ -25,8 +25,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/manifests/ate-install/generated"
 	"go.ate.dev/substrate/tools/apitool/internal/docsite"
 	"go.ate.dev/substrate/tools/apitool/internal/examples"
+	"go.ate.dev/substrate/tools/apitool/internal/k8smodel"
 	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
@@ -39,7 +41,7 @@ var (
 // internal to Substrate, not part of the control-plane API.
 const documentedService = "Control"
 
-// latestVersion names the version built from this checkout's ateapi.proto.
+// latestVersion names the version built from this checkout.
 const latestVersion = "latest"
 
 var generateDocsCmd = &cobra.Command{
@@ -64,11 +66,20 @@ func init() {
 }
 
 func runGenerateDocs(cmd *cobra.Command, args []string) error {
-	ex, err := examples.ByResource()
+	ex, err := examples.GRPCResources()
 	if err != nil {
 		return fmt.Errorf("while reading examples: %w", err)
 	}
-	if err := writeVersion(cmd.Context(), latestVersion, ateapi.Source, ex); err != nil {
+	k8sEx, err := examples.K8sResources()
+	if err != nil {
+		return fmt.Errorf("while reading Kubernetes examples: %w", err)
+	}
+	crds, err := generated.CRDs()
+	if err != nil {
+		return fmt.Errorf("while reading CRDs: %w", err)
+	}
+	latest := release{tag: latestVersion, source: ateapi.Source, examples: ex, crds: crds, k8sExamples: k8sEx}
+	if err := writeVersion(cmd.Context(), latest); err != nil {
 		return err
 	}
 	versions := []string{latestVersion}
@@ -79,7 +90,7 @@ func runGenerateDocs(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		for _, r := range releases {
-			if err := writeVersion(cmd.Context(), r.tag, r.source, r.examples); err != nil {
+			if err := writeVersion(cmd.Context(), r); err != nil {
 				return err
 			}
 			versions = append(versions, r.tag)
@@ -111,19 +122,22 @@ func runGenerateDocs(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// writeVersion renders source, one version's ateapi.proto, into the
-// version's directory under outDir.
-func writeVersion(ctx context.Context, version, source string, ex map[string]string) error {
-	api, err := model.Build(ctx, source)
+// writeVersion renders r into its directory under outDir.
+func writeVersion(ctx context.Context, r release) error {
+	api, err := model.Build(ctx, r.source)
 	if err != nil {
-		return fmt.Errorf("while building %s API model: %w", version, err)
+		return fmt.Errorf("while building %s API model: %w", r.tag, err)
 	}
-	page, err := docsite.Render(model.ScopeToService(api, documentedService), ex)
+	k8sAPI, err := k8smodel.Build(r.crds)
 	if err != nil {
-		return fmt.Errorf("while rendering %s: %w", version, err)
+		return fmt.Errorf("while building %s Kubernetes model: %w", r.tag, err)
+	}
+	page, err := docsite.Render(model.ScopeToService(api, documentedService), r.examples, k8sAPI, r.k8sExamples)
+	if err != nil {
+		return fmt.Errorf("while rendering %s: %w", r.tag, err)
 	}
 
-	dir := filepath.Join(outDir, version)
+	dir := filepath.Join(outDir, r.tag)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
