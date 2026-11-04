@@ -29,6 +29,7 @@ import controlplane
 from util import build_and_push
 
 USES_SHARED_WORKLOADS = True
+EXTRA_INGRESS_SPIFFE_IDS = ()
 
 def teardown_workloads() -> None:
     pass

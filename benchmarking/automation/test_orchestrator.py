@@ -92,7 +92,7 @@ class DeploySubstrateTest(unittest.TestCase):
     # denies it unless the install makes it an owner, and the Envoy ingress
     # router refuses to deploy without an allowed SPIFFE ID.
     @mock.patch("orchestrator.run")
-    def test_runner_and_client_are_bootstrap_owners(self, run):
+    def test_deploy_substrate_auth(self, run):
         orchestrator.deploy_substrate(["--credential-provider={}"])
         cmd = run.call_args.args[0]
         self.assertEqual(cmd, ["go", "run", "./cmd/ate-setup", "deploy", "ate-system", "--credential-provider={}"])
@@ -108,6 +108,13 @@ class DeploySubstrateTest(unittest.TestCase):
         self.assertEqual(
             env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
             "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
+        )
+
+        orchestrator.deploy_substrate([], extra_ingress_spiffe_ids=("spiffe://cluster.local/ns/foo/sa/bar",))
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(
+            env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
+            "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner,spiffe://cluster.local/ns/foo/sa/bar",
         )
 
     @mock.patch("orchestrator.run")
@@ -228,7 +235,11 @@ class RunnerNamespaceTest(unittest.TestCase):
 
     def test_namespace_has_api_access_label(self):
         want = self.api_client_labels()
-        for name in ("runner-job.yaml.tmpl", "nighthawk-ingress-runner-job.yaml.tmpl"):
+        for name in (
+            "runner-job.yaml.tmpl",
+            "nighthawk-ingress-runner-job.yaml.tmpl",
+            "nighthawk-egress-runner-job.yaml.tmpl",
+        ):
             with self.subTest(template=name):
                 text = open(os.path.join(self.HERE, "manifests", name)).read()
                 ns = next(
@@ -239,6 +250,173 @@ class RunnerNamespaceTest(unittest.TestCase):
                 self.assertEqual(ns["metadata"]["name"], "benchmarking")
                 for k, v in want.items():
                     self.assertEqual(ns["metadata"].get("labels", {}).get(k), v)
+
+
+class NighthawkEgressTest(unittest.TestCase):
+    def test_nighthawk_egress_validation_bounds(self):
+        from testtypes import TYPES
+        egress = TYPES["nighthawk-egress"]
+        base = {"name": "t", "duration": "1s", "type": "nighthawk-egress", "nighthawk-egress": {"envoyCpu": 1}}
+
+        # Valid
+        b1 = dict(base)
+        b1["nighthawk-egress"] = {"envoyCpu": 1, "tailLatencySloMs": 0}
+        egress.validate(b1)
+
+        # Invalid expFactor
+        b2 = dict(base)
+        b2["nighthawk-egress"] = {"envoyCpu": 1, "expFactor": 1.0}
+        with self.assertRaisesRegex(ValueError, "expFactor must be > 1.0"):
+            egress.validate(b2)
+        b3 = dict(base)
+        b3["nighthawk-egress"] = {"envoyCpu": 1, "expFactor": 0.5}
+        with self.assertRaisesRegex(ValueError, "expFactor must be > 1.0"):
+            egress.validate(b3)
+
+        # Invalid sendRateThreshold
+        b4 = dict(base)
+        b4["nighthawk-egress"] = {"envoyCpu": 1, "sendRateThreshold": 1.5}
+        with self.assertRaisesRegex(ValueError, "sendRateThreshold must be > 0 and <= 1.0"):
+            egress.validate(b4)
+
+        # Invalid tailLatencySloMs
+        b5 = dict(base)
+        b5["nighthawk-egress"] = {"envoyCpu": 1, "tailLatencySloMs": -1}
+        with self.assertRaisesRegex(ValueError, "tailLatencySloMs must be >= 0"):
+            egress.validate(b5)
+
+        # Invalid bool connections
+        b6 = dict(base)
+        b6["nighthawk-egress"] = {"envoyCpu": 1, "connections": True}
+        with self.assertRaisesRegex(ValueError, "connections must be an int >= 1"):
+            egress.validate(b6)
+
+    def _entry(self, **overrides):
+        cfg = {"envoyCpu": 2, "mode": "mitm", "tailLatencySloMs": 25, **overrides}
+        return {"name": "egress_mitm", "type": "nighthawk-egress", "targetCluster": "dev", "duration": "30m", "nighthawk-egress": cfg}
+
+    def test_validate_and_registration(self):
+        from testtypes import nighthawk_egress
+
+        self.assertIn("nighthawk-egress", orchestrator.TYPES)
+
+        self.assertFalse(getattr(nighthawk_egress, "USES_SHARED_WORKLOADS", True))
+        for mode in ("http", "mitm", "passthrough"):
+            nighthawk_egress.validate(self._entry(mode=mode))
+        for bad, pattern in (({"mode": "grpc"}, "mode"), ({"unknownKnob": 1}, "unknown knob"), ({"envoyCpu": 0}, "envoyCpu")):
+            with self.assertRaisesRegex(ValueError, pattern):
+                nighthawk_egress.validate(self._entry(**bad))
+
+    def test_job_template_renders_args_labels_and_toleration(self):
+        from testtypes import nighthawk_egress
+
+        test = self._entry(mode="passthrough", envoyCpu=4, tailLatencySloMs=50)
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "6949841e", "NAME": test["name"], "DEST": "gs://b/p", **nighthawk_egress.job_subs(test)}
+        text = orchestrator.render_template(nighthawk_egress.job_tmpl(os.path.join(os.path.dirname(__file__), "manifests")), subs)
+        self.assertNotIn("${", text)
+        job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
+        self.assertEqual(job["spec"]["ttlSecondsAfterFinished"], 86400)
+        self.assertEqual(job["spec"]["template"]["metadata"]["labels"]["tag"], "6949841e")
+        args = job["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertEqual(args[args.index("--mode") + 1], "passthrough")
+        self.assertEqual(args[args.index("--envoy-cpu") + 1], "4")
+        self.assertEqual(args[args.index("--connections") + 1], "16")
+        self.assertEqual(args[args.index("--tail-latency-slo-ms") + 1], "50")
+        mounts = job["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+        self.assertIn({"name": "servicedns-ca", "mountPath": "/run/servicedns-ca", "readOnly": True}, mounts)
+        vols = job["spec"]["template"]["spec"]["volumes"]
+        ca_vol = next(v for v in vols if v["name"] == "servicedns-ca")
+        ctb = ca_vol["projected"]["sources"][0]["clusterTrustBundle"]
+        self.assertEqual(ctb["signerName"], "servicedns.podcert.ate.dev/identity")
+        self.assertEqual(ctb["path"], "ca.crt")
+
+    def test_tests_yaml_egress_suites(self):
+        from testtypes import nighthawk_egress
+
+        path = os.path.join(os.path.dirname(__file__), "tests.yaml")
+        with open(path) as f:
+            tests = [t for t in yaml.safe_load(f)["tests"] if t.get("type") == "nighthawk-egress"]
+        for t in tests:
+            nighthawk_egress.validate(t)
+            cfg = t["nighthawk-egress"]
+            self.assertIn(cfg["envoyCpu"], (1, 2))
+            self.assertEqual(cfg["tailLatencySloMs"], 25)
+
+    @mock.patch("testtypes.nighthawk_egress.run")
+    def test_pre_test(self, run):
+        from testtypes import nighthawk_egress
+
+        nighthawk_egress.pre_test(self._entry(envoyCpu=2, mode="mitm"))
+        cmds = [c.args[0] for c in run.call_args_list]
+        for expected in (
+            "python3",
+            "hack/setup-e2e-egress-tls-kind.sh",
+            "benchmarking/nighthawk-egress/deploy.sh",
+            "benchmarking/nighthawk-egress/deploy-traffic-driver.sh"
+        ):
+            self.assertTrue(any(expected in cmd for cmd in cmds), expected)
+
+        shape_cmd = next(cmd for cmd in cmds if any("cluster_setup.py" in arg for arg in cmd))
+        self.assertEqual(shape_cmd, ["python3", "benchmarking/nighthawk-egress/cluster_setup.py", "shape", "--envoy-cpu", "2"])
+
+    @mock.patch("subprocess.run")
+    @mock.patch("orchestrator.run_no_check")
+    def test_teardown_workloads_contract(self, run_no_check, sub_run):
+        from testtypes import nighthawk_egress
+
+        # Test nighthawk_egress.teardown_workloads directly
+        nighthawk_egress.teardown_workloads()
+        self.assertEqual(
+            [c.args[0] for c in sub_run.call_args_list],
+            [
+                ["benchmarking/nighthawk-egress/deploy-traffic-driver.sh", "--delete"],
+                ["benchmarking/nighthawk-egress/deploy.sh", "--delete"],
+            ],
+        )
+
+        sub_run.reset_mock()
+        run_no_check.reset_mock()
+
+        # Teardown with locust only: runs shared workloads delete, never touches nighthawk-egress scripts
+        orchestrator.teardown_test_workloads(["locust"])
+        run_no_check.assert_called_once_with(["benchmarking/workloads/deploy.sh", "--delete"])
+        sub_run.assert_not_called()
+
+        sub_run.reset_mock()
+        run_no_check.reset_mock()
+
+        # Teardown with nighthawk-ingress only: runs shared workloads delete, never touches nighthawk-egress scripts
+        orchestrator.teardown_test_workloads(["nighthawk-ingress"])
+        run_no_check.assert_called_once_with(["benchmarking/workloads/deploy.sh", "--delete"])
+        sub_run.assert_not_called()
+
+        sub_run.reset_mock()
+        run_no_check.reset_mock()
+
+        # Teardown with nighthawk-egress only: skips shared workloads delete, runs custom module teardown
+        orchestrator.teardown_test_workloads(["nighthawk-egress"])
+        run_no_check.assert_not_called()
+        self.assertEqual(
+            [c.args[0] for c in sub_run.call_args_list],
+            [
+                ["benchmarking/nighthawk-egress/deploy-traffic-driver.sh", "--delete"],
+                ["benchmarking/nighthawk-egress/deploy.sh", "--delete"],
+            ],
+        )
+
+        sub_run.reset_mock()
+        run_no_check.reset_mock()
+
+        # Teardown with all / None: runs both shared workloads and custom module teardown
+        orchestrator.teardown_test_workloads(None)
+        run_no_check.assert_called_once_with(["benchmarking/workloads/deploy.sh", "--delete"])
+        self.assertEqual(
+            [c.args[0] for c in sub_run.call_args_list],
+            [
+                ["benchmarking/nighthawk-egress/deploy-traffic-driver.sh", "--delete"],
+                ["benchmarking/nighthawk-egress/deploy.sh", "--delete"],
+            ],
+        )
 
 
 class JobNameTest(unittest.TestCase):
@@ -353,6 +531,9 @@ class RunMetadataTest(unittest.TestCase):
         text = orchestrator.render_template(RunnerSizingTest.TMPL, subs, ["--metadata", md])
         job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
         self.assertEqual(job["spec"]["template"]["spec"]["containers"][0]["args"][-1], md)
+
+
+
 
 
 if __name__ == "__main__":

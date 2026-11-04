@@ -294,6 +294,64 @@ With `.ate-dev-env.sh` configured and `ate-system` deployed on the cluster, run 
 ./benchmarking/nighthawk-egress/run-dev.sh --skip-deploy --mode passthrough --envoy-cpu 1 --tail-latency-slo-ms 25
 ```
 
+### CI Automation (`benchmarking/automation`)
+
+In automated benchmark sweeps (`benchmarking/automation/orchestrator.py`), entries in `benchmarking/automation/tests.yaml` with `type: nighthawk-egress` (`egress_gatewaycap_{http,mitm,passthrough}_{1,2}cpu`) run through `benchmarking/automation/testtypes/nighthawk_egress.py`:
+
+```mermaid
+flowchart LR
+    subgraph Orchestrator["benchmarking/automation"]
+        TY["tests.yaml<br/>type: nighthawk-egress"]
+        ORCH["orchestrator.py"]
+        NHE["testtypes/nighthawk_egress.py"]
+        TMPL["manifests/<br/>nighthawk-egress-runner-job.yaml.tmpl"]
+    end
+
+    subgraph Cluster["Target Cluster"]
+        SHAPE["cluster_setup.py shape<br/>Pins envoy + ext-proc CPU<br/>& Envoy --concurrency"]
+        SETUP["deploy.sh +<br/>deploy-traffic-driver.sh<br/>+ setup-e2e-egress-tls-kind.sh"]
+        JOB["Job: runner.py<br/>(nighthawk-egress-test:<tag>)"]
+    end
+
+    TY --> ORCH
+    ORCH -->|"validate() / pre_test()"| NHE
+    NHE --> SHAPE
+    NHE --> SETUP
+    ORCH -->|"job_subs() + job_tmpl()"| TMPL
+    TMPL -->|"kubectl apply"| JOB
+```
+
+```yaml
+  - name: egress_gatewaycap_http_2cpu
+    description: "Egress gateway capacity (cleartext HTTP): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 2 CPUs"
+    type: nighthawk-egress
+    targetCluster: dev
+    duration: 30m
+    nighthawk-egress:
+      mode: http
+      envoyCpu: 2
+      tailLatencySloMs: 25
+```
+
+### Configuration Knobs (`nighthawk-egress:` block in `tests.yaml`)
+
+| Knob (`tests.yaml`) | CLI Flag (`runner.py`) | Default | Description |
+|---|---|---|---|
+| `envoyCpu` | `--envoy-cpu` | *(required)* | CPU request/limit pinned on both `envoy` and `ext-proc` in `deployment/atenet-egress`, plus Envoy `--concurrency`. |
+| `mode` | `--mode` | `http` | Egress dataplane path: `http` (`:80`), `mitm` (`:443`), or `passthrough` (`:8443`). |
+| `tailLatencySloMs` | `--tail-latency-slo-ms` | `25` | Latency SLO budget (`mean + 2σ`) in milliseconds. |
+| `clientConcurrency` | `--client-concurrency` | `16` | Number of Nighthawk worker threads inside `nighthawk/tester`. |
+| `connections` | `--connections` | `16` | HTTP/1.1 connections per Nighthawk worker thread. |
+| `maxPending` | `--max-pending` | `32` | Max queued requests per connection pool before overflow failure. |
+| `initialRps` | `--initial-rps` | `500` | Starting total RPS across all worker threads. |
+| `expFactor` | `--exp-factor` | `2.0` | Multiplicative step factor during exponential search. |
+| `measuringPeriod` | `--measuring-period` | `20s` | Duration of each adaptive search step. |
+| `convergenceDeadline` | `--convergence-deadline` | `600s` | Total time budget for the adaptive search phase. |
+| `testingStageDuration` | `--testing-stage-duration` | `60s` | Duration of the final confirmation stage at the converged RPS. |
+| `successRateThreshold` | `--success-rate-threshold` | `0.998` | Minimum fraction of 2xx responses without pool overflow or connection errors. |
+| `sendRateThreshold` | `--send-rate-threshold` | `0.9` | Minimum achieved-to-intended RPS ratio (`achieved_rps / target_rps`). |
+| *(Job volume mount)* | `--servicedns-ca-cert` | `/run/servicedns-ca/ca.crt` | Path to the `servicedns.podcert.ate.dev` CA bundle read when `--mode passthrough`. |
+
 ### Output Artifacts
 
 Each run writes its artifacts under `<dest>/runs/<name>/run_date=YYYY-MM-DD/run_ts=<epoch>/run_tag=<tag>/`:

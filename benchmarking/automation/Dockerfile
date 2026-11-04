@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build context = benchmarking/automation/.
-# Build with: docker build --platform=linux/amd64 -t <image> benchmarking/automation/
+# docker build --platform=linux/amd64 -t <image> benchmarking/automation/
 
 FROM ubuntu:24.04
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -64,7 +62,10 @@ ENV PATH=/opt/automation/venv/bin:$PATH
 
 COPY orchestrator.py util.py controlplane.py /opt/automation/
 COPY testtypes/ /opt/automation/testtypes/
-COPY manifests/runner-job.yaml.tmpl manifests/nighthawk-ingress-runner-job.yaml.tmpl /opt/automation/manifests/
+COPY manifests/runner-job.yaml.tmpl \
+     manifests/nighthawk-ingress-runner-job.yaml.tmpl \
+     manifests/nighthawk-egress-runner-job.yaml.tmpl \
+     /opt/automation/manifests/
 
 ENV PYTHONUNBUFFERED=1
 

@@ -51,6 +51,7 @@ class TestType(Protocol):
     def job_tmpl(self, manifests_dir: str) -> str: ...
     def job_subs(self, test: dict[str, Any]) -> dict[str, Any]: ...
     USES_SHARED_WORKLOADS: bool
+    EXTRA_INGRESS_SPIFFE_IDS: tuple[str, ...]
     def teardown_workloads(self) -> None: ...
 
 
@@ -65,5 +66,5 @@ TYPES: dict[str, TestType] = {
 # (orchestrator, run-dev.sh, the unit tests) fails at import instead of
 # mid-benchmark.
 for _name, _mod in TYPES.items():
-    for _hook in ("validate", "build_image", "pre_test", "job_tmpl", "job_subs", "teardown_workloads", "USES_SHARED_WORKLOADS"):
+    for _hook in ("validate", "build_image", "pre_test", "job_tmpl", "job_subs", "teardown_workloads", "USES_SHARED_WORKLOADS", "EXTRA_INGRESS_SPIFFE_IDS"):
         assert hasattr(_mod, _hook), f"test type {_name!r} missing hook {_hook!r}"

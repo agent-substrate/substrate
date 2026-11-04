@@ -35,8 +35,8 @@ To run the cold resume tests from your workstation instead, see
    images via `ko` as part of their deploy steps). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
    runner's calls pass [authorization](../../docs/guides/authorization.md), and sets
-   `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` and
-   `nighthawk/default` for the Envoy ingress router.
+   `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` (which is always allowed) and
+   any test-specific identities (`TestType.EXTRA_INGRESS_SPIFFE_IDS` adds `spiffe://cluster.local/ns/nighthawk/sa/traffic-driver-invoker` on `nighthawk-egress` installs) for the Envoy ingress router.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
    is the benchmark's independent variable and the shipped manifest sets
