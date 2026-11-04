@@ -70,7 +70,6 @@ class JsonLinesTest(unittest.TestCase):
         self.assertIsNone(invalid)
         self.assertEqual({k: v[k] for k in ("records", "good", "bad", "good_ratio_pct", "bad_failed_requests")},
                          {"records": 3, "good": 2, "bad": 1, "good_ratio_pct": 66.67, "bad_failed_requests": 1})
-        self.assertEqual((v["rules_applied"], v["rules_skipped"]), ("failed_requests", ""))
         everything, _ = query(self.LINES, {"rules": []})  # no select: every line, blank ones skipped
         self.assertEqual((everything["records"], everything["good"]), (4, 4))
 
@@ -100,8 +99,8 @@ class JsonLinesTest(unittest.TestCase):
                          "line 1 column 2 (char 1)")
         self.assertEqual(query(["[1, 2]"], {"rules": []})[1], "stats.jsonl:1: not a JSON object")
         self.assertEqual(query(self.LINES, {"select": 'line.metric == "none"', "rules": [], "values": RATIO}),
-                         ({"records": 0, "good": 0, "bad": 0, "rules_applied": "", "rules_skipped": "",
-                           "good_ratio_pct": None}, "no line of stats.jsonl selected"))
+                         ({"records": 0, "good": 0, "bad": 0, "good_ratio_pct": None},
+                          "no line of stats.jsonl selected"))
         self.assertEqual(query(self.LINES, {"file": "evaluation.json", "rules": []}), ({}, "evaluation.json absent"))
 
 

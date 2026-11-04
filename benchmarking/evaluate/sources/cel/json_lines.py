@@ -84,5 +84,5 @@ class JsonLines(Kind):
         return Records(found)
 
     def summary(self, cfg: Mapping[str, Any], found: Records, compiled: list[rules.Rule],
-                reasons: list[list[str]], skipped: list[str]) -> Summary:
+                reasons: list[list[str]]) -> Summary:
         return Summary(invalid="" if found.records else f"no line of {cfg['file']} selected")

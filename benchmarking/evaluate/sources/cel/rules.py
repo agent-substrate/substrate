@@ -155,10 +155,12 @@ def holds(expr: cel.Expression, data: Mapping[str, Any], what: str) -> bool:
 
 
 def broken(rules: list[Rule], data: Mapping[str, Any], where: str) -> list[str]:
-    """The names of the rules data breaks, in order. A rule that reads a
-    variable data lacks doesn't judge it."""
-    return [r.name for r in rules
-            if all(v in data for v in r.reads) and not holds(r.expr, data, f"rule {r.name!r} on {where}")]
+    """The names of the rules data breaks, in order. Raises SourceInvalid
+    when data lacks a variable a rule reads."""
+    for r in rules:
+        if lacked := next((v for v in r.reads if v not in data), None):
+            raise SourceInvalid(f"rule {r.name!r} reads {lacked}, which {where} lacks")
+    return [r.name for r in rules if not holds(r.expr, data, f"rule {r.name!r} on {where}")]
 
 
 @dataclass(frozen=True)

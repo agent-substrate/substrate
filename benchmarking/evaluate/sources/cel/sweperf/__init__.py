@@ -22,7 +22,6 @@ and a re-evaluation, with no new benchmark run.
   kind: sweperf_tasks
   window: steady                # steady (default) | whole; one window per query
   baseline_test: sweperf_astropy_1_user  # the test whose run is the baseline
-  require_baseline: false       # true: invalid (values kept) when a rule's baseline is missing
   rules:
   - {name: slow_resume, cel: "task.resume_max_ms <= 1500.0"}
   - {name: slow_wall, cel: "task.wall_ms <= 1.5 * baseline.wall_ms"}
@@ -33,9 +32,8 @@ A task that failed is bad whatever the rules say (G1), with its failure as the
 reason (tasks.py). Rules read task.<field>, from the task's record, and
 baseline.<field>, the median over the finished tasks without failures of the
 run of baseline_test that BenchmarkRunContext.paired_run returns. Without one,
-the rules that read it are skipped, and the values say which and why
-(rules_skipped, bad_<rule> null, baseline_note) next to the numbers they would
-have changed. Each run is read once, however many queries there are.
+a rule that reads it makes the variable invalid, and the reason says why.
+Each run is read once, however many queries there are.
 
 `values:` expressions also read unfinished (tasks that never finished, all
 bad), window_hours, and the cluster's nodes, vcpus and gb_ram, which are
@@ -65,8 +63,7 @@ ENV = rules.Env({f"{ns}.{f}": cel.Type.DOUBLE for ns in (TASK, BASELINE) for f i
 FACTS = ("unfinished", "window_hours", "nodes", "vcpus", "gb_ram")
 CAPACITY = {"nodes": "node_count", "vcpus": "allocatable_cores", "gb_ram": "allocatable_ram_gb"}
 # The values summary gives besides those of metrics.window_values.
-OWN_VALUES = {"window_source", "cutoff_source", "lifecycle_mode", "skipped_records", "baseline_run",
-              "baseline_note", "baseline_tasks"}
+OWN_VALUES = {"window_source", "cutoff_source", "lifecycle_mode", "skipped_records", "baseline_run", "baseline_tasks"}
 
 
 @dataclass
@@ -127,7 +124,7 @@ class SweperfTasks(Kind):
     VALUES_ENV = values_env(FACTS)
     RUN_VARIABLES = frozenset(v for v in ENV.variables if v.startswith(BASELINE + "."))
     FAILURE_REASONS = tasks.FAILURE_REASON_ORDER
-    CFG_KEYS = frozenset({"window", "baseline_test", "require_baseline"})
+    CFG_KEYS = frozenset({"window", "baseline_test"})
 
     @classmethod
     def validate(cls, cfg: Mapping[str, Any]) -> None:
@@ -135,8 +132,6 @@ class SweperfTasks(Kind):
             raise ValueError(f"window: {cfg['window']!r} is not one of {list(WINDOWS)}")
         if "baseline_test" in cfg and (not isinstance(cfg["baseline_test"], str) or not cfg["baseline_test"]):
             raise ValueError("baseline_test: must be the name of a test")
-        if not isinstance(cfg.get("require_baseline", False), bool):
-            raise ValueError("require_baseline: must be true or false")
 
     @classmethod
     def value_names(cls, compiled: list[rules.Rule]) -> set[str]:
@@ -155,31 +150,25 @@ class SweperfTasks(Kind):
         window = cfg.get("window", "steady")
         span, source = run.windows[window]
         test = cfg.get("baseline_test")
-        base = self._baseline(test, run.lifecycle_mode) if test else Baseline()
+        base = (self._baseline(test, run.lifecycle_mode) if test
+                else Baseline(note=f"{UNAVAILABLE}no baseline_test in source_cfg"))
         found = [record(t) for t in run.tasks
                  if metrics.in_window(t.end if t.finished else t.first_failure_t, span)]
-        return TaskRecords(found, run_data(base.refs), run=run, window=window, span=span, window_source=source,
-                           baseline=base)
+        return TaskRecords(found, run_data(base.refs), run_note=base.note, run=run, window=window, span=span,
+                           window_source=source, baseline=base)
 
     def summary(self, cfg: Mapping[str, Any], found: TaskRecords, compiled: list[rules.Rule],
-                reasons: list[list[str]], skipped: list[str]) -> Summary:
+                reasons: list[list[str]]) -> Summary:
         run, base, refs = found.run, found.baseline, dict(found.baseline.refs)
-        applied = [r for r in compiled if r.name not in skipped]
         values = metrics.window_values([r.item for r in found.records], [not r for r in reasons], run.startup_ts,
-                                       run.episode_ts, found.span, refs, ratio_fields(applied))
-        # The keys don't change from run to run: a skipped rule's ratios are null.
-        for f in ratio_fields(compiled):
-            for p in (50, 90, 99):
-                values.setdefault(f"{f}_ratio_p{p}", None)
-        test = cfg.get("baseline_test")
-        note = base.note or (f"{UNAVAILABLE}no baseline_test in source_cfg" if skipped and not test else "")
+                                       run.episode_ts, found.span, refs, ratio_fields(compiled))
         values.update({
             "window_source": found.window_source, "cutoff_source": run.cut_source,
             "lifecycle_mode": run.lifecycle_mode, "skipped_records": run.log.skipped_records,
-            "baseline_run": base.run, "baseline_note": note, "baseline_tasks": base.tasks,
+            "baseline_run": base.run, "baseline_tasks": base.tasks,
         })
         for name in dict.fromkeys(f for r in compiled for f in fields(r, BASELINE)):
-            values[f"baseline_{name}"] = refs.get(name)
+            values[f"baseline_{name}"] = refs[name]
         facts = {"unfinished": values["unfinished"], **{fact: run.capacity[key] for fact, key in CAPACITY.items()},
                  "window_hours": max(0.0, found.span[1] - found.span[0]) / 3600.0}
         invalid = ""
@@ -187,9 +176,6 @@ class SweperfTasks(Kind):
             invalid = f"empty {found.window} window"
         elif not found.records:
             invalid = f"no tasks in the {found.window} window"
-        elif cfg.get("require_baseline", False) and skipped:
-            # The values stay: they are the numbers without the skipped rules.
-            invalid = note or f"{UNAVAILABLE}no baseline value for {','.join(skipped)}"
         return Summary(values, facts, invalid)
 
     def _read(self) -> Run:

@@ -23,13 +23,13 @@
 
 A record is good when the kind gives it no failure of its own (a SWE-Perf
 task that failed) and it breaks no rule. A rule's name is the reason a record
-that breaks it is bad. A rule that reads a per-run variable the run lacks (a
-baseline value) is skipped, and one that reads a field a record lacks doesn't
-judge that record. A rule that fails to evaluate makes the variable invalid.
+that breaks it is bad. A rule that can't judge makes the run invalid, with no
+values: it reads a variable the run lacks (a baseline value) or a record lacks
+(a task field), or it fails to evaluate.
 
 The source gives records, good, bad, bad_<reason> for every rule and reason,
-rules_applied, rules_skipped, the kind's own values, and those of `values:`.
-A value is null when it reads a fact the run lacks, or isn't finite (x / 0).
+the kind's own values, and those of `values:`. A value is null when it reads
+a fact the run lacks, or isn't finite (x / 0).
 """
 
 from collections import Counter
@@ -52,15 +52,10 @@ def judge(record: Record, compiled: list[rules.Rule], run_data: Mapping[str, Any
     return rules.broken(compiled, {**record.data, **run_data}, record.where)
 
 
-def skipped_rules(compiled: list[rules.Rule], kind: type[Kind], run_data: Mapping[str, Any]) -> list[str]:
-    """The names of the rules that read a per-run variable the run lacks."""
-    return [r.name for r in compiled if any(v in kind.RUN_VARIABLES and v not in run_data for v in r.reads)]
-
-
 def compile_cfg(cfg: Mapping[str, Any], kind: type[Kind]) -> tuple[list[rules.Rule], list[rules.Value]]:
     """The rules and values of cfg, compiled. Raises ValueError for a bad one."""
     compiled = rules.compile_rules(cfg["rules"], kind.ENV, kind.FAILURE_REASONS)
-    taken = {*COUNTS, "rules_applied", "rules_skipped", *kind.value_names(compiled)}
+    taken = {*COUNTS, *kind.value_names(compiled)}
     return compiled, rules.compile_values(cfg.get("values", {}), kind.VALUES_ENV, taken)
 
 
@@ -85,20 +80,19 @@ class Cel(Source):
         kind = self._kind(cfg["kind"])
         compiled, defined = compile_cfg(cfg, type(kind))
         found = kind.records(cfg)
-        skipped = skipped_rules(compiled, type(kind), found.run_data)
+        for r in compiled:
+            if lacked := next((v for v in r.reads if v in kind.RUN_VARIABLES and v not in found.run_data), None):
+                why = f" ({found.run_note})" if found.run_note else ""
+                raise SourceInvalid(f"rule {r.name!r} reads {lacked}, which the run lacks{why}")
         reasons = [judge(r, compiled, found.run_data) for r in found.records]
         good = sum(1 for r in reasons if not r)
 
         # The keys don't change from run to run: every rule and reason of the
-        # kind has a bad_<name> count, 0 when no record had it, null for a
-        # skipped rule.
+        # kind has a bad_<name> count, 0 when no record had it.
         values: dict[str, Scalar] = {"records": len(reasons), "good": good, "bad": len(reasons) - good}
-        values.update({f"bad_{reason}": 0 for reason in kind.FAILURE_REASONS})
-        values.update({f"bad_{r.name}": None if r.name in skipped else 0 for r in compiled})
+        values.update({f"bad_{name}": 0 for name in (*kind.FAILURE_REASONS, *(r.name for r in compiled))})
         values.update({f"bad_{reason}": n for reason, n in sorted(Counter(x for r in reasons for x in r).items())})
-        values["rules_applied"] = ",".join(r.name for r in compiled if r.name not in skipped)
-        values["rules_skipped"] = ",".join(skipped)
-        summary = kind.summary(cfg, found, compiled, reasons, skipped)
+        summary = kind.summary(cfg, found, compiled, reasons)
         values.update(summary.values)
         data = {k: float(values[k]) for k in COUNTS}
         data.update({k: float(v) for k, v in summary.facts.items() if v is not None})

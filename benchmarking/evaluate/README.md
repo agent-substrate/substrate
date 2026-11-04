@@ -102,12 +102,14 @@ breaks no rule.
   (x / 0).
 - Loading the evaluations compiles the rules and values: an unknown name, a
   type error, a result of the wrong type or a value name the source gives is
-  an error. A rule or value that fails to evaluate makes the
-  variable `invalid`.
+  an error.
+- A rule that can't judge makes the variable `invalid` with no values, and the
+  reason names it: it reads a field the run or a record lacks, or it fails to
+  evaluate. So does a value that fails to evaluate.
 - The source gives `records`, `good`, `bad`, `bad_<reason>` for every rule and
-  reason of the kind (0 when none, null for a skipped rule), `rules_applied`,
-  `rules_skipped`, the kind's own values, and those of `values`. The keys are
-  the same on every run: null where there is nothing to measure.
+  reason of the kind (0 when none), the kind's own values, and those of
+  `values`. The keys are the same on every valid run: null where there is
+  nothing to measure.
 - Invalid: a kind with no records to judge, and the kind's own cases below.
 
 #### `sweperf_tasks`
@@ -141,8 +143,7 @@ that logged a failure but no record never finished, and is bad.
         - {name: slow_ttfe, cel: "task.ttfe_max_ms <= 1000.0"}
         - {name: slow_cel, cel: "task.cel_ms <= 1.5 * baseline.cel_ms"}
         - {name: slow_wall, cel: "task.wall_ms <= 1.5 * baseline.wall_ms"}
-        baseline_test: sweperf_astropy_1_user
-        require_baseline: true   # without the 1-user run the G3 rules can't apply: invalid
+        baseline_test: sweperf_astropy_1_user   # without its run, the G3 rules can't judge: invalid
         values:
           good_ratio_pct: "round(100.0 * good / records, 2)"
           good_per_hour: "round(good / window_hours, 3)"
@@ -162,15 +163,14 @@ that logged a failure but no record never finished, and is bad.
   Fields: `wall_ms`, `cel_ms`, `resume_max_ms`, `ttfe_max_ms`, `startup_ms`,
   `think_ms`, `retries`, `cycles`, `steps`. They are doubles, and so is every
   whole number in a rule (`1500` is `1500.0`). A task without a field a rule
-  reads isn't judged by that rule, and rules can't test for a field with
+  reads makes the variable `invalid`; rules can't test for a field with
   `has()`. The built-in reasons are `resume_failed`, `execute_failed`,
   `suspend_failed` and `failed`.
 - `baseline.<field>` is the median over the clean finished tasks of the run
   of `baseline_test` that `paired_run` returns: the latest run of that test
   from the same invocation. Without one (no `baseline_test`, no such run, a
-  run in the other lifecycle mode), the rules that read it are skipped and
-  listed in `rules_skipped`, and `baseline_note` says why; `require_baseline:
-  true` makes that `invalid`, keeping the values.
+  run in the other lifecycle mode), a rule that reads it makes the variable
+  `invalid`, and the reason says why. A baseline of 0 is a value.
 - Facts for `values`: `unfinished`, `window_hours`, and the cluster's `nodes`,
   `vcpus` and `gb_ram` (missing when the run didn't record them).
 - Values: `unfinished` (tasks that never finished, all bad),
@@ -178,12 +178,12 @@ that logged a failure but no record never finished, and is bad.
   `window_start_ts`, `window_end_ts`, `window_s`, `window_source`,
   `cutoff_source`, `<field>_ratio_p50/p90/p99` (task over baseline, for each
   field a rule reads from both; null over a baseline of 0), `baseline_run`,
-  `baseline_note`, `baseline_tasks`, `baseline_<field>` for each field the
-  rules read from the baseline, `lifecycle_mode` (`async`, `sync`, `mixed`, or empty when the run
+  `baseline_tasks`, `baseline_<field>` for each field the rules read from the
+  baseline, `lifecycle_mode` (`async`, `sync`, `mixed`, or empty when the run
   doesn't say; `wall_ms` covers the snapshot upload only in the sync mode),
   `skipped_records`.
-- Invalid: no `logs.txt` or no task records, an empty window or one without
-  tasks, and `require_baseline` with skipped rules.
+- Invalid: no `logs.txt` or no task records, and an empty window or one
+  without tasks.
 
 #### `json_lines`
 
