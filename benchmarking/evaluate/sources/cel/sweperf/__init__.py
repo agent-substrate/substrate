@@ -108,8 +108,8 @@ def record(t: tasks.Task) -> Record:
 
 
 def run_data(refs: Mapping[str, float]) -> dict[str, float]:
-    """baseline.<field> for each baseline value above 0."""
-    return {f"{BASELINE}.{f}": float(v) for f, v in refs.items() if v > 0}
+    """baseline.<field> for each field of the baseline, 0 included."""
+    return {f"{BASELINE}.{f}": float(v) for f, v in refs.items()}
 
 
 def fields(rule: rules.Rule, ns: str) -> list[str]:

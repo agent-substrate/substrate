@@ -402,9 +402,9 @@ class RuleTest(unittest.TestCase):
         t = task(ttfe_max_ms=1200.0, cel_ms=7000.0)
         self.assertEqual(judge(t, STRICT, self.REFS), ["slow_ttfe", "slow_cel", "slow_wall"])
 
-    def test_baseline_ref_rules_skip_without_a_usable_ref(self):
+    def test_baseline_ref_rules_skip_without_a_baseline_value(self):
         rules = compile_rules(STRICT)
-        for refs in (None, {}, {"cel_ms": 0, "wall_ms": -1}, {"retries": 5}):
+        for refs in (None, {}, {"retries": 5}):
             self.assertEqual(judge(task(), STRICT, refs), [], refs)
             self.assertEqual(split(rules, refs),
                              (["slow_resume", "slow_ttfe"], ["slow_cel", "slow_wall"]), refs)
@@ -412,6 +412,8 @@ class RuleTest(unittest.TestCase):
         self.assertEqual(split(rules, self.REFS),
                          (["slow_resume", "slow_ttfe", "slow_cel", "slow_wall"], []))
         self.assertEqual(ratio_fields(rules, {"wall_ms": 5000.0}), ["wall_ms"])
+        # A baseline of 0 is a value.
+        self.assertEqual(judge(task(), STRICT, {"cel_ms": 0.0, "wall_ms": 0.0}), ["slow_cel", "slow_wall"])
 
     def test_rules_over_several_values(self):
         floor = rule("slow_wall", "task.wall_ms <= 1.5 * baseline.wall_ms || task.wall_ms <= 9000.0")
@@ -652,8 +654,9 @@ class ComputeTest(unittest.TestCase):
         self.assertEqual(missing["baseline_note"], "baseline unavailable: no run of t1 with tag abc")
         self.assertEqual(req_invalid, "baseline unavailable: no run of t1 with tag abc")
         self.assertEqual(req, missing)  # the numbers without the skipped rules
-        self.assertEqual((no_cel_invalid, no_cel["baseline_cel_ms"]),
-                         ("baseline unavailable: no baseline value for slow_cel", 0.0))
+        # A baseline of 0 applies; its ratios are null.
+        self.assertEqual((no_cel_invalid, no_cel["baseline_cel_ms"], no_cel["bad_slow_cel"], no_cel["cel_ms_ratio_p50"]),
+                         (None, 0.0, 2, None))
         self.assertEqual(broken["baseline_note"], f"baseline unavailable: t1 run {d / 'empty'}: no task records in "
                          "logs.txt: no task finished, or the workload logs none")
         self.assertEqual(broken["rules_skipped"], "slow_cel,slow_wall")

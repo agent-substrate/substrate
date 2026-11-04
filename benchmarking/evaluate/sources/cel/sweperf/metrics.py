@@ -48,7 +48,7 @@ def window_values(window_tasks: list[Task], good: list[bool], startup_ts: list[f
     unfinished ones (always bad) that first failed in it. Startup failures are
     reported as attempts and episodes and stay out of the ratio. For each field
     in ratio_fields, the p50/p90/p99 of value / refs[field] over finished tasks
-    with a value.
+    with a value; None when refs[field] is 0.
     """
     length = max(0.0, window[1] - window[0])
     finished = [t.record for t in window_tasks if t.finished]
@@ -62,7 +62,8 @@ def window_values(window_tasks: list[Task], good: list[bool], startup_ts: list[f
         "good_wall_ms_p99": percentile(walls, 99),
     }
     for f in ratio_fields:
-        ratios = [getattr(r, f) / refs[f] for r in finished if getattr(r, f) is not None]
+        # A baseline of 0 has no ratios.
+        ratios = [getattr(r, f) / refs[f] for r in finished if getattr(r, f) is not None] if refs[f] else []
         for p in (50, 90, 99):
             m[f"{f}_ratio_p{p}"] = percentile(ratios, p)
     return m

@@ -177,9 +177,9 @@ that logged a failure but no record never finished, and is bad.
   `good_wall_ms_p50/p90/p99`, `startup_failure_attempts` and `_episodes`,
   `window_start_ts`, `window_end_ts`, `window_s`, `window_source`,
   `cutoff_source`, `<field>_ratio_p50/p90/p99` (task over baseline, for each
-  field a rule reads from both), `baseline_run`, `baseline_note`,
-  `baseline_tasks`, `baseline_<field>` for each field the rules read from the
-  baseline, `lifecycle_mode` (`async`, `sync`, `mixed`, or empty when the run
+  field a rule reads from both; null over a baseline of 0), `baseline_run`,
+  `baseline_note`, `baseline_tasks`, `baseline_<field>` for each field the
+  rules read from the baseline, `lifecycle_mode` (`async`, `sync`, `mixed`, or empty when the run
   doesn't say; `wall_ms` covers the snapshot upload only in the sync mode),
   `skipped_records`.
 - Invalid: no `logs.txt` or no task records, an empty window or one without
