@@ -28,6 +28,11 @@ from typing import Any
 import controlplane
 from util import build_and_push
 
+USES_SHARED_WORKLOADS = True
+
+def teardown_workloads() -> None:
+    pass
+
 TEST_TYPE = "locust"
 
 

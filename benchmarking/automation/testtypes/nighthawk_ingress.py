@@ -27,6 +27,11 @@ from typing import Any
 
 from util import build_and_push, parse_duration_seconds, run
 
+USES_SHARED_WORKLOADS = True
+
+def teardown_workloads() -> None:
+    pass
+
 TEST_TYPE = "nighthawk-ingress"
 
 # Defaults for the tests.yaml `nighthawk-ingress:` block; envoyCpu has no default —
