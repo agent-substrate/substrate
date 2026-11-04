@@ -109,11 +109,18 @@ rejects that option with agentgateway rather than silently omitting it.
 
 ## Prerequisites
 
-- A Kubernetes cluster with Agent Substrate installed as in the [Quickstart](../../docs/get-started/quickstart.md)
-  (with `ATE_INSTALL_KIND=true` exported in your shell on [kind](https://kind.sigs.k8s.io/)), [GKE Quickstart](../../README.md#gke-quickstart), or [Operator Install Guide](../../docs/guides/operator-install.md), with the dataplane
-  [chosen above](#choose-a-dataplane). Egress is enabled by the ateapi flag above.
-- `atenet-router` configured with `--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client`
-  (`ATE_INGRESS_ALLOWED_SPIFFE_IDS`, see [Ingress to actors](../../docs/guides/operator-install.md#ingress-to-actors)) so `kubectl ate proxy actor` and the automated test can reach the demo actor.
+- A Kubernetes cluster with Agent Substrate installed as in the
+  [Quickstart](../../docs/get-started/quickstart.md) (with `ATE_INSTALL_KIND=true`
+  exported in your shell on [kind](https://kind.sigs.k8s.io/)),
+  [GKE Quickstart](../../README.md#gke-quickstart), or
+  [Operator Install Guide](../../docs/guides/operator-install.md), with the
+  dataplane [chosen above](#choose-a-dataplane). Egress is enabled by the ateapi
+  flag above.
+- `atenet-router` configured with
+  `--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client`
+  (`ATE_INGRESS_ALLOWED_SPIFFE_IDS`, see
+  [Ingress to actors](../../docs/guides/operator-install.md#ingress-to-actors))
+  so `kubectl ate proxy actor` and the automated test can reach the demo actor.
 - `kubectl` and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
 
 ## Deploy the demo fixture
@@ -122,7 +129,8 @@ rejects that option with agentgateway rather than silently omitting it.
 go run ./cmd/ate-setup deploy demo egress
 ```
 
-For the microVM runtime, deploy `egress-microvm` instead (`go run ./cmd/ate-setup deploy demo egress-microvm`).
+For the microVM runtime, deploy `egress-microvm` instead
+(`go run ./cmd/ate-setup deploy demo egress-microvm`).
 
 The install applies the worker pool, creates the `ate-demo-egress` atespace and
 the `egress` ActorTemplate (a substrate resource, not a CRD) through the ate

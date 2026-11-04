@@ -24,12 +24,25 @@ See [docs/concepts/request-parking.md](../../docs/concepts/request-parking.md) f
 
 ## Prerequisites
 
-- A Kubernetes cluster with Agent Substrate installed as in the [Quickstart](../../docs/get-started/quickstart.md)
-  (with `ATE_INSTALL_KIND=true` exported in your shell on [kind](https://kind.sigs.k8s.io/)), [GKE Quickstart](../../README.md#gke-quickstart), or [Operator Install Guide](../../docs/guides/operator-install.md).
-- `atenet-router` configured with `--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client`
-  (`ATE_INGRESS_ALLOWED_SPIFFE_IDS`, see [Ingress to actors](../../docs/guides/operator-install.md#ingress-to-actors)) so `kubectl ate proxy actor` can authenticate to the router.
-- A snapshot location (`SNAPSHOT_LOCATION`, see [Snapshot storage](../../docs/guides/operator-install.md#snapshot-storage)) and image repository (`KO_DOCKER_REPO`, or `ko.dockerRepo` in `--config`). On `kind`, `export ATE_INSTALL_KIND=true` configures local defaults (`gs://ate-snapshots/` and `localhost:5001`) automatically.
-- The default Envoy router dataplane (`--atenet-dataplane=envoy`) for Sections C and D, which inspect `:4040/statusz` and patch `--parked-request-max=0` on `atenet-router`.
+- A Kubernetes cluster with Agent Substrate installed as in the
+  [Quickstart](../../docs/get-started/quickstart.md) (with `ATE_INSTALL_KIND=true`
+  exported in your shell on [kind](https://kind.sigs.k8s.io/)),
+  [GKE Quickstart](../../README.md#gke-quickstart), or
+  [Operator Install Guide](../../docs/guides/operator-install.md).
+- `atenet-router` configured with
+  `--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client`
+  (`ATE_INGRESS_ALLOWED_SPIFFE_IDS`, see
+  [Ingress to actors](../../docs/guides/operator-install.md#ingress-to-actors))
+  so `kubectl ate proxy actor` can authenticate to the router.
+- A snapshot location (`SNAPSHOT_LOCATION`, see
+  [Snapshot storage](../../docs/guides/operator-install.md#snapshot-storage))
+  and image repository (`KO_DOCKER_REPO`, or `ko.dockerRepo` in `--config`).
+  On [kind](https://kind.sigs.k8s.io/), setting `ATE_INSTALL_KIND=true`
+  configures local defaults (`gs://ate-snapshots/` and `localhost:5001`)
+  automatically.
+- The default Envoy router dataplane (`--atenet-dataplane=envoy`) for Sections
+  C and D, which inspect `:4040/statusz` and patch `--parked-request-max=0` on
+  `atenet-router`.
 
 ## How to Run on Agent Substrate
 
