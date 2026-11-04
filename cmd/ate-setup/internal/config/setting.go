@@ -15,7 +15,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -35,6 +38,10 @@ const (
 	KindBool
 	KindInt
 	KindDuration
+	// KindPathList is a list of paths, held as one string joined by
+	// os.PathListSeparator, as the environment variable is. The flag is
+	// repeated once per path and the file takes a YAML sequence.
+	KindPathList
 )
 
 // Setting declares one configurable value. It is the single definition: the
@@ -129,9 +136,8 @@ var Registry = []Setting{
 			"<issuer>/.well-known/openid-configuration (default https://idp.<namespace>.svc)",
 	},
 	{
-		// Whitespace-separated, as the environment variable is. The registry
-		// has no list kind, so the value is carried as written and split
-		// where it is used.
+		// Whitespace-separated, as the environment variable is. The value is
+		// carried as written and split where it is used.
 		Key: "docker.buildFlags", Env: "DOCKER_BUILD_FLAGS", Flag: "docker-build-flags",
 		Kind:  KindString,
 		Usage: "Extra docker buildx build flags for the images ko cannot build, whitespace-separated",
@@ -156,6 +162,13 @@ var Registry = []Setting{
 	{
 		Key: "storage.transferGSAName", Env: "SNAPSHOT_TRANSFER_GSA_NAME", Flag: "snapshot-transfer-gsa-name", Kind: KindString,
 		Usage: "Name of the Google service account snapshot transfers run as on GCS, in gcp.projectID. ate-api-server's credential exchange impersonates it (required to deploy ate-api-server on GKE, unused on kind)",
+	},
+
+	{
+		Key: "components", Env: "ATE_INSTALL_COMPONENTS", Flag: "component", Kind: KindPathList,
+		Usage: "Compose the kustomize component in `DIR` into every control plane apply, after " +
+			"the installer's own components. Its patches must select their targets with target:. " +
+			"Repeat to add more; they apply in order. Pass the same components to every later deploy",
 	},
 
 	{
@@ -312,9 +325,8 @@ var Registry = []Setting{
 			"use it on a cluster that serves real actors",
 	},
 	{
-		// Comma-separated, as the router's own flag is. The registry has no
-		// list kind, so the value is carried as written and split where it is
-		// used.
+		// Comma-separated, as the router's own flag is. The value is carried
+		// as written and split where it is used.
 		Key: "ingressAllowedSPIFFEIDs", Env: "ATE_INGRESS_ALLOWED_SPIFFE_IDS", Flag: "ingress-allowed-spiffe-ids",
 		Kind: KindString,
 		Usage: "SPIFFE IDs (exact match, comma-separated) of the clients the ingress router lets reach actors; " +
@@ -328,8 +340,7 @@ var Registry = []Setting{
 
 	{
 		// Comma-separated, as the components' own --preview flag is. The
-		// registry has no list kind, so the value is carried as written and
-		// split where it is used.
+		// value is carried as written and split where it is used.
 		Key: "preview", Env: "ATE_PREVIEW", Flag: "preview", Kind: KindString,
 		Usage: "Preview gates every substrate component runs with, comma-separated; ALL enables all",
 	},
@@ -539,6 +550,10 @@ func (s Setting) bindable() bool { return s.Flag != "" && !s.Secret }
 // no canonical key. One vocabulary across all three channels is worth more
 // than the type shown in help.
 func bind(fs *pflag.FlagSet, s Setting) {
+	if s.Kind == KindPathList {
+		fs.Var(&pathListFlag{}, s.Flag, s.Usage)
+		return
+	}
 	if s.Kind == KindBool {
 		// An empty Default yields nil from parse; the assertion then gives
 		// false, which is right for a bool with no declared default.
@@ -578,7 +593,35 @@ func (s Setting) parse(raw string) (any, error) {
 			return nil, fmt.Errorf("%s must be a duration such as 60s or 5m, got %q", s.Key, raw)
 		}
 		return d, nil
+	case KindPathList:
+		paths := filepath.SplitList(raw)
+		if slices.Contains(paths, "") {
+			return nil, fmt.Errorf("%s must not contain an empty path, got %q", s.Key, raw)
+		}
+		return paths, nil
 	default:
 		return raw, nil
 	}
 }
+
+// pathListFlag collects a repeated flag into a KindPathList value.
+type pathListFlag struct {
+	paths []string
+}
+
+func (f *pathListFlag) Set(v string) error {
+	if v == "" {
+		return errors.New("must not be empty")
+	}
+	if strings.ContainsRune(v, os.PathListSeparator) {
+		return fmt.Errorf("must name one path, without %q", os.PathListSeparator)
+	}
+	f.paths = append(f.paths, v)
+	return nil
+}
+
+func (f *pathListFlag) String() string {
+	return strings.Join(f.paths, string(os.PathListSeparator))
+}
+
+func (f *pathListFlag) Type() string { return "pathList" }

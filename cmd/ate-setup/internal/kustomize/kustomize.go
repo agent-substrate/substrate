@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/api/types"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
+	"sigs.k8s.io/yaml"
 )
 
 // Build renders an overlay directory to a multi-document YAML manifest.
@@ -83,23 +84,27 @@ func ComposeBytes(manifest []byte, components ...string) ([]byte, error) {
 }
 
 func compose(dir, resource string, components []string) ([]byte, error) {
-	var b strings.Builder
-	b.WriteString("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n")
+	k := types.Kustomization{TypeMeta: types.TypeMeta{APIVersion: types.KustomizationVersion, Kind: types.KustomizationKind}}
 	rel, err := relativeTo(dir, resource)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(&b, "  - %s\n", rel)
-	b.WriteString("components:\n")
+	k.Resources = []string{rel}
 	for _, component := range components {
 		rel, err := relativeTo(dir, component)
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&b, "  - %s\n", rel)
+		k.Components = append(k.Components, rel)
+	}
+	// Marshaling quotes paths that YAML would otherwise misread, such as a
+	// directory named "a: b" or "my provider #1".
+	data, err := yaml.Marshal(k)
+	if err != nil {
+		return nil, fmt.Errorf("while serializing a scratch kustomization: %w", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(b.String()), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), data, 0o600); err != nil {
 		return nil, fmt.Errorf("while writing a scratch kustomization: %w", err)
 	}
 	out, err := Build(dir)

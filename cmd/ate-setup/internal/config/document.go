@@ -15,6 +15,7 @@
 package config
 
 import (
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -137,6 +138,8 @@ func scalar(v Value) any {
 			return v.Raw
 		}
 		return n
+	case KindPathList:
+		return filepath.SplitList(v.Raw)
 	default:
 		return v.Raw
 	}

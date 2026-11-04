@@ -53,6 +53,8 @@ func TestEveryConfigFieldIsFedBySomeSetting(t *testing.T) {
 			env[s.Env] = "7"
 		case KindDuration:
 			env[s.Env] = "7m0s"
+		case KindPathList:
+			env[s.Env] = writeComponent(t, t.TempDir(), "Component")
 		default:
 			env[s.Env] = valueFor(s.Key)
 		}
