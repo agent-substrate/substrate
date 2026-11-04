@@ -18,11 +18,17 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"sigs.k8s.io/yaml"
 
 	"google.golang.org/grpc/codes"
@@ -166,7 +172,7 @@ func TestFetchSecretAuthorization(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := NewServer(fake.NewSimpleClientset(secret), authz)
+			srv := NewServer(fake.NewSimpleClientset(secret), authz, 0)
 			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: tc.uri, ActorSpiffeId: tc.actorSpiffeID})
 			if tc.wantCode != codes.OK {
 				if status.Code(err) != tc.wantCode {
@@ -185,7 +191,7 @@ func TestFetchSecretAuthorization(t *testing.T) {
 
 	// With no authorizer configured, enforcement is bypassed entirely.
 	t.Run("nil authorizer bypasses", func(t *testing.T) {
-		srv := NewServer(fake.NewSimpleClientset(secret), nil)
+		srv := NewServer(fake.NewSimpleClientset(secret), nil, 0)
 		if _, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 			Uri:           "ate-secret://k8s.io/default/ns1/example-api/token",
 			ActorSpiffeId: "not-a-spiffe-uri",
@@ -237,7 +243,7 @@ func TestFetchSecret(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(secret)
-			srv := NewServer(client, nil)
+			srv := NewServer(client, nil, 0)
 			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{Uri: tc.uri})
 			if tc.wantCode != codes.OK {
 				if status.Code(err) != tc.wantCode {
@@ -253,6 +259,181 @@ func TestFetchSecret(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Fetches of one Secret within the TTL share a single read, whichever key they
+// ask for. Authorization still runs on a cached Secret, a failed read is not
+// cached, and an expired entry is read again.
+func TestFetchSecretCache(t *testing.T) {
+	// team-a may read any Secret in ns1; team-b only labeled ones.
+	authz, err := newNamespaceAuthorizer(namespacePolicyFile{Policies: []atespaceNamespacePolicy{
+		{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}},
+		{
+			Atespace: "team-b", AllowedNamespaces: []string{"ns1"},
+			SecretSelector: &secretSelector{MatchLabels: map[string]string{"example.com/credential": "true"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("newNamespaceAuthorizer: %v", err)
+	}
+	const teamA = "spiffe://substrate-actor.local/actor/team-a/my-actor"
+	const teamB = "spiffe://substrate-actor.local/actor/team-b/my-actor"
+
+	type fetch struct {
+		// wait is how long to sleep before this fetch, on synctest's clock.
+		wait     time.Duration
+		actor    string
+		key      string
+		wantCode codes.Code
+	}
+	tests := []struct {
+		name string
+		ttl  time.Duration
+		// createAfter is how many fetches run before the Secret exists.
+		createAfter int
+		fetches     []fetch
+		wantGets    int
+	}{
+		{
+			name:     "keys share a read",
+			ttl:      time.Hour,
+			fetches:  []fetch{{actor: teamA, key: "token"}, {actor: teamA, key: "user"}},
+			wantGets: 1,
+		},
+		{
+			name:     "zero ttl reads every time",
+			fetches:  []fetch{{actor: teamA, key: "token"}, {actor: teamA, key: "user"}},
+			wantGets: 2,
+		},
+		{
+			name:     "cached secret still checked against labels",
+			ttl:      time.Hour,
+			fetches:  []fetch{{actor: teamA, key: "token"}, {actor: teamB, key: "token", wantCode: codes.PermissionDenied}},
+			wantGets: 1,
+		},
+		{
+			name:        "missing secret not cached",
+			ttl:         time.Hour,
+			createAfter: 1,
+			fetches:     []fetch{{actor: teamA, key: "token", wantCode: codes.PermissionDenied}, {actor: teamA, key: "token"}},
+			wantGets:    2,
+		},
+		{
+			name:     "expired entry read again",
+			ttl:      10 * time.Second,
+			fetches:  []fetch{{actor: teamA, key: "token"}, {wait: 10 * time.Second, actor: teamA, key: "token"}},
+			wantGets: 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				client := fake.NewSimpleClientset()
+				srv := NewServer(client, authz, tc.ttl)
+				for i, f := range tc.fetches {
+					if i == tc.createAfter {
+						if err := client.Tracker().Add(&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{Name: "example-api", Namespace: "ns1"},
+							Data:       map[string][]byte{"token": []byte("s3cr3t"), "user": []byte("bob")},
+						}); err != nil {
+							t.Fatalf("adding Secret: %v", err)
+						}
+					}
+					time.Sleep(f.wait)
+					_, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
+						Uri:           "ate-secret://k8s.io/default/ns1/example-api/" + f.key,
+						ActorSpiffeId: f.actor,
+					})
+					if status.Code(err) != f.wantCode {
+						t.Fatalf("fetch %d: code = %v, want %v (err=%v)", i, status.Code(err), f.wantCode, err)
+					}
+				}
+				gets := 0
+				for _, a := range client.Actions() {
+					if a.Matches("get", "secrets") {
+						gets++
+					}
+				}
+				if gets != tc.wantGets {
+					t.Errorf("Secret Gets = %d, want %d", gets, tc.wantGets)
+				}
+			})
+		})
+	}
+}
+
+// gatedSecrets counts Secret Gets and holds each one until gate closes. The
+// fake clientset runs reactors under a mutex, so a blocking reactor would
+// serialize the callers instead.
+type gatedSecrets struct {
+	kubernetes.Interface
+	gate chan struct{}
+	gets atomic.Int32
+}
+
+func (g *gatedSecrets) CoreV1() typedcorev1.CoreV1Interface {
+	return gatedCoreV1{g.Interface.CoreV1(), g}
+}
+
+type gatedCoreV1 struct {
+	typedcorev1.CoreV1Interface
+	g *gatedSecrets
+}
+
+func (c gatedCoreV1) Secrets(namespace string) typedcorev1.SecretInterface {
+	return gatedSecretClient{c.CoreV1Interface.Secrets(namespace), c.g}
+}
+
+type gatedSecretClient struct {
+	typedcorev1.SecretInterface
+	g *gatedSecrets
+}
+
+func (s gatedSecretClient) Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Secret, error) {
+	s.g.gets.Add(1)
+	<-s.g.gate
+	return s.SecretInterface.Get(ctx, name, opts)
+}
+
+// Concurrent fetches of one Secret share a single read, even with the cache
+// disabled.
+func TestFetchSecretCollapsesConcurrentReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &gatedSecrets{
+			Interface: fake.NewSimpleClientset(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "example-api", Namespace: "ns1"},
+				Data:       map[string][]byte{"token": []byte("s3cr3t")},
+			}),
+			gate: make(chan struct{}),
+		}
+		srv := NewServer(client, nil, 0)
+
+		const callers = 8
+		var wg sync.WaitGroup
+		errs := make(chan error, callers)
+		for range callers {
+			wg.Go(func() {
+				_, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
+					Uri: "ate-secret://k8s.io/default/ns1/example-api/token",
+				})
+				errs <- err
+			})
+		}
+		// Every caller is now parked on the read or on the flight, so none
+		// can arrive after the read completes and start its own.
+		synctest.Wait()
+		close(client.gate)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Errorf("FetchSecret: %v", err)
+			}
+		}
+		if gets := client.gets.Load(); gets != 1 {
+			t.Errorf("Secret Gets = %d, want 1 for %d concurrent callers", gets, callers)
+		}
+	})
 }
 
 // A grant narrowed by label admits only Secrets carrying those labels. A grant
@@ -303,7 +484,7 @@ func TestFetchSecretSecretNarrowing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newNamespaceAuthorizer: %v", err)
 			}
-			srv := NewServer(fake.NewSimpleClientset(model, caPool), authz)
+			srv := NewServer(fake.NewSimpleClientset(model, caPool), authz, 0)
 			resp, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 				Uri:           "ate-secret://k8s.io/default/ns1/" + tc.secret + "/token",
 				ActorSpiffeId: actorURI,
@@ -526,7 +707,7 @@ func TestFetchSecretLabelGrantHidesExistence(t *testing.T) {
 	srv := NewServer(fake.NewSimpleClientset(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "actor-id-ca-pool", Namespace: "ns1"},
 		Data:       map[string][]byte{"token": []byte("private")},
-	}), authz)
+	}), authz, 0)
 
 	ask := func(name string) (codes.Code, string) {
 		_, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
@@ -560,7 +741,7 @@ func TestFetchSecretMissingSecretIsPermissionDeniedWhenEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newNamespaceAuthorizer: %v", err)
 	}
-	srv := NewServer(fake.NewSimpleClientset(), authz)
+	srv := NewServer(fake.NewSimpleClientset(), authz, 0)
 	if _, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/no-such-secret/token",
 		ActorSpiffeId: "spiffe://substrate-actor.local/actor/team-a/my-actor",
