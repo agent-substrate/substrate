@@ -3101,7 +3101,7 @@ type Capabilities struct {
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # a Linux capability name; "ALL" not accepted
+	// +k8s:customValidation # one of resources.AllowedAddCapabilities
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=64

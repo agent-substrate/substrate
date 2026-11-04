@@ -860,7 +860,7 @@ message Capabilities {
   // +k8s:optional
   // +k8s:maxItems=64
   // +k8s:listType=set
-  // +k8s:customValidation # a Linux capability name; "ALL" not accepted
+  // +k8s:customValidation # one of resources.AllowedAddCapabilities
   repeated string add = 1;
 
   // +k8s:optional

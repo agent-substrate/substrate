@@ -94,11 +94,11 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		wantSource string
 		wantOpts   []string
 	}{
-		{"/var/data", durableDir + "/data", []string{"bind", "rw"}},
-		{"/home/counter", durableDir + "/data", []string{"bind", "rw"}},
-		{"/run/ate", sysInfoDir + "/sysinfo", []string{"bind", "ro"}},
-		{"/mnt/csi", volumesDir + "/csi", []string{"bind", "rw"}},
-		{"/ate", imagecache.ImageVolumeMountPath(bundle, "agent"), []string{"bind", "ro"}},
+		{"/var/data", durableDir + "/data", []string{"bind", "rw", "nodev"}},
+		{"/home/counter", durableDir + "/data", []string{"bind", "rw", "nodev"}},
+		{"/run/ate", sysInfoDir + "/sysinfo", []string{"bind", "ro", "nodev"}},
+		{"/mnt/csi", volumesDir + "/csi", []string{"bind", "rw", "nodev"}},
+		{"/ate", imagecache.ImageVolumeMountPath(bundle, "agent"), []string{"bind", "ro", "nodev"}},
 	} {
 		m := mountFor(t, spec, tc.dest)
 		if m.Type != "bind" {
@@ -130,7 +130,7 @@ func TestBuild_VolumeReplacesSystemMount(t *testing.T) {
 			if i < 0 {
 				t.Fatalf("no system mount at %q", dest)
 			}
-			want[i] = specs.Mount{Destination: dest, Type: "bind", Source: durableDir + "/data", Options: []string{"bind", "rw"}}
+			want[i] = specs.Mount{Destination: dest, Type: "bind", Source: durableDir + "/data", Options: []string{"bind", "rw", "nodev"}}
 			if !reflect.DeepEqual(spec.Mounts, want) {
 				t.Errorf("Mounts =\n%+v\nwant\n%+v", spec.Mounts, want)
 			}

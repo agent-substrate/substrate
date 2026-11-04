@@ -251,7 +251,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 			Args:    []string{"serve"},
 			Env:     []*ateletpb.EnvVar{{Name: "GREETING", Value: "hello"}},
 			SecurityContext: &ateletpb.SecurityContext{
-				Capabilities: &ateletpb.Capabilities{Add: []string{"NET_ADMIN"}, Drop: []string{"KILL"}},
+				Capabilities: &ateletpb.Capabilities{Add: []string{"SETUID"}, Drop: []string{"KILL"}},
 			},
 			Resources: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
 		}},
@@ -265,7 +265,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	want := []*ateworkerpb.ContainerSpec{{
 		Args:         []string{"/bin/app", "serve"},
 		Env:          []string{"GREETING=hello", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE"},
+		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_BIND_SERVICE", "CAP_SETUID"},
 		Resources:    &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
 		Cwd:          "/",
 	}}

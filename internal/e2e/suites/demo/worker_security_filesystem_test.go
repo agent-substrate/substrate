@@ -219,7 +219,7 @@ func TestWorkerSecurityFilesystem(t *testing.T) {
 					HttpGet: &ateapi.HttpGetAction{Path: "/healthz", Port: 80}, TimeoutSeconds: 30,
 				},
 				SecurityContext: &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{
-					Add: []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID", "MKNOD"},
+					Add: []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID"},
 				}},
 			}}
 		},
@@ -257,12 +257,12 @@ func TestWorkerSecurityFilesystem(t *testing.T) {
 		if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapi.ResumeActorRequest{Actor: ref}); err != nil {
 			t.Fatal(err)
 		}
-		method, path := "GET", "/filesystem"
+		method, path := "GET", "/filesystem?icmp=1"
 		if turn == 1 {
 			method = "POST"
 		}
 		if e2e.IsMicroVM() {
-			path += "?nonroot=1"
+			path += "&nonroot=1"
 		}
 		raw, err := callActorPath(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName}, method, path)
 		if err != nil {
