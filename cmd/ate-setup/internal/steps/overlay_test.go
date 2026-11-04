@@ -940,6 +940,158 @@ patches:
 	}
 }
 
+// objectStorePluginSidecars returns the objectstore-plugin init container of
+// atelet and of ate-api-server, failing unless each has exactly one.
+func objectStorePluginSidecars(t *testing.T, manifest []byte) (node, control corev1.Container) {
+	t.Helper()
+	daemonSets, deployments := dataPlaneWorkloads(t, manifest)
+	find := func(workload string, spec corev1.PodSpec) corev1.Container {
+		var found []corev1.Container
+		for _, c := range spec.InitContainers {
+			if c.Name == "objectstore-plugin" {
+				found = append(found, c)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%s has %d objectstore-plugin init containers, want 1", workload, len(found))
+		}
+		return found[0]
+	}
+	return find("atelet", daemonSets["atelet"].Spec.Template.Spec),
+		find("ate-api-server", deployments["ate-api-server"].Spec.Template.Spec)
+}
+
+// providerImageComponent writes a component that sets the objectstore-plugin
+// image of each workload in targets, given as kind and name.
+func providerImageComponent(t *testing.T, targets ...[2]string) string {
+	t.Helper()
+	body := "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\npatches:\n"
+	for _, target := range targets {
+		body += fmt.Sprintf(`  - target:
+      kind: %s
+      name: %s
+    patch: |-
+      apiVersion: apps/v1
+      kind: %s
+      metadata:
+        name: %s
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: objectstore-plugin
+                image: example.invalid/objectstore-plugin:v1
+`, target[0], target[1], target[0], target[1])
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// Under the external backend, rendering fails when a component leaves either
+// objectstore-plugin sidecar on the in-tree image, naming the workload and the
+// component.
+func TestRenderExternalStorageRequiresProviderImages(t *testing.T) {
+	root := repoRoot(t)
+	node := [2]string{"DaemonSet", "atelet"}
+	control := [2]string{"Deployment", "ate-api-server"}
+	for _, tc := range []struct {
+		name    string
+		path    string
+		targets [][2]string
+		wantErr string // empty for success
+	}{
+		{name: "both patched", path: SystemOverlay(&config.Config{}), targets: [][2]string{node, control}},
+		{name: "atelet alone patched", path: installDir + "/atelet.yaml", targets: [][2]string{node}},
+		{name: "no target matches", path: SystemOverlay(&config.Config{}), targets: [][2]string{{"DaemonSet", "atelet-node"}, {"Deployment", "api-server"}}, wantErr: "container objectstore-plugin in"},
+		{name: "atelet not patched", path: SystemOverlay(&config.Config{}), targets: [][2]string{control}, wantErr: "container objectstore-plugin in DaemonSet atelet"},
+		{name: "ate-api-server not patched", path: SystemOverlay(&config.Config{}), targets: [][2]string{node}, wantErr: "container objectstore-plugin in Deployment ate-api-server"},
+		{name: "ate-api-server alone not patched", path: installDir + "/ate-api-server.yaml", targets: [][2]string{node}, wantErr: "container objectstore-plugin in Deployment ate-api-server"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			component := providerImageComponent(t, tc.targets...)
+			e := &Env{Cfg: &config.Config{
+				Root:           root,
+				Router:         config.RouterEnvoy,
+				StorageBackend: config.StorageBackendExternal,
+				Components:     []string{component},
+			}}
+			_, err := e.render(e.Cfg.Path(tc.path))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("render = nil error, want an error")
+			}
+			for _, want := range []string{tc.wantErr, images.KoReference("cmd/objectstore-plugin"), "--component " + component} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("render error %q does not contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// The in-tree backends keep their storage settings and probe on both sidecars.
+// Under the external backend no in-tree object store setting reaches either
+// sidecar, on any overlay.
+func TestRenderStorageBackend(t *testing.T) {
+	root := repoRoot(t)
+	awsEnv := []string{"AWS_REGION", "AWS_ENDPOINT_URL", "AWS_S3_USE_PATH_STYLE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+	for _, tc := range []struct {
+		name    string
+		cfg     config.Config
+		backend string // ATE_STORAGE_BACKEND on both sidecars; empty for none
+		aws     bool   // whether the AWS_* settings are set
+	}{
+		{name: "gcs", cfg: config.Config{Router: config.RouterEnvoy, StorageBackend: config.StorageBackendGCS}, backend: "gcs"},
+		{name: "s3 kind", cfg: config.Config{Router: config.RouterEnvoy, Kind: true, StorageBackend: config.StorageBackendS3}, backend: "s3", aws: true},
+		{name: "external", cfg: config.Config{Router: config.RouterEnvoy, StorageBackend: config.StorageBackendExternal}},
+		{name: "external kind", cfg: config.Config{Router: config.RouterEnvoy, Kind: true, StorageBackend: config.StorageBackendExternal}},
+		{name: "external agentgateway", cfg: config.Config{Router: config.RouterAgentgateway, StorageBackend: config.StorageBackendExternal}},
+		{name: "external kind agentgateway", cfg: config.Config{Router: config.RouterAgentgateway, Kind: true, StorageBackend: config.StorageBackendExternal}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			if cfg.StorageBackend == config.StorageBackendExternal {
+				cfg.Components = []string{providerImageComponent(t, [2]string{"DaemonSet", "atelet"}, [2]string{"Deployment", "ate-api-server"})}
+			}
+			e := &Env{Cfg: &cfg}
+			rendered, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			node, control := objectStorePluginSidecars(t, rendered)
+			for _, c := range []corev1.Container{node, control} {
+				env := map[string]string{}
+				for _, v := range c.Env {
+					env[v.Name] = v.Value
+				}
+				if got, ok := env["ATE_STORAGE_BACKEND"]; got != tc.backend || ok != (tc.backend != "") {
+					t.Errorf("objectstore-plugin ATE_STORAGE_BACKEND = %q (set %t), want %q", got, ok, tc.backend)
+				}
+				for _, name := range awsEnv {
+					if _, ok := env[name]; ok != tc.aws {
+						t.Errorf("objectstore-plugin env %s set = %t, want %t", name, ok, tc.aws)
+					}
+				}
+				if _, ok := env["POD_NAMESPACE"]; !ok {
+					t.Errorf("objectstore-plugin env = %v, missing POD_NAMESPACE", env)
+				}
+				if p := c.StartupProbe; p == nil || p.Exec == nil || !slices.Contains(p.Exec.Command, "healthcheck") {
+					t.Errorf("objectstore-plugin startupProbe = %+v, want the in-tree healthcheck", p)
+				}
+			}
+		})
+	}
+}
+
 // Both paths that deliver the Envoy router pass it the install's allowlist,
 // whatever the overlay, and pass none when the install sets none.
 func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {

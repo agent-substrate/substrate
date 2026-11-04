@@ -90,6 +90,8 @@ func valueFor(key string) string {
 	switch key {
 	case "atenet.dataplane":
 		return RouterEnvoy
+	case "storage.backend":
+		return StorageBackendGCS
 	case "clusterSize":
 		return ClusterSizeSize0
 	case "ingressAllowedSPIFFEIDs", "ateapi.authz.egressGatewayExtraSPIFFEIDs":

@@ -91,6 +91,7 @@ func loadEnv(t *testing.T) {
 		"PROJECT_ID",
 		"SNAPSHOT_LOCATION",
 		"SNAPSHOT_TRANSFER_GSA_NAME",
+		"STORAGE_BACKEND",
 		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
 		// Unset, not blanked. An exported empty variable is a value a channel
@@ -369,6 +370,7 @@ func TestRequireTransferServiceAccount(t *testing.T) {
 		{name: "GKE without a project", cfg: Config{TransferGSAName: "xfer"}, wantKey: "gcp.projectID"},
 		{name: "GKE with both", cfg: Config{TransferGSAName: "xfer", ProjectID: "proj"}},
 		{name: "kind without either", cfg: Config{Kind: true}},
+		{name: "external without either", cfg: Config{StorageBackend: StorageBackendExternal}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.cfg.RequireTransferServiceAccount()
@@ -397,10 +399,17 @@ func TestLoadTransferServiceAccount(t *testing.T) {
 		{name: "built from the name and the project", env: map[string]string{"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj"}, wantName: "xfer", want: "xfer@proj.iam.gserviceaccount.com"},
 		{name: "no default name", env: map[string]string{"PROJECT_ID": "proj"}},
 		{name: "kind ignores the environment", opts: Options{Kind: true}, env: map[string]string{"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj"}},
+		{name: "external uses none", env: map[string]string{
+			"SNAPSHOT_TRANSFER_GSA_NAME": "xfer", "PROJECT_ID": "proj",
+			"STORAGE_BACKEND": StorageBackendExternal, "ATE_INSTALL_COMPONENTS": "COMPONENT",
+		}, wantName: "xfer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loadEnv(t)
 			for k, v := range tc.env {
+				if v == "COMPONENT" {
+					v = writeComponent(t, t.TempDir(), "Component")
+				}
 				t.Setenv(k, v)
 			}
 			cfg, err := Load(tc.opts)

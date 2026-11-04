@@ -152,6 +152,12 @@ var Registry = []Setting{
 	},
 
 	{
+		Key: "storage.backend", Env: "STORAGE_BACKEND", Flag: "storage-backend", Kind: KindString,
+		Default: StorageBackendGCS,
+		Usage: "Object store of the objectstore-plugin sidecars: gcs, s3 (kind only, where it is the default) " +
+			"or external, where a --component configures the sidecars",
+	},
+	{
 		Key: "storage.bucketName", Env: "BUCKET_NAME", Flag: "storage-bucket-name", Kind: KindString,
 		Usage: "Object-storage bucket passed to install scripts; the kind profile derives --snapshot-location from it",
 	},

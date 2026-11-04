@@ -25,6 +25,9 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/kustomize/kyaml/kio"
+	"sigs.k8s.io/kustomize/kyaml/yaml"
+
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
@@ -53,6 +56,11 @@ const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
 const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-static-mtls"
 
+// storageExternalComponent is the kustomize component that removes the in-tree
+// object store settings from the objectstore-plugin sidecars, layered over
+// every control plane apply under --storage-backend=external.
+const storageExternalComponent = installDir + "/components/storage-external"
+
 // components lists the kustomize components every control plane apply is
 // composed with: ours, then the operator's --component directories. Each patch
 // targets its workloads by name, and kustomize leaves a stream alone when
@@ -73,6 +81,9 @@ func (e *Env) components() []string {
 	}
 	if e.Cfg.CordonSystemInfraComponents {
 		components = append(components, e.Cfg.Path(cordonSystemInfraComponent))
+	}
+	if e.Cfg.StorageBackend == config.StorageBackendExternal {
+		components = append(components, e.Cfg.Path(storageExternalComponent))
 	}
 	// Operator components come last, so they patch the result of ours.
 	return append(components, e.Cfg.Components...)
@@ -105,7 +116,16 @@ func SystemOverlay(cfg *config.Config) string {
 // control plane workload whichever apply path delivers it.
 func (e *Env) render(path string) ([]byte, error) {
 	if components := e.components(); len(components) > 0 {
-		return kustomize.Compose(path, components...)
+		manifest, err := kustomize.Compose(path, components...)
+		if err != nil {
+			return nil, err
+		}
+		if e.Cfg.StorageBackend == config.StorageBackendExternal {
+			if err := e.checkProviderPluginImages(manifest); err != nil {
+				return nil, err
+			}
+		}
+		return manifest, nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -119,6 +139,34 @@ func (e *Env) render(path string) ([]byte, error) {
 		return nil, fmt.Errorf("while reading %s: %w", path, err)
 	}
 	return data, nil
+}
+
+// checkProviderPluginImages fails if an objectstore-plugin container in
+// manifest still runs the in-tree image. Kustomize skips a patch whose target
+// matches nothing, so a --component that names the wrong workload would
+// otherwise leave the in-tree sidecar in place with no storage backend set.
+func (e *Env) checkProviderPluginImages(manifest []byte) error {
+	inTree := images.KoReference("cmd/objectstore-plugin")
+	nodes, err := (&kio.ByteReader{
+		Reader:                bytes.NewReader(manifest),
+		OmitReaderAnnotations: true,
+	}).Read()
+	if err != nil {
+		return fmt.Errorf("while parsing manifest: %w", err)
+	}
+	for _, node := range nodes {
+		for _, field := range []string{"initContainers", "containers"} {
+			image, err := node.Pipe(yaml.Lookup("spec", "template", "spec", field, "[name=objectstore-plugin]", "image"))
+			if err != nil {
+				return err
+			}
+			if image != nil && yaml.GetValue(image) == inTree {
+				return fmt.Errorf("storage.backend is %s, but container objectstore-plugin in %s %s still runs the in-tree image %s; check that a patch in --component %s targets it",
+					config.StorageBackendExternal, node.GetKind(), node.GetName(), inTree, strings.Join(e.Cfg.Components, ", "))
+			}
+		}
+	}
+	return nil
 }
 
 // renderBytes is render for a manifest already held in memory.
