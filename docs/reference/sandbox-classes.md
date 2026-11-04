@@ -22,7 +22,6 @@ An [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) select
 | CPU limit enforcement | Host cgroup v2 `cpu.max` on the sandbox | Guest vCPU count, plus host cgroup v2 `cpu.max` on the VMM and `virtiofsd` |
 | Minimum `limits.memoryBytes` | None enforced by worker | `128 MiB` (`134217728` bytes) |
 | Per-container limits (`containers[].resources.limits`) | Accepted in the API, ignored at runtime | Enforced via guest cgroups (`cpuMillicores` floored at 10) |
-| `NET_RAW` capability | Stripped (`runsc` default `--net-raw=false`) | Granted when listed in `securityContext.capabilities.add` |
 | `VOLUMES` and `ROOTFS` snapshot format | `runsc` filesystem checkpoint bundles (`fs/`, `rootfs/`) | Tar archives of the host directories |
 
 ## CPU Count and Throttling
@@ -47,17 +46,6 @@ Containers may declare optional `containers[].resources.limits` (`cpuMillicores`
 - **MicroVM (`microvm`):** The guest enforces each container's limits in its own cgroup. Substrate raises a `cpuMillicores` limit below 10 to 10. A container that exceeds its memory limit is OOM-killed on its own while sibling containers in the actor keep running.
 
 See [Per-container limits](api-guide.md#per-container-limits) in the API Guide.
-
-## Capabilities (`NET_RAW`)
-
-Both sandbox classes start from the same default capability set (`AUDIT_WRITE`, `KILL`, `NET_BIND_SERVICE`), allow binding ports below 1024 without `NET_BIND_SERVICE`, and allow `setuid` binaries.
-
-They differ on `NET_RAW`:
-
-- **gVisor (`gvisor`):** `ateworker-gvisor` does not enable `runsc --net-raw`, which defaults to `false`. `runsc` then removes `CAP_NET_RAW` from the container and disables raw sockets (`AF_PACKET` and `SOCK_RAW`), even when `securityContext.capabilities.add` includes `NET_RAW`.
-- **MicroVM (`microvm`):** Adding `NET_RAW` in `securityContext.capabilities.add` grants `CAP_NET_RAW` inside the guest container.
-
-See [Container Capabilities](api-guide.md#container-capabilities-securitycontextcapabilities) in the API Guide.
 
 ## System Mounts (`/dev/shm` and `/tmp`)
 

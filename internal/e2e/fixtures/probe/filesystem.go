@@ -15,6 +15,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -75,6 +76,11 @@ func filesystem(w http.ResponseWriter, r *http.Request) {
 			response.Error = err.Error()
 		}
 	}
+	if response.Error == "" && r.URL.Query().Get("icmp") == "1" {
+		if err := checkUnprivilegedICMP(); err != nil {
+			response.Error = err.Error()
+		}
+	}
 	writeJSON(w, response)
 }
 
@@ -114,7 +120,8 @@ func readFilesystemFile(path string) (filesystemFile, error) {
 }
 
 // checkNonRootFilesystem also exercises virtiofsd's credential switching and
-// device-node creation. The caller enables it only on the microVM lane.
+// checks that device-node creation is denied. The caller enables it only on
+// the microVM lane.
 func checkNonRootFilesystem() error {
 	self, err := os.Executable()
 	if err != nil {
@@ -143,8 +150,23 @@ func checkNonRootFilesystem() error {
 	if output, err := run(2000, "read"); err == nil || !strings.Contains(string(output), "permission denied") {
 		return fmt.Errorf("UID 2000 private-file read: err=%v output=%q, want permission denied", err, output)
 	}
-	if err := syscall.Mknod("/var/worker-security/null", syscall.S_IFCHR|0o600, (1<<8)|3); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("guest device-node creation: %w", err)
+	if err := syscall.Mknod("/var/worker-security/null", syscall.S_IFCHR|0o600, (1<<8)|3); !errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("guest device-node creation: got %v, want EPERM", err)
+	}
+	return nil
+}
+
+// checkUnprivilegedICMP checks that a non-root user can open the ICMP echo
+// socket ping uses, with no NET_RAW. Both runtimes allow it.
+func checkUnprivilegedICMP() error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(self, "filesystem-child", "icmp-socket", "-")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 1000, Gid: 1000, NoSetGroups: true}}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("UID 1000 ICMP echo socket: %w: %s", err, output)
 	}
 	return nil
 }
@@ -157,6 +179,13 @@ func filesystemChild(operation, path string) error {
 		data, err := os.ReadFile(path)
 		if err == nil {
 			_, err = os.Stdout.Write(data)
+		}
+		return err
+	case "icmp-socket":
+		// What ping opens without NET_RAW.
+		fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_ICMP)
+		if err == nil {
+			syscall.Close(fd)
 		}
 		return err
 	default:

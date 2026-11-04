@@ -431,9 +431,12 @@ type CreateSandboxOpts struct {
 // volumes every container runs on). Mirrors kata startSandbox.
 func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSandboxOpts) error {
 	storages := []*agentpb.Storage{{
-		Driver:     virtioFSDriver,
-		Source:     FsTag,
-		Fstype:     typeVirtioFS,
+		Driver: virtioFSDriver,
+		Source: FsTag,
+		Fstype: typeVirtioFS,
+		// nodev on the share itself also covers its automounted submounts,
+		// which a nodev remount of each container bind does not reach.
+		Options:    []string{"nodev"},
 		MountPoint: guestSharedDir,
 	}}
 	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{

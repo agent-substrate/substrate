@@ -58,7 +58,7 @@ func TestGVisorCgroupLeafMatchesTheShapedPath(t *testing.T) {
 }
 
 // runsc replaces /dev and /dev/pts with its own mounts and ignores mqueue
-// mounts and the nodev and strictatime options, so ShapeGVisor drops them.
+// mounts and the strictatime option, so ShapeGVisor drops them. nodev stays.
 // /tmp is capped at half the memory limit when tmpfs.
 func TestShapeGVisor_SystemMounts(t *testing.T) {
 	const durableDir = "/node/actors/a/durable-dir"
@@ -73,24 +73,24 @@ func TestShapeGVisor_SystemMounts(t *testing.T) {
 			name:   "memory limit",
 			memory: 512 << 20,
 			wantAll: []specs.Mount{
-				{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec"}},
-				{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "mode=1777", "size=65536k"}},
-				{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "ro"}},
-				{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "mode=1777", "size=268435456"}},
+				{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
+				{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
+				{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
+				{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777", "size=268435456"}},
 			},
 		},
 		{
 			name:   "minimum positive memory limit",
 			memory: 1,
 			wantEach: []specs.Mount{
-				{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "mode=1777", "size=1"}},
+				{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777", "size=1"}},
 			},
 		},
 		{
 			name:   "no memory limit",
 			memory: 0,
 			wantEach: []specs.Mount{
-				{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "mode=1777"}},
+				{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777"}},
 			},
 		},
 		{
@@ -101,8 +101,8 @@ func TestShapeGVisor_SystemMounts(t *testing.T) {
 				{Name: "tmp", MountPath: "/tmp"},
 			},
 			wantEach: []specs.Mount{
-				{Destination: "/dev/mqueue", Type: "bind", Source: durableDir + "/mq", Options: []string{"bind", "rw"}},
-				{Destination: "/tmp", Type: "bind", Source: durableDir + "/tmp", Options: []string{"bind", "rw"}},
+				{Destination: "/dev/mqueue", Type: "bind", Source: durableDir + "/mq", Options: []string{"bind", "rw", "nodev"}},
+				{Destination: "/tmp", Type: "bind", Source: durableDir + "/tmp", Options: []string{"bind", "rw", "nodev"}},
 			},
 		},
 	} {
