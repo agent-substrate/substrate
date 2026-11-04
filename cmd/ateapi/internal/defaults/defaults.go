@@ -32,6 +32,8 @@ func Apply(m proto.Message) {
 		applyAccessPolicyDefaults(v)
 	case *ateapi.Actor:
 		applyActorDefaults(v)
+	case *ateapi.ActorAssignment:
+		applyActorAssignmentDefaults(v)
 	case *ateapi.ActorTemplate:
 		applyActorTemplateDefaults(v)
 	case *ateapi.Atespace:
@@ -96,6 +98,8 @@ func applyContainerDefaults(c *ateapi.Container) {
 func applyAccessPolicyDefaults(*ateapi.AccessPolicy) {}
 
 func applyActorDefaults(*ateapi.Actor) {}
+
+func applyActorAssignmentDefaults(*ateapi.ActorAssignment) {}
 
 func applyAtespaceDefaults(*ateapi.Atespace) {}
 
