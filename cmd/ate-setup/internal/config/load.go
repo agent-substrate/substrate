@@ -234,6 +234,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		APIAuthzBootstrapOwners:     bootstrapOwners,
 		EgressGatewayExtraSPIFFEIDs: splitList(r.String("ateapi.authz.egressGatewayExtraSPIFFEIDs")),
 
+		StorageBackend:     r.String("storage.backend"),
 		BucketName:         r.String("storage.bucketName"),
 		SnapshotLocation:   r.String("storage.snapshotLocation"),
 		TransferGSAName:    r.String("storage.transferGSAName"),
@@ -419,14 +420,53 @@ func applyKindDefaults(r *Resolved) {
 	if !namedExplicitly(r, "ko.defaultPlatforms") {
 		r.set("ko.defaultPlatforms", "linux/"+runtime.GOARCH, OriginKindProfile)
 	}
+	// Kind stores snapshots in its local rustfs through S3. Unlike the
+	// settings above, an ambient value is kept, and validateResolved refuses
+	// gcs on kind.
+	if !r.Supplied("storage.backend") {
+		r.set("storage.backend", StorageBackendS3, OriginKindProfile)
+	}
 	if !namedExplicitly(r, "storage.bucketName") {
 		r.set("storage.bucketName", "ate-snapshots", OriginKindProfile)
 	}
 	// Follows the bucket, so the location names the one the local rustfs
 	// creates rather than a GCS bucket from the developer's environment.
-	if !namedExplicitly(r, "storage.snapshotLocation") {
+	// Under external the location is in the provider's object store.
+	if !namedExplicitly(r, "storage.snapshotLocation") && r.String("storage.backend") != StorageBackendExternal {
 		r.set("storage.snapshotLocation", "gs://"+r.String("storage.bucketName")+"/", OriginKindProfile)
 	}
+}
+
+// validateStorageBackend checks the backend against the cluster and the
+// settings it needs.
+func validateStorageBackend(cfg *Config, r *Resolved) error {
+	backend, _ := r.Value("storage.backend")
+	kind, _ := r.Value(kindEnabledKey)
+	switch cfg.StorageBackend {
+	case StorageBackendGCS:
+		if cfg.Kind {
+			return &ConflictError{A: backend, B: kind, Why: "kind stores snapshots in its local rustfs through " + StorageBackendS3}
+		}
+	case StorageBackendS3:
+		if !cfg.Kind {
+			return &ConflictError{A: backend, B: kind, Why: StorageBackendS3 + " is supported only on kind"}
+		}
+	case StorageBackendExternal:
+		if len(cfg.Components) == 0 {
+			components, _ := Lookup("components")
+			return fmt.Errorf("%s=%s (from %s) needs a component that configures the objectstore-plugin sidecars: set %s",
+				backend.Setting.Key, backend.Raw, backend.From.Describe(backend.Setting), components.Channels())
+		}
+		if cfg.FakeDataPlane {
+			fake, _ := r.Value("fakeDataPlane.enabled")
+			return &ConflictError{A: backend, B: fake,
+				Why: "fake-atelet takes the storage settings of the in-tree objectstore-plugin"}
+		}
+	default:
+		return &InvalidError{Value: backend, Want: strings.Join(
+			[]string{StorageBackendGCS, StorageBackendS3, StorageBackendExternal}, ", ")}
+	}
+	return nil
 }
 
 // namedExplicitly reports whether a flag or configuration file supplied the
@@ -467,6 +507,10 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			return &InvalidError{Value: ipType, Want: strings.Join(
 				[]string{CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC}, ", ")}
 		}
+	}
+
+	if err := validateStorageBackend(cfg, r); err != nil {
+		return err
 	}
 
 	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {

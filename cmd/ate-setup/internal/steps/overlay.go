@@ -53,6 +53,11 @@ const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
 const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-static-mtls"
 
+// storageExternalComponent is the kustomize component that removes the in-tree
+// object store settings from the objectstore-plugin sidecars, layered over
+// every control plane apply under --storage-backend=external.
+const storageExternalComponent = installDir + "/components/storage-external"
+
 // components lists the kustomize components every control plane apply is
 // composed with: ours, then the operator's --component directories. Each patch
 // targets its workloads by name, and kustomize leaves a stream alone when
@@ -73,6 +78,9 @@ func (e *Env) components() []string {
 	}
 	if e.Cfg.CordonSystemInfraComponents {
 		components = append(components, e.Cfg.Path(cordonSystemInfraComponent))
+	}
+	if e.Cfg.StorageBackend == config.StorageBackendExternal {
+		components = append(components, e.Cfg.Path(storageExternalComponent))
 	}
 	// Operator components come last, so they patch the result of ours.
 	return append(components, e.Cfg.Components...)

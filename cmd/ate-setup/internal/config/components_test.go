@@ -179,3 +179,68 @@ func TestParseFileComponentsMustBePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadStorageBackend(t *testing.T) {
+	component := writeComponent(t, t.TempDir(), "Component")
+	for _, tc := range []struct {
+		name         string
+		opts         Options
+		env          map[string]string
+		want         string
+		wantFrom     Origin
+		wantLocation string
+		wantErr      []string
+	}{
+		{name: "default", want: StorageBackendGCS, wantFrom: OriginDefault},
+		{name: "kind profile", opts: Options{Kind: true}, want: StorageBackendS3, wantFrom: OriginKindProfile, wantLocation: "gs://ate-snapshots/"},
+		{
+			name: "external", env: map[string]string{"STORAGE_BACKEND": "external", "ATE_INSTALL_COMPONENTS": component},
+			want: StorageBackendExternal, wantFrom: OriginEnv,
+		},
+		{
+			name: "external on kind derives no location", opts: Options{Kind: true},
+			env:  map[string]string{"STORAGE_BACKEND": "external", "ATE_INSTALL_COMPONENTS": component},
+			want: StorageBackendExternal, wantFrom: OriginEnv,
+		},
+		{name: "unknown", env: map[string]string{"STORAGE_BACKEND": "azure"}, wantErr: []string{"gcs, s3, external", "STORAGE_BACKEND"}},
+		{name: "s3 off kind", env: map[string]string{"STORAGE_BACKEND": "s3"}, wantErr: []string{"only on kind"}},
+		{name: "gcs on kind", opts: Options{Kind: true}, env: map[string]string{"STORAGE_BACKEND": "gcs"}, wantErr: []string{"rustfs"}},
+		{name: "external without a component", env: map[string]string{"STORAGE_BACKEND": "external"}, wantErr: []string{"--component"}},
+		{
+			name: "external with the fake data plane", opts: Options{FakeDataPlane: true},
+			env:     map[string]string{"STORAGE_BACKEND": "external", "ATE_INSTALL_COMPONENTS": component},
+			wantErr: []string{"fakeDataPlane.enabled"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load(tc.opts)
+			if len(tc.wantErr) > 0 {
+				if err == nil {
+					t.Fatal("Load() = nil error, want an error")
+				}
+				for _, want := range tc.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q does not contain %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.StorageBackend != tc.want {
+				t.Errorf("StorageBackend = %q, want %q", cfg.StorageBackend, tc.want)
+			}
+			if v, _ := cfg.Resolved().Value("storage.backend"); v.From != tc.wantFrom {
+				t.Errorf("storage.backend from %v, want %v", v.From, tc.wantFrom)
+			}
+			if cfg.SnapshotLocation != tc.wantLocation {
+				t.Errorf("SnapshotLocation = %q, want %q", cfg.SnapshotLocation, tc.wantLocation)
+			}
+		})
+	}
+}
