@@ -58,10 +58,7 @@ The sizes:
      KUBECTL_CONTEXT=<context> hack/setup-e2e-egress-tls-kind.sh
      ```
    - To run on a smaller cluster, lower `requests.cpu` and `requests.memory` in `traffic-driver.yaml.tmpl` and `nighthawk-server.yaml` before deploying. A worker pod without limits offers its node's allocatable CPU and memory to actors, so on nodes with fewer than 16 allocatable vCPUs also lower `cpuMillicores` in `traffic-driver-template.yaml.tmpl`. On a cluster without the two tainted pools, leave out `--cordon-system-infra-components`; the gateway then shares nodes with the load.
-2. **`kubectl-ate` installed in `PATH`**:
-   ```bash
-   go install ./cmd/kubectl-ate
-   ```
+2. **`kubectl-ate`**: `deploy-traffic-driver.sh` builds it from `./cmd/kubectl-ate` into a temporary directory.
 3. **Docker** running locally (used to run `nighthawk_client`).
 
 ## Setup
