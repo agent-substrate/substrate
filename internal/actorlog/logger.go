@@ -118,67 +118,94 @@ func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerN
 	return pw, nil
 }
 
+// maxLineBytes bounds how much of one line WrapContainerLogs holds in memory.
+// A longer line is logged in chunks of this size, as plain text.
+const maxLineBytes = 64 << 10
+
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified
 // structured format. containerName is added as the ate.actor.container.name label
 // so multi-container actors can be demultiplexed.
 func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttribution, containerName string) {
 	rdr := bufio.NewReader(r)
+	var line []byte
+	// split is set once a chunk of the current line has been logged.
+	split := false
 	for {
-		lineBytes, err := rdr.ReadBytes('\n')
+		frag, err := rdr.ReadSlice('\n')
+		eol := err == nil
+		if eol {
+			frag = frag[:len(frag)-1]
+		}
+		line = append(line, frag...)
 
-		// Strip trailing newline from ReadBytes if present
-		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
-			lineBytes = lineBytes[:len(lineBytes)-1]
+		for len(line) > maxLineBytes || (len(line) == maxLineBytes && !eol) {
+			al.logLine(line[:maxLineBytes], a, containerName, false)
+			line = line[:copy(line, line[maxLineBytes:])]
+			split = true
 		}
 
-		if len(lineBytes) > 0 {
-			var m map[string]any
-			var envelope map[string]any
-
-			dec := json.NewDecoder(bytes.NewReader(lineBytes))
-			dec.UseNumber()
-
-			unmarshalErr := dec.Decode(&m)
-			if unmarshalErr == nil && m == nil {
-				unmarshalErr = errors.New("JSON value is not an object")
+		end := err != nil && !errors.Is(err, bufio.ErrBufferFull)
+		if eol || end {
+			if len(line) > 0 {
+				al.logLine(line, a, containerName, !split)
 			}
-			if unmarshalErr == nil {
-				var trailing any
-				if err := dec.Decode(&trailing); err != io.EOF {
-					unmarshalErr = errors.New("trailing garbage detected after JSON object")
-				}
-			}
-
-			if unmarshalErr != nil {
-				envelope = map[string]any{
-					"time":       time.Now().Format(time.RFC3339Nano),
-					"message":    string(lineBytes),
-					al.labelsKey: ateattr.ActorLogLabels(a, containerName),
-				}
-			} else {
-				if _, ok := m["time"]; !ok {
-					m["time"] = time.Now().Format(time.RFC3339Nano)
-				}
-				for k := range m {
-					if strings.HasPrefix(k, ateattr.ReservedNamespace) {
-						delete(m, k)
-					}
-				}
-				labels := al.foldLabelGroups(m)
-				for k, v := range ateattr.ActorLogLabels(a, containerName) {
-					labels[k] = v
-				}
-				m[al.labelsKey] = labels
-				envelope = m
-			}
-
-			al.write(envelope)
+			line, split = line[:0], false
 		}
-
-		if err != nil {
+		if end {
 			break
 		}
 	}
+}
+
+// logLine logs one line. With parse set, a line holding a JSON object is merged
+// into the record; any other line becomes its message.
+func (al *ActorLogger) logLine(line []byte, a resources.ActorAttribution, containerName string, parse bool) {
+	var m map[string]any
+	if parse {
+		m = parseJSONObject(line)
+	}
+
+	var envelope map[string]any
+	if m == nil {
+		envelope = map[string]any{
+			"time":       time.Now().Format(time.RFC3339Nano),
+			"message":    string(line),
+			al.labelsKey: ateattr.ActorLogLabels(a, containerName),
+		}
+	} else {
+		if _, ok := m["time"]; !ok {
+			m["time"] = time.Now().Format(time.RFC3339Nano)
+		}
+		for k := range m {
+			if strings.HasPrefix(k, ateattr.ReservedNamespace) {
+				delete(m, k)
+			}
+		}
+		labels := al.foldLabelGroups(m)
+		for k, v := range ateattr.ActorLogLabels(a, containerName) {
+			labels[k] = v
+		}
+		m[al.labelsKey] = labels
+		envelope = m
+	}
+
+	al.write(envelope)
+}
+
+// parseJSONObject returns the object line holds, or nil if line is anything else,
+// including an object followed by more data.
+func parseJSONObject(line []byte) map[string]any {
+	var m map[string]any
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil
+	}
+	return m
 }
 
 func (al *ActorLogger) write(envelope map[string]any) {
