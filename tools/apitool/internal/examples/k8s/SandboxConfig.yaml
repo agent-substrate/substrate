@@ -1,0 +1,35 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: ate.dev/v1
+kind: SandboxConfig
+metadata:
+  name: gvisor-default
+  annotations:
+    sandboxconfig.ate.dev/is-class-default: "true"
+spec:
+  sandboxClass: gvisor
+  defaultVersion: v6
+  versions:
+  - name: v6
+    state: Enabled
+    assets:
+      amd64:
+        gvisor:
+          url: gs://gvisor/releases/release/20261026.0/x86_64/gvisor.tar.zstd
+          sha256: 708afc62f2ee82d19930c703e85f9dab4f27a78c0aec40c0f55eb1040107f1a7
+      arm64:
+        gvisor:
+          url: gs://gvisor/releases/release/20261026.0/aarch64/gvisor.tar.zstd
+          sha256: 6257e49955f13e6caceb2c4181c5dc5406c460e805940c944e67ad65553f5b02

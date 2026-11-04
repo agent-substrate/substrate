@@ -481,6 +481,7 @@ footer {
   padding-right: 0;
 
   > .td-main {
+    width: 100%;
     max-width: 1440px;
     margin: 0 auto;
     padding: 0 40px;
@@ -3983,6 +3984,14 @@ footer {
   .as-sb__tree {
     margin: 0 0 0 10px;
   }
+}
+
+.as-sb__tree-group {
+  display: block;
+  padding: 8px 10px 2px;
+  color: $substrate-text;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .as-sb__tree-link {
