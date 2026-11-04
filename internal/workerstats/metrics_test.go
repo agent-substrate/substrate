@@ -62,16 +62,17 @@ func TestCPUCounterAggregatesActorsWithoutIdentityLabels(t *testing.T) {
 		t.Fatalf("sum = %+v, want one monotonic series", sum)
 	}
 	dp := sum.DataPoints[0]
-	if dp.Value != 0.5 {
-		t.Errorf("CPU = %g seconds, want 0.5", dp.Value)
+	wantCPU := float64(first.GetCpuUsageUsec()+second.GetCpuUsageUsec()) / 1e6
+	if dp.Value != wantCPU {
+		t.Errorf("CPU = %g seconds, want %g", dp.Value, wantCPU)
 	}
 	for _, key := range []struct {
 		key  string
 		want string
 	}{
-		{string(ateattr.TemplateAtespaceKey), "ns"},
-		{string(ateattr.TemplateNameKey), "t"},
-		{string(ateattr.SandboxClassKey), "gvisor"},
+		{string(ateattr.TemplateAtespaceKey), first.GetActorTemplateAtespace()},
+		{string(ateattr.TemplateNameKey), first.GetActorTemplateName()},
+		{string(ateattr.SandboxClassKey), first.GetSandboxClass()},
 		{string(ateattr.StatsSourceKey), ateattr.StatsSourceCgroup},
 		{string(ateattr.WorkerPoolNamespaceKey), testPool.Namespace},
 		{string(ateattr.WorkerPoolNameKey), testPool.Name},

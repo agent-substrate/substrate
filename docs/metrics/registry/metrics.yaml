@@ -1263,11 +1263,13 @@ groups:
       callbacks.
 
       CPU can still be undercounted when the final reading fails and the last
-      measured sample is older, when an ateworker exits without a final reading,
-      or, for a microVM restored from a full snapshot, before a container's
-      first successful reading. A gVisor VOLUMES checkpoint can run after its
-      final reading; CPU used between that reading and teardown is omitted
-      unless another sample captures it. OTLP delivery is best effort.
+      measured sample is older, when a sandbox dies on its own and its final
+      record reuses the last sample without a fresh read, when an ateworker
+      exits without a final reading, or, for a microVM restored from a full
+      snapshot, before a container's first successful reading. A gVisor VOLUMES
+      checkpoint can run after its final reading; CPU used between that reading
+      and teardown is omitted unless another sample captures it. OTLP delivery
+      is best effort.
     annotations:
       substrate:
         emitted_by: [ateworker-gvisor, ateworker-microvm]
