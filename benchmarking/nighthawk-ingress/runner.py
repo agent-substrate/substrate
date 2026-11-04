@@ -42,7 +42,7 @@ from typing import IO, TextIO
 
 import actors
 from nighthawk_common import output as output_mod
-import spec as spec_mod
+from nighthawk_common import spec as spec_mod
 
 NIGHTHAWK_SERVICE = "nighthawk_service"
 ADAPTIVE_CLIENT = "nighthawk_adaptive_load_client"

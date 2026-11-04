@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import spec as spec_mod
+from nighthawk_common import spec as spec_mod
 
 
 def build(**overrides):
