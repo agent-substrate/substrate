@@ -29,16 +29,33 @@ import (
 // Pre-releases such as v0.3.0-rc.1 do not match.
 var releaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
-// examplesDir is where a release keeps its resource examples, if it has any.
-const examplesDir = "tools/apitool/internal/examples"
+// grpcExamplesDir and k8sExamplesDir are where a release keeps its resource
+// examples, if it has any.
+const (
+	grpcExamplesDir = "tools/apitool/internal/examples/grpc"
+	k8sExamplesDir  = "tools/apitool/internal/examples/k8s"
+)
 
-// release is one release's API, read from git.
+// crdDir is where a release keeps its CRDs, whose file names start with
+// crdPrefix.
+const (
+	crdDir    = "manifests/ate-install/generated"
+	crdPrefix = "ate.dev_"
+)
+
+// release is one version's API.
+//
+// TODO: Rename source and examples to grpcSource and grpcExamples.
 type release struct {
 	tag    string
 	source string // its ateapi.proto
 	// examples holds its resource examples keyed by message name, as
-	// examples.ByResource does. Releases before the examples have none.
+	// examples.GRPCResources does. Releases before the examples have none.
 	examples map[string]string
+	crds     []string // its CRD manifests
+	// k8sExamples holds its Kubernetes examples keyed by kind, as
+	// examples.K8sResources does. Releases before the examples have none.
+	k8sExamples map[string]string
 }
 
 // releaseTags returns the full release tags in tags at or after since,
@@ -107,20 +124,24 @@ func readReleases(since string) ([]release, error) {
 	return releases, nil
 }
 
-// readRelease reads tag's ateapi.proto, wherever that release keeps it, and
-// its examples.
+// readRelease reads tag's ateapi.proto, wherever that release keeps it, its
+// CRDs, and its examples.
 func readRelease(top, tag string) (release, error) {
 	files, err := git(top, "ls-tree", "-r", "--name-only", tag)
 	if err != nil {
 		return release{}, err
 	}
-	var protos, exampleFiles []string
+	var protos, exampleFiles, k8sExampleFiles, crdPaths []string
 	for f := range strings.FieldsSeq(files) {
 		switch {
 		case path.Base(f) == "ateapi.proto":
 			protos = append(protos, f)
-		case path.Dir(f) == examplesDir && path.Ext(f) == ".json":
+		case path.Dir(f) == crdDir && strings.HasPrefix(path.Base(f), crdPrefix) && path.Ext(f) == ".yaml":
+			crdPaths = append(crdPaths, f)
+		case path.Dir(f) == grpcExamplesDir && path.Ext(f) == ".yaml":
 			exampleFiles = append(exampleFiles, f)
+		case path.Dir(f) == k8sExamplesDir && path.Ext(f) == ".yaml":
+			k8sExampleFiles = append(k8sExampleFiles, f)
 		}
 	}
 	if len(protos) != 1 {
@@ -131,13 +152,27 @@ func readRelease(top, tag string) (release, error) {
 	if err != nil {
 		return release{}, err
 	}
-	r := release{tag: tag, source: source, examples: map[string]string{}}
+	r := release{tag: tag, source: source, examples: map[string]string{}, k8sExamples: map[string]string{}}
 	for _, f := range exampleFiles {
 		text, err := git(top, "show", tag+":"+f)
 		if err != nil {
 			return release{}, err
 		}
-		r.examples[strings.TrimSuffix(path.Base(f), ".json")] = text
+		r.examples[strings.TrimSuffix(path.Base(f), ".yaml")] = text
+	}
+	for _, f := range k8sExampleFiles {
+		text, err := git(top, "show", tag+":"+f)
+		if err != nil {
+			return release{}, err
+		}
+		r.k8sExamples[strings.TrimSuffix(path.Base(f), ".yaml")] = text
+	}
+	for _, f := range crdPaths {
+		text, err := git(top, "show", tag+":"+f)
+		if err != nil {
+			return release{}, err
+		}
+		r.crds = append(r.crds, text)
 	}
 	return r, nil
 }
