@@ -132,7 +132,7 @@ def compile_rules(rules: Any, env: Env, taken: tuple[str, ...] = ()) -> list[Rul
         if not isinstance(rule, dict):
             raise ValueError(f"{at}: not a mapping")
         if unknown := set(rule) - KEYS:
-            raise ValueError(f"{at}: unknown keys {sorted(unknown)}")
+            raise ValueError(f"{at}: unknown keys {sorted(unknown, key=repr)}")
         if not valid_name(rule.get("name")):
             raise ValueError(f"{at}: name {rule.get('name')!r} must match {NAME.pattern}, without '__', "
                              f"at most {NAME_MAX} characters")

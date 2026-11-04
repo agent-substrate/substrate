@@ -178,6 +178,8 @@ class ConfigTest(unittest.TestCase):
             "kind: 'tasks' is not one of": {"kind": "tasks", "rules": []},
             "kind: ['sweperf_tasks'] is not one of": {"kind": ["sweperf_tasks"], "rules": []},
             "unknown keys ['window']": {**json_lines, "window": "steady"},
+            "unknown keys ['window', 0]": {**json_lines, "window": "steady", 0: "x"},  # YAML {0: x}
+            "rules[0]: unknown keys ['type', 1]": {**json_lines, "rules": [{**FAILED, "type": "t", 1: 2}]},
             "unknown keys ['file']": {"kind": "sweperf_tasks", "file": "stats.jsonl", "rules": []},
             "needs rules": {"kind": "json_lines", "file": "stats.jsonl"},
             "needs file": {"kind": "json_lines", "rules": []},

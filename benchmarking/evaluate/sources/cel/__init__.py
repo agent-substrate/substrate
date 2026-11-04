@@ -66,7 +66,7 @@ class Cel(Source):
         if kind is None:
             raise ValueError(f"kind: {cfg.get('kind')!r} is not one of {sorted(KINDS)}")
         if unknown := set(cfg) - CFG_KEYS - kind.CFG_KEYS:
-            raise ValueError(f"unknown keys {sorted(unknown)}")
+            raise ValueError(f"unknown keys {sorted(unknown, key=repr)}")
         if "rules" not in cfg:
             raise ValueError("needs rules (a list, may be empty)")
         compile_cfg(cfg, kind)
