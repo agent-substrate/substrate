@@ -43,7 +43,7 @@ def stats_row(metric: str, **measurements) -> dict:
 def query(lines: list, cfg: dict) -> tuple[dict, Optional[str]]:
     """One json_lines query of a run whose stats.jsonl holds lines (dicts are dumped as JSON): the values, and why
     the run is invalid (None when valid)."""
-    cfg = {"records": "json_lines", "file": "stats.jsonl", **cfg}
+    cfg = {"kind": "json_lines", "file": "stats.jsonl", **cfg}
     cel.Cel.validate(cfg)
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "stats.jsonl"
@@ -124,21 +124,21 @@ class ValuesTest(unittest.TestCase):
 
 class ConfigTest(unittest.TestCase):
     def test_valid(self):
-        for cfg in ({"records": "json_lines", "file": "stats.jsonl", "rules": []},
-                    {"records": "json_lines", "file": "stats.jsonl", "select": GRPC, "rules": [FAILED]},
-                    {"records": "sweperf_tasks", "rules": []}):
+        for cfg in ({"kind": "json_lines", "file": "stats.jsonl", "rules": []},
+                    {"kind": "json_lines", "file": "stats.jsonl", "select": GRPC, "rules": [FAILED]},
+                    {"kind": "sweperf_tasks", "rules": []}):
             cel.Cel.validate(cfg)
 
     def test_invalid(self):
-        json_lines = {"records": "json_lines", "file": "stats.jsonl", "rules": []}
+        json_lines = {"kind": "json_lines", "file": "stats.jsonl", "rules": []}
         cases = {
-            "records: None is not one of ['json_lines', 'sweperf_tasks']": {"rules": []},
-            "records: 'tasks' is not one of": {"records": "tasks", "rules": []},
-            "records: ['sweperf_tasks'] is not one of": {"records": ["sweperf_tasks"], "rules": []},
+            "kind: None is not one of ['json_lines', 'sweperf_tasks']": {"rules": []},
+            "kind: 'tasks' is not one of": {"kind": "tasks", "rules": []},
+            "kind: ['sweperf_tasks'] is not one of": {"kind": ["sweperf_tasks"], "rules": []},
             "unknown keys ['window']": {**json_lines, "window": "steady"},
-            "unknown keys ['file']": {"records": "sweperf_tasks", "file": "stats.jsonl", "rules": []},
-            "needs rules": {"records": "json_lines", "file": "stats.jsonl"},
-            "needs file": {"records": "json_lines", "rules": []},
+            "unknown keys ['file']": {"kind": "sweperf_tasks", "file": "stats.jsonl", "rules": []},
+            "needs rules": {"kind": "json_lines", "file": "stats.jsonl"},
+            "needs file": {"kind": "json_lines", "rules": []},
             "select: must give a bool, gives DYN": {**json_lines, "select": "line.metric"},
             "select: needs a CEL expression": {**json_lines, "select": 1},
             "undeclared reference to 'task.cel_ms'": {**json_lines,
@@ -148,10 +148,10 @@ class ConfigTest(unittest.TestCase):
             "values: 'Good' must match": {**json_lines, "values": {"Good": "good"}},
             "values: 'records' is a value the source gives": {**json_lines, "values": {"records": "good"}},
             "values: 'bad_x' is a value the source gives": {**json_lines, "values": {"bad_x": "bad"}},
-            "values: 'window_s' is a value the source gives": {"records": "sweperf_tasks", "rules": [],
+            "values: 'window_s' is a value the source gives": {"kind": "sweperf_tasks", "rules": [],
                                                                "values": {"window_s": "good"}},
             "values: 'cel_ms_ratio_p50' is a value the source gives": {
-                "records": "sweperf_tasks", "rules": [{"name": "x", "cel": "task.cel_ms <= 1.5 * baseline.cel_ms"}],
+                "kind": "sweperf_tasks", "rules": [{"name": "x", "cel": "task.cel_ms <= 1.5 * baseline.cel_ms"}],
                 "values": {"cel_ms_ratio_p50": "good"}},
             "'_/_' applied to '(double, int)'": {**json_lines, "values": {"x": "good / 2"}},
             "value 'x': must give a double or a bool, gives STRING": {**json_lines, "values": {"x": "string(good)"}},

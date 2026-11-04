@@ -19,7 +19,7 @@ work (see "Sweperf Log Lines" in docs/guides/benchmarking.md). The benchmark
 only records facts and the rules judge them, so a rule change is a config edit
 and a re-evaluation, with no new benchmark run.
 
-  records: sweperf_tasks
+  kind: sweperf_tasks
   window: steady                # steady (default) | whole; one window per query
   baseline_test: sweperf_astropy_1_user  # the test whose run is the baseline
   require_baseline: false       # true: invalid (values kept) when a rule's baseline is missing

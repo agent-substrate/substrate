@@ -14,7 +14,7 @@
 
 """json_lines: the lines of one of the run's JSON-lines files, as records of the cel source.
 
-  records: json_lines
+  kind: json_lines
   file: stats.jsonl                          # one of the run's files, by name
   select: 'line.metric.startsWith("grpc_")'  # optional: the lines to judge; all by default
   rules:

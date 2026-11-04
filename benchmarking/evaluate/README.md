@@ -85,7 +85,7 @@ means the source can't tell before the run.
 ### `cel`
 
 Judges each record of a run with CEL rules, and counts the good ones.
-`records` names the kind of record, and each kind has its own keys:
+`kind` names the kind of record, and each kind has its own keys:
 `sweperf_tasks` (SWE-Perf tasks) and `json_lines` (the lines of a JSON-lines
 file). A record is good when its kind gives it no failure of its own and it
 breaks no rule.
@@ -134,7 +134,7 @@ that logged a failure but no record never finished, and is bad.
     - name: goodput
       source: cel
       source_cfg:
-        records: sweperf_tasks
+        kind: sweperf_tasks
         rules:
         - {name: slow_resume, cel: "task.resume_max_ms <= 1500.0"}
         - {name: slow_ttfe, cel: "task.ttfe_max_ms <= 1000.0"}
@@ -187,7 +187,7 @@ that logged a failure but no record never finished, and is bad.
 
 ```yaml
 source_cfg:
-  records: json_lines
+  kind: json_lines
   file: stats.jsonl                          # one of the run's files, by name
   select: 'line.metric.startsWith("grpc_")'  # optional: the lines to judge; all by default
   rules:

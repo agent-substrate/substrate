@@ -15,7 +15,7 @@
 """The cel source: judges each record of a run with CEL rules, and counts the good ones.
 
   source_cfg:
-    records: sweperf_tasks      # the kind of record (KINDS), with its own keys
+    kind: sweperf_tasks         # the kind of record (KINDS), with its own keys
     rules:                      # required, may be []
     - {name: slow_resume, cel: "task.resume_max_ms <= 1500.0"}
     values:                     # optional: more values, from the counts and the kind's facts
@@ -42,7 +42,7 @@ from .kind import COUNTS, Kind, Record
 from .sweperf import SweperfTasks
 
 KINDS: dict[str, type[Kind]] = {"json_lines": JsonLines, "sweperf_tasks": SweperfTasks}
-CFG_KEYS = {"records", "rules", "values"}
+CFG_KEYS = {"kind", "rules", "values"}
 
 
 def judge(record: Record, compiled: list[rules.Rule], run_data: Mapping[str, Any]) -> list[str]:
@@ -67,9 +67,9 @@ def compile_cfg(cfg: Mapping[str, Any], kind: type[Kind]) -> tuple[list[rules.Ru
 class Cel(Source):
     @classmethod
     def validate(cls, cfg: Mapping[str, Any]) -> None:
-        kind = KINDS.get(cfg.get("records")) if isinstance(cfg.get("records"), str) else None
+        kind = KINDS.get(cfg.get("kind")) if isinstance(cfg.get("kind"), str) else None
         if kind is None:
-            raise ValueError(f"records: {cfg.get('records')!r} is not one of {sorted(KINDS)}")
+            raise ValueError(f"kind: {cfg.get('kind')!r} is not one of {sorted(KINDS)}")
         if unknown := set(cfg) - CFG_KEYS - kind.CFG_KEYS:
             raise ValueError(f"unknown keys {sorted(unknown)}")
         if "rules" not in cfg:
@@ -82,7 +82,7 @@ class Cel(Source):
         self._kinds: dict[str, Kind] = {}
 
     def query(self, cfg: Mapping[str, Any]) -> Mapping[str, Scalar]:
-        kind = self._kind(cfg["records"])
+        kind = self._kind(cfg["kind"])
         compiled, defined = compile_cfg(cfg, type(kind))
         found = kind.records(cfg)
         skipped = skipped_rules(compiled, type(kind), found.run_data)

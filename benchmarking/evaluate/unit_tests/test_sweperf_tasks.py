@@ -203,7 +203,7 @@ def pair(run: BenchmarkRunContext, baseline: Optional[BenchmarkRunContext] = Non
 def query(run: BenchmarkRunContext, cfg: dict) -> tuple[dict, Optional[str]]:
     """One sweperf_tasks query of run through the hooks, with VALUES unless cfg has its own: the values, and why
     the run is invalid (None when valid)."""
-    cfg = {"records": "sweperf_tasks", "values": VALUES, **cfg}
+    cfg = {"kind": "sweperf_tasks", "values": VALUES, **cfg}
     cel.Cel.validate(cfg)
     source = cel.Cel()
     source.init(run)
@@ -456,7 +456,7 @@ class ConfigTest(unittest.TestCase):
         for cfg in ({"rules": STRICT}, {"rules": []}, {"rules": RELAXED, "window": "whole"},
                     {"rules": STRICT, "baseline_test": "sweperf_astropy_1_user", "require_baseline": True},
                     {"rules": [self.rule(cel="task.retries >= -1.0 && task.think_ms < 2.0 * task.cel_ms")]}):
-            cel.Cel.validate({"records": "sweperf_tasks", **cfg})
+            cel.Cel.validate({"kind": "sweperf_tasks", **cfg})
 
     def test_invalid(self):
         r = self.rule
@@ -488,7 +488,7 @@ class ConfigTest(unittest.TestCase):
         }
         for message, cfg in cases.items():
             with self.assertRaisesRegex(ValueError, re.escape(message), msg=message):
-                cel.Cel.validate({"records": "sweperf_tasks", **cfg})
+                cel.Cel.validate({"kind": "sweperf_tasks", **cfg})
 
 
 class MetricsTest(unittest.TestCase):
@@ -685,7 +685,7 @@ class ComputeTest(unittest.TestCase):
                             {"rules": RELAXED, "baseline_test": "t1"},
                             {"rules": STRICT, "baseline_test": "t1", "window": "whole"},
                             {"rules": STRICT, "baseline_test": "t2"}, {"rules": []}):
-                    source.query({"records": "sweperf_tasks", **cfg})
+                    source.query({"kind": "sweperf_tasks", **cfg})
         self.assertEqual(asked, ["t1", "t2"])
         self.assertEqual([c.args[0] for c in read_run.call_args_list],
                          [d / "run" / "logs.txt", d / "one_user" / "logs.txt", d / "one_user" / "logs.txt"])
@@ -697,7 +697,7 @@ class ComputeTest(unittest.TestCase):
             source = cel.Cel()
             source.init(BenchmarkRunContext(files={name: d / name for name in sweperf.INPUTS}))
             write_run(d, [record(11, A)], {"start_ts": T0, "end_ts": T0 + 30})
-            self.assertEqual(source.query({"records": "sweperf_tasks", "rules": []})["good"], 1)
+            self.assertEqual(source.query({"kind": "sweperf_tasks", "rules": []})["good"], 1)
 
     def test_baseline_refs_use_clean_tasks(self):
         meta = {"start_ts": T0, "end_ts": T0 + 100}
