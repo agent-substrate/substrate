@@ -49,10 +49,7 @@ The actor, the worker pool, and `nighthawk-server` are sized to outscale `atenet
      KUBECTL_CONTEXT=<context> hack/setup-e2e-egress-tls-kind.sh
      ```
    - To run on a smaller cluster, lower `requests.cpu` and `requests.memory` in `traffic-driver.yaml.tmpl` and `nighthawk-server.yaml` before deploying.
-2. **`kubectl-ate` installed in `PATH`**:
-   ```bash
-   go install ./cmd/kubectl-ate
-   ```
+2. **`kubectl-ate`**: `deploy-traffic-driver.sh` builds it from `./cmd/kubectl-ate` into a temporary directory.
 3. **Docker** running locally (used to run `nighthawk_client`).
 
 ## Setup
