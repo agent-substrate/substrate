@@ -504,6 +504,65 @@ message CheckpointWorkloadResponse {
   // data_snapshot_files is the subset of snapshot_files that restores the
   // actor at VOLUMES fidelity on its own. Empty when the capture holds no durable data.
   repeated string data_snapshot_files = 2;
+
+  // The worker's own attributes for the snapshot it wrote, which describe
+  // that snapshot's guest, not the worker binary: each snapshot of an actor
+  // may carry different ones. Each key starts with "worker.". atelet adds
+  // them to the snapshot's stamp, ateletpb.Snapshot.sandbox_runtime.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=key
+  repeated AttributeEntry snapshot_attributes = 3;
+}
+
+// AttributeEntry is a single key-value compatibility attribute. It mirrors
+// the control plane's AttributeEntry.
+//
+// +k8s:customValidation # no compatible_values entry for value itself
+message AttributeEntry {
+  // +k8s:required
+  // +k8s:maxLength=128
+  string key = 1;
+
+  // +k8s:required
+  // +k8s:maxLength=256
+  string value = 2;
+
+  // Restore limits for when the worker that restores the snapshot has a
+  // different value for key. A value of "" stands for that worker lacking
+  // key.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=value
+  repeated CompatibleValue compatible_values = 3;
+}
+
+// CompatibleValue mirrors the control plane's CompatibleValue.
+message CompatibleValue {
+  // The other side's value. "" stands for the other side lacking the key.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  string value = 1;
+
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=4 # keep this in sync with the CompatibleFidelity enum
+  CompatibleFidelity fidelity = 2;
+}
+
+// CompatibleFidelity mirrors the control plane's CompatibleFidelity.
+enum CompatibleFidelity {
+  COMPATIBLE_FIDELITY_UNSPECIFIED = 0;
+  COMPATIBLE_FIDELITY_NONE = 1;
+  COMPATIBLE_FIDELITY_VOLUMES = 2;
+  COMPATIBLE_FIDELITY_ROOTFS = 3;
+  COMPATIBLE_FIDELITY_MEMORY = 4;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 message RestoreWorkloadRequest {

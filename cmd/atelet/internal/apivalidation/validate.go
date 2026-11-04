@@ -79,6 +79,12 @@ func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateletpb.
 	return Validate_SetWorkerSandboxRuntimesRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
+// ValidateActorSandboxRuntime runs the generated validation for rt, a
+// snapshot's stamp atelet builds from the worker's CheckpointWorkloadResponse.
+func ValidateActorSandboxRuntime(ctx context.Context, rt *ateletpb.ActorSandboxRuntime) field.ErrorList {
+	return Validate_ActorSandboxRuntime(ctx, operation.Operation{Type: operation.Create}, nil, rt, nil)
+}
+
 // ValidateRegisterWorkerRequest runs the generated validation for req.
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
 	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
@@ -90,6 +96,16 @@ func ValidateCustom_EgressGateway_Address(_ context.Context, _ operation.Operati
 
 func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
+}
+
+// ValidateCustom_AttributeEntry requires that no compatible value equals the
+// entry's own value.
+func ValidateCustom_AttributeEntry(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.AttributeEntry) field.ErrorList {
+	var compatible []string
+	for _, c := range value.GetCompatibleValues() {
+		compatible = append(compatible, c.GetValue())
+	}
+	return resources.ValidateCompatibleValues(fldPath, value.GetValue(), compatible)
 }
 
 func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

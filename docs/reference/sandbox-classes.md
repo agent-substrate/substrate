@@ -57,7 +57,7 @@ Volumes cannot mount at `/dev`, or at or under `/dev/pts`, `/proc`, or `/sys`.
 
 ## Snapshots (`VOLUMES`, `ROOTFS`, and `MEMORY`)
 
-On both classes, a `MEMORY` restore prefers a worker that offers a runtime compatible with the snapshot's `sandboxRuntime`. If none of those workers has room, a durable snapshot restores its `ROOTFS` state on any eligible worker of the same class and cold-boots under that worker's default runtime. See `sandboxRuntime` in [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
+On both classes, a restore prefers a worker that restores all of the snapshot by its `sandboxRuntime`. If none of those workers has room, a durable snapshot restores less of it on another eligible worker of the same class, and cold-boots under that worker's default runtime when it loses memory state. A worker that cannot restore the snapshot is never used. See `sandboxRuntime` in [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 
 How `VOLUMES` and `ROOTFS` state is stored differs by class:
 

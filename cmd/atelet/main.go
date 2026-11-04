@@ -84,6 +84,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -898,7 +899,10 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		return nil, err
 	}
 	committed = true
-	if err := writeSandboxRecord(actorUID, sandboxRec); err != nil {
+	// A copy, since sandboxRec is the runtime index's entry.
+	record := *sandboxRec
+	record.SandboxRuntime = hostRuntime(req.GetSandboxRuntime())
+	if err := writeSandboxRecord(actorUID, &record); err != nil {
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
@@ -1043,6 +1047,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	if committed {
 		// A retry of a Checkpoint that committed the snapshot. That one
 		// deleted the workload, so checkpointing again would fail.
+		// The tracked snapshot carries the stamp that checkpoint recorded.
 		state, err := s.committedCheckpointState(ctx, req, &op, &dPersist)
 		if err != nil {
 			return nil, err
@@ -1135,6 +1140,26 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	sandboxRec.SnapshotFiles, sandboxRec.DataSnapshotFiles, err = checkpointSnapshotFiles(resp, shouldHaveSnapshots(req))
 	if err != nil {
 		return nil, err
+	}
+	// The snapshot's stamp goes in its manifest and on the tracked snapshot,
+	// which every report of the snapshot carries. A record written before
+	// this release names no runtime. Such an actor started before atelet
+	// upgraded, and the workers roll, and with them their actors, before
+	// ate-api-server does: so the ate-api-server that gets this snapshot's
+	// report ignores the stamp.
+	if sandboxRec.SandboxRuntime != nil {
+		stamp, err := checkpointStamp(sandboxRec.SandboxRuntime, resp.GetSnapshotAttributes())
+		if err != nil {
+			return nil, apierror.Internal("worker CheckpointWorkload: %v", err)
+		}
+		if errs := apivalidation.ValidateActorSandboxRuntime(opCtx, stamp); len(errs) > 0 {
+			return nil, apierror.Internal("worker CheckpointWorkload returned invalid snapshot attributes: %v", errs.ToAggregate())
+		}
+		sandboxRec.SandboxRuntime = &recordedRuntime{stamp}
+		snap.Snapshot = proto.CloneOf(req.GetSnapshot())
+		snap.Snapshot.SandboxRuntime = stamp
+	} else {
+		slog.WarnContext(opCtx, "Sandbox record names no runtime; the snapshot gets no stamp", slog.Any("actor", actorRef))
 	}
 	sandboxRec.Atespace = req.GetAtespace()
 	sandboxRec.ActorName = req.GetActorName()
@@ -1497,8 +1522,39 @@ func (s *Atelet) promoteLocalSnapshot(ctx context.Context, req *ateletpb.Promote
 		if uploaded {
 			snap.UploadTime = time.Now()
 		}
+		// The request names the snapshot without its stamp, which its
+		// manifest records.
+		actor := actorRef{atespace: req.GetAtespace(), name: req.GetActorName(), uid: req.GetActorUid()}
+		stamp, err := s.manifestStamp(ctx, actor, localDir, uri.String())
+		if err != nil {
+			return nil, err
+		}
+		snap.Snapshot = proto.CloneOf(snap.Snapshot)
+		snap.Snapshot.SandboxRuntime = stamp
 	}
 	return s.snapshots.CommitPromoted(req.GetActorUid(), snap), nil
+}
+
+// manifestStamp returns the stamp the manifest of a committed snapshot
+// records: the local copy's in localDir, or the uploaded copy's at
+// snapshotURI once the local copy is gone. nil for a snapshot an earlier
+// release took.
+func (s *Atelet) manifestStamp(ctx context.Context, actor actorRef, localDir, snapshotURI string) (*ateletpb.ActorSandboxRuntime, error) {
+	manifest, err := readSnapshotManifest(localDir)
+	if errors.Is(err, os.ErrNotExist) {
+		manifest, err = s.fetchManifest(ctx, actor, snapshotURI)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while reading the snapshot's manifest: %w", err)
+	}
+	rec, err := unmarshalSandboxRecord(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if rec.SandboxRuntime == nil {
+		return nil, nil
+	}
+	return rec.SandboxRuntime.ActorSandboxRuntime, nil
 }
 
 // uploadLocalCheckpointDir uploads the local checkpoint in localDir to uri. It
@@ -1861,7 +1917,10 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// Record the sandbox binaries running the guest on-node before
 	// RestoreWorkload, as Run does before RunWorkload, so a Checkpoint or
 	// Terminate can resolve the runtime as soon as the sandbox is started.
-	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
+	// A copy, since runtimeRec is the runtime index's entry.
+	record := *runtimeRec
+	record.SandboxRuntime = hostRuntime(req.GetSandboxRuntime())
+	if err := writeSandboxRecord(actorUID, &record); err != nil {
 		return nil, err
 	}
 

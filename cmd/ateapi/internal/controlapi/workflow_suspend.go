@@ -80,9 +80,10 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	var actor *ateapi.Actor
 	var actorTemplate *ateapi.ActorTemplate
 	var wireFidelity string
-	// ateletState is the state atelet returned from Checkpoint, which
-	// finalize applies.
+	// ateletState is the state atelet returned from Checkpoint, and stamp
+	// the new snapshot's stamp it reports, which finalize applies.
 	var ateletState *ateletpb.ActorSnapshotState
+	var stamp *ateletpb.ActorSandboxRuntime
 	// Set just before finalize; nil until then, so earlier exits label
 	// themselves from the record they hold.
 	var finalAttrs []attribute.KeyValue
@@ -117,7 +118,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		return nil, err
 	}
 	actor = marked
-	wireFidelity, ateletState, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate, mode)
+	wireFidelity, ateletState, stamp, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	// the one requested.
 	finalAttrs = lifecycleOpAttrs(actor, "", wireFidelity)
 	var finalized *ateapi.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode, ateletState); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, mode, ateletState, stamp); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -196,7 +197,6 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 			uri.String(),
 			ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
 		)
-		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
 		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
 		return nil
 	})
@@ -213,26 +213,28 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 // ensureAteletSuspended checkpoints the workload to the actor's persisted
 // in-progress snapshot location. A sync suspend has atelet upload it before
 // returning; an async suspend has atelet upload it in the background. It
-// returns the snapshot state atelet reports once the checkpoint is taken,
-// which finalize applies.
+// returns the snapshot state atelet reports once the checkpoint is taken, and
+// the stamp it reports on the new snapshot, which finalize applies. A state
+// without the new snapshot's stamp fails the step: the assignment's runtime
+// carries the worker's rules, not the snapshot's, so it never stands in.
 // A re-entered workflow re-sends the same snapshot, which
 // ensureMarkedSuspending minted once, and atelet answers a Checkpoint of a
 // snapshot it already committed without checkpointing again, so a retry after
 // a lost response succeeds.
-func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, mode suspendMode) (wireFidelity string, state *ateletpb.ActorSnapshotState, err error) {
+func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, mode suspendMode) (wireFidelity string, _ *ateletpb.ActorSnapshotState, _ *ateletpb.ActorSandboxRuntime, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		return "", nil, fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
+		return "", nil, nil, fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
 	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
@@ -266,11 +268,27 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	if err != nil {
 		// A snapshot conflict leaves the actor and its assignment intact for a retry.
 		if ctx.Err() == nil && status.Code(err) == codes.Aborted {
-			return wireFidelity, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)
+			return wireFidelity, nil, nil, apierror.Aborted("while calling atelet Checkpoint: %w", err)
 		}
-		return wireFidelity, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		return wireFidelity, nil, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
-	return wireFidelity, resp.GetState(), nil
+	stamp := reportedStamp(resp.GetState(), inProgressSnap)
+	if stamp == nil {
+		return wireFidelity, nil, nil, apierror.Internal("atelet on node %q reported no sandbox runtime stamp for snapshot %s of Actor %s", assignment.GetNodeName(), inProgressSnap.GetUuid(), actorRef)
+	}
+	return wireFidelity, resp.GetState(), stamp, nil
+}
+
+// reportedStamp returns the stamp state reports on snap, from latest_local or
+// latest_durable: one of them reports the snapshot a Checkpoint took. nil
+// when neither reports snap with one.
+func reportedStamp(state *ateletpb.ActorSnapshotState, snap *ateapi.Snapshot) *ateletpb.ActorSandboxRuntime {
+	for _, r := range []*ateletpb.SnapshotReport{state.GetLatestLocal(), state.GetLatestDurable()} {
+		if s := r.GetSnapshot(); s.GetSnapshotUuid() == snap.GetUuid() && s.GetGeneration() == snap.GetGeneration() && s.GetSandboxRuntime() != nil {
+			return s.GetSandboxRuntime()
+		}
+	}
+	return nil
 }
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is
@@ -318,8 +336,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // no longer SUSPENDING is left as it is and the step fails with
 // FailedPrecondition.
 // ateletState is the state atelet returned from Checkpoint, applied in the
-// same update. A state that conflicts with the record crashes the actor.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState) (_ *ateapi.Actor, err error) {
+// same update, and stamp the stamp it reports on the new snapshot, recorded
+// on it. A state that conflicts with the record crashes the actor.
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, mode suspendMode, ateletState *ateletpb.ActorSnapshotState, stamp *ateletpb.ActorSandboxRuntime) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -383,6 +402,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)
+		snap.SandboxRuntime = fromAteletSandboxRuntime(stamp)
 		if mode == suspendSync {
 			snap.GetDurableSnapshot().State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
 		}
