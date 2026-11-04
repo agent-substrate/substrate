@@ -329,6 +329,7 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `sandboxClasses`                             | `ATE_INSTALL_SANDBOX_CLASSES`                   | `--sandbox-classes`                                | `gvisor,microvm`      | `deploy ate-system`, `deploy sandboxconfig` |
 | `storage.backend`                            | `STORAGE_BACKEND`                               | `--storage-backend`                                | `gcs`                 | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
+| `storage.microVMAssetLocation`               | `MICROVM_ASSET_LOCATION`                        | `--microvm-asset-location`                         | —                     | (global)                                 |
 | `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
 | `storage.transferGSAName`                    | `SNAPSHOT_TRANSFER_GSA_NAME`                    | `--snapshot-transfer-gsa-name`                     | —                     | (global)                                 |
 
@@ -373,7 +374,11 @@ its in-cluster rustfs. `external` removes the in-tree storage settings from both
 sidecars and leaves them to a `--component` that replaces the sidecars, as
 [the object store plugin sidecar contract](../reference/object-store-plugin-sidecar.md)
 describes. ate-setup refuses `external` without a component, and sets no
-snapshot transfer service account under it.
+snapshot transfer service account under it. It does not stage the microVM
+assets either: upload them yourself and name the location with
+`storage.microVMAssetLocation`, as
+[microVM assets](../reference/object-store-plugin-sidecar.md#microvm-assets)
+shows.
 
 With `--kind`, ate-setup defaults `storage.snapshotLocation` to
 `gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster

@@ -166,6 +166,11 @@ var Registry = []Setting{
 		Usage: "Cluster-wide object-storage URI ate-api-server stores snapshots under, for example gs://BUCKET/PREFIX/ (required if the PerTemplateSnapshotLocation preview gate is not enabled)",
 	},
 	{
+		Key: "storage.microVMAssetLocation", Env: "MICROVM_ASSET_LOCATION", Flag: "microvm-asset-location", Kind: KindString,
+		Usage: "Object-storage `URI`, such as scheme://BUCKET/PREFIX, the microvm SandboxConfig fetches guest assets under " +
+			"with --storage-backend=external. Upload the assets there first; ate-setup stages them only on gcs and s3",
+	},
+	{
 		Key: "storage.transferGSAName", Env: "SNAPSHOT_TRANSFER_GSA_NAME", Flag: "snapshot-transfer-gsa-name", Kind: KindString,
 		Usage: "Name of the Google service account snapshot transfers run as on GCS, in gcp.projectID. ate-api-server's credential exchange impersonates it (required to deploy ate-api-server on GKE, unused on kind)",
 	},

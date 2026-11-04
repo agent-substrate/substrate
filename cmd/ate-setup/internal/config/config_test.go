@@ -91,7 +91,7 @@ func loadEnv(t *testing.T) {
 		"PROJECT_ID",
 		"SNAPSHOT_LOCATION",
 		"SNAPSHOT_TRANSFER_GSA_NAME",
-		"STORAGE_BACKEND",
+		"STORAGE_BACKEND", "MICROVM_ASSET_LOCATION",
 		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
 		// Unset, not blanked. An exported empty variable is a value a channel
