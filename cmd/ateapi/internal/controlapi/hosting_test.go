@@ -16,13 +16,11 @@ package controlapi
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/apierror"
@@ -59,7 +57,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 				NodeName:        node,
 				Status: registered(&ateapi.WorkerStatus{
 					State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-					Capacity:       &ateapi.WorkerResources{Actors: 1},
+					Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 					SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor"}},
 				}),
 			}); err != nil {
@@ -128,9 +126,7 @@ func TestHostingNodeAfterWorkerRelease(t *testing.T) {
 			if want := wantFinalNode[tc.Name]; got != want {
 				t.Errorf("HostingNode once finalized = %q, want %q", got, want)
 			}
-			if _, err := persistence.GetWorkerAssignment(ctx, workerName, uid); !errors.Is(err, store.ErrNotFound) {
-				t.Errorf("worker assignment once finalized: err %v, want ErrNotFound", err)
-			}
+			wantAssignmentFollowsActor(t, ctx, persistence, workerName, uid, actor)
 		})
 	}
 }
@@ -157,7 +153,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		NodeName:        "node1",
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "microvm", DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: testSandboxRuntime().GetVersion()}}},
 		}),
 	}
@@ -171,7 +167,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 		Labels:          map[string]string{"pool": "b"},
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}),
 	}

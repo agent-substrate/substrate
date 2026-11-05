@@ -419,6 +419,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}()
 
 	constraints := schedulingConstraints(actor, actorTemplate)
+	constraints.PreferredWorker = w.workerKeepingAssignment(ctx, actor, constraints.RequiredNodes)
 	snapRuntime := constraints.SnapshotRuntime
 	class = constraints.SandboxClass
 	relaxable := canRelaxRuntime(actor, constraints)
@@ -520,6 +521,34 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	outcome = ateattr.SchedulerOutcomeAssigned
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, bound, nil
+}
+
+// workerKeepingAssignment returns the Worker on the node the Actor is bound to
+// that keeps its suspended assignment, or "" if none does. Resuming there saves
+// moving the assignment. It only asks the store when the node has more than
+// one Worker, since otherwise the scheduler has no choice to make.
+func (w *ActorWorkflow) workerKeepingAssignment(ctx context.Context, actor *ateapi.Actor, requiredNodes []string) string {
+	if w.workerCache == nil || len(requiredNodes) != 1 {
+		return ""
+	}
+	workers, err := w.workerCache.Workers()
+	if err != nil {
+		return ""
+	}
+	onNode := map[string]bool{}
+	for _, worker := range workers {
+		if worker.GetNodeName() == requiredNodes[0] {
+			onNode[worker.GetMetadata().GetName()] = true
+		}
+	}
+	if len(onNode) < 2 {
+		return ""
+	}
+	assignment, holder, err := w.store.GetActorAssignment(ctx, actor.GetMetadata().GetUid())
+	if err != nil || !onNode[holder] || resources.AssignmentRunning(assignment) {
+		return ""
+	}
+	return holder
 }
 
 // errNoWorkerRoom reports that no worker has room for the Actor under its

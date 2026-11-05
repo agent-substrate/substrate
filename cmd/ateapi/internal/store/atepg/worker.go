@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -168,12 +169,13 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, preconditio
 			return nil, err
 		}
 		// Binds and releases lock the Worker row first, so this sees every
-		// assignment committed before the lock was taken.
-		var assigned bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM worker_assignments WHERE worker_name = $1)`, name).Scan(&assigned); err != nil {
-			return nil, fmt.Errorf("checking assignments of worker %s: %w", name, err)
+		// assignment committed before the lock was taken. Suspended
+		// assignments go with the Worker; their Actors stay bound to the node.
+		running, err := holdsRunningAssignment(ctx, tx, name)
+		if err != nil {
+			return nil, err
 		}
-		if assigned {
+		if running {
 			return nil, fmt.Errorf("%w: worker %s still holds assignments", store.ErrFailedPrecondition, name)
 		}
 		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
@@ -237,4 +239,31 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 		nextToken = encodePageToken(kindWorker, "", []string{names[pageSize-1]})
 	}
 	return store.ListResponse[*ateapi.Worker]{Items: result, NextPageToken: nextToken}, nil
+}
+
+// holdsRunningAssignment reports whether the Worker named name holds an
+// assignment that is not suspended.
+func holdsRunningAssignment(ctx context.Context, tx pgx.Tx, name string) (bool, error) {
+	rows, err := tx.Query(ctx, `SELECT proto FROM worker_assignments WHERE worker_name = $1`, name)
+	if err != nil {
+		return false, fmt.Errorf("checking assignments of worker %s: %w", name, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var protoBytes []byte
+		if err := rows.Scan(&protoBytes); err != nil {
+			return false, fmt.Errorf("checking assignments of worker %s: %w", name, err)
+		}
+		assignment := &ateapi.ActorAssignment{}
+		if err := unmarshalStored(protoBytes, assignment); err != nil {
+			return false, fmt.Errorf("unmarshaling an assignment of worker %s: %w", name, err)
+		}
+		if resources.AssignmentRunning(assignment) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("checking assignments of worker %s: %w", name, err)
+	}
+	return false, nil
 }

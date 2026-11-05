@@ -196,8 +196,8 @@ func TestSuspendActorAsync_Finalized_RecordsFidelity(t *testing.T) {
 			if got.GetStatus().GetWorkerAssignment() != nil {
 				t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
 			}
-			if a := firstAssignment(t, st, wireTestAssignment().GetWorker().GetName()); a != nil {
-				t.Errorf("worker assignment = %v, want released", a)
+			if a := firstAssignment(t, st, wireTestAssignment().GetWorker().GetName()); a.GetState() != ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED {
+				t.Errorf("worker assignment = %v, want it kept suspended", a)
 			}
 		})
 	}

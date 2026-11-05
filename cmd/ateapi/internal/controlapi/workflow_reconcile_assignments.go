@@ -117,6 +117,10 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 			return fmt.Errorf("while listing the assignments of worker %s: %w", name, err)
 		}
 		for _, assignment := range page.Items {
+			// a suspended Actor runs under no epoch
+			if !resources.AssignmentRunning(assignment) {
+				continue
+			}
 			err := w.releaseEarlierAssignment(ctx, worker, assignment, epoch)
 			if errors.Is(err, errActorBusy) {
 				busy++

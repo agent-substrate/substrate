@@ -83,16 +83,60 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	return updateActor(ctx, p.pool, actorRef, store.DeletePreconditions(precondition), mutate, false)
+	return p.updateUnassignedActor(ctx, actorRef, store.DeletePreconditions(precondition), mutate, false)
 }
 
 func (p *Persistence) MarkActorForDeletion(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error) (*ateapi.Actor, error) {
-	return updateActor(ctx, p.pool, actorRef, precondition, mutate, true)
+	return p.updateUnassignedActor(ctx, actorRef, precondition, mutate, true)
+}
+
+// errKeepsAssignment stops a write of an Actor that keeps a suspended
+// assignment outside a transaction, which could not drop the assignment with
+// it.
+var errKeepsAssignment = errors.New("actor keeps a suspended assignment")
+
+// updateUnassignedActor is updateActor for writes that bind and release
+// nothing. A suspended Actor bound to a node keeps its assignment, so a write
+// that moves it off the node drops the assignment in the same transaction. Any
+// other write goes straight to the pool.
+func (p *Persistence) updateUnassignedActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+	updated, err := updateActorUnless(ctx, p.pool, actorRef, precondition, mutate, markForDeletion, keepsSuspendedAssignment)
+	if !errors.Is(err, errKeepsAssignment) {
+		return updated, err
+	}
+	_, err = p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+		var node string
+		var err error
+		updated, err = updateActor(ctx, tx, actorRef, precondition, func(a *ateapi.Actor) error {
+			node = a.GetStatus().GetAssignedNode()
+			if mutate == nil {
+				return nil
+			}
+			return mutate(a)
+		}, markForDeletion)
+		if err != nil {
+			return nil, err
+		}
+		if keepsSuspendedAssignment(updated) && updated.GetStatus().GetAssignedNode() == node {
+			return nil, nil
+		}
+		return dropSuspendedAssignment(ctx, tx, updated.GetMetadata().GetUid())
+	})
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
 }
 
 // updateActor applies mutate to the stored actor through q, which is the pool
 // or a transaction the write must commit with.
 func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool) (*ateapi.Actor, error) {
+	return updateActorUnless(ctx, q, actorRef, precondition, mutate, markForDeletion, nil)
+}
+
+// updateActorUnless is updateActor that returns errKeepsAssignment, writing
+// nothing, when stop reports true for the stored actor.
+func updateActorUnless(ctx context.Context, q querier, actorRef resources.ActorRef, precondition store.DeletePreconditions, mutate func(*ateapi.Actor) error, markForDeletion bool, stop func(*ateapi.Actor) bool) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -115,6 +159,9 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 	}
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
+	}
+	if stop != nil && stop(dbActor) {
+		return nil, errKeepsAssignment
 	}
 	oldMeta := proto.CloneOf(dbActor.Metadata)
 	if mutate != nil {
@@ -155,36 +202,37 @@ func updateActor(ctx context.Context, q querier, actorRef resources.ActorRef, pr
 
 func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapi.Actor, error) {
 	atespace, name := actorRef.Atespace, actorRef.Name
-	tx, err := p.pool.Begin(ctx)
+	var deleted *ateapi.Actor
+	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapi.Worker, error) {
+		// Locked so the Actor checked is the one the DELETE removes.
+		var protoBytes []byte
+		err := tx.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2 FOR UPDATE`, atespace, name).Scan(&protoBytes)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		if err != nil {
+			return nil, fmt.Errorf("locking actor %s/%s: %w", atespace, name, err)
+		}
+		deleted = &ateapi.Actor{}
+		if err := unmarshalStored(protoBytes, deleted); err != nil {
+			return nil, fmt.Errorf("unmarshaling actor to delete: %w", err)
+		}
+		if err := precondition.Check(deleted.GetMetadata()); err != nil {
+			return nil, err
+		}
+		if deleted.GetStatus().GetWorkerAssignment() != nil {
+			return nil, fmt.Errorf("%w: actor %s/%s is still assigned to a worker", store.ErrFailedPrecondition, atespace, name)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {
+			return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
+		}
+		if !keepsSuspendedAssignment(deleted) {
+			return nil, nil
+		}
+		return dropSuspendedAssignment(ctx, tx, deleted.GetMetadata().GetUid())
+	})
 	if err != nil {
-		return nil, fmt.Errorf("beginning actor delete: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
-	// Locked so the Actor checked is the one the DELETE removes.
-	var protoBytes []byte
-	err = tx.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2 FOR UPDATE`, atespace, name).Scan(&protoBytes)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("locking actor %s/%s: %w", atespace, name, err)
-	}
-	deleted := &ateapi.Actor{}
-	if err := unmarshalStored(protoBytes, deleted); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor to delete: %w", err)
-	}
-	if err := precondition.Check(deleted.GetMetadata()); err != nil {
 		return nil, err
-	}
-	if deleted.GetStatus().GetWorkerAssignment() != nil {
-		return nil, fmt.Errorf("%w: actor %s/%s is still assigned to a worker", store.ErrFailedPrecondition, atespace, name)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {
-		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor delete %s/%s: %w", atespace, name, err)
 	}
 	return deleted, nil
 }

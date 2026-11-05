@@ -395,7 +395,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}),
 	}
@@ -448,7 +448,7 @@ func TestEnsureWorkerAssigned_MissingUploadClaimsNoWorker(t *testing.T) {
 		WorkerPodUid:    testWorkerUID("pod-1"),
 		Status: &ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		},
 	}
@@ -514,7 +514,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		NodeName:        "node-1",
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(wantRuntime),
 		}),
 	}
@@ -527,7 +527,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		NodeName:        "node-1",
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(wantRuntime),
 		}),
 	}
@@ -627,7 +627,7 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		NodeName:        "node-1",
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}),
 	}); err != nil {
@@ -894,11 +894,11 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 func TestValidateAssignedWorker(t *testing.T) {
 	activeStatus := registered(&ateapi.WorkerStatus{
 		State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-		Capacity:       &ateapi.WorkerResources{Actors: 1},
+		Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 		SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 	})
-	drainingStatus := &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapi.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
-	unavailableStatus := &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapi.WorkerResources{Actors: 1}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
+	drainingStatus := &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_DRAINING, Capacity: &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
+	unavailableStatus := &ateapi.WorkerStatus{State: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, Capacity: &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000}, SandboxClasses: workerSandboxClasses(testSandboxRuntime())}
 
 	tests := []struct {
 		name         string
@@ -941,7 +941,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 			workerStatus: &ateapi.WorkerStatus{
 				State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 				RegisteredEpoch: 2,
-				Capacity:        &ateapi.WorkerResources{Actors: 1},
+				Capacity:        &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			},
 			wantCode:       codes.Unavailable,
 			wantActorState: ateapi.ActorState_ACTOR_STATE_RESUMING,
@@ -2268,7 +2268,7 @@ func contendedWorker(podName string) *ateapi.Worker {
 		NodeName:        "node-1",
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}),
 	}
@@ -2587,7 +2587,7 @@ func seedRuntimeWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		Status: &ateapi.WorkerStatus{
 			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			RegisteredEpoch: registeredEpoch,
-			Capacity:        &ateapi.WorkerResources{Actors: 1},
+			Capacity:        &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses:  workerSandboxClasses(def, restorable...),
 		},
 	})
@@ -2620,7 +2620,7 @@ func seedMicroVMWorker(t *testing.T, ctx context.Context, st store.Interface, po
 		Status: &ateapi.WorkerStatus{
 			State:           ateapi.WorkerState_WORKER_STATE_ACTIVE,
 			RegisteredEpoch: registeredEpoch,
-			Capacity:        &ateapi.WorkerResources{Actors: 1},
+			Capacity:        &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: []*ateapi.WorkerSandboxClass{{
 				SandboxClass: "microvm",
 				DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: &ateapi.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: []*ateapi.AttributeEntry{
@@ -3106,7 +3106,7 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 		NodeName:        node,
 		Status: registered(&ateapi.WorkerStatus{
 			State:          ateapi.WorkerState_WORKER_STATE_ACTIVE,
-			Capacity:       &ateapi.WorkerResources{Actors: 1},
+			Capacity:       &ateapi.WorkerResources{Actors: 1, CpuMillicores: 4000},
 			SandboxClasses: workerSandboxClasses(testSandboxRuntime()),
 		}),
 	}); err != nil {

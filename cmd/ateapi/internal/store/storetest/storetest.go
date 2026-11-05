@@ -178,7 +178,10 @@ func MustSeedAssignment(t *testing.T, ctx context.Context, s store.Interface, wo
 		if w.Status == nil {
 			w.Status = &ateapi.WorkerStatus{}
 		}
-		w.Status.Allocated = resources.AddToAllocated(w.Status.Allocated, assignment, +1)
+		if resources.AssignmentRunning(assignment) {
+			w.Status.Allocated = resources.AddToAllocated(w.Status.Allocated, assignment, +1)
+		}
+		w.Status.Assignments = &ateapi.ActorAssignmentsStatus{Total: w.GetStatus().GetAssignments().GetTotal() + 1}
 		return nil
 	}); err != nil {
 		t.Fatalf("booking a seeded assignment on worker %q: %v", workerName, err)

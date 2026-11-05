@@ -64,6 +64,11 @@ type Constraints struct {
 	// Limits are the actor's declared resource limits, in the units a Worker
 	// reports its capacity in, so the two subtract.
 	Limits *ateapi.Resources
+
+	// PreferredWorker, when it names a candidate, is picked over the others.
+	// Used for a resume onto the Worker that kept the actor's suspended
+	// assignment, which saves moving it.
+	PreferredWorker string
 }
 
 // ErrNoCapacity is returned by Schedule when no worker that meets the
@@ -117,9 +122,12 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 }
 
 // Schedule filters the fleet for eligible candidates with room, samples two at
-// random (power of two choices), and returns the less-loaded one, where load is
-// the higher of actor-slot and compute-resource utilization. Spreading across
-// the warm pool avoids hotspots until autoscaling reclaims idle workers.
+// random (power of two choices), and returns the less-loaded one. For a new
+// placement, one with no RequiredNodes, that is the Worker with fewer
+// assignments per CPU core, counting suspended Actors still bound to its node.
+// Otherwise, or on a tie, load is the higher of actor-slot and compute-resource
+// utilization. Spreading across the warm pool avoids hotspots until
+// autoscaling reclaims idle workers.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapi.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
@@ -143,6 +151,13 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity
 	}
+	if constraints.PreferredWorker != "" {
+		for _, c := range candidates {
+			if c.worker.GetMetadata().GetName() == constraints.PreferredWorker {
+				return c.worker, nil
+			}
+		}
+	}
 	if len(candidates) == 1 {
 		return candidates[0].worker, nil
 	}
@@ -152,10 +167,36 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	if j >= i {
 		j++
 	}
+	if len(constraints.RequiredNodes) == 0 {
+		if c := compareAssignmentDensity(candidates[j].worker, candidates[i].worker); c != 0 {
+			if c < 0 {
+				return candidates[j].worker, nil
+			}
+			return candidates[i].worker, nil
+		}
+	}
 	if lessLoaded(&candidates[j], &candidates[i]) {
 		return candidates[j].worker, nil
 	}
 	return candidates[i].worker, nil
+}
+
+// compareAssignmentDensity compares a's and b's assignments, running and
+// suspended, per CPU core, and returns a negative number when a has fewer, 0 on
+// a tie, and a positive number when b has fewer. checkRoom only admits
+// workers with CPU capacity.
+func compareAssignmentDensity(a, b *ateapi.Worker) int {
+	aTotal, bTotal := a.GetStatus().GetAssignments().GetTotal(), b.GetStatus().GetAssignments().GetTotal()
+	aSize, bSize := a.GetStatus().GetCapacity().GetCpuMillicores(), b.GetStatus().GetCapacity().GetCpuMillicores()
+	// cross-multiplied, so equal densities tie exactly
+	lhs, rhs := aTotal*bSize, bTotal*aSize
+	switch {
+	case lhs < rhs:
+		return -1
+	case lhs > rhs:
+		return 1
+	}
+	return 0
 }
 
 // candidate pairs an eligible worker with its cached compute utilization.
@@ -321,6 +362,10 @@ func sum(vs ...int64) (int64, bool) {
 func checkRoom(worker *ateapi.Worker, want *ateapi.Resources) (candidate, bool) {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
+
+	if capacity.GetCpuMillicores() <= 0 {
+		return candidate{}, false
+	}
 
 	// No per-actor size to compare: every assignment costs one, so a worker at
 	// its limit has no room however small the next actor is.
