@@ -102,12 +102,15 @@ type fakeControlClient struct {
 	createSpaceErr error
 	createActorErr error
 	resumeErr      error
+	resumeErrs     []error
 	suspendErr     error
 	deleteErr      error
 	suspendReqs    []*ateapi.SuspendActorRequest
 	// Make ResumeActor take time and report a smaller server-side elapsed.
 	resumeDelay     time.Duration
 	resumeElapsedUs string
+	// onResume, if set, runs on each ResumeActor call.
+	onResume func()
 	// beforeDelete, if set, runs at the start of each DeleteActor, outside mu.
 	beforeDelete func()
 }
@@ -136,9 +139,19 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapi.ResumeAc
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
+	if f.onResume != nil {
+		f.onResume()
+	}
 	time.Sleep(f.resumeDelay)
 	if f.resumeElapsedUs != "" {
 		setTrailer(opts, metadata.Pairs(ateinterceptors.ServerElapsedTrailer, f.resumeElapsedUs))
+	}
+	if len(f.resumeErrs) > 0 {
+		err := f.resumeErrs[0]
+		f.resumeErrs = f.resumeErrs[1:]
+		if err != nil {
+			return nil, err
+		}
 	}
 	if f.resumeErr != nil {
 		return nil, f.resumeErr
@@ -520,7 +533,7 @@ func TestControlClientErrors(t *testing.T) {
 		fakeCtrl.resumeErr = errors.New("resume RPC failed")
 		u := &sweperfUser{cfg: cfg, actorName: "act"}
 
-		if _, ok := u.resume(context.Background()); ok {
+		if u.resume(context.Background()).ok {
 			t.Errorf("resume = true on RPC failure, want false")
 		}
 	})
@@ -801,7 +814,7 @@ func TestNoopFirstResumeNotRecorded(t *testing.T) {
 		t.Errorf("recordedCalls after startUser = %v, want %v", got, want)
 	}
 	u.chunks = []chunk{{0, 5}, {5, 10}}
-	resumeRows := []string{"ResumeActor", "ResumeActor_rtt", "ResumeToFirstExec"}
+	resumeRows := []string{"ResumeActor", "ResumeActor_rtt", "ResumeWithRetry", "ResumeToFirstExec"}
 
 	before := readStats(t)
 	u.step(context.Background())
@@ -836,7 +849,7 @@ func TestNoopFirstResumeFailureStillRecorded(t *testing.T) {
 
 	before := readStats(t)
 	u.step(context.Background())
-	for _, name := range []string{"ResumeActor", "ResumeToFirstExec"} {
+	for _, name := range []string{"ResumeActor", "ResumeWithRetry", "ResumeToFirstExec"} {
 		if got := recordedSince(t, before, name, "failure"); got.count != 1 {
 			t.Errorf("%s recorded %d failures, want 1", name, got.count)
 		}
@@ -889,7 +902,7 @@ func TestTracedCallRecordsBothLatencies(t *testing.T) {
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
 
 	before := readStats(t)
-	if _, ok := u.resume(context.Background()); !ok {
+	if !u.resume(context.Background()).ok {
 		t.Fatalf("resume failed")
 	}
 
@@ -912,7 +925,7 @@ func TestTracedCallSkipsRTTRowWithoutTrailer(t *testing.T) {
 	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
 
 	before := readStats(t)
-	if _, ok := u.resume(context.Background()); !ok {
+	if !u.resume(context.Background()).ok {
 		t.Fatalf("resume failed")
 	}
 
@@ -1329,10 +1342,10 @@ func TestTracedCallSkipsFailureWhenCanceled(t *testing.T) {
 	cancel()
 
 	before := readStats(t)
-	if _, ok := u.resume(ctx); ok {
+	if u.resume(ctx).ok {
 		t.Fatalf("resume = true on RPC failure, want false")
 	}
-	for _, name := range []string{"ResumeActor", "ResumeActor_rtt"} {
+	for _, name := range []string{"ResumeActor", "ResumeActor_rtt", "ResumeWithRetry"} {
 		if got := recordedSince(t, before, name, "failure"); got.count != 0 {
 			t.Errorf("%s recorded %d failures for a canceled call, want 0", name, got.count)
 		}
@@ -1371,7 +1384,7 @@ func TestShutdownMidCycleRecordsNoFailures(t *testing.T) {
 	r.shutdown(ctx)
 
 	for _, name := range []string{
-		"ResumeActor", "ResumeActor_rtt", "ResumeToFirstExec", "Workload_Cycle_1",
+		"ResumeActor", "ResumeActor_rtt", "ResumeActorRefused", "ResumeWithRetry", "ResumeRetryGiveUp", "ResumeToFirstExec", "Workload_Cycle_1",
 		"CycleCEL", "TaskCEL", "TaskWallClock", "SuspendActor", "DeleteActor",
 	} {
 		if got := recordedSince(t, before, name, "failure"); got.count != 0 {
@@ -1757,5 +1770,209 @@ func TestShutdownCutsOffInFlightCycle(t *testing.T) {
 				t.Errorf("task record logged for a canceled task: %v", recs)
 			}
 		})
+	}
+}
+
+func TestResumeRetryWhileFleetIsFull(t *testing.T) {
+	t.Run("retries capacity errors within budget and records refusals apart from the final attempt", func(t *testing.T) {
+		logs := captureLogs(t)
+		cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+		fakeCtrl.resumeErrs = []error{
+			status.Error(codes.ResourceExhausted, "no worker has room for the actor"),
+			status.Error(codes.Unavailable, "worker transiently unavailable"),
+		}
+		cfg.Dyn = dynconfig.Static(knobs{
+			ResumeRetryBudget: dynconfig.Seconds(5 * time.Second),
+		})
+		u := &sweperfUser{
+			cfg:       cfg,
+			actorName: "act-retry",
+			userClass: sweperfUserClass,
+			chunks:    []chunk{{0, 5}},
+		}
+
+		before := readStats(t)
+		u.step(context.Background())
+
+		if u.cycleIndex != 1 || u.loopFailed {
+			t.Fatalf("after retried resume: cycleIndex=%d loopFailed=%v, want 1/false", u.cycleIndex, u.loopFailed)
+		}
+		if got := recordedSince(t, before, "ResumeActorRefused", "failure"); got.count != 2 {
+			t.Errorf("ResumeActorRefused failures = %d, want 2", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeActor", "failure"); got.count != 0 {
+			t.Errorf("ResumeActor failures = %d, want 0 (retried refusals go to ResumeActorRefused)", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeActor", "success"); got.count != 1 {
+			t.Errorf("ResumeActor successes = %d, want 1", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeWithRetry", "success"); got.count != 1 {
+			t.Errorf("ResumeWithRetry successes = %d, want 1", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeRetryGiveUp", "failure"); got.count != 0 {
+			t.Errorf("ResumeRetryGiveUp failures = %d, want 0", got.count)
+		}
+		cyc := onlyLine(t, logs(), completedCycleMsg)
+		if cyc["resume_retries"] != 2.0 {
+			t.Errorf("cycle log resume_retries = %v, want 2", cyc["resume_retries"])
+		}
+		u.recordTaskMetrics()
+		rec := onlyLine(t, logs(), taskRecordMsg)
+		if rec["capacity_retries"] != 2.0 {
+			t.Errorf("task record capacity_retries = %v, want 2", rec["capacity_retries"])
+		}
+		// The two waits alone are at least 50ms + 100ms.
+		if got, _ := rec["resume_max_ms"].(float64); got < 150 {
+			t.Errorf("task record resume_max_ms = %v, want >= 150 (includes the retry waits)", rec["resume_max_ms"])
+		}
+	})
+
+	t.Run("gives up after retry budget and records ResumeRetryGiveUp", func(t *testing.T) {
+		logs := captureLogs(t)
+		cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+		fakeCtrl.resumeErr = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+		const budget = 180 * time.Millisecond
+		cfg.Dyn = dynconfig.Static(knobs{
+			ResumeRetryBudget: dynconfig.Seconds(budget),
+		})
+		u := &sweperfUser{
+			cfg:       cfg,
+			actorName: "act-giveup",
+			userClass: sweperfUserClass,
+			chunks:    []chunk{{0, 5}},
+		}
+
+		before := readStats(t)
+		u.step(context.Background())
+
+		if u.cycleIndex != 0 || !u.loopFailed {
+			t.Fatalf("after give-up: cycleIndex=%d loopFailed=%v, want 0/true", u.cycleIndex, u.loopFailed)
+		}
+		// Timing-dependent: the 50ms and 100ms waits fit in the budget unless
+		// the calls themselves are slow.
+		if got := recordedSince(t, before, "ResumeActorRefused", "failure"); got.count < 1 || got.count > 2 {
+			t.Errorf("ResumeActorRefused failures = %d, want 1 or 2 within %v budget", got.count, budget)
+		}
+		if got := recordedSince(t, before, "ResumeActor", "failure"); got.count != 1 {
+			t.Errorf("ResumeActor failures = %d, want 1 (the attempt that gave up)", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeWithRetry", "failure"); got.count != 1 {
+			t.Errorf("ResumeWithRetry failures = %d, want 1", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeRetryGiveUp", "failure"); got.count != 1 {
+			t.Errorf("ResumeRetryGiveUp failures = %d, want 1", got.count)
+		}
+		failLine := onlyLine(t, logs(), "ResumeActor failed in step")
+		if failLine["gave_up"] != true {
+			t.Errorf("failLine gave_up = %v, want true", failLine["gave_up"])
+		}
+		if u.capacityRetries < 1 || u.capacityRetries > 2 {
+			t.Errorf("capacityRetries = %d after give-up, want 1 or 2", u.capacityRetries)
+		}
+	})
+
+	t.Run("context canceled during capacity error records no failures", func(t *testing.T) {
+		cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+		ctx, cancel := context.WithCancel(context.Background())
+		fakeCtrl.onResume = cancel
+		fakeCtrl.resumeErr = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+		cfg.Dyn = dynconfig.Static(knobs{
+			ResumeRetryBudget: dynconfig.Seconds(5 * time.Second),
+		})
+		u := &sweperfUser{
+			cfg:       cfg,
+			actorName: "act-canceled",
+			userClass: sweperfUserClass,
+			chunks:    []chunk{{0, 5}},
+		}
+
+		before := readStats(t)
+		u.step(ctx)
+
+		if u.loopFailed {
+			t.Errorf("loopFailed = true on canceled resume, want false")
+		}
+		for _, name := range []string{"ResumeActor", "ResumeActorRefused", "ResumeWithRetry", "ResumeRetryGiveUp"} {
+			if got := recordedSince(t, before, name, "failure"); got.count != 0 {
+				t.Errorf("%s failures = %d on canceled resume, want 0", name, got.count)
+			}
+		}
+	})
+
+	t.Run("default zero budget does not retry capacity errors", func(t *testing.T) {
+		cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+		fakeCtrl.resumeErr = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+		u := &sweperfUser{
+			cfg:       cfg,
+			actorName: "act-nobudget",
+			userClass: sweperfUserClass,
+			chunks:    []chunk{{0, 5}},
+		}
+
+		before := readStats(t)
+		u.step(context.Background())
+
+		if got := recordedSince(t, before, "ResumeActor", "failure"); got.count != 1 {
+			t.Errorf("ResumeActor failures = %d with 0 budget, want 1", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeActorRefused", "failure"); got.count != 0 {
+			t.Errorf("ResumeActorRefused failures = %d with 0 budget, want 0", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeRetryGiveUp", "failure"); got.count != 0 {
+			t.Errorf("ResumeRetryGiveUp failures = %d with 0 budget, want 0", got.count)
+		}
+		if u.capacityRetries != 0 {
+			t.Errorf("capacityRetries = %d with 0 budget, want 0", u.capacityRetries)
+		}
+	})
+
+	t.Run("non-capacity error returns immediately without retry", func(t *testing.T) {
+		cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+		fakeCtrl.resumeErrs = []error{
+			status.Error(codes.ResourceExhausted, "no worker has room"),
+			status.Error(codes.Aborted, "actor crashed"),
+			nil,
+		}
+		cfg.Dyn = dynconfig.Static(knobs{
+			ResumeRetryBudget: dynconfig.Seconds(5 * time.Second),
+		})
+		u := &sweperfUser{
+			cfg:       cfg,
+			actorName: "act-aborted",
+			userClass: sweperfUserClass,
+			chunks:    []chunk{{0, 5}},
+		}
+
+		before := readStats(t)
+		u.step(context.Background())
+
+		if got := recordedSince(t, before, "ResumeActorRefused", "failure"); got.count != 1 {
+			t.Errorf("ResumeActorRefused failures = %d, want 1 (the retried capacity error)", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeActor", "failure"); got.count != 1 {
+			t.Errorf("ResumeActor failures = %d, want 1 (the Aborted attempt)", got.count)
+		}
+		if got := recordedSince(t, before, "ResumeRetryGiveUp", "failure"); got.count != 0 {
+			t.Errorf("ResumeRetryGiveUp failures = %d on Aborted, want 0", got.count)
+		}
+	})
+
+	t.Run("rejects negative sweperf_resume_retry_budget", func(t *testing.T) {
+		if err := knobsCodec.Validate(knobs{ResumeRetryBudget: -1}); err == nil {
+			t.Error("Validate accepted negative sweperf_resume_retry_budget")
+		}
+	})
+}
+
+func TestNextResumeBackoff(t *testing.T) {
+	for _, tc := range []struct{ in, want time.Duration }{
+		{50 * time.Millisecond, 100 * time.Millisecond},
+		{2 * time.Second, 4 * time.Second},
+		{3 * time.Second, 4 * time.Second},
+		{4 * time.Second, 4 * time.Second},
+	} {
+		if got := nextResumeBackoff(tc.in); got != tc.want {
+			t.Errorf("nextResumeBackoff(%v) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
