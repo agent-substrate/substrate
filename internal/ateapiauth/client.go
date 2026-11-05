@@ -15,9 +15,6 @@
 package ateapiauth
 
 import (
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
 	"fmt"
 
 	"go.ate.dev/substrate/internal/credbundle"
@@ -39,7 +36,8 @@ type ClientConfig struct {
 	// Required.
 	CAFile string
 
-	// ServerName overrides SNI / hostname verification. Optional.
+	// ServerName is the DNS name expected on the server certificate. Required:
+	// an empty ServerName would skip hostname verification entirely.
 	ServerName string
 
 	// ClientCredBundle is a PEM file containing the client certificate chain
@@ -56,41 +54,22 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	if cfg.ClientCredBundle == "" {
 		return nil, fmt.Errorf("ateapiauth: a client credential bundle (mTLS) is required")
 	}
-	loadRootCAs := credbundle.PoolLoader(cfg.CAFile)
-	if _, err := loadRootCAs(); err != nil {
-		return nil, fmt.Errorf("ateapiauth: loading CA file: %w", err)
+	if cfg.ServerName == "" {
+		return nil, fmt.Errorf("ateapiauth: ServerName is required")
 	}
-	tlsCfg := &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		// Chain verification happens in VerifyConnection against the
-		// reloadable pool, so a CA rotation applies without a redial.
-		InsecureSkipVerify: true, //nolint:gosec
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			pool, err := loadRootCAs()
-			if err != nil {
-				return err
-			}
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("ateapiauth: server presented no certificate")
-			}
-			inter := x509.NewCertPool()
-			for _, c := range cs.PeerCertificates[1:] {
-				inter.AddCert(c)
-			}
-			_, err = cs.PeerCertificates[0].Verify(x509.VerifyOptions{
-				Roots:         pool,
-				Intermediates: inter,
-				DNSName:       cfg.ServerName,
-			})
-			return err
-		},
+	tlsCfg, err := credbundle.PrepareClientTLSConfig(credbundle.ClientConfig{
+		GetClientCertificate: credbundle.ClientLoader(cfg.ClientCredBundle),
+		TrustBundlePath:      cfg.CAFile,
+		ServerName:           cfg.ServerName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ateapiauth: %w", err)
 	}
 
 	opts := []grpc.DialOption{
 		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
 	}
 
-	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	return opts, nil
 }
