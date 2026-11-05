@@ -397,6 +397,7 @@ footer {
 .td-section .td-navbar.as-navbar .as-navbar__inner,
 .td-page .td-navbar.as-navbar .as-navbar__inner,
 .td-404 .td-navbar.as-navbar .as-navbar__inner {
+  max-width: 1760px;
   min-height: 64px;
   padding: 0 40px;
 
@@ -416,9 +417,13 @@ footer {
 
   > .td-main {
     width: 100%;
-    max-width: 1440px;
+    max-width: 1760px;
     margin: 0 auto;
     padding: 0 40px;
+
+    @media (min-width: 1200px) and (max-width: 1599px) {
+      padding: 0 24px;
+    }
 
     @media (max-width: 767px) {
       padding: 0 16px;
@@ -433,6 +438,11 @@ footer {
         grid-template-columns: 248px minmax(0, 1fr) 216px;
         gap: 40px;
         align-items: start;
+
+        @media (max-width: 1599px) {
+          grid-template-columns: 220px minmax(0, 1fr) 188px;
+          gap: 24px;
+        }
 
         > .td-sidebar,
         > main,
@@ -2580,7 +2590,7 @@ footer {
 
 .td-content.as-prose {
   width: 100%;
-  max-width: 820px;
+  max-width: none;
   min-width: 0;
 
   > *,
@@ -3298,13 +3308,13 @@ footer {
       code {
         font-size: 12.5px;
         padding: 1px 5px;
-        overflow-wrap: anywhere;
-        word-break: break-all;
+        overflow-wrap: break-word;
+        word-break: normal;
       }
 
       a {
-        overflow-wrap: anywhere;
-        word-break: break-all;
+        overflow-wrap: break-word;
+        word-break: normal;
       }
 
       &:first-child {
@@ -3315,6 +3325,64 @@ footer {
           color: #f4f8f5;
           font-size: 13px;
         }
+      }
+
+      &:last-child {
+        overflow-wrap: anywhere;
+
+        code,
+        a {
+          overflow-wrap: anywhere;
+        }
+      }
+    }
+  }
+
+  &:has(> thead > tr > th:nth-child(5)):not(:has(> thead > tr > th:nth-child(6))) {
+    > thead > tr > th:nth-child(4),
+    > tbody > tr > td:nth-child(4) {
+      min-width: 96px;
+
+      code,
+      a {
+        overflow-wrap: anywhere;
+      }
+    }
+
+    > tbody > tr > td:last-child {
+      overflow-wrap: break-word;
+
+      code,
+      a {
+        overflow-wrap: break-word;
+      }
+    }
+
+    @media (min-width: 1200px) {
+      > thead > tr > th:nth-child(1),
+      > tbody > tr > td:nth-child(1) {
+        min-width: 196px;
+      }
+    }
+
+    @media (max-width: 1759px) {
+      > tbody > tr > td:nth-child(1),
+      > tbody > tr > td:nth-child(2) {
+        code,
+        a {
+          overflow-wrap: anywhere;
+        }
+      }
+    }
+  }
+
+  @media (max-width: 1023px) {
+    > tbody > tr > td {
+      overflow-wrap: anywhere;
+
+      code,
+      a {
+        overflow-wrap: anywhere;
       }
     }
   }
@@ -3640,7 +3708,7 @@ footer {
 
   .as-footer__docs-bar {
     width: 100%;
-    max-width: 1440px;
+    max-width: 1760px;
     margin: 0 auto;
     padding: 0 40px;
     display: flex;
