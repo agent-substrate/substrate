@@ -17,12 +17,14 @@ package controllers
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -35,7 +37,8 @@ import (
 // TestSandboxConfigProtectionReconcile checks that the reconciler never adds
 // the protection finalizer, that a deleting SandboxConfig loses it only when
 // neither the cache nor a live read finds a WorkerPool naming it, that it
-// keeps it when either list fails, and that other finalizers are untouched.
+// keeps it and emits a Warning event when still in use, that it keeps it when
+// either list fails, and that other finalizers are untouched.
 func TestSandboxConfigProtectionReconcile(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
@@ -43,18 +46,21 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 		t.Fatalf("add scheme: %v", err)
 	}
 	now := metav1.Now()
-	// using returns a pool whose status has one sandbox class per name, each
-	// using the named config, or no config when the name is "".
-	using := func(names ...string) *atev1.WorkerPool {
-		wp := makeWorkerPool("pool", "default", 1, "worker:v1")
-		for _, name := range names {
+	// usingIn returns a pool in ns/name whose status has one sandbox class per
+	// config name, each using the named config, or no config when the name is "".
+	usingIn := func(ns, name string, names ...string) *atev1.WorkerPool {
+		wp := makeWorkerPool(name, ns, 1, "worker:v1")
+		for _, n := range names {
 			s := atev1.WorkerPoolSandboxClassStatus{Name: atev1.SandboxClassGvisor}
-			if name != "" {
-				s.ConfigRef = &atev1.SandboxConfigReference{Name: name}
+			if n != "" {
+				s.ConfigRef = &atev1.SandboxConfigReference{Name: n}
 			}
 			wp.Status.SandboxClasses = append(wp.Status.SandboxClasses, s)
 		}
 		return wp
+	}
+	using := func(names ...string) *atev1.WorkerPool {
+		return usingIn("default", "pool", names...)
 	}
 	// claiming returns a pool whose one sandbox class uses "other" and is
 	// switching to the named config.
@@ -93,6 +99,7 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 			}).Build()
 	}
 	errList := errors.New("list failed")
+	inUseByDefaultPool := []string{`Warning SandboxConfigInUse deletion blocked by WorkerPool "default/pool"`}
 
 	tests := []struct {
 		name   string
@@ -104,7 +111,8 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 		liveErr   error
 		want      bool
 		// wantErr is the error Reconcile must return, or nil.
-		wantErr error
+		wantErr    error
+		wantEvents []string
 	}{
 		{
 			name: "live and unused: left alone",
@@ -123,40 +131,56 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 			want: true,
 		},
 		{
-			name:   "deleting, used in cache: keep",
-			sc:     config(true, true),
-			cached: []client.Object{using("sc")},
-			want:   true,
+			name:       "deleting, used in cache: keep",
+			sc:         config(true, true),
+			cached:     []client.Object{using("sc")},
+			want:       true,
+			wantEvents: inUseByDefaultPool,
 		},
 		{
-			name: "deleting, unused in cache but used live: keep",
+			name: "deleting, used by multiple pools in cache: keep and list sorted pools",
 			sc:   config(true, true),
-			live: []client.Object{using("sc")},
-			want: true,
+			cached: []client.Object{
+				usingIn("prod", "p2", "sc"),
+				usingIn("ate-demo", "p1", "sc"),
+			},
+			want:       true,
+			wantEvents: []string{`Warning SandboxConfigInUse deletion blocked by WorkerPools: "ate-demo/p1", "prod/p2"`},
 		},
 		{
-			name:   "deleting, used by a later sandbox class in cache: keep",
-			sc:     config(true, true),
-			cached: []client.Object{using("other", "sc")},
-			want:   true,
+			name:       "deleting, unused in cache but used live: keep",
+			sc:         config(true, true),
+			live:       []client.Object{using("sc")},
+			want:       true,
+			wantEvents: inUseByDefaultPool,
 		},
 		{
-			name: "deleting, used by a later sandbox class live: keep",
-			sc:   config(true, true),
-			live: []client.Object{using("other", "sc")},
-			want: true,
+			name:       "deleting, used by a later sandbox class in cache: keep",
+			sc:         config(true, true),
+			cached:     []client.Object{using("other", "sc")},
+			want:       true,
+			wantEvents: inUseByDefaultPool,
 		},
 		{
-			name:   "deleting, claimed in cache: keep",
-			sc:     config(true, true),
-			cached: []client.Object{claiming("sc")},
-			want:   true,
+			name:       "deleting, used by a later sandbox class live: keep",
+			sc:         config(true, true),
+			live:       []client.Object{using("other", "sc")},
+			want:       true,
+			wantEvents: inUseByDefaultPool,
 		},
 		{
-			name: "deleting, unclaimed in cache but claimed live: keep",
-			sc:   config(true, true),
-			live: []client.Object{claiming("sc")},
-			want: true,
+			name:       "deleting, claimed in cache: keep",
+			sc:         config(true, true),
+			cached:     []client.Object{claiming("sc")},
+			want:       true,
+			wantEvents: inUseByDefaultPool,
+		},
+		{
+			name:       "deleting, unclaimed in cache but claimed live: keep",
+			sc:         config(true, true),
+			live:       []client.Object{claiming("sc")},
+			want:       true,
+			wantEvents: inUseByDefaultPool,
 		},
 		{
 			name:   "deleting and unused: remove",
@@ -197,7 +221,12 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := newClient(tc.cachedErr, append([]client.Object{tc.sc}, tc.cached...)...)
-			r := &SandboxConfigProtectionReconciler{Client: c, APIReader: newClient(tc.liveErr, tc.live...)}
+			rec := events.NewFakeRecorder(10)
+			r := &SandboxConfigProtectionReconciler{
+				Client:    c,
+				APIReader: newClient(tc.liveErr, tc.live...),
+				Recorder:  rec,
+			}
 			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Name: tc.sc.Name}})
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Reconcile error = %v, want %v", err, tc.wantErr)
@@ -211,6 +240,13 @@ func TestSandboxConfigProtectionReconcile(t *testing.T) {
 			}
 			if controllerutil.ContainsFinalizer(tc.sc, testHoldFinalizer) && !controllerutil.ContainsFinalizer(got, testHoldFinalizer) {
 				t.Errorf("lost %s", testHoldFinalizer)
+			}
+			var gotEvents []string
+			for len(rec.Events) > 0 {
+				gotEvents = append(gotEvents, <-rec.Events)
+			}
+			if !slices.Equal(gotEvents, tc.wantEvents) {
+				t.Errorf("got events %q, want %q", gotEvents, tc.wantEvents)
 			}
 		})
 	}
@@ -254,7 +290,7 @@ func TestSandboxConfigProtectionReconcileGet(t *testing.T) {
 						return c.Get(ctx, key, obj, opts...)
 					},
 				}).Build()
-			r := &SandboxConfigProtectionReconciler{Client: c, APIReader: c}
+			r := &SandboxConfigProtectionReconciler{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(10)}
 			res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "missing"}})
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Reconcile error = %v, want %v", err, tc.wantErr)

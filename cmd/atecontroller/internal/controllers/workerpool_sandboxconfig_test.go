@@ -536,7 +536,7 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 								return err
 							}
 							if tc.release {
-								p := &SandboxConfigProtectionReconciler{Client: c, APIReader: c}
+								p := &SandboxConfigProtectionReconciler{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(10)}
 								if _, err := p.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(newDefault)}); err != nil {
 									return err
 								}
@@ -1961,7 +1961,7 @@ func TestSwitchInterleavings(t *testing.T) {
 				WithIndex(&atev1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
 					return sandboxConfigsInUse(obj.(*atev1.WorkerPool))
 				}).Build()
-			protection := &SandboxConfigProtectionReconciler{Client: base, APIReader: base}
+			protection := &SandboxConfigProtectionReconciler{Client: base, APIReader: base, Recorder: events.NewFakeRecorder(10)}
 			protect := func(ctx context.Context) error {
 				for _, name := range []string{"x", "y"} {
 					if _, err := protection.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
