@@ -323,6 +323,8 @@ func TestAuthorize_Refusals(t *testing.T) {
 		lookedUp bool
 	}{
 		{name: "empty jwt", want: codes.InvalidArgument},
+		{name: "jwt over MaxJWTSize", jwt: strings.Repeat("a", MaxJWTSize+1), want: codes.InvalidArgument, msg: "longer than"},
+		{name: "garbage jwt of MaxJWTSize", jwt: strings.Repeat("a", MaxJWTSize), want: codes.Unauthenticated},
 		{name: "verifier refuses", jwt: good, verifier: fakeVerifier{err: errors.New("expired")}, want: codes.Unauthenticated},
 		{name: "bad signature", jwt: badSignature, want: codes.Unauthenticated},
 		{name: "wrong audience", jwt: wrongAudience, want: codes.Unauthenticated},
