@@ -30,34 +30,26 @@ flowchart LR
 
 ## Prerequisites
 
-To measure single CPU performance characteristics of Envoy dataplane set E2E_ATE_ENVOY_CONCURRENCY=1 environment
-variable when deploying ATE.
+The actor, the worker pool, and `nighthawk-server` are sized to outscale `atenet-egress`, so a run measures the gateway and not the load generator or the origin server. The sizes target a multi-node benchmark cluster, such as 3 x `c3-standard-22` nodes (22 vCPUs and 88 GiB each):
 
-1. **Cluster with Agent Substrate deployed**:
+- `traffic-driver-template.yaml.tmpl` gives the `nighthawk/tester` sandbox 16 vCPUs and 8 GiB, so `nighthawk_service` runs the 16 worker threads that the example `nighthawk_client` command below asks for (`--concurrency 16`) without CPU throttling.
+- `traffic-driver.yaml.tmpl` requests 12 vCPUs and 8 GiB for the worker pod and limits it to 18 vCPUs and 10 GiB. The request fits a `c3-standard-22` node beside the system DaemonSets, and the limit leaves burst room for the actor and the worker's atunnel. The worker pod and `nighthawk-server` request 18 vCPUs together, so the scheduler may place them on the same node; this benchmark accepts that.
+- `nighthawk-server.yaml` runs `nighthawk_test_server` with `--concurrency 8` and 6-8 vCPUs, so upstream HTTP and TLS on `:80`, `:443`, and `:8443` do not saturate before the gateway.
+
+1. **Multi-node benchmark cluster with Agent Substrate deployed**:
    - **Existing cluster** (with `.ate-dev-env.sh` configured):
      ```bash
      go run ./cmd/ate-setup deploy ate-system \
        --credential-provider='{"name":"k8s.io"}' \
        --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
      ```
-   - **Local `kind` cluster**:
+   - To set the `atenet-egress` Envoy worker thread count (`--concurrency`), prefix the command above with `E2E_ATE_ENVOY_CONCURRENCY=<n>`. `E2E_ATE_ENVOY_CONCURRENCY=1` measures a single Envoy core.
+   - Provision the CA bundle in `ate-system` so `atenet-egress` trusts `nighthawk-server`'s `servicedns` certificate on `:443`. The script defaults to a kind context, so name the cluster's context:
      ```bash
-     go run ./cmd/ate-setup --kind deploy ate-system \
-       --credential-provider='{"enabled":false}' \
-       --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
+     KUBECTL_CONTEXT=<context> hack/setup-e2e-egress-tls-kind.sh
      ```
-   - To set the `atenet-egress` Envoy worker thread count (`--concurrency`), set `E2E_ATE_ENVOY_CONCURRENCY` when deploying:
-     ```bash
-     E2E_ATE_ENVOY_CONCURRENCY=1 go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}' --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/nighthawk/sa/default
-     ```
-   - Provision CA bundle which includes cluster's trust bundle, so that egress gateway can trust nighhawk's test server cert, run:
-     ```bash
-     hack/setup-e2e-egress-tls-kind.sh
-     ```
-2. **`kubectl-ate` installed in `PATH`**:
-   ```bash
-   go install ./cmd/kubectl-ate
-   ```
+   - To run on a smaller cluster, lower `requests.cpu` and `requests.memory` in `traffic-driver.yaml.tmpl` and `nighthawk-server.yaml` before deploying.
+2. **`kubectl-ate`**: `deploy-traffic-driver.sh` builds it from `./cmd/kubectl-ate` into a temporary directory.
 3. **Docker** running locally (used to run `nighthawk_client`).
 
 ## Setup
@@ -87,8 +79,10 @@ kubectl -n nighthawk port-forward svc/traffic-driver-invoker 19980:19980
 Run `nighthawk_client` against the port-forwarded `traffic-driver-invoker` endpoint (`grpc://127.0.0.1:19980`), which routes the gRPC request to `nighthawk_service` inside the `nighthawk/tester` actor:
 
 ```bash
-docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envoyproxy/nighthawk-dev:latest --nighthawk-service grpc://127.0.0.1:19980 --rps 1000 --concurrency 1 --protocol http1 --duration 60  http://nighthawk-server.nighthawk.svc:80
+docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envoyproxy/nighthawk-dev:latest --nighthawk-service grpc://127.0.0.1:19980 --rps 1000 --concurrency 16 --protocol http1 --duration 60  http://nighthawk-server.nighthawk.svc:80
 ```
+
+Nighthawk multiplies `--rps` by `--concurrency`, so this command targets 16,000 requests per second in total.
 
 See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-nighthawk-client-cli) for all command line options.
 
