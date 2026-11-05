@@ -131,8 +131,8 @@ func checkIssuerCertificate(ctx context.Context, issuer, trusted string, verifie
 type Decision struct {
 	ActorUID string
 	Grants   []actorscope.Grant
-	// Expiry is the token's exp. A credential issued from a Decision must not
-	// outlive it.
+	// Expiry is the token's exp. It may already be past, since verification
+	// allows for clock skew.
 	Expiry time.Time
 }
 

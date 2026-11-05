@@ -139,8 +139,8 @@ type Grant struct {
 type Decision struct {
 	ActorUID string
 	Grants   []Grant
-	// Expiry is the token's exp. A credential issued from a Decision must not
-	// outlive it.
+	// Expiry is the token's exp. It may already be past, since verification
+	// allows for clock skew.
 	Expiry time.Time
 }
 
