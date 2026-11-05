@@ -37,7 +37,6 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestDialOptionsRequiresCAFile(t *testing.T) {
@@ -48,7 +47,7 @@ func TestDialOptionsRequiresCAFile(t *testing.T) {
 }
 
 func TestDialOptionsRequiresClientCredential(t *testing.T) {
-	_, err := DialOptions(ClientConfig{K8sClient: fake.NewSimpleClientset(), CAFile: "ca.pem"})
+	_, err := DialOptions(ClientConfig{CAFile: "ca.pem"})
 	if err == nil {
 		t.Fatalf("DialOptions() error = nil, want error")
 	}
@@ -89,7 +88,6 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 
 	t.Run("with client cert", func(t *testing.T) {
 		opts, err := DialOptions(ClientConfig{
-			K8sClient:        fake.NewSimpleClientset(),
 			CAFile:           caFile,
 			ClientCredBundle: clientBundle,
 		})
@@ -141,7 +139,6 @@ func TestDialOptionsReloadsCAFile(t *testing.T) {
 	defer srv.Stop()
 
 	opts, err := DialOptions(ClientConfig{
-		K8sClient:        fake.NewSimpleClientset(),
 		CAFile:           caFile,
 		ClientCredBundle: clientBundle,
 	})

@@ -57,6 +57,7 @@ import (
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/pluginsocket"
@@ -382,7 +383,6 @@ func main() {
 	}
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
 		ServerName:       *ateapiServerName,
 		ClientCredBundle: *grpcServerCredBundle,
@@ -390,6 +390,7 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
 	}
+	dialOpts = append(dialOpts, grpc.WithResolvers(k8sresolver.NewBuilder(k8sClient)))
 	// atelet acts for the system, not a user, so it always opts in to the
 	// preview features the server enables.
 	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)

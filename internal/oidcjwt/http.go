@@ -112,6 +112,14 @@ func (t *rootsTransport) current(ctx context.Context) *http.Transport {
 	return t.transport
 }
 
+// CloseIdleConnections closes the idle connections of the current transport.
+// http.Client.CloseIdleConnections calls it.
+func (t *rootsTransport) CloseIdleConnections() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.transport.CloseIdleConnections()
+}
+
 // use switches to a transport that trusts roots, unless it already does.
 // t.mu must be held, or t not yet shared.
 func (t *rootsTransport) use(roots *x509.CertPool) {
