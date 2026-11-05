@@ -313,6 +313,11 @@ name. An actor that is deleted and recreated under the same name can get its
 predecessor's token until that token's refresh point, up to two thirds of its
 lifetime, and that token's UID claim names the old actor.
 
+**The reference provider caches Secrets.** It reuses each Secret it reads for
+`--secret-cache-ttl` (10s by default; 0 disables the cache). A rotated value,
+a label change, or a deleted Secret can take that long to take effect. The
+namespace policy is checked on every fetch.
+
 **Scope of the reference provider's RBAC.** The sample deployment grants read
 on Secrets cluster-wide so the policy may name any namespace; a production
 deployment should scope this to the namespaces the provider is allowed to
