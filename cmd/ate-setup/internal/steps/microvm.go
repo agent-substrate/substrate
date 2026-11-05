@@ -25,6 +25,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -39,9 +40,11 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const (
@@ -116,11 +119,14 @@ func parseSandboxClasses(classes string) (gvisor, microvm bool, err error) {
 	return gvisor, microvm, nil
 }
 
-// microVMPrepared holds the validated target bucket and per-architecture
-// asset digests assembled by prepareMicroVMDeps before the cluster is touched.
+// microVMPrepared holds what prepareMicroVMDeps validated and assembled
+// before the cluster is touched: the URI the SandboxConfig fetches assets
+// under and, unless the storage backend is external, the bucket ate-setup
+// stages them in and their per-architecture digests.
 type microVMPrepared struct {
-	bucket  string
-	digests map[string]map[string]string
+	location string
+	bucket   string
+	digests  map[string]map[string]string
 }
 
 // microVMArches returns the architectures to assemble and stage: only the host
@@ -135,12 +141,22 @@ func (e *Env) microVMArches() []string {
 
 // prepareMicroVMDeps validates the microVM prerequisites, assembles the guest
 // assets locally, and on non-Kind clusters uploads them to GCS before any
-// cluster resources are modified.
+// cluster resources are modified. Under the external storage backend it only
+// validates the location the operator uploaded them to.
 func (e *Env) prepareMicroVMDeps(ctx context.Context) (*microVMPrepared, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	log.Step("prepare_microvm_deps")
+
+	if e.Cfg.StorageBackend == config.StorageBackendExternal {
+		location, err := e.externalMicroVMAssetLocation()
+		if err != nil {
+			return nil, err
+		}
+		log.Infof("Skipping microVM asset staging: the storage backend is external, and the SandboxConfig fetches them from %s/.", location)
+		return &microVMPrepared{location: location}, nil
+	}
 
 	bucket, err := e.checkMicroVMDeps()
 	if err != nil {
@@ -177,7 +193,8 @@ func (e *Env) prepareMicroVMDeps(ctx context.Context) (*microVMPrepared, error) 
 			return nil, err
 		}
 	}
-	return &microVMPrepared{bucket: bucket, digests: digests}, nil
+	location := e.microVMBucketScheme() + "://" + bucket + "/" + microvmAssetsPrefix
+	return &microVMPrepared{location: location, bucket: bucket, digests: digests}, nil
 }
 
 // applyMicroVMSandboxConfig stages the assembled microVM guest assets into
@@ -188,7 +205,7 @@ func (e *Env) applyMicroVMSandboxConfig(ctx context.Context, prep *microVMPrepar
 	}
 	log.Step("deploy_microvm_sandboxconfig")
 
-	if e.Cfg.Kind {
+	if e.Cfg.Kind && e.Cfg.StorageBackend != config.StorageBackendExternal {
 		log.Infof("Staging assets to in-cluster rustfs bucket %s (%s/)...", prep.bucket, microvmAssetsPrefix)
 		if err := e.stageMicroVMAssetsToRustfs(ctx, prep.bucket, prep.digests); err != nil {
 			return err
@@ -198,10 +215,7 @@ func (e *Env) applyMicroVMSandboxConfig(ctx context.Context, prep *microVMPrepar
 	log.Infof("Applying microvm SandboxConfig from %s...", microvmSandboxConfigTemplate)
 	rendered, err := render.Template(
 		e.Cfg.Manifest("sandboxconfig-microvm.yaml.tmpl"),
-		map[string]string{
-			"BUCKET_SCHEME":     e.microVMBucketScheme(),
-			"ASSET_BUCKET_NAME": prep.bucket,
-		},
+		map[string]string{"MICROVM_ASSET_LOCATION": prep.location},
 		nil,
 	)
 	if err != nil {
@@ -217,14 +231,8 @@ func (e *Env) applyMicroVMSandboxConfig(ctx context.Context, prep *microVMPrepar
 // loadMicroVMAssetDigests reads the expected per-architecture SHA-256 digests
 // for microvmAssets from the default version of sandboxconfig-microvm.yaml.tmpl.
 func loadMicroVMAssetDigests(tmplPath string) (map[string]map[string]string, error) {
-	rendered, err := render.Template(
-		tmplPath,
-		map[string]string{
-			"BUCKET_SCHEME":     "gs",
-			"ASSET_BUCKET_NAME": "placeholder",
-		},
-		nil,
-	)
+	const location = "gs://placeholder/" + microvmAssetsPrefix
+	rendered, err := render.Template(tmplPath, map[string]string{"MICROVM_ASSET_LOCATION": location}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -256,9 +264,9 @@ func loadMicroVMAssetDigests(tmplPath string) (map[string]map[string]string, err
 			if !ok || af.SHA256 == "" {
 				return nil, fmt.Errorf("%s default version %q arch %q missing sha256 for %q", tmplPath, defaultVer.Name, arch, tmplKey)
 			}
-			wantSuffix := fmt.Sprintf("/%s/%s/%s", microvmAssetsPrefix, arch, af.SHA256)
-			if !strings.HasSuffix(af.URL, wantSuffix) {
-				return nil, fmt.Errorf("%s default version %q arch %q %q url %q does not end with %q", tmplPath, defaultVer.Name, arch, tmplKey, af.URL, wantSuffix)
+			wantURL := fmt.Sprintf("%s/%s/%s", location, arch, af.SHA256)
+			if af.URL != wantURL {
+				return nil, fmt.Errorf("%s default version %q arch %q %q url %q is not %q", tmplPath, defaultVer.Name, arch, tmplKey, af.URL, wantURL)
 			}
 			files[fileName] = af.SHA256
 		}
@@ -304,6 +312,48 @@ func (e *Env) microVMBucket() (string, error) {
 		return "", fmt.Errorf("bucket name %q is too long: the asset bucket %q would have %d characters, and GCS allows %d", e.Cfg.BucketName, assetBucket, len(assetBucket), maxGCSBucketNameLength)
 	}
 	return assetBucket, nil
+}
+
+// externalMicroVMAssetLocation returns the operator's
+// --microvm-asset-location without trailing slashes. It must name a scheme, a
+// bucket and a path with no empty segment, and stay clear of the snapshot
+// location, since the plugin API requires the plugin to refuse assets stored
+// under a snapshot location.
+func (e *Env) externalMicroVMAssetLocation() (string, error) {
+	raw := e.Cfg.MicroVMAssetLocation
+	if raw == "" {
+		return "", fmt.Errorf("MICROVM_ASSET_LOCATION (--microvm-asset-location or config.storage.microVMAssetLocation) must be set to install the microvm sandbox class with an external storage backend")
+	}
+	if _, err := resources.ParseStoragePrefix(raw); err != nil {
+		return "", fmt.Errorf("invalid --microvm-asset-location: %w", err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid --microvm-asset-location: %w", err)
+	}
+	if u.Scheme == "" {
+		return "", fmt.Errorf("invalid --microvm-asset-location %q: missing scheme", raw)
+	}
+	if strings.Contains(strings.TrimRight(u.Path, "/"), "//") {
+		return "", fmt.Errorf("invalid --microvm-asset-location %q: empty path segment", raw)
+	}
+	if snap := e.Cfg.SnapshotLocation; snap != "" && storageURIsOverlap(u, snap) {
+		return "", fmt.Errorf("--microvm-asset-location %q overlaps --snapshot-location %q", raw, snap)
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
+
+// storageURIsOverlap reports whether one of a and b is under the other: the
+// same bucket, and a path that equals or contains the other's. The scheme is
+// ignored, as the storage layer ignores it.
+func storageURIsOverlap(a *url.URL, b string) bool {
+	// A snapshot location that does not parse fails its own validation.
+	u, err := url.Parse(b)
+	if err != nil || u.Host != a.Host {
+		return false
+	}
+	pa, pb := strings.Trim(a.Path, "/")+"/", strings.Trim(u.Path, "/")+"/"
+	return pb == "/" || strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
 }
 
 // microVMBucketScheme returns the URL scheme for the node's object-store

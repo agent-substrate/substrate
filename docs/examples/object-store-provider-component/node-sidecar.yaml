@@ -1,0 +1,45 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The node sidecar next to atelet. It serves NodeProvider and AssetProvider on
+# /run/objectstore-plugin/node.sock.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: atelet
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: objectstore-plugin
+          # A placeholder. Pin your image by digest.
+          image: example.invalid/objectstore-plugin:v0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args:
+            - node
+            - --socket=/run/objectstore-plugin/node.sock
+            - --region=example-region-1
+          env:
+            - name: EXAMPLE_ENDPOINT
+              value: https://storage.example.invalid
+          # The in-tree probe runs the in-tree binary. Replace it with one that
+          # passes once the plugin serves on its socket.
+          startupProbe:
+            $patch: replace
+            exec:
+              command:
+                - /objectstore-plugin
+                - probe
+                - --socket=/run/objectstore-plugin/node.sock
+            periodSeconds: 2
+            failureThreshold: 30

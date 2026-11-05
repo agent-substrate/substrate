@@ -46,6 +46,12 @@ const (
 	SandboxClassGvisor  = "gvisor"
 	SandboxClassMicrovm = "microvm"
 
+	// Object store backends of the objectstore-plugin sidecars. Under
+	// external, operator components configure the sidecars.
+	StorageBackendGCS      = "gcs"
+	StorageBackendS3       = "s3"
+	StorageBackendExternal = "external"
+
 	// Cluster size profiles. size0 is the shipped footprint; size10 assumes a
 	// dedicated node for PostgreSQL and raises the store, its client pool, and
 	// the podcertificate controller's API rate limits to match.
@@ -134,6 +140,10 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
+	// StorageBackend is the objectstore-plugin sidecars' object store
+	// (STORAGE_BACKEND): gcs, s3 or external.
+	StorageBackend string
+
 	// BucketName is the object-storage bucket (BUCKET_NAME) used for staging
 	// microVM assets and passed to benchmark scripts. The kind profile also
 	// derives SnapshotLocation from it.
@@ -147,6 +157,11 @@ type Config struct {
 	// benchmarks, and so e2e runs, need it even with the gate, since they do
 	// not set storageLocation.
 	SnapshotLocation string
+
+	// MicroVMAssetLocation is the URI the microvm SandboxConfig fetches guest
+	// assets under when StorageBackend is external, where ate-setup does not
+	// stage them (MICROVM_ASSET_LOCATION).
+	MicroVMAssetLocation string
 
 	// TransferGSAName is the name of the Google service account snapshot
 	// transfers run as on GCS, in ProjectID (SNAPSHOT_TRANSFER_GSA_NAME).
@@ -230,6 +245,11 @@ type Config struct {
 	// data plane applies (ATE_INSTALL_E2E_TUNING).
 	E2ETuning bool
 
+	// Components are absolute paths of operator kustomize components,
+	// composed in order into every control plane apply after the
+	// installer's own (ATE_INSTALL_COMPONENTS).
+	Components []string
+
 	// IngressAllowedSPIFFEIDs are the SPIFFE IDs the ingress router lets
 	// reach actors over its TLS listeners (ATE_INGRESS_ALLOWED_SPIFFE_IDS).
 	// Empty means no client may reach actors through the router.
@@ -293,9 +313,10 @@ func (c *Config) Resolved() *Resolved {
 
 // TransferServiceAccount is the email of the snapshot transfer service
 // account, built from TransferGSAName and ProjectID the same way substrate-gke's
-// tools/setup-gcp builds it. It is empty when either is.
+// tools/setup-gcp builds it. It is empty when either is, and under the
+// external backend, whose sidecars the installer does not configure.
 func (c *Config) TransferServiceAccount() string {
-	if c.TransferGSAName == "" || c.ProjectID == "" {
+	if c.StorageBackend == StorageBackendExternal || c.TransferGSAName == "" || c.ProjectID == "" {
 		return ""
 	}
 	return c.TransferGSAName + "@" + c.ProjectID + ".iam.gserviceaccount.com"
@@ -304,9 +325,9 @@ func (c *Config) TransferServiceAccount() string {
 // RequireTransferServiceAccount fails when the install would deploy
 // ate-api-server on GCS without a transfer service account. Its credential
 // exchange impersonates the account and refuses to start without one.
-// ate-setup installs GCS everywhere but kind, which uses S3.
+// Only the gcs backend uses one; kind always uses S3.
 func (c *Config) RequireTransferServiceAccount() error {
-	if c.Kind {
+	if c.Kind || c.StorageBackend == StorageBackendExternal {
 		return nil
 	}
 	if c.TransferGSAName == "" {

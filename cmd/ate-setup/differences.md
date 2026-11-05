@@ -62,7 +62,9 @@ caught at all and surfaced from inside `deploy_locust.sh` after the microvm
 dependencies had already been installed. `--setup-csi` is checked the same way:
 an unknown driver is rejected during argument validation, before the
 configuration is even loaded, and `--setup-csi=hostpath` against a cluster that
-is not Kind is refused before `deploy ate-system` installs anything.
+is not Kind is refused before `deploy ate-system` installs anything. A
+`--component` with a bad patch is the exception; see "Operator components are
+new" below.
 
 `.ate-dev-env.sh` is still sourced through bash — a developer's file can contain
 arbitrary shell — but its variables are then layered under the process
@@ -80,8 +82,8 @@ Still required, and why:
 | `ko` | building and publishing images (`ko resolve` only); not used with `--image-repo` |
 | `go` | locating the pinned `ko` tool, exactly as `hack/run-tool.sh` does; not used with `--image-repo` |
 | `git` | the `git describe` version stamp passed to ko; not used with `--image-repo` |
-| `docker` | the kind CSI setup (`docker exec` into the node), staging microVM assets into Kind's `rustfs`, and the claude-code-multiplex workload build |
-| `gcloud` | GKE `get-credentials` (when `PROJECT_ID` is set and no context was given) and `gcloud storage` when staging microVM assets on GKE |
+| `docker` | the kind CSI setup (`docker exec` into the node), staging microVM assets into Kind's `rustfs` (not under `--storage-backend=external`), and the claude-code-multiplex workload build |
+| `gcloud` | GKE `get-credentials` (when `PROJECT_ID` is set and no context was given) and `gcloud storage` when staging microVM assets on GKE (not under `--storage-backend=external`) |
 | `bash` | sourcing `.ate-dev-env.sh` |
 
 One shell script is still invoked rather than reimplemented, because it
@@ -195,6 +197,20 @@ path. The size10 PostgreSQL changes are made to the decoded objects before the
 one server-side apply, not patched on afterwards: one rollout, the rollout wait
 sees the resized pod, and there is no second field manager for a later apply to
 fight with.
+
+**Operator components are new.** `--component`, `--storage-backend` and
+`--microvm-asset-location` postdate the shell installer. `--component DIR`
+composes the operator's kustomize Component over every control plane apply
+path, after the installer's own components. `--storage-backend=external`
+composes `manifests/ate-install/components/storage-external`, which removes the
+in-tree GCS and S3 settings from both objectstore-plugin sidecars, and leaves
+them to a `--component`. Under that backend ate-setup stages no microVM assets.
+The `microvm` SandboxConfig fetches them from `--microvm-asset-location`, and
+that location is validated before any cluster mutation. A `--component` is only
+checked to be a directory holding a kustomize Component. Its patches are
+applied when the first control plane apply renders, after the namespace, CRD
+and SandboxConfig applies have already run. A patch that fails stops the
+install there. Fix the component and rerun the same command.
 
 **Timing lines are new.** `ate-setup` prints `(kubectl apply took 1.234s)`
 after each apply, delete, rollout wait, trust bundle wait, `ko` invocation, and

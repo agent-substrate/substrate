@@ -53,10 +53,16 @@ const fakeDataPlaneComponent = installDir + "/components/fake-data-plane"
 
 const agentgatewayStaticMTLSComponent = installDir + "/components/agentgateway-static-mtls"
 
+// storageExternalComponent is the kustomize component that removes the in-tree
+// object store settings from the objectstore-plugin sidecars, layered over
+// every control plane apply under --storage-backend=external.
+const storageExternalComponent = installDir + "/components/storage-external"
+
 // components lists the kustomize components every control plane apply is
-// composed with. Each patch targets its workloads by name, and kustomize leaves
-// a stream alone when nothing in it matches, so composing a manifest that
-// carries none of them is harmless.
+// composed with: ours, then the operator's --component directories. Each patch
+// targets its workloads by name, and kustomize leaves a stream alone when
+// nothing in it matches, so composing a manifest that carries none of them is
+// harmless.
 func (e *Env) components() []string {
 	var components []string
 	// e2e must come before fake-data-plane: e2e appends to atelet's args,
@@ -73,7 +79,11 @@ func (e *Env) components() []string {
 	if e.Cfg.CordonSystemInfraComponents {
 		components = append(components, e.Cfg.Path(cordonSystemInfraComponent))
 	}
-	return components
+	if e.Cfg.StorageBackend == config.StorageBackendExternal {
+		components = append(components, e.Cfg.Path(storageExternalComponent))
+	}
+	// Operator components come last, so they patch the result of ours.
+	return append(components, e.Cfg.Components...)
 }
 
 // SystemOverlay picks the kustomization for a full control plane install.
