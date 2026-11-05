@@ -25,6 +25,8 @@ import (
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/hardware"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,16 +50,26 @@ var getWorkersCmd = &cobra.Command{
 	Use:     "worker [worker-name ...]",
 	Aliases: []string{"workers"},
 	Short:   "List all workers or get one or more workers",
-	Args:    cobra.ArbitraryArgs,
-	RunE:    runGetWorkers,
+	Long: `List all workers or get one or more workers.
+
+Workers are global objects; listing or getting workers requires global viewer
+permission. The -a/--atespace flag filters the global list to workers hosting
+actors in that atespace and does not grant tenant access.`,
+	Args: cobra.ArbitraryArgs,
+	RunE: runGetWorkers,
 }
 
 var topWorkersCmd = &cobra.Command{
 	Use:     "worker",
 	Aliases: []string{"workers"},
 	Short:   "Display resource (CPU/Memory) usage of workers",
-	Args:    noArgs(""),
-	RunE:    runTopWorkers,
+	Long: `Display resource (CPU/Memory) usage of workers.
+
+Workers are global objects; viewing worker resource usage requires global
+viewer permission. The -a/--atespace flag filters the global list to workers
+hosting actors in that atespace and does not grant tenant access.`,
+	Args: noArgs(""),
+	RunE: runTopWorkers,
 }
 
 // WorkerLister abstracts ListWorkers RPC calls.
@@ -102,6 +114,13 @@ func workersHostingAtespace(ctx context.Context, lister ActorLister, atespace st
 	}
 }
 
+func workerRPCError(msg string, err error) error {
+	if status.Code(err) == codes.PermissionDenied {
+		return fmt.Errorf("%s: %w (workers are global objects and require global viewer permission)", msg, err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
+}
+
 // listAllWorkers pages through ListWorkers and returns all workers.
 func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapi.Worker, error) {
 	var workers []*ateapi.Worker
@@ -111,7 +130,7 @@ func listAllWorkers(ctx context.Context, lister WorkerLister) ([]*ateapi.Worker,
 			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to list workers: %w", err)
+			return nil, workerRPCError("failed to list workers", err)
 		}
 		workers = append(workers, resp.GetWorkers()...)
 		pageToken = resp.GetNextPageToken()
@@ -186,7 +205,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 		for _, name := range r.names {
 			worker, err := r.workerGetter.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: &ateapi.ObjectRef{Name: name}})
 			if err != nil {
-				return fmt.Errorf("failed to get worker %q: %w", name, err)
+				return workerRPCError(fmt.Sprintf("failed to get worker %q", name), err)
 			}
 			workers = append(workers, worker)
 		}
@@ -413,13 +432,13 @@ func runTopWorkers(cmd *cobra.Command, args []string) error {
 
 func init() {
 	getWorkersCmd.Flags().StringVarP(&getWorkerNamespaceFlag, "namespace", "n", "", "scope output to a specific Kubernetes namespace")
-	getWorkersCmd.Flags().StringVarP(&getWorkerAtespaceFlag, "atespace", "a", "", "filter worker pods hosting actors in a specific atespace")
+	getWorkersCmd.Flags().StringVarP(&getWorkerAtespaceFlag, "atespace", "a", "", "filter worker pods hosting actors in a specific atespace (requires global viewer)")
 	getWorkersCmd.Flags().StringVarP(&getWorkerSelectorFlag, "selector", "l", "", "filter by worker pool labels")
 	getWorkersCmd.Flags().StringVar(&getWorkerClassFlag, "sandbox-class", "", "filter by sandbox class (e.g. gvisor, microvm)")
 	getCmd.AddCommand(getWorkersCmd)
 
 	topWorkersCmd.Flags().StringVarP(&topWorkerNamespaceFlag, "namespace", "n", "", "scope output to a specific Kubernetes namespace")
-	topWorkersCmd.Flags().StringVarP(&topWorkerAtespaceFlag, "atespace", "a", "", "filter worker pods hosting actors in a specific atespace")
+	topWorkersCmd.Flags().StringVarP(&topWorkerAtespaceFlag, "atespace", "a", "", "filter worker pods hosting actors in a specific atespace (requires global viewer)")
 	topWorkersCmd.Flags().StringVarP(&topWorkerSelectorFlag, "selector", "l", "", "filter by worker pool labels")
 	topWorkersCmd.Flags().StringVar(&topWorkerClassFlag, "sandbox-class", "", "filter by sandbox class (e.g. gvisor, microvm)")
 	topCmd.AddCommand(topWorkersCmd)

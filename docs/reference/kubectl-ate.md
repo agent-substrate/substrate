@@ -90,7 +90,9 @@ kubectl ate get workers
 kubectl ate get worker <worker-name>
 
 # Filter workers by Kubernetes namespace, assigned-actor atespace,
-# worker pool labels, or sandbox class (same flags as `top workers`)
+# worker pool labels, or sandbox class (same flags as `top workers`).
+# Workers are global objects, so listing or getting workers requires global
+# viewer permission even when filtering by atespace.
 kubectl ate get workers -n <namespace>
 kubectl ate get workers -a <atespace>
 kubectl ate get workers -l <label-selector>
