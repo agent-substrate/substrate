@@ -19,8 +19,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestPostgresImageMatchesManifest(t *testing.T) {
+	manifest, err := os.ReadFile("../../../../../manifests/ate-install/postgres/postgres.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), "image: "+PostgresImage) {
+		t.Errorf("postgres.yaml does not use image %s", PostgresImage)
+	}
+}
 
 func TestConfigureFromContext(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "")
