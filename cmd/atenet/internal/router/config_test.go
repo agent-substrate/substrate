@@ -143,6 +143,11 @@ func TestRouterConfigValidate(t *testing.T) {
 			wantErr: "--drain-timeout must not be negative",
 		},
 		{
+			name:    "negative route-timeout rejected",
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, RouteTimeout: -time.Second},
+			wantErr: "--route-timeout must not be negative",
+		},
+		{
 			name: "upstream-connect with the upstream credential bundle accepted",
 			cfg:  routerConfig{Mode: ModeIngress, UpstreamConnect: true, UpstreamCredentialBundlePath: "/run/bundle.pem"},
 		},
@@ -178,6 +183,30 @@ func TestRouterConfigValidate(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestRouteTimeoutFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want time.Duration
+	}{
+		{name: "omitted uses default", want: defaultRouteTimeout},
+		{name: "zero is preserved", args: []string{"--route-timeout=0"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg routerConfig
+			fs := pflag.NewFlagSet("router", pflag.ContinueOnError)
+			bindRouterFlags(fs, &cfg)
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatalf("parsing flags: %v", err)
+			}
+			if cfg.RouteTimeout != tc.want {
+				t.Errorf("RouteTimeout = %v, want %v", cfg.RouteTimeout, tc.want)
 			}
 		})
 	}
