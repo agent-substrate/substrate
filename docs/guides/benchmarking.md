@@ -358,7 +358,7 @@ the stock `glutton` template; steps are sequences of glutton RPCs:
 | 20_commit_and_summarize | committing + summarizing | 256Ki disk write; 24Mi shipped back out; RAM walk |
 
 The script needs bigger actors than the 256Mi default: it holds ~96Mi of
-RAM arrays + ~110Mi of tmpfs files, and the observed guest peak with
+RAM arrays + ~110Mi of files on the rootfs, and the observed guest peak with
 allocator transients is ~320Mi (512Mi OOMs). Deploy the workloads with
 `--actor-memory 1Gi`. Every script declares that floor as
 `min_actor_memory`; the worker reads the `glutton` template's memory limit
