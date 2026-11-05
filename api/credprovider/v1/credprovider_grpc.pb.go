@@ -47,6 +47,11 @@ const (
 type CredentialProviderClient interface {
 	// FetchSecret resolves a credential URI to its secret material, subject to
 	// whatever authorization the provider applies to the request context.
+	//
+	// The egress gateway answers the actor with 403 for NotFound,
+	// PermissionDenied, FailedPrecondition and InvalidArgument, 503 for
+	// Unavailable, DeadlineExceeded and ResourceExhausted, and 502 for any other
+	// code.
 	FetchSecret(ctx context.Context, in *FetchSecretRequest, opts ...grpc.CallOption) (*FetchSecretResponse, error)
 }
 
@@ -79,6 +84,11 @@ func (c *credentialProviderClient) FetchSecret(ctx context.Context, in *FetchSec
 type CredentialProviderServer interface {
 	// FetchSecret resolves a credential URI to its secret material, subject to
 	// whatever authorization the provider applies to the request context.
+	//
+	// The egress gateway answers the actor with 403 for NotFound,
+	// PermissionDenied, FailedPrecondition and InvalidArgument, 503 for
+	// Unavailable, DeadlineExceeded and ResourceExhausted, and 502 for any other
+	// code.
 	FetchSecret(context.Context, *FetchSecretRequest) (*FetchSecretResponse, error)
 	mustEmbedUnimplementedCredentialProviderServer()
 }
