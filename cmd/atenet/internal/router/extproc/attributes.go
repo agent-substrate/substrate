@@ -32,8 +32,8 @@ const (
 	TargetActorFilterStateKey = "dev.ate.target.actor"
 	// ConnectAuthorityFilterStateKey carries the outer CONNECT authority across
 	// the same hop. Ingress selects the target port from it; the egress request
-	// legs read the IP:port the actor dialed from it, since the port a rule
-	// names is that one and not any port in the request's Host.
+	// legs read the port the actor dialed from it, since the port a rule names
+	// is that one and not any port in the request's Host.
 	ConnectAuthorityFilterStateKey = "dev.ate.connect.authority"
 
 	// TargetActorFilterStateAttribute is the CEL expression ext_proc evaluates
