@@ -7,10 +7,10 @@ Agent Substrate is an Apache-2.0 open-source project. This document describes
 how decisions get made and how contributors can take on more responsibility
 over time.
 
-For day-to-day collaboration norms (PR workflow, communication, AI-tool
-disclosure), see [COLLABORATING.md](COLLABORATING.md). For build and
-contribution instructions, see [CONTRIBUTING.md](CONTRIBUTING.md). For
-community conduct, see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+For build and contribution instructions and day-to-day collaboration norms
+(PR workflow, communication, AI-tool disclosure), see
+[CONTRIBUTING.md](CONTRIBUTING.md). For community conduct, see
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Roles
 
