@@ -192,6 +192,12 @@ data:
 
 #### 2. Envoy Sidecar in `csi-nfs-controller` Deployment
 
+The controller mounts the NFS share when creating and deleting volume directories.
+This example uses privileged mode for the `nfs` container, following the
+[vendored controller manifest](../../hack/third_party/csi-driver-nfs/deploy/csi-nfs-controller.yaml).
+Adding `SYS_ADMIN` alone does not bypass security profiles that deny mounts.
+Envoy keeps its restricted security context.
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -212,9 +218,16 @@ spec:
       # Upstream CSI NFS driver container listening on local Unix socket
       - name: nfs
         image: registry.k8s.io/sig-storage/nfsplugin:v4.13.4
+        securityContext:
+          privileged: true
         args:
         - "--nodeid=$(NODE_ID)"
         - "--endpoint=unix:///csi/csi.sock"
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         volumeMounts:
         - name: socket-dir
           mountPath: /csi
