@@ -34,12 +34,6 @@
 // at <Issuer>/.well-known/openid-configuration. The issuer's certificate must
 // verify against Config.IssuerCAFile, or the system roots if the issuer's host
 // ends in neither .svc nor .svc.cluster.local.
-//
-// This package imports packages under internal/, so that a provider runs the
-// same code as the in-tree exchange and only this package's API is public. Go
-// allows it: the internal rule checks the importer's path, and every package
-// under go.ate.dev/substrate may import go.ate.dev/substrate/internal/...,
-// while code outside the module may import this package.
 package actorauthz
 
 import (
