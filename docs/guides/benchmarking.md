@@ -38,8 +38,11 @@ scenario ladder, read [observability.md](observability.md).
 > ```bash
 > ATE_API_AUTHZ_BOOTSTRAP_OWNERS=system:serviceaccount:ate-system:ate-client,spiffe://cluster.local/ns/benchmarking/sa/default \
 > ATE_INGRESS_ALLOWED_SPIFFE_IDS=spiffe://cluster.local/ns/benchmarking/sa/default \
->   go run ./cmd/ate-setup deploy ate-system
+>   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"enabled":false}'
 > ```
+> These benchmarks do not use credential injection, so the examples disable
+> credential providers.
+>
 > The nightly automation sets both itself; see
 > [automation/README.md](../../benchmarking/automation/README.md).
 
@@ -678,7 +681,7 @@ limits of ate-api-server and Postgres. Isolate mode takes the nodes out by
 installing substrate with a fake data plane:
 
 ```bash
-go run ./cmd/ate-setup deploy ate-system --fake-data-plane
+go run ./cmd/ate-setup deploy ate-system --fake-data-plane --credential-provider='{"enabled":false}'
 ./benchmarking/workloads/deploy.sh --deploy --worker-count 200 \
   --fake-atelet-env FAKE_ATELET_DELAY=500ms
 ```
