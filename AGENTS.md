@@ -2,12 +2,12 @@
 
 ## Rules for contributors
 
-- Read `CONTRIBUTING.md` and the "Using AI" section of `COLLABORATING.md`. You are responsible for everything your agent submits.
+- Read `CONTRIBUTING.md`, including its "Using AI" section. You are responsible for everything your agent submits.
 - Say in the PR description that you used AI, and how. Don't add AI co-author or assisted-by trailers. Submit commits and PRs from your own account. We can't accept contributions from agent or bot accounts.
 - Agents must never sign off a commit as themselves. Only a human can certify the [DCO](https://developercertificate.org/).
 - Before asking for review, review your own diff. For substantial changes, also have a fresh agent session review it adversarially, then validate its findings and fix the confirmed issues.
 - **Be brief.** Code comments, commit messages, PR descriptions and issues should be short, plain English, and read the way an experienced maintainer writes by hand. Reviewer time and agent context windows are limited.
-  - `COLLABORATING.md` doesn't allow AI-generated commit messages, because they have usually been low quality and unreviewed. If you are asked to write one anyway, hold it to the same standard, and the person submitting it must review it.
+  - `CONTRIBUTING.md` doesn't allow AI-generated commit messages, because they have usually been low quality and unreviewed. If you are asked to write one anyway, hold it to the same standard, and the person submitting it must review it.
   - Write short, direct sentences with one idea each, subject first.
   - Use the real identifiers from the code. Don't coin new names, and avoid noun stacks like "the store-wide pin-lock pre-flight".
   - Prefer verbs to abstract nouns: "evicts" instead of "performs eviction".
@@ -26,7 +26,7 @@
 
 ### Scope
 
-- Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Sizing PRs for review" in `CONTRIBUTING.md`.
+- Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Optimizing PRs for review" in `CONTRIBUTING.md`.
 - Split a PR into commits that are easy to review in order. PRs are squash-merged, so only the branch `HEAD` needs to build and pass tests.
 - Follow "Contribution process" in `CONTRIBUTING.md`: open an issue first for anything beyond a small fix, and search open PRs and issues before you start.
 - Start the PR description with why the change is needed, or link the issue. Only write "Fixes #N" if the PR fully fixes it, and keep the description in sync with the final diff.
@@ -45,7 +45,7 @@
 - Comment the final state of the code. Bugs that only existed while you were writing the change, and links to planning docs outside the repository, are noise to the next reader.
 - Check every claim in comments, docs and the PR description against the code. Don't claim a guarantee the code doesn't enforce. When you change behavior, update the comments, docs and scripts elsewhere that describe it. Link to existing docs instead of copying them.
 - Find the root cause before fixing a symptom. Back performance claims with a measurement.
-- Keep atelet and the worker runtimes opaque to each other. The only knowledge they may share is `internal/proto/ateworkerpb` and the paths in `internal/nodepath`. Using the same library code is fine; depending on how the other side is built is not. We want atelet to roll ahead of workers eventually, so don't widen that interface casually. Until v1.0.0 nothing enforces this; see Backward Compatibility.
+- Keep atelet and the worker runtimes opaque to each other. The only knowledge they may share is `internal/proto/ateworkerpb` and the paths in `internal/nodepath`. Using the same library code is fine; depending on how the other side is built is not. We want atelet to roll ahead of workers eventually, so don't widen that interface casually.
 - Actor features work on both gVisor and microVM, with e2e coverage for both, unless the issue or PR description scopes the change to one runtime.
 - Don't assume kind, GKE, amd64 or a newer kernel than the repo already needs. Dev scripts must work on arm64 macOS. Don't change host-wide state.
 - Put shell code in standalone `.sh` scripts so shellcheck can lint them. Place each script near what uses it, such as `hack/` for dev scripts or a directory under `.github/` for a workflow. Don't inline it in YAML, such as a GitHub workflow `run:` block, in JSON, or in another language's source, such as Go or Python. Have those call the script. Get a reviewer's agreement before making an exception.
@@ -66,7 +66,7 @@ It takes the Kubernetes control-plane out of the critical path to achieve lower 
 Agent Substrate relies on the fact that agent-like applications tend to be idle most of the time to achieve heavy multiplexing.
 
 For development, it's recommended to read the `README.md` and `CONTRIBUTING.md` in the root folder.
-See `cmd/ate-setup` and `tools/setup-gcp` for provisioning and deploying clusters and GCP resources.
+See `cmd/ate-setup` for deploying clusters. GCP resources are provisioned with `tools/setup-gcp` in [substrate-gke](https://github.com/ai-on-gke/substrate-gke).
 
 ## Repository Layout
 
@@ -122,14 +122,6 @@ The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` insta
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
 
-## Backward Compatibility
-
-<!-- TODO #2004: Remove this section at the v1.0.0 release. -->
-
-Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code to stay compatible with older clients, binaries, protos, flags, or config.
-Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
-Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
-
 ## Version Skew
 
 From v1.0.0, changes must keep upgrades and rollbacks working under [docs/reference/version-skew-policy.md](docs/reference/version-skew-policy.md). Read it before you change an RPC, a CRD, the worker pod template, a database migration, or file(s) that `atelet` and `ateworker` share on a node.
@@ -156,7 +148,7 @@ See the [metric registry](docs/guides/observability.md#the-metric-registry) sect
 1. Write tests for new behavior. Update tests when you change existing behavior. Consider the value of tests for future changes.
 2. Ensure changes do not break existing tests.
 3. Run `go test -race ./...` and `hack/verify-all.sh` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
-4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
+4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (on GKE, set up with `tools/setup-gcp` in [substrate-gke](https://github.com/ai-on-gke/substrate-gke)).
 5. A test that skips when a precondition is missing (Docker, a cluster, an artifact directory) must **fail** on it in CI, because a skip and a pass are the same exit code. Check for CI with a named predicate like `cmd/ateapi/internal/store/dockerenv.Required()` instead of an inline `os.Getenv("CI")`. Make sure the CI branch actually fails before merging. See `docs/dev/best-practices/ci-fail-closed.md`.
 
 ## Security Considerations

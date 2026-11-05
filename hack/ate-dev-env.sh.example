@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,54 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Example environment variables for Substrate development.
-# Copy this file to .ate-dev-env.sh and customize it for your environment.
+# Example environment for Substrate development on a local kind cluster.
+# Copy this file to .ate-dev-env.sh, adjust it, and source it in every shell
+# that runs ate-setup or the hack/ scripts:
+#
+#   cp hack/ate-dev-env.sh.example .ate-dev-env.sh
+#   source .ate-dev-env.sh
+#   hack/create-kind-cluster.sh
+#   go run ./cmd/ate-setup deploy ate-system
+#
+# On kind, ate-setup does not read .ate-dev-env.sh itself, so source it into
+# your shell. Every value keeps one already exported, so you can override any
+# of them per shell.
 
-export PROJECT_ID=${USER}-gke-dev
-export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
-
-export GCE_REGION=us-west1
-export CLUSTER_LOCATION=us-west1-c
-
-export NETWORK=default
-export SUBNETWORK=default
-
-export CLUSTER_NAME=substrate-poc
-# Supported: 1.36 with the v1beta1 PodCertificate APIs enabled, which setup-gcp
-# does, or 1.37+, which serves them under v1. Anything below 1.36 does not
-# work. GKE retires patch versions over time — if cluster creation rejects
-# this pin, pick a current one from:
-#   gcloud container get-server-config --zone ${CLUSTER_LOCATION} --format="value(defaultClusterVersion)"
-# See tools/setup-gcp/README.md ("Create Cluster") for the full constraint.
-export CLUSTER_VERSION=1.36.3-gke.1767000
-export NODE_POOL_NAME=gvisor-pool
-export NODE_POOL_VERSION=1.36.3-gke.1767000
-export NODE_MACHINE_TYPE=c3-standard-4
-# Enable nested virtualization (required for microVMs)
-export ENABLE_NESTED_VIRTUALIZATION=true
-# Boot disk customizations (optional; defaults to GKE's default boot disk)
-# export BOOT_DISK_SIZE_GB=500
-# export BOOT_DISK_TYPE=hyperdisk-balanced
-
-# Set this if you are using an existing cluster with a different context name.
-export KUBECTL_CONTEXT=
-
-export BUCKET_NAME=snapshot-substrate-test-${PROJECT_ID}
-# Cluster-wide location ate-api-server stores snapshots under.
-export SNAPSHOT_LOCATION="gs://${BUCKET_NAME}/"
-# Google service account snapshot transfers run as on GCS. setup-gcp creates
-# it, and ate-setup and hack/teardown.sh read the same name.
-export SNAPSHOT_TRANSFER_GSA_NAME=ate-snapshot-transfer
-
-export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
+# Target the local kind cluster.
+export ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-true}"
+# kind cluster name used by hack/create-kind-cluster.sh,
+# hack/delete-kind-cluster.sh and ate-setup (kube context kind-<name>).
+export KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
+# Local registry hack/create-kind-cluster.sh starts; ko pushes images here.
+export KIND_REGISTRY_PORT="${KIND_REGISTRY_PORT:-5001}"
+export KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:${KIND_REGISTRY_PORT}}"
+# IP family of the kind cluster: ipv4, dual or ipv6.
+# export IP_FAMILY=ipv4
 
 # Credential provider the egress gateway injects credentials from, as JSON; the
 # install requires a choice. {"name":"k8s.io"} deploys the bundled Kubernetes
 # Secrets provider, with a NetworkPolicy that admits only the egress gateway;
 # {"enabled":false} turns egress credential injection off, and is the only choice
 # on the agentgateway dataplane; {"name":"<provider>","address":"<host>:<port>"}
-# uses a provider you deploy yourself. See docs/egress-credential-injection.md.
-export ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}'
+# uses a provider you deploy yourself. See docs/guides/egress-credential-injection.md.
+export ATE_CREDENTIAL_PROVIDER="${ATE_CREDENTIAL_PROVIDER:-{\"name\":\"k8s.io\"}}"
 
-# Set this if you want to override the default build platforms
-export KO_DEFAULTPLATFORMS=linux/amd64
+# Clients the ingress router lets reach actors, comma-separated. This is the
+# identity `kubectl ate proxy actor` presents. See
+# docs/guides/operator-install.md#ingress-to-actors.
+export ATE_INGRESS_ALLOWED_SPIFFE_IDS="${ATE_INGRESS_ALLOWED_SPIFFE_IDS:-spiffe://cluster.local/ns/ate-system/sa/atenet-client}"

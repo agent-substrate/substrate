@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -87,6 +87,7 @@ outputFormats:
 outputs:
   home: [HTML, LLMS, LLMSFULL]
   section: [HTML]
+  page: [HTML, MARKDOWN]
 
 params:
   github_repo: "https://github.com/agent-substrate/substrate"
@@ -141,6 +142,10 @@ module:
     min: 0.163.3
   mounts:
     - source: content
+      target: content
+    # Content adapters, for pages made from generated data rather than from
+    # the stubs in content/.
+    - source: adapters
       target: content
     - source: data
       target: data

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ import (
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorlookup"
 	"go.ate.dev/substrate/internal/objectstoreplugin/exchange"
 	"go.ate.dev/substrate/internal/objectstoreplugin/gcsissuer"
-	"go.ate.dev/substrate/internal/oidcjwt"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/pkg/objectstorage"
@@ -44,7 +43,7 @@ type exchangeConfig struct {
 	listen          string
 	credBundle      string
 	issuer          string
-	jwksFile        string
+	issuerCAFile    string
 	transferAccount string
 	ateapi          actorlookup.Config
 }
@@ -63,19 +62,16 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if cfg.issuer == "" {
 		return nil, nil, errors.New("--actor-jwt-issuer is required to serve the exchange on GCS")
 	}
-	if cfg.jwksFile == "" {
-		return nil, nil, errors.New("--actor-jwt-jwks-file is required to serve the exchange on GCS")
-	}
 	if cfg.transferAccount == "" {
 		return nil, nil, errors.New("--transfer-service-account is required to serve the exchange on GCS")
 	}
-	// Read the key set once now, so a wrong path fails the start rather
-	// than the first exchange.
-	keys := oidcjwt.FileKeySource(cfg.jwksFile)
-	if _, err := keys.Keys(ctx); err != nil {
-		return nil, nil, fmt.Errorf("while reading the actor JWT key set: %w", err)
+	if cfg.issuerCAFile == "" {
+		return nil, nil, errors.New("--actor-jwt-issuer-ca-file is required to serve the exchange on GCS")
 	}
-	verifier := oidcjwt.NewVerifier(cfg.issuer, []string{actorauthz.Audience}, keys, oidcjwt.WithSubstrateClaims())
+	verifier, _, err := actorauthz.StartVerifier(ctx, cfg.issuer, cfg.issuerCAFile)
+	if err != nil {
+		return nil, nil, err
+	}
 	lookup, err := actorlookup.New(cfg.ateapi)
 	if err != nil {
 		return nil, nil, err

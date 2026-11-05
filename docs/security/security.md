@@ -12,6 +12,19 @@ Substrate delivers zero trust for agents. Every agent has an identity, but no cr
 
 Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls operate within Substrate's cold-start and resume latency budget. This document defines the high-level security principles. For identity and credential configuration, see the [Authentication Guide](../guides/authentication.md). Detailed threat scenarios and mitigating invariants are documented [in the threat model](threat-model.md).
 
+## Security Boundaries
+
+![Substrate security boundaries](../assets/security-boundaries.svg)
+
+The numbered tags mark the boundaries Substrate holds:
+
+1. **Sandbox.** Each actor runs in its own gVisor or microVM sandbox, with its own network namespace and storage. Actor code cannot reach the node or other actors; it can only talk through its gateway path and DNS relay, where policy applies.
+2. **Gateways.** Traffic reaches actors only through the ingress gateway, from authenticated callers. Outbound traffic leaves only through the egress gateway and DNS relay. The gateway enforces destination policies and injects credentials, so sandboxes hold none.
+3. **Control plane.** Actors have no direct network path to the Substrate API, its database, or the Kubernetes API; their egress policy decides what external destinations or cluster services they can reach. Worker pods cannot reach the Substrate API or bundled database. API callers are authorized per atespace.
+4. **Storage.** Sandboxes never touch snapshot storage. On GCS, the node supervisor moves an actor's snapshots using credentials scoped to that one actor (S3 per-actor scoping is planned), and only the control plane copies or deletes them.
+
+Your application is outside these boundaries: it authenticates end users and decides which actors they can reach. A more detailed diagram is available in the [threat model](threat-model.md#architecture-of-substrate).
+
 ## Security Scope
 
 Substrate provides the foundational base for agent security:
@@ -49,6 +62,7 @@ Substrate is designed to safely run mutually hostile, untrusted actors from disp
 | **Per-Actor Storage Segregation** | Storage and persistent volume state must be strictly segregated per actor. Actors cannot traverse, enumerate, or access persistence belonging to other actors. Restoring a snapshot must re-validate the actor's current tenant authorization before execution resumes. | Met (Segregation)<br>Future (Per-Actor Encryption, Restore Authorization) |
 | **Per-Actor Network Isolation** | Guest network stacks are segregated per actor. Lateral peer-to-peer network communication between co-located actors on the same host or across the cluster is blocked by default; inter-actor communication must route through authenticated, policy-enforced gateways. | Met (Private netns, atunnel) |
 | **Delete Guarantee** | Reset, scrub, and sanitize local ephemeral volumes, cached state, and worker runtime environments between actor scheduling cycles to prevent cross-tenant data leakage. | In Progress (atelet resetActorDirs) |
+| **Worker Capability Reduction** | Worker pods use `privileged: false`, `allowPrivilegeEscalation: false` and fixed runtime-specific capability sets. They still run as root with `SYS_ADMIN` and `NET_ADMIN`; see [Worker security](../reference/api-guide.md#worker-security). | In Progress (root with `SYS_ADMIN`; no worker user namespace yet) |
 | **Node Blast Radius Containment** | A compromise of an individual sandbox guest or node supervisor restricts impact to the actors and identities actively co-located on that node. | In Progress (Node-attested PodIdentity, checkActorOnNode) |
 | **Atespace Separation** | The Substrate equivalent of a Kubernetes namespace that is used to group resources and partition object storage snapshot paths. OpenFGA relationship-based access control (ReBAC) is integrated for API authorization, but it does not yet enforce inter-atespace network policies or resource quotas. | In-Progress (OpenFGA ReBAC; network policies and quotas pending) |
 

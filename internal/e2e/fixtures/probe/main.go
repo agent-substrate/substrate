@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -219,6 +219,36 @@ func readfile(w http.ResponseWriter, r *http.Request) {
 		resp["content"] = string(b)
 	} else {
 		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
+// statResponse is the /stat payload: path's numeric owner and mode as the
+// actor sees them, without following a final-component symlink.
+type statResponse struct {
+	Path string `json:"path"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
+	// Mode is the os.FileMode string, e.g. "drwx------".
+	Mode  string `json:"mode"`
+	Error string `json:"error,omitempty"`
+}
+
+// stat reports a path's owner and mode inside the actor, so a test can assert
+// on the ownership the image's layers gave it.
+func stat(w http.ResponseWriter, r *http.Request) {
+	resp := statResponse{Path: r.URL.Query().Get("path")}
+	fi, err := os.Lstat(resp.Path)
+	if err != nil {
+		resp.Error = err.Error()
+		writeJSON(w, resp)
+		return
+	}
+	resp.Mode = fi.Mode().String()
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		resp.UID, resp.GID = st.Uid, st.Gid
+	} else {
+		resp.Error = "no owner information for " + resp.Path
 	}
 	writeJSON(w, resp)
 }
@@ -600,6 +630,13 @@ func fetchOnce(ctx context.Context, client *http.Client, url string) error {
 }
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == "filesystem-child" {
+		if err := filesystemChild(os.Args[2], os.Args[3]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	healthz := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	if url := os.Getenv(bootFetchURLEnv); url != "" {
 		booted, err := os.ReadFile(identityFile)
@@ -629,8 +666,10 @@ func main() {
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/lookup", lookup)
+	mux.HandleFunc("/stat", stat)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
+	mux.HandleFunc("/filesystem", filesystem)
 	mux.HandleFunc("/healthz", healthz)
 
 	const addr = ":80"

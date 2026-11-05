@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -76,8 +76,8 @@ func checkSubresourceNaming(r model.Resource) []Finding {
 // standardVerbPrefix returns the standard verb methodName starts with, if
 // it's followed by another word. For example, "Get" for
 // "GetActorEgressPolicy", but nothing for "Getaway".
-func standardVerbPrefix(methodName protoreflect.Name) (verb, bool) {
-	for _, v := range standardVerbs {
+func standardVerbPrefix(methodName protoreflect.Name) (model.Verb, bool) {
+	for _, v := range model.StandardVerbs {
 		rest, ok := strings.CutPrefix(string(methodName), string(v))
 		if r, _ := utf8.DecodeRuneInString(rest); ok && unicode.IsUpper(r) {
 			return v, true

@@ -1,5 +1,5 @@
 {{/*
-Copyright 2026 Google LLC
+Copyright 2026 The Agent Substrate Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,20 +13,23 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */ -}}
-# Agent Substrate — Full Documentation Bundle (llms-full.txt)
+# Agent Substrate: Full Documentation Bundle (llms-full.txt)
 
-> Complete machine-readable compilation of Agent Substrate's Get Started guides, Concepts, Architecture, How-to Guides, Reference (API, CLI, Glossary, Metrics), Security, Tutorials, and Project documentation.
+> Complete Markdown compilation of Agent Substrate's Get Started guides, Concepts, Tutorials, How-to Guides, Reference, Security, and Project documentation.
 > Canonical index: {{ "llms.txt" | absURL }}
 
 {{- $docs := site.GetPage "/docs" -}}
 {{- if $docs -}}
 {{- range $section := $docs.Sections.ByWeight -}}
-{{- range $p := $section.RegularPages.ByWeight }}
+{{- range $p := where $section.RegularPages.ByWeight ".Params.toc_hide" "!=" true }}
 
 ================================================================================
 SECTION: {{ upper ($section.LinkTitle | default $section.Title) }}
 PAGE: {{ $p.Title }}
 URL: {{ $p.Permalink }}
+{{- with $p.OutputFormats.Get "markdown" }}
+MARKDOWN: {{ .Permalink }}
+{{- end }}
 {{- with $p.Params.repo_source }}
 SOURCE: {{ . }}
 {{- end }}

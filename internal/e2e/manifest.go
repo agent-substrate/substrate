@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -120,12 +122,37 @@ func koApply(t *testing.T, manifest string) {
 // the manifest with those references replaced by pushed digests. Same pinned
 // ko and KO_CONFIG_PATH rules as koApply; resolve is how a manifest that is
 // not destined for kubectl (a protojson ActorTemplate document) still gets
-// its image built.
-func koResolve(t *testing.T, manifest string) []byte {
+// its image built. args go to ko resolve before the manifest.
+func koResolve(t *testing.T, manifest string, args ...string) []byte {
 	t.Helper()
 	root, err := FindRepoRoot()
 	if err != nil {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
-	return RunCmdOutput(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), "ko", "resolve", "-f", manifest)
+	resolveArgs := append([]string{"ko", "resolve"}, args...)
+	resolveArgs = append(resolveArgs, "-f", manifest)
+	return RunCmdOutput(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), resolveArgs...)
+}
+
+// ResolveFixtureImage builds a fixture through the same ko resolver used by
+// fixture manifests and returns its digest-pinned image reference.
+func ResolveFixtureImage(t *testing.T, importPath string) string {
+	t.Helper()
+	pod := corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "fixture", Image: "ko://" + importPath}}}}
+	raw, err := yaml.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(t.TempDir(), "fixture-image.yaml")
+	if err := os.WriteFile(manifest, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(koResolve(t, manifest), &pod); err != nil {
+		t.Fatal(err)
+	}
+	image := pod.Spec.Containers[0].Image
+	if !strings.Contains(image, "@sha256:") {
+		t.Fatalf("fixture image %q is not pinned by digest", image)
+	}
+	return image
 }

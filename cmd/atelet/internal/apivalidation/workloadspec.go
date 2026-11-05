@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -78,11 +78,11 @@ func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operat
 }
 
 func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
-	return resources.ValidateCapabilities(fldPath, value, false)
+	return resources.ValidateAddCapabilities(fldPath, value)
 }
 
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
-	return resources.ValidateCapabilities(fldPath, value, true)
+	return resources.ValidateDropCapabilities(fldPath, value)
 }
 
 func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {

@@ -92,6 +92,8 @@ A kept version's assets must stay fetchable, so a release does not overwrite the
 
 An actor that starts without memory state, new or cold booting, gets the default version. An actor restoring memory state gets the version its snapshot was taken with, and stays on it until it next starts without memory state. If that version is gone, it cold boots, keeping its files and losing its memory. Rollback applies the N lists again, which removes the N+1 versions.
 
+On gVisor, every restore without memory state runs under the worker's default `runsc`. After an upgrade or a rollback, that `runsc` may read `fscheckpoint` bundles that another `runsc` version wrote. Substrate does not check that it can, and a restore that fails crashes the actor.
+
 <!-- TODO: Link the SandboxConfig upgrade guide, which covers the details. -->
 
 ### Database schema
@@ -100,7 +102,7 @@ The schema is updated with `ate-api-server`, and migrations follow [postgresql-s
 
 ### Data on nodes and in snapshots
 
-This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the file systems.
+This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the file systems. On gVisor, `runsc` writes those file systems as `fscheckpoint` bundles (see [SandboxConfig](#sandboxconfig)). On microVM, `ateworker-microvm` writes them as tar files, which are Substrate's own data and follow the snapshot rules below.
 
 This section is about data one release writes and another release reads, whether that is a different component or the same component after an upgrade or a rollback. Substrate's data comes in two kinds, by how long it lives.
 

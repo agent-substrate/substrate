@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -87,8 +87,7 @@ usage() {
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
-  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
-  echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)"
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi)"
   echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
@@ -202,4 +204,90 @@ func TestWaitActorTemplateGoldenDisabledTemplateReady(t *testing.T) {
 	if err := WaitActorTemplateGolden(context.Background(), client, ref, 0); err != nil {
 		t.Fatalf("WaitActorTemplateGolden on a disabled template = %v, want nil", err)
 	}
+}
+
+type recordingCreateActorClient struct {
+	ateapi.ControlClient
+	got *ateapi.CreateActorRequest
+	err error
+}
+
+func (r *recordingCreateActorClient) CreateActor(_ context.Context, in *ateapi.CreateActorRequest, _ ...grpc.CallOption) (*ateapi.Actor, error) {
+	r.got = in
+	if r.err != nil {
+		return nil, r.err
+	}
+	return in.GetActor(), nil
+}
+
+func TestCreateActor(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "claude-multiplex-demo", Name: "luna"}
+	tmplRef := resources.ActorTemplateRef{Atespace: "claude-multiplex-demo", Name: "agent-luna"}
+
+	t.Run("creates actor with template ref", func(t *testing.T) {
+		rec := &recordingCreateActorClient{}
+		client := &ateclient.Client{ControlClient: rec}
+		if err := CreateActor(context.Background(), client, actorRef, tmplRef); err != nil {
+			t.Fatalf("CreateActor = %v, want nil", err)
+		}
+		if got := resources.ActorRefFromActor(rec.got.GetActor()); got != actorRef {
+			t.Errorf("created actor ref = %s, want %s", got, actorRef)
+		}
+		if got := resources.ActorTemplateRefFromObjectRef(rec.got.GetActor().GetActorTemplate()); got != tmplRef {
+			t.Errorf("created actor template ref = %s, want %s", got, tmplRef)
+		}
+	})
+
+	t.Run("idempotent on AlreadyExists", func(t *testing.T) {
+		rec := &recordingCreateActorClient{err: status.Error(codes.AlreadyExists, "exists")}
+		client := &ateclient.Client{ControlClient: rec}
+		if err := CreateActor(context.Background(), client, actorRef, tmplRef); err != nil {
+			t.Fatalf("CreateActor on AlreadyExists = %v, want nil", err)
+		}
+	})
+}
+
+type recordingCreateEgressPolicyClient struct {
+	ateapi.ControlClient
+	got *ateapi.CreateActorEgressPolicyRequest
+	err error
+}
+
+func (r *recordingCreateEgressPolicyClient) CreateActorEgressPolicy(_ context.Context, in *ateapi.CreateActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapi.EgressPolicy, error) {
+	r.got = in
+	if r.err != nil {
+		return nil, r.err
+	}
+	return in.GetEgressPolicy(), nil
+}
+
+func TestCreateActorEgressPolicy(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "claude-multiplex-demo", Name: "luna"}
+	rules := []*ateapi.EgressRule{{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"api.anthropic.com"}}}}
+
+	t.Run("creates the actor's singleton policy", func(t *testing.T) {
+		rec := &recordingCreateEgressPolicyClient{}
+		client := &ateclient.Client{ControlClient: rec}
+		if err := CreateActorEgressPolicy(context.Background(), client, actorRef, rules); err != nil {
+			t.Fatalf("CreateActorEgressPolicy = %v, want nil", err)
+		}
+		if got := resources.ActorRefFromObjectRef(rec.got.GetActor()); got != actorRef {
+			t.Errorf("policy parent = %s, want %s", got, actorRef)
+		}
+		meta := rec.got.GetEgressPolicy().GetMetadata()
+		if meta.GetAtespace() != actorRef.Atespace || meta.GetName() != resources.SingletonName {
+			t.Errorf("policy metadata = %s/%s, want %s/%s", meta.GetAtespace(), meta.GetName(), actorRef.Atespace, resources.SingletonName)
+		}
+		if got := rec.got.GetEgressPolicy().GetRules(); len(got) != 1 || got[0] != rules[0] {
+			t.Errorf("policy rules = %v, want %v", got, rules)
+		}
+	})
+
+	t.Run("idempotent on AlreadyExists", func(t *testing.T) {
+		rec := &recordingCreateEgressPolicyClient{err: status.Error(codes.AlreadyExists, "exists")}
+		client := &ateclient.Client{ControlClient: rec}
+		if err := CreateActorEgressPolicy(context.Background(), client, actorRef, rules); err != nil {
+			t.Fatalf("CreateActorEgressPolicy on AlreadyExists = %v, want nil", err)
+		}
+	})
 }

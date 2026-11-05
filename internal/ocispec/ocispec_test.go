@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -27,16 +28,37 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
-// mountFor returns the spec's mount at destination dest, or fails.
+// mountFor returns the spec's only mount at destination dest, or fails.
 func mountFor(t *testing.T, spec *specs.Spec, dest string) specs.Mount {
 	t.Helper()
+	var found []specs.Mount
 	for _, m := range spec.Mounts {
 		if m.Destination == dest {
-			return m
+			found = append(found, m)
 		}
 	}
-	t.Fatalf("no mount at %q; mounts=%v", dest, spec.Mounts)
-	return specs.Mount{}
+	if len(found) != 1 {
+		t.Fatalf("%d mounts at %q, want 1; mounts=%v", len(found), dest, spec.Mounts)
+	}
+	return found[0]
+}
+
+// Build gives both runtimes the same system mounts, including tmpfs at
+// /dev/shm and /tmp.
+func TestBuild_SystemMounts(t *testing.T) {
+	spec := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}})
+	want := []specs.Mount{
+		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+		{Destination: "/dev/pts", Type: "devpts", Source: "devpts", Options: []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"}},
+		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
+		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
+		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
+		{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777"}},
+	}
+	if !reflect.DeepEqual(spec.Mounts, want) {
+		t.Errorf("Mounts =\n%+v\nwant\n%+v", spec.Mounts, want)
+	}
 }
 
 // Each volume mount becomes a bind of its host directory, rw or ro by kind.
@@ -72,11 +94,11 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		wantSource string
 		wantOpts   []string
 	}{
-		{"/var/data", durableDir + "/data", []string{"bind", "rw"}},
-		{"/home/counter", durableDir + "/data", []string{"bind", "rw"}},
-		{"/run/ate", sysInfoDir + "/sysinfo", []string{"bind", "ro"}},
-		{"/mnt/csi", volumesDir + "/csi", []string{"bind", "rw"}},
-		{"/ate", imagecache.ImageVolumeMountPath(bundle, "agent"), []string{"bind", "ro"}},
+		{"/var/data", durableDir + "/data", []string{"bind", "rw", "nodev"}},
+		{"/home/counter", durableDir + "/data", []string{"bind", "rw", "nodev"}},
+		{"/run/ate", sysInfoDir + "/sysinfo", []string{"bind", "ro", "nodev"}},
+		{"/mnt/csi", volumesDir + "/csi", []string{"bind", "rw", "nodev"}},
+		{"/ate", imagecache.ImageVolumeMountPath(bundle, "agent"), []string{"bind", "ro", "nodev"}},
 	} {
 		m := mountFor(t, spec, tc.dest)
 		if m.Type != "bind" {
@@ -88,6 +110,31 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		if !slices.Equal(m.Options, tc.wantOpts) {
 			t.Errorf("%s options = %v, want %v", tc.dest, m.Options, tc.wantOpts)
 		}
+	}
+}
+
+// A volume at a system mount path replaces that mount in place.
+func TestBuild_VolumeReplacesSystemMount(t *testing.T) {
+	const durableDir = "/node/actors/a/durable-dir"
+	for _, dest := range []string{"/dev/mqueue", "/dev/shm", "/tmp"} {
+		t.Run(dest, func(t *testing.T) {
+			spec := Build(Options{
+				ActorDirs: &ateworkerpb.ActorDirs{DurableDirVolumeMountsDir: durableDir},
+				Container: &ateworkerpb.Container{
+					ContainerSpec:          &ateworkerpb.ContainerSpec{Args: []string{"/app"}},
+					DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: dest}},
+				},
+			})
+			want := systemMounts()
+			i := slices.IndexFunc(want, func(m specs.Mount) bool { return m.Destination == dest })
+			if i < 0 {
+				t.Fatalf("no system mount at %q", dest)
+			}
+			want[i] = specs.Mount{Destination: dest, Type: "bind", Source: durableDir + "/data", Options: []string{"bind", "rw", "nodev"}}
+			if !reflect.DeepEqual(spec.Mounts, want) {
+				t.Errorf("Mounts =\n%+v\nwant\n%+v", spec.Mounts, want)
+			}
+		})
 	}
 }
 
@@ -134,6 +181,26 @@ func TestBuild_Capabilities(t *testing.T) {
 		if len(set.got) != 0 {
 			t.Errorf("%s = %v, want empty", set.name, set.got)
 		}
+	}
+}
+
+func TestBuild_ProcessUser(t *testing.T) {
+	user := &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65534, AdditionalGids: []uint32{44}}
+	want := specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, User: user}}}).Process.User; !reflect.DeepEqual(got, want) {
+		t.Errorf("Process.User = %+v, want %+v", got, want)
+	}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}}).Process.User; !reflect.DeepEqual(got, specs.User{}) {
+		t.Errorf("Process.User = %+v, want root", got)
+	}
+}
+
+func TestBuild_Cwd(t *testing.T) {
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}, Cwd: "/work"}}}).Process.Cwd; got != "/work" {
+		t.Errorf("Process.Cwd = %q, want /work", got)
+	}
+	if got := Build(Options{Container: &ateworkerpb.Container{ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app"}}}}).Process.Cwd; got != "/" {
+		t.Errorf("Process.Cwd = %q, want /", got)
 	}
 }
 

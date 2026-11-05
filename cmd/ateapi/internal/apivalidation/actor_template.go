@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -163,9 +163,9 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return resources.ValidatePinnedImage(fldPath, *value)
 }
 
-// ValidateCustom_SnapshotConfig_StorageLocation ensures an
-// ActorTemplate's snapshotConfig.storageLocation is a well-formed
-// URI with a bucket, so a bad location fails fast.
+// ValidateCustom_SnapshotConfig_StorageLocation checks an ActorTemplate's
+// snapshotConfig.storageLocation with resources.ValidateSnapshotLocation, so a
+// bad location fails fast.
 func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
@@ -178,9 +178,9 @@ func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPat
 }
 
 func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
-	return resources.ValidateCapabilities(fldPath, value, false)
+	return resources.ValidateAddCapabilities(fldPath, value)
 }
 
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
-	return resources.ValidateCapabilities(fldPath, value, true)
+	return resources.ValidateDropCapabilities(fldPath, value)
 }

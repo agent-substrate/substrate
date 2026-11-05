@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1810,10 +1810,24 @@ func TestValidateContainer(t *testing.T) {
 		}, {
 			name: "capabilities: lowercase rejected",
 			obj:  caps(nil, []string{"net_bind_service"}),
-			want: field.ErrorList{field.Invalid(capsPath.Child("drop").Index(0), nil, "")},
+			want: field.ErrorList{field.NotSupported[string](capsPath.Child("drop").Index(0), nil, nil)},
+		}, {
+			name: "capabilities: unknown name rejected",
+			obj:  caps(nil, []string{"NET_ADIMN"}),
+			want: field.ErrorList{field.NotSupported[string](capsPath.Child("drop").Index(0), nil, nil)},
+		}, {
+			name: "capabilities: add outside the allowlist rejected",
+			obj:  caps([]string{"MKNOD", "SYS_ADMIN"}, nil),
+			want: field.ErrorList{
+				field.NotSupported[string](capsPath.Child("add").Index(0), nil, nil),
+				field.NotSupported[string](capsPath.Child("add").Index(1), nil, nil),
+			},
+		}, {
+			name: "capabilities: drop outside the allowlist accepted",
+			obj:  caps(nil, []string{"MKNOD", "SYS_ADMIN"}),
 		}, {
 			name: "capabilities: duplicate rejected by the set",
-			obj:  caps([]string{"SYS_TIME", "SYS_TIME"}, nil),
+			obj:  caps([]string{"SETUID", "SETUID"}, nil),
 			want: field.ErrorList{field.Duplicate(capsPath.Child("add").Index(1), nil)},
 		},
 

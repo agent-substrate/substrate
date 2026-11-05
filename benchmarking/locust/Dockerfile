@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -61,6 +61,7 @@ COPY benchmarking/locust/cluster_facts.py /app/cluster_facts.py
 COPY benchmarking/locust/server_telemetry.py /app/server_telemetry.py
 COPY benchmarking/locust/phase_breakdown.py /app/phase_breakdown.py
 COPY benchmarking/locust/ladder_steps.py /app/ladder_steps.py
+COPY benchmarking/locust/turnover_window.py /app/turnover_window.py
 COPY benchmarking/analysis/phase_report.py /app/phase_report.py
 
 ENV PYTHONPATH=/app:/app/deps

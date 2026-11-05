@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@
 # sandbox classes. The ActorTemplate is a substrate resource, not a CRD: it
 # lives in egress-microvm-template.yaml.tmpl and is created through the
 # ate API with `kubectl ate create actor-template`. The cluster-wide `microvm`
-# SandboxConfig referenced by the pool is installed by
-# hack/install-microvm-deps.sh
+# SandboxConfig referenced by the pool is installed by `deploy ate-system`.
 
 apiVersion: v1
 kind: Namespace

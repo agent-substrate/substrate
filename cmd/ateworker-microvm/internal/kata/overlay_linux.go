@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -127,6 +127,15 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 	return []string{
 		"--socket-path=" + o.SocketPath,
 		"--shared-dir=" + o.SharedDir,
+		// Namespace isolation uses pivot_root, not the separate chroot mode.
+		"--sandbox=namespace",
+		"--seccomp=kill",
+		// Track inodes with O_PATH fds. In any other mode virtiofsd adds
+		// DAC_READ_SEARCH to its child set, which the worker does not grant,
+		// and exits at startup. The default (prefer) would use fds here
+		// anyway: the shared directory is on the worker's overlayfs rootfs,
+		// which cannot produce decodable file handles.
+		"--inode-file-handles=never",
 		"--cache=auto",
 		"--thread-pool-size=1",
 		"--announce-submounts",
@@ -422,9 +431,12 @@ type CreateSandboxOpts struct {
 // volumes every container runs on). Mirrors kata startSandbox.
 func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSandboxOpts) error {
 	storages := []*agentpb.Storage{{
-		Driver:     virtioFSDriver,
-		Source:     FsTag,
-		Fstype:     typeVirtioFS,
+		Driver: virtioFSDriver,
+		Source: FsTag,
+		Fstype: typeVirtioFS,
+		// nodev on the share itself also covers its automounted submounts,
+		// which a nodev remount of each container bind does not reach.
+		Options:    []string{"nodev"},
 		MountPoint: guestSharedDir,
 	}}
 	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{

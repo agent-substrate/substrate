@@ -16,15 +16,16 @@ request and retries the resume until a worker frees up — instead of failing fa
 with a `503`.
 
 The setup is deliberately **oversubscribed**: a 2-worker pool with several
-actors. The workload is the same `counter` binary used by the counter demo; its
-reply includes the worker pod IP, so you can see which worker served a request.
+actors running the `counter` binary from the counter demo. Run
+`kubectl ate get actors -a ate-demo-parking` to see which worker pod each actor
+is assigned to.
 
 See [docs/concepts/request-parking.md](../../docs/concepts/request-parking.md) for the design.
 
 ## Prerequisites
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart-development).
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart).
 - A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate

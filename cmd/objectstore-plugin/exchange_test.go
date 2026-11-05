@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,17 @@
 package main
 
 import (
+	"encoding/pem"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
+	"go.ate.dev/substrate/internal/testcert"
 )
 
 func TestNewExchangeService(t *testing.T) {
@@ -34,15 +40,38 @@ func TestNewExchangeService(t *testing.T) {
 			t.Fatalf("S3 exchange is %T, want the unimplemented server", svc)
 		}
 	})
+	const (
+		issuer = "https://idp.ate-system.svc"
+		xfer   = "xfer@proj.iam.gserviceaccount.com"
+	)
+	emptyCA := filepath.Join(t.TempDir(), "empty.pem")
+	if err := os.WriteFile(emptyCA, []byte("not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tlsIssuer := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(tlsIssuer.Close)
+	tlsIssuerCA := writeServerCA(t, tlsIssuer)
+	otherCA := filepath.Join(t.TempDir(), "other-ca.pem")
+	if err := os.WriteFile(otherCA, testcert.NewServerTLS(t, net.ParseIP("127.0.0.1")).RootCA, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The httptest certificate is for 127.0.0.1, not localhost.
+	_, tlsIssuerPort, err := net.SplitHostPort(tlsIssuer.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name string
 		cfg  exchangeConfig
 		want string
 	}{
-		{"GCS needs the issuer", exchangeConfig{jwksFile: "jwks.json"}, "--actor-jwt-issuer"},
-		{"GCS needs the JWKS file", exchangeConfig{issuer: "https://idp.ate-system.svc"}, "--actor-jwt-jwks-file"},
-		{"GCS needs the transfer account", exchangeConfig{issuer: "https://idp.ate-system.svc", jwksFile: "jwks.json"}, "--transfer-service-account"},
-		{"GCS needs a readable JWKS file", exchangeConfig{issuer: "https://idp.ate-system.svc", jwksFile: filepath.Join(t.TempDir(), "absent.json"), transferAccount: "xfer@proj.iam.gserviceaccount.com"}, "key set"},
+		{"GCS needs the issuer", exchangeConfig{transferAccount: xfer}, "--actor-jwt-issuer"},
+		{"GCS needs the transfer account", exchangeConfig{issuer: issuer}, "--transfer-service-account"},
+		{"GCS needs a readable issuer CA file", exchangeConfig{issuer: issuer, issuerCAFile: filepath.Join(t.TempDir(), "absent.pem"), transferAccount: xfer}, "absent.pem"},
+		{"GCS needs certificates in the issuer CA file", exchangeConfig{issuer: issuer, issuerCAFile: emptyCA, transferAccount: xfer}, "contains no certificates"},
+		{"GCS needs the issuer CA file", exchangeConfig{issuer: issuer, transferAccount: xfer}, "--actor-jwt-issuer-ca-file"},
+		{"GCS needs an issuer certificate the CA file or system roots trust", exchangeConfig{issuer: tlsIssuer.URL, issuerCAFile: otherCA, transferAccount: xfer}, "the system roots or " + otherCA},
+		{"GCS needs an issuer certificate for the issuer's host", exchangeConfig{issuer: "https://localhost:" + tlsIssuerPort, issuerCAFile: tlsIssuerCA, transferAccount: xfer}, "the system roots or " + tlsIssuerCA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ATE_STORAGE_BACKEND", "gcs")
@@ -52,6 +81,16 @@ func TestNewExchangeService(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeServerCA writes srv's certificate to a PEM file and returns its path.
+func writeServerCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "issuer-ca.pem")
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestExchangeTransportCredentials_MissingBundle(t *testing.T) {

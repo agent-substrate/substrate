@@ -5,9 +5,9 @@ docsite: false
 # API Validation
 
 All fields of all APIs must be validated.  This is especially critical for the
-main "resource oriented" API because (once we hit 1.0) when bad data has been
-written to a database, we can't easily fix it.  Retroactively fixing validation
-to make it stricter will break users.
+main "resource oriented" API because once bad data has been written to a
+database, we can't easily fix it.  Retroactively fixing validation to make it
+stricter will break users.
 
 ## Tooling
 

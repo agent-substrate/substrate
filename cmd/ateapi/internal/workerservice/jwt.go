@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -104,10 +104,7 @@ func (s *Server) MintWorkerActorJwt(ctx context.Context, req *ateapi.MintWorkerA
 // request. The refusal is NotFound, so a node learns nothing about actors it
 // does not host. credential names what the caller mints, for the refusal log.
 func (s *Server) checkActorOnNode(ctx context.Context, actor *ateapi.Actor, callerNode, credential string) error {
-	hostingNode, err := controlapi.HostingNode(ctx, s.store, actor)
-	if err != nil {
-		return err
-	}
+	hostingNode := controlapi.HostingNode(actor)
 	if hostingNode == "" || hostingNode != callerNode {
 		slog.WarnContext(ctx, "Refusing a worker-for-actor "+credential+" for an actor the caller's node does not host",
 			slog.String("actor", resources.ActorRefFromActor(actor).String()),

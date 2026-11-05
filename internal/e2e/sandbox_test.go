@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,6 +39,10 @@ var substrateFixtures = []struct {
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-template.yaml.tmpl",
+	}, 1, nil},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-nonroot-template.yaml.tmpl",
 	}, 1, nil},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",

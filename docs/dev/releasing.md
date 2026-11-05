@@ -10,6 +10,10 @@ A tag ruleset on `agent-substrate/substrate` that restricts creating, updating, 
 
 The ruleset limits tag pushes only. Anyone with write access can still publish images: they can start this workflow from the Actions tab, from any branch, and publish or overwrite the images of a tag whose release is still a draft, and a workflow on a branch they push can request `packages: write` as well. Once a tag's release is published, this workflow publishes nothing for it.
 
+## Release branches
+
+Releases should always be made from a release branch, named `release-X.Y`.
+
 ## Cut a release
 
 1. Tag the release commit and push the tag. The [`release`](../../.github/workflows/release.yaml) workflow does two things, in order:

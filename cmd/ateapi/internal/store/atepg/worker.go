@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -166,6 +166,15 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string, preconditio
 		}
 		if err := precondition.Check(deleted.GetMetadata()); err != nil {
 			return nil, err
+		}
+		// Binds and releases lock the Worker row first, so this sees every
+		// assignment committed before the lock was taken.
+		var assigned bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM worker_assignments WHERE worker_name = $1)`, name).Scan(&assigned); err != nil {
+			return nil, fmt.Errorf("checking assignments of worker %s: %w", name, err)
+		}
+		if assigned {
+			return nil, fmt.Errorf("%w: worker %s still holds assignments", store.ErrFailedPrecondition, name)
 		}
 		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
 		if err != nil {

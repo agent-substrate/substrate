@@ -1,7 +1,7 @@
 # Scaling the Cloud SQL store
 
 Sizing guidance for running the ateapi PostgreSQL store
-([tools/setup-gcp/cloud-sql.md](../../tools/setup-gcp/cloud-sql.md)) at large
+([tools/setup-gcp/cloud-sql.md](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/cloud-sql.md) in substrate-gke) at large
 actor counts and high request rates.
 
 The provisioning defaults (`db-custom-2-8192`, 10 GB disk) suit development

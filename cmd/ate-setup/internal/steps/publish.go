@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,6 @@ package steps
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -107,17 +105,12 @@ func (e *Env) publishReleaseBinaries(ctx context.Context, w io.Writer, outDir st
 // its directory so the check runs wherever both are downloaded. It returns
 // the checksum file's path.
 func writeChecksum(path string) (string, error) {
-	f, err := os.Open(path)
+	digest, err := fileSHA256(path)
 	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
 		return "", fmt.Errorf("while hashing %s: %w", path, err)
 	}
 	sum := path + ".sha256"
-	line := hex.EncodeToString(h.Sum(nil)) + "  " + filepath.Base(path) + "\n"
+	line := digest + "  " + filepath.Base(path) + "\n"
 	if err := os.WriteFile(sum, []byte(line), 0o644); err != nil {
 		return "", fmt.Errorf("while writing %s: %w", sum, err)
 	}

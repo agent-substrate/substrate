@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -352,7 +352,7 @@ func TestShippedSandboxConfigManifests(t *testing.T) {
 
 	for _, path := range []string{
 		"../../../../../manifests/ate-install/sandboxconfig-gvisor.yaml",
-		"../../../../../manifests/microvm/sandboxconfig-microvm.yaml.tmpl",
+		"../../../../../manifests/ate-install/sandboxconfig-microvm.yaml.tmpl",
 	} {
 		t.Run(path, func(t *testing.T) {
 			raw, err := os.ReadFile(path)

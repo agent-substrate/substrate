@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@ import (
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/otlprelay"
 	"go.ate.dev/substrate/internal/pluginsocket"
@@ -235,10 +236,7 @@ func main() {
 		}()
 	}
 
-	// stopped on SIGTERM because the replacement pod starts while we drain and
-	// registers the same socket, and kubelet can wedge the resource when two
-	// registrations for one socket overlap
-	startDevicePlugins(shutdownCtx)
+	startDevicePlugins(ctx)
 
 	workerDialer := newWorkerDialer(256)
 
@@ -385,7 +383,6 @@ func main() {
 	}
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
 		ServerName:       *ateapiServerName,
 		ClientCredBundle: *grpcServerCredBundle,
@@ -393,6 +390,7 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
 	}
+	dialOpts = append(dialOpts, grpc.WithResolvers(k8sresolver.NewBuilder(k8sClient)))
 	// atelet acts for the system, not a user, so it always opts in to the
 	// preview features the server enables.
 	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
@@ -2262,19 +2260,25 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			img, cwd, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
-			args, err := resolveProcessArgs(imageConfig, ctr.GetCommand(), ctr.GetArgs())
+			args, err := resolveProcessArgs(&img.Config, ctr.GetCommand(), ctr.GetArgs())
 			if err != nil {
 				return fmt.Errorf("while resolving process args for container %q: %w", ctr.GetName(), err)
 			}
+			user, err := resolveImageUser(img)
+			if err != nil {
+				return fmt.Errorf("while resolving user for container %q: %w", ctr.GetName(), err)
+			}
 			containerSpecs[i] = &ateworkerpb.ContainerSpec{
 				Args:         args,
-				Env:          resolveActorEnv(imageConfig, envs),
+				Env:          resolveActorEnv(&img.Config, envs),
 				Capabilities: resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
 				Resources:    toAteworkerResources(ctr.GetResources()),
+				User:         user,
+				Cwd:          cwd,
 			}
 			return nil
 		})

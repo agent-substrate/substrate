@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -612,7 +612,7 @@ const otelEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
 // otelOverrideDeployments are the control plane Deployments that read
 // ate-otel-config. ate-controller additionally copies the values onto the
 // worker pods it creates, so one patch reaches the whole system.
-var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router"}
+var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router", "atenet-egress"}
 
 // applyOtelEndpointOverride points all control plane telemetry at a different
 // collector for the duration of a measurement. See

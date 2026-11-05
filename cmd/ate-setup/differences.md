@@ -1,11 +1,12 @@
 # ate-setup vs. the install shell scripts
 
 `ate-setup` is a Go port of `hack/install-ate.sh`, the seven
-`hack/install-demo-*.sh` scripts it sourced, and `hack/setup-csi-*-kind.sh`.
+`hack/install-demo-*.sh` scripts it sourced, `hack/setup-csi-*-kind.sh`, and
+`hack/install-microvm-deps.sh`.
 
-The port has replaced them. `hack/install-ate.sh`, the demo scripts, and
-`hack/setup-csi-hostpath-kind.sh` are deleted. See
-[`commands.md`](commands.md) for the commands.
+The port has replaced them. `hack/install-ate.sh` and the demo, CSI, and
+microVM asset scripts are deleted. See [`commands.md`](commands.md) for the
+commands.
 
 This document covers the design decisions of the port, against the shell it
 replaced. For anything not listed here, the port is intended to be
@@ -79,15 +80,20 @@ Still required, and why:
 | `ko` | building and publishing images (`ko resolve` only); not used with `--image-repo` |
 | `go` | locating the pinned `ko` tool, exactly as `hack/run-tool.sh` does; not used with `--image-repo` |
 | `git` | the `git describe` version stamp passed to ko; not used with `--image-repo` |
-| `docker` | the kind CSI setup (`docker exec` into the node) and the claude-code-multiplex workload build |
-| `gcloud` | GKE `get-credentials`, only when `PROJECT_ID` is set and no context was given |
+| `docker` | the kind CSI setup (`docker exec` into the node), staging microVM assets into Kind's `rustfs`, and the claude-code-multiplex workload build |
+| `gcloud` | GKE `get-credentials` (when `PROJECT_ID` is set and no context was given) and `gcloud storage` when staging microVM assets on GKE |
 | `bash` | sourcing `.ate-dev-env.sh` |
 
-Two shell scripts are still invoked rather than reimplemented, because they
-orchestrate image builds, asset assembly, and object-store staging that are out
-of scope for an installer: `benchmarking/deploy_locust.sh` and
-`hack/install-microvm-deps.sh`. They receive `Config.ScriptEnv()`, which
-reconstructs the environment the shell installer would have exported to them.
+One shell script is still invoked rather than reimplemented, because it
+orchestrates benchmark image builds and Locust stack deployment:
+`benchmarking/deploy_locust.sh`. It receives `Config.ScriptEnv()`, which
+reconstructs the environment the shell installer would have exported to it, and
+is fronted by `deploy`/`delete benchmarks`.
+
+The microVM asset assembly (`kata-static` `.tar.zst` extraction and
+`cloud-hypervisor` download), object-store staging (`rustfs` on Kind,
+`<BUCKET_NAME>-assets` on GKE), and `microvm` `SandboxConfig` apply now run in
+Go as part of `deploy ate-system` (and `deploy sandboxconfig`).
 
 `ko` is no longer asked to apply anything. The scripts ran `run_ko apply`, which
 made ko shell out to kubectl and forced the awkward `-- --context=` special case
@@ -287,21 +293,6 @@ dgst -sha256` over jsonpath output and `ate-setup` digests the ConfigMap and
 Secret contents directly. The value is opaque — only changes to it matter — so
 the only consequence is that the first `ate-setup` install over a
 shell-installed cluster rolls `ate-api-server` once.
-
-**Cloud SQL DSNs are synthesized, not adopted verbatim.** With
-`ATE_API_POSTGRES_CLOUDSQL_INSTANCE` set and no explicit
-`ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`, the DSN is built passwordless
-against the proxy's loopback listener from the GSA's email
-([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)), so
-`ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false` is rejected rather than producing a
-DSN that cannot authenticate. The owner connection uses the same IAM login
-unless `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` is set. An *unset* instance variable is distinct from an
-exported empty one: unset adopts whatever the cluster already records in
-`ate-api-server-envvars`, including the IP type and the GSA from the
-`iam.gke.io/gcp-service-account` annotation, so a redeploy from a shell that
-never exported the variables leaves a working proxy alone. Exporting it empty
-removes the sidecar and the annotation and falls back to the bundled
-StatefulSet.
 
 ## Testing
 

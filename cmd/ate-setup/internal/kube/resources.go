@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -216,7 +216,12 @@ func (c *Client) ServiceAccountAnnotation(ctx context.Context, namespace, name, 
 // An empty string means the endpoint is unavailable or has no issuer, which
 // callers treat as "fall back to the in-cluster default".
 func (c *Client) OIDCIssuer(ctx context.Context) string {
-	raw, err := c.Typed.Discovery().RESTClient().
+	// fake.Clientset's FakeDiscovery returns a nil RESTClient in unit tests.
+	restClient := c.Typed.Discovery().RESTClient()
+	if restClient == nil {
+		return ""
+	}
+	raw, err := restClient.
 		Get().AbsPath("/.well-known/openid-configuration").
 		DoRaw(ctx)
 	if err != nil {

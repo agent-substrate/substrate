@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,13 @@
 
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"go.ate.dev/substrate/internal/ateworker/memborrow"
+)
 
 func TestUnbookedMemory(t *testing.T) {
 	const limit = 4 << 30
@@ -28,5 +34,36 @@ func TestUnbookedMemory(t *testing.T) {
 	want := int64(limit - memoryReservedBytes - (1<<30 + 4<<20 + 8<<20) - (512<<20 + 4<<20 + 4<<20))
 	if got := s.unbookedMemory(limit); got != want {
 		t.Errorf("unbookedMemory() = %d, want %d", got, want)
+	}
+}
+
+func TestDirSize(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "f"), make([]byte, 1000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("f", filepath.Join(dir, "sub", "l")); err != nil {
+		t.Fatal(err)
+	}
+	// dir, sub, f and l are 4 entries, and f's 1000 bytes pad to 1024
+	if got, err := dirSize(t.Context(), dir); err != nil || got != 4*2048+1024 {
+		t.Errorf("dirSize() = %d, %v, want %d", got, err, 4*2048+1024)
+	}
+}
+
+func TestArchiveDirReturnsTheLoanOnError(t *testing.T) {
+	l := &memborrow.Ledger{
+		Unbooked:  func(int64) int64 { return 1 << 30 },
+		PodMemory: func() (int64, int64, error) { return 4 << 30, 0, nil },
+	}
+	s := &AteWorkerService{borrow: l}
+	if err := s.archiveDir(t.Context(), filepath.Join(t.TempDir(), "missing", "upper.tar"), t.TempDir()); err == nil {
+		t.Fatal("archiveDir() into a missing directory succeeded")
+	}
+	if got := l.Take(1 << 30); got != 1<<30 {
+		t.Errorf("Take() after a failed archiveDir = %d, want all %d back", got, int64(1<<30))
 	}
 }

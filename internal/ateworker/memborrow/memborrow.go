@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ type Ledger struct {
 	// limit, less what its hosted actors booked.
 	Unbooked func(podLimit int64) int64
 	// PodMemory replaces cgroup.PodMemory in tests.
-	PodMemory func() (limit, current int64, err error)
+	PodMemory func() (limit, unreclaimable int64, err error)
 
 	mu    sync.Mutex
 	bytes int64
@@ -46,7 +46,7 @@ type Ledger struct {
 	returned chan struct{}
 }
 
-func (l *Ledger) podMemory() (limit, current int64, err error) {
+func (l *Ledger) podMemory() (limit, unreclaimable int64, err error) {
 	if l.PodMemory != nil {
 		return l.PodMemory()
 	}
@@ -54,19 +54,34 @@ func (l *Ledger) podMemory() (limit, current int64, err error) {
 }
 
 // Take borrows up to want. The caller passes what it got to Return once the
-// pages it held are on disk. A nil Ledger lends nothing.
+// pages it held are on disk. A nil Ledger lends nothing. Without a pod memory
+// limit it returns all of want, there's no limit to run into.
 func (l *Ledger) Take(want int64) int64 {
+	return l.take(want, false)
+}
+
+// TakeAll is Take for all of want or nothing: it reports whether it borrowed
+// exactly want, which the caller then passes to Return. A caller that can't use
+// part of it doesn't hold any while others ask. TakeAll(0) reports true.
+func (l *Ledger) TakeAll(want int64) bool {
+	return l.take(want, true) == want
+}
+
+func (l *Ledger) take(want int64, all bool) int64 {
 	if l == nil {
 		return 0
 	}
-	limit, current, err := l.podMemory()
-	if err != nil || limit == 0 {
+	limit, unreclaimable, err := l.podMemory()
+	if err != nil {
 		return 0
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n := min(want, l.Unbooked(limit)-l.bytes, limit-current-margin)
-	if n <= 0 {
+	n := want
+	if limit != 0 {
+		n = min(want, l.Unbooked(limit)-l.bytes, limit-unreclaimable-margin)
+	}
+	if n <= 0 || (all && n < want) {
 		return 0
 	}
 	l.bytes += n
@@ -102,7 +117,7 @@ func (l *Ledger) Wait(ctx context.Context) error {
 			return nil
 		}
 		limit, _, err := l.podMemory()
-		if err != nil || l.bytes <= l.Unbooked(limit) {
+		if err != nil || limit == 0 || l.bytes <= l.Unbooked(limit) {
 			l.mu.Unlock()
 			return nil
 		}

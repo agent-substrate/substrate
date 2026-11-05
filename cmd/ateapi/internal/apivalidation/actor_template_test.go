@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -184,6 +184,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots?versions=true"
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
+	}, {
+		"storage_location under another actor's prefix",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots/atespaces/team-a/actors/0b4e7c4e-2f3a-4d43-9a5e-0f6d1c2b3a4d", "")},
+	}, {
+		"storage_location with a dot in a path segment",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots.v1"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots.v1", "")},
 	}, {
 		// preferred_fidelity has no default of its own at this layer, so leaving it
 		// unset is a required violation.
@@ -693,7 +705,19 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{Drop: []string{"net_raw"}}}
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "drop").Index(0), nil, "")},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("containers").Index(0).Child("security_context", "capabilities", "drop").Index(0), nil, nil)},
+	}, {
+		name: "unknown capability",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{Add: []string{"NET_ADIMN"}}}
+		},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, nil)},
+	}, {
+		name: "capability outside the add allowlist",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapi.SecurityContext{Capabilities: &ateapi.Capabilities{Add: []string{"MKNOD"}}}
+		},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, nil)},
 	}, {
 		name: "duplicate capability",
 		mutate: func(tmpl *ateapi.ActorTemplate) {

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -65,8 +66,5 @@ func seedAssignment(t *testing.T, st store.Interface, workerName string, assignm
 	if assignment == nil {
 		return
 	}
-	ctx := context.Background()
-	if err := st.BindActorToWorker(ctx, workerName, assignment, nil); err != nil {
-		t.Fatalf("seed assignment on worker %q: %v", workerName, err)
-	}
+	storetest.MustSeedAssignment(t, context.Background(), st, workerName, assignment)
 }

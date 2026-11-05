@@ -22,17 +22,17 @@ To run the cold resume tests from your workstation instead, see
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
 5. `go run ./cmd/ate-setup deploy ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
-   `ateArgs`) + `benchmarking/workloads/deploy.sh
+   `ateArgs`; passes `--sandbox-classes=<class>` so `deploy ate-system`
+   installs the test's class and, for `microvm`, stages the microVM guest
+   assets to `<BUCKET_NAME>-assets` and applies the cluster-wide `microvm`
+   `SandboxConfig`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
    runner's calls pass [authorization](../../docs/guides/authorization.md), and sets
    `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
-   Envoy ingress router. For a `microvm` test the orchestrator also
-   runs `hack/install-microvm-deps.sh --install` between the two, which
-   stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
-   store bucket and applies the cluster-wide `microvm` SandboxConfig.
+   Envoy ingress router.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
    is the benchmark's independent variable and the shipped manifest sets
@@ -40,7 +40,7 @@ To run the cold resume tests from your workstation instead, see
    requests=limits and Envoy's thread count to its own `envoyCpu`, then
    waits for the rollout before deploying workloads. The teardown after
    each test redeploys substrate, so the pin never outlives its run.
-6. For each test in `tests.yaml`:
+6. For each test in `tests.yaml`, or only those named by `--test-name`:
    - Submits a Job using the just-built image for the test's type
      (`runner-job.yaml.tmpl` for locust,
      `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress).
@@ -49,7 +49,7 @@ To run the cold resume tests from your workstation instead, see
      variable (a JSON object) if set. A `--metadata` in the test's own
      `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down workloads + microVM deps (if any) + substrate.
+   - Tears down workloads + substrate.
    - If not the last test, redeploys them so the next run starts clean.
 
 ## Choosing a sandbox class
@@ -116,7 +116,7 @@ gcloud container clusters create <CLUSTER_NAME> \
 ```
 
 On GKE 1.37 or higher, omit `--enable-kubernetes-unstable-apis`; the
-required APIs are served by default. See the [cluster setup guide](../../tools/setup-gcp/README.md#2-create-cluster) for details.
+required APIs are served by default. See the [cluster setup guide](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#2-create-cluster) in substrate-gke for details.
 
 The orchestration cluster needs Workload Identity but no special APIs. It only
 ever runs one pod (the orchestrator + DIND sidecar), so a single zonal node

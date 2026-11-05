@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -109,6 +109,7 @@ func TestCheckMemoryKillsOncePausesForCheckpoint(t *testing.T) {
 	const limit = 256 << 20
 	writeCgroupFiles(t, leaf, map[string]string{
 		"memory.current": strconv.Itoa(limit+32<<20) + "\n",
+		"memory.stat":    "anon " + strconv.Itoa(limit+32<<20) + "\n",
 		"cgroup.kill":    "",
 		"cgroup.events":  "populated 0\nfrozen 0\n",
 	})

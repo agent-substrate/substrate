@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ type Script struct {
 	// MinActorMemory is the smallest actor memory limit the script is known
 	// to run under, in bytes. The driver refuses to start against a smaller
 	// template. Required, and at least the script's declared RAM plus disk
-	// (the data dir is tmpfs).
+	// (see Budget).
 	MinActorMemory int64
 	Steps          []Step
 }

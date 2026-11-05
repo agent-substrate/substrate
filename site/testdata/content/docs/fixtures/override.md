@@ -2,7 +2,7 @@
 title: "Override Page"
 weight: 4
 repo_source: "docs/override.md"
-status: experimental
+status: preview
 description: "Stub overrides the source status."
 ---
 

@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,5 +35,18 @@ metadata:
 spec:
   replicas: 2
   workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
+  template:
+    # One worker holding one actor: the limits are what it advertises as
+    # capacity. The CPU limit matches one agent template's 1 CPU, so the 2-pod
+    # pool can host at most 2 running agents at once. The memory limit is above
+    # the agent's 2Gi because the worker keeps some of it for itself, and the
+    # request equals it because memory is not compressible.
+    resources:
+      limits:
+        cpu: "1"
+        memory: 2560Mi
+      requests:
+        cpu: 250m
+        memory: 2560Mi
   sandboxClasses:
   - name: gvisor

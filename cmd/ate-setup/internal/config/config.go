@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -134,8 +134,8 @@ type Config struct {
 	// defaults to the in-cluster URL of the install's ate-idp-server Service.
 	ActorJWTIssuer string
 
-	// BucketName is the object-storage bucket (BUCKET_NAME) passed to install
-	// scripts such as hack/install-microvm-deps.sh. The kind profile also
+	// BucketName is the object-storage bucket (BUCKET_NAME) used for staging
+	// microVM assets and passed to benchmark scripts. The kind profile also
 	// derives SnapshotLocation from it.
 	BucketName string
 
@@ -292,8 +292,8 @@ func (c *Config) Resolved() *Resolved {
 }
 
 // TransferServiceAccount is the email of the snapshot transfer service
-// account, built from TransferGSAName and ProjectID as tools/setup-gcp builds
-// it. It is empty when either is.
+// account, built from TransferGSAName and ProjectID the same way substrate-gke's
+// tools/setup-gcp builds it. It is empty when either is.
 func (c *Config) TransferServiceAccount() string {
 	if c.TransferGSAName == "" || c.ProjectID == "" {
 		return ""

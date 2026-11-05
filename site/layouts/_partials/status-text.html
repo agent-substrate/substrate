@@ -1,5 +1,5 @@
 {{/*
-Copyright 2026 Google LLC
+Copyright 2026 The Agent Substrate Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,9 @@ merged params, or a default for the status.
 
 {{- $text := .status_note | default "" -}}
 {{- if not $text -}}
-  {{- if eq .status "experimental" -}}
+  {{- if eq .status "preview" -}}
+    {{- $text = "This feature is in preview and disabled by default. APIs and behavior may change." -}}
+  {{- else if eq .status "experimental" -}}
     {{- $text = "This feature is experimental and may change or be removed without notice." -}}
   {{- else if eq .status "planned" -}}
     {{- $text = "This describes planned design that is not fully implemented yet." -}}

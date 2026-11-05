@@ -2,6 +2,10 @@
 title: "Deploying CSI Drivers"
 linkTitle: "Deploying CSI Drivers"
 weight: 6
+status: preview
+status_note: >
+  External CSI volumes are disabled by default behind the `ExternalVolumes`
+  preview gate, and APIs or behavior may change.
 description: >
   Deploy CSI drivers for use with Agent Substrate.
 ---
@@ -9,6 +13,9 @@ description: >
 # Deploying CSI Drivers for Agent Substrate
 
 This guide explains how to deploy and configure Container Storage Interface (CSI) drivers to work with Agent Substrate.
+
+> [!IMPORTANT]
+> External CSI volumes are a preview feature. Enabling them requires running Substrate with `--preview=ExternalVolumes` and opting in on the client (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` gRPC metadata header). See [CSI Volumes](csi-volumes.md) for usage details.
 
 In standard Kubernetes, CSI drivers are deployed to interact with asynchronous sidecars and kubelet. Substrate directly orchestrates storage operations from its control plane (`ateapi`) and node daemon (`atelet`), introducing specific deployment and networking requirements for both the **CSI Controller** and the **CSI Node DaemonSet**.
 
@@ -307,7 +314,7 @@ The CSI Node plugin runs as a DaemonSet on each worker node and handles `NodeSta
 
 ### Mount Propagation Requirements
 
-When the CSI Node plugin mounts an external volume (such as an NFS share or a formatted block device), the filesystem mount is created inside the plugin container. For Substrate's node supervisor (`atelet`) and worker sandboxes (`ateworker-gvisor`) on the host to see this filesystem mount, the following requirements must be met:
+When the CSI Node plugin mounts an external volume (such as an NFS share or a formatted block device), the filesystem mount is created inside the plugin container. For Substrate's node supervisor (`atelet`) and worker sandboxes (`ateworker-gvisor`, `ateworker-microvm`) on the host to see this filesystem mount, the following requirements must be met:
 
 1. **Bidirectional Mount Propagation (`mountPropagation: Bidirectional`):** The volume mount on the host Substrate target directory (e.g. `/var/lib/ate`) in the CSI Node plugin container must have `mountPropagation: Bidirectional`. This ensures that any mounts made by the CSI plugin inside the container propagate back to the host filesystem.
 2. **Unix Domain Socket Accessibility:** The CSI Node plugin must place its Unix domain socket under `/var/lib/kubelet/plugins/<driverName>/` (or the path defined in `CSIDriverConfig.spec.nodeSocketOverride`), which is shared with `atelet`.

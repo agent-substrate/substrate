@@ -1,5 +1,5 @@
 {{/*
-Copyright 2026 Google LLC
+Copyright 2026 The Agent Substrate Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ limitations under the License.
   {{- $params := partialCached "page-params.html" . .Path -}}
   {{- with $params.status }}
   <div class="as-status-banner as-status-banner--{{ . }}" role="note">
-    <i class="fa-solid {{ index (dict "experimental" "fa-flask" "deprecated" "fa-triangle-exclamation" "planned" "fa-compass-drafting") . }}" aria-hidden="true"></i>
+    <i class="fa-solid {{ index (dict "preview" "fa-eye" "experimental" "fa-flask" "deprecated" "fa-triangle-exclamation" "planned" "fa-compass-drafting") . }}" aria-hidden="true"></i>
     <p><strong>{{ title . }}.</strong> {{ partial "rewrite-repo-links.html" (dict "content" (partial "status-text.html" $params) "dir" (path.Dir ($.Params.repo_source | default ""))) | markdownify }}</p>
   </div>
   {{- end }}

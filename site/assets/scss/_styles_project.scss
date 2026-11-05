@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -72,7 +72,7 @@ footer {
 }
 
 // --------------------------------------------------
-// Pre-1.0 Banner & Navbar
+// Navbar
 // --------------------------------------------------
 .ic {
   fill: none;
@@ -92,72 +92,6 @@ footer {
   top: 0;
   z-index: 1030;
   width: 100%;
-}
-
-.as-pre-banner {
-  min-height: 40px;
-  padding: 6px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: #111612;
-  border-bottom: 1px solid #243028;
-  font-size: 13px;
-  color: #9aa89f;
-
-  &__pill {
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #2a2a12;
-    color: #f0f175;
-    font-size: 12px;
-    font-weight: 600;
-    flex-shrink: 0;
-  }
-
-  &__text-mobile,
-  &__link-mobile {
-    display: none;
-  }
-
-  &__link {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-weight: 500;
-    color: $substrate-green;
-    text-decoration: none;
-
-    &:hover,
-    &:focus {
-      color: $substrate-green-light;
-    }
-  }
-
-  @media (max-width: 640px) {
-    justify-content: flex-start;
-    font-size: 12px;
-    gap: 8px;
-
-    &__text-desktop,
-    &__link-desktop {
-      display: none;
-    }
-
-    &__text-mobile {
-      display: inline;
-      flex-grow: 1;
-    }
-
-    &__link-mobile {
-      display: inline;
-    }
-
-    &__link svg {
-      display: none;
-    }
-  }
 }
 
 .td-navbar.as-navbar {
@@ -481,6 +415,7 @@ footer {
   padding-right: 0;
 
   > .td-main {
+    width: 100%;
     max-width: 1440px;
     margin: 0 auto;
     padding: 0 40px;
@@ -2729,6 +2664,12 @@ footer {
     color: inherit;
   }
 
+  &--preview {
+    background: #21162d;
+    border-color: #58397a;
+    color: #d2a8ff;
+  }
+
   &--experimental {
     background: #2a2412;
     border-color: #6b5a1e;
@@ -2764,6 +2705,11 @@ footer {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   vertical-align: middle;
+
+  &--preview {
+    background: #21162d;
+    color: #d2a8ff;
+  }
 
   &--experimental {
     background: #2a2412;
@@ -3934,3 +3880,105 @@ footer {
   }
 }
 
+
+// --------------------------------------------------
+// API reference
+// --------------------------------------------------
+// The page has no "On this page" column; its sidebar link lists the resources
+// instead (see layouts/_partials/api-reference-nav.html).
+.as-apiref-page .td-outer > .td-main > .row {
+  @media (min-width: 1200px) {
+    grid-template-columns: 248px minmax(0, 1fr);
+  }
+
+  > .td-sidebar-toc {
+    display: none !important;
+  }
+}
+
+.as-apiref-version {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: $substrate-muted;
+
+  select {
+    padding: 4px 28px 4px 10px;
+    border: 1px solid $substrate-border;
+    border-radius: 6px;
+    background: $substrate-surface;
+    color: $substrate-text;
+    font-family: $font-family-monospace;
+    font-size: 13px;
+
+    &:focus {
+      outline: 2px solid $substrate-green;
+      outline-offset: -1px;
+    }
+  }
+}
+
+.as-sb__tree {
+  list-style: none;
+  margin: 2px 0 6px 10px;
+  padding: 0 0 0 8px;
+  border-left: 1px solid $substrate-border;
+
+  .as-sb__tree {
+    margin: 0 0 0 10px;
+  }
+}
+
+.as-sb__tree-group {
+  display: block;
+  padding: 8px 10px 2px;
+  color: $substrate-text;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.as-sb__tree-link {
+  display: block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: $substrate-muted !important;
+  font-family: $font-family-monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+
+  &:hover,
+  &:focus {
+    color: $substrate-text !important;
+  }
+
+  &.is-active {
+    background: #14231a;
+    color: $substrate-text !important;
+    font-weight: 500;
+    box-shadow: inset 2px 0 0 $substrate-green;
+  }
+}
+
+// tools/apitool/internal/docsite/style.css lays out the page and reads its
+// colors and fonts from these variables.
+.apiref {
+  --apiref-bg: #{$substrate-bg};
+  --apiref-bg-raised: #{$substrate-surface-elevated};
+  --apiref-bg-sunken: #{$substrate-surface};
+  --apiref-fg: #{$substrate-text};
+  --apiref-fg-muted: #{$substrate-muted};
+  --apiref-border: #{$substrate-border};
+  --apiref-accent: #{$substrate-green};
+  --apiref-mono: #{$font-family-monospace};
+  --apiref-code-type: #{$substrate-text};
+  --apiref-code-string: #{$substrate-green-light};
+  --apiref-code-number: #{$substrate-yellow};
+  --apiref-code-keyword: #{$substrate-blue};
+  --apiref-code-punct: #{$substrate-muted};
+}

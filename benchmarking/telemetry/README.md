@@ -1,5 +1,5 @@
 <!--
-Copyright 2026 Google LLC
+Copyright 2026 The Agent Substrate Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -46,9 +46,9 @@ go run ./cmd/ate-setup deploy ate-system \
 
 `--otlp-endpoint` patches the `ate-otel-config` ConfigMap and restarts the
 workloads that read it. One patch is sufficient for `ateapi`, `ate-controller`,
-`atelet`, and `atenet-router`, because each one reads the ConfigMap through
-`envFrom`. `ate-controller` also copies the values to the worker pods
-that it creates.
+`atelet`, `atenet-router`, and `atenet-egress`, because each one reads the
+ConfigMap through `envFrom`. `ate-controller` also copies the values to the
+worker pods that it creates.
 
 The actor containers are different. Substrate puts no OTLP configuration in
 them, thus they use the `env` of the ActorTemplate:

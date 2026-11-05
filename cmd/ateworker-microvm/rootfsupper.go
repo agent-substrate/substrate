@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -113,14 +113,14 @@ func resetRootfsUpperDir(actorDirs *ateworkerpb.ActorDirs) error {
 // guest first: virtiofsd is write-through, so a completed guest write has
 // reached the host overlay's upper by then, but a running guest could still
 // add more after the walk.
-func tarRootfsUpper(ctx context.Context, dir, checkpointDir string, containers []string) error {
+func (s *AteWorkerService) tarRootfsUpper(ctx context.Context, dir, checkpointDir string, containers []string) error {
 	for _, cid := range containers {
 		name, err := rootfsUpperTarFile(cid)
 		if err != nil {
 			return err
 		}
 		upper, _ := kata.UpperWorkDirs(dir, cid)
-		if err := tarutil.CreateWithRoot(ctx, filepath.Join(checkpointDir, name), upper); err != nil {
+		if err := s.archiveDir(ctx, filepath.Join(checkpointDir, name), upper); err != nil {
 			return fmt.Errorf("while archiving rootfs upper %q: %w", upper, err)
 		}
 	}

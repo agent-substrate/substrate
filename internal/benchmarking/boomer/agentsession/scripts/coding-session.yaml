@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,10 +18,11 @@
 # suspension) before every step. Each op is one glutton RPC; see
 # scriptfile.go for the op kinds and their arguments.
 #
-# The script declares ~96Mi of resident RAM and ~110Mi of files (tmpfs, so
-# also memory). The guest peak on top of that (kernel, kata-agent, Go
-# allocator transients) has been observed around 320Mi, and 512Mi actors
-# OOM under allocator churn, hence min_actor_memory: 1Gi.
+# The script declares ~96Mi of resident RAM and ~110Mi of files on the
+# rootfs (which can also use memory). The guest peak on top of that
+# (kernel, kata-agent, Go allocator transients) has been observed around
+# 320Mi, and 512Mi actors OOM under allocator churn, hence
+# min_actor_memory: 1Gi.
 name: coding-session
 min_actor_memory: 1Gi
 steps:

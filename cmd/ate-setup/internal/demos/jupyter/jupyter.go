@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package jupyter installs the Jupyter demo, which runs an unmodified
-// jupyter/base-notebook image as an actor that suspends when idle and resumes
-// when the notebook is next opened.
+// quay.io/jupyter/base-notebook image as an actor that checkpoints on suspend
+// and resumes when the notebook is next opened.
 package jupyter
 
 import (

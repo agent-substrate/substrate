@@ -1,4 +1,4 @@
-//  Copyright 2026 Google LLC
+//  Copyright 2026 The Agent Substrate Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -486,7 +486,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				Image: "main",
 				SecurityContext: &ateapi.SecurityContext{
 					Capabilities: &ateapi.Capabilities{
-						Add:  []string{"NET_ADMIN"},
+						Add:  []string{"SETUID"},
 						Drop: []string{"ALL"},
 					},
 				},
@@ -515,7 +515,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				Image: "main",
 				SecurityContext: &ateletpb.SecurityContext{
 					Capabilities: &ateletpb.Capabilities{
-						Add:  []string{"NET_ADMIN"},
+						Add:  []string{"SETUID"},
 						Drop: []string{"ALL"},
 					},
 				},

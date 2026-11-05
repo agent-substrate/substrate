@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,11 +33,10 @@
 # files in scratch/target-clusters/ intact.
 #
 # TODO: drive workload-cluster creation and IAM/Workload Identity bindings
-# from tools/setup-gcp (see tools/setup-gcp/cmd/cluster.go) instead of leaving
-# them as manual gcloud steps in README.md. That tool already encodes the
-# required beta APIs, Workload Identity pool, and node config; this wizard
-# should call it (or its equivalent in tools/setup-gcp) once we know the
-# values collected below.
+# from tools/setup-gcp in https://github.com/ai-on-gke/substrate-gke instead
+# of leaving them as manual gcloud steps in README.md. That tool already
+# encodes the required beta APIs, Workload Identity pool, and node config;
+# this wizard should call it once we know the values collected below.
 
 set -o errexit -o nounset -o pipefail
 

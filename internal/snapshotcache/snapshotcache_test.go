@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,9 @@ package snapshotcache
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -196,4 +198,179 @@ func TestEvictFiles(t *testing.T) {
 			t.Errorf("EvictFiles() = true after inode replacement, want false")
 		}
 	})
+}
+
+func TestStartWriteback(t *testing.T) {
+	dir := t.TempDir()
+	if isTmpfs(t, dir) {
+		t.Skip("TMPDIR is on tmpfs, which never writes pages back")
+	}
+	p := filepath.Join(dir, "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 8<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	if err := StartWriteback([]string{p}, func() { close(done) }); err != nil {
+		t.Fatalf("StartWriteback: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Minute):
+		t.Fatal("done never ran")
+	}
+}
+
+type fakePageCache struct {
+	noCachestat bool
+	clean       atomic.Bool
+	written     atomic.Bool
+	writeOuts   atomic.Int32
+	onWriteOut  func()
+}
+
+func (c *fakePageCache) cachestat(*os.File) (unix.Cachestat_t, error) {
+	if c.noCachestat {
+		return unix.Cachestat_t{}, unix.ENOSYS
+	}
+	if c.clean.Load() {
+		return unix.Cachestat_t{Cache: 16}, nil
+	}
+	return unix.Cachestat_t{Cache: 16, Dirty: 16}, nil
+}
+
+func (c *fakePageCache) startWriteOut(*os.File, int64, int64) error {
+	c.writeOuts.Add(1)
+	if c.onWriteOut != nil {
+		c.onWriteOut()
+	}
+	return nil
+}
+
+func (c *fakePageCache) writeOut(*os.File) error {
+	c.written.Store(true)
+	return nil
+}
+
+func startFakeWriteback(t *testing.T, pc pageCache) (string, <-chan struct{}) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 4<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+		t.Fatalf("startWriteback: %v", err)
+	}
+	return p, done
+}
+
+func TestStartWritebackWaitsForDirtyPages(t *testing.T) {
+	pc := &fakePageCache{}
+	_, done := startFakeWriteback(t, pc)
+	select {
+	case <-done:
+		t.Fatal("done ran while the file was still dirty")
+	case <-time.After(100 * time.Millisecond):
+	}
+	pc.clean.Store(true)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran once the file was clean")
+	}
+}
+
+func TestStartWritebackKeepsStartingWriteOutWhileDirty(t *testing.T) {
+	pc := &fakePageCache{}
+	_, done := startFakeWriteback(t, pc)
+	deadline := time.Now().Add(10 * time.Second)
+	for pc.writeOuts.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("write-out started %d times while the file stayed dirty, want it again on a later pass", pc.writeOuts.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	pc.clean.Store(true)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran once the file was clean")
+	}
+}
+
+func TestStartWritebackDropsUnlinkedDirtyFile(t *testing.T) {
+	pc := &fakePageCache{}
+	p, done := startFakeWriteback(t, pc)
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran for an unlinked file that stays dirty")
+	}
+}
+
+func TestStartWritebackStopsWriteOutOnUnlink(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(p, 3*writeOutChunk); err != nil {
+		t.Fatal(err)
+	}
+	pc := &fakePageCache{onWriteOut: func() { _ = os.Remove(p) }}
+	done := make(chan struct{})
+	if err := startWriteback(pc, []time.Duration{time.Millisecond}, []string{p}, func() { close(done) }); err != nil {
+		t.Fatalf("startWriteback: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran for a file unlinked during write-out")
+	}
+	if got := pc.writeOuts.Load(); got != 1 {
+		t.Errorf("%d write-out chunks started, want 1 before the file was unlinked", got)
+	}
+}
+
+func TestStartWritebackStartsWriteOutRightAway(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "memory-ranges")
+	if err := os.WriteFile(p, make([]byte, 4<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pc := &fakePageCache{}
+	t.Cleanup(func() { pc.clean.Store(true) })
+	if err := startWriteback(pc, []time.Duration{30 * time.Second}, []string{p}, nil); err != nil {
+		t.Fatalf("startWriteback: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for pc.writeOuts.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("write-out never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestStartWritebackWithoutCachestat(t *testing.T) {
+	pc := &fakePageCache{noCachestat: true}
+	_, done := startFakeWriteback(t, pc)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("done never ran")
+	}
+	if !pc.written.Load() {
+		t.Error("done ran without waiting for write-out")
+	}
+}
+
+func isTmpfs(t *testing.T, dir string) bool {
+	t.Helper()
+	var fs unix.Statfs_t
+	if err := unix.Statfs(dir, &fs); err != nil {
+		return false
+	}
+	return fs.Type == unix.TMPFS_MAGIC
 }
