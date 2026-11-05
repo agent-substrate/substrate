@@ -33,8 +33,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -688,5 +690,28 @@ func TestReportActorCrashedRequiresACertificate(t *testing.T) {
 	}
 	if len(workers.gotCrashed) != 0 {
 		t.Errorf("unauthenticated report was still forwarded: %v", workers.gotCrashed)
+	}
+}
+
+// TestWorkerSupportRejectsUnknownFields sends RegisterWorker with a field atelet
+// does not know through a server built with atelet's WorkerSupport options, and
+// checks it is rejected before the handler forwards it.
+func TestWorkerSupportRejectsUnknownFields(t *testing.T) {
+	srv := grpc.NewServer(workerSupportServerOptions(insecure.NewCredentials())...)
+	workers := &fakeWorkerService{}
+	ateletpb.RegisterWorkerSupportServer(srv, &workerSupportServer{workers: workers})
+	client := ateletpb.NewWorkerSupportClient(serveBufconn(t, srv))
+
+	req := &ateletpb.RegisterWorkerRequest{Epoch: 1}
+	req.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 9999, protowire.VarintType), 42))
+	_, err := client.RegisterWorker(t.Context(), req)
+	if got, want := status.Code(err), codes.InvalidArgument; got != want {
+		t.Fatalf("RegisterWorker code = %v, want %v (error: %v)", got, want, err)
+	}
+	if got, want := status.Convert(err).Message(), "request: Invalid value: unknown field with protobuf tag 9999"; got != want {
+		t.Errorf("RegisterWorker message = %q, want %q", got, want)
+	}
+	if len(workers.got) != 0 {
+		t.Errorf("RegisterWorker forwarded %d requests, want 0", len(workers.got))
 	}
 }
