@@ -39,6 +39,18 @@ func RejectUnknownFieldsUnaryInterceptor(ctx context.Context, req any, info *grp
 	return handler(ctx, req)
 }
 
+// RejectUnknownFieldsStatusUnaryInterceptor is RejectUnknownFieldsUnaryInterceptor
+// for a server whose handlers return gRPC statuses, like atelet's WorkerSupport,
+// which relays ate-api-server's statuses to ateworker.
+func RejectUnknownFieldsStatusUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if msg, ok := req.(proto.Message); ok {
+		if errs := findUnknownFields(msg); len(errs) > 0 {
+			return nil, resources.ToGRPCStatusError(errs)
+		}
+	}
+	return handler(ctx, req)
+}
+
 // findUnknownFields reports an error for every unknown field in m, at every
 // level of nesting. An unknown field on m itself is reported at "request".
 func findUnknownFields(m proto.Message) field.ErrorList {
