@@ -26,7 +26,7 @@
 
 ### Scope
 
-- Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Sizing PRs for review" in `CONTRIBUTING.md`.
+- Keep each PR to one change. Send refactors, cleanups and follow-ups as separate PRs. For how to batch small fixes, see "Optimizing PRs for review" in `CONTRIBUTING.md`.
 - Split a PR into commits that are easy to review in order. PRs are squash-merged, so only the branch `HEAD` needs to build and pass tests.
 - Follow "Contribution process" in `CONTRIBUTING.md`: open an issue first for anything beyond a small fix, and search open PRs and issues before you start.
 - Start the PR description with why the change is needed, or link the issue. Only write "Fixes #N" if the PR fully fixes it, and keep the description in sync with the final diff.
