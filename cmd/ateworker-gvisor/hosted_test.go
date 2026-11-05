@@ -90,56 +90,37 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 	}
 }
 
-// TestGracefulShutdownWaitsForInFlightRPCs verifies checkpoints finish before shutdown.
+// TestGracefulShutdownWaitsForInFlightRPCs verifies boots, restores and
+// checkpoints finish before shutdown.
 func TestGracefulShutdownWaitsForInFlightRPCs(t *testing.T) {
-	s := &AteWorkerService{
-		locks:    actorlock.New(),
-		inFlight: actorlock.NewInFlight(),
-		actors:   map[string]*hostedActor{},
-	}
-	release := s.inFlight.Add("actor-a", rpcCheckpointWorkload, nil)
+	for _, name := range []string{rpcRunWorkload, rpcRestoreWorkload, rpcCheckpointWorkload} {
+		t.Run(name, func(t *testing.T) {
+			s := &AteWorkerService{
+				locks:    actorlock.New(),
+				inFlight: actorlock.NewInFlight(),
+				actors:   map[string]*hostedActor{},
+			}
+			release := s.inFlight.Add("actor-a", name)
 
-	returned := make(chan struct{})
-	go func() {
-		defer close(returned)
-		s.gracefulShutdown(context.Background())
-	}()
+			returned := make(chan struct{})
+			go func() {
+				defer close(returned)
+				s.gracefulShutdown(context.Background())
+			}()
 
-	select {
-	case <-returned:
-		t.Fatal("gracefulShutdown returned while a checkpoint was still in flight")
-	case <-time.After(250 * time.Millisecond):
-	}
+			select {
+			case <-returned:
+				t.Fatalf("gracefulShutdown returned while %s was still in flight", name)
+			case <-time.After(250 * time.Millisecond):
+			}
 
-	release()
-	select {
-	case <-returned:
-	case <-time.After(30 * time.Second):
-		t.Error("gracefulShutdown did not return after the checkpoint finished")
-	}
-}
-
-func TestGracefulShutdownCancelsEveryStartup(t *testing.T) {
-	s := &AteWorkerService{
-		locks:    actorlock.New(),
-		inFlight: actorlock.NewInFlight(),
-		actors:   map[string]*hostedActor{},
-	}
-	canceled := make(chan string, 2)
-	for _, uid := range []string{"actor-a", "actor-b"} {
-		defer s.inFlight.Add(uid, rpcRunWorkload, func() { canceled <- uid })()
-	}
-
-	cancelStartups(context.Background(), s.inFlight)
-
-	seen := map[string]bool{}
-	for range 2 {
-		select {
-		case uid := <-canceled:
-			seen[uid] = true
-		case <-time.After(5 * time.Second):
-			t.Fatalf("only %v were canceled", seen)
-		}
+			release()
+			select {
+			case <-returned:
+			case <-time.After(30 * time.Second):
+				t.Errorf("gracefulShutdown did not return after %s finished", name)
+			}
+		})
 	}
 }
 
@@ -147,7 +128,7 @@ func TestGracefulShutdownCancelsEveryStartup(t *testing.T) {
 func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 	s := &AteWorkerService{locks: actorlock.New(), inFlight: actorlock.NewInFlight()}
 
-	release, err := s.beginRPC("actor-a", rpcRunWorkload, func() {})
+	release, err := s.beginRPC("actor-a", rpcRunWorkload)
 	if err != nil {
 		t.Fatalf("beginRPC on a live ateworker: %v", err)
 	}
@@ -158,7 +139,7 @@ func TestBeginRPCRegistersBeforeCheckingForADrain(t *testing.T) {
 
 	// Draining: refused, and nothing left behind for shutdown to wait on.
 	s.shuttingDown.Store(true)
-	if _, err := s.beginRPC("actor-b", rpcRunWorkload, func() {}); err == nil {
+	if _, err := s.beginRPC("actor-b", rpcRunWorkload); err == nil {
 		t.Error("beginRPC admitted an RPC while draining")
 	}
 	if got := s.inFlight.Names(); len(got) != 0 {
