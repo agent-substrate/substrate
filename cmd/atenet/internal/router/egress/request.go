@@ -110,16 +110,20 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.DebugContext(ctx, "egress allowed", append(attrs(decision), slog.Int("injectedHeaders", len(injected)))...)
 	}
+	dynamicMetadata, err := metadataAnswer(map[string]string{
+		extproc.EgressDialKey:     extproc.EgressDialName,
+		extproc.EgressDialHostKey: dialHost(dest),
+	}, policy.SNIRules(dest.Port))
+	if err != nil {
+		return extproc.Result{}, err
+	}
 	res := allow()
 	// ext_proc only honors the clear when the response also carries a header
 	// mutation, on the assumption that nothing else can move a route, so an
 	// empty one goes along — carrying any injected credential headers.
 	res.Response.Response.ClearRouteCache = true
 	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{SetHeaders: injected}
-	res.DynamicMetadata = metadataAnswer(map[string]string{
-		extproc.EgressDialKey:     extproc.EgressDialName,
-		extproc.EgressDialHostKey: dialHost(dest),
-	})
+	res.DynamicMetadata = dynamicMetadata
 	return res, nil
 }
 

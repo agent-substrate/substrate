@@ -103,6 +103,7 @@ mod tests {
       rules: vec![SniRule {
         pattern: "api.example.com".to_string(),
         mode: "mitm".to_string(),
+        has_effects: false,
       }],
       hash: 1,
     });

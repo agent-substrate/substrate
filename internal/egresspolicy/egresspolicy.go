@@ -176,8 +176,9 @@ const (
 
 // SNIRule is an SNI pattern and the mode applied when it matches first.
 type SNIRule struct {
-	Pattern string
-	Mode    SNIMode
+	Pattern    string
+	Mode       SNIMode
+	HasEffects bool
 }
 
 // SNIRules returns the https and tls_passthrough rules for a dialed port,
@@ -201,9 +202,10 @@ func (p *Policy) SNIRules(port uint16) []SNIRule {
 		default:
 			continue
 		}
+		hasEffects := len(rule.effects.GetReplaceHeaders()) > 0
 		for _, pattern := range rule.patterns {
 			entries = append(entries, ranked{
-				rule: SNIRule{Pattern: pattern.String(), Mode: mode},
+				rule: SNIRule{Pattern: pattern.String(), Mode: mode, HasEffects: hasEffects},
 				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
 			})
 		}
