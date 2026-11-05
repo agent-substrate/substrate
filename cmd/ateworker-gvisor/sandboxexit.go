@@ -79,6 +79,18 @@ func (p *sandboxProcess) Close() {
 	_ = unix.Close(p.pidfd)
 }
 
+// checkExited rejects a live sandbox even if its expected cgroups are absent.
+func (p *sandboxProcess) checkExited() error {
+	fds := []unix.PollFd{{Fd: int32(p.pidfd), Events: unix.POLLIN}}
+	if _, err := unix.Poll(fds, 0); err != nil {
+		return fmt.Errorf("checking sandbox %d exit: %w", p.pid, err)
+	}
+	if fds[0].Revents&unix.POLLIN == 0 {
+		return fmt.Errorf("sandbox %d has not exited", p.pid)
+	}
+	return nil
+}
+
 // waitGone blocks until the sandbox has exited and been reaped.
 func (p *sandboxProcess) waitGone(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

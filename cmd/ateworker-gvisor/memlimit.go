@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // throttleSandboxMemory swaps the memory.max runsc set on the sandbox leaf for
@@ -51,20 +52,48 @@ func (s *AteWorkerService) throttleSandboxMemory(ctx context.Context, hosted *ho
 	hosted.memory.Resume(limit)
 }
 
-// removeStaleSandboxLeaf removes a sandbox leaf an earlier activation of the
-// actor left behind when its runsc delete never ran. runsc joins an existing
-// cgroup as is, so the new sandbox would get no memory.max, a sentry sized to
-// the host's RAM, and no watch.
-// https://github.com/google/gvisor/blob/0068142bdeb9de91fe72bf9794204de6dec92cb4/runsc/cgroup/cgroup_v2.go#L138-L153
-func (s *AteWorkerService) removeStaleSandboxLeaf(ctx context.Context, actorUID string) error {
-	dir := s.sandboxLeaf(actorUID)
+// removeActorCgroups stops sandbox and gofer processes even if runsc lost its
+// records. Checkpointing can move the sandbox into a separate cgroup.
+// Removing the leaves also resets limits for the next activation.
+func (s *AteWorkerService) removeActorCgroups(ctx context.Context, actorUID string, containers []*ateworkerpb.Container) error {
+	hosted := s.lookupActor(actorUID)
+	if hosted != nil {
+		hosted.stopping.Store(true)
+	}
+	var errs []error
+	for _, name := range []string{
+		filepath.Base(s.sandboxLeaf(actorUID)),
+		filepath.Base(checkpointCgroupDir(s.cgroupRoot, actorUID)),
+	} {
+		if err := s.removeCgroup(ctx, name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// runsc also creates empty compatibility cgroups for application containers.
+	for _, ctr := range containers {
+		dir := filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(actorUID, ctr.GetName()))
+		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("while removing container cgroup %q: %w", dir, err))
+		}
+	}
+	if hosted != nil && hosted.sandbox != nil {
+		if err := hosted.sandbox.checkExited(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *AteWorkerService) removeCgroup(ctx context.Context, name string) error {
 	killCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := cgroup.KillLeafUnder(killCtx, s.cgroupRoot, filepath.Base(dir)); err != nil {
-		return fmt.Errorf("while clearing a leftover sandbox cgroup: %w", err)
+	if err := cgroup.KillLeafUnder(killCtx, s.cgroupRoot, name); err != nil {
+		return fmt.Errorf("while stopping cgroup %q: %w", name, err)
 	}
+	// Removal also rejects live processes on kernels without cgroup.kill.
+	dir := filepath.Join(s.cgroupRoot, name)
 	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("while removing leftover sandbox cgroup %q: %w", dir, err)
+		return fmt.Errorf("while removing cgroup %q: %w", dir, err)
 	}
 	return nil
 }
