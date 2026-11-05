@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -33,6 +34,7 @@ import (
 	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
 	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 	"go.opentelemetry.io/otel"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -541,6 +543,135 @@ func TestIteratePacesResumes(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 95*time.Millisecond {
 		t.Errorf("21 resumes at 200 per second took %v, want >= 100ms", elapsed)
 	}
+}
+
+func TestWaveSlot(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	// burstSize=3 at targetRPS=30 gives a 100ms wave period.
+	const (
+		burst  = 3
+		rps    = 30.0
+		period = 100 * time.Millisecond
+	)
+	tests := []struct {
+		name      string
+		now       time.Time
+		waveTime  time.Time
+		waveCount int
+		wantSlot  time.Time
+		wantCount int
+	}{
+		{
+			name:      "first caller starts first future boundary",
+			now:       t0,
+			waveTime:  time.Time{},
+			waveCount: 0,
+			wantSlot:  t0.Add(period),
+			wantCount: 1,
+		},
+		{
+			name:      "second caller before boundary shares the wave",
+			now:       t0.Add(10 * time.Millisecond),
+			waveTime:  t0.Add(period),
+			waveCount: 1,
+			wantSlot:  t0.Add(period),
+			wantCount: 2,
+		},
+		{
+			name:      "third caller fills the wave",
+			now:       t0.Add(20 * time.Millisecond),
+			waveTime:  t0.Add(period),
+			waveCount: 2,
+			wantSlot:  t0.Add(period),
+			wantCount: 3,
+		},
+		{
+			name:      "fourth caller before boundary overflows to next wave",
+			now:       t0.Add(25 * time.Millisecond),
+			waveTime:  t0.Add(period),
+			waveCount: 3,
+			wantSlot:  t0.Add(2 * period),
+			wantCount: 1,
+		},
+		{
+			name:      "caller arriving on boundary after a partial wave advances one period",
+			now:       t0.Add(period),
+			waveTime:  t0.Add(period),
+			waveCount: 2,
+			wantSlot:  t0.Add(2 * period),
+			wantCount: 1,
+		},
+		{
+			name:      "caller arriving after several idle periods advances to next grid boundary",
+			now:       t0.Add(350 * time.Millisecond),
+			waveTime:  t0.Add(period),
+			waveCount: 1,
+			wantSlot:  t0.Add(4 * period),
+			wantCount: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			slot, nextCount := waveSlot(tc.now, tc.waveTime, tc.waveCount, burst, rps)
+			if !slot.Equal(tc.wantSlot) || nextCount != tc.wantCount {
+				t.Errorf("waveSlot() = (%v, %d), want (%v, %d)",
+					slot.Sub(t0), nextCount,
+					tc.wantSlot.Sub(t0), tc.wantCount)
+			}
+		})
+	}
+}
+
+func TestIteratePacesInWaves(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake := newFake()
+		r := newTestRuntime(fake)
+		// BurstSize=2 at TargetRPS=10 gives a 200ms wave period. The token-bucket
+		// limiter stays untouched while BurstSize > 0.
+		h := dynconfig.NewHolder(knobsCodec)
+		if _, _, err := h.Apply([]byte(`{"target_rps": 10, "burst_size": 2}`)); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		r.cfg.Dyn = h
+
+		arrivals := []time.Duration{0, 30 * time.Millisecond, 50 * time.Millisecond}
+		elapsed := make([]time.Duration, len(arrivals)+1)
+		var wg sync.WaitGroup
+		for i, delay := range arrivals {
+			wg.Go(func() {
+				r.iterate() // warm up at t0 (unpaced)
+				time.Sleep(delay)
+				start := time.Now()
+				r.iterate()
+				elapsed[i] = time.Since(start)
+			})
+		}
+		wg.Wait()
+
+		// Changing target_rps live advances from the last scheduled boundary using
+		// the new 100ms period (t0+400ms + 100ms = t0+500ms, 40ms from t0+460ms).
+		time.Sleep(60 * time.Millisecond)
+		if _, _, err := h.Apply([]byte(`{"target_rps": 20, "burst_size": 2}`)); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		r.iterate() // warm up this goroutine's actor
+		start := time.Now()
+		r.iterate()
+		elapsed[3] = time.Since(start)
+
+		want := []time.Duration{
+			200 * time.Millisecond,
+			170 * time.Millisecond,
+			350 * time.Millisecond,
+			40 * time.Millisecond,
+		}
+		if !slices.Equal(elapsed, want) {
+			t.Errorf("wave elapsed = %v, want %v", elapsed, want)
+		}
+		if got := r.limiter.Limit(); got != rate.Inf {
+			t.Errorf("limiter.Limit() = %v, want rate.Inf", got)
+		}
+	})
 }
 
 func TestIterateRecordsTheRecoveryPauseOfAPausedActorAsASuccess(t *testing.T) {

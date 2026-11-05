@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Request-rate runtime flag, for boomer user classes that pace
+"""Request-rate runtime flags, for boomer user classes that pace
 (resumepaused, and agentsession in turnover mode)."""
 
 from locust import events
@@ -31,6 +31,19 @@ def add_rate_arguments(parser: LocustArgumentParser) -> None:
             "turnover mode (--agentsession-awake). 0 disables both. "
             "A --ladder step with @target_rps changes it while the run "
             "continues"
+        ),
+        include_in_web_ui=True,
+    )
+    parser.add_argument(
+        "--burst-size",
+        type=int,
+        default=0,
+        env_var="LOCUST_BURST_SIZE",
+        help=(
+            "For resumepaused only: release cold resumes in waves of up to "
+            "this many users every burst_size/target_rps seconds instead of "
+            "spacing them one by one. 0 paces smoothly; positive values "
+            "require --target-rps > 0"
         ),
         include_in_web_ui=True,
     )
