@@ -37,32 +37,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// SandboxNetwork holds a sandbox's runtime and gateway namespaces.
+// SandboxNetwork holds a sandbox's private network namespace.
 type SandboxNetwork struct {
-	// ActorUID is the Actor resource's UID. It names the namespaces, so a
-	// teardown can find them again.
+	// ActorUID is the Actor resource's UID. It names the namespace, so a
+	// teardown can find it again.
 	ActorUID string
-	// RuntimeNetNS is what the sandbox runs in, whichever runtime that is: the
-	// micro-VM's tap lives here, and gVisor claims every interface here and
-	// moves their addresses into its own stack.
-	RuntimeNetNS netns.Handle
-	// GatewayNetNS holds the sandbox's default gateway, DNS relay, and atunnel
-	// sockets. This is local to the sandbox, not the external egress gateway.
-	// For microVMs it shares RuntimeNetNS.
-	//
-	// TODO: we hope gVisor can take that same single-namespace shape soon,
-	// once runsc can be given one interface rather than claiming every
-	// interface in the namespace it runs in.
-	GatewayNetNS netns.Handle
+	// NetNS holds the runtime interfaces, default gateway, DNS relay, and
+	// atunnel sockets. The actor's network stack lives inside its sandbox.
+	NetNS netns.Handle
 }
 
-func (n *SandboxNetwork) holdsNetNS() bool { return n.RuntimeNetNS > 0 }
+func (n *SandboxNetwork) holdsNetNS() bool { return n.NetNS > 0 }
 
 // SandboxNetworkConfig describes one actor's private networking.
 type SandboxNetworkConfig struct {
 	ActorUID string
 
-	// Veth separates gVisor's interfaces from the kernel-owned gateway.
+	// Veth connects gVisor's network stack to the kernel-owned gateway.
 	// MicroVMs use a tap in a single namespace instead.
 	Veth bool
 
@@ -76,8 +67,8 @@ type SandboxNetworkConfig struct {
 }
 
 // SetupSandboxNetwork creates isolated networking with fixed sandbox addresses.
-// gVisor uses a veth pair across runtime and gateway namespaces because it takes
-// over every interface in its namespace. MicroVMs use a tap in one namespace.
+// gVisor uses a veth pair in one namespace. ActivateGateway completes its setup
+// after runsc imports eth0. MicroVMs use a tap in one namespace.
 // nftables at the sandbox's default gateway redirect outbound TCP to atunnel, preserving
 // SO_ORIGINAL_DST. Traffic to the gateway address is not redirected, so DNS
 // over UDP and TCP reaches the relay's own sockets.
@@ -102,29 +93,18 @@ func SetupSandboxNetwork(ctx context.Context, cfg SandboxNetworkConfig) (_ *Sand
 		return nil, err
 	}
 
-	// Without a veth, atunnel shares the namespace with the runtime's tap.
-	atunnelNS := actorNS
 	if cfg.Veth {
-		outer, err := setupVethPair(ctx, cfg, actorNS)
-		if err != nil {
+		if err := setupVethPair(ctx, actorNS); err != nil {
 			return nil, err
 		}
-		defer func() {
-			if retErr != nil {
-				outer.Close()
-				_ = netns.RemoveNamed(SandboxGatewayNetNSName(cfg.ActorUID))
-			}
-		}()
-		atunnelNS = outer
 	}
-	if err := installEgressRules(atunnelNS, cfg.EgressPort); err != nil {
+	if err := installEgressRules(actorNS, cfg.EgressPort); err != nil {
 		return nil, err
 	}
 
 	return &SandboxNetwork{
-		ActorUID:     actorUID,
-		RuntimeNetNS: actorNS,
-		GatewayNetNS: atunnelNS,
+		ActorUID: actorUID,
+		NetNS:    actorNS,
 	}, nil
 }
 
@@ -181,55 +161,23 @@ var sandboxSysctls = []netns.Sysctl{
 	{Key: "net/ipv6/conf/default/accept_redirects", Value: "0"},
 }
 
-// setupVethPair creates the gateway namespace and the veth pair joining it to
-// actorNS. The caller owns the returned handle and its name.
-func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.Handle) (_ netns.Handle, retErr error) {
-	gatewayNSName := SandboxGatewayNetNSName(cfg.ActorUID)
-	outer, err := netns.CreateNamed(gatewayNSName)
-	if err != nil {
-		return 0, fmt.Errorf("while creating the outer netns %s: %w", gatewayNSName, err)
-	}
-	defer func() {
-		if retErr != nil {
-			outer.Close()
-			_ = netns.RemoveNamed(gatewayNSName)
-		}
-	}()
-
-	// Keep the kernel-owned peer outside gVisor's namespace.
-	if err := netns.Do(ctx, outer, func(ctx context.Context) error {
-		if err := prepareNamespace(ctx); err != nil {
-			return err
-		}
+// setupVethPair leaves atside addressless so runsc imports only eth0.
+func setupVethPair(ctx context.Context, actorNS netns.Handle) error {
+	return netns.Do(ctx, actorNS, func(context.Context) error {
 		veth := &netlink.Veth{
 			LinkAttrs: netlink.LinkAttrs{Name: gatewayVethName},
 			PeerName:  ActorVethName,
-			// Create the peer directly in the actor's namespace. Moving a
-			// netdev across namespaces afterwards costs several times the
-			// whole setup, all of it under the global RTNL lock, and this
-			// runs on the resume path.
-			PeerNamespace: netlink.NsFd(int(actorNS)),
 		}
 		if err := netlink.LinkAdd(veth); err != nil {
 			return fmt.Errorf("while creating the veth pair: %w", err)
 		}
-		atSide, err := netlink.LinkByName(gatewayVethName)
-		if err != nil {
+		// A link-local IPv6 address would make runsc import atside too.
+		if err := netns.SetSysctls(netns.Sysctl{Key: "net/ipv6/conf/" + gatewayVethName + "/disable_ipv6", Value: "1"}); err != nil {
 			return err
 		}
-		if err := netlink.AddrReplace(atSide, HostVethAddr); err != nil {
-			return fmt.Errorf("while assigning the atunnel-side address: %w", err)
-		}
-		if err := netlink.LinkSetUp(atSide); err != nil {
+		if err := linkUp(gatewayVethName); err != nil {
 			return err
 		}
-		return nil
-	}); err != nil {
-		return 0, err
-	}
-
-	// gVisor imports these addresses and routes into its network stack.
-	if err := netns.Do(ctx, actorNS, func(context.Context) error {
 		eth0, err := netlink.LinkByName(ActorVethName)
 		if err != nil {
 			return err
@@ -240,14 +188,31 @@ func setupVethPair(ctx context.Context, cfg SandboxNetworkConfig, actorNS netns.
 		if err := netlink.LinkSetUp(eth0); err != nil {
 			return err
 		}
-		return netlink.RouteReplace(&netlink.Route{
-			LinkIndex: eth0.Attrs().Index,
-			Gw:        ActorVethGwIP,
-		})
-	}); err != nil {
-		return 0, err
-	}
-	return outer, nil
+		return netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethGwIP})
+	})
+}
+
+// ActivateGateway assigns the Linux gateway after runsc has imported eth0.
+// Call it after starting or restoring the empty sandbox, before its containers.
+func (n *SandboxNetwork) ActivateGateway(ctx context.Context) error {
+	return netns.Do(ctx, n.NetNS, func(context.Context) error {
+		eth0, err := netlink.LinkByName(ActorVethName)
+		if err != nil {
+			return err
+		}
+		addrs, err := netlink.AddrList(eth0, netlink.FAMILY_V4)
+		if err != nil {
+			return err
+		}
+		if len(addrs) != 0 {
+			return fmt.Errorf("runsc has not removed eth0's IPv4 addresses")
+		}
+		gateway, err := netlink.LinkByName(gatewayVethName)
+		if err != nil {
+			return err
+		}
+		return netlink.AddrReplace(gateway, HostVethAddr)
+	})
 }
 
 func linkUp(name string) error {
@@ -387,35 +352,21 @@ var actorSubnetBase, actorSubnetMask = func() ([]byte, []byte) {
 // gatewayVethName is the veth peer in the gateway namespace.
 const gatewayVethName = "atside"
 
-// SandboxGatewayNetNSName names the namespace holding the veth peer and atunnel's
-// sockets for one actor.
-func SandboxGatewayNetNSName(actorUID string) string {
-	return nodepath.ActorNetNSName(actorUID) + "-at"
-}
-
-// CleanupSandboxNetwork closes namespace handles and removes their names.
+// CleanupSandboxNetwork closes the namespace handle and removes its name.
 func CleanupSandboxNetwork(network *SandboxNetwork) error {
 	if network == nil {
 		return nil
 	}
 	var errs error
-	// Compare before Close sets the handle to -1; microVMs share one descriptor.
-	separateNS := network.GatewayNetNS != network.RuntimeNetNS
 	if network.holdsNetNS() {
-		if err := network.RuntimeNetNS.Close(); err != nil {
+		if err := network.NetNS.Close(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("while closing the sandbox netns: %w", err))
 		}
 	}
-	if separateNS && network.GatewayNetNS > 0 {
-		if err := network.GatewayNetNS.Close(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("while closing the gateway netns: %w", err))
-		}
-	}
-	// Deleting the namespaces takes any veth pair with them.
-	for _, name := range []string{nodepath.ActorNetNSName(network.ActorUID), SandboxGatewayNetNSName(network.ActorUID)} {
-		if err := netns.RemoveNamed(name); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("while deleting netns %s: %w", name, err))
-		}
+	// Deleting the namespace takes the veth pair with it.
+	name := nodepath.ActorNetNSName(network.ActorUID)
+	if err := netns.RemoveNamed(name); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("while deleting netns %s: %w", name, err))
 	}
 	return errs
 }
@@ -485,7 +436,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	}()
 
 	if resolver != nil {
-		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS, cfg.DNSPolicy)
+		dnsServer, err := resolver.Serve(ctx, network.NetNS, cfg.DNSPolicy)
 		if err != nil {
 			return nil, err
 		}
@@ -494,7 +445,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 	// Egress last: its binding is released by the serve goroutine, so nothing
 	// may fail between binding and starting it.
 	if egress != nil {
-		closers, serveEgress, err := serveSandboxEgress(ctx, egress, cfg.ActorUID, network.GatewayNetNS, []uint16{cfg.EgressPort})
+		closers, serveEgress, err := serveSandboxEgress(ctx, egress, cfg.ActorUID, network.NetNS, []uint16{cfg.EgressPort})
 		if err != nil {
 			return nil, err
 		}
@@ -513,8 +464,8 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 }
 
 // Close cancels the work in flight, closes the sockets, waits for the serving
-// goroutines, then removes the namespaces. ctx bounds only the wait; the
-// namespaces go either way, since leaving them wedges the next activation.
+// goroutines, then removes the namespace. ctx bounds only the wait; the
+// namespace goes either way, since leaving them wedges the next activation.
 // Idempotent, and every step's error is returned.
 func (s *SandboxSession) Close(ctx context.Context) error {
 	s.mu.Lock()
@@ -558,8 +509,8 @@ type SessionHolder struct {
 
 // Replace closes whatever session is held and installs next. A previous
 // actor's session can still be here if its teardown never ran, and overwriting
-// it would leak both namespaces, their /run/netns mounts and the goroutines
-// serving them.
+// it would leak the namespace, its /run/netns mount and the goroutines
+// serving it.
 func (h *SessionHolder) Replace(ctx context.Context, next *SandboxSession) error {
 	if err := h.Close(ctx); err != nil {
 		return fmt.Errorf("while releasing the previous sandbox network: %w", err)
@@ -609,7 +560,7 @@ func (s *SandboxSession) Dialer() func(context.Context, string, string) (net.Con
 			s.mu.Unlock()
 			return nil, net.ErrClosed
 		}
-		fd, err := unix.FcntlInt(uintptr(s.Network.GatewayNetNS), unix.F_DUPFD_CLOEXEC, 0)
+		fd, err := unix.FcntlInt(uintptr(s.Network.NetNS), unix.F_DUPFD_CLOEXEC, 0)
 		s.mu.Unlock()
 		if err != nil {
 			return nil, fmt.Errorf("while retaining the sandbox namespace: %w", err)
