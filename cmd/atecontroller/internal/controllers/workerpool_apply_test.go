@@ -495,6 +495,12 @@ func TestWorkerSecurityContextByClass(t *testing.T) {
 				*sc.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
 				t.Errorf("AppArmorProfile = %v, want Unconfined", sc.AppArmorProfile)
 			}
+			// Every class uses the /var/lib/ate hostPath, which the default
+			// container_t may not use on nodes that enforce SELinux.
+			if sc.SELinuxOptions == nil || sc.SELinuxOptions.Type == nil ||
+				*sc.SELinuxOptions.Type != "spc_t" {
+				t.Errorf("SELinuxOptions = %+v, want type spc_t", sc.SELinuxOptions)
+			}
 			// Every class declares Unconfined explicitly so it does not depend on
 			// the cluster leaving the seccomp profile unset.
 			gotSeccompUnconfined := sc.SeccompProfile != nil && sc.SeccompProfile.Type != nil &&
@@ -918,6 +924,8 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithAdd(workerGvisorCapabilities...)).
 				WithAppArmorProfile(corev1ac.AppArmorProfile().
 					WithType(corev1.AppArmorProfileTypeUnconfined)).
+				WithSELinuxOptions(corev1ac.SELinuxOptions().
+					WithType("spc_t")).
 				WithSeccompProfile(corev1ac.SeccompProfile().
 					WithType(corev1.SeccompProfileTypeUnconfined))).
 			WithEnv(
