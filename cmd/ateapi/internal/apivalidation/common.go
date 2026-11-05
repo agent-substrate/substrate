@@ -17,7 +17,10 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
+	"slices"
+	"strings"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -89,6 +92,27 @@ func ValidateCustom_ResourceMetadata(_ context.Context, _ operation.Operation, f
 		}
 	}
 	return errs
+}
+
+const maxAnnotationsSizeBytes = 16384
+
+func validateAnnotations(fldPath *field.Path, annotations map[string]string) field.ErrorList {
+	var errs field.ErrorList
+	size := 0
+	for _, key := range slices.Sorted(maps.Keys(annotations)) {
+		if strings.HasPrefix(key, "ate.dev/") || strings.Contains(key, ".ate.dev/") {
+			errs = append(errs, field.Invalid(fldPath, key, "ate.dev and its subdomains are reserved"))
+		}
+		size += len(key) + len(annotations[key])
+	}
+	if size > maxAnnotationsSizeBytes {
+		errs = append(errs, field.TooLong(fldPath, size, maxAnnotationsSizeBytes))
+	}
+	return errs
+}
+
+func ValidateCustom_ResourceMetadata_Annotations(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return validateAnnotations(fldPath, value)
 }
 
 // validateDualStackIPs checks that each entry is a valid, canonical IP and
