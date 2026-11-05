@@ -475,6 +475,8 @@ class ClusterFactsTest(unittest.TestCase):
             m = summarize(metal_facts, td, stats_ok, users=1300,
                           user_counts=[650, 1300, 1300])["measurements"]
         self.assertEqual(m["actors_per_node"], "1300.0")
+        self.assertEqual(m["live_actors"], "1300")
+        self.assertEqual(m["replaced_actors"], "223")
         self.assertEqual(m["actors_per_vcpu"], "6.8")
         self.assertEqual(m["actors_per_pod_p50"], "13.0")
         self.assertEqual(m["multi_actor_worker"], "true")
@@ -488,6 +490,8 @@ class ClusterFactsTest(unittest.TestCase):
             m = summarize(metal_facts, td, stats_fail, users=1300,
                           user_counts=[650, 1300, 1300])["measurements"]
         self.assertEqual(m["actors_per_node"], "0.0")
+        self.assertEqual(m["live_actors"], "0")
+        self.assertEqual(m["replaced_actors"], "0")
         self.assertEqual(m["actors_per_vcpu"], "0.0")
         self.assertEqual(m["actors_per_gb_ram"], "0.0")
         self.assertEqual(m["actors_per_pod_p50"], "0.0")
@@ -502,6 +506,8 @@ class ClusterFactsTest(unittest.TestCase):
             m = summarize(metal_facts, td, stats_partial, users=1300,
                           user_counts=[650, 1300, 1300])["measurements"]
         self.assertEqual(m["actors_per_node"], "700.0")
+        self.assertEqual(m["live_actors"], "700")
+        self.assertEqual(m["replaced_actors"], "100")
         self.assertEqual(m["actors_per_pod_p50"], "7.0")
 
         # sweperf retires completed trajectories (TaskWallClock) with
@@ -516,6 +522,14 @@ class ClusterFactsTest(unittest.TestCase):
                           user_counts=[50, 100, 100])["measurements"]
         self.assertEqual(m["actors_per_node"], "100.0")
         self.assertEqual(m["actors_per_pod_p50"], "1.0")
+        self.assertEqual(m["live_actors"], "100")
+        self.assertEqual(m["replaced_actors"], "0")
+
+        # No CreateActor row: the test does not manage actors this way.
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(metal_facts, td)["measurements"]
+        self.assertIsNone(m["live_actors"])
+        self.assertIsNone(m["replaced_actors"])
 
     def test_worker_pod_snapshot(self):
         api = fake_api(ns_pods=[
@@ -540,6 +554,31 @@ class ClusterFactsTest(unittest.TestCase):
         self.assertIsNone(snapshot(fake_api(ns_pods=None)))
         with mock.patch.object(cluster_facts, "_load_kube_config", return_value=False):
             self.assertIsNone(cluster_facts.snapshot_worker_pods())
+
+    def test_worker_pods_ready(self):
+        def ready_pod(ready, phase="Running"):
+            p = pod(phase=phase)
+            p.status.conditions = [SimpleNamespace(type="Ready", status=ready)]
+            return p
+
+        def pending_pod():
+            p = pod(phase="Pending")
+            p.status.conditions = None
+            return p
+
+        def check(api):
+            with mock.patch.object(cluster_facts, "_load_kube_config", return_value=True), \
+                 mock.patch.object(cluster_facts.client, "CoreV1Api", return_value=api), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                return cluster_facts.worker_pods_ready()
+
+        self.assertTrue(check(fake_api(ns_pods=[ready_pod("True"), ready_pod("True")])))
+        # Terminated pods are not part of the pool.
+        self.assertTrue(check(fake_api(ns_pods=[ready_pod("True"), ready_pod("False", "Failed")])))
+        self.assertFalse(check(fake_api(ns_pods=[ready_pod("True"), ready_pod("False")])))
+        self.assertFalse(check(fake_api(ns_pods=[pending_pod()])))
+        self.assertFalse(check(fake_api(ns_pods=[])))
+        self.assertIsNone(check(fake_api(ns_pods=None)))
 
     def test_evicted_pods_from_events(self):
         def event(uid, last=None, event_time=None, created=None):

@@ -346,11 +346,15 @@ def append_trial_summary(
     # run (stats.csv is written before boomer's shutdown DeleteActor sweep).
     # In sweperf, each completed TaskWallClock retires its actor with
     # DeleteActor before starting a fresh one, so only unretired deletes count
-    # as failed/wedged actors.
+    # as replaced actors.
+    live_actors: int | None = None
+    replaced_actors: int | None = None
     if create_actor_successes is not None:
-        unretired_deletes = max(delete_actor_requests - retired_task_requests, 0)
-        live_actors = max(create_actor_successes - unretired_deletes, 0)
-        peak_actors = min(peak_actors, live_actors)
+        replaced_actors = max(delete_actor_requests - retired_task_requests, 0)
+        peak_actors = min(peak_actors,
+                          max(create_actor_successes - replaced_actors, 0))
+        # Locust's User Count samples parse as floats.
+        live_actors = int(peak_actors)
 
     node_count = facts.get("node_count")
     cores = facts.get("allocatable_cores")
@@ -401,6 +405,9 @@ def append_trial_summary(
         "actors_per_pod_p50": actors_per_pod_p50,
         "actors_per_pod_p90": actors_per_pod_p90,
         "actors_per_pod_p99": actors_per_pod_p99,
+        # None when the test records no CreateActor.
+        "live_actors": live_actors,
+        "replaced_actors": replaced_actors,
         **failure_ratios,
     }
 
@@ -417,6 +424,23 @@ def append_trial_summary(
     with open(jsonl_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(summary_entry) + "\n")
     _log(logs, f"Appended trial_summary to {jsonl_path}")
+
+
+def worker_pods_ready(logs: TextIO | None = None) -> bool | None:
+    """Whether the worker pool has live pods and every one of them is Ready.
+
+    None when the read failed.
+    """
+    if not _load_kube_config(logs):
+        return None
+    pods = _list_worker_pods(client.CoreV1Api(), logs)
+    if pods is None:
+        return None
+    return bool(pods) and all(
+        any(c.type == "Ready" and c.status == "True"
+            for c in pod.status.conditions or [])
+        for pod in pods
+    )
 
 
 def snapshot_worker_pods(
