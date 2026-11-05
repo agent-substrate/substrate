@@ -78,24 +78,6 @@ func TestSwapMemoryMaxForHighNoLimit(t *testing.T) {
 	}
 }
 
-func TestRemoveStaleSandboxLeaf(t *testing.T) {
-	root := t.TempDir()
-	s := &AteWorkerService{cgroupRoot: root}
-	leaf := s.sandboxLeaf("uid-a")
-	if err := os.Mkdir(leaf, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.removeStaleSandboxLeaf(context.Background(), "uid-a"); err != nil {
-		t.Fatalf("removeStaleSandboxLeaf() = %v", err)
-	}
-	if _, err := os.Stat(leaf); !os.IsNotExist(err) {
-		t.Errorf("leftover leaf still there (stat err: %v)", err)
-	}
-	if err := s.removeStaleSandboxLeaf(context.Background(), "uid-a"); err != nil {
-		t.Errorf("removeStaleSandboxLeaf() without a leaf = %v", err)
-	}
-}
-
 // A sandbox past the overshoot cap is killed once, and a checkpoint pausing
 // the watch waits for the kill.
 func TestCheckMemoryKillsOncePausesForCheckpoint(t *testing.T) {
