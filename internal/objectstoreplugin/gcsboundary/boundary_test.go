@@ -15,10 +15,11 @@
 package gcsboundary
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"golang.org/x/oauth2/google/downscope"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/actorscope"
 	"go.ate.dev/substrate/internal/resources"
@@ -42,16 +43,16 @@ func TestFromGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromGrants: %v", err)
 	}
-	want := []downscope.AccessBoundaryRule{
+	want := []Rule{
 		{
-			AvailableResource:    "//storage.googleapis.com/projects/_/buckets/snaps",
-			AvailablePermissions: []string{"inRole:roles/storage.objectAdmin"},
-			Condition:            &downscope.AvailabilityCondition{Expression: "resource.name.startsWith('projects/_/buckets/snaps/objects/ate-demo/atespaces/team-a/actors/9f1e/')"},
+			Resource:    "//storage.googleapis.com/projects/_/buckets/snaps",
+			Permissions: []string{"inRole:roles/storage.objectAdmin"},
+			Condition:   "resource.name.startsWith('projects/_/buckets/snaps/objects/ate-demo/atespaces/team-a/actors/9f1e/')",
 		},
 		{
-			AvailableResource:    "//storage.googleapis.com/projects/_/buckets/snaps",
-			AvailablePermissions: []string{"inRole:roles/storage.objectViewer"},
-			Condition:            &downscope.AvailabilityCondition{Expression: "resource.name.startsWith('projects/_/buckets/snaps/objects/ate-demo/atespaces/ate-golden/tags/7a3c/')"},
+			Resource:    "//storage.googleapis.com/projects/_/buckets/snaps",
+			Permissions: []string{"inRole:roles/storage.objectViewer"},
+			Condition:   "resource.name.startsWith('projects/_/buckets/snaps/objects/ate-demo/atespaces/ate-golden/tags/7a3c/')",
 		},
 	}
 	if diff := cmp.Diff(want, b); diff != "" {
@@ -67,6 +68,9 @@ func TestFromGrants_Refuses(t *testing.T) {
 		{"not gs", []actorscope.Grant{{Prefix: prefix(t, "s3://b/p"), Access: actorscope.ReadOnly}}},
 		{"zero prefix", []actorscope.Grant{{Prefix: resources.StoragePrefix{}, Access: actorscope.ReadOnly}}},
 		{"unknown access", []actorscope.Grant{{Prefix: prefix(t, "gs://b/p"), Access: 0}}},
+		{"no grants", nil},
+		{"more than ten grants", manyGrants(t, 11)},
+		{"a condition over 512 bytes", []actorscope.Grant{longGrant(t, 513)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := FromGrants(tc.grants); err == nil {
@@ -84,10 +88,35 @@ func TestFromGrants_EscapesTheCELLiteral(t *testing.T) {
 		t.Fatalf("FromGrants: %v", err)
 	}
 	want := `resource.name.startsWith('projects/_/buckets/snaps/objects/tenant\'s/atespaces/team-a/actors/9f1e/')`
-	if got := rules[0].Condition.Expression; got != want {
+	if got := rules[0].Condition; got != want {
 		t.Errorf("expression = %s, want %s", got, want)
 	}
 	if got := celEscape(`a\b'c`); got != `a\\b\'c` {
 		t.Errorf("celEscape = %s", got)
+	}
+}
+
+func manyGrants(t *testing.T, n int) []actorscope.Grant {
+	var gs []actorscope.Grant
+	for i := range n {
+		gs = append(gs, actorscope.Grant{Prefix: prefix(t, fmt.Sprintf("gs://b/p%d", i)), Access: actorscope.ReadOnly})
+	}
+	return gs
+}
+
+// longGrant is a grant whose condition literal is n bytes:
+// "projects/_/buckets/b/objects/" and the path with its trailing slash.
+func longGrant(t *testing.T, n int) actorscope.Grant {
+	path := strings.Repeat("p", n-len("projects/_/buckets/b/objects/")-1)
+	return actorscope.Grant{Prefix: prefix(t, "gs://b/"+path), Access: actorscope.ReadWrite}
+}
+
+func TestFromGrants_AcceptsA512ByteCondition(t *testing.T) {
+	rules, err := FromGrants([]actorscope.Grant{longGrant(t, 512)})
+	if err != nil {
+		t.Fatalf("FromGrants: %v", err)
+	}
+	if got := len(rules[0].Condition) - len("resource.name.startsWith('')"); got != 512 {
+		t.Fatalf("literal is %d bytes, want 512", got)
 	}
 }

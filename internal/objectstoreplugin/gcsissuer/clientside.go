@@ -1,0 +1,301 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package gcsissuer
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/google/cel-go/cel"
+	"github.com/tink-crypto/tink-go/v2/aead"
+	"github.com/tink-crypto/tink-go/v2/insecurecleartextkeyset"
+	"github.com/tink-crypto/tink-go/v2/keyset"
+	"github.com/tink-crypto/tink-go/v2/tink"
+	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
+	"google.golang.org/protobuf/proto"
+
+	"go.ate.dev/substrate/internal/objectstoreplugin/gcsboundary"
+	pb "go.ate.dev/substrate/internal/proto/clientsideboundarypb"
+)
+
+// Client-side Credential Access Boundaries, as google-auth-library-java's
+// ClientSideCredentialAccessBoundaryFactory implements them, see
+// https://docs.cloud.google.com/iam/docs/create-downscoped-short-lived-credentials#client-side-token-exchange
+// and
+// https://github.com/googleapis/google-auth-library-java/blob/9ac2d4340ebc6a8582b898e97f65aeed3c1776d6/cab-token-generator/java/com/google/auth/credentialaccessboundary/ClientSideCredentialAccessBoundaryFactory.java.
+// One STS exchange per source token returns an intermediary token and a
+// session key. Each downscoped token is then the intermediary token, a dot,
+// and the boundary encrypted with the session key. GCS accepts the
+// intermediary token only with a boundary appended.
+const (
+	stsTokenURL           = "https://sts.googleapis.com/v1/token"
+	tokenExchangeGrant    = "urn:ietf:params:oauth:grant-type:token-exchange"
+	accessTokenType       = "urn:ietf:params:oauth:token-type:access_token"
+	intermediaryTokenType = "urn:ietf:params:oauth:token-type:access_boundary_intermediary_token"
+	// maxSTSResponse bounds what is read of an STS response, which is under
+	// a few KiB when valid. An error quotes at most the first KiB.
+	maxSTSResponse = 64 << 10
+	// maxBoundary is the largest serialized boundary GCS accepts, in bytes.
+	// GCS refuses a token with a larger one with a 401 that does not say why.
+	// The limit is measured, not documented.
+	maxBoundary = 4096
+	// minRetryDelay is how long exchanges pause after one failure. Each further
+	// failure doubles the pause, up to stsTimeout.
+	minRetryDelay = time.Second
+)
+
+// intermediary is what one STS exchange returns for a source token.
+type intermediary struct {
+	token  string
+	expiry time.Time
+	aead   tink.AEAD
+}
+
+// currentIntermediary returns the intermediary to mint with. Intermediaries
+// are stored by source token until they expire, so a caller still holding a
+// token that was just replaced finds its intermediary too.
+//
+// When the source token has none yet, the latest intermediary is used while
+// it has at least minServeLifetime left, and the exchange runs in the
+// background, as Google's Java library refreshes ahead of expiry. So a source
+// token refresh, a slow STS or a failing one does not hold up mints. Only
+// without such an intermediary does a mint wait for the exchange, and if that
+// fails it still uses the latest intermediary while it has more than
+// stsTimeout left, as the source token's own fallback does.
+func (i *Issuer) currentIntermediary(ctx context.Context) (*intermediary, error) {
+	src, err := i.source.Token()
+	if err != nil {
+		return nil, fmt.Errorf("while getting the source token: %w", err)
+	}
+	if in := i.stored(src); in != nil {
+		return in, nil
+	}
+	last := i.latest.Load()
+	if last != nil && last.expiry.Sub(i.now()) >= minServeLifetime {
+		i.exchange(ctx, src)
+		return last, nil
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-i.exchange(ctx, src):
+		if res.Err != nil {
+			if last != nil && last.expiry.Sub(i.now()) > stsTimeout {
+				return last, nil
+			}
+			return nil, res.Err
+		}
+		return res.Val.(*intermediary), nil
+	}
+}
+
+// exchange starts the exchange for src, or joins one in flight. Concurrent
+// mints share it, and it outlives a caller that gives up, so that caller does
+// not fail the mints waiting on it. After a failed exchange it returns the
+// failure instead of calling STS again until the pause ends, so an STS outage
+// or refusal does not turn every mint into an STS call. The pause starts at
+// minRetryDelay, so one transient failure with nothing to fall back on fails
+// mints only briefly, and doubles with each further failure up to stsTimeout.
+func (i *Issuer) exchange(ctx context.Context, src *oauth2.Token) <-chan singleflight.Result {
+	if f := i.failure.Load(); f != nil && i.now().Before(f.until) {
+		ch := make(chan singleflight.Result, 1)
+		ch <- singleflight.Result{Err: fmt.Errorf("STS exchanges paused until %s after a failed exchange: %w", f.until.Format(time.RFC3339), f.err)}
+		return ch
+	}
+	return i.flight.DoChan(src.AccessToken, func() (any, error) {
+		if in := i.stored(src); in != nil {
+			return in, nil
+		}
+		// The caller's deadline is dropped with its cancellation. The default
+		// client times out after stsTimeout, and one set with WithHTTPClient
+		// may not, so the exchange gets its own deadline.
+		xctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stsTimeout)
+		defer cancel()
+		in, err := i.exchangeIntermediary(xctx, src)
+		if err != nil {
+			delay := minRetryDelay
+			if f := i.failure.Load(); f != nil {
+				delay = min(2*f.delay, stsTimeout)
+			}
+			i.failure.Store(&failure{err: err, delay: delay, until: i.now().Add(delay)})
+			slog.WarnContext(ctx, "Exchanging the source token for an intermediary token failed", "error", err)
+			return nil, err
+		}
+		i.failure.Store(nil)
+		i.intermediaries.Set(src.AccessToken, in, in.expiry.Sub(i.now()))
+		i.keepLatest(in)
+		slog.InfoContext(ctx, "Exchanged the source token for an intermediary token", "expiry", in.expiry)
+		return in, nil
+	})
+}
+
+// failure is the last exchange's error, returned without calling STS until
+// until, delay after the failure.
+type failure struct {
+	err   error
+	delay time.Duration
+	until time.Time
+}
+
+// keepLatest stores in as the fallback intermediary, unless one that expires
+// later is stored already.
+func (i *Issuer) keepLatest(in *intermediary) {
+	for {
+		last := i.latest.Load()
+		if last != nil && !in.expiry.After(last.expiry) {
+			return
+		}
+		if i.latest.CompareAndSwap(last, in) {
+			return
+		}
+	}
+}
+
+// stored returns the intermediary exchanged for src, if it has not expired.
+// The cache expires entries on the wall clock, so expiry is checked again on
+// the issuer's clock, which tests set with WithClock.
+func (i *Issuer) stored(src *oauth2.Token) *intermediary {
+	if v, ok := i.intermediaries.Get(src.AccessToken); ok {
+		if in := v.(*intermediary); i.now().Before(in.expiry) {
+			return in
+		}
+	}
+	return nil
+}
+
+func (i *Issuer) exchangeIntermediary(ctx context.Context, src *oauth2.Token) (*intermediary, error) {
+	form := url.Values{
+		"grant_type":           {tokenExchangeGrant},
+		"subject_token_type":   {accessTokenType},
+		"subject_token":        {src.AccessToken},
+		"requested_token_type": {intermediaryTokenType},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stsTokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := i.client.Do(req)
+	if err != nil {
+		// Formatted with %v so a timeout of the exchange's own deadline does not
+		// reach the caller as context.DeadlineExceeded.
+		return nil, fmt.Errorf("while exchanging at STS: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSTSResponse))
+	if err != nil {
+		return nil, fmt.Errorf("while reading the STS response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("while exchanging at STS: status %d: %.1024s", resp.StatusCode, body)
+	}
+	var r struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+		SessionKey  string `json:"access_boundary_session_key"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("while decoding the STS response: %w", err)
+	}
+	if r.AccessToken == "" {
+		return nil, errors.New("STS returned no access token")
+	}
+	if r.SessionKey == "" {
+		return nil, errors.New("STS returned no session key")
+	}
+	// For a service account's source token, STS reports the token's remaining
+	// life, less a second. Google's Java library says it reports nothing for
+	// other tokens. The intermediary is not trusted past the source token
+	// either way.
+	expiry := src.Expiry
+	if r.ExpiresIn > 0 {
+		if sts := i.now().Add(time.Duration(r.ExpiresIn) * time.Second); expiry.IsZero() || sts.Before(expiry) {
+			expiry = sts
+		}
+	}
+	if expiry.IsZero() {
+		// Without an expiry the node plugin could not know when to stop using
+		// the token.
+		return nil, errors.New("intermediary token has no expiry")
+	}
+	// Java's decoder accepts the key with or without padding.
+	rawKey, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(r.SessionKey, "="))
+	if err != nil {
+		return nil, fmt.Errorf("while decoding the session key: %w", err)
+	}
+	handle, err := insecurecleartextkeyset.Read(keyset.NewBinaryReader(bytes.NewReader(rawKey)))
+	if err != nil {
+		return nil, fmt.Errorf("while reading the session key: %w", err)
+	}
+	a, err := aead.New(handle)
+	if err != nil {
+		return nil, fmt.Errorf("while loading the session key: %w", err)
+	}
+	return &intermediary{token: r.AccessToken, expiry: expiry, aead: a}, nil
+}
+
+// encode serializes rules as the ClientSideAccessBoundary STS decrypts. A
+// condition is parsed, not type checked, as the Java factory does.
+func encode(env *cel.Env, rules []gcsboundary.Rule) ([]byte, error) {
+	var b pb.ClientSideAccessBoundary
+	for _, r := range rules {
+		ast, iss := env.Parse(r.Condition)
+		if iss.Err() != nil {
+			return nil, fmt.Errorf("while parsing condition %q: %w", r.Condition, iss.Err())
+		}
+		parsed, err := cel.AstToParsedExpr(ast)
+		if err != nil {
+			return nil, fmt.Errorf("while converting condition %q: %w", r.Condition, err)
+		}
+		cond, err := proto.Marshal(parsed.GetExpr())
+		if err != nil {
+			return nil, fmt.Errorf("while encoding condition %q: %w", r.Condition, err)
+		}
+		b.AccessBoundaryRules = append(b.AccessBoundaryRules, &pb.ClientSideAccessBoundaryRule{
+			AvailableResource:             r.Resource,
+			AvailablePermissions:          r.Permissions,
+			CompiledAvailabilityCondition: cond,
+		})
+	}
+	out, err := proto.Marshal(&b)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > maxBoundary {
+		return nil, fmt.Errorf("the access boundary is %d bytes, more than the %d GCS accepts", len(out), maxBoundary)
+	}
+	return out, nil
+}
+
+// seal encrypts the boundary with the session key and appends it to the
+// intermediary token, unpadded as the Java library writes it.
+func (in *intermediary) seal(plain []byte) (string, error) {
+	sealed, err := in.aead.Encrypt(plain, []byte{})
+	if err != nil {
+		return "", fmt.Errorf("while encrypting the access boundary: %w", err)
+	}
+	return in.token + "." + base64.RawURLEncoding.EncodeToString(sealed), nil
+}
