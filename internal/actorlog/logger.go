@@ -20,7 +20,7 @@
 // Only the lifecycle events carry trace context: one forwarder goroutine covers a
 // whole container stream, so it cannot tell which request produced a given line.
 // An actor emitting its own trace_id/span_id keeps them, verbatim like the rest of
-// its fields.
+// its fields, unless the line exceeds maxLineBytes and is logged as text chunks.
 package actorlog
 
 import (
@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -118,67 +119,104 @@ func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerN
 	return pw, nil
 }
 
+// maxLineBytes is the largest line WrapContainerLogs parses as JSON.
+// Longer lines become plain-text chunks of at most this size, preserving UTF-8.
+const maxLineBytes = 64 << 10
+
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified
 // structured format. containerName is added as the ate.actor.container.name label
 // so multi-container actors can be demultiplexed.
 func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttribution, containerName string) {
 	rdr := bufio.NewReader(r)
+	var line []byte
+	// split is set once a chunk of the current line has been logged.
+	split := false
 	for {
-		lineBytes, err := rdr.ReadBytes('\n')
-
-		// Strip trailing newline from ReadBytes if present
-		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
-			lineBytes = lineBytes[:len(lineBytes)-1]
+		frag, err := rdr.ReadSlice('\n')
+		eol := err == nil
+		if eol {
+			frag = frag[:len(frag)-1]
 		}
+		line = append(line, frag...)
 
-		if len(lineBytes) > 0 {
-			var m map[string]any
-			var envelope map[string]any
-
-			dec := json.NewDecoder(bytes.NewReader(lineBytes))
-			dec.UseNumber()
-
-			unmarshalErr := dec.Decode(&m)
-			if unmarshalErr == nil && m == nil {
-				unmarshalErr = errors.New("JSON value is not an object")
-			}
-			if unmarshalErr == nil {
-				var trailing any
-				if err := dec.Decode(&trailing); err != io.EOF {
-					unmarshalErr = errors.New("trailing garbage detected after JSON object")
-				}
-			}
-
-			if unmarshalErr != nil {
-				envelope = map[string]any{
-					"time":       time.Now().Format(time.RFC3339Nano),
-					"message":    string(lineBytes),
-					al.labelsKey: ateattr.ActorLogLabels(a, containerName),
-				}
-			} else {
-				if _, ok := m["time"]; !ok {
-					m["time"] = time.Now().Format(time.RFC3339Nano)
-				}
-				for k := range m {
-					if strings.HasPrefix(k, ateattr.ReservedNamespace) {
-						delete(m, k)
+		for len(line) > maxLineBytes {
+			n := maxLineBytes
+			// Keep an incomplete UTF-8 character for the next chunk.
+			for i := n - 1; i > n-utf8.UTFMax; i-- {
+				if utf8.RuneStart(line[i]) {
+					if !utf8.FullRune(line[i:n]) {
+						n = i
 					}
+					break
 				}
-				labels := al.foldLabelGroups(m)
-				for k, v := range ateattr.ActorLogLabels(a, containerName) {
-					labels[k] = v
-				}
-				m[al.labelsKey] = labels
-				envelope = m
 			}
-
-			al.write(envelope)
+			al.logLine(line[:n], a, containerName, false)
+			line = line[:copy(line, line[n:])]
+			split = true
 		}
 
-		if err != nil {
+		end := err != nil && !errors.Is(err, bufio.ErrBufferFull)
+		if eol || end {
+			if len(line) > 0 {
+				al.logLine(line, a, containerName, !split)
+			}
+			line, split = line[:0], false
+		}
+		if end {
 			break
 		}
 	}
+}
+
+// logLine logs one line. With parse set, a line holding a JSON object is merged
+// into the record; any other line becomes its message.
+func (al *ActorLogger) logLine(line []byte, a resources.ActorAttribution, containerName string, parse bool) {
+	var m map[string]any
+	if parse {
+		m = parseJSONObject(line)
+	}
+
+	var envelope map[string]any
+	if m == nil {
+		envelope = map[string]any{
+			"time":       time.Now().Format(time.RFC3339Nano),
+			"message":    string(line),
+			al.labelsKey: ateattr.ActorLogLabels(a, containerName),
+		}
+	} else {
+		if _, ok := m["time"]; !ok {
+			m["time"] = time.Now().Format(time.RFC3339Nano)
+		}
+		for k := range m {
+			if strings.HasPrefix(k, ateattr.ReservedNamespace) {
+				delete(m, k)
+			}
+		}
+		labels := al.foldLabelGroups(m)
+		for k, v := range ateattr.ActorLogLabels(a, containerName) {
+			labels[k] = v
+		}
+		m[al.labelsKey] = labels
+		envelope = m
+	}
+
+	al.write(envelope)
+}
+
+// parseJSONObject returns the object line holds, or nil if line is anything else,
+// including an object followed by more data.
+func parseJSONObject(line []byte) map[string]any {
+	var m map[string]any
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return nil
+	}
+	return m
 }
 
 func (al *ActorLogger) write(envelope map[string]any) {

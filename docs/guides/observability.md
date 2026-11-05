@@ -24,13 +24,15 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and head-sampled request tracing (10% by default, 1% at the router), with roadmap plans to fully integrate actor-level correlation.
 
-`ate.*` is reserved for Substrate. An actor's own log lines pass through untouched except for keys in that namespace, which are dropped before the record is written, so nothing a workload emits can be read as platform-issued attribution.
+`ate.*` is reserved for Substrate. For JSON log lines up to 64 KiB, the forwarder preserves actor fields except for keys in that namespace, which are dropped before the record is written, so nothing a workload emits can be read as platform-issued attribution.
 
 ---
 
 ## 1. Logging
 
 Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
+
+Container log lines longer than 64 KiB are split into plain-text `message` chunks of at most 64 KiB. Chunk boundaries preserve valid UTF-8 characters. Each chunk carries the container's identity labels, but its contents are not parsed as JSON. Structured fields such as severity and trace IDs remain text inside the chunks and cannot be queried as top-level fields. This limits the worker's log buffering even when a container writes continuously without a newline.
 
 ### Active Actor Inspection via CLI
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
@@ -141,7 +143,7 @@ resource.labels.pod_name="counter-c995fdf4c-m7d96"
 
 Substrate-emitted records carry top-level `trace_id`, `span_id`, and `trace_flags` in lowercase hex, the names the [OpenTelemetry spec](https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/) fixes for non-OTLP log formats. That covers component logs (every `slog.*Context` call, via [`internal/contextlogging`](../../internal/contextlogging)) and the synthetic actor lifecycle records, so a suspend or resume log line joins the RPC that drove it.
 
-An actor's **own** lines carry trace context only if the actor emits these fields itself, in which case they pass through unchanged. Substrate cannot supply them: one forwarder goroutine covers a container's whole output stream and cannot tell which request produced a given line. Per-line correlation for actor logs arrives with the actor telemetry relay ([#853](https://github.com/agent-substrate/substrate/issues/853)), where the actor's own SDK carries the context.
+An actor's **own** lines carry trace context only if the actor emits these fields itself in a JSON line of at most 64 KiB, in which case they pass through unchanged. Longer lines become plain-text chunks and lose structured trace correlation. Substrate cannot supply trace context: one forwarder goroutine covers a container's whole output stream and cannot tell which request produced a given line. Per-line correlation for actor logs arrives with the actor telemetry relay ([#853](https://github.com/agent-substrate/substrate/issues/853)), where the actor's own SDK carries the context.
 
 ---
 
