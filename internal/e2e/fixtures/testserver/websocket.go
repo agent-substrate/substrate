@@ -15,8 +15,10 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
@@ -32,6 +34,19 @@ func newWebsocketHandler(echo bool) http.Handler {
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// /hang never answers: it returns once the request's connection closes.
+	// /hanging reports how many /hang requests are waiting, so a test can
+	// suspend the actor while one is in flight.
+	var hanging atomic.Int64
+	mux.HandleFunc("/hang", func(_ http.ResponseWriter, r *http.Request) {
+		hanging.Add(1)
+		defer hanging.Add(-1)
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("/hanging", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, hanging.Load())
 	})
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {

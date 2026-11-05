@@ -16,6 +16,7 @@
 resolver = "3"
 members = [
   "egress-policy",
+  "ingress-cache",
 ]
 
 [workspace.package]

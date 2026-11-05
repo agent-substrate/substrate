@@ -17,6 +17,7 @@ package router
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -46,11 +47,14 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	tracev3 "github.com/envoyproxy/go-control-plane/envoy/config/trace/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
+	dynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
+	httpdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	originaldstv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/original_dst/v3"
+	networkdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/dynamic_modules/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	setfilterstatenetworkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/set_filter_state/v3"
 	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
@@ -124,6 +128,37 @@ const (
 	// httpExtProcFilterName is envoy.filters.http.ext_proc's own well-known
 	// name, used as the HttpFilter.Name in buildHcm.
 	httpExtProcFilterName = "envoy.filters.http.ext_proc"
+
+	// httpDynamicModulesFilterName is envoy.filters.http.dynamic_modules's
+	// well-known name, used as the HttpFilter.Name in buildHcm.
+	httpDynamicModulesFilterName = "envoy.filters.http.dynamic_modules"
+
+	// ingressCacheDynamicModuleName is the shared library and filter name for
+	// the ingress-cache dynamic module.
+	ingressCacheDynamicModuleName = "envoy_substrate_ingress_cache"
+
+	// networkDynamicModulesFilterName is envoy.filters.network.dynamic_modules's
+	// well-known name.
+	networkDynamicModulesFilterName = "envoy.filters.network.dynamic_modules"
+
+	// ingressCacheTunnelWatcherFilterName is the ingress-cache module's network
+	// filter. It marks cache entries from what happens to the CONNECT tunnels
+	// they route to, so the HTTP filter can tell a refused tunnel from one cut
+	// off mid-request. It must load from the same library as the HTTP filter,
+	// which shares its per-thread cache.
+	ingressCacheTunnelWatcherFilterName = "tunnel_watcher"
+
+	// DefaultIngressCacheTTL is --ingress-cache-ttl's default.
+	DefaultIngressCacheTTL = 5 * time.Second
+	// DefaultIngressCacheMaxCachedActors is --ingress-cache-max-cached-actors's default.
+	DefaultIngressCacheMaxCachedActors = 10000
+
+	// The ingress-cache dynamic module sets this dynamic metadata on a cache hit
+	// so route selection picks the route that disables ext_proc. Clients can't
+	// set dynamic metadata.
+	cacheHitMetadataNamespace = "ate.ingress_cache"
+	cacheHitMetadataKey       = "hit"
+	cacheHitMetadataValue     = "true"
 )
 
 // defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
@@ -252,6 +287,9 @@ type XdsServer struct {
 	upstreamTrustBundlePath      string
 	// upstreamConnect: see SetUpstreamConnect.
 	upstreamConnect bool
+	// ingressCache, ingressCacheConfig: see SetIngressCache.
+	ingressCache       bool
+	ingressCacheConfig IngressCacheConfig
 
 	// Downstream (client-facing) mTLS. Every TLS ingress listener requires a
 	// client certificate that chains to downstreamClientCAPath and carries
@@ -424,6 +462,56 @@ func (x *XdsServer) SetUpstreamConnect(enabled bool) {
 	x.upstreamConnect = enabled
 }
 
+// IngressCacheConfig is the ingress-cache filter's configuration.
+type IngressCacheConfig struct {
+	// TTL is how long a binding is served from the cache. It's a whole number
+	// of seconds.
+	TTL time.Duration
+	// MaxCachedActors is the most actors cached per Envoy worker thread. Each
+	// thread has its own cache.
+	MaxCachedActors int
+}
+
+// validate checks the flags cfg comes from.
+func (cfg IngressCacheConfig) validate() error {
+	if cfg.TTL < time.Second || cfg.TTL%time.Second != 0 {
+		return fmt.Errorf("--ingress-cache-ttl must be a whole number of seconds, at least 1s, got %s", cfg.TTL)
+	}
+	if cfg.MaxCachedActors < 1 {
+		return fmt.Errorf("--ingress-cache-max-cached-actors must be at least 1, got %d", cfg.MaxCachedActors)
+	}
+	return nil
+}
+
+// SetIngressCache installs the ingress-cache filter, configured by cfg, and,
+// for each workload route, a copy that matches the cache-hit dynamic metadata and skips
+// ext_proc. With upstream CONNECT it also installs the tunnel_watcher network
+// filter on actor_connect. When disabled, none of these exist, so every
+// request is resolved by ext_proc.
+func (x *XdsServer) SetIngressCache(enabled bool, cfg IngressCacheConfig) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.ingressCache = enabled
+	x.ingressCacheConfig = cfg
+}
+
+// ingressCacheFilterConfig is the ingress-cache module's JSON filter config
+// (Config in cmd/dataplane/envoy/dynamic-modules/ingress-cache/src/config.rs).
+// Envoy passes a StringValue to the module without the wrapper.
+func (x *XdsServer) ingressCacheFilterConfig() *anypb.Any {
+	cfg, err := json.Marshal(struct {
+		CacheTTLSeconds int64 `json:"cache_ttl_seconds"`
+		MaxCachedActors int   `json:"max_cached_actors"`
+	}{
+		CacheTTLSeconds: int64(x.ingressCacheConfig.TTL / time.Second),
+		MaxCachedActors: x.ingressCacheConfig.MaxCachedActors,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshaling the ingress-cache filter config: %v", err))
+	}
+	return newAny(wrapperspb.String(string(cfg)))
+}
+
 // SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
 // collector. addr empty disables tracing. See normalizeOtlpCollector for the
 // accepted forms.
@@ -563,7 +651,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	// Listeners
 	var listeners []types.Resource
 	if x.upstreamConnect {
-		listeners = append(listeners, buildActorConnectListener())
+		listeners = append(listeners, buildActorConnectListener(x.ingressCache))
 	}
 	if connectEnabled {
 		listeners = append(listeners, x.buildMainInternalListener())
@@ -1012,28 +1100,26 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 	if x.upstreamConnect {
 		routes = x.buildActorTunnelRoutes()
 	} else {
-		routes = []*routev3.Route{
-			{
-				Match: &routev3.RouteMatch{
-					PathSpecifier: &routev3.RouteMatch_Prefix{
-						Prefix: "/",
-					},
-				},
-				Action: &routev3.Route_Route{
-					Route: x.workloadRouteAction(OriginalDstClusterName),
-				},
-				RequestHeadersToAdd: []*corev3.HeaderValueOption{
-					{
-						Header: &corev3.HeaderValue{
-							Key: atunnelingress.TargetPortHeader,
-							Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
-								ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
-						},
-						AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-					},
+		routes = x.withCachedRoute(&routev3.Route{
+			Match: &routev3.RouteMatch{
+				PathSpecifier: &routev3.RouteMatch_Prefix{
+					Prefix: "/",
 				},
 			},
-		}
+			Action: &routev3.Route_Route{
+				Route: x.workloadRouteAction(OriginalDstClusterName),
+			},
+			RequestHeadersToAdd: []*corev3.HeaderValueOption{
+				{
+					Header: &corev3.HeaderValue{
+						Key: atunnelingress.TargetPortHeader,
+						Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
+							ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
+					},
+					AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+				},
+			},
+		})
 	}
 	return &routev3.RouteConfiguration{
 		Name: RouteName,
@@ -1045,6 +1131,37 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 			},
 		},
 	}
+}
+
+// withCachedRoute returns a pair of routes: a copy of r that matches the
+// cache-hit dynamic metadata and disables ext_proc, followed by r itself.
+// Without the ingress cache it returns r alone, so no route skips ext_proc.
+func (x *XdsServer) withCachedRoute(r *routev3.Route) []*routev3.Route {
+	if !x.ingressCache {
+		return []*routev3.Route{r}
+	}
+	cached := proto.Clone(r).(*routev3.Route)
+	cached.Match.DynamicMetadata = []*matcherv3.MetadataMatcher{{
+		Filter: cacheHitMetadataNamespace,
+		Path: []*matcherv3.MetadataMatcher_PathSegment{{
+			Segment: &matcherv3.MetadataMatcher_PathSegment_Key{Key: cacheHitMetadataKey},
+		}},
+		Value: &matcherv3.ValueMatcher{
+			MatchPattern: &matcherv3.ValueMatcher_StringMatch{
+				StringMatch: &matcherv3.StringMatcher{
+					MatchPattern: &matcherv3.StringMatcher_Exact{Exact: cacheHitMetadataValue},
+				},
+			},
+		},
+	}}
+	cached.TypedPerFilterConfig = map[string]*anypb.Any{
+		httpExtProcFilterName: newAny(&extprocv3filter.ExtProcPerRoute{
+			Override: &extprocv3filter.ExtProcPerRoute_Disabled{
+				Disabled: true,
+			},
+		}),
+	}
+	return []*routev3.Route{cached, r}
 }
 
 func (x *XdsServer) workloadRouteAction(cluster string) *routev3.RouteAction {
@@ -1103,10 +1220,8 @@ func (x *XdsServer) buildActorTunnelRoutes() []*routev3.Route {
 			},
 		},
 	}
-	return []*routev3.Route{
-		route(ActorTunnelHTTP2ClusterName, grpcHeaders...),
-		route(ActorTunnelHTTP1ClusterName),
-	}
+	routes := x.withCachedRoute(route(ActorTunnelHTTP2ClusterName, grpcHeaders...))
+	return append(routes, x.withCachedRoute(route(ActorTunnelHTTP1ClusterName))...)
 }
 
 func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
@@ -1226,9 +1341,10 @@ func workerIdentityFilterStateFilter() *hcmv3.HttpFilter {
 
 // buildActorConnectListener turns each connection from an actor_tunnel cluster
 // into a CONNECT to atunnel, which takes the port from the authority and
-// ignores the host.
-func buildActorConnectListener() *listenerv3.Listener {
-	return &listenerv3.Listener{
+// ignores the host. With ingressCache, the tunnel_watcher network filter
+// runs ahead of tcp_proxy.
+func buildActorConnectListener(ingressCache bool) *listenerv3.Listener {
+	listener := &listenerv3.Listener{
 		Name: ActorConnectName,
 		ListenerSpecifier: &listenerv3.Listener_InternalListener{
 			InternalListener: &listenerv3.Listener_InternalListenerConfig{},
@@ -1282,6 +1398,29 @@ func buildActorConnectListener() *listenerv3.Listener {
 					},
 				},
 			},
+		},
+	}
+	if ingressCache {
+		chain := listener.GetFilterChains()[0]
+		proxy := chain.Filters[len(chain.Filters)-1]
+		chain.Filters = append(chain.Filters[:len(chain.Filters)-1], ingressCacheTunnelWatcherFilter(), proxy)
+	}
+	return listener
+}
+
+// ingressCacheTunnelWatcherFilter is the ingress-cache module's network filter for
+// actor_connect. It must run ahead of tcp_proxy to see the tunnel's bytes and
+// close; see ingressCacheTunnelWatcherFilterName.
+func ingressCacheTunnelWatcherFilter() *listenerv3.Filter {
+	return &listenerv3.Filter{
+		Name: networkDynamicModulesFilterName,
+		ConfigType: &listenerv3.Filter_TypedConfig{
+			TypedConfig: newAny(&networkdynamicmodulesv3.DynamicModuleNetworkFilter{
+				DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+					Name: ingressCacheDynamicModuleName,
+				},
+				FilterName: ingressCacheTunnelWatcherFilterName,
+			}),
 		},
 	}
 }
@@ -1410,12 +1549,28 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 	if captureActorRouting {
 		httpFilters = append(httpFilters, actorRoutingFilterStateFilter(false))
 	}
-	httpFilters = append(httpFilters, &hcmv3.HttpFilter{
-		Name: httpExtProcFilterName,
-		ConfigType: &hcmv3.HttpFilter_TypedConfig{
-			TypedConfig: extProcConfig,
+	if x.ingressCache {
+		httpFilters = append(httpFilters, &hcmv3.HttpFilter{
+			Name: httpDynamicModulesFilterName,
+			ConfigType: &hcmv3.HttpFilter_TypedConfig{
+				TypedConfig: newAny(&httpdynamicmodulesv3.DynamicModuleFilter{
+					DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+						Name: ingressCacheDynamicModuleName,
+					},
+					FilterName:   ingressCacheDynamicModuleName,
+					FilterConfig: x.ingressCacheFilterConfig(),
+				}),
+			},
+		})
+	}
+	httpFilters = append(httpFilters,
+		&hcmv3.HttpFilter{
+			Name: httpExtProcFilterName,
+			ConfigType: &hcmv3.HttpFilter_TypedConfig{
+				TypedConfig: extProcConfig,
+			},
 		},
-	})
+	)
 	if x.upstreamConnect {
 		httpFilters = append(httpFilters, actorTunnelFilterStateFilter())
 	}
