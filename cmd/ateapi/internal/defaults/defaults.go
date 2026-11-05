@@ -32,6 +32,8 @@ func Apply(m proto.Message) {
 		applyAccessPolicyDefaults(v)
 	case *ateapi.Actor:
 		applyActorDefaults(v)
+	case *ateapi.ActorAssignment:
+		// ActorAssignments are server managed and don't support defaults.
 	case *ateapi.ActorTemplate:
 		applyActorTemplateDefaults(v)
 	case *ateapi.Atespace:
