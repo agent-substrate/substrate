@@ -465,6 +465,19 @@ func (s *AteWorkerService) rejectIfDraining() error {
 	return nil
 }
 
+// drainCanceledError reports err as codes.Unavailable when graceful shutdown
+// canceled the restore (ctx) while its caller (callerCtx) was still waiting.
+// The cancel kills runsc, so err is usually `signal: killed` rather than a
+// context error. The restore failed before ingress opened and its failure
+// cleanup tore down local state, so the control plane can retry it on another
+// worker, as it does a restore that rejectIfDraining refused.
+func (s *AteWorkerService) drainCanceledError(callerCtx, ctx context.Context, err error) error {
+	if err == nil || callerCtx.Err() != nil || ctx.Err() == nil || !s.shuttingDown.Load() {
+		return err
+	}
+	return apierror.Unavailable("worker draining: restore canceled: %w", err)
+}
+
 // cancelStartups cancels all boots and restores, leaving checkpoints running.
 func cancelStartups(ctx context.Context, inFlight *actorlock.InFlight) {
 	for _, actorUID := range inFlight.CancelStartups() {
@@ -1129,8 +1142,11 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+	callerCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Runs after the failure cleanup registered below.
+	defer func() { retErr = s.drainCanceledError(callerCtx, ctx, retErr) }()
 
 	// Per-phase timing, recorded on the way out so a failed restore still
 	// reports the phases it completed, and the failing step its elapsed time.
