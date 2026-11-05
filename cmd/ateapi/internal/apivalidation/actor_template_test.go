@@ -106,6 +106,49 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "metadata", "name"), "Tmpl_A", "").WithOrigin("format=k8s-short-name")},
 	}, {
+		"valid metadata.annotations and actor_annotations",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Annotations = map[string]string{"build.example.com/commit": "abc1234"}
+			tmpl.ActorAnnotations = map[string]string{"team.example.com/owner": "agents"}
+		})},
+		nil,
+	}, {
+		"invalid metadata.annotations key",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Annotations = map[string]string{"bad key": "v"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "metadata", "annotations"), "bad key", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		"reserved metadata.annotations key",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Annotations = map[string]string{"ate.dev/x": "v"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "metadata", "annotations"), "ate.dev/x", "")},
+	}, {
+		"too many actor_annotations",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorAnnotations = selectorLabelsOfSize(65)
+		})},
+		field.ErrorList{field.TooMany(field.NewPath("actor_template", "actor_annotations"), 65, 64).WithOrigin("maxProperties")},
+	}, {
+		"invalid actor_annotations key",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorAnnotations = map[string]string{"bad key": "v"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "actor_annotations"), "bad key", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		"reserved actor_annotations key",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorAnnotations = map[string]string{"sub.ate.dev/x": "v"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "actor_annotations"), "sub.ate.dev/x", "")},
+	}, {
+		"actor_annotations total size exceeds 16384 bytes",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.ActorAnnotations = annotationsOfBytes(1)
+		})},
+		field.ErrorList{field.TooLong(field.NewPath("actor_template", "actor_annotations"), "", maxAnnotationsSizeBytes)},
+	}, {
 		"valid volumes fidelity",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES

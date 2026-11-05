@@ -474,6 +474,19 @@ message ResourceMetadata {
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
   google.protobuf.Timestamp delete_time = 7;
+
+  // annotations are decorative, non-queryable key-value metadata for the
+  // resource. On an Actor, creation merges them over the actor_annotations
+  // of the ActorTemplate, with the Actor's own value winning on a key
+  // conflict. Immutable after creation. Keys in ate.dev and its subdomains
+  // are reserved, and keys and values together may not exceed 16384 bytes.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:customValidation # reserved keys and total size
+  // +k8s:immutable
+  map<string, string> annotations = 8;
 }
 
 // ExternalVolumes is the external volume state recorded on an actor, wrapped
@@ -1214,6 +1227,17 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 7;
+
+  // actor_annotations are default annotations for Actors created from this
+  // template. An Actor's own metadata.annotations win on a key conflict.
+  // Keys in ate.dev and its subdomains are reserved, and keys and values
+  // together may not exceed 16384 bytes.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:customValidation # reserved keys and total size
+  map<string, string> actor_annotations = 8;
 }
 
 // ResourceRequirements are the compute resources a workload may use.

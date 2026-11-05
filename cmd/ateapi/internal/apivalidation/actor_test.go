@@ -152,6 +152,45 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		"invalid actor.source_tag.name",
 		validReq(validActor(withSourceTag("as", "invalid value"))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "source_tag", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"valid actor.metadata.annotations",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Annotations = map[string]string{
+				"owner":              "team-a",
+				"example.com/config": `{"url":"https://example.com:8443/path?a=1&b=2"}`,
+			}
+		}))),
+		nil,
+	}, {
+		"actor.metadata.annotations with 64 entries",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Annotations = selectorLabelsOfSize(64)
+		}))),
+		nil,
+	}, {
+		"too many actor.metadata.annotations",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Annotations = selectorLabelsOfSize(65)
+		}))),
+		field.ErrorList{field.TooMany(field.NewPath("actor", "metadata", "annotations"), 65, 64).WithOrigin("maxProperties")},
+	}, {
+		"invalid actor.metadata.annotations key",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Annotations = map[string]string{"bad key!": "v"}
+		}))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "annotations"), "bad key!", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		"reserved ate.dev/ actor.metadata.annotations key",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Annotations = map[string]string{"ate.dev/internal": "v"}
+		}))),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "annotations"), "ate.dev/internal", "")},
+	}, {
+		"actor.metadata.annotations total size exceeds 16384 bytes",
+		validReq(validActor(withMetadata(func(m *ateapi.ResourceMetadata) {
+			m.Annotations = annotationsOfBytes(1)
+		}))),
+		field.ErrorList{field.TooLong(field.NewPath("actor", "metadata", "annotations"), "", maxAnnotationsSizeBytes)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -222,6 +261,25 @@ func TestValidateActorUpdate(t *testing.T) {
 		oldVal: validInput(),
 		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Name = "invalid value" })),
 		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "unchanged actor.metadata.annotations",
+		oldVal: validInput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+	}, {
+		name:   "add actor.metadata.annotations",
+		oldVal: validInput(),
+		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "annotations"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "change actor.metadata.annotations",
+		oldVal: validInput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v1"} })),
+		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v2"} })),
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "annotations"), nil, "").WithOrigin("immutable")},
+	}, {
+		name:   "clear actor.metadata.annotations",
+		oldVal: validInput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+		newVal: validOutput(),
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "annotations"), nil, "").WithOrigin("immutable")},
 	}, {
 		name:   "change actor.actor_template is allowed",
 		oldVal: validInput(withActorTemplate("as1", "nm1")),

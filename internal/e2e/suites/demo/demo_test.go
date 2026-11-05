@@ -2416,3 +2416,136 @@ func (h *revertHarness) revertAndAssert(ctx context.Context, wantURI string) *at
 	}
 	return actor
 }
+
+func TestAnnotations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	nsObj := e2e.CreateNamespace(t)
+
+	templateAnnotations := map[string]string{
+		"example.com/template-meta": "template-only",
+	}
+	defaultActorAnnotations := map[string]string{
+		"example.com/default-role": "worker",
+		"example.com/override":     "from-template",
+	}
+
+	at, err := createActorTemplateInternal(ctx, t, clients, nsObj, "annotations", ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, func(at *ateapi.ActorTemplate) {
+		at.Metadata.Annotations = templateAnnotations
+		at.ActorAnnotations = defaultActorAnnotations
+		at.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{
+			Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED,
+		}
+	})
+	if err != nil {
+		t.Fatalf("failed to create ActorTemplate with annotations: %v", err)
+	}
+
+	gotTemplate, err := clients.SubstrateAPI.GetActorTemplate(ctx, &ateapi.GetActorTemplateRequest{
+		ActorTemplate: e2e.TemplateRef(at),
+	})
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	if diff := cmp.Diff(templateAnnotations, gotTemplate.GetMetadata().GetAnnotations()); diff != "" {
+		t.Errorf("GetActorTemplate metadata.annotations mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(defaultActorAnnotations, gotTemplate.GetActorAnnotations()); diff != "" {
+		t.Errorf("GetActorTemplate actor_annotations mismatch (-want +got):\n%s", diff)
+	}
+
+	actorName := "annotations-actor-" + nsObj.Name
+	actorRef := &ateapi.ObjectRef{Atespace: demoAtespace, Name: actorName}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = e2e.RetryAborted(t, cleanupCtx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{Actor: actorRef})
+	})
+
+	createdActor, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace: demoAtespace,
+				Name:     actorName,
+				Annotations: map[string]string{
+					"example.com/override": "from-actor",
+					"example.com/uri":      "spiffe://example.com/agent/1",
+				},
+			},
+			ActorTemplate: e2e.TemplateRef(at),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	wantMerged := map[string]string{
+		"example.com/default-role": "worker",
+		"example.com/override":     "from-actor",
+		"example.com/uri":          "spiffe://example.com/agent/1",
+	}
+	if diff := cmp.Diff(wantMerged, createdActor.GetMetadata().GetAnnotations()); diff != "" {
+		t.Fatalf("CreateActor metadata.annotations mismatch (-want +got):\n%s", diff)
+	}
+
+	gotActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if diff := cmp.Diff(wantMerged, gotActor.GetMetadata().GetAnnotations()); diff != "" {
+		t.Errorf("GetActor metadata.annotations mismatch (-want +got):\n%s", diff)
+	}
+
+	listResp, err := clients.SubstrateAPI.ListActors(ctx, &ateapi.ListActorsRequest{Atespace: demoAtespace})
+	if err != nil {
+		t.Fatalf("ListActors: %v", err)
+	}
+	var listedActor *ateapi.Actor
+	for _, a := range listResp.GetActors() {
+		if a.GetMetadata().GetName() == actorName {
+			listedActor = a
+			break
+		}
+	}
+	if listedActor == nil {
+		t.Fatalf("ListActors did not include actor %q", actorName)
+	}
+	if diff := cmp.Diff(wantMerged, listedActor.GetMetadata().GetAnnotations()); diff != "" {
+		t.Errorf("ListActors metadata.annotations mismatch (-want +got):\n%s", diff)
+	}
+
+	// UpdateActor keeping annotations unchanged while updating worker_selector succeeds.
+	gotActor.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"demo": nsObj.Name}}
+	updatedActor, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: gotActor})
+	if err != nil {
+		t.Fatalf("UpdateActor with unchanged annotations failed: %v", err)
+	}
+	if diff := cmp.Diff(wantMerged, updatedActor.GetMetadata().GetAnnotations()); diff != "" {
+		t.Errorf("UpdateActor metadata.annotations mismatch (-want +got):\n%s", diff)
+	}
+
+	// UpdateActor modifying annotations fails with InvalidArgument.
+	mutatedActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor before mutation check: %v", err)
+	}
+	mutatedActor.Metadata.Annotations["example.com/override"] = "mutated"
+	if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: mutatedActor}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("UpdateActor with mutated annotations returned %v, want InvalidArgument", err)
+	}
+
+	// CreateActor with reserved ate.dev/ annotation key fails with InvalidArgument.
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{
+		Actor: &ateapi.Actor{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace:    demoAtespace,
+				Name:        "reserved-ann-" + nsObj.Name,
+				Annotations: map[string]string{"ate.dev/internal": "val"},
+			},
+			ActorTemplate: e2e.TemplateRef(at),
+		},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("CreateActor with reserved ate.dev/ annotation key returned %v, want InvalidArgument", err)
+	}
+}

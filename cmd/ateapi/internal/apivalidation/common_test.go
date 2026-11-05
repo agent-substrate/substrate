@@ -72,6 +72,55 @@ func selectorLabelsOfSize(n int) map[string]string {
 	return labels
 }
 
+func annotationsOfBytes(extra int) map[string]string {
+	out := make(map[string]string, 64)
+	for i := range 64 {
+		valLen := 253
+		if i == 0 {
+			valLen += extra
+		}
+		out[fmt.Sprintf("k%02d", i)] = strings.Repeat("v", valLen)
+	}
+	return out
+}
+
+func TestValidateAnnotations(t *testing.T) {
+	path := field.NewPath("annotations")
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        field.ErrorList
+	}{{
+		name: "nil",
+	}, {
+		name:        "arbitrary values",
+		annotations: map[string]string{"owner/team": "platform", "runbook": "https://runbooks.example.com/a?b=1&c=2"},
+	}, {
+		name:        "reserved exact prefix ate.dev/",
+		annotations: map[string]string{"ate.dev/internal": "1"},
+		want:        field.ErrorList{field.Invalid(path, "ate.dev/internal", "")},
+	}, {
+		name:        "reserved subdomain prefix foo.ate.dev/",
+		annotations: map[string]string{"foo.ate.dev/internal": "1"},
+		want:        field.ErrorList{field.Invalid(path, "foo.ate.dev/internal", "")},
+	}, {
+		name:        "non-reserved lookalike domain myate.dev/",
+		annotations: map[string]string{"myate.dev/ok": "1"},
+	}, {
+		name:        "exactly max total bytes",
+		annotations: annotationsOfBytes(0),
+	}, {
+		name:        "exceeds max total bytes by 1",
+		annotations: annotationsOfBytes(1),
+		want:        field.ErrorList{field.TooLong(path, "", maxAnnotationsSizeBytes)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateAnnotations(path, tt.annotations), tt.want)
+		})
+	}
+}
+
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)

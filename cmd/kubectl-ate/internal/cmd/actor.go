@@ -50,6 +50,7 @@ var (
 	createActorAtespaceFlag       string
 	createActorTemplateFlag       string
 	createActorTagFlag            string
+	createActorAnnotationsFlag    string
 	updateActorAtespaceFlag       string
 	updateActorTemplateFlag       string
 	updateActorWorkerSelectorFlag string
@@ -123,7 +124,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  exactlyOneArg("<actor-name>", "atespace", "template"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)
+		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag, createActorAnnotationsFlag)
 		if err != nil {
 			return wrapUsageError(err)
 		}
@@ -305,7 +306,7 @@ func buildSuspendActorRequest(actorRef resources.ActorRef, mode ateapi.Durabilit
 	}
 }
 
-func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, template, tag, annotations string) (*ateapi.CreateActorRequest, error) {
 	templateRef, err := parseAtespacedName(template, atespace)
 	if err != nil {
 		return nil, err
@@ -325,7 +326,31 @@ func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapi
 		}
 		actor.SourceTag = ref
 	}
+	if annotations != "" {
+		actor.Metadata.Annotations, err = parseAnnotationPairs(annotations)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &ateapi.CreateActorRequest{Actor: actor}, nil
+}
+
+func parseAnnotationPairs(raw string) (map[string]string, error) {
+	annotations := make(map[string]string)
+	for entry := range strings.SplitSeq(raw, ",") {
+		key, val, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid annotations %q: entry %q must be in key=value format", raw, entry)
+		}
+		if errs := content.IsLabelKey(key); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid annotations %q: invalid annotation key %q: %s", raw, key, strings.Join(errs, "; "))
+		}
+		if _, exists := annotations[key]; exists {
+			return nil, fmt.Errorf("invalid annotations %q: duplicate annotation key %q", raw, key)
+		}
+		annotations[key] = val
+	}
+	return annotations, nil
 }
 
 type actorUpdater interface {
@@ -850,6 +875,7 @@ func init() {
 	createActorCmd.Flags().StringVar(&createActorTemplateFlag, "template", "", "actor-template to derive the actor from, as <atespace>/<template-name>, or just <template-name> to use the actor's own atespace (see --atespace)")
 	createActorCmd.Flags().StringVarP(&createActorAtespaceFlag, "atespace", "a", "", "atespace to create the actor in")
 	createActorCmd.Flags().StringVar(&createActorTagFlag, "tag", "", "tag to initialize the actor from, as <atespace>/<tag-name>, or just <tag-name> to use the actor's own atespace (see --atespace)")
+	createActorCmd.Flags().StringVar(&createActorAnnotationsFlag, "annotations", "", "comma-separated key=value annotations for the actor, merged over the template's actor_annotations; immutable after creation")
 	createCmd.AddCommand(createActorCmd)
 
 	updateActorCmd.Flags().StringVarP(&updateActorAtespaceFlag, "atespace", "a", "", "the actor's atespace")
