@@ -246,10 +246,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	// Register for startup cancellation before checking for shutdown.
-	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload)
 	if err != nil {
 		return nil, err
 	}

@@ -90,7 +90,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
-	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
+	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload)()
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed, and the failing step its elapsed time.
