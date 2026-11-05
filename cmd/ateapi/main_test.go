@@ -31,7 +31,127 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.ate.dev/substrate/internal/apiconfig"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
+
+func TestLoadKubeRESTConfig(t *testing.T) {
+	t.Run("explicit path wins", func(t *testing.T) {
+		explicitPath := writeKubeconfig(t, "https://explicit.example")
+		t.Setenv("KUBECONFIG", writeKubeconfig(t, "https://environment.example"))
+
+		config, err := loadRESTConfig(explicitPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config.Host != "https://explicit.example" {
+			t.Fatalf("config host = %q, want explicit kubeconfig host", config.Host)
+		}
+	})
+
+	t.Run("invalid explicit path does not fall back", func(t *testing.T) {
+		t.Setenv("KUBECONFIG", writeKubeconfig(t, "https://environment.example"))
+		missingPath := filepath.Join(t.TempDir(), "missing")
+
+		_, err := loadRESTConfig(missingPath)
+		if err == nil || !strings.Contains(err.Error(), missingPath) {
+			t.Fatalf("loadRESTConfig() error = %v, want missing explicit path error", err)
+		}
+	})
+
+	t.Run("KUBECONFIG wins", func(t *testing.T) {
+		t.Setenv("KUBECONFIG", writeKubeconfig(t, "https://environment.example"))
+
+		config, err := loadRESTConfig("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config.Host != "https://environment.example" {
+			t.Fatalf("config host = %q, want KUBECONFIG host", config.Host)
+		}
+	})
+
+	t.Run("invalid KUBECONFIG does not fall back", func(t *testing.T) {
+		t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+
+		_, err := loadRESTConfig("")
+		if err == nil || !strings.Contains(err.Error(), "load KUBECONFIG") {
+			t.Fatalf("loadRESTConfig() error = %v, want KUBECONFIG error", err)
+		}
+	})
+
+	t.Run("in-cluster config follows unset KUBECONFIG", func(t *testing.T) {
+		oldHomeFile := clientcmd.RecommendedHomeFile
+		clientcmd.RecommendedHomeFile = writeKubeconfig(t, "https://home.example")
+		t.Cleanup(func() { clientcmd.RecommendedHomeFile = oldHomeFile })
+		t.Setenv("KUBECONFIG", "")
+		t.Setenv("KUBERNETES_SERVICE_HOST", "")
+		t.Setenv("KUBERNETES_SERVICE_PORT", "")
+
+		_, err := loadRESTConfig("")
+		if err == nil || !strings.Contains(err.Error(), "get in-cluster config") {
+			t.Fatalf("loadRESTConfig() error = %v, want in-cluster config error", err)
+		}
+	})
+}
+
+func TestNewKubeClientsFromKubeconfig(t *testing.T) {
+	config, err := loadRESTConfig(writeKubeconfig(t, "https://kubernetes.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientset, ateClient, err := newKubeClients(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientset == nil || ateClient == nil {
+		t.Fatalf("newKubeClients() = %v, %v, want both clientsets", clientset, ateClient)
+	}
+}
+
+func TestBuildJWTProvidersUsesKubernetesConfigForDiscoveryCredentials(t *testing.T) {
+	cfg := &apiconfig.AuthenticationConfig{JWTProviders: []apiconfig.JWTProviderConfig{{
+		Name:      "kubernetes",
+		Issuer:    "https://kubernetes.default.svc",
+		Audiences: []string{"api.ate-system.svc"},
+	}}}
+
+	serverCfg, err := buildJWTProviders(context.Background(), cfg, &rest.Config{Host: "https://kubernetes.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serverCfg.JWTProviders) != 1 {
+		t.Fatalf("JWT providers = %d, want 1", len(serverCfg.JWTProviders))
+	}
+}
+
+func writeKubeconfig(t *testing.T, server string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	contents := `apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: ` + server + `
+  name: test
+contexts:
+- context:
+    cluster: test
+    user: test
+  name: test
+current-context: test
+users:
+- name: test
+  user:
+    token: test
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 	oldDSN := *postgresReadWriteConnectionString

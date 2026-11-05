@@ -23,11 +23,20 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
 
 	"go.ate.dev/substrate/internal/credbundle"
+
+	"k8s.io/client-go/rest"
+)
+
+const (
+	oidcDiscoveryPath  = "/.well-known/openid-configuration"
+	kubernetesJWKSPath = "/openid/v1/jwks"
+	httpClientTimeout  = 10 * time.Second
 )
 
 // NewHTTPClient returns a client for OIDC discovery and JWKS requests.
@@ -187,5 +196,97 @@ func isKubernetesJWKSURL(rawURL string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
+	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == kubernetesJWKSPath
+}
+
+func NewHTTPClientWithClientConfig(issuer, caFile, tokenFile string, config *rest.Config) (*http.Client, error) {
+	issuerURL, err := url.Parse(issuer)
+	if err != nil {
+		return nil, err
+	}
+	if tokenFile != "" || config == nil ||
+		strings.EqualFold(issuerURL.Hostname(), "accounts.google.com") ||
+		strings.EqualFold(issuerURL.Hostname(), "container.googleapis.com") {
+		return NewHTTPClient(issuer, caFile, tokenFile)
+	}
+	serverURL, err := url.Parse(config.Host)
+	if err != nil || serverURL.Scheme != "https" || serverURL.Host == "" {
+		return nil, fmt.Errorf("KUBECONFIG API server must be an HTTPS URL")
+	}
+	transport, err := rest.TransportFor(config)
+	if err != nil {
+		return nil, fmt.Errorf("build KUBECONFIG discovery transport: %w", err)
+	}
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	roundTripper := &kubeconfigIssuerTransport{
+		base: base, kubernetes: transport, issuerURL: issuerURL, serverURL: serverURL}
+	return &http.Client{Timeout: httpClientTimeout, Transport: roundTripper}, nil
+}
+
+type kubeconfigIssuerTransport struct {
+	base       http.RoundTripper
+	kubernetes http.RoundTripper
+	issuerURL  *url.URL
+	serverURL  *url.URL
+}
+
+func (t *kubeconfigIssuerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	targetURL := t.kubernetesURL(req.URL)
+	if targetURL == nil {
+		return t.base.RoundTrip(req)
+	}
+	req = req.Clone(req.Context())
+	req.URL = targetURL
+	req.Host = targetURL.Host
+	resp, err := t.kubernetes.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	return resolveRedirectLocation(resp, targetURL), nil
+}
+
+func resolveRedirectLocation(resp *http.Response, targetURL *url.URL) *http.Response {
+	// http.Client resolves redirects against the original, unmodified request.
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return resp
+	}
+	resolved, err := targetURL.Parse(location)
+	if err == nil {
+		resp.Header.Set("Location", resolved.String())
+	}
+	return resp
+}
+
+func (t *kubeconfigIssuerTransport) kubernetesURL(requestURL *url.URL) *url.URL {
+	if requestURL.Scheme != "https" {
+		return nil
+	}
+	targetURL := *requestURL
+	prefixRawPath := ""
+	switch {
+	case issuerScopedURL(requestURL.String(), t.serverURL.String()):
+		prefixRawPath = t.serverURL.EscapedPath()
+	case isKubernetesJWKSURL(requestURL.String()):
+		targetURL.Path = kubernetesJWKSPath
+		targetURL.RawPath = ""
+	case issuerScopedURL(requestURL.String(), t.issuerURL.String()):
+		prefixRawPath = t.issuerURL.EscapedPath()
+	default:
+		return nil
+	}
+	targetURL.RawPath = replacePathPrefix(targetURL.EscapedPath(), prefixRawPath, t.serverURL.EscapedPath())
+	// EscapedPath always returns valid percent-encoding.
+	targetURL.Path, _ = url.PathUnescape(targetURL.RawPath)
+	serverPath := strings.TrimRight(path.Clean("/"+t.serverURL.Path), "/")
+	targetPath := path.Clean(targetURL.Path)
+	if targetPath != serverPath && !strings.HasPrefix(targetPath, serverPath+"/") {
+		return nil
+	}
+	targetURL.Host = t.serverURL.Host
+	return &targetURL
+}
+
+func replacePathPrefix(path, oldPrefix, newPrefix string) string {
+	return strings.TrimRight(newPrefix, "/") + strings.TrimPrefix(path, strings.TrimRight(oldPrefix, "/"))
 }
