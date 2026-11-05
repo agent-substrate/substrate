@@ -253,6 +253,11 @@ func Validate_AttributeEntry(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.AttributeEntry) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_AttributeEntry(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateletpb.AttributeEntry.Key
 		fn := func(
 			fldPath *field.Path,
@@ -315,6 +320,52 @@ func Validate_AttributeEntry(
 				return &oldObj.Value
 			})
 		errs = append(errs, fn(fldPath.Child("value"), &obj.Value, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.AttributeEntry.CompatibleValues
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateletpb.CompatibleValue,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateletpb.CompatibleValue](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.CompatibleValue, b *ateletpb.CompatibleValue) bool { return a.Value == b.Value }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateletpb.CompatibleValue, b *ateletpb.CompatibleValue) bool { return a.Value == b.Value }, ateDeepEqual, Validate_CompatibleValue); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.AttributeEntry) []*ateletpb.CompatibleValue {
+				return oldObj.CompatibleValues
+			})
+		errs = append(errs, fn(fldPath.Child("compatible_values"), obj.CompatibleValues, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -656,6 +707,25 @@ func Validate_CheckpointRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "sandbox_runtime"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.ForbiddenPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.OptionalPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.OptionalPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -696,6 +766,81 @@ func Validate_CheckpointRequest(
 				return oldObj.UploadConfig
 			})
 		errs = append(errs, fn(fldPath.Child("upload_config"), obj.UploadConfig, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_CompatibleValue validates an instance of CompatibleValue according
+// to declarative validation rules in the API schema.
+func Validate_CompatibleValue(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.CompatibleValue) (errs field.ErrorList) {
+
+	{ // field ateletpb.CompatibleValue.Value
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.CompatibleValue) *string {
+				return &oldObj.Value
+			})
+		errs = append(errs, fn(fldPath.Child("value"), &obj.Value, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.CompatibleValue.Fidelity
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.CompatibleFidelity,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 4); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.CompatibleValue) *ateletpb.CompatibleFidelity {
+				return &oldObj.Fidelity
+			})
+		errs = append(errs, fn(fldPath.Child("fidelity"), &obj.Fidelity, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2005,6 +2150,25 @@ func Validate_PromoteSnapshotRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "sandbox_runtime"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.ForbiddenPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.OptionalPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.OptionalPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -2726,6 +2890,25 @@ func Validate_RestoreRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "sandbox_runtime"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.ForbiddenPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.OptionalPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "sandbox_runtime",
+					func(o *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime { return o.SandboxRuntime }, ateDeepEqual, validate.OptionalPointer).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -3497,6 +3680,36 @@ func Validate_Snapshot(
 				return oldObj.Object
 			})
 		errs = append(errs, fn(fldPath.Child("object"), obj.Object, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.Snapshot.SandboxRuntime
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.ActorSandboxRuntime,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorSandboxRuntime(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Snapshot) *ateletpb.ActorSandboxRuntime {
+				return oldObj.SandboxRuntime
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_runtime"), obj.SandboxRuntime, oldVal, oldObj != nil)...)
 	}
 
 	return errs

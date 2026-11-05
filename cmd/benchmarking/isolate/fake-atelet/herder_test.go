@@ -132,6 +132,51 @@ func TestHerderSucceedsAfterDelay(t *testing.T) {
 	}
 }
 
+// Checkpoint reports the snapshot with the runtime the actor's last Run or
+// Restore named as its stamp, which ate-api-server requires, and none for an
+// actor it never started.
+func TestHerderStampsCheckpoints(t *testing.T) {
+	rt := func(arch string) *ateletpb.ActorSandboxRuntime {
+		return &ateletpb.ActorSandboxRuntime{SandboxClass: "gvisor", Version: &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1", Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: arch}},
+		}}
+	}
+	h := &herder{storage: &recordingStorage{}, epochs: newWorkerEpochs()}
+	ctx := context.Background()
+	if _, err := h.Run(ctx, &ateletpb.RunRequest{ActorUid: "ran", SandboxRuntime: rt("amd64")}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := h.Run(ctx, &ateletpb.RunRequest{ActorUid: "restored", SandboxRuntime: rt("amd64")}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := h.Restore(ctx, &ateletpb.RestoreRequest{ActorUid: "restored", SandboxRuntime: rt("arm64")}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	for _, tc := range []struct {
+		uid  string
+		want *ateletpb.ActorSandboxRuntime
+	}{
+		{uid: "ran", want: rt("amd64")},
+		{uid: "restored", want: rt("arm64")},
+		{uid: "never-started"},
+	} {
+		for _, mode := range []ateletpb.UploadMode{ateletpb.UploadMode_UPLOAD_MODE_DEFERRED, ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE} {
+			snap := &ateletpb.Snapshot{SnapshotUuid: "snap-" + tc.uid, Generation: 1, Object: &ateletpb.ObjectStorage{SnapshotUri: "gs://b/atespaces/a/actors/" + tc.uid + "/snapshots/s"}}
+			resp, err := h.Checkpoint(ctx, &ateletpb.CheckpointRequest{ActorUid: tc.uid, Snapshot: snap, UploadConfig: &ateletpb.UploadConfig{Mode: mode}})
+			if err != nil {
+				t.Fatalf("Checkpoint(%s, %v): %v", tc.uid, mode, err)
+			}
+			report := resp.GetState().GetLatestLocal()
+			if mode == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+				report = resp.GetState().GetLatestDurable()
+			}
+			if got := report.GetSnapshot(); got.GetSnapshotUuid() != snap.GetSnapshotUuid() || !proto.Equal(got.GetSandboxRuntime(), tc.want) {
+				t.Errorf("Checkpoint(%s, %v) reports %v, want snapshot %s with sandbox_runtime %v", tc.uid, mode, got, snap.GetSnapshotUuid(), tc.want)
+			}
+		}
+	}
+}
+
 // Run and Restore report the epoch the Worker registered with through the
 // relay, as its worker process would, and 0 for a Worker that never did.
 func TestHerderReportsTheRegisteredEpoch(t *testing.T) {

@@ -502,8 +502,11 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	return updated
 }
 
+// newDurableSnapshot is a COMPLETED snapshot stamped with the runtime the test
+// workers report by default, as every restorable snapshot is stamped.
 func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.SnapshotFidelity, templateUID, uuid, uri string) *ateapi.Snapshot {
 	return &ateapi.Snapshot{
+		SandboxRuntime:   defaultWorkerRuntime("gvisor"),
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            owner,
@@ -518,7 +521,8 @@ func newDurableSnapshot(gen int32, owner ateapi.SnapshotOwner, fidelity ateapi.S
 
 // newPausedSnapshot is the snapshot an asynchronous suspend leaves on node
 // locality: its durable copy, under the actor's own prefix, is PENDING until
-// atelet uploads it.
+// atelet uploads it. It is stamped with the runtime the test workers report
+// by default.
 func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity, templateUID, actorUID, uuid, locality string) *ateapi.Snapshot {
 	t.Helper()
 	uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actorUID, uuid)
@@ -526,6 +530,7 @@ func newPausedSnapshot(t *testing.T, gen int32, fidelity ateapi.SnapshotFidelity
 		t.Fatalf("NewActorSnapshotURI: %v", err)
 	}
 	return &ateapi.Snapshot{
+		SandboxRuntime:   defaultWorkerRuntime("gvisor"),
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,

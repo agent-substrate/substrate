@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -344,6 +345,49 @@ func TestSetWorkerSandboxRuntimes(t *testing.T) {
 		name:          "forwards restorable runtimes",
 		req:           &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: reqClasses(reqCompat("d547"))},
 		wantForwarded: forwarded(wantCompat("d547")),
+	}, {
+		name: "forwards the worker's own attributes with their rules",
+		req: func() *ateletpb.SetWorkerSandboxRuntimesRequest {
+			classes := reqClasses(reqCompat("d547"))
+			for _, rt := range []*ateletpb.WorkerSandboxRuntime{classes[0].DefaultRuntime, classes[0].RestorableRuntimes[0]} {
+				rt.Version = proto.CloneOf(rt.Version)
+				rt.Version.Attributes = append(rt.Version.Attributes, &ateletpb.AttributeEntry{
+					Key: "worker.layout", Value: "per_volume",
+					CompatibleValues: []*ateletpb.CompatibleValue{{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}},
+				})
+			}
+			return &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: classes}
+		}(),
+		wantForwarded: func() []*ateapi.SetWorkerSandboxRuntimesRequest {
+			want := forwarded(wantCompat("d547"))
+			c := want[0].GetSandboxClasses()[0]
+			for _, rt := range []*ateapi.WorkerSandboxRuntime{c.DefaultRuntime, c.RestorableRuntimes[0]} {
+				rt.Version = proto.CloneOf(rt.Version)
+				rt.Version.Attributes = append(rt.Version.Attributes, &ateapi.AttributeEntry{
+					Key: "worker.layout", Value: "per_volume",
+					CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}},
+				})
+			}
+			return want
+		}(),
+	}, {
+		name: "rejects a worker attribute without the worker prefix",
+		req: func() *ateletpb.SetWorkerSandboxRuntimesRequest {
+			classes := reqClasses(reqCompat("d547"))
+			v := classes[0].RestorableRuntimes[0].Version
+			v.Attributes = append(v.Attributes, &ateletpb.AttributeEntry{Key: "layout", Value: "per_volume"})
+			return &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: classes}
+		}(),
+		wantCode: codes.InvalidArgument,
+	}, {
+		name: "rejects rules on a host key",
+		req: func() *ateletpb.SetWorkerSandboxRuntimesRequest {
+			classes := reqClasses()
+			classes[0].DefaultRuntime.Version = proto.CloneOf(reqDefault)
+			classes[0].DefaultRuntime.Version.Attributes[0].CompatibleValues = []*ateletpb.CompatibleValue{{Value: "arm64", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}}
+			return &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3, SandboxClasses: classes}
+		}(),
+		wantCode: codes.InvalidArgument,
 	}, {
 		name:     "rejects missing sandbox classes without forwarding",
 		req:      &ateletpb.SetWorkerSandboxRuntimesRequest{Epoch: 3},

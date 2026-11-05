@@ -139,6 +139,16 @@ func ValidateCustom_ActorSandboxRuntime_SandboxClass(_ context.Context, _ operat
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
 
+// ValidateCustom_AttributeEntry requires that no compatible value equals the
+// entry's own value.
+func ValidateCustom_AttributeEntry(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.AttributeEntry) field.ErrorList {
+	var compatible []string
+	for _, c := range value.GetCompatibleValues() {
+		compatible = append(compatible, c.GetValue())
+	}
+	return resources.ValidateCompatibleValues(fldPath, value.GetValue(), compatible)
+}
+
 func ValidateCustom_WorkerSandboxClass_SandboxClass(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateSandboxClass(fldPath, *value)
 }
