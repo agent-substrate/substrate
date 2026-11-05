@@ -19,6 +19,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -80,6 +81,15 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	template, err := resolveActorTemplate(ctx, s.store, inActor)
 	if err != nil {
 		return nil, err
+	}
+
+	if defaults := template.GetActorAnnotations(); len(defaults) > 0 {
+		annotations := maps.Clone(defaults)
+		maps.Copy(annotations, inActor.GetMetadata().GetAnnotations())
+		inActor.Metadata.Annotations = annotations
+		if errs := apivalidation.ValidateCreateActorRequest(ctx, &ateapi.CreateActorRequest{Actor: inActor}); len(errs) > 0 {
+			return nil, resources.ToAPIError(errs)
+		}
 	}
 
 	// Resolve the explicit tag, or freeze the template's current golden default.
@@ -272,6 +282,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, inActor)
 		// Restore status and metadata from the server.
+		metadata.Annotations = inActor.GetMetadata().GetAnnotations()
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
 		defaults.Apply(toUpdate)

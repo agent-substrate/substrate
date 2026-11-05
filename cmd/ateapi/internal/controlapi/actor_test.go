@@ -200,6 +200,42 @@ func TestUpdateActor(t *testing.T) {
 			wantCode: codes.InvalidArgument,
 		},
 		{
+			name: "metadata.annotations immutable field is kept when unchanged",
+			stored: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Annotations: map[string]string{"env": "prod"}},
+			},
+			req: &ateapi.Actor{
+				Metadata:       &ateapi.ResourceMetadata{Annotations: map[string]string{"env": "prod"}},
+				ActorTemplate:  &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			},
+			want: &ateapi.Actor{
+				Metadata:       &ateapi.ResourceMetadata{Annotations: map[string]string{"env": "prod"}},
+				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			},
+		},
+		{
+			name: "modifying metadata.annotations is rejected",
+			stored: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Annotations: map[string]string{"env": "prod"}},
+			},
+			req: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Annotations: map[string]string{"env": "staging"}},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+			},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name: "omitting metadata.annotations when stored actor had annotations is rejected",
+			stored: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{Annotations: map[string]string{"env": "prod"}},
+			},
+			req: &ateapi.Actor{
+				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
+			},
+			wantCode: codes.InvalidArgument,
+		},
+		{
 			name:   "refused while another operation holds the actor",
 			stored: &ateapi.Actor{},
 			req: &ateapi.Actor{
@@ -212,7 +248,8 @@ func TestUpdateActor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.stored.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			storedAnnotations := tt.stored.GetMetadata().GetAnnotations()
+			tt.stored.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Annotations: storedAnnotations}
 			tt.stored.ActorTemplate = &ateapi.ObjectRef{Atespace: templateNS, Name: templateName}
 			tt.stored.Status = &ateapi.ActorStatus{
 				State: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
@@ -229,7 +266,10 @@ func TestUpdateActor(t *testing.T) {
 				defer lease.Close()
 			}
 
-			tt.req.Metadata = created.GetMetadata()
+			reqAnnotations := tt.req.GetMetadata().GetAnnotations()
+			reqMeta := proto.Clone(created.GetMetadata()).(*ateapi.ResourceMetadata)
+			reqMeta.Annotations = reqAnnotations
+			tt.req.Metadata = reqMeta
 			updated, err := svc.UpdateActor(context.Background(), &ateapi.UpdateActorRequest{Actor: tt.req})
 
 			if tt.wantCode != codes.OK {
@@ -249,7 +289,8 @@ func TestUpdateActor(t *testing.T) {
 				t.Fatalf("UpdateActor failed: %v", err)
 			}
 
-			tt.want.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2}
+			wantAnnotations := tt.want.GetMetadata().GetAnnotations()
+			tt.want.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2, Annotations: wantAnnotations}
 			tt.want.ActorTemplate = &ateapi.ObjectRef{Atespace: templateNS, Name: templateName}
 			tt.want.Status = &ateapi.ActorStatus{
 				State: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
@@ -1059,6 +1100,129 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			if snapshotToResume(loaded.GetStatus()) == nil {
 				t.Fatalf("missing snapshot source for %s", scenario)
+			}
+		})
+	}
+}
+
+func TestCreateActor_Annotations(t *testing.T) {
+	manyEntries := func(prefix string, n int) map[string]string {
+		m := make(map[string]string, n)
+		for i := range n {
+			m[fmt.Sprintf("%s-%d", prefix, i)] = "v"
+		}
+		return m
+	}
+	largeEntries := func(prefix string, n, valBytes int) map[string]string {
+		m := make(map[string]string, n)
+		for i := range n {
+			m[fmt.Sprintf("%s%02d", prefix, i)] = strings.Repeat("x", valBytes)
+		}
+		return m
+	}
+
+	tests := []struct {
+		name            string
+		tmplMetaAnnot   map[string]string
+		tmplActorAnnot  map[string]string
+		actorAnnot      map[string]string
+		wantAnnotations map[string]string
+		wantCode        codes.Code
+	}{{
+		name:            "actor annotations only",
+		actorAnnot:      map[string]string{"owner": "team-a"},
+		wantAnnotations: map[string]string{"owner": "team-a"},
+	}, {
+		name:            "template actor_annotations defaults only",
+		tmplActorAnnot:  map[string]string{"env": "prod", "runbook": "https://example.com/runbook"},
+		wantAnnotations: map[string]string{"env": "prod", "runbook": "https://example.com/runbook"},
+	}, {
+		name:          "template metadata.annotations are not inherited by actor",
+		tmplMetaAnnot: map[string]string{"build/commit": "abc1234"},
+	}, {
+		name:           "actor annotations override template actor_annotations on conflict",
+		tmplMetaAnnot:  map[string]string{"template-only": "ignored"},
+		tmplActorAnnot: map[string]string{"env": "staging", "team": "platform"},
+		actorAnnot:     map[string]string{"env": "prod", "actor-only": "1"},
+		wantAnnotations: map[string]string{
+			"env":        "prod",
+			"team":       "platform",
+			"actor-only": "1",
+		},
+	}, {
+		name:           "merged annotations exceeding 64 entries rejected",
+		tmplActorAnnot: manyEntries("tmpl", 40),
+		actorAnnot:     manyEntries("actor", 25),
+		wantCode:       codes.InvalidArgument,
+	}, {
+		name:           "merged annotations exceeding 16384 bytes rejected",
+		tmplActorAnnot: largeEntries("t", 32, 300),
+		actorAnnot:     largeEntries("a", 32, 300),
+		wantCode:       codes.InvalidArgument,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			impl := newServiceImpl(persistence, nil)
+			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+			svc := &RPCService{impl: impl}
+			storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
+
+			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+				ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+					tmpl.Metadata = &ateapi.ResourceMetadata{
+						Atespace:    testAtespace,
+						Name:        "tmpl",
+						Annotations: tt.tmplMetaAnnot,
+					}
+					tmpl.ActorAnnotations = tt.tmplActorAnnot
+				}),
+			})
+			if err != nil {
+				t.Fatalf("CreateActorTemplate: %v", err)
+			}
+			if diff := cmp.Diff(tt.tmplMetaAnnot, tmpl.GetMetadata().GetAnnotations()); diff != "" {
+				t.Fatalf("template metadata.annotations mismatch (-want +got):\n%s", diff)
+			}
+
+			created, err := svc.CreateActor(ctx, &ateapi.CreateActorRequest{
+				Actor: &ateapi.Actor{
+					Metadata: &ateapi.ResourceMetadata{
+						Atespace:    testAtespace,
+						Name:        "actor-1",
+						Annotations: tt.actorAnnot,
+					},
+					ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+				},
+			})
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("CreateActor code = %v (err: %v), want %v", got, err, tt.wantCode)
+			}
+			if tt.wantCode != codes.OK {
+				return
+			}
+			if diff := cmp.Diff(tt.wantAnnotations, created.GetMetadata().GetAnnotations()); diff != "" {
+				t.Errorf("CreateActor annotations mismatch (-want +got):\n%s", diff)
+			}
+
+			fetched, err := svc.GetActor(ctx, &ateapi.GetActorRequest{
+				Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
+			})
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if diff := cmp.Diff(tt.wantAnnotations, fetched.GetMetadata().GetAnnotations()); diff != "" {
+				t.Errorf("GetActor annotations mismatch (-want +got):\n%s", diff)
+			}
+
+			listed, err := svc.ListActors(ctx, &ateapi.ListActorsRequest{Atespace: testAtespace})
+			if err != nil || len(listed.GetActors()) != 1 {
+				t.Fatalf("ListActors: %v (len=%d)", err, len(listed.GetActors()))
+			}
+			if diff := cmp.Diff(tt.wantAnnotations, listed.GetActors()[0].GetMetadata().GetAnnotations()); diff != "" {
+				t.Errorf("ListActors annotations mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
