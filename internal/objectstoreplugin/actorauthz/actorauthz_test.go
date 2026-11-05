@@ -516,8 +516,9 @@ func writeServerCA(t *testing.T, srv *httptest.Server) string {
 	return path
 }
 
-// TestIssuerRoots checks that a .svc issuer is verified against the CA file
-// alone and any other issuer against the system roots as well.
+// TestIssuerRoots checks that a .svc or .svc.cluster.local issuer is verified
+// against the CA file alone and any other issuer against the system roots as
+// well.
 func TestIssuerRoots(t *testing.T) {
 	srv := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(srv.Close)
@@ -537,10 +538,13 @@ func TestIssuerRoots(t *testing.T) {
 		{"https://idp.ate-system.svc", bundleOnly},
 		{"https://IDP.ATE-SYSTEM.SVC.", bundleOnly},
 		{"https://idp.ate-system.svc:443", bundleOnly},
+		{"https://idp.ate-system.svc.cluster.local", bundleOnly},
+		{"https://IDP.ATE-SYSTEM.SVC.CLUSTER.LOCAL.", bundleOnly},
+		{"https://idp.ate-system.svc.cluster.local:443", bundleOnly},
 		{"https://idp.example.com", withSystem},
 		{"https://svc.example.com", withSystem},
 		{"https://idp.svc.example.com", withSystem},
-		{"https://idp.ate-system.svc.cluster.local", withSystem},
+		{"https://idp.ate-system.svc.cluster.example", withSystem},
 	} {
 		t.Run(tc.issuer, func(t *testing.T) {
 			loadRoots, _, err := issuerRoots(tc.issuer, caFile)

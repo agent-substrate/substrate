@@ -33,7 +33,7 @@
 // The JWTs' public keys come from the issuer through OpenID Connect discovery
 // at <Issuer>/.well-known/openid-configuration. The issuer's certificate must
 // verify against Config.IssuerCAFile, or the system roots if the issuer's host
-// does not end in .svc.
+// ends in neither .svc nor .svc.cluster.local.
 //
 // This package imports packages under internal/, so that a provider runs the
 // same code as the in-tree exchange and only this package's API is public. Go
@@ -75,10 +75,10 @@ type Config struct {
 	Issuer string
 	// IssuerCAFile is a PEM CA bundle that verifies Issuer's serving
 	// certificate, such as the service DNS trust bundle the in-tree
-	// objectstore-plugin sidecar uses. For an Issuer whose host ends in .svc,
-	// it is the only trusted bundle. For any other Issuer, the system roots
-	// are trusted too. It is required. It is re-read when it changes. If a
-	// re-read fails, the last bundle stays in use.
+	// objectstore-plugin sidecar uses. For an Issuer whose host ends in .svc
+	// or .svc.cluster.local, it is the only trusted bundle. For any other
+	// Issuer, the system roots are trusted too. It is required. It is re-read
+	// when it changes. If a re-read fails, the last bundle stays in use.
 	IssuerCAFile string
 	// APIServer says how to reach ate-api-server.
 	APIServer APIServerConfig

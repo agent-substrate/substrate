@@ -91,15 +91,17 @@ func StartVerifier(ctx context.Context, issuer, caFile string) (*oidcjwt.Verifie
 }
 
 // issuerRoots returns the roots that verify issuer's certificate, and names
-// them for errors. A .svc host is trusted only through caFile: public CAs
-// cannot issue internal names, so only the service DNS signer can vouch for
-// it. Any other host is trusted through the system roots or caFile.
+// them for errors. A Service host, ending in .svc or .svc.cluster.local, is
+// trusted only through caFile: public CAs cannot issue internal names, so only
+// a private CA such as the service DNS signer can vouch for it. Any other host
+// is trusted through the system roots or caFile.
 func issuerRoots(issuer, caFile string) (loadRoots func() (*x509.CertPool, error), trusted string, err error) {
 	u, err := url.Parse(issuer)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid actor JWT issuer: %w", err)
 	}
-	if host := strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")); strings.HasSuffix(host, ".svc") {
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local") {
 		return credbundle.PoolLoader(caFile), caFile, nil
 	}
 	return credbundle.SystemPoolLoader(caFile), "the system roots or " + caFile, nil

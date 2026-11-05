@@ -105,7 +105,8 @@ spec:
         # identity certificate. The issuer must be the one ate-api-server
         # mints with, so both read it from the same ConfigMap key. The issuer
         # certificate is verified against the service DNS trust bundle, and
-        # also the system roots unless the issuer's host ends in .svc. One
+        # also the system roots unless the issuer's host ends in .svc or
+        # .svc.cluster.local. One
         # that does not verify stops the sidecar at start. On GCS it
         # downscopes a token for the snapshot transfer service account, which
         # it impersonates.
