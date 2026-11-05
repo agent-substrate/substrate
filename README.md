@@ -162,64 +162,7 @@ kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 curl -X POST -i http://localhost:8000/
 ```
 
-### GKE Quickstart (Development)
-
-1. Create and configure your environment file from the GKE example in
-   [substrate-gke](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/ate-dev-env.sh.example) (`hack/ate-dev-env.sh.example` here is for kind):
-   ```bash
-   curl -fsSLo .ate-dev-env.sh https://raw.githubusercontent.com/ai-on-gke/substrate-gke/main/tools/setup-gcp/ate-dev-env.sh.example
-
-   # Edit .ate-dev-env.sh to match your project and preferences, then source it:
-   source .ate-dev-env.sh
-   ```
-
-2. Enable application-default credentials for gcloud:
-   ```bash
-   gcloud auth application-default login --project=${PROJECT_ID}
-   ```
-
-3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings)
-   with [`tools/setup-gcp`](https://github.com/ai-on-gke/substrate-gke/tree/main/tools/setup-gcp) in the
-   [substrate-gke](https://github.com/ai-on-gke/substrate-gke) repository, which holds the GKE
-   setup and teardown tooling. Its `bootstrap` command also creates the Workload
-   Identity IAM grants that ate-api-server and atelet depend on. See
-   [what `create iam` actually grants](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#what-create-iam-actually-grants)
-   to audit them or apply them manually.
-
-   If you bring your own cluster instead, it needs the PodCertificateRequest and
-   ClusterTrustBundle APIs, which GKE 1.37 and higher serve by default.
-
-4. Deploy the Agent Substrate system to your cluster:
-   ```bash
-   go run ./cmd/ate-setup deploy ate-system --credential-provider='{"name":"k8s.io"}' \
-     --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
-   ```
-
-   `--ingress-allowed-spiffe-ids` lists the clients the router lets reach
-   actors. The ID above is the one `kubectl ate proxy actor` presents. Without
-   the flag no client reaches actors. See
-   [Ingress to actors](docs/guides/operator-install.md#ingress-to-actors).
-
-   `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
-   bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only
-   the egress gateway; `{"enabled":false}` turns egress credential injection off
-   (see [docs/guides/egress-credential-injection.md](docs/guides/egress-credential-injection.md)).
-   `ATE_CREDENTIAL_PROVIDER` in `.ate-dev-env.sh` is the same choice.
-
-   **Credential injection needs a namespace policy.** The bundled provider
-   starts with an empty, default-deny one, so it resolves no Secrets until you
-   grant each atespace the namespaces it may read; see
-   [Enable it](docs/guides/egress-credential-injection.md#enable-it).
-
-5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
-   ```bash
-   go run ./cmd/ate-setup deploy demo counter
-   ```
-
-#### Custom Setup and Deployment
-
-To create individual GCP resources, or to run the PostgreSQL store backend on
-Cloud SQL, see [`tools/setup-gcp`](https://github.com/ai-on-gke/substrate-gke/tree/main/tools/setup-gcp) in substrate-gke.
+### Custom Setup and Deployment
 
 You can deploy or cleanup specific Agent Substrate components using
 the installation script. See `go run ./cmd/ate-setup` for all options.
@@ -231,22 +174,21 @@ go run ./cmd/ate-setup deploy apiserver
 go run ./cmd/ate-setup delete all
 ```
 
-#### Tearing down resources (GCP)
-
-To delete the GCP resources, run substrate-gke's
-[`tools/setup-gcp/teardown.sh`](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md#teardown). It deletes resources
-in the reverse order of creation and handles partial failures.
-
-* `--all` deletes everything, including the dashboards, the snapshot transfer service account and the project-level IAM bindings, which every Substrate cluster in the project shares.
-* `--cluster-scoped` deletes only this cluster, its buckets and the bindings on them. Use it while other Substrate clusters still use the project.
-
-#### Tearing down local `kind` resources
+### Tearing down local `kind` resources
 
 If you need to delete the local `kind` cluster and its registry (if it was created by `hack/create-kind-cluster.sh`):
 
 ```bash
 ./hack/delete-kind-cluster.sh
 ```
+
+### GKE Quickstart
+
+To deploy on Google Kubernetes Engine, follow the official
+[GKE Installation Guide](https://docs.cloud.google.com/kubernetes-engine/ai-ml/install-overview-substrate).
+It lists the prerequisites and gives the one-line installer command. The
+installer's source and detailed options are in
+[substrate-gke](https://github.com/ai-on-gke/substrate-gke).
 
 ## Demos
 
