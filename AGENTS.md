@@ -2,12 +2,12 @@
 
 ## Rules for contributors
 
-- Read `CONTRIBUTING.md` and the "Using AI" section of `COLLABORATING.md`. You are responsible for everything your agent submits.
+- Read `CONTRIBUTING.md`, including its "Using AI" section. You are responsible for everything your agent submits.
 - Say in the PR description that you used AI, and how. Don't add AI co-author or assisted-by trailers. Submit commits and PRs from your own account. We can't accept contributions from agent or bot accounts.
 - Agents must never sign off a commit as themselves. Only a human can certify the [DCO](https://developercertificate.org/).
 - Before asking for review, review your own diff. For substantial changes, also have a fresh agent session review it adversarially, then validate its findings and fix the confirmed issues.
 - **Be brief.** Code comments, commit messages, PR descriptions and issues should be short, plain English, and read the way an experienced maintainer writes by hand. Reviewer time and agent context windows are limited.
-  - `COLLABORATING.md` doesn't allow AI-generated commit messages, because they have usually been low quality and unreviewed. If you are asked to write one anyway, hold it to the same standard, and the person submitting it must review it.
+  - `CONTRIBUTING.md` doesn't allow AI-generated commit messages, because they have usually been low quality and unreviewed. If you are asked to write one anyway, hold it to the same standard, and the person submitting it must review it.
   - Write short, direct sentences with one idea each, subject first.
   - Use the real identifiers from the code. Don't coin new names, and avoid noun stacks like "the store-wide pin-lock pre-flight".
   - Prefer verbs to abstract nouns: "evicts" instead of "performs eviction".

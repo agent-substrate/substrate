@@ -36,4 +36,4 @@ We host an open community sync every week to discuss roadmap progress, design pr
 
 ## Contributing
 
-Interested in contributing code, documentation, or bug reports? Review our **[Contributing Guidelines](https://github.com/agent-substrate/substrate/blob/main/docs/project/contributing.md)** and **[Integration Repositories](https://github.com/agent-substrate/substrate/blob/main/docs/project/integration-repos.md)** guides to get started.
+Interested in contributing code, documentation, or bug reports? Review our **[Contributing Guidelines](https://github.com/agent-substrate/substrate/blob/main/CONTRIBUTING.md)** and **[Integration Repositories](https://github.com/agent-substrate/substrate/blob/main/docs/project/integration-repos.md)** guides to get started.
