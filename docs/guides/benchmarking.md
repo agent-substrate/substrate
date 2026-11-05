@@ -556,24 +556,34 @@ To go back to a built-in variant, redeploy without the flag.
 
 Passing `--density-step-duration <duration>` to `runner.py` runs
 `locust/density_runner.py` to find the highest concurrent actor count a cluster
-sustains within the `-t` duration budget. It starts at 1 user to measure
-baseline P90 latencies, doubles the user count each step up to `-u`, and
+sustains within the `-t` duration budget. It starts at 8 users, whose P90
+latencies are the baseline (at fewer users P90 is close to the max, so one slow
+wake would fail the step). It doubles the user count each step up to `-u` and
 switches to binary search (stopping once the bracket is within 8 users or 12.5%
 of the failing step) when a step fails any check:
 
 * Wake P90 (`TimeToWake`) exceeds `max(2.0 * baseline_p90, 1000ms)`.
 * Suspend P90 (`SuspendActor` or `SuspendActorAsync`) exceeds
   `max(2.0 * baseline_p90, 1000ms)`.
-* `TimeToWake` failure ratio exceeds `1%`, live actors (`CreateActor` successes
-  minus unretired `DeleteActor` calls) drop below 90% of target users, or a
-  non-zero OOM, worker restart, pod eviction, lost worker pod, or explicit-mode
+* `TimeToWake` or suspend failure ratio exceeds `1%`, `live_actors` drops below
+  90% of target users, or a non-zero OOM, worker restart, pod eviction, lost
+  worker pod, step operation failure (`http_Step_*`), or explicit-mode
   `actor_CrashCount` is recorded.
+* `replaced_actors` is non-zero. The test deletes an actor and creates a new
+  one after three failed steps in a row, a crash, or a 404, so live actors
+  alone would not show it.
+
+Before each step it deletes any leftover actors in the `benchmark` atespace and
+waits up to 5 minutes for the atespace to be empty and for every worker pod to
+be Ready (`--no-cluster-facts` skips the pod check). If the cluster does not
+settle, the search stops and the run is marked failed with the results so far.
 
 Each step runs `runner.py` into a local scratch directory so intermediate step
 files stay out of `--dest`. At the end of the search, `density_runner.py`
 uploads `logs.txt`, `status.json`, and one `stats.jsonl` carrying the
 highest passing step's `trial_summary` (with `run_start` and `run_end` spanning
-the whole search) and `server_summary`, a `density_limit` summary row, and one
+the whole search) and `server_summary`, a `density_limit` summary row (with
+`abort_reason` set when the search stopped early on an error), and one
 `density_step_NNNN` row per step.
 
 ### Spawn Benchmark
@@ -894,6 +904,12 @@ map holds the raw facts and the derived numbers side by side.
 * `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most actors
   Locust reported running, over the matching capacity. The `-u` flag only
   stands in when no sample was read.
+* `live_actors`: `CreateActor` successes minus `replaced_actors`, capped at
+  the most actors Locust reported running. Null when the test records no
+  `CreateActor`.
+* `replaced_actors`: `DeleteActor` calls during the run, minus those that
+  retired a finished `TaskWallClock` task. These are actors the test deleted
+  because they broke.
 * `actors_per_pod_p50`, `actors_per_pod_p90`, `actors_per_pod_p99`: actors per
   worker pod across the run. Reported as a distribution rather than one
   average, and it spans ramp-up too, because a custom load shape has no

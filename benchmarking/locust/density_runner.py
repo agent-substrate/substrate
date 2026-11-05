@@ -14,14 +14,15 @@
 
 """Actor density search driven by runner.py --density-step-duration.
 
-Doubles concurrent users from 1 up to -u and binary-searches once a step fails
-any check in evaluate_step (see "Density Limit Benchmark" in
+Doubles concurrent users from START_USERS up to -u and binary-searches once a
+step fails any check in evaluate_step (see "Density Limit Benchmark" in
 docs/guides/benchmarking.md). Publishes stats.jsonl, logs.txt, and status.json
 under <dest>/runs/<name>/run_date=<date>/run_ts=<ts>/run_tag=<tag>/.
 """
 
 import argparse
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
@@ -34,13 +35,23 @@ import tempfile
 import time
 from typing import Any, TextIO
 
+from cluster_facts import worker_pods_ready
+from common.ateapi_channel import ateapi_channel
+import grpc
+
 RUNNER_SCRIPT = Path(__file__).with_name("runner.py")
+# At one or two users a step has so few wakes that its P90 is its max, and one
+# slow wake would fail the knee check.
+START_USERS = 8
 SEARCH_RESOLUTION = 8
 KNEE_MULTIPLIER = 2.0
 KNEE_FLOOR_MS = 1000.0
 MAX_FAILURE_RATIO = 0.01
 MIN_LIVE_ACTOR_RATIO = 0.9
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600}
+ATE_API_HOST = "api.ate-system.svc.cluster.local:443"
+SETTLE_TIMEOUT_S = 300
+SETTLE_POLL_S = 10
 
 SERVER_PASSTHROUGH_KEYS = (
     "active_actors_p50",
@@ -60,12 +71,14 @@ class StepResult:
     passed: bool = False
     failure_reason: str = ""
     live_actors: int | None = None
+    replaced_actors: int | None = None
     wake_p50_ms: float | None = None
     wake_p90_ms: float | None = None
     suspend_p50_ms: float | None = None
     suspend_p90_ms: float | None = None
     wake_rps: float | None = None
     failure_ratio: float | None = None
+    step_failures: int = 0
     crash_count: int = 0
     oom_counts: dict[str, int] = field(default_factory=dict)
     server_fields: dict[str, float | None] = field(default_factory=dict)
@@ -106,7 +119,7 @@ def next_step_users(steps: list[StepResult], max_users: int) -> int | None:
     if max_users < 1:
         return None
     if not steps:
-        return 1
+        return min(START_USERS, max_users)
     passed = [s.users for s in steps if s.passed]
     if not passed:
         return None
@@ -151,20 +164,20 @@ def parse_step_stats(users: int, exit_code: int, jsonl_path: Path | None) -> Ste
         res.suspend_p50_ms = _to_float(susp.get("p50"))
         res.suspend_p90_ms = _to_float(susp.get("p90"))
 
-    if create := rows.get("grpc_CreateActor"):
-        created = (_to_int(create.get("request_count")) or 0) - (
-            _to_int(create.get("failure_count")) or 0
-        )
-        deletes = _to_int((rows.get("grpc_DeleteActor") or {}).get("request_count")) or 0
-        retired = _to_int((rows.get("actor_TaskWallClock") or {}).get("request_count")) or 0
-        res.live_actors = min(users, max(created - max(deletes - retired, 0), 0))
-
+    res.live_actors = _to_int(trial.get("live_actors"))
+    res.replaced_actors = _to_int(trial.get("replaced_actors"))
     if crash_row := rows.get("actor_CrashCount"):
         res.crash_count = _to_int(crash_row.get("failure_count")) or 0
-
-    res.failure_ratio = _to_float(
-        trial.get("time_to_wake_failure_ratio", trial.get("aggregate_failure_ratio"))
+    res.step_failures = sum(
+        _to_int(m.get("failure_count")) or 0
+        for k, m in rows.items()
+        if k.startswith("http_Step_")
     )
+    ratios = [
+        _to_float(trial.get(f"{k}_failure_ratio"))
+        for k in ("time_to_wake", "suspend_actor", "suspend_actor_async")
+    ]
+    res.failure_ratio = max((r for r in ratios if r is not None), default=None)
     for k in SERVER_PASSTHROUGH_KEYS:
         res.server_fields[k] = _to_float(srv.get(k))
     for k, v in srv.items():
@@ -188,6 +201,10 @@ def evaluate_step(step: StepResult, baseline: StepResult | None) -> str:
     bad_counters = [f"{k}={v}" for k, v in step.oom_counts.items() if v > 0]
     if step.crash_count > 0:
         bad_counters.append(f"actor_crashes={step.crash_count}")
+    if step.step_failures > 0:
+        bad_counters.append(f"step_failures={step.step_failures}")
+    if step.replaced_actors:
+        bad_counters.append(f"replaced_actors={step.replaced_actors}")
     if bad_counters:
         return ", ".join(bad_counters)
 
@@ -223,7 +240,7 @@ def _stringify(raw: dict[str, Any]) -> dict[str, str | None]:
 
 def summarize_sweep(steps: list[StepResult]) -> dict[str, Any]:
     ordered = sorted(steps, key=lambda s: s.users)
-    baseline = next((s for s in ordered if s.users == 1), None)
+    baseline = ordered[0] if ordered else None
     passed = [s for s in ordered if s.passed]
     best = passed[-1] if passed else None
     max_actors = best.users if best else 0
@@ -281,6 +298,8 @@ def build_jsonl_records(
                     "passed": s.passed,
                     "failure_reason": s.failure_reason or None,
                     "live_actors": s.live_actors,
+                    "replaced_actors": s.replaced_actors,
+                    "step_failures": s.step_failures,
                     "wake_p50_ms": s.wake_p50_ms,
                     "wake_p90_ms": s.wake_p90_ms,
                     "suspend_p50_ms": s.suspend_p50_ms,
@@ -292,22 +311,6 @@ def build_jsonl_records(
             )
         )
     return records
-
-
-def _strip_flag_with_value(flags: list[str], name: str) -> list[str]:
-    out: list[str] = []
-    i = 0
-    while i < len(flags):
-        cur = flags[i]
-        if cur == name:
-            i += 2
-            continue
-        if cur.startswith(f"{name}="):
-            i += 1
-            continue
-        out.append(cur)
-        i += 1
-    return out
 
 
 def build_step_cmd(
@@ -342,12 +345,7 @@ def build_step_cmd(
     ]
     if not args.cluster_facts:
         cmd.append("--no-cluster-facts")
-    extra = list(args.locust_extra)
-    if users == 1:
-        # Skip the random startup delay for the single-user baseline so it uses
-        # the full step window.
-        extra = _strip_flag_with_value(extra, "--agentsession-phase-in")
-    return [*cmd, *extra]
+    return [*cmd, *args.locust_extra]
 
 
 def run_step(args: argparse.Namespace, users: int, step_dest: Path, logs: TextIO) -> StepResult:
@@ -363,6 +361,76 @@ def run_step(args: argparse.Namespace, users: int, step_dest: Path, logs: TextIO
     exit_code = proc.wait()
     jsonl_path = next(step_dest.rglob("stats.jsonl"), None)
     return parse_step_stats(users, exit_code, jsonl_path)
+
+
+def cleanup_benchmark_actors() -> int:
+    """Deletes every actor in the benchmark atespace and returns how many it found."""
+    # The stubs are generated into the image at build time and are not in the
+    # repo, so importing them at module level would break the unit tests.
+    from common import ateapi_pb2, ateapi_pb2_grpc
+    from common.atespace import ATESPACE
+
+    with ateapi_channel(ATE_API_HOST) as channel:
+        stub = ateapi_pb2_grpc.ControlStub(channel)
+        names: list[str] = []
+        token = ""
+        while True:
+            resp = stub.ListActors(
+                ateapi_pb2.ListActorsRequest(
+                    atespace=ATESPACE,
+                    options=ateapi_pb2.ListOptions(page_size=1000, page_token=token),
+                ),
+                timeout=30,
+            )
+            names.extend(a.metadata.name for a in resp.actors)
+            token = resp.next_page_token
+            if not token:
+                break
+
+        def delete_one(name: str) -> None:
+            try:
+                stub.DeleteActor(
+                    ateapi_pb2.DeleteActorRequest(
+                        actor=ateapi_pb2.ObjectRef(atespace=ATESPACE, name=name)
+                    ),
+                    timeout=30,
+                )
+            except grpc.RpcError as e:
+                if e.code() != grpc.StatusCode.NOT_FOUND:
+                    raise
+
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            list(pool.map(delete_one, names))
+        return len(names)
+
+
+def wait_for_idle(check_pods: bool, logs: TextIO) -> bool:
+    """Deletes any leftover benchmark actors and waits for worker pods to be Ready.
+
+    Boomer's shutdown sweep stops at its deadline, so a large step can leave
+    actors behind. When check_pods is False (--no-cluster-facts), only actor
+    cleanup runs.
+    """
+    deadline = time.monotonic() + SETTLE_TIMEOUT_S
+    while True:
+        actors: int | None = None
+        try:
+            actors = cleanup_benchmark_actors()
+            if actors:
+                tee(logs, f"Deleted {actors} leftover benchmark actors")
+        except grpc.RpcError as e:
+            tee(logs, f"Benchmark actor cleanup RPC failed: {e.code()} ({e.details()})")
+        ready = worker_pods_ready(logs) if check_pods else True
+        if actors == 0 and ready:
+            return True
+        if time.monotonic() >= deadline:
+            tee(
+                logs,
+                f"Cluster not idle after {SETTLE_TIMEOUT_S}s: benchmark actors={actors}, "
+                f"worker pods ready={ready}",
+            )
+            return False
+        time.sleep(SETTLE_POLL_S)
 
 
 def run_density_sweep(
@@ -387,7 +455,7 @@ def run_density_sweep(
     )
 
     steps: list[StepResult] = []
-    baseline: StepResult | None = None
+    abort_reason: str | None = None
     sweep_ok = False
     upload_ok = True
     try:
@@ -396,16 +464,21 @@ def run_density_sweep(
                 if steps and time.time() + step_budget_s > deadline_ts:
                     tee(logs, "Stopping search: remaining -t budget cannot fit another step")
                     break
+                iter_start = time.monotonic()
+                if not wait_for_idle(args.cluster_facts, logs):
+                    abort_reason = "cluster did not go idle"
+                    tee(logs, f"Stopping search: {abort_reason}")
+                    break
                 step = run_step(args, users, steps_root / f"u{users:04d}", logs)
-                step.failure_reason = evaluate_step(step, baseline)
+                step_budget_s = max(step_budget_s, int(time.monotonic() - iter_start))
+                step.failure_reason = evaluate_step(step, steps[0] if steps else None)
                 step.passed = step.failure_reason == ""
-                if baseline is None and step.users == 1:
-                    baseline = step
                 steps.append(step)
                 verdict = "PASS" if step.passed else f"FAIL ({step.failure_reason})"
                 tee(logs, f"Step users={users} verdict: {verdict}")
                 if step.exit_code != 0:
-                    tee(logs, f"Stopping search: step exited with code {step.exit_code}")
+                    abort_reason = f"step exited with code {step.exit_code}"
+                    tee(logs, f"Stopping search: {abort_reason}")
                     break
 
             summary = summarize_sweep(steps)
@@ -415,9 +488,13 @@ def run_density_sweep(
                 f"first_failed={summary['first_failed_users']} "
                 f"reason={summary['failure_reason']}",
             )
+    except Exception as e:
+        # Marks the published status as failed; the exception still propagates.
+        abort_reason = f"density runner error: {e}"
+        raise
     finally:
         run_end_ts = int(datetime.now(timezone.utc).timestamp())
-        summary = summarize_sweep(steps)
+        summary = {**summarize_sweep(steps), "abort_reason": abort_reason}
         records = build_jsonl_records(
             steps,
             summary,
@@ -431,7 +508,7 @@ def run_density_sweep(
             for rec in records:
                 f.write(json.dumps(rec) + "\n")
 
-        sweep_ok = summary["max_actors"] >= 1 and all(s.exit_code == 0 for s in steps)
+        sweep_ok = summary["max_actors"] >= 1 and abort_reason is None
         status_path.write_text(
             json.dumps({"locust_exit_code": 0 if sweep_ok else 1, "stats_generated": sweep_ok}),
             encoding="utf-8",
