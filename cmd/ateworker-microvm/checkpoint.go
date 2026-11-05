@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -372,8 +373,8 @@ func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client,
 	}
 	var releases []func()
 	releaseAll := func() {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
+		for _, release := range slices.Backward(releases) {
+			release()
 		}
 	}
 	// the page cache the write adds isn't the actor running away
