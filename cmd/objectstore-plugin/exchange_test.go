@@ -15,7 +15,6 @@
 package main
 
 import (
-	"encoding/json"
 	"encoding/pem"
 	"net"
 	"net/http"
@@ -23,13 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
-	"go.ate.dev/substrate/internal/actoridjwt"
-	"go.ate.dev/substrate/internal/localjwtauthority"
-	"go.ate.dev/substrate/internal/objectstoreplugin/actorauthz"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
 	"go.ate.dev/substrate/internal/testcert"
 )
@@ -84,104 +78,6 @@ func TestNewExchangeService(t *testing.T) {
 			_, _, err := newExchangeService(t.Context(), tc.cfg)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to name %s", err, tc.want)
-			}
-		})
-	}
-}
-
-// TestCheckIssuerCertificate checks that errors other than an untrusted
-// certificate let the exchange start.
-func TestCheckIssuerCertificate(t *testing.T) {
-	trusted := httptest.NewTLSServer(http.NotFoundHandler())
-	t.Cleanup(trusted.Close)
-	closed := httptest.NewTLSServer(http.NotFoundHandler())
-	closed.Close()
-	for _, tc := range []struct {
-		name   string
-		issuer string
-		client *http.Client
-	}{
-		{"unreachable issuer", closed.URL, closed.Client()},
-		{"issuer without discovery", trusted.URL, trusted.Client()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := checkIssuerCertificate(t.Context(), tc.issuer, "ca.pem", actorauthz.NewVerifier(tc.issuer, tc.client)); err != nil {
-				t.Fatalf("checkIssuerCertificate() = %v, want nil", err)
-			}
-		})
-	}
-}
-
-// TestNewActorVerifierWarmsCache checks that the start check fills the cache
-// of the verifier the exchange uses, and that a failed start check leaves the
-// first exchange to fetch right away.
-func TestNewActorVerifierWarmsCache(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		// startFails makes the issuer answer 503 to the start check only.
-		startFails bool
-		// wantFetches is the JWKS fetch count after the start and one Verify.
-		wantFetches int32
-	}{
-		{"start check fills the cache", false, 1},
-		{"failed start check retries on first use", true, 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			auth, err := localjwtauthority.GenerateAuthority("ES256", "k1")
-			if err != nil {
-				t.Fatal(err)
-			}
-			pool := &localjwtauthority.ConcretePool{Authorities: []*localjwtauthority.Authority{auth}, ActiveForSigning: "k1"}
-			keys, err := pool.VerificationKeys()
-			if err != nil {
-				t.Fatal(err)
-			}
-			jwks, err := localjwtauthority.JWKS(keys)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var fetches atomic.Int32
-			failNext := &atomic.Bool{}
-			failNext.Store(tc.startFails)
-			mux := http.NewServeMux()
-			var srv *httptest.Server
-			mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "jwks_uri": srv.URL + "/jwks"})
-			})
-			mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
-				fetches.Add(1)
-				if failNext.Swap(false) {
-					http.Error(w, "down", http.StatusServiceUnavailable)
-					return
-				}
-				_, _ = w.Write(jwks)
-			})
-			srv = httptest.NewTLSServer(mux)
-			t.Cleanup(srv.Close)
-
-			verifier, err := newActorVerifier(t.Context(), srv.URL, writeServerCA(t, srv))
-			if err != nil {
-				t.Fatal(err)
-			}
-			now := time.Now()
-			token, err := pool.SignJWT(&actoridjwt.Claims{
-				Kind:       actoridjwt.KindWorkerForActor,
-				Issuer:     srv.URL,
-				Subject:    actoridjwt.KindWorkerForActor.SubjectPrefix() + "/team-a/bot",
-				Audiences:  []string{actorauthz.Audience},
-				Expiration: now.Add(time.Hour),
-				NotBefore:  now.Add(-time.Minute),
-				IssuedAt:   now,
-				Substrate:  actoridjwt.SubstrateClaims{Atespace: "team-a", ActorName: "bot", ActorUID: "uid", Node: "node-1"},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := verifier.Verify(t.Context(), token, now); err != nil {
-				t.Fatalf("Verify() error = %v", err)
-			}
-			if got := fetches.Load(); got != tc.wantFetches {
-				t.Fatalf("JWKS fetches = %d, want %d", got, tc.wantFetches)
 			}
 		})
 	}

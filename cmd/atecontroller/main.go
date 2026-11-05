@@ -28,6 +28,7 @@ import (
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/egresspolicy"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
@@ -209,7 +210,6 @@ func main() {
 	}
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
 		ServerName:       *ateapiServerName,
 		ClientCredBundle: *ateapiClientCert,
@@ -218,6 +218,7 @@ func main() {
 		setupLog.Error(err, "building ateapi dial options")
 		os.Exit(1)
 	}
+	dialOpts = append(dialOpts, grpc.WithResolvers(k8sresolver.NewBuilder(k8sClient)))
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	// atecontroller acts for the system, not a user, so it always opts in to
 	// the preview features the server enables.

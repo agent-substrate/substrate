@@ -43,6 +43,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
@@ -168,13 +169,15 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	go serverboot.StartHealthServer(ctx, s.cfg.HealthAddr, readiness)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        s.clientset,
 		CAFile:           s.cfg.Auth.AteapiCAFile,
 		ServerName:       s.cfg.Auth.AteapiServerName,
 		ClientCredBundle: s.cfg.Auth.AteapiClientCertPath,
 	})
 	if err != nil {
 		return fmt.Errorf("building ateapi dial options: %w", err)
+	}
+	if s.clientset != nil {
+		dialOpts = append(dialOpts, grpc.WithResolvers(k8sresolver.NewBuilder(s.clientset)))
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	// atenet acts for the system, not a user, so it always opts in to the
