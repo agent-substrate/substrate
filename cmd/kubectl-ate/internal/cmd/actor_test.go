@@ -49,6 +49,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 		name        string
 		templateRef string
 		tag         string
+		annotations string
 		want        *ateapi.Actor
 		wantErr     bool
 	}{
@@ -88,13 +89,32 @@ func TestBuildCreateActorRequest(t *testing.T) {
 				ActorTemplate: &ateapi.ObjectRef{Atespace: "shared-templates", Name: "counter"},
 			},
 		},
+		{
+			name:        "annotations with URLs and equals signs in values",
+			templateRef: "counter",
+			annotations: "owner=team-a,example.com/url=https://example.com:8443/path?a=1&b=2",
+			want: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{
+					Atespace: "demo",
+					Name:     "my-counter",
+					Annotations: map[string]string{
+						"owner":           "team-a",
+						"example.com/url": "https://example.com:8443/path?a=1&b=2",
+					},
+				},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
+			},
+		},
 		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
 		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
+		{name: "annotation missing equals sign", templateRef: "counter", annotations: "no-equals", wantErr: true},
+		{name: "annotation invalid key", templateRef: "counter", annotations: "bad key!=v", wantErr: true},
+		{name: "annotation duplicate key", templateRef: "counter", annotations: "k=1,k=2", wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag)
+			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag, test.annotations)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("buildCreateActorRequest error = %v, wantErr %t", err, test.wantErr)
 			}
