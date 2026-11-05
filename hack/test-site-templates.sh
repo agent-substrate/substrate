@@ -93,10 +93,10 @@ fi
 
 # Front matter is parsed, never rendered, and the source title is dropped.
 for p in plain experimental deprecated override new new-deprecated planned; do
-  lacks main "${F}/${p}/index.html" 'status: (experimental|deprecated)|status_note:'
+  lacks main "${F}/${p}/index.html" 'status: (preview|experimental|deprecated)|status_note:'
   lacks main "${F}/${p}/index.html" 'Source Title'
 done
-lacks main llms-full.txt 'status: (experimental|deprecated)|status_note:'
+lacks main llms-full.txt 'status: (preview|experimental|deprecated)|status_note:'
 lacks main llms-full.txt 'Source Title'
 has main "${F}/deprecated/index.html" 'Deprecated body\.'
 
@@ -113,13 +113,15 @@ has main "${F}/deprecated/index.html" 'Use the <a href="/docs/fixtures/experimen
 lacks main "${F}/deprecated/index.html" 'will be removed in a future release'
 has main "${F}/planned/index.html" 'class="as-status-banner as-status-banner--planned"'
 has main "${F}/planned/index.html" 'This describes planned design that is not fully implemented yet\.'
-has main "${F}/override/index.html" 'as-status-banner--experimental'
+has main "${F}/override/index.html" 'class="as-status-banner as-status-banner--preview"'
+has main "${F}/override/index.html" 'This feature is in preview and disabled by default\. APIs and behavior may change\.'
 lacks main "${F}/override/index.html" 'as-status-banner--deprecated'
 lacks main "${F}/plain/index.html" 'as-status-banner'
 lacks main "${F}/index.html" 'as-status-banner'
 
 # Copy as Markdown, per-page index.md, and llms-full.txt carry unescaped
 # Markdown, preserve shell variables, and rewrite relative links.
+has main "${F}/override/index.html" '\*\*Status: Preview\.\*\* This feature is in preview and disabled by default\.'
 has main "${F}/experimental/index.html" '\*\*Status: Experimental\.\*\* This feature is experimental'
 has main "${F}/deprecated/index.md" '> \*\*Status: Deprecated\.\*\* Use the \[experimental page\]\(https://example\.org/docs/fixtures/experimental/index\.md\) instead\.'
 has main llms-full.txt '> \*\*Status: Deprecated\.\*\* Use the \[experimental page\]\(https://example\.org/docs/fixtures/experimental/index\.md\) instead\.'
@@ -131,6 +133,7 @@ lacks main "${F}/plain/index.html" '\*\*Status:'
 
 # llms.txt links to per-page Markdown files and prefixes non-GA statuses.
 has main llms.txt '\[Plain Page\]\(https://example\.org/docs/fixtures/plain/index\.md\):'
+has main llms.txt '\[Override Page\]\(https://example\.org/docs/fixtures/override/index\.md\): \[Status: Preview\]'
 has main llms.txt '\[Experimental Page\]\(https://example\.org/docs/fixtures/experimental/index\.md\): \[Status: Experimental\]'
 has main llms.txt '\[Deprecated Page\]\(https://example\.org/docs/fixtures/deprecated/index\.md\): \[Status: Deprecated\]'
 has main llms.txt '\[Planned Page\]\(https://example\.org/docs/fixtures/planned/index\.md\): \[Status: Planned\]'
@@ -146,6 +149,7 @@ fi
 # but never "New" on a deprecated page.
 SB="${F}/plain/index.html"
 link='class="as-sb__link[^"]*"[^>]*>[[:space:]]*'
+has main "${SB}" "${link}<span>Override Page</span>[[:space:]]*<span class=\"as-pill as-pill--preview\">Preview</span>"
 has main "${SB}" "${link}<span>Experimental Page</span>[[:space:]]*<span class=\"as-pill as-pill--experimental\">Experimental</span>"
 has main "${SB}" "${link}<span>Deprecated Page</span>[[:space:]]*<span class=\"as-pill as-pill--deprecated\">Deprecated</span>"
 has main "${SB}" "${link}<span>New Page</span>[[:space:]]*<span class=\"as-pill as-pill--new\" title=\"New in v0.3.0\">New</span>"
@@ -154,6 +158,7 @@ has main "${SB}" "${link}<span>Planned Page</span>[[:space:]]*<span class=\"as-p
 has main "${SB}" "${link}<span>Plain Page</span>[[:space:]]*</a>"
 
 # Section cards show status pills but not "New".
+has main "${F}/index.html" '<span>Override Page</span>[[:space:]]*<span class="as-pill as-pill--preview">Preview</span>'
 has main "${F}/index.html" '<span>Experimental Page</span>[[:space:]]*<span class="as-pill as-pill--experimental">Experimental</span>'
 has main "${F}/index.html" '<span>New Page</span>[[:space:]]*</p>'
 

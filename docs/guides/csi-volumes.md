@@ -2,6 +2,10 @@
 title: "CSI Volumes"
 linkTitle: "CSI Volumes"
 weight: 5
+status: preview
+status_note: >
+  External CSI volumes are disabled by default behind the `ExternalVolumes`
+  preview gate, and APIs or behavior may change.
 description: >
   Attach CSI volumes to actors.
 ---
@@ -10,13 +14,14 @@ description: >
 
 Substrate integrates with the **Container Storage Interface (CSI)** to provide dynamically provisioned, per-actor external volumes that seamlessly attach and detach as actors transition through their lifecycle.
 
-External volumes are a preview feature. The ate API server accepts them only
-when it runs with `--preview=ExternalVolumes` (ate-setup's `preview` setting)
-and the client opts in to preview features: `kubectl ate --preview`, or the
-`Ate-Preview-Allowed: true` gRPC metadata header. The opt-in is needed to
-create an actor template with external volumes, or an actor from such a
-template. Later operations on that actor, such as resume, suspend and delete,
-do not need it.
+> [!IMPORTANT]
+> External volumes are a preview feature. The ate API server accepts them only
+> when it runs with `--preview=ExternalVolumes` (ate-setup's `preview` setting)
+> and the client opts in to preview features: `kubectl ate --preview`, or the
+> `Ate-Preview-Allowed: true` gRPC metadata header. The opt-in is needed to
+> create an actor template with external volumes, or an actor from such a
+> template. Later operations on that actor, such as resume, suspend and delete,
+> do not need it.
 
 ---
 

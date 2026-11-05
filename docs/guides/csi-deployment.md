@@ -2,6 +2,10 @@
 title: "Deploying CSI Drivers"
 linkTitle: "Deploying CSI Drivers"
 weight: 6
+status: preview
+status_note: >
+  External CSI volumes are disabled by default behind the `ExternalVolumes`
+  preview gate, and APIs or behavior may change.
 description: >
   Deploy CSI drivers for use with Agent Substrate.
 ---
@@ -9,6 +13,9 @@ description: >
 # Deploying CSI Drivers for Agent Substrate
 
 This guide explains how to deploy and configure Container Storage Interface (CSI) drivers to work with Agent Substrate.
+
+> [!IMPORTANT]
+> External CSI volumes are a preview feature. Enabling them requires running Substrate with `--preview=ExternalVolumes` and opting in on the client (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` gRPC metadata header). See [CSI Volumes](csi-volumes.md) for usage details.
 
 In standard Kubernetes, CSI drivers are deployed to interact with asynchronous sidecars and kubelet. Substrate directly orchestrates storage operations from its control plane (`ateapi`) and node daemon (`atelet`), introducing specific deployment and networking requirements for both the **CSI Controller** and the **CSI Node DaemonSet**.
 

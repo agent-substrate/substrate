@@ -149,19 +149,20 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). The pool sets the sandbox class, so this is also how a template pins one: if your cluster has pools of more than one sandbox class and the workload needs a particular class, make sure the selector points only at pools of that class. An actor booting with no snapshot and no selector may run on any class, and keeps it from its first checkpoint on. An actor created from the golden snapshot or a `sourceTag` runs on that snapshot's class. See [Sandbox Classes](sandbox-classes.md) for what differs between classes. The pools a template selects must also share a CPU architecture; see `sandboxRuntime` under [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (a preview field that requires the `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `image` read-only OCI image volume (`image.reference`, pinned by digest), an `external` CSI volume source (preview, behind the `ExternalVolumes` gate; see [CSI Volumes Guide](../guides/csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
+| `snapshotConfig` | `SnapshotConfig` | Optional; omitted fields take their defaults. The base object-storage location snapshots are written under (`storageLocation`; **Preview**, `PerTemplateSnapshotLocation` gate), the snapshot fidelity (`preferredFidelity`) every Suspend captures, and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `image` read-only OCI image volume (`image.reference`, pinned by digest), an `external` CSI volume source (**Preview**, `ExternalVolumes` gate; see [CSI Volumes Guide](../guides/csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `durableDir` is created `0777`, as Kubernetes creates an emptyDir, so a container running as any user can write it. A snapshot restores it with the mode it had, so the container's own chmod survives suspend and resume. |
 | `resources` | `*ResourceRequirements` | Required. Declares each actor's compute size via `limits`, which must set both `cpuMillicores` and `memoryBytes` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
-| `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview.** Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
+| `goldenEgressPolicy` | `EgressPolicyTemplate` | **Preview** (`GoldenEgressPolicy` gate). Optional egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
 The sandbox runtime and its binaries (e.g. the gVisor `runsc` binary, or a microVM kernel/firmware/config) are configured on the [`WorkerPool`](#1-workerpool-the-physical-capacity) via its `sandboxClasses` and the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) it resolves, rather than on the `ActorTemplate`. An `ActorTemplate` selects its `WorkerPool`s via `workerSelector` (AND'd with the actor's `worker_selector`). When an actor runs on a worker, the runtime it runs under is stamped onto the actor's assignment and snapshots (`sandboxRuntime`: the sandbox class and the runtime's compatibility version) so subsequent resumes prefer runtime-compatible workers.
 
 ### Golden Egress Policy (`goldenEgressPolicy`)
 
-`goldenEgressPolicy` is a **preview** feature. Enable
-`--preview=GoldenEgressPolicy` on the server (or through
-ate-setup's `preview` setting), and opt in on the client with `kubectl ate --preview`
-or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview gates](../dev/preview-gates.md).
+> [!IMPORTANT]
+> `goldenEgressPolicy` is a **preview** feature. Enable
+> `--preview=GoldenEgressPolicy` on the server (or through
+> ate-setup's `preview` setting), and opt in on the client with `kubectl ate --preview`
+> or the `Ate-Preview-Allowed: true` gRPC metadata header. See [Preview gates](../dev/preview-gates.md).
 
 Set `goldenEgressPolicy` on an ActorTemplate to give its golden actor network
 access during initialization. For example, this template field
@@ -462,7 +463,7 @@ resources:
 <location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
-> [!NOTE]
+> [!IMPORTANT]
 > Snapshots are stored under ate-api-server's cluster-wide `--snapshot-location`. `snapshotConfig.storageLocation` is an optional preview field: with the `PerTemplateSnapshotLocation` preview gate (`--preview=PerTemplateSnapshotLocation`), a template that sets it stores its snapshots there instead. `<location>` above is whichever of the two applies.
 >
 > Only a client that opts in to preview features (`kubectl ate --preview`, or the `Ate-Preview-Allowed: true` header) may set `storageLocation`, and only with the gate enabled. Otherwise the request fails with `InvalidArgument`. A template stored before the API enforced this keeps the field, and ate-api-server ignores it while the gate is off. `CreateActorTemplate` fails with `FailedPrecondition` when the template leaves it empty and ate-api-server has no `--snapshot-location`.
