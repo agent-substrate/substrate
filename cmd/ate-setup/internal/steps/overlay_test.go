@@ -1402,9 +1402,15 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 				Name:      "atelet",
 			},
 		}
+		provider := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: NamespaceAteSystem,
+				Name:      "k8s-credential-provider",
+			},
+		}
 		e := &Env{
 			Cfg:  &config.Config{OtlpEndpoint: endpoint},
-			Kube: fakeKube(t, otelConfig("http://default:4317"), apiServerDeployment(), atelet),
+			Kube: fakeKube(t, otelConfig("http://default:4317"), apiServerDeployment(), atelet, provider),
 		}
 
 		if err := e.applyOtelEndpointOverride(t.Context()); err != nil {
@@ -1419,6 +1425,9 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		// component has only that component, which is not an error.
 		if !restartedAt(t, e, "deployment", "ate-api-server") {
 			t.Error("ate-api-server was not restarted")
+		}
+		if !restartedAt(t, e, "deployment", "k8s-credential-provider") {
+			t.Error("k8s-credential-provider was not restarted")
 		}
 		if !restartedAt(t, e, "daemonset", "atelet") {
 			t.Error("the atelet DaemonSet was not restarted")
