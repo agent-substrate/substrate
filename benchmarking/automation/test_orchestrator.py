@@ -346,6 +346,30 @@ class RunMetadataTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not valid JSON"):
             orchestrator.validate_and_normalize_tests([test])
 
+    def test_locust_job_gets_evaluations(self):
+        evaluations = [{"name": "goodput_strict", "variables": [], "conditions": []}]
+
+        class Rendered(Exception):
+            pass
+
+        fake = mock.Mock(job_tmpl=mock.Mock(return_value="t"), job_subs=mock.Mock(return_value={}))
+        test = {"name": "n", "type": "locust", "duration": "1m", "flags": ["--x"], "evaluations": evaluations}
+        with mock.patch.dict(orchestrator.TYPES, {"locust": fake}), \
+             mock.patch.dict(os.environ, CLUSTER_ENV, clear=True), \
+             mock.patch.object(orchestrator, "render_template", side_effect=Rendered) as render, \
+             self.assertRaises(Rendered):
+            orchestrator.run_test(test, "img", "dest", "abcdef0123")
+        args = render.call_args.args[2]
+        self.assertEqual(args[args.index("--evaluations") + 1], json.dumps(evaluations))
+        # Without the key, no flag.
+        self.assertNotIn("--evaluations", self.submitted_args("locust"))
+
+    def test_evaluations_only_on_locust(self):
+        test = {"name": "n", "type": "nighthawk-ingress", "targetCluster": "t", "evaluations": [{"name": "e"}]}
+        with mock.patch.object(orchestrator.TYPES["nighthawk-ingress"], "validate"), \
+             self.assertRaisesRegex(ValueError, "test 'n': 'evaluations' is supported only for type locust"):
+            orchestrator.validate_and_normalize_tests([test])
+
     def test_metadata_survives_yaml(self):
         md = json.dumps({"cluster_name": "c: d", "q": "\"'"})
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}

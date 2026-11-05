@@ -28,3 +28,5 @@ opentelemetry-instrumentation-grpc
 opentelemetry-instrumentation-requests
 google-cloud-storage
 kubernetes
+# The cel source of run evaluations (benchmarking/evaluate/requirements.txt).
+cel-expr-python==0.1.3

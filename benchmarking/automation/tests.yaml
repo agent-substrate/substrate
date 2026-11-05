@@ -112,6 +112,24 @@
 # seconds, or the step falls short of its rate. A resumepaused iteration is a
 # resume plus a pause, so size it by the p99 of both together.
 #
+# Optional `evaluations` judges the run against conditions on its results:
+# runner.py writes the verdicts to evaluation.json and adds evaluation_* rows
+# to stats.jsonl; they never fail the run. A cel variable's `baseline_test`
+# (kind: sweperf_tasks) names the suite's 1-user test, whose latest run
+# under the same --dest with the same tag (at most 6h older, on the same
+# cluster) is its baseline. See benchmarking/evaluate/README.md.
+#
+#   evaluations:
+#   - name: envelope
+#     variables:
+#     - name: trial
+#       source: run_results
+#       source_cfg: {metric: trial_summary, measurements: [aggregate_failure_ratio]}
+#     conditions:
+#     - name: failure_ratio
+#       type: threshold
+#       check: {value: trial.aggregate_failure_ratio, op: "<=", limit: 0.001}
+#
 # An optional `controlPlane:` block shapes the control plane for a capacity
 # run; pre_test applies it after the deploy. Its `apiServer:` section, which
 # is required, sizes ate-api-server:

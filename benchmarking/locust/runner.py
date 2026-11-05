@@ -195,6 +195,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--evaluations",
+        default=None,
+        help=(
+            "The test entry's evaluations as a JSON list (see "
+            "benchmarking/evaluate/README.md). Their sources are set up before "
+            "the run; after it they judge the run, and the verdicts are "
+            "written to evaluation.json, plus rows in stats.jsonl. They never "
+            "change the exit code or status.json"
+        ),
+    )
+    p.add_argument(
         "--phase-breakdown",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -288,6 +299,7 @@ def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, l
         f"  users:          {args.users}",
         f"  uses_boomer:    {needs_boomer(args.file)}",
         f"  empty stats ok: {args.allow_empty_stats}",
+        f"  evaluations:    {evaluation_names(args.evaluations)}",
         f"  dest_prefix:    {dest_prefix}",
         f"  work_dir:       {work_dir}",
         # One flag for each line, with its value. A run gives many flags to
@@ -298,6 +310,64 @@ def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, l
     lines += [f"    {flag}" for flag in pair_flags(args.locust_extra)] or ["    (none)"]
     lines.append("====================")
     for line in lines:
+        tee(logs, line)
+
+
+def evaluation_names(evaluations: str | None) -> str:
+    """The names in an --evaluations value, for the run config; never raises."""
+    if not evaluations:
+        return "(none)"
+    try:
+        return ", ".join(str(e.get("name")) for e in json.loads(evaluations)) or "(empty)"
+    except (ValueError, TypeError, AttributeError):
+        return "(unreadable, see below)"
+
+
+def prepare_evaluations(
+    args: argparse.Namespace, files: dict[str, Path], run_ts: int, logs: TextIO
+) -> tuple[Any, str | None]:
+    """The evaluator of --evaluations, whose sources start with the run, or
+    None and why it can't judge the run. Called before the run so a typo is
+    in the log from the start; the run goes ahead either way. Sources ask
+    for paired runs, such as the suite's 1-user run, under --dest with the
+    same --tag."""
+    if not args.evaluations:
+        return None, None
+    try:
+        import evaluate  # benchmarking/evaluate, at /app/evaluate in the image
+        from evaluate import rundir
+
+        error = evaluate.check_config(args.evaluations)
+        if error is None:
+            paired_run = rundir.paired_run_finder(
+                args.dest, args.tag, run_ts, files, files["logs.txt"].parent / "evaluate"
+            )
+            run = evaluate.BenchmarkRunContext(files, paired_run=paired_run)
+            return evaluate.prepare(args.evaluations, run), None
+    except Exception as e:  # never cost the run its load test
+        error = f"evaluate failed to load or prepare the evaluations: {type(e).__name__}: {e}"
+    tee(logs, f"Warning: evaluations will not be judged: {error}")
+    return None, error
+
+
+def run_evaluations(
+    args: argparse.Namespace,
+    evaluator: Any,
+    error: str | None,
+    identity: dict[str, str],
+    out_json: Path,
+    jsonl_path: Path,
+    data_ts: str,
+    logs: TextIO,
+) -> None:
+    """Judges the finished run with the evaluator from prepare_evaluations:
+    evaluation.json and stats.jsonl rows. Without one, evaluation.json
+    records the error instead."""
+    import evaluate
+
+    report = evaluate.error_report(identity, error) if evaluator is None else evaluator.evaluate(identity)
+    evaluate.write(report, out_json, jsonl_path, data_ts, args.tag, args.name)
+    for line in evaluate.summary_lines(report):
         tee(logs, line)
 
 
@@ -569,6 +639,8 @@ def main() -> None:
     traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
     server_summary_json = work_dir / f"{args.name}_server_summary.json"
+    stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
+    evaluation_json = work_dir / f"{args.name}_evaluation.json"
 
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
@@ -579,6 +651,14 @@ def main() -> None:
         traces.write("\t".join(TRACE_COLUMNS) + "\n")
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
+        # The run's files by the names the evaluations' sources read.
+        run_files = {
+            "logs.txt": logs_path,
+            "stats.jsonl": jsonl_path,
+            "server_summary.json": server_summary_json,
+            "stats_history.csv": stats_history_csv,
+        }
+        evaluator, evaluations_error = prepare_evaluations(args, run_files, run_ts, logs)
         # Worker pods around the run, for OOMKilled restarts and evictions.
         pods_before = read_worker_pods(args, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
@@ -613,7 +693,7 @@ def main() -> None:
         # Density frontiers and server-side telemetry are additive. They are
         # kept out of the block above so that a failure here cannot discard
         # the measurements the trial actually came for.
-        stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
+        #
         # Seeded up front so that a discovery failure still leaves a usable
         # value for the frontier summary below.
         facts = dict(EMPTY_FACTS)
@@ -716,6 +796,32 @@ def main() -> None:
         elif stats_generated:
             tee(logs, "Skipping phase breakdown (--no-phase-breakdown)")
 
+    # Evaluations come last: their sources read the finished logs.txt and
+    # stats.jsonl, so they run once logs.txt is closed, and append their own
+    # lines to it. Additive like the steps above: a failure here costs no
+    # measurement.
+    if args.evaluations:
+        with open(logs_path, "a") as logs:
+            try:
+                run_evaluations(
+                    args,
+                    evaluator,
+                    evaluations_error,
+                    identity={
+                        "test_name": args.name,
+                        "tag": args.tag,
+                        "run_date": run_date,
+                        "run_ts": str(run_ts),
+                        "uri": prefix,
+                    },
+                    out_json=evaluation_json,
+                    jsonl_path=jsonl_path,
+                    data_ts=data_ts,
+                    logs=logs,
+                )
+            except Exception as e:
+                tee(logs, f"Warning: Failed to run the evaluations: {e}")
+
     status_path.write_text(
         json.dumps(
             {"locust_exit_code": exit_code, "stats_generated": stats_generated}
@@ -732,6 +838,7 @@ def main() -> None:
         (work_dir / f"{args.name}_failures.csv", "failures.csv"),
         (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
         (server_summary_json, "server_summary.json"),
+        (evaluation_json, "evaluation.json"),
     ]
     for src, basename in files:
         if not src.exists():
