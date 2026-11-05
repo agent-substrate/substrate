@@ -27,7 +27,7 @@ option go_package = "go.ate.dev/substrate/internal/proto/objectstoreexchangepb";
 service CredentialExchange {
   // ExchangeActorJwt verifies actor_jwt and returns a credential limited to
   // the actor's snapshot prefixes. Errors:
-  //   - INVALID_ARGUMENT: actor_jwt is empty.
+  //   - INVALID_ARGUMENT: actor_jwt is empty or too long.
   //   - UNAUTHENTICATED: actor_jwt fails signature, audience or expiry, or
   //     does not name an actor.
   //   - PERMISSION_DENIED: actor_jwt is not a worker-for-actor token, the

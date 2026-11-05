@@ -50,6 +50,9 @@ import (
 // audience is refused.
 const Audience = "objectstore-plugin.ate.dev"
 
+// MaxJWTSize is the largest jwt, in bytes, Authorize accepts.
+const MaxJWTSize = 8 << 10
+
 // Lookup resolves the actor a verified JWT names. actorlookup implements it.
 type Lookup interface {
 	Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapi.Actor, error)
@@ -159,6 +162,9 @@ func New(v Verifier, l Lookup) *Authorizer {
 func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, error) {
 	if jwt == "" {
 		return nil, status.Error(codes.InvalidArgument, "actor_jwt is required")
+	}
+	if len(jwt) > MaxJWTSize {
+		return nil, status.Errorf(codes.InvalidArgument, "actor_jwt is longer than %d bytes", MaxJWTSize)
 	}
 	claims, err := a.verifier.Verify(ctx, jwt, a.now())
 	switch {

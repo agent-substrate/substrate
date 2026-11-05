@@ -65,7 +65,7 @@ import (
 const Audience = internalauthz.Audience
 
 // MaxJWTSize is the largest jwt, in bytes, Authorize accepts.
-const MaxJWTSize = 8 << 10
+const MaxJWTSize = internalauthz.MaxJWTSize
 
 // Config says how an Authorizer verifies JWTs and reaches ate-api-server.
 type Config struct {
@@ -219,9 +219,6 @@ func (a *Authorizer) Close() error {
 //   - Canceled, DeadlineExceeded: ctx ended during the key fetch, or the
 //     actor lookup was canceled or timed out.
 func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, error) {
-	if len(jwt) > MaxJWTSize {
-		return nil, status.Errorf(codes.InvalidArgument, "actor_jwt is longer than %d bytes", MaxJWTSize)
-	}
 	d, err := a.checks.Authorize(ctx, jwt)
 	if err != nil {
 		return nil, err
