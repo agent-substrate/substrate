@@ -82,9 +82,7 @@ Agent Substrate is **framework and agent harness agnostic**. Because it runs sta
 
 ## Status and compatibility
 
-Agent Substrate is pre-1.0.  We are not making any guarantees about backward
-compatibility at this stage, and APIs and behavior may still change
-significantly.
+Agent Substrate has reached 1.0. We are committed to compatibility and stability of the public API, CLI, and configuration formats. We will continue to add new features, but we will not break existing APIs or configuration formats without a major version bump. See "Compatibility and schema evolution" in [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
 
 ### Supported Kubernetes Releases
 
