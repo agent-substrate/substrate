@@ -48,6 +48,10 @@ type originalDestinationFunc func(net.Conn) (string, error)
 // is assigned to its worker.
 type Proxy struct {
 	originalDestination originalDestinationFunc
+	// configureAcceptedSock is a hook that runs on every socket accepted by
+	// the atunnel egress. This can be used to configure socket-level settings
+	// such as socket buffers.
+	configureAcceptedSock func(net.Conn) error
 	// tunnelOpenTimeout bounds the wait for the gateway's CONNECT answer.
 	tunnelOpenTimeout time.Duration
 
@@ -69,8 +73,17 @@ type activation struct {
 	wg     sync.WaitGroup
 }
 
+// Option customizes a Proxy.
+type Option func(*Proxy)
+
+// WithConfigureAcceptedSock sets the hook that configures every socket the
+// egress accepts, before it is proxied. A socket the hook fails on is closed.
+func WithConfigureAcceptedSock(configure func(net.Conn) error) Option {
+	return func(e *Proxy) { e.configureAcceptedSock = configure }
+}
+
 // New creates an activation-aware egress proxy.
-func New(originalDestination originalDestinationFunc) (*Proxy, error) {
+func New(originalDestination originalDestinationFunc, opts ...Option) (*Proxy, error) {
 	if originalDestination == nil {
 		return nil, fmt.Errorf("egress: original destination resolver is required")
 	}
@@ -78,11 +91,16 @@ func New(originalDestination originalDestinationFunc) (*Proxy, error) {
 	// means it has queued the CONNECT behind its connection cap, and closing
 	// the connection is what frees that queue slot.
 	const tunnelOpenTimeout = 10 * time.Second
-	return &Proxy{
-		originalDestination: originalDestination,
-		tunnelOpenTimeout:   tunnelOpenTimeout,
-		active:              map[string]*activation{},
-	}, nil
+	e := &Proxy{
+		originalDestination:   originalDestination,
+		configureAcceptedSock: func(net.Conn) error { return nil },
+		tunnelOpenTimeout:     tunnelOpenTimeout,
+		active:                map[string]*activation{},
+	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e, nil
 }
 
 // Bind captures the actor's activation before its listeners start serving.
@@ -314,6 +332,10 @@ func (e *Proxy) handle(downstream net.Conn, active *activation) {
 		defer active.wg.Done()
 		defer downstream.Close()
 
+		if err := e.configureAcceptedSock(downstream); err != nil {
+			slog.ErrorContext(active.ctx, "atunnel configureAcceptedSock failed", slog.Any("err", err))
+			return
+		}
 		destination, err := e.originalDestination(downstream)
 		if err != nil {
 			slog.WarnContext(active.ctx, "atunnel failed to resolve original egress destination", slog.Any("err", err))

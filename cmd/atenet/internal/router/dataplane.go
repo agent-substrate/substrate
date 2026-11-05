@@ -94,6 +94,7 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	xdsSrv.SetTraceRootSamplingPercent(traceRootSamplingPercent)
 
 	xdsSrv.SetRouteTimeout(s.cfg.RouteTimeout)
+	xdsSrv.SetTCPNotSentLowat(s.cfg.TCPNotSentLowat)
 	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
 	if parkCfg.Enabled() {
 		// Envoy must keep a parked request open at least as long as the router

@@ -202,6 +202,22 @@ ingress dataplane, `atenet-egress` the egress gateway.
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
 
+## Kernel socket buffers
+
+A client that reads slowly makes the bytes Envoy relays to it wait in the
+kernel's socket queues. That memory is charged to the Envoy container but
+missing from Envoy's statistics. `--router-tcp-notsent-lowat` (default 16384)
+sets `TCP_NOTSENT_LOWAT` on the Envoy ingress router's TCP sockets, through
+the xDS configuration: the ones its TLS listeners accept from clients and the
+ones it dials to atunnel. A slow reader then backs data up behind Envoy's
+buffer limits instead of in the kernel. 0 leaves the kernel's default.
+
+The option is set on the listening socket, and the connections it accepts
+inherit it. Internal listeners and clusters have no kernel sockets and get
+none. The router doesn't set `SO_SNDBUF` or `SO_RCVBUF`: a fixed buffer size
+turns off the kernel's autotuning and caps a connection at about the buffer
+size per round trip.
+
 ## Ingress client authentication and authorization
 
 The Envoy ingress router serves only TLS listeners, and every client must
