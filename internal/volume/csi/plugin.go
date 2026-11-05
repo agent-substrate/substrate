@@ -50,10 +50,18 @@ var defaultTLSPaths = tlsPaths{
 	caCert:     DefaultCACertPath,
 }
 
+// NodeIDResolver maps a Kubernetes node name to the CSI driver's NodeID.
+// CSI ControllerPublishVolume and ControllerUnpublishVolume require the
+// driver-reported NodeID, which may differ from the Kubernetes node name.
+type NodeIDResolver interface {
+	ResolveNodeID(ctx context.Context, driverName, kubeNodeName string) (string, error)
+}
+
 // Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
 	client           *Client
 	stagingDirPrefix string
+	nodeIDResolver   NodeIDResolver
 
 	// capsMu guards controllerCaps and nodeCaps. The maps are built by
 	// InitControllerCapabilities and InitNodeCapabilities, and an RPC is
@@ -67,13 +75,23 @@ type Plugin struct {
 var _ volume.VolumePluginControlPlane = (*Plugin)(nil)
 var _ volume.VolumePluginWorkerPlane = (*Plugin)(nil)
 
+type PluginOption func(*Plugin)
+
+func WithNodeIDResolver(r NodeIDResolver) PluginOption {
+	return func(p *Plugin) { p.nodeIDResolver = r }
+}
+
 // NewPlugin creates a new Plugin adapter. Call InitControllerCapabilities or
 // InitNodeCapabilities before use; until then, no optional RPC is reported as supported.
-func NewPlugin(client *Client) *Plugin {
-	return &Plugin{
+func NewPlugin(client *Client, opts ...PluginOption) *Plugin {
+	p := &Plugin{
 		client:           client,
 		stagingDirPrefix: filepath.Join(nodepath.BasePath, "staging"),
 	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
 // SupportsControllerCapability reports whether the driver supports the given controller RPC.
@@ -211,10 +229,20 @@ func (p *Plugin) AttachVolume(ctx context.Context, req volume.AttachVolumeReques
 		return volume.AttachVolumeResponse{}, nil
 	}
 
+	nodeID := req.Node
+	if p.nodeIDResolver != nil {
+		driverName, _ := p.DriverName(ctx)
+		resolved, err := p.nodeIDResolver.ResolveNodeID(ctx, driverName, req.Node)
+		if err != nil {
+			return volume.AttachVolumeResponse{}, fmt.Errorf("resolve CSI NodeID for node %q: %w", req.Node, err)
+		}
+		nodeID = resolved
+	}
+
 	csiReq := &csi.ControllerPublishVolumeRequest{
 		VolumeId:         req.VolumeID,
-		NodeId:           req.Node,
-		VolumeCapability: getStandardCapabilities()[0], // Use primary capability
+		NodeId:           nodeID,
+		VolumeCapability: getStandardCapabilities()[0],
 		Readonly:         false,
 	}
 
@@ -238,9 +266,19 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 		return nil
 	}
 
+	nodeID := node
+	if p.nodeIDResolver != nil {
+		driverName, _ := p.DriverName(ctx)
+		resolved, err := p.nodeIDResolver.ResolveNodeID(ctx, driverName, node)
+		if err != nil {
+			return fmt.Errorf("resolve CSI NodeID for node %q: %w", node, err)
+		}
+		nodeID = resolved
+	}
+
 	req := &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: volumeID,
-		NodeId:   node,
+		NodeId:   nodeID,
 	}
 
 	_, err := p.client.ControllerUnpublishVolume(ctx, req)
