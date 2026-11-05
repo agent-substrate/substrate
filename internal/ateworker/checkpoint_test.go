@@ -131,6 +131,16 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 	if got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES); got != nil {
 		t.Fatalf("ReuseCheckpoint(VOLUMES with non-data files) = %v, want nil", got)
 	}
+
+	// VOLUMES fidelity with no durable-dir volumes records and reuses an empty file list.
+	emptyResp := &ateworkerpb.CheckpointWorkloadResponse{}
+	if err := RecordCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, emptyResp); err != nil {
+		t.Fatalf("RecordCheckpoint(empty VOLUMES): %v", err)
+	}
+	got = ReuseCheckpoint(checkpointDir, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES)
+	if got == nil || len(got.GetSnapshotFiles()) != 0 || len(got.GetDataSnapshotFiles()) != 0 {
+		t.Fatalf("ReuseCheckpoint(empty VOLUMES) = %v, want empty response", got)
+	}
 }
 
 // TestCheckpointContext checks that a checkpoint outlives its canceled caller
