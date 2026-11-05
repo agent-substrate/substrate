@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,8 @@ type hostedActor struct {
 	// stopping is set before ateworker itself stops the sandbox, so watchSandbox
 	// can tell that exit from a crash.
 	stopping atomic.Bool
+	// cleanupOnce starts at most one checkpoint cleanup retry per activation.
+	cleanupOnce sync.Once
 	// sandbox pins the sandbox process from the moment runsc creates it, so
 	// nothing that waits on it later can be fooled by a reused pid. Nil if it
 	// could not be pinned. Set once, under the actor's lock.
