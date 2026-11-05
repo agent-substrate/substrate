@@ -52,18 +52,7 @@ func TestActorEgressWebSocket(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decoding WebSocket observation: %v", err)
 	}
-	if got.StatusCode != http.StatusForbidden {
-		t.Errorf("WebSocket handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
-	}
-	if got.HandshakeBody != "WebSocket egress is not supported" {
-		t.Errorf("WebSocket handshake body = %q, want %q", got.HandshakeBody, "WebSocket egress is not supported")
-	}
-	if got.Error == "" {
-		t.Error("WebSocket handshake error is empty")
-	}
-	if len(got.Messages) != 0 {
-		t.Errorf("WebSocket messages = %+v, want no echoes", got.Messages)
-	}
+	requireEgressWebSocketDenied(t, "WebSocket", got)
 }
 
 func TestActorEgressSecureWebSocket(t *testing.T) {
@@ -80,16 +69,20 @@ func TestActorEgressSecureWebSocket(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("decoding secure WebSocket observation: %v", err)
 	}
-	if got.StatusCode != http.StatusForbidden {
-		t.Errorf("secure WebSocket handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
-	}
-	if got.HandshakeBody != "WebSocket egress is not supported" {
-		t.Errorf("secure WebSocket handshake body = %q, want %q", got.HandshakeBody, "WebSocket egress is not supported")
+	requireEgressWebSocketDenied(t, "secure WebSocket", got)
+}
+
+// requireEgressWebSocketDenied checks that the dataplane refused the handshake
+// and that nothing was echoed.
+func requireEgressWebSocketDenied(t *testing.T, name string, got egressWebSocketResponse) {
+	t.Helper()
+	if !e2e.CurrentAtenetDataplane().IsWebSocketEgressDenied(got.StatusCode, got.HandshakeBody) {
+		t.Errorf("%s handshake = %d %q, want a WebSocket egress denial", name, got.StatusCode, got.HandshakeBody)
 	}
 	if got.Error == "" {
-		t.Error("secure WebSocket handshake error is empty")
+		t.Errorf("%s handshake error is empty", name)
 	}
 	if len(got.Messages) != 0 {
-		t.Errorf("secure WebSocket messages = %+v, want no echoes", got.Messages)
+		t.Errorf("%s messages = %+v, want no echoes", name, got.Messages)
 	}
 }
