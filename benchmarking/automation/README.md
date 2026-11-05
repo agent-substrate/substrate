@@ -165,13 +165,18 @@ gcloud projects add-iam-policy-binding <TEST_PROJECT_ID> \
 ```
 
 **Runner Job pod** (KSA `benchmark-runner` in namespace `benchmarking` on the
-test cluster's project) needs `roles/storage.objectUser` on the destination
-bucket so `runner.py` can upload results:
+test cluster's project) needs `roles/storage.objectCreator` on the destination
+bucket so `runner.py` can upload results, and `roles/storage.objectViewer` so
+that a `cel` variable with a `baseline_test` can find and read the paired
+1-user run under `--dest` (without it, the evaluation is `invalid` and says
+why):
 
 ```bash
 RUNNER_PRINCIPAL="principal://iam.googleapis.com/projects/<TEST_PROJECT_NUMBER>/locations/global/workloadIdentityPools/<TEST_PROJECT_ID>.svc.id.goog/subject/ns/benchmarking/sa/benchmark-runner"
 gcloud storage buckets add-iam-policy-binding gs://<DEST_BUCKET> \
   --role=roles/storage.objectCreator --member="${RUNNER_PRINCIPAL}"
+gcloud storage buckets add-iam-policy-binding gs://<DEST_BUCKET> \
+  --role=roles/storage.objectViewer --member="${RUNNER_PRINCIPAL}"
 ```
 
 ## Updating tests

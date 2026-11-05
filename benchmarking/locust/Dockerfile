@@ -63,6 +63,10 @@ COPY benchmarking/locust/phase_breakdown.py /app/phase_breakdown.py
 COPY benchmarking/locust/ladder_steps.py /app/ladder_steps.py
 COPY benchmarking/locust/turnover_window.py /app/turnover_window.py
 COPY benchmarking/analysis/phase_report.py /app/phase_report.py
+# Run evaluations (--evaluations), imported by runner.py as the evaluate package.
+# The modules only: the directory also holds the tests and a local venv.
+COPY benchmarking/evaluate/*.py /app/evaluate/
+COPY benchmarking/evaluate/sources/ /app/evaluate/sources/
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

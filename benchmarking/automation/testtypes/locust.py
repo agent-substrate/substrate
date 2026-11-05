@@ -20,6 +20,12 @@ The runner Job wraps benchmarking/locust/runner.py, which drives locust
 An optional `controlPlane:` block shapes ate-api-server and Postgres for a
 capacity run (see controlplane.py); without it pre_test leaves the cluster
 as installed.
+
+Optional `evaluations:` go to the runner, which judges the run against them
+(benchmarking/evaluate/README.md). This image doesn't ship the evaluate
+package, so validate checks their shape only; the runner checks the rest
+before its run, and `python -m evaluate --check-config` checks a tests file
+offline.
 """
 
 import os
@@ -38,11 +44,22 @@ def control_plane_config(test: dict[str, Any]) -> dict[str, Any] | None:
     return controlplane.config(test["controlPlane"])
 
 
+def validate_evaluations_shape(test: dict[str, Any]) -> None:
+    """Raises ValueError unless evaluations is a list of mappings with a name."""
+    name = test.get("name")
+    evaluations = test.get("evaluations", [])
+    if not isinstance(evaluations, list) or not all(
+        isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"] for e in evaluations
+    ):
+        raise ValueError(f"locust test {name!r}: evaluations must be a list of mappings, each with a name")
+
+
 def validate(test: dict[str, Any]) -> None:
     name = test.get("name")
     for field in ("file", "duration", "users"):
         if field not in test:
             raise ValueError(f"locust test {name!r} missing {field!r}")
+    validate_evaluations_shape(test)
     if "controlPlane" not in test:
         return
     try:
