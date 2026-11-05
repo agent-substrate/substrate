@@ -50,7 +50,8 @@ type exchangeConfig struct {
 
 // newExchangeService builds the exchange handler for the configured backend.
 // The returned function closes what the handler holds open, the loopback
-// connection to ate-api-server, and is called at shutdown. GCS serves the
+// connection to ate-api-server and the idle connections to the actor JWT
+// issuer, and is called at shutdown. GCS serves the
 // exchange. S3 answers UNIMPLEMENTED, since the S3 node plugin never calls
 // it: it ignores actor_jwt and transfers with the pod's own credentials. The
 // backend seam is exchange.Issuer, the one piece of the exchange that is not
@@ -68,20 +69,25 @@ func newExchangeService(ctx context.Context, cfg exchangeConfig) (exchangepb.Cre
 	if cfg.issuerCAFile == "" {
 		return nil, nil, errors.New("--actor-jwt-issuer-ca-file is required to serve the exchange on GCS")
 	}
-	verifier, _, err := actorauthz.StartVerifier(ctx, cfg.issuer, cfg.issuerCAFile)
+	verifier, issuerClient, err := actorauthz.StartVerifier(ctx, cfg.issuer, cfg.issuerCAFile)
 	if err != nil {
 		return nil, nil, err
 	}
 	lookup, err := actorlookup.New(cfg.ateapi)
 	if err != nil {
+		issuerClient.CloseIdleConnections()
 		return nil, nil, err
+	}
+	release := func() {
+		issuerClient.CloseIdleConnections()
+		_ = lookup.Close()
 	}
 	issuer, err := gcsissuer.New(ctx, cfg.transferAccount)
 	if err != nil {
-		lookup.Close()
+		release()
 		return nil, nil, fmt.Errorf("while setting up the GCS credential issuer: %w", err)
 	}
-	return exchange.New(actorauthz.New(verifier, lookup), issuer), func() { _ = lookup.Close() }, nil
+	return exchange.New(actorauthz.New(verifier, lookup), issuer), release, nil
 }
 
 // exchangeTransportCredentials serves the pod's service DNS certificate,

@@ -33,13 +33,7 @@
 // The JWTs' public keys come from the issuer through OpenID Connect discovery
 // at <Issuer>/.well-known/openid-configuration. The issuer's certificate must
 // verify against Config.IssuerCAFile, or the system roots if the issuer's host
-// does not end in .svc.
-//
-// This package imports packages under internal/, so that a provider runs the
-// same code as the in-tree exchange and only this package's API is public. Go
-// allows it: the internal rule checks the importer's path, and every package
-// under go.ate.dev/substrate may import go.ate.dev/substrate/internal/...,
-// while code outside the module may import this package.
+// ends in neither .svc nor .svc.cluster.local.
 package actorauthz
 
 import (
@@ -65,7 +59,7 @@ import (
 const Audience = internalauthz.Audience
 
 // MaxJWTSize is the largest jwt, in bytes, Authorize accepts.
-const MaxJWTSize = 8 << 10
+const MaxJWTSize = internalauthz.MaxJWTSize
 
 // Config says how an Authorizer verifies JWTs and reaches ate-api-server.
 type Config struct {
@@ -75,10 +69,10 @@ type Config struct {
 	Issuer string
 	// IssuerCAFile is a PEM CA bundle that verifies Issuer's serving
 	// certificate, such as the service DNS trust bundle the in-tree
-	// objectstore-plugin sidecar uses. For an Issuer whose host ends in .svc,
-	// it is the only trusted bundle. For any other Issuer, the system roots
-	// are trusted too. It is required. It is re-read when it changes. If a
-	// re-read fails, the last bundle stays in use.
+	// objectstore-plugin sidecar uses. For an Issuer whose host ends in .svc
+	// or .svc.cluster.local, it is the only trusted bundle. For any other
+	// Issuer, the system roots are trusted too. It is required. It is re-read
+	// when it changes. If a re-read fails, the last bundle stays in use.
 	IssuerCAFile string
 	// APIServer says how to reach ate-api-server.
 	APIServer APIServerConfig
@@ -139,8 +133,8 @@ type Grant struct {
 type Decision struct {
 	ActorUID string
 	Grants   []Grant
-	// Expiry is the token's exp. A credential issued from a Decision must not
-	// outlive it.
+	// Expiry is the token's exp. It may already be past, since verification
+	// allows for clock skew.
 	Expiry time.Time
 }
 
@@ -219,9 +213,6 @@ func (a *Authorizer) Close() error {
 //   - Canceled, DeadlineExceeded: ctx ended during the key fetch, or the
 //     actor lookup was canceled or timed out.
 func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, error) {
-	if len(jwt) > MaxJWTSize {
-		return nil, status.Errorf(codes.InvalidArgument, "actor_jwt is longer than %d bytes", MaxJWTSize)
-	}
 	d, err := a.checks.Authorize(ctx, jwt)
 	if err != nil {
 		return nil, err

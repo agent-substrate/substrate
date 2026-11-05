@@ -50,6 +50,9 @@ import (
 // audience is refused.
 const Audience = "objectstore-plugin.ate.dev"
 
+// MaxJWTSize is the largest jwt, in bytes, Authorize accepts.
+const MaxJWTSize = 8 << 10
+
 // Lookup resolves the actor a verified JWT names. actorlookup implements it.
 type Lookup interface {
 	Actor(ctx context.Context, claims *actoridjwt.WireSubstrateClaims) (*ateapi.Actor, error)
@@ -91,15 +94,17 @@ func StartVerifier(ctx context.Context, issuer, caFile string) (*oidcjwt.Verifie
 }
 
 // issuerRoots returns the roots that verify issuer's certificate, and names
-// them for errors. A .svc host is trusted only through caFile: public CAs
-// cannot issue internal names, so only the service DNS signer can vouch for
-// it. Any other host is trusted through the system roots or caFile.
+// them for errors. A Service host, ending in .svc or .svc.cluster.local, is
+// trusted only through caFile: public CAs cannot issue internal names, so only
+// a private CA such as the service DNS signer can vouch for it. Any other host
+// is trusted through the system roots or caFile.
 func issuerRoots(issuer, caFile string) (loadRoots func() (*x509.CertPool, error), trusted string, err error) {
 	u, err := url.Parse(issuer)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid actor JWT issuer: %w", err)
 	}
-	if host := strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")); strings.HasSuffix(host, ".svc") {
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local") {
 		return credbundle.PoolLoader(caFile), caFile, nil
 	}
 	return credbundle.SystemPoolLoader(caFile), "the system roots or " + caFile, nil
@@ -131,8 +136,8 @@ func checkIssuerCertificate(ctx context.Context, issuer, trusted string, verifie
 type Decision struct {
 	ActorUID string
 	Grants   []actorscope.Grant
-	// Expiry is the token's exp. A credential issued from a Decision must not
-	// outlive it.
+	// Expiry is the token's exp. It may already be past, since verification
+	// allows for clock skew.
 	Expiry time.Time
 }
 
@@ -157,6 +162,9 @@ func New(v Verifier, l Lookup) *Authorizer {
 func (a *Authorizer) Authorize(ctx context.Context, jwt string) (*Decision, error) {
 	if jwt == "" {
 		return nil, status.Error(codes.InvalidArgument, "actor_jwt is required")
+	}
+	if len(jwt) > MaxJWTSize {
+		return nil, status.Errorf(codes.InvalidArgument, "actor_jwt is longer than %d bytes", MaxJWTSize)
 	}
 	claims, err := a.verifier.Verify(ctx, jwt, a.now())
 	switch {
