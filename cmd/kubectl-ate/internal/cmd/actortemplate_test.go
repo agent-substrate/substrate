@@ -133,6 +133,57 @@ func TestActorTemplateFromManifest_Errors(t *testing.T) {
 	}
 }
 
+func TestActorTemplateFromManifest_CRDHint(t *testing.T) {
+	manifest := "apiVersion: ate.dev/v1\nkind: ActorTemplate\nmetadata: {name: counter}\nspec:\n  containers: []\n"
+	_, err := actorTemplateFromManifest([]byte(manifest))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	want := "ActorTemplate is not a Kubernetes CRD; remove apiVersion/kind/spec"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected error containing %q, got: %v", want, err)
+	}
+}
+
+func TestActorTemplateFromManifest_EgressTrustBundleDocSnippet(t *testing.T) {
+	manifest := `metadata:
+  name: my-actor
+  atespace: my-atespace
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        - system-roots.ate.dev
+        path: trust-bundle.pem
+containers:
+- name: app
+  image: busybox:1.36
+  volumeMounts:
+  - name: system-info
+    mountPath: /run/ate/egress-trust-bundle
+`
+	got, err := actorTemplateFromManifest([]byte(manifest))
+	if err != nil {
+		t.Fatalf("actorTemplateFromManifest failed: %v", err)
+	}
+	if got.GetMetadata().GetName() != "my-actor" || got.GetMetadata().GetAtespace() != "my-atespace" {
+		t.Errorf("unexpected metadata: %v", got.GetMetadata())
+	}
+	if len(got.GetVolumes()) != 1 || got.GetVolumes()[0].GetName() != "system-info" {
+		t.Errorf("unexpected volumes: %v", got.GetVolumes())
+	}
+	tb := got.GetVolumes()[0].GetSystemInfo().GetDataSources()[0].GetTrustBundle()
+	if tb == nil || tb.GetPath() != "trust-bundle.pem" {
+		t.Errorf("unexpected trust bundle: %v", tb)
+	}
+	if len(got.GetContainers()) != 1 || got.GetContainers()[0].GetVolumeMounts()[0].GetMountPath() != "/run/ate/egress-trust-bundle" {
+		t.Errorf("unexpected container volume mounts: %v", got.GetContainers())
+	}
+}
+
 // The counter demo's substrate template manifests must stay parseable by
 // `create actortemplate -f`; this pins them to the parser.
 func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
