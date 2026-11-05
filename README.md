@@ -121,7 +121,13 @@ To quickly set up the complete environment:
 1. Make sure you have [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [`docker`](https://www.docker.com/) installed and configured on your dev machine. We will automatically manage other dependencies via Go, including [`kind`](https://kind.sigs.k8s.io/).
    A Linux host that will run more than about a thousand sandboxes also needs a larger kernel neighbor table (`net.ipv4.neigh.default.gc_thresh1/2/3` = 4096/16384/32768); `hack/create-kind-cluster.sh` warns when the host is at the default of 1024.
 
-2. Run the following steps:
+2. Clone the repository (if you haven't yet) and `cd` to it:
+```shell
+git clone https://github.com/agent-substrate/substrate.git
+cd substrate
+```
+
+3. From the repository root, run the following steps:
 ```shell
 # create cluster and local registry
 hack/create-kind-cluster.sh
@@ -155,7 +161,7 @@ kubectl ate proxy actor my-counter-1 -a ate-demo-counter
 > injected, grant its atespace the namespaces whose Secrets it may read; see
 > [Enable it](docs/guides/egress-credential-injection.md#enable-it).
 
-3. In a **separate terminal**, send an HTTP request to increment the counter:
+4. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
 curl -X POST -i http://localhost:8000/
 ```
