@@ -15,21 +15,34 @@
 package exchangeclient
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/utils/lru"
 
 	"go.ate.dev/substrate/internal/objectstoreplugin/credential"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
+	"go.ate.dev/substrate/internal/testcert"
 	"go.ate.dev/substrate/pkg/objectstorage"
 )
 
@@ -109,6 +122,9 @@ func TestClient_CachesTheTokenAndClientPerJWTUntilNearExpiry(t *testing.T) {
 	}
 	if client, err := s.Client(t.Context(), "jwt-a", false); err != nil || tokenOf(client) != "tok-2" || len(exchange.calls) != 3 {
 		t.Fatalf("after the refresh: client %v, err %v, calls %d, want tok-2 from the cache", client, err, len(exchange.calls))
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
 	}
 }
 
@@ -248,6 +264,335 @@ func TestNew_ChecksItsConfig(t *testing.T) {
 	}
 	if _, err := New(Config{Address: "api:8445", CAFile: filepath.Join(t.TempDir(), "absent.pem")}); err == nil {
 		t.Error("New with a missing CA bundle succeeded")
+	}
+}
+
+type actorTokenExchange struct {
+	exchangepb.CredentialExchangeClient
+	expiry time.Time
+}
+
+func (e *actorTokenExchange) ExchangeActorJwt(_ context.Context, in *exchangepb.ExchangeActorJwtRequest, _ ...grpc.CallOption) (*exchangepb.ExchangeActorJwtResponse, error) {
+	tok := "tok-" + in.GetActorJwt()
+	if in.GetForce() {
+		tok += "-forced"
+	}
+	return &exchangepb.ExchangeActorJwtResponse{
+		AccessToken: tok,
+		ExpireTime:  timestamppb.New(e.expiry),
+	}, nil
+}
+
+func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.T) {
+	t.Setenv("STORAGE_EMULATOR_HOST", "")
+	adcProbeHits := atomic.Int64{}
+	adcServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		adcProbeHits.Add(1)
+		http.Error(w, "ambient credentials must not be used", http.StatusInternalServerError)
+	}))
+	t.Cleanup(adcServer.Close)
+	adcFile := filepath.Join(t.TempDir(), "ambient-creds.json")
+	adcJSON := fmt.Sprintf(`{"type":"authorized_user","client_id":"id","client_secret":"secret","refresh_token":"refresh","token_url":%q}`, adcServer.URL+"/token")
+	if err := os.WriteFile(adcFile, []byte(adcJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", adcFile)
+	t.Setenv("GCE_METADATA_HOST", "127.0.0.1:1")
+
+	var (
+		totalConns  atomic.Int64
+		liveConns   atomic.Int64
+		connClosed  = make(chan struct{}, 1)
+		connsMu     sync.Mutex
+		connHits    = make(map[string]int)
+		holdEntered = make(chan struct{})
+		holdRelease = make(chan struct{})
+		holdOnce    sync.Once
+		badReq      atomic.Pointer[string]
+	)
+	releaseHold := sync.OnceFunc(func() { close(holdRelease) })
+	recordFailure := func(msg string) {
+		badReq.CompareAndSwap(nil, &msg)
+	}
+
+	gcs := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			recordFailure(fmt.Sprintf("proto = %s, want HTTP/2", r.Proto))
+			http.Error(w, "want HTTP/2", http.StatusHTTPVersionNotSupported)
+			return
+		}
+		connsMu.Lock()
+		connHits[r.RemoteAddr]++
+		connsMu.Unlock()
+		var object string
+		switch r.Method {
+		case http.MethodPost:
+			object = r.URL.Query().Get("name")
+		case http.MethodGet:
+			object = strings.TrimPrefix(r.URL.Path, "/bucket/")
+		default:
+			recordFailure(fmt.Sprintf("unexpected %s %s", r.Method, r.URL))
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+		actor, rest, ok := strings.Cut(object, "/")
+		if !ok {
+			recordFailure(fmt.Sprintf("unexpected object %q", object))
+			http.Error(w, "bad object", http.StatusBadRequest)
+			return
+		}
+		wantAuth := "Bearer tok-" + actor
+		if strings.HasPrefix(rest, "forced") {
+			wantAuth += "-forced"
+		}
+		if got := r.Header.Get("Authorization"); got != wantAuth {
+			recordFailure(fmt.Sprintf("object %q got Authorization %q, want %q", object, got, wantAuth))
+			http.Error(w, "wrong token", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet {
+			body := "payload-" + actor
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(body)-1, len(body)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, body)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		if rest == "inflight" {
+			holdOnce.Do(func() { close(holdEntered) })
+			select {
+			case <-holdRelease:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"name":%q,"bucket":"bucket"}`, object)
+	}))
+	gcs.EnableHTTP2 = true
+	gcs.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			totalConns.Add(1)
+			liveConns.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			if liveConns.Add(-1) == 0 {
+				select {
+				case connClosed <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+	gcs.StartTLS()
+	t.Cleanup(gcs.Close)
+	t.Cleanup(releaseHold)
+
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	base := gcs.Client().Transport.(*http.Transport).Clone()
+	base.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, gcs.Listener.Addr().String())
+	}
+	base.TLSClientConfig.ServerName = "example.com"
+	base.HTTP2 = &http.HTTP2Config{MaxReadFrameSize: 32 << 10}
+	s := newPoolSource(&actorTokenExchange{expiry: now.Add(time.Hour)}, base)
+	if base.HTTP2.SendPingTimeout != 0 {
+		t.Fatalf("newPoolSource mutated base.HTTP2.SendPingTimeout = %v", base.HTTP2.SendPingTimeout)
+	}
+	for i, tr := range s.pool.transports {
+		if tr.MaxIdleConnsPerHost != 100 || tr.HTTP2 == nil || tr.HTTP2.MaxReadFrameSize != 32<<10 || tr.HTTP2.SendPingTimeout != 31*time.Second {
+			t.Fatalf("transport %d settings = (MaxIdleConnsPerHost=%d, HTTP2=%+v)", i, tr.MaxIdleConnsPerHost, tr.HTTP2)
+		}
+	}
+	s.now = func() time.Time { return now }
+	s.cache = lru.New(2)
+
+	// Open all transportPoolSize HTTP/2 connections before concurrent transfers
+	// so cold ALPN handshakes do not race.
+	warmClient, err := s.Client(t.Context(), "actor-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range transportPoolSize {
+		if err := warmClient.PutObject(t.Context(), "bucket", fmt.Sprintf("actor-1/warm-%d", i), bytes.NewReader([]byte("snap"))); err != nil {
+			t.Fatalf("warm PutObject %d: %v", i, err)
+		}
+	}
+	if got := totalConns.Load(); got != transportPoolSize {
+		t.Fatalf("warmed %d TLS connections, want %d", got, transportPoolSize)
+	}
+
+	// Hold an upload open on actor-0 while later actors evict it from s.cache.
+	evictedClient, err := s.Client(t.Context(), "actor-0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldErr := make(chan error, 1)
+	go func() {
+		heldErr <- evictedClient.PutObject(t.Context(), "bucket", "actor-0/inflight", bytes.NewReader([]byte("snap")))
+	}()
+	select {
+	case <-holdEntered:
+	case err := <-heldErr:
+		t.Fatalf("actor-0 upload exited before hold: %v", err)
+	case <-t.Context().Done():
+		t.Fatal("timed out waiting for actor-0 upload to reach server")
+	}
+
+	const actors = 30
+	grp, gctx := errgroup.WithContext(t.Context())
+	for i := 2; i < 2+actors; i++ {
+		actor := fmt.Sprintf("actor-%d", i)
+		grp.Go(func() error {
+			c, err := s.Client(gctx, actor, false)
+			if err != nil {
+				return err
+			}
+			if err := c.PutObject(gctx, "bucket", actor+"/put", bytes.NewReader([]byte("snap"))); err != nil {
+				return err
+			}
+			rc, err := c.GetObject(gctx, "bucket", actor+"/get")
+			if err != nil {
+				return err
+			}
+			got, readErr := io.ReadAll(rc)
+			if err := errors.Join(readErr, rc.Close()); err != nil {
+				return err
+			}
+			if want := "payload-" + actor; string(got) != want {
+				return fmt.Errorf("GetObject(%s) = %q, want %q", actor, got, want)
+			}
+			return nil
+		})
+	}
+	if err := grp.Wait(); err != nil {
+		t.Fatalf("actor transfers failed: %v", err)
+	}
+
+	forced, err := s.Client(t.Context(), "actor-2", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := forced.PutObject(t.Context(), "bucket", "actor-2/forced", bytes.NewReader([]byte("snap"))); err != nil {
+		t.Fatalf("forced PutObject: %v", err)
+	}
+
+	releaseHold()
+	if err := <-heldErr; err != nil {
+		t.Fatalf("evicted actor-0 upload failed: %v", err)
+	}
+	if msg := badReq.Load(); msg != nil {
+		t.Fatalf("server saw invalid request: %s", *msg)
+	}
+	if got := totalConns.Load(); got != transportPoolSize {
+		t.Fatalf("opened %d TLS connections across %d actors, want %d", got, actors+2, transportPoolSize)
+	}
+	if got := liveConns.Load(); got != transportPoolSize {
+		t.Fatalf("live TLS connections = %d before Close, want %d", got, transportPoolSize)
+	}
+	if got := adcProbeHits.Load(); got != 0 {
+		t.Fatalf("probed ambient credentials %d times, want 0", got)
+	}
+	connsMu.Lock()
+	distinctConns := len(connHits)
+	for addr, hits := range connHits {
+		if hits < 2 {
+			t.Errorf("connection %s served %d requests, want >= 2 across actor churn", addr, hits)
+		}
+	}
+	connsMu.Unlock()
+	if distinctConns != transportPoolSize {
+		t.Fatalf("requests used %d distinct TLS connections, want %d", distinctConns, transportPoolSize)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	// gcsReader.Close cancels its stream context before closing the HTTP/2
+	// body, so stream bookkeeping in net/http can finish just after Close
+	// returns. Retry closeIdleConnections until all streams drain.
+	retry := time.NewTicker(10 * time.Millisecond)
+	defer retry.Stop()
+	for liveConns.Load() > 0 {
+		select {
+		case <-connClosed:
+		case <-retry.C:
+			s.pool.closeIdleConnections()
+		case <-t.Context().Done():
+			t.Fatalf("Close() left %d idle TLS connections open", liveConns.Load())
+		}
+	}
+}
+
+type exchangeServer struct {
+	exchangepb.UnimplementedCredentialExchangeServer
+	expiry time.Time
+}
+
+func (s *exchangeServer) ExchangeActorJwt(_ context.Context, in *exchangepb.ExchangeActorJwtRequest) (*exchangepb.ExchangeActorJwtResponse, error) {
+	return &exchangepb.ExchangeActorJwtResponse{
+		AccessToken: "tok-" + in.GetActorJwt(),
+		ExpireTime:  timestamppb.New(s.expiry),
+	}, nil
+}
+
+func TestNew_ExchangesAndCloses(t *testing.T) {
+	var gotAuth atomic.Pointer[string]
+	emulator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		gotAuth.Store(&auth)
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"obj","bucket":"bucket"}`))
+	}))
+	t.Cleanup(emulator.Close)
+	t.Setenv("STORAGE_EMULATOR_HOST", strings.TrimPrefix(emulator.URL, "http://"))
+
+	serverTLS := testcert.NewServerTLS(t, net.ParseIP("127.0.0.1"))
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, serverTLS.RootCA, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cert, err := tls.X509KeyPair(serverTLS.Certificate, serverTLS.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+	})))
+	exchangepb.RegisterCredentialExchangeServer(grpcSrv, &exchangeServer{expiry: time.Now().Add(time.Hour)})
+	go func() { _ = grpcSrv.Serve(lis) }()
+	t.Cleanup(grpcSrv.Stop)
+
+	s, err := New(Config{Address: lis.Addr().String(), CAFile: caFile})
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	client, err := s.Client(t.Context(), "actor-a", false)
+	if err != nil {
+		t.Fatalf("Client() = %v", err)
+	}
+	if err := client.PutObject(t.Context(), "bucket", "obj", bytes.NewReader([]byte("data"))); err != nil {
+		t.Fatalf("PutObject() = %v", err)
+	}
+	if auth := gotAuth.Load(); auth == nil || *auth != "Bearer tok-actor-a" {
+		t.Fatalf("Authorization = %v, want %q", auth, "Bearer tok-actor-a")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if _, err := s.Client(t.Context(), "actor-b", false); status.Code(err) != codes.Canceled {
+		t.Fatalf("Client() after Close() = %v, want Canceled", err)
 	}
 }
 
