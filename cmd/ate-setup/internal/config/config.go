@@ -118,9 +118,9 @@ type Config struct {
 	// follows neither form.
 	ExpectedJWTIssuer string
 
-	// APIAuthzBootstrapOwners is the comma-separated principal list granted
-	// owner on global:root (ATE_API_AUTHZ_BOOTSTRAP_OWNERS).
-	APIAuthzBootstrapOwners string
+	// APIAuthzBootstrapOwners are the principals granted owner on global:root
+	// (ATE_API_AUTHZ_BOOTSTRAP_OWNERS, parsed by principal.ParseList).
+	APIAuthzBootstrapOwners []string
 
 	// EgressGatewayExtraSPIFFEIDs hold ate-api-server's egress_gateway role
 	// next to atenet-egress (ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS).
