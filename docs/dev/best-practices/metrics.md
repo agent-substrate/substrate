@@ -5,7 +5,7 @@ instrument to pick, how to name it, which labels it may carry, how to write the
 Go, how to test it, and how to register it. It is the metrics counterpart of
 [Tracing Best Practices](tracing.md).
 
-Read [Actor Observability](../../observability.md#2-metrics) first if you have
+Read [Actor Observability](../../guides/observability.md#2-metrics) first if you have
 not: it explains what already exists and how the registry is used. This
 document is about adding to it.
 
@@ -41,7 +41,7 @@ Every metric PR has these parts. Reviewers check for each one.
    `docs/metrics/registry/metrics.yaml`, and `hack/verify/metrics.sh` passes.
 5. If the metric has a rule the registry cannot hold, or a blind spot it closes,
    `docs/metrics/substrate.yaml` is updated.
-6. The metrics table in `docs/observability.md` has a row for it.
+6. The metrics table in `docs/guides/observability.md` has a row for it.
 
 ## Choosing the instrument
 
@@ -462,19 +462,12 @@ entry), when it has a rule Weaver cannot express (add it under
 `cardinality_rules` with what could enforce it), or when it deliberately
 breaks a convention (add a `lint_exceptions` entry with the reason).
 
-### `docs/observability.md`
+### `docs/guides/observability.md`
 
 Add a row to the metrics table under "2. Metrics": name, emitting component,
 instrument kind, and one sentence on what it measures with the label list. If
 the label semantics need more than a sentence (as the snapshot labels did), add
 a short paragraph below the table rather than growing the row.
-
-### Dashboards
-
-Cloud Monitoring dashboards live in `tools/setup-gcp/dashboards/`. A new metric
-does not need a new dashboard in the same PR, but a metric an operator will
-alert on should get a panel in a follow-up, and the PR description should say
-which question the panel answers.
 
 ## Worked example: a node-local snapshot cache
 
@@ -515,5 +508,5 @@ Steps, in order:
    instruments ship with the cache, so it starts with no blind spot; the
    `image cache cost and eviction` entry there is the image cache's gap, not
    this one's.
-7. `docs/observability.md`: four rows in the table, one paragraph on the
+7. `docs/guides/observability.md`: four rows in the table, one paragraph on the
    outcome semantics.

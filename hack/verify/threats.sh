@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ cd "${ROOT}"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-hack/export-threats.py --md docs/threat-model.md --out "${TMP_DIR}/threats.json" > /dev/null
+hack/export-threats.py --md docs/security/threat-model.md --out "${TMP_DIR}/threats.json" > /dev/null
 
 if ! diff -u docs/threats.json "${TMP_DIR}/threats.json"; then
   echo "FAIL: docs/threats.json is out of date." >&2

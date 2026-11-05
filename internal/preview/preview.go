@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,9 +45,10 @@ const (
 	// GateGoldenEgressPolicy controls configuring a golden actor's egress policy on its template.
 	GateGoldenEgressPolicy Gate = "GoldenEgressPolicy"
 
-	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate's
-	// snapshotConfig.storage_location is honored. When disabled, snapshots
-	// are stored under ate-api-server's --snapshot-location.
+	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate may
+	// set snapshotConfig.storage_location. When disabled, the API rejects the
+	// field and snapshots are stored under ate-api-server's
+	// --snapshot-location.
 	GatePerTemplateSnapshotLocation Gate = "PerTemplateSnapshotLocation"
 )
 

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -68,10 +68,10 @@ type Substrate struct {
 	// is a cloud-hypervisor cold boot plus a checkpoint, on nested KVM in CI.
 	GoldenTimeout time.Duration
 
-	// RenderValues optionally supplies extra placeholder values at deploy
-	// time, for demos whose manifests need more than ${BUCKET_NAME} (e.g. a
-	// freshly built image digest). Delete renders only the pool manifest, so
-	// deploy-only values may live solely here.
+	// RenderValues optionally supplies placeholder values at deploy time, for
+	// demos whose manifests need them (e.g. a freshly built image digest).
+	// Delete renders only the pool manifest, so deploy-only values may live
+	// solely here.
 	RenderValues func(ctx context.Context, e *steps.Env) (map[string]string, error)
 }
 
@@ -186,18 +186,31 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 	return nil
 }
 
-func (d *Substrate) Delete(ctx context.Context, e *steps.Env) error {
+func (d *Substrate) Delete(ctx context.Context, e *steps.Env) ([]string, error) {
 	log.Step(d.DemoName + "_delete")
 	refs := make([]resources.ActorTemplateRef, 0, len(d.Templates))
 	for _, t := range d.Templates {
 		refs = append(refs, t.Ref)
 	}
 	if err := e.DeleteSubstrateDemo(ctx, refs, d.atespaces()); err != nil {
-		return err
+		return nil, err
 	}
 	manifest, err := Render(e, d.WorkerPoolManifest, nil, ExternalVolumePlaceholders)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return e.Kube.DeleteBytes(ctx, manifest)
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.Kube.Delete(ctx, objs); err != nil {
+		return nil, err
+	}
+	var namespaces []string
+	for _, obj := range objs {
+		if gvk := obj.GroupVersionKind(); gvk.Group == "" && gvk.Kind == "Namespace" {
+			namespaces = append(namespaces, obj.GetName())
+		}
+	}
+	return namespaces, nil
 }

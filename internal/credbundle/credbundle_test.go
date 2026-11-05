@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -283,6 +283,46 @@ func TestPoolLoaderErrorWhenBundleMissing(t *testing.T) {
 	getPool := PoolLoader(t.TempDir() + "/absent.pem")
 	if _, err := getPool(); err == nil {
 		t.Fatalf("PoolLoader() error = nil, want missing-file error")
+	}
+}
+
+// TestSystemPoolLoader checks that the pool holds the system roots and the
+// bundle, and is cached and reloaded like PoolLoader's. Holding the system
+// roots is what lets an issuer with a publicly trusted certificate verify.
+func TestSystemPoolLoader(t *testing.T) {
+	path := writeProjectedBundle(t, makeTrustBundle(t, 1))
+	getPool := SystemPoolLoader(path)
+	first, err := getPool()
+	if err != nil {
+		t.Fatalf("SystemPoolLoader() first call error = %v", err)
+	}
+	want := func() *x509.CertPool {
+		t.Helper()
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := appendPool(pool, path); err != nil {
+			t.Fatal(err)
+		}
+		return pool
+	}
+	if !first.Equal(want()) {
+		t.Fatalf("SystemPoolLoader() pool is not the system roots plus the bundle")
+	}
+	if second, err := getPool(); err != nil || second != first {
+		t.Fatalf("SystemPoolLoader() with the file unchanged = %p, %v, want the cached %p", second, err, first)
+	}
+
+	if err := rotateProjectedBundle(path, makeTrustBundle(t, 2)); err != nil {
+		t.Fatalf("rotate bundle: %v", err)
+	}
+	rotated, err := getPool()
+	if err != nil {
+		t.Fatalf("SystemPoolLoader() after rotation error = %v", err)
+	}
+	if rotated.Equal(first) || !rotated.Equal(want()) {
+		t.Fatalf("SystemPoolLoader() did not pick up the rotated trust bundle")
 	}
 }
 

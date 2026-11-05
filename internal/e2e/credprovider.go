@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ const (
 //
 // The provider itself and the gateway's side of the connection — the
 // credential-provider configuration — are the install's
-// (hack/install-ate.sh --credential-provider='{"name":"k8s.io"}'), not
+// (ate-setup --credential-provider='{"name":"k8s.io"}'), not
 // something this helper can retrofit: the rollout wait below fails on a
 // cluster installed without them.
 func ConfigureCredentialProvider(t *testing.T) {

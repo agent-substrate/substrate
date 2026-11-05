@@ -1,4 +1,4 @@
-//  Copyright 2026 Google LLC
+//  Copyright 2026 The Agent Substrate Authors
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -23,9 +23,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/ateattr"
 )
+
+// serviceName is the OpenTelemetry instrumentation scope of the ingress handler.
+const serviceName = "atenet-router"
 
 // Request-parking instruments. parking.active is the live count of parked
 // requests; parking.wait.duration is how long each request stayed parked
@@ -49,7 +51,7 @@ type ParkingMetrics struct {
 // NewParkingMetrics creates the request-parking instruments from the global
 // MeterProvider.
 func NewParkingMetrics() (*ParkingMetrics, error) {
-	meter := otel.Meter(extproc.ServiceName)
+	meter := otel.Meter(serviceName)
 
 	active, err := meter.Int64UpDownCounter(
 		parkingActiveMetricName,

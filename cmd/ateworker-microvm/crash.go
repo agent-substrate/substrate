@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,6 +53,9 @@ func (s *AteWorkerService) watchVM(attribution resources.ActorAttribution, actor
 	}
 	ctx := context.Background()
 	message := fmt.Sprintf("%s exited: %s", what, exit)
+	if ra.memory.Killed() {
+		message = "killed for exceeding its memory limit"
+	}
 	slog.WarnContext(ctx, "Micro-VM died", slog.String("actorUID", attribution.UID), slog.String("reason", message))
 
 	// Not reported under the actor's lock: a suspend in flight holds the

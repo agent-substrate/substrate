@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -114,7 +114,7 @@ def isolate_block(test: dict) -> dict | None:
 
 
 def isolate_install_args(test: dict) -> list[str]:
-    """Return the hack/install-ate.sh flags a tests.yaml entry's isolate block
+    """Return the ate-setup flags a tests.yaml entry's isolate block
     installs the fake data plane with, or none without a block. The installer
     only chooses the data plane; the block's tuning goes to deploy.sh."""
     return [] if isolate_block(test) is None else ["--fake-data-plane"]

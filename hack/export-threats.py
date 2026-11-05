@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -89,7 +89,7 @@ def extract(md_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Export threats from threat-model.md to JSON")
-    parser.add_argument("--md", type=str, default="docs/threat-model.md", help="Path to threat-model.md")
+    parser.add_argument("--md", type=str, default="docs/security/threat-model.md", help="Path to threat-model.md")
     parser.add_argument("--out", type=str, default="docs/threats.json", help="Output JSON path")
     args = parser.parse_args()
 

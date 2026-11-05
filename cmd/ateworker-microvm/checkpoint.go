@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,10 +31,12 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/ateworker"
+	"go.ate.dev/substrate/internal/ateworker/cgroup"
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/snapshotcache"
 	"go.ate.dev/substrate/internal/workerstats"
 	"golang.org/x/sync/errgroup"
 )
@@ -80,7 +82,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	defer s.locks.Unlock(req.GetActorUid())
 
 	if s.lookupActor(req.GetActorUid()) == nil {
-		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), req.GetFidelity()); resp != nil {
+		if resp := ateworker.ReuseCheckpoint(req.GetActorDirs().GetCheckpointDir(), s.bootID, req.GetFidelity()); resp != nil {
 			slog.InfoContext(ctx, "Reusing completed checkpoint from previous attempt", slog.String("actorUID", req.GetActorUid()))
 			return resp, nil
 		}
@@ -213,7 +215,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		g.Go(func() error {
 			t := time.Now()
 			var err error
-			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
+			durableFiles, err = s.tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
@@ -221,7 +223,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if shipsRootfs {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
+			err := s.tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})
@@ -261,7 +263,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.Duration("teardown", dTeardown))
 	s.recordFinalIfEnded(ctx, hosted)
 	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
-	if err := ateworker.RecordCheckpoint(checkpointDir, scope, resp); err != nil {
+	if err := ateworker.RecordCheckpoint(checkpointDir, s.bootID, scope, resp); err != nil {
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 	return resp, nil
@@ -288,8 +290,9 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 
 	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", actorUID), slog.String("dir", checkpointDir))
 	tSnapshot := time.Now()
-	if err := client.Snapshot(ctx, checkpointDir); err != nil {
-		return 0, fmt.Errorf("while snapshotting guest: %w", err)
+	borrowed, err := s.writeSnapshot(ctx, client, ra, actorUID, checkpointDir)
+	if err != nil {
+		return 0, err
 	}
 	dSnapshot := time.Since(tSnapshot)
 
@@ -308,15 +311,106 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 	} else if ra != nil && ra.restoreSourceDir != "" {
 		tMerge := time.Now()
 		if err := mergeOnDemandDelta(ctx, ra.restoreSourceDir, checkpointDir, ra.preserveRestoreSource); err != nil {
+			s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
 			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
 			slog.String("id", actorUID), slog.Duration("merge", time.Since(tMerge)))
 	}
 
+	// Clean pages can be reclaimed, and dropped once a restore has read them.
+	// Start writeback after mergeOnDemandDelta so it tracks the final merged
+	// memory-ranges inode rather than the unlinked delta file.
+	s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
+
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
 	return dSnapshot, nil
+}
+
+// snapshotWriteHeadroom is how far the actor's cgroup may grow past the paused
+// guest while CH writes the snapshot, when its booking leaves less than that,
+// and snapshotWriteSlots how many of those writes may run at once.
+// memoryReservedBytes covers both.
+const (
+	snapshotWriteHeadroom = 16 << 20
+	snapshotWriteSlots    = 2
+)
+
+// writeSnapshot has CH write the paused guest into checkpointDir.
+//
+// CH writes through the page cache from the actor's cgroup while the guest
+// still holds its memory. At the worker pod's memory limit that can OOM-kill
+// the whole pod, and every actor on it, so the leaf may only grow into what the
+// actor booked and the guest left untouched, plus what it can borrow, and the
+// kernel throttles CH to the disk past that.
+//
+// It returns what it borrowed, for the caller to Return once the snapshot is on
+// disk. On error the loan comes back once whatever CH wrote is on disk or
+// removed.
+func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (int64, error) {
+	if s.snapshotWrites != nil {
+		select {
+		case s.snapshotWrites <- struct{}{}:
+			defer func() { <-s.snapshotWrites }()
+		case <-ctx.Done():
+			return 0, fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
+		}
+	}
+	// the page cache the write adds isn't the actor running away
+	if ra != nil {
+		defer ra.memory.Resume(ra.memory.Pause())
+	}
+	var borrowed int64
+	// the write caches about as much as the guest has populated, which is
+	// at most the leaf's usage. When the pod can lend all of that, the leaf
+	// goes unlimited: memory.high also shrinks the cgroup's dirty page
+	// limit, which throttles the write to the disk long before the cap
+	current, err := cgroup.ActorLeafMemory(actorUID)
+	if err == nil {
+		borrowed = s.borrow.Take(current)
+	}
+	if err == nil && borrowed >= current && s.throttleMemory {
+		release, err := cgroup.LiftActorLeafMemory(actorUID)
+		if err != nil {
+			slog.WarnContext(ctx, "Snapshotting under the actor's memory limit", slog.String("id", actorUID), slog.Any("err", err))
+		} else {
+			defer release()
+		}
+	}
+	if err != nil || borrowed < current {
+		var ceiling int64
+		if ra != nil {
+			ceiling = ra.memoryBytes
+		}
+		release, err := cgroup.LimitActorLeafGrowth(actorUID, snapshotWriteHeadroom, ceiling, borrowed)
+		if err != nil {
+			slog.WarnContext(ctx, "Snapshotting without a page cache limit", slog.String("id", actorUID), slog.Any("err", err))
+		} else {
+			defer release()
+		}
+	}
+	if err := client.Snapshot(ctx, checkpointDir); err != nil {
+		s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
+		return 0, fmt.Errorf("while snapshotting guest: %w", err)
+	}
+	return borrowed, nil
+}
+
+// writeBackSnapshot returns borrowed once the snapshot files in checkpointDir
+// are on disk or removed, or right away if there are none.
+func (s *AteWorkerService) writeBackSnapshot(ctx context.Context, actorUID, checkpointDir string, borrowed int64) {
+	var written []string
+	for _, name := range []string{"config.json", "state.json", memoryRangesFile} {
+		p := filepath.Join(checkpointDir, name)
+		if _, err := os.Stat(p); err == nil {
+			written = append(written, p)
+		}
+	}
+	if err := snapshotcache.StartWriteback(written, func() { s.borrow.Return(borrowed) }); err != nil {
+		s.borrow.Return(borrowed)
+		slog.WarnContext(ctx, "Failed to start snapshot writeback", slog.String("id", actorUID), slog.Any("err", err))
+	}
 }
 
 // mergeOnDemandDelta merges the OnDemand delta in checkpointDir with the base in

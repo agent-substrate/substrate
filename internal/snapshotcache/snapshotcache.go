@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -47,14 +48,25 @@ var (
 	cachestatFn = unix.Cachestat
 	fadviseFn   = unix.Fadvise
 
-	// RetryDelays are the backoff intervals between post-restore eviction
-	// passes when dirty pages are waiting for background kernel writeback.
+	// RetryDelays are the backoff intervals between EvictWithRetries passes
+	// while dirty pages wait for writeback.
 	RetryDelays = []time.Duration{
 		500 * time.Millisecond,
 		1500 * time.Millisecond,
 		3000 * time.Millisecond,
 	}
 )
+
+// writebackPollDelays are the intervals between StartWriteback passes, short at
+// first so a small file's loan comes back soon after it's written, and the last
+// repeats.
+var writebackPollDelays = []time.Duration{
+	25 * time.Millisecond,
+	100 * time.Millisecond,
+	500 * time.Millisecond,
+	1500 * time.Millisecond,
+	3000 * time.Millisecond,
+}
 
 // FindFiles walks dir and returns regular files whose base name satisfies
 // match, pinned by their FileInfo at discovery time.
@@ -109,6 +121,133 @@ func DropFiles(files []File) bool {
 		}
 	}
 	return dropped
+}
+
+// StartWriteback opens paths and, in the background, waits for each file's
+// dirty pages to be written back or for the file to be unlinked, then calls done
+// once. If a path can't be opened it returns the error, holds nothing, and never
+// calls done.
+func StartWriteback(paths []string, done func()) error {
+	return startWriteback(kernelPageCache{}, writebackPollDelays, paths, done)
+}
+
+// pageCache is the page cache state and write-out startWriteback uses
+type pageCache interface {
+	cachestat(f *os.File) (unix.Cachestat_t, error)
+	// startWriteOut starts write-out of [off, off+n) without waiting for it
+	startWriteOut(f *os.File, off, n int64) error
+	// writeOut writes out all of f and waits for it
+	writeOut(f *os.File) error
+}
+
+type kernelPageCache struct{}
+
+func (kernelPageCache) cachestat(f *os.File) (unix.Cachestat_t, error) {
+	var cs unix.Cachestat_t
+	err := unix.Cachestat(uint(f.Fd()), &unix.CachestatRange{}, &cs, 0)
+	return cs, err
+}
+
+func (kernelPageCache) startWriteOut(f *os.File, off, n int64) error {
+	return unix.SyncFileRange(int(f.Fd()), off, n, unix.SYNC_FILE_RANGE_WRITE)
+}
+
+func (kernelPageCache) writeOut(f *os.File) error {
+	return unix.SyncFileRange(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
+}
+
+func startWriteback(pc pageCache, delays []time.Duration, paths []string, done func()) error {
+	var files []*os.File
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			for _, f := range files {
+				_ = f.Close()
+			}
+			return err
+		}
+		files = append(files, f)
+	}
+	go func() {
+		defer func() {
+			for _, f := range files {
+				if f != nil {
+					_ = f.Close()
+				}
+			}
+			if done != nil {
+				done()
+			}
+		}()
+		// poll instead of waiting on write-out, so a file unlinked meanwhile is
+		// closed and its dirty pages dropped instead of written back
+		for i := 0; pollWritebackFiles(pc, files); i++ {
+			time.Sleep(delays[min(i, len(delays)-1)])
+		}
+	}()
+	return nil
+}
+
+// pollWritebackFiles closes and clears each file that is clean or unlinked,
+// starts write-out of any that are still dirty, and reports whether any are left.
+func pollWritebackFiles(pc pageCache, files []*os.File) bool {
+	anyRemaining := false
+	for i, f := range files {
+		if f == nil {
+			continue
+		}
+		if info, err := f.Stat(); err != nil || isUnlinked(info) {
+			_ = f.Close()
+			files[i] = nil
+			continue
+		}
+		cstat, err := pc.cachestat(f)
+		if err != nil {
+			// no cachestat before Linux 6.5, so wait for write-out instead of
+			// giving the memory back while the pages are still dirty
+			_ = pc.writeOut(f)
+			_ = f.Close()
+			files[i] = nil
+			continue
+		}
+		if cstat.Dirty == 0 && cstat.Writeback == 0 {
+			_ = f.Close()
+			files[i] = nil
+			continue
+		}
+		if cstat.Dirty > 0 && !startWriteOut(pc, f) {
+			_ = f.Close()
+			files[i] = nil
+			continue
+		}
+		anyRemaining = true
+	}
+	return anyRemaining
+}
+
+// writeOutChunk is how much of a file startWriteOut submits per call
+const writeOutChunk = 64 << 20
+
+// startWriteOut starts write-out of f's dirty pages, and reports whether f is
+// still linked. Starting write-out can block for a long time on a busy disk, so
+// it goes a chunk at a time and stops once f is unlinked.
+// https://github.com/torvalds/linux/blob/v6.12/fs/sync.c#L315-L317
+func startWriteOut(pc pageCache, f *os.File) bool {
+	for off := int64(0); ; off += writeOutChunk {
+		info, err := f.Stat()
+		if err != nil || isUnlinked(info) {
+			return false
+		}
+		if off >= info.Size() {
+			return true
+		}
+		_ = pc.startWriteOut(f, off, writeOutChunk)
+	}
+}
+
+func isUnlinked(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink == 0
 }
 
 // EvictFiles evicts clean cached pages of targets via POSIX_FADV_DONTNEED and

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,10 +13,7 @@
 // limitations under the License.
 
 // Command ate-setup installs and tears down Agent Substrate on a Kubernetes
-// cluster. It is the installer; hack/install-ate.sh is a shim that translates
-// its historical flags onto these commands. See cmd/ate-setup/commands.md for
-// the flag-by-flag mapping and cmd/ate-setup/cli-diff.md for what the
-// translation does not cover.
+// cluster. See cmd/ate-setup/commands.md for its commands.
 package main
 
 import (

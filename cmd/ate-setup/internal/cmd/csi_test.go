@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -81,7 +81,7 @@ func TestAnUnknownCSIDriverIsRejectedBeforeAnythingRuns(t *testing.T) {
 // The accepted spellings have to make it past the same check, including the
 // bare `setup csi` that takes the default.
 func TestAcceptedCSIDriversPassArgumentValidation(t *testing.T) {
-	accepted := []string{"nfs", "hostpath", "both", "none", "true", "false", ""}
+	accepted := []string{"nfs", "hostpath", "both", "none"}
 
 	t.Run("setup csi", func(t *testing.T) {
 		for _, driver := range accepted {

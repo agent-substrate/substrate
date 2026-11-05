@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -280,12 +280,6 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			fullMethod: ateapi.Control_MintActorJwt_FullMethodName,
 			req:        &ateapi.MintActorJwtRequest{Actor: actorRef},
 			want:       []check{{RelationCanMintActorJWT, "actor:team-a/runner"}},
-		},
-		{
-			name:       "MintActorCertificate",
-			fullMethod: ateapi.Control_MintActorCertificate_FullMethodName,
-			req:        &ateapi.MintActorCertificateRequest{Actor: actorRef},
-			want:       []check{{RelationCanMintActorCertificate, "actor:team-a/runner"}},
 		},
 
 		// Tags.
@@ -602,12 +596,6 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			fullMethod: ateapi.Control_MintActorJwt_FullMethodName,
 			req:        &ateapi.MintActorJwtRequest{},
 			wantField:  "actor.atespace",
-		},
-		{
-			name:       "MintActorCertificate with an invalid name",
-			fullMethod: ateapi.Control_MintActorCertificate_FullMethodName,
-			req:        &ateapi.MintActorCertificateRequest{Actor: &ateapi.ObjectRef{Atespace: "team-a", Name: "a/b"}},
-			wantField:  "actor.name",
 		},
 		{
 			name:       "CreateTag without a source actor",

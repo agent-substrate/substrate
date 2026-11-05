@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -82,11 +82,7 @@ See benchmarking/README.md for the walkthrough and customization options.`,
 var deleteBenchmarksCmd = &cobra.Command{
 	Use:   "benchmarks",
 	Short: "Delete the locust load test stack and the benchmark workloads",
-	Long: `Delete the locust load test stack and the benchmark workloads.
-
-Pass --sandbox-class=microvm to also remove the micro-VM SandboxConfig; it is
-cluster-wide, so it is left in place by default.`,
-	Args: cobra.NoArgs,
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		opts, err := benchmarkOptions()
 		if err != nil {

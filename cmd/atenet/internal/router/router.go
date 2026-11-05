@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
@@ -42,6 +43,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/version"
@@ -139,9 +141,13 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// below, because otelgrpc.NewClientHandler captures the global
 	// TracerProvider at construction time. Resolved once so the router's SDK
 	// sampler and Envoy's RandomSampling percent cannot drift.
+	serviceName := "atenet-router"
+	if s.cfg.Mode == ModeEgress {
+		serviceName = "atenet-egress"
+	}
 	sampling := serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(dataPlaneTraceRatio))
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: extproc.ServiceName,
+		ServiceName: serviceName,
 		Sampling:    sampling,
 	})
 	if err != nil {
@@ -149,7 +155,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, extproc.ServiceName)
+	mp, err := serverboot.InitMetrics(ctx, serviceName)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}
@@ -163,13 +169,15 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	go serverboot.StartHealthServer(ctx, s.cfg.HealthAddr, readiness)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        s.clientset,
 		CAFile:           s.cfg.Auth.AteapiCAFile,
 		ServerName:       s.cfg.Auth.AteapiServerName,
 		ClientCredBundle: s.cfg.Auth.AteapiClientCertPath,
 	})
 	if err != nil {
 		return fmt.Errorf("building ateapi dial options: %w", err)
+	}
+	if s.clientset != nil {
+		dialOpts = append(dialOpts, grpc.WithResolvers(k8sresolver.NewBuilder(s.clientset)))
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	// atenet acts for the system, not a user, so it always opts in to the
@@ -220,36 +228,39 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		// is set: dial the provider over mTLS and hand the client to the handler.
 		// With no address the handler gets no provider, and a request matching
 		// an injection-requiring rule is denied (see egress.applyEffects).
-		var provider credprovider.CredentialProviderClient
-		var providerName string
-		if s.cfg.CredentialProvider.Address != "" {
-			providerName, err = egress.ProviderName(s.cfg.CredentialProvider.Name)
+		providers := map[string]credprovider.CredentialProviderClient{}
+		for i, address := range s.cfg.CredentialProvider.Addresses {
+			providerName, err := egress.ProviderName(s.cfg.CredentialProvider.Names[i])
 			if err != nil {
 				return fmt.Errorf("--credential-provider-name: %w", err)
 			}
+			var serverName string
+			if len(s.cfg.CredentialProvider.ServerNames) > 0 {
+				serverName = s.cfg.CredentialProvider.ServerNames[i]
+			}
 			providerConn, err := egress.DialProvider(ctx, egress.ProviderDialConfig{
-				Address:    s.cfg.CredentialProvider.Address,
+				Address:    address,
 				CAFile:     s.cfg.CredentialProvider.CAFile,
 				ClientCert: s.cfg.CredentialProvider.ClientCert,
-				ServerName: s.cfg.CredentialProvider.ServerName,
+				ServerName: serverName,
 				Insecure:   s.cfg.CredentialProvider.Insecure,
 			})
 			if err != nil {
 				return fmt.Errorf("dial credential provider: %w", err)
 			}
 			defer providerConn.Close()
-			provider = credprovider.NewCredentialProviderClient(providerConn)
+			providers[providerName] = credprovider.NewCredentialProviderClient(providerConn)
 			slog.InfoContext(ctx, "egress credential injection enabled",
-				slog.String("provider", s.cfg.CredentialProvider.Address),
-				slog.String("provider_name", s.cfg.CredentialProvider.Name))
+				slog.String("provider", address),
+				slog.String("provider_name", providerName))
 		}
 
-		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
+		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 
 	if s.extprocSrv == nil {
-		routeDuration, err := extproc.NewRouteDurationHistogram()
+		routeDuration, err := extproc.NewRouteDurationHistogram(otel.Meter(serviceName))
 		if err != nil {
 			return fmt.Errorf("failed to create route-duration histogram: %w", err)
 		}

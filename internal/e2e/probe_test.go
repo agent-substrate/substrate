@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ func TestProbeTemplate_TrustBundle(t *testing.T) {
 			// Strict decoding is what proves the fragment landed at the right
 			// depth: misindented, it would fail the protojson decode or parse
 			// as some other field.
-			inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", cfg.trustBundles)
+			inline, blocks := substrateTemplateSubstitutions("render", cfg.trustBundles)
 			rendered, err := os.ReadFile(renderManifest(t, probeManifests.Template, inline, blocks))
 			if err != nil {
 				t.Fatalf("reading rendered manifest: %v", err)

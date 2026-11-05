@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,6 +46,43 @@ func TestRouterConfigValidate(t *testing.T) {
 			name:    "unknown router rejected",
 			cfg:     routerConfig{Mode: ModeIngress, AtenetRouter: "blah"},
 			wantErr: "--atenet-dataplane must be",
+		},
+		{
+			name: "credential providers paired by position are valid",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"k8s.io", "sts.example.com"}, Addresses: []string{"a:1", "b:1"}, ServerNames: []string{"a", "b"},
+			}},
+		},
+		{
+			name:    "empty credential provider address rejected",
+			cfg:     routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{Names: []string{"k8s.io"}, Addresses: []string{""}}},
+			wantErr: "--credential-provider-address must not be empty",
+		},
+		{
+			name:    "credential provider name without an address rejected",
+			cfg:     routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{Names: []string{"k8s.io"}}},
+			wantErr: "want one per address",
+		},
+		{
+			name: "credential provider server names not paired rejected",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"k8s.io", "sts.example.com"}, Addresses: []string{"a:1", "b:1"}, ServerNames: []string{"a"},
+			}},
+			wantErr: "want one per address or none",
+		},
+		{
+			name: "repeated credential provider name rejected",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"k8s.io", "k8s.io"}, Addresses: []string{"a:1", "b:1"},
+			}},
+			wantErr: `"k8s.io" repeats`,
+		},
+		{
+			name: "empty credential provider name next to another rejected",
+			cfg: routerConfig{Mode: ModeEgress, CredentialProvider: credentialProviderConfig{
+				Names: []string{"", "k8s.io"}, Addresses: []string{"a:1", "b:1"},
+			}},
+			wantErr: "must be the only provider",
 		},
 		{
 			name:    "negative extproc-max-requests rejected",

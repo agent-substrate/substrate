@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,9 @@ containers:
   - "/ko-app/glutton"
   - "--grpc-listen-addr=:80"
   - "--metrics-listen-addr=:9090"
-  - "--data-dir=/tmp/glutton"
+  # No volume is mounted here, so WriteDisk files go to the container's
+  # rootfs upper layer. /tmp is a tmpfs and would count them as memory.
+  - "--data-dir=/var/lib/glutton"
   - "--mode=http"
   # Substrate puts no OTLP configuration in an actor container:
   # resolveActorEnv in cmd/atelet/oci.go merges the env of the ActorTemplate
@@ -59,4 +61,3 @@ resources:
     memoryBytes: "${ACTOR_MEMORY_BYTES}"
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
-  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/

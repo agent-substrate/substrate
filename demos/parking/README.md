@@ -1,3 +1,13 @@
+---
+title: "Request Parking"
+linkTitle: "Request Parking"
+weight: 5
+estimated_time: "10 mins"
+card_icon: "fa-solid fa-traffic-light"
+description: >
+  Hold and retry inbound requests during momentary WorkerPool saturation instead of failing with 503.
+---
+
 # Request Parking Demo
 
 This demo shows the **request parking** feature of the `atenet` router: when the
@@ -6,26 +16,21 @@ request and retries the resume until a worker frees up — instead of failing fa
 with a `503`.
 
 The setup is deliberately **oversubscribed**: a 2-worker pool with several
-actors. The workload is the same `counter` binary used by the counter demo; its
-reply includes the worker pod IP, so you can see which worker served a request.
+actors running the `counter` binary from the counter demo. Run
+`kubectl ate get actors -a ate-demo-parking` to see which worker pod each actor
+is assigned to.
 
-See [docs/request-parking.md](../../docs/request-parking.md) for the design.
+See [docs/concepts/request-parking.md](../../docs/concepts/request-parking.md) for the design.
 
 ## Prerequisites
 
 - A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  or [GKE Quickstart](../../README.md#gke-quickstart-development).
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
+  (with `ATE_INSTALL_KIND=true` exported in your shell) or [GKE Quickstart](../../README.md#gke-quickstart).
+- A snapshot location set at install (`SNAPSHOT_LOCATION`). The demo stores its snapshots there.
 
 ## How to Run on Agent Substrate
 
 ### 1. Build and Deploy
-
-> [!NOTE]
-> Do not manually edit the `demos/parking/*.yaml.tmpl` manifests. The installation
-> script automatically injects your `${BUCKET_NAME}` environment variable during
-> deployment.
 
 ```bash
 go run ./cmd/ate-setup deploy demo parking

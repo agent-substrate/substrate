@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -93,6 +93,17 @@ def add_agentsession_arguments(parser: LocustArgumentParser) -> None:
             "hibernated (per --lifecycle-mode). When empty (default), the "
             "actor is hibernated after every step unless --lifecycle-mode is "
             "'none'."
+        ),
+        include_in_web_ui=True,
+    )
+    parser.add_argument(
+        "--agentsession-awake",
+        type=int,
+        default=0,
+        env_var="LOCUST_AGENTSESSION_AWAKE",
+        help=(
+            "Turnover mode when > 0: keep this many sessions awake and swap "
+            "--target-rps sessions/s with parked ones (default: 0, off)"
         ),
         include_in_web_ui=True,
     )

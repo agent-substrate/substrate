@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,8 +61,7 @@ func ParseFile(path string) (*File, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		// Name the absolute path: a relative one means different files from
-		// different working directories, and the shell installer changes to
-		// the repository root before running.
+		// different working directories.
 		abs, absErr := filepath.Abs(path)
 		if absErr != nil {
 			abs = path

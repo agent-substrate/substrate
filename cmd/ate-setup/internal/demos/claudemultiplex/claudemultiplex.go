@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,15 +15,16 @@
 // Package claudemultiplex installs the claude-code-multiplex demo, which runs
 // several Claude Code agents side by side on one WorkerPool.
 //
-// Its workload is a Dockerfile-based Python and Claude Code wrapper rather than
-// a Go binary, so the image is built with docker buildx instead of ko and the
-// resolved digest is substituted into the agent templates.
+// Its workload is a Dockerfile-based node:20-slim and Claude Code wrapper
+// rather than a Go binary, so the image is built with docker buildx instead of
+// ko and the resolved digest is substituted into the agent templates.
 package claudemultiplex
 
 import (
 	"context"
 	"fmt"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
@@ -53,7 +54,7 @@ func init() {
 	d := &demo{}
 	d.sub = demos.Substrate{
 		DemoName:           "demo-claude-code-multiplex",
-		Short:              "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO)",
+		Short:              "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, KO_DOCKER_REPO)",
 		WorkerPoolManifest: poolManifest,
 		Deployments:        []steps.TemplateRef{{Atespace: atespace, Name: "claude-workerpool"}},
 		Templates:          agentTemplates(),
@@ -62,13 +63,35 @@ func init() {
 	demos.Register(d)
 }
 
+// agentSpec pairs each demo actor name with the ActorTemplate it derives from.
+type agentSpec struct {
+	actor    string
+	template string
+}
+
+var agents = []agentSpec{
+	{actor: "luna", template: "agent-luna"},
+	{actor: "mars", template: "agent-mars"},
+	{actor: "orion", template: "agent-orion"},
+}
+
+// anthropicEgress lets an agent reach the Anthropic API. The egress gateway
+// denies an actor without a policy, and passing the TLS through means Claude
+// Code needs no trust bundle for the gateway's CA.
+var anthropicEgress = []*ateapi.EgressRule{{
+	TlsPassthrough: &ateapi.TlsPassthroughRule{
+		Hostnames: []string{"api.anthropic.com"},
+		Ports:     &ateapi.Ports{Numbers: []int32{443}},
+	},
+}}
+
 // agentTemplates lists the demo's three agent ActorTemplates.
 func agentTemplates() []demos.SubstrateTemplate {
-	var templates []demos.SubstrateTemplate
-	for _, agent := range []string{"agent-luna", "agent-mars", "agent-orion"} {
+	templates := make([]demos.SubstrateTemplate, 0, len(agents))
+	for _, a := range agents {
 		templates = append(templates, demos.SubstrateTemplate{
-			Manifest: "demos/claude-code-multiplex/" + agent + "-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: agent},
+			Manifest: "demos/claude-code-multiplex/" + a.template + "-template.yaml.tmpl",
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: a.template},
 		})
 	}
 	return templates
@@ -85,18 +108,35 @@ func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
 	if e.Cfg.AnthropicAPIKey == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY must be set")
 	}
-	if e.Cfg.BucketName == "" {
-		return fmt.Errorf("BUCKET_NAME must be set")
-	}
 	if e.Cfg.KODockerRepo == "" {
 		return fmt.Errorf("KO_DOCKER_REPO must be set (see hack/ate-dev-env.sh.example)")
 	}
-	return d.sub.Deploy(ctx, e)
+	if err := d.sub.Deploy(ctx, e); err != nil {
+		return err
+	}
+
+	client, err := e.AteClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	for _, a := range agents {
+		actorRef := resources.ActorRef{Atespace: atespace, Name: a.actor}
+		templateRef := resources.ActorTemplateRef{Atespace: atespace, Name: a.template}
+		if err := steps.CreateActor(ctx, client, actorRef, templateRef); err != nil {
+			return err
+		}
+		if err := steps.CreateActorEgressPolicy(ctx, client, actorRef, anthropicEgress); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Delete needs no credentials: only the pool manifest is rendered, and it
 // carries none of the deploy-time placeholders.
-func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
+func (d *demo) Delete(ctx context.Context, e *steps.Env) ([]string, error) {
 	return d.sub.Delete(ctx, e)
 }
 

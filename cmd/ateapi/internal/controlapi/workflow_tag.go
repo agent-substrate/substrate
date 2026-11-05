@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -274,7 +274,7 @@ func (w *ActorWorkflow) checkTagCreatable(ctx context.Context, tagRef resources.
 		return err
 	}
 	if err := resources.ValidateSnapshotLocation(location); err != nil {
-		return fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
+		return apierror.FailedPrecondition("invalid storage location for tag %s: %w", tagRef, err)
 	}
 	return nil
 }

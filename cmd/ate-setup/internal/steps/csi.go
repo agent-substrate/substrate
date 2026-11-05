@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -69,17 +69,12 @@ type csiDriverSpec struct {
 // installsNothing reports whether the value selects no driver at all.
 func (s csiDriverSpec) installsNothing() bool { return !s.hostpath && !s.nfs }
 
-// csiDrivers is every accepted --setup-csi value. "true", "false" and the empty
-// string are the shell installer's boolean spellings, from before the flag grew
-// driver names, and still work.
+// csiDrivers is every accepted --setup-csi value.
 var csiDrivers = map[string]csiDriverSpec{
 	"nfs":      {nfs: true},
 	"hostpath": {hostpath: true},
 	"both":     {hostpath: true, nfs: true},
-	"true":     {hostpath: true, nfs: true},
 	"none":     {},
-	"false":    {},
-	"":         {},
 }
 
 // ValidateCSIDriver reports whether driver names something --setup-csi accepts.

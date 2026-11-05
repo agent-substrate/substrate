@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,14 +57,16 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 		t.Fatalf("reading egress manifest: %v", err)
 	}
 
+	k8s := config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}
+	vault := config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}
 	for _, tc := range []struct {
-		name     string
-		provider config.CredentialProvider
-		want     []string
+		name      string
+		providers []config.CredentialProvider
+		want      []string
 	}{
 		{
-			name:     "kubernetes",
-			provider: config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress},
+			name:      "kubernetes",
+			providers: []config.CredentialProvider{k8s},
 			want: []string{
 				"--credential-provider-name=k8s.io",
 				"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
@@ -74,18 +76,31 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 			},
 		},
 		{
-			name:     "another provider",
-			provider: config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"},
+			name:      "another provider",
+			providers: []config.CredentialProvider{vault},
 			want: []string{
 				"--credential-provider-name=vault.example.com",
 				"--credential-provider-address=vault.ate-system.svc:8200",
 				"--credential-provider-server-name=vault.ate-system.svc",
 			},
 		},
+		{
+			name:      "several providers",
+			providers: []config.CredentialProvider{k8s, vault},
+			want: []string{
+				"--credential-provider-name=k8s.io",
+				"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
+				"--credential-provider-server-name=k8s-credential-provider.ate-system.svc",
+				"--credential-provider-name=vault.example.com",
+				"--credential-provider-address=vault.ate-system.svc:8200",
+				"--credential-provider-server-name=vault.ate-system.svc",
+				"--credential-provider-ca-file=",
+			},
+		},
 		{name: "off"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			patched, err := env.patchAtenetEgressInject(raw, tc.provider)
+			patched, err := env.patchAtenetEgressInject(raw, tc.providers)
 			if err != nil {
 				t.Fatalf("patchAtenetEgressInject failed: %v", err)
 			}
@@ -94,12 +109,16 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 					t.Errorf("patched manifest still contains an unreplaced marker: %q", line)
 				}
 			}
+			// The gateway pairs the repeated flags up by position.
+			rest := string(patched)
 			for _, want := range tc.want {
-				if !strings.Contains(string(patched), want) {
-					t.Errorf("patched manifest is missing spliced flag %q", want)
+				i := strings.Index(rest, want)
+				if i < 0 {
+					t.Fatalf("patched manifest is missing spliced flag %q, or has it out of order", want)
 				}
+				rest = rest[i+len(want):]
 			}
-			if !tc.provider.Enabled() && strings.Contains(string(patched), "- --credential-provider-") {
+			if len(tc.providers) == 0 && strings.Contains(string(patched), "- --credential-provider-") {
 				t.Error("patched manifest carries provider flags with injection off")
 			}
 			assertEgressManifestParses(t, patched)
@@ -108,7 +127,7 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 
 	// The marker is what the splice keys on; a manifest without it is a
 	// broken install, not a silent no-op.
-	if _, err := env.patchAtenetEgressInject([]byte("kind: ConfigMap\n"), config.CredentialProvider{}); err == nil {
+	if _, err := env.patchAtenetEgressInject([]byte("kind: ConfigMap\n"), nil); err == nil {
 		t.Error("patchAtenetEgressInject accepted a manifest without the marker")
 	}
 }
@@ -770,7 +789,7 @@ func TestRenderFakeDataPlane(t *testing.T) {
 
 // Under --e2e-tuning every path that applies atelet appends the e2e tuning
 // flags without dropping the overlay's own args, and a non-e2e kind render
-// keeps atelet on its default snapshot upload delay.
+// keeps atelet on its default snapshot delays.
 func TestRenderE2ETuning(t *testing.T) {
 	root := repoRoot(t)
 	const ateletDS = "atelet"
@@ -786,41 +805,41 @@ func TestRenderE2ETuning(t *testing.T) {
 			cfg:        config.Config{Router: config.RouterEnvoy},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "kind bundle",
 			cfg:        config.Config{Router: config.RouterEnvoy, Kind: true},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "agentgateway bundle",
 			cfg:        config.Config{Router: config.RouterAgentgateway},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "kind agentgateway bundle",
 			cfg:        config.Config{Router: config.RouterAgentgateway, Kind: true},
 			path:       func(e *Env) string { return e.Cfg.Path(SystemOverlay(e.Cfg)) },
 			wantAtelet: true,
-			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "atelet file",
 			path:       func(e *Env) string { return e.Cfg.Manifest("atelet.yaml") },
 			wantAtelet: true,
-			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name:       "kind atelet overlay",
 			cfg:        config.Config{Kind: true},
 			path:       func(e *Env) string { return e.ateletManifestPath() },
 			wantAtelet: true,
-			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s"},
+			wantArgs:   []string{"--localhost-registry-replacement=kind-registry:5000", "--log-level=debug", "--snapshot-upload-delay=2s", "--snapshot-detach-delay=30s"},
 		},
 		{
 			name: "api server file without atelet",
@@ -854,7 +873,7 @@ func TestRenderE2ETuning(t *testing.T) {
 		})
 	}
 
-	t.Run("kind without e2e-tuning omits snapshot-upload-delay", func(t *testing.T) {
+	t.Run("kind without e2e-tuning omits snapshot delays", func(t *testing.T) {
 		e := &Env{Cfg: &config.Config{Root: root, Kind: true}}
 		rendered, err := e.render(e.ateletManifestPath())
 		if err != nil {
@@ -866,7 +885,7 @@ func TestRenderE2ETuning(t *testing.T) {
 			t.Errorf("kind atelet args = %v, missing --log-level=debug", args)
 		}
 		for _, arg := range args {
-			if strings.HasPrefix(arg, "--snapshot-upload-delay") {
+			if strings.HasPrefix(arg, "--snapshot-upload-delay") || strings.HasPrefix(arg, "--snapshot-detach-delay") {
 				t.Errorf("kind atelet without --e2e-tuning carries %q in args %v", arg, args)
 			}
 		}
@@ -986,7 +1005,7 @@ func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
 		{
 			name: "egress redeploy",
 			render: func(e *Env) ([]byte, error) {
-				return e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+				return e.renderAtenetEgressManifest(t.Context(), nil)
 			},
 		},
 	} {
@@ -1231,13 +1250,16 @@ func TestAgentgatewayEgressOverlay(t *testing.T) {
 }
 
 func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
+	k8s := config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}
+	vault := config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}
 	for _, tc := range []struct {
-		name     string
-		provider config.CredentialProvider
+		name      string
+		providers []config.CredentialProvider
 	}{
 		{name: "disabled"},
-		{name: "kubernetes", provider: config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}},
-		{name: "custom", provider: config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}},
+		{name: "kubernetes", providers: []config.CredentialProvider{k8s}},
+		{name: "custom", providers: []config.CredentialProvider{vault}},
+		{name: "several providers", providers: []config.CredentialProvider{k8s, vault}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
@@ -1252,7 +1274,7 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 					return "sha256:" + strings.Repeat("2", 64), nil
 				}),
 			}
-			built, err := e.renderAtenetEgressManifest(t.Context(), tc.provider)
+			built, err := e.renderAtenetEgressManifest(t.Context(), tc.providers)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1296,24 +1318,27 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 					if err := policy.YNode().Decode(&got); err != nil {
 						t.Fatal(err)
 					}
-					if !tc.provider.Enabled() {
+					if len(tc.providers) == 0 {
 						if len(got.Providers) != 0 {
 							t.Errorf("%s unexpectedly has credential providers: %v", protocol, got.Providers)
 						}
 						continue
 					}
-					want := []map[string]any{{
-						"uriAuthority": tc.provider.Name,
-						"target": map[string]any{
-							"host": tc.provider.Address,
-							"policies": map[string]any{"backendTLS": map[string]any{
-								"hostname": tc.provider.ServerName(),
-								"cert":     "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-								"key":      "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-								"root":     "/run/servicedns-ca/trust-bundle.pem",
-							}},
-						},
-					}}
+					var want []map[string]any
+					for _, p := range tc.providers {
+						want = append(want, map[string]any{
+							"uriAuthority": p.Name,
+							"target": map[string]any{
+								"host": p.Address,
+								"policies": map[string]any{"backendTLS": map[string]any{
+									"hostname": p.ServerName(),
+									"cert":     "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+									"key":      "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+									"root":     "/run/servicedns-ca/trust-bundle.pem",
+								}},
+							},
+						})
+					}
 					if !reflect.DeepEqual(got.Providers, want) {
 						t.Errorf("credential providers = %v, want %v", got.Providers, want)
 					}
@@ -1328,7 +1353,7 @@ func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
 
 func TestPatchAgentgatewayCredentialProviderRequiresOneMarker(t *testing.T) {
 	for _, raw := range []string{"", "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS\n#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS\n"} {
-		if _, err := patchAgentgatewayEgressInject([]byte(raw), config.CredentialProvider{}); err == nil {
+		if _, err := patchAgentgatewayEgressInject([]byte(raw), nil); err == nil {
 			t.Errorf("accepted a manifest without exactly one marker: %q", raw)
 		}
 	}
@@ -1402,6 +1427,12 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 				Name:      "atelet",
 			},
 		}
+		egress := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: NamespaceAteSystem,
+				Name:      "atenet-egress",
+			},
+		}
 		provider := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: NamespaceAteSystem,
@@ -1410,7 +1441,7 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		}
 		e := &Env{
 			Cfg:  &config.Config{OtlpEndpoint: endpoint},
-			Kube: fakeKube(t, otelConfig("http://default:4317"), apiServerDeployment(), atelet, provider),
+			Kube: fakeKube(t, otelConfig("http://default:4317"), apiServerDeployment(), egress, atelet, provider),
 		}
 
 		if err := e.applyOtelEndpointOverride(t.Context()); err != nil {
@@ -1425,6 +1456,9 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		// component has only that component, which is not an error.
 		if !restartedAt(t, e, "deployment", "ate-api-server") {
 			t.Error("ate-api-server was not restarted")
+		}
+		if !restartedAt(t, e, "deployment", "atenet-egress") {
+			t.Error("atenet-egress was not restarted")
 		}
 		if !restartedAt(t, e, "deployment", "k8s-credential-provider") {
 			t.Error("k8s-credential-provider was not restarted")
@@ -1459,7 +1493,7 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	}{
 		{
 			name:   "egress",
-			render: func() ([]byte, error) { return e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{}) },
+			render: func() ([]byte, error) { return e.renderAtenetEgressManifest(t.Context(), nil) },
 		},
 		{
 			name:   "router",
@@ -1555,7 +1589,7 @@ func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
 				return digest, nil
 			}),
 		}
-		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		out, err := e.renderAtenetEgressManifest(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
 		}
@@ -1577,7 +1611,7 @@ func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
 				return digest, nil
 			}),
 		}
-		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		out, err := e.renderAtenetEgressManifest(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
 		}

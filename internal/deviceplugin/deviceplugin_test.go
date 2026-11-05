@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,29 +16,63 @@ package deviceplugin
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
-// Each resource gets its own socket in the directory kubelet watches, and two
-// resources must never collide on one filename.
+// Each resource gets its own sockets in the directory kubelet watches, and two
+// resources never collide on one filename.
 func TestSocketPathsAreDistinctAndInKubeletDir(t *testing.T) {
 	kvm := New(HostDevice{ResourceName: "ate.dev/kvm", Path: "/dev/kvm"})
 	other := New(HostDevice{ResourceName: "ate.dev/other", Path: "/dev/other"})
 
-	if kvm.socket == other.socket {
-		t.Errorf("sockets collide: %q", kvm.socket)
+	if kvm.socketPrefix == other.socketPrefix {
+		t.Errorf("socket prefixes collide: %q", kvm.socketPrefix)
 	}
 	for _, p := range []*Plugin{kvm, other} {
-		if got := filepath.Dir(p.socket) + "/"; got != pluginapi.DevicePluginPath {
-			t.Errorf("socket %q is not in %q", p.socket, pluginapi.DevicePluginPath)
+		socket := p.newSocket()
+		if got := filepath.Dir(socket) + "/"; got != pluginapi.DevicePluginPath {
+			t.Errorf("socket %q is not in %q", socket, pluginapi.DevicePluginPath)
 		}
-		if filepath.Ext(p.socket) != ".sock" {
-			t.Errorf("socket %q should end in .sock", p.socket)
+		if filepath.Ext(socket) != ".sock" {
+			t.Errorf("socket %q should end in .sock", socket)
+		}
+	}
+}
+
+// removeSockets removes only our own sockets, not those of a resource whose
+// name extends ours.
+func TestRemoveSocketsKeepsOtherResources(t *testing.T) {
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, socketPrefix("ate.dev/kvm"))
+	ours := prefix + rand.Text() + ".sock"
+	others := []string{
+		filepath.Join(dir, socketPrefix("ate.dev/kvm-gpu")+rand.Text()+".sock"),
+		filepath.Join(dir, "kubelet.sock"),
+	}
+	for _, path := range append(others, ours) {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := removeSockets(prefix); err != nil {
+		t.Fatalf("removeSockets() = %v", err)
+	}
+	if _, err := os.Stat(ours); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%q still exists, err = %v", ours, err)
+	}
+	for _, path := range others {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%q was removed: %v", path, err)
 		}
 	}
 }
@@ -155,6 +189,53 @@ func TestListAndWatchSendsDevicesThenBlocks(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("ListAndWatch() after cancel = %v, want nil", err)
+	}
+}
+
+// Only a Create for a kubelet socket other than the one we registered with
+// is a restart; one already queued for that same socket is stale.
+func TestKubeletRestartedIgnoresStaleCreate(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "kubelet.sock")
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registered, err := os.Stat(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := fsnotify.Event{Name: socket, Op: fsnotify.Create}
+
+	if kubeletRestarted(create, socket, registered) {
+		t.Error("kubeletRestarted() = true for a Create of the registered socket")
+	}
+	if kubeletRestarted(fsnotify.Event{Name: filepath.Join(dir, "other.sock"), Op: fsnotify.Create}, socket, registered) {
+		t.Error("kubeletRestarted() = true for another socket")
+	}
+	if kubeletRestarted(fsnotify.Event{Name: socket, Op: fsnotify.Write}, socket, registered) {
+		t.Error("kubeletRestarted() = true for a Write")
+	}
+	if !kubeletRestarted(create, socket, nil) {
+		t.Error("kubeletRestarted() = false with no registered socket")
+	}
+
+	// kubelet restarting unlinks and recreates its socket
+	if err := os.Remove(socket); err != nil {
+		t.Fatal(err)
+	}
+	if !kubeletRestarted(create, socket, registered) {
+		t.Error("kubeletRestarted() = false with the socket gone")
+	}
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// the inode may be reused, so only mtime tells them apart
+	later := registered.ModTime().Add(time.Second)
+	if err := os.Chtimes(socket, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if !kubeletRestarted(create, socket, registered) {
+		t.Error("kubeletRestarted() = false for a recreated socket")
 	}
 }
 

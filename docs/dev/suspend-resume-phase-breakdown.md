@@ -11,7 +11,7 @@ atelet (the outer phases: `download`, `persist`, `worker_*`, …) and by
 ateworker-microvm (the phases inside `worker_*`: `pause`, `snapshot`, `vm_restore`,
 `wakeup_probe`, …). `benchmarking/analysis/` collects the records from the pod
 logs and aggregates them. See
-[docs/observability.md](../observability.md#actor-attributed-component-logs)
+[docs/guides/observability.md](../guides/observability.md#actor-attributed-component-logs)
 for the record shape and
 [benchmarking/analysis/README.md](../../benchmarking/analysis/README.md) for
 the report.
@@ -21,7 +21,7 @@ the report.
 * A cluster with Agent Substrate installed from a tree that has the records
   and the analysis tools: the
   [Quickstart (Development)](../../README.md#quickstart-development) for kind,
-  or the [GKE Quickstart](../../README.md#gke-quickstart-development). For GKE
+  or the [GKE Quickstart](../../README.md#gke-quickstart). For GKE
   the scripts below read `.ate-dev-env.sh` from the repository root
   (`collect_logs.sh` sources it itself; set `NO_DEV_ENV` to opt out).
 * A **microVM** or **gVisor** pool: both ateworkers write the inner records,

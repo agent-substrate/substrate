@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ patches:
               # The OTLP endpoint comes from the ate-otel-config ConfigMap the
               # atelet DaemonSet consumes via envFrom; the kind copy lives at
               # ../ate-otel-config.yaml and is applied by the parent overlay or
-              # by hack/install-ate.sh for a targeted redeploy.
+              # by ate-setup for a targeted redeploy.
               # kind nodes ship no credential provider plugin (the args above
               # leave the --image-credential-provider-* flags unset), so drop
               # the base manifest's host mounts instead of fabricating empty
@@ -57,8 +57,8 @@ patches:
             - name: image-credential-provider-config
               $patch: delete
             # The object-store plugin transfers atelet's external snapshots and
-            # fetches its private sandbox assets (the micro-VM assets
-            # stage-to-rustfs.sh uploads), so it points at rustfs.
+            # fetches its private sandbox assets (the microVM assets
+            # ate-setup deploy ate-system uploads), so it points at rustfs.
             initContainers:
             - name: objectstore-plugin
               env:

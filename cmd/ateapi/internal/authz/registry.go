@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -297,9 +297,6 @@ var defaultRPCPermissions = map[string]rpcRule{
 	// Actor identity credentials.
 	ateapi.Control_MintActorJwt_FullMethodName: rule(checksOf(func(r *ateapi.MintActorJwtRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanMintActorJWT, r.GetActor(), field.NewPath("actor"))
-	})),
-	ateapi.Control_MintActorCertificate_FullMethodName: rule(checksOf(func(r *ateapi.MintActorCertificateRequest) ([]check, field.ErrorList) {
-		return onActor(RelationCanMintActorCertificate, r.GetActor(), field.NewPath("actor"))
 	})),
 
 	// Tags. CreateTag stores the tag in its source actor's atespace, so that is

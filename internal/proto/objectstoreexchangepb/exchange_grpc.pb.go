@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,7 +57,9 @@ type CredentialExchangeClient interface {
 	//   - FAILED_PRECONDITION: the exchange is not allowed to read actors.
 	//   - INTERNAL: the actor's grants cannot be derived or expressed as an
 	//     access boundary.
-	//   - UNAVAILABLE: ate-api-server or the credential issuer cannot be reached.
+	//   - UNAVAILABLE: ate-api-server or the credential issuer cannot be
+	//     reached, or the actor JWT signing keys cannot be fetched from their
+	//     issuer.
 	//   - CANCELLED, DEADLINE_EXCEEDED: the caller gave up first.
 	ExchangeActorJwt(ctx context.Context, in *ExchangeActorJwtRequest, opts ...grpc.CallOption) (*ExchangeActorJwtResponse, error)
 }
@@ -101,7 +103,9 @@ type CredentialExchangeServer interface {
 	//   - FAILED_PRECONDITION: the exchange is not allowed to read actors.
 	//   - INTERNAL: the actor's grants cannot be derived or expressed as an
 	//     access boundary.
-	//   - UNAVAILABLE: ate-api-server or the credential issuer cannot be reached.
+	//   - UNAVAILABLE: ate-api-server or the credential issuer cannot be
+	//     reached, or the actor JWT signing keys cannot be fetched from their
+	//     issuer.
 	//   - CANCELLED, DEADLINE_EXCEEDED: the caller gave up first.
 	ExchangeActorJwt(context.Context, *ExchangeActorJwtRequest) (*ExchangeActorJwtResponse, error)
 	mustEmbedUnimplementedCredentialExchangeServer()

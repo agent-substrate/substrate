@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -74,7 +74,7 @@ func TestProcessReturnsWebSocketDenialAsImmediateResponse(t *testing.T) {
 			}
 			stream := &websocketProcessStream{ctx: context.Background(), requests: []*extprocv3.ProcessingRequest{request}}
 			server := extproc.NewServer(0, nil, extproc.Handlers{
-				extproc.DirectionEgress: egress.New(nil, nil, 0, nil, ""),
+				extproc.DirectionEgress: egress.New(nil, nil, 0, nil),
 			})
 
 			if err := server.Process(stream); err != nil {

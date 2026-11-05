@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -73,7 +73,11 @@ func init() {
 			Short: "Delete " + demo.Name(),
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return demo.Delete(cmd.Context(), env)
+				namespaces, err := demo.Delete(cmd.Context(), env)
+				if err != nil {
+					return err
+				}
+				return env.WaitNamespacesDeleted(cmd.Context(), namespaces)
 			},
 		})
 	}

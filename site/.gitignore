@@ -1,0 +1,7 @@
+/content/
+/public/
+/resources/
+/node_modules/
+/.hugo_build.lock
+/data/release.json
+/assets/api-reference/

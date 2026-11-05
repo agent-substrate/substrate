@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,27 +40,6 @@ type jwk struct {
 	Y         string `json:"y,omitempty"`
 	N         string `json:"n,omitempty"`
 	E         string `json:"e,omitempty"`
-}
-
-// JWKS returns the JWK set, as JSON, that publishes the pool's public keys for
-// signature verification. It carries no private material, so it is what a
-// verifier that cannot use discovery is given instead of the pool itself.
-func (p *ConcretePool) JWKS() ([]byte, error) {
-	keys, err := p.VerificationKeys()
-	if err != nil {
-		return nil, err
-	}
-	return JWKS(keys)
-}
-
-// PublicJWKS returns the JWK set for a serialized pool, for writers that hold
-// the pool only as bytes.
-func PublicJWKS(poolBytes []byte) ([]byte, error) {
-	pool, err := Unmarshal(poolBytes)
-	if err != nil {
-		return nil, fmt.Errorf("while reading the pool: %w", err)
-	}
-	return pool.JWKS()
 }
 
 // JWKS returns the JWK set, as JSON, that publishes keys for signature

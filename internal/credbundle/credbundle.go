@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,9 +64,18 @@ func ClientLoader(path string) func(*tls.CertificateRequestInfo) (*tls.Certifica
 // when it changes, mirroring Loader, so a rotation is picked up on the next
 // handshake without paying the read and parse cost when nothing changed.
 func PoolLoader(path string) func() (*x509.CertPool, error) {
-	c := &poolCache{path: path}
+	c := &poolCache{path: path, newPool: newEmptyPool}
 	return c.get
 }
+
+// SystemPoolLoader is PoolLoader for a pool that holds the system roots as
+// well as the trust bundle at path.
+func SystemPoolLoader(path string) func() (*x509.CertPool, error) {
+	c := &poolCache{path: path, newPool: x509.SystemCertPool}
+	return c.get
+}
+
+func newEmptyPool() (*x509.CertPool, error) { return x509.NewCertPool(), nil }
 
 // certCache holds the parse of a credential bundle file together with the stat
 // of the file it was parsed from, so unchanged files are not re-parsed on
@@ -124,6 +133,8 @@ func (c *certCache) get() (*tls.Certificate, error) {
 // concurrency reasoning.
 type poolCache struct {
 	path string
+	// newPool returns the pool the bundle's certificates are added to.
+	newPool func() (*x509.CertPool, error)
 
 	mu   sync.Mutex
 	fi   os.FileInfo
@@ -145,8 +156,11 @@ func (c *poolCache) get() (*x509.CertPool, error) {
 		return c.pool, nil
 	}
 
-	pool, err := ParsePool(c.path)
+	pool, err := c.newPool()
 	if err != nil {
+		return nil, fmt.Errorf("while loading the base pool for trust bundle %q: %w", c.path, err)
+	}
+	if err := appendPool(pool, c.path); err != nil {
 		return nil, err
 	}
 	c.fi, c.pool = fi, pool
@@ -210,13 +224,22 @@ func Parse(bundlePath string) (*tls.Certificate, error) {
 // error if the file holds no certificates: an empty trust pool would silently
 // reject every peer, which is never what a workload should receive.
 func ParsePool(path string) (*x509.CertPool, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("while reading trust bundle: %w", err)
-	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pemBytes) {
-		return nil, fmt.Errorf("trust bundle %q contains no certificates", path)
+	if err := appendPool(pool, path); err != nil {
+		return nil, err
 	}
 	return pool, nil
+}
+
+// appendPool adds the certificates in the PEM trust-bundle file at path to
+// pool. It returns an error if the file holds none.
+func appendPool(pool *x509.CertPool, path string) error {
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("while reading trust bundle: %w", err)
+	}
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		return fmt.Errorf("trust bundle %q contains no certificates", path)
+	}
+	return nil
 }

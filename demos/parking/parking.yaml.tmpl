@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,9 +18,8 @@
 # room it returns ResourceExhausted ("no worker has room for the actor"); with
 # parking enabled (the default) the router holds such requests and retries the
 # resume until a worker frees up (e.g. another actor suspends), instead of
-# failing fast with 503. The workload is the same counter binary used by the
-# counter demo -- its reply includes the worker pod IP, so you can see which
-# worker served a (possibly parked) request.
+# failing fast with 503. The workload is the counter binary from the counter
+# demo.
 #
 # The ActorTemplate is not a CRD: it lives in parking-template.yaml.tmpl and
 # is created through the ate API with `kubectl ate create actor-template`.
@@ -46,3 +45,14 @@ spec:
   workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
   sandboxClasses:
   - name: gvisor
+  template:
+    # Each worker advertises its container limits as capacity. Sizing CPU to
+    # one actor's limit in parking-template.yaml.tmpl caps each worker at one
+    # running actor.
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 1Gi

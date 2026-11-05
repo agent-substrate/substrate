@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -80,7 +80,7 @@ docker info >/dev/null 2>&1 || {
 
 kubectl get deployment atenet-router -n ate-system >/dev/null 2>&1 || {
   echo "ERROR: substrate is not deployed on ${CLUSTER_NAME}. Run:" >&2
-  echo "  hack/install-ate.sh deploy ate-system --credential-provider='{\"name\":\"k8s.io\"}' --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner" >&2
+  echo "  go run ./cmd/ate-setup deploy ate-system --credential-provider='{\"name\":\"k8s.io\"}' --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner" >&2
   exit 1
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ ASLV2_HEADER = [
 ]
 
 def match_copyright(line):
-    match = re.search(r"Copyright\s+(\d{4})\s+(?:Google LLC|The Agent Substrate Authors)", line)
+    match = re.search(r"Copyright\s+(\d{4})\s+The Agent Substrate Authors", line)
     if not match:
         return False
     year = int(match.group(1))
@@ -108,7 +108,7 @@ def main():
         # Skip non-source-code files
         if ext in ['.md', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.json', '.pdf', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.svg']:
             continue
-        if filename in ['LICENSE', 'NOTICE', 'CODEOWNERS', '.gitignore', 'go.mod', 'go.sum', 'Cargo.lock']:
+        if filename in ['LICENSE', 'NOTICE', 'CODEOWNERS', 'CNAME', '.gitignore', 'go.mod', 'go.sum', 'Cargo.lock']:
             continue
 
         # exclude third_party files, which should have their OWN LICENSE

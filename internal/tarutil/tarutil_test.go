@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package tarutil
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -189,6 +190,33 @@ func TestRoundTrip(t *testing.T) {
 			t.Error("hard.txt is a copy, want the same inode as a.txt")
 		}
 	})
+}
+
+// An archive bigger than writeBehindChunk is written out a chunk at a time.
+func TestRoundTripLargeFile(t *testing.T) {
+	src := t.TempDir()
+	want := make([]byte, 2*writeBehindChunk+12345)
+	for i := range want {
+		want[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(filepath.Join(src, "big"), want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(t.TempDir(), "out.tar")
+	if err := Create(context.Background(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "big"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("extracted %d bytes that differ from the %d archived", len(got), len(want))
+	}
 }
 
 func TestCreateEmptyDir(t *testing.T) {
@@ -743,7 +771,7 @@ func TestCreateWithRootRestoresRootMeta(t *testing.T) {
 
 	for _, tc := range []struct {
 		name     string
-		create   func(ctx context.Context, tarPath, srcDir string) error
+		create   func(ctx context.Context, tarPath, srcDir string, opts ...Option) error
 		wantMode os.FileMode
 		wantAttr bool
 	}{

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -204,41 +204,37 @@ func (e *Env) DeleteAtenet(ctx context.Context) error {
 // The demos live in their own packages, which import this one for Env, so the
 // interface is declared here rather than imported from there.
 type Deleter interface {
-	Delete(ctx context.Context, e *Env) error
+	Delete(ctx context.Context, e *Env) ([]string, error)
 }
 
-// DeleteAll removes every demo, then the microvm SandboxConfig, then the
-// control plane.
+// DeleteAll removes every registered demo and then the control plane.
 func (e *Env) DeleteAll(ctx context.Context, demos []Deleter) error {
 	log.Step("delete_all")
 
-	if err := e.deleteDemos(ctx, demos); err != nil {
-		return err
-	}
-	return e.DeleteAteSystem(ctx)
-}
-
-// deleteDemos removes every demo, then tries to delete the microvm
-// SandboxConfig. An earlier `delete benchmarks` or `delete demo` may have
-// left the config behind because a pool still used it. After the demos, no
-// pool does.
-//
-// The delete is best effort. The script skips a config that is still in use,
-// and a failure is only logged, because DeleteAteSystem deletes the config
-// with the CRD anyway.
-//
-// The gvisor config needs no such step. It is installed and deleted with the
-// control plane, and DeleteAteSystem strips its finalizer itself. The microvm
-// config is managed by hack/install-microvm-deps.sh, whose `kubectl delete`
-// would block while a pool still uses it.
-func (e *Env) deleteDemos(ctx context.Context, demos []Deleter) error {
+	// The demos' namespaces drain while the control plane is deleted, and are
+	// waited for after it.
+	var namespaces []string
 	for _, demo := range demos {
-		if err := demo.Delete(ctx, e); err != nil {
+		demoNamespaces, err := demo.Delete(ctx, e)
+		if err != nil {
 			return err
 		}
+		namespaces = append(namespaces, demoNamespaces...)
 	}
-	if err := e.runScript(ctx, installMicrovmDepScript, "--delete"); err != nil {
-		log.Warnf("while deleting the microvm SandboxConfig: %v", err)
+	if err := e.DeleteAteSystem(ctx); err != nil {
+		return err
+	}
+	return e.WaitNamespacesDeleted(ctx, namespaces)
+}
+
+// WaitNamespacesDeleted waits until each demo namespace is gone, because a
+// deploy cannot create objects in a namespace that is still terminating.
+func (e *Env) WaitNamespacesDeleted(ctx context.Context, names []string) error {
+	namespace := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+	for _, name := range names {
+		if err := e.Kube.WaitDeleted(ctx, namespace, "", name, e.Cfg.WaitTimeout(DemoTimeout)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

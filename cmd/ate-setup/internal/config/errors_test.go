@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -248,9 +248,9 @@ func TestValidationErrorsNameTheSupplyingChannel(t *testing.T) {
 func TestCredentialProviderErrorNamesTheFileChannel(t *testing.T) {
 	useFixtures(t)
 	cfg := &Config{}
-	_, err := cfg.CredentialProvider()
+	_, err := cfg.CredentialProviders()
 	if err == nil {
-		t.Fatal("CredentialProvider() with nothing set returned no error")
+		t.Fatal("CredentialProviders() with nothing set returned no error")
 	}
 	for _, want := range []string{
 		"--credential-provider",

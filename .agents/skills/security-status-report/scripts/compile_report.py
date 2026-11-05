@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -60,6 +60,9 @@ def compile_report(threats_json_path, results_dir, output_path):
                             t["strengths"] = str(res["strengths"])
                         if "weaknesses" in res:
                             t["weaknesses"] = str(res["weaknesses"])
+                        for key in ("mitigation_summary", "remaining_gap"):
+                            if key in res:
+                                t[key] = str(res[key])
 
                         # Validate and normalize citations schema
                         if "citations" in res:

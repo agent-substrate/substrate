@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -97,7 +97,7 @@ func TestDurableVolumesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkpointDir := t.TempDir()
-	files, err := tarDurableVolumes(t.Context(), src, checkpointDir, []string{"cache", "data"})
+	files, err := (&AteWorkerService{}).tarDurableVolumes(t.Context(), src, checkpointDir, []string{"cache", "data"})
 	if err != nil {
 		t.Fatalf("tarDurableVolumes: %v", err)
 	}

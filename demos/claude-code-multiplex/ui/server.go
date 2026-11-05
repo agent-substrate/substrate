@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -74,8 +74,8 @@ const (
 	logTailLines     = int64(25)
 
 	// Assignment lifecycle states the UI badge logic reads.
-	// queued → running → completed; computeState drives the
-	// transitions from elapsed-since-creation.
+	// queued → running → completed; a task leaves queued only once
+	// reconcileAgents starts it on a running agent.
 	stateQueued    = "queued"
 	stateRunning   = "running"
 	stateCompleted = "completed"
@@ -104,6 +104,8 @@ type assignment struct {
 	CompletedAt *float64 `json:"completed_at"`
 	QueueFor    float64  `json:"queue_for"`
 	RunFor      float64  `json:"run_for"`
+
+	waitLogged bool // reconcileAgents logged that the task waits for a pod
 }
 
 // podSummary is the per-worker shape the UI's index.html renders. Field
@@ -234,7 +236,7 @@ func listActorNames(ctx context.Context) []string {
 	}
 	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{})
+	resp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{Atespace: namespace})
 	if err != nil {
 		log.Printf("[ui] ListActors error: %v", err)
 		return nil
@@ -249,64 +251,204 @@ func listActorNames(ctx context.Context) []string {
 	return names
 }
 
-// computeState returns the timer-driven UI state for an assignment.
-// queued → running → completed (purely client-time-driven; the
-// substrate side has no concept of these per-task states).
+// computeState returns the UI state for an assignment. A task stays queued
+// until reconcileAgents starts it on a running agent, then runs for RunFor.
+// The substrate side has no concept of these per-task states.
 func computeState(asg *assignment) string {
-	elapsed := nowSec() - asg.CreatedAt
-	if elapsed < asg.QueueFor {
+	if asg.StartedAt == nil {
 		return stateQueued
 	}
-	if elapsed < asg.QueueFor+asg.RunFor {
+	if nowSec() < *asg.StartedAt+asg.RunFor {
 		return stateRunning
 	}
 	return stateCompleted
 }
 
-// applyComputedStates walks current assignments and stamps started_at /
-// completed_at as states advance. Caller must NOT hold mu.
+// applyComputedStates stamps each assignment's state, and completed_at once
+// its run time is up. Caller must NOT hold mu.
 func applyComputedStates() {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, asg := range assignments {
-		newState := computeState(asg)
-		if newState == asg.State {
-			continue
-		}
-		asg.State = newState
-		if newState == stateRunning && asg.StartedAt == nil {
-			v := asg.CreatedAt + asg.QueueFor
-			asg.StartedAt = &v
-		} else if newState == stateCompleted && asg.CompletedAt == nil {
-			v := asg.CreatedAt + asg.QueueFor + asg.RunFor
+		asg.State = computeState(asg)
+		if asg.State == stateCompleted && asg.CompletedAt == nil {
+			v := *asg.StartedAt + asg.RunFor
 			asg.CompletedAt = &v
 		}
 	}
+}
+
+// reconcileAgents matches the actors to the tasks. It suspends a running agent
+// with no task left, starts a waiting task on its agent once that agent runs,
+// and resumes an agent only into a free pod. It never suspends an agent
+// mid-task, so with three agents and two pods the third task waits for a pod.
+func reconcileAgents(ctx context.Context) {
+	if ateClient == nil {
+		return
+	}
+
+	busy := map[string]bool{}       // the agent has a running task
+	hasWaiting := map[string]bool{} // the agent has a task whose queue time is up
+	var waiting []*assignment       // those tasks, oldest first
+	mu.Lock()
+	now := nowSec()
+	for i := len(assignments) - 1; i >= 0; i-- {
+		asg := assignments[i]
+		switch computeState(asg) {
+		case stateRunning:
+			busy[asg.Agent] = true
+		case stateQueued:
+			if now >= asg.CreatedAt+asg.QueueFor {
+				waiting = append(waiting, asg)
+				hasWaiting[asg.Agent] = true
+			}
+		}
+	}
+	mu.Unlock()
+
+	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	resp, err := ateClient.ListActors(rctx, &ateapi.ListActorsRequest{Atespace: namespace})
+	cancel()
+	if err != nil {
+		log.Printf("[ui] ListActors error: %v", err)
+		return
+	}
+	running := map[string]bool{}
+	occupied := 0 // actors holding a pod
+	for _, a := range resp.GetActors() {
+		switch a.GetStatus().GetState() {
+		case ateapi.ActorState_ACTOR_STATE_RUNNING:
+			running[a.GetMetadata().GetName()] = true
+			occupied++
+		case ateapi.ActorState_ACTOR_STATE_RESUMING, ateapi.ActorState_ACTOR_STATE_SUSPENDING:
+			occupied++
+		}
+	}
+
+	for name := range running {
+		if !busy[name] && !hasWaiting[name] && suspendActorByName(ctx, name) {
+			delete(running, name)
+			occupied--
+		}
+	}
+
+	poolSize := countPoolWorkers(ctx)
+	for _, asg := range waiting {
+		if busy[asg.Agent] {
+			continue // the agent's current task runs first
+		}
+		if !running[asg.Agent] {
+			if occupied >= poolSize {
+				mu.Lock()
+				if !asg.waitLogged {
+					asg.waitLogged = true
+					log.Printf("[ui] pool full (%d/%d); %s waits for a free pod", occupied, poolSize, asg.Agent)
+				}
+				mu.Unlock()
+				continue
+			}
+			if !resumeActorByName(ctx, asg.Agent) {
+				continue
+			}
+			running[asg.Agent] = true
+			occupied++
+		}
+		mu.Lock()
+		v := nowSec()
+		asg.StartedAt = &v
+		asg.State = stateRunning
+		mu.Unlock()
+		busy[asg.Agent] = true
+	}
+}
+
+func resumeActorByName(ctx context.Context, name string) bool {
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := ateClient.ResumeActor(rctx, &ateapi.ResumeActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: name},
+	}); err != nil {
+		log.Printf("[ui] ResumeActor(%s/%s) error: %v", namespace, name, err)
+		return false
+	}
+	log.Printf("[ui] resumed actor %s/%s", namespace, name)
+	return true
+}
+
+func countPoolWorkers(ctx context.Context) int {
+	rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+	resp, err := ateClient.ListWorkers(rctx, &ateapi.ListWorkersRequest{})
+	if err != nil {
+		return 2
+	}
+	count := 0
+	for _, w := range resp.GetWorkers() {
+		if namespace == "" || w.GetWorkerNamespace() == "" || w.GetWorkerNamespace() == namespace {
+			count++
+		}
+	}
+	if count <= 0 {
+		return 2
+	}
+	return count
+}
+
+func suspendActorByName(ctx context.Context, name string) bool {
+	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := ateClient.SuspendActor(sctx, &ateapi.SuspendActorRequest{
+		Actor: &ateapi.ObjectRef{Atespace: namespace, Name: name},
+	}); err != nil {
+		log.Printf("[ui] SuspendActor(%s/%s) error: %v", namespace, name, err)
+		return false
+	}
+	log.Printf("[ui] suspended actor %s/%s", namespace, name)
+	return true
 }
 
 func nowSec() float64 {
 	return float64(time.Now().UnixNano()) / 1e9
 }
 
-// giveTask picks a random task + random agent and records the assignment.
-// Returns nil-string error if no agents.
+// giveTask picks a random task + idle agent (or any agent if all have active
+// assignments) and records the assignment. Returns non-empty error string if no
+// agents exist in the namespace.
 func giveTask(ctx context.Context) (*assignment, string) {
 	agents := listActorNames(ctx)
 	if len(agents) == 0 {
 		return nil, "no agents available in namespace"
 	}
 	now := nowSec()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	busy := make(map[string]bool, len(agents))
+	for _, a := range assignments {
+		if st := computeState(a); st == stateQueued || st == stateRunning {
+			busy[a.Agent] = true
+		}
+	}
+	candidates := make([]string, 0, len(agents))
+	for _, name := range agents {
+		if !busy[name] {
+			candidates = append(candidates, name)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = agents
+	}
+
 	asg := &assignment{
 		ID:        fmt.Sprintf("asg-%d", time.Now().UnixMilli()),
-		Agent:     agents[rand.Intn(len(agents))],
+		Agent:     candidates[rand.Intn(len(candidates))],
 		Task:      predefinedTasks[rand.Intn(len(predefinedTasks))],
 		State:     stateQueued,
 		CreatedAt: now,
 		QueueFor:  roundOne(2.0 + rand.Float64()*3.0), // 2.0–5.0
 		RunFor:    roundOne(9.0 + rand.Float64()*7.0), // 9.0–16.0
 	}
-	mu.Lock()
-	defer mu.Unlock()
 	assignments = append([]*assignment{asg}, assignments...)
 	if len(assignments) > maxAssignments {
 		assignments = assignments[:maxAssignments]
@@ -397,18 +539,13 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), rpcTimeout)
 	defer cancel()
-	resp, err := ateClient.ListActors(ctx, &ateapi.ListActorsRequest{})
+	resp, err := ateClient.ListActors(ctx, &ateapi.ListActorsRequest{Atespace: namespace})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ListActors: " + err.Error()})
 		return
 	}
 	actors := make([]actorSummary, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
-		// The demo's templates live in the atespace named after the demo
-		// namespace, so the template ref's atespace filters foreign actors.
-		if namespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != namespace {
-			continue
-		}
 		// Carry the template name as the meta message so the UI's
 		// secondary line shows useful provenance (the original
 		// kubectl path put k8s `status.message` here — for
@@ -464,10 +601,12 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 func handleTaskStatus(w http.ResponseWriter, _ *http.Request) {
 	applyComputedStates()
 	mu.Lock()
-	snapshot := make([]*assignment, len(assignments))
-	copy(snapshot, assignments)
+	snapshot := make([]assignment, len(assignments))
+	for i, asg := range assignments {
+		snapshot[i] = *asg
+	}
 	mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string][]*assignment{"assignments": snapshot})
+	writeJSON(w, http.StatusOK, map[string][]assignment{"assignments": snapshot})
 }
 
 func handleGiveTask(w http.ResponseWriter, r *http.Request) {
@@ -513,6 +652,15 @@ func main() {
 		log.Printf("[ui] kube client init error (logs disabled): %v", kerr)
 	}
 	kubeClient = kc
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			applyComputedStates()
+			reconcileAgents(context.Background())
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ const (
 	// EgressTrustBundleObjectName is the reconciler-owned ClusterTrustBundle.
 	EgressTrustBundleObjectName = "egress-mitm.ate.dev:mitm:primary-bundle"
 
-	// egressCAPoolSecretName is not release-prefixed: hack/install-ate.sh
+	// egressCAPoolSecretName is not release-prefixed: ate-setup
 	// creates it under this fixed name and the reconciler looks it up the same
 	// way, so it does not follow the deployment's naming.
 	egressCAPoolSecretName = "egress-mitm-ca-pool"

@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -80,12 +80,6 @@ func ValidateMintActorJWTRequest(ctx context.Context, req *ateapi.MintActorJwtRe
 	// Call the generated validation.
 	op := MakeCreateOp(ctx)
 	return Validate_MintActorJwtRequest(ctx, op, nil, req, nil)
-}
-
-func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapi.MintActorCertificateRequest) field.ErrorList {
-	// Call the generated validation.
-	op := MakeCreateOp(ctx)
-	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapi.MintWorkerActorCertificateRequest) field.ErrorList {

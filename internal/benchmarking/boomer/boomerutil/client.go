@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateapiauth"
 	"go.ate.dev/substrate/internal/credbundle"
-	_ "go.ate.dev/substrate/internal/k8sresolver"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
@@ -102,7 +102,6 @@ func DialControl(endpoint string) (*grpc.ClientConn, ateapi.ControlClient, error
 	}
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		K8sClient:        k8sClient,
 		CAFile:           servicednsCAFile,
 		ClientCredBundle: podIdentityCredBundle,
 		ServerName:       ateapiServerName,
@@ -110,6 +109,7 @@ func DialControl(endpoint string) (*grpc.ClientConn, ateapi.ControlClient, error
 	if err != nil {
 		return nil, nil, fmt.Errorf("ateapi dial options: %w", err)
 	}
+	dialOpts = append(dialOpts, grpc.WithResolvers(k8sresolver.NewBuilder(k8sClient)))
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 
 	conn, err := grpc.NewClient(endpoint, dialOpts...)

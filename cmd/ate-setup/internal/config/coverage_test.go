@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -90,7 +90,7 @@ func valueFor(key string) string {
 		return RouterEnvoy
 	case "clusterSize":
 		return ClusterSizeSize0
-	case "ingressAllowedSPIFFEIDs":
+	case "ingressAllowedSPIFFEIDs", "ateapi.authz.egressGatewayExtraSPIFFEIDs":
 		return "spiffe://cluster.local/ns/a/sa/b"
 	case "ateapi.postgres.cloudsql.ipType":
 		return CloudSQLIPTypePSC

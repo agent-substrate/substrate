@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -169,7 +169,6 @@ type actor
     # Credentials asserting the actor's own identity. Only the egress gateway
     # mints them; an editor holding one could impersonate the actor.
     define can_mint_actor_jwt: egress_gateway from parent_atespace
-    define can_mint_actor_certificate: egress_gateway from parent_atespace
 
     # Data Plane Ingress: Routers (or editors) can resume
     define can_resume: [user] or editor from parent_atespace or ingress_router from parent_atespace

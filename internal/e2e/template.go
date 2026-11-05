@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package e2e
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -42,10 +44,16 @@ type SubstrateTemplateOptions struct {
 	// k8s namespace.
 	PoolName     string
 	PoolReplicas int32
+	// PoolTemplate configures the worker pods before the golden actor starts.
+	PoolTemplate *atev1.WorkerPoolPodTemplate
+	// SandboxConfigName, when set, pins the pool's sandbox class to that
+	// SandboxConfig via configRef instead of following the class default.
+	SandboxConfigName string
 	// Labels tie the template's workerSelector to the pool, keeping this
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
-	// SnapshotConfig for the new template; nil copies the source's.
+	// SnapshotConfig for the new template. nil copies the source's, with its
+	// own SnapshotLocation.
 	SnapshotConfig *ateapi.SnapshotConfig
 	// Modify, when set, edits the template before it is created.
 	Modify func(*ateapi.ActorTemplate)
@@ -78,6 +86,12 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		t.Fatalf("failed to get ActorTemplate %s/%s (deploy with: %s): %v", src.Atespace, src.Name, src.DeployWith, err)
 	}
 
+	sandboxClasses := slices.Clone(existingWp.Spec.SandboxClasses)
+	if opts.SandboxConfigName != "" {
+		for i := range sandboxClasses {
+			sandboxClasses[i].ConfigRef = &atev1.SandboxConfigReference{Name: opts.SandboxConfigName}
+		}
+	}
 	wp := &atev1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.PoolName,
@@ -87,7 +101,8 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		Spec: atev1.WorkerPoolSpec{
 			Replicas:       opts.PoolReplicas,
 			WorkerImage:    existingWp.Spec.WorkerImage,
-			SandboxClasses: existingWp.Spec.SandboxClasses,
+			SandboxClasses: sandboxClasses,
+			Template:       opts.PoolTemplate.DeepCopy(),
 		},
 	}
 	if _, err := clients.SubstrateK8s.AteV1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
@@ -101,7 +116,11 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 
 	snapshots := opts.SnapshotConfig
 	if snapshots == nil {
-		snapshots = srcTmpl.GetSnapshotConfig()
+		snapshots = &ateapi.SnapshotConfig{}
+		if src := srcTmpl.GetSnapshotConfig(); src != nil {
+			snapshots = proto.Clone(src).(*ateapi.SnapshotConfig)
+		}
+		snapshots.StorageLocation = SnapshotLocation(t, "ate-e2e-"+opts.Atespace+"-"+opts.Name)
 	}
 	tmpl := &ateapi.ActorTemplate{
 		Metadata:       &ateapi.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},

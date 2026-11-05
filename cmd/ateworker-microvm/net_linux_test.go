@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 		}
 	})
 	for range 2 {
-		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false); err != nil {
+		if _, err := service.hostActor(ctx, resources.ActorAttribution{UID: actorUID}, false, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

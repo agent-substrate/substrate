@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ Owns the generic benchmark lifecycle; everything specific to a test type
 lives in a testtypes/ module (see that package's docstring for the hook
 contract). The flow, with the type hooks marked:
 
-  1. Clone the substrate branch once; wait for the DIND sidecar.
-  2. Validate every tests.yaml entry before any cluster work
-     [hook: validate].
+  1. Pick the tests.yaml entries named by --test-name (default: all) and
+     validate them before any other work [hook: validate].
+  2. Clone the substrate branch once; wait for the DIND sidecar.
   3. Per test entry:
      a. Source the target cluster's env; gcloud/docker/kubectl setup and
         the runner image build [hook: build_image] are cached per
@@ -92,6 +92,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to the tests YAML file (mounted from a ConfigMap)",
     )
     p.add_argument(
+        "--test-name",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Run only the named test entry; repeatable. Default: all entries",
+    )
+    p.add_argument(
         "--target-cluster-dir",
         default=TARGET_CLUSTER_DIR,
         help="Directory containing target cluster configuration scripts (<cluster>.sh)",
@@ -106,6 +113,19 @@ def parse_args() -> argparse.Namespace:
         help="Path to write a JUnit XML report summarizing test results and durations",
     )
     return p.parse_args()
+
+
+def select_tests(tests: list[dict], names: list[str]) -> list[dict]:
+    """Return the entries of tests named in names, in file order, or all of
+    them when names is empty. Raise ValueError on a name not in tests."""
+    if not names:
+        return tests
+    unknown = sorted(set(names) - {t.get("name") for t in tests})
+    if unknown:
+        raise ValueError(
+            f"--test-name values not in the tests file: {', '.join(unknown)}"
+        )
+    return [t for t in tests if t.get("name") in names]
 
 
 def source_env(path: str) -> None:
@@ -126,7 +146,7 @@ def apply_target_cluster(
     target_cluster: str, target_cluster_dir: str = TARGET_CLUSTER_DIR
 ) -> None:
     """Copy target_cluster_dir/<name>.sh into the cloned
-    substrate repo as .ate-dev-env.sh (so install-ate.sh / deploy.sh source
+    substrate repo as .ate-dev-env.sh (so ate-setup / deploy.sh source
     it) and merge it into this process's env (so the orchestrator's own
     gcloud / docker / kubectl calls see the same values). Resets os.environ
     to the startup baseline first so vars defined by a previous target
@@ -390,11 +410,16 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
 
 
 def substrate_args(test: dict[str, Any]) -> list[str]:
-    """Return the hack/install-ate.sh deploy ate-system arguments for a
-    tests.yaml entry: its ateArgs, then the fake data plane flag its isolate
-    block asks for. The teardown needs no matching flag: delete ate-system
-    removes the fake data plane whether or not it was installed."""
-    return [*test.get("ateArgs", []), *isolate_install_args(test)]
+    """Return the ate-setup deploy ate-system arguments for a
+    tests.yaml entry: its ateArgs, the fake data plane flag its isolate block
+    asks for, and --sandbox-classes=<sandboxClass> so gVisor runs do not need
+    write access to <BUCKET_NAME>-assets. The teardown needs no matching flag:
+    delete ate-system removes the fake data plane and any SandboxConfigs
+    whether or not they were installed."""
+    args = [*test.get("ateArgs", []), *isolate_install_args(test)]
+    if not any(a == "--sandbox-classes" or a.startswith("--sandbox-classes=") for a in args):
+        args.append(f"--sandbox-classes={test.get('sandboxClass', 'gvisor')}")
+    return args
 
 
 # ate-api-server enforces authorization, and the runner Job calls it with its
@@ -413,25 +438,11 @@ def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
         "ATE_API_AUTHZ_BOOTSTRAP_OWNERS": f"{CLIENT_PRINCIPAL},{BENCHMARK_RUNNER_PRINCIPAL}",
         "ATE_INGRESS_ALLOWED_SPIFFE_IDS": BENCHMARK_RUNNER_PRINCIPAL,
     }
-    run(["hack/install-ate.sh", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
+    run(["go", "run", "./cmd/ate-setup", "deploy", "ate-system", *(str(a) for a in ate_args)], env=env)
 
 
 def teardown_substrate() -> None:
-    run_no_check(["hack/install-ate.sh", "delete", "ate-system"])
-
-
-def install_microvm_deps() -> None:
-    """Stage kata/cloud-hypervisor assets and apply the cluster-wide
-    microvm SandboxConfig. Required before a microvm WorkerPool can run
-    actors; must run after deploy_substrate() (which installs the CRDs)."""
-    run(["hack/install-microvm-deps.sh", "--install"])
-
-
-def teardown_microvm_deps() -> None:
-    """Remove the microvm SandboxConfig. Must run before
-    teardown_substrate(), which deletes the SandboxConfig CRD (and would
-    prevent this from succeeding via kubectl)."""
-    run_no_check(["hack/install-microvm-deps.sh", "--delete"])
+    run_no_check(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
 
 
 def deploy_workloads(
@@ -564,6 +575,15 @@ def write_junit_xml(
 
 def main() -> None:
     args = parse_args()
+    tests = yaml.safe_load(Path(args.tests).read_text())["tests"]
+    try:
+        tests = select_tests(tests, args.test_name)
+        print(f"Running {len(tests)} test(s)", flush=True)
+        validate_and_normalize_tests(tests)
+        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
+        run_metadata()
+    except ValueError as e:
+        sys.exit(str(e))
 
     # Config-independent setup: DIND + clone the substrate branch once.
     wait_for_docker()
@@ -583,19 +603,10 @@ def main() -> None:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(f"Building commit {commit}", flush=True)
 
-    tests = yaml.safe_load(Path(args.tests).read_text())["tests"]
-    print(f"Running {len(tests)} test(s)", flush=True)
-    try:
-        validate_and_normalize_tests(tests)
-        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
-        run_metadata()
-    except ValueError as e:
-        sys.exit(str(e))
-
     # Per-target-cluster caches: re-running setup for the same target
     # cluster is wasted work, so we track what was last set up and only
     # redo it when the target cluster name changes (substrate images get
-    # rebuilt by install-ate.sh each test anyway via ko apply). Runner
+    # rebuilt by ate-setup each test anyway via ko). Runner
     # images are built lazily per test type, so a locust-only tests.yaml
     # never builds the nighthawk image and vice versa.
     last_target = None
@@ -632,11 +643,8 @@ def main() -> None:
             # fire that crashed mid-test (or any other process that left
             # state behind) would otherwise leak its substrate + workloads
             # into this run. All teardowns use --ignore-not-found, so
-            # this is cheap on a clean cluster. Order matters:
-            # microvm-deps deletes a SandboxConfig CR, which requires the
-            # SandboxConfig CRD that teardown_substrate removes.
+            # this is cheap on a clean cluster.
             teardown_workloads()
-            teardown_microvm_deps()
             teardown_substrate()
 
             sandbox_class = test.get("sandboxClass", "gvisor")
@@ -646,10 +654,6 @@ def main() -> None:
             try:
                 deploy_substrate(substrate_args(test))
                 TYPES[ttype].pre_test(test)
-                # install-microvm-deps needs the CRDs from deploy_substrate;
-                # deploy_workloads needs the microvm SandboxConfig.
-                if sandbox_class == "microvm":
-                    install_microvm_deps()
                 deploy_workloads(
                     test.get("workerCount", 1),
                     sandbox_class,
@@ -678,10 +682,7 @@ def main() -> None:
             finally:
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
-                # microvm-deps must go before substrate for the same reason
-                # as above.
                 teardown_workloads()
-                teardown_microvm_deps()
                 teardown_substrate()
             duration = time.time() - start_time
             results.append((test["name"], status, duration, failure_msg))

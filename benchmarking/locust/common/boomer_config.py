@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -81,6 +81,7 @@ _FLAGS = {
     "--agentsession-snapshot-steps": str,
     "--agentsession-phase-in": float,
     "--agentsession-resume-retry-budget": float,
+    "--agentsession-awake": int,
     "--total-actors": int,
     "--spawn-concurrency": int,
     "--actor-deadline": float,

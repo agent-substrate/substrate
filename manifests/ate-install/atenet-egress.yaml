@@ -1,4 +1,4 @@
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -302,7 +302,7 @@ data:
       # policy ext_proc on every request. They also carry an
       # #ATE_MITM_EXTPROC_FILTER marker, with a matching
       # #ATE_MITM_EXTPROC_CLUSTER in the cluster list: inert comments until
-      # hack/install-ate.sh is run with
+      # ate-setup is run with
       # --experimental-additional-egress-extproc-service, which replaces each
       # with a generated block for an additional, external processor. The
       # marker sits below the policy filter, so that processor sees only
@@ -1393,7 +1393,7 @@ spec:
         # "Envoy already exited", and reports a drain it never performed.
         - --envoy-admin-address=127.0.0.1:15000
         # Egress credential-injection flags. The installer replaces this marker
-        # with the --credential-provider-* flags for the provider that the
+        # with the --credential-provider-* flags for the providers that the
         # installer's --credential-provider selects, or removes it when that is
         # {"enabled":false}. Without a provider, a request matching a rule that
         # requires an injection is denied (see egress.applyEffects).

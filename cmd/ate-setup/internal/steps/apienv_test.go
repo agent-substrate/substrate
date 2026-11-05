@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,26 +29,38 @@ import (
 	"go.ate.dev/substrate/pkg/postgressetup"
 )
 
-// The digest exists to turn an envFrom change into a rollout, so what matters
-// is that it moves when a value does and holds still otherwise.
+// The digest exists to turn an environment or configuration change into a
+// rollout, so what matters is that it moves when a value does and holds still
+// otherwise.
 func TestEnvHash(t *testing.T) {
 	cm := map[string]string{"A": "1", "B": "2"}
+	authn := map[string]string{"authentication.yaml": "jwtProviders: []"}
+	apiConfig := map[string]string{"apiconfig.textproto": `logging { level: "info" }`}
 	secret := map[string][]byte{"DSN": []byte("postgresql://h/atepg")}
 
-	base := envHash(cm, secret)
-	if base != envHash(map[string]string{"B": "2", "A": "1"}, secret) {
+	base := envHash(cm, authn, apiConfig, secret)
+	if base != envHash(map[string]string{"B": "2", "A": "1"}, authn, apiConfig, secret) {
 		t.Error("envHash() depends on map iteration order")
 	}
-	if base == envHash(cm, map[string][]byte{"DSN": []byte("postgresql://other/atepg")}) {
+	if base == envHash(cm, authn, apiConfig, map[string][]byte{"DSN": []byte("postgresql://other/atepg")}) {
 		t.Error("envHash() did not change when the DSN did")
 	}
-	if base == envHash(map[string]string{"A": "1"}, secret) {
+	if base == envHash(map[string]string{"A": "1"}, authn, apiConfig, secret) {
 		t.Error("envHash() did not change when a ConfigMap key was removed")
 	}
-	// The two sources are hashed into the same stream, so they need a
-	// separator to stay distinguishable.
-	if envHash(map[string]string{"X": "1"}, nil) == envHash(nil, map[string][]byte{"X": []byte("1")}) {
+	if base == envHash(cm, map[string]string{"authentication.yaml": "jwtProviders: [- name: other]"}, apiConfig, secret) {
+		t.Error("envHash() did not change when authentication.yaml did")
+	}
+	if base == envHash(cm, authn, map[string]string{"apiconfig.textproto": `logging { level: "debug" }`}, secret) {
+		t.Error("envHash() did not change when apiconfig.textproto did")
+	}
+	// The sources are hashed into the same stream, so they need
+	// separators to stay distinguishable.
+	if envHash(map[string]string{"X": "1"}, nil, nil, nil) == envHash(nil, nil, nil, map[string][]byte{"X": []byte("1")}) {
 		t.Error("envHash() does not distinguish the ConfigMap from the Secret")
+	}
+	if envHash(nil, map[string]string{"X": "1"}, nil, nil) == envHash(nil, nil, map[string]string{"X": "1"}, nil) {
+		t.Error("envHash() does not distinguish authn from apiConfig")
 	}
 }
 
@@ -532,7 +544,7 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetDeployment() error = %v", err)
 		}
-		want := envHash(nil, secret.Data)
+		want := envHash(nil, nil, nil, secret.Data)
 		if got := dep.Spec.Template.Annotations[envHashAnnotation]; got != want {
 			t.Errorf("%s = %q, want %q", envHashAnnotation, got, want)
 		}
@@ -692,6 +704,63 @@ spec:
 	}
 	if err := setAPIServerAuthzArgs(objs, "alice"); err == nil {
 		t.Error("setAPIServerAuthzArgs() without deployment/ate-api-server error = nil, want an error")
+	}
+}
+
+func TestSetAPIServerEgressGatewayArgs(t *testing.T) {
+	const manifest = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: ate-api-server
+        args:
+        - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
+        - --egress-gateway-spiffe-id=stale
+`
+	const (
+		egress = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+		a      = "spiffe://cluster.local/ns/ate-system/sa/sts-credential-provider"
+		b      = "spiffe://cluster.local/ns/plugins/sa/other"
+	)
+	for _, tc := range []struct {
+		name   string
+		extras []string
+		want   []string
+	}{
+		{
+			name:   "gateway first, then extras without duplicates",
+			extras: []string{a, egress, b, a},
+			want: []string{
+				"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto",
+				"--egress-gateway-spiffe-id=" + egress,
+				"--egress-gateway-spiffe-id=" + a,
+				"--egress-gateway-spiffe-id=" + b,
+			},
+		},
+		{
+			name: "no extras drops the flag",
+			want: []string{"--config-file=/run/apiconfig.ate.dev/apiconfig.textproto"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs, err := kube.DecodeManifestBytes([]byte(manifest))
+			if err != nil {
+				t.Fatalf("DecodeManifestBytes() error = %v", err)
+			}
+			if err := setAPIServerEgressGatewayArgs(objs, "ate-system", tc.extras); err != nil {
+				t.Fatalf("setAPIServerEgressGatewayArgs() error = %v", err)
+			}
+			containers, _, _ := unstructured.NestedSlice(objs[0].Object, "spec", "template", "spec", "containers")
+			args, _, _ := unstructured.NestedStringSlice(containers[0].(map[string]any), "args")
+			if diff := cmp.Diff(tc.want, args); diff != "" {
+				t.Errorf("ate-api-server args (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

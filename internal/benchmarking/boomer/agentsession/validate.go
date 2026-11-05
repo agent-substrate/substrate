@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,9 +20,10 @@ import (
 
 // Budget is what a script declares it will hold in the sandbox: resident
 // RAM (the largest fill per array) and files in the data dir (the largest
-// object per key). The data dir is tmpfs, so both come out of the actor's
-// memory limit. It does not model the guest's real peak: kernel, kata-agent,
-// and Go allocator transients sit on top.
+// object per key). The data dir is on the container's rootfs, whose files
+// can also use actor memory, so the memory floor counts both. It does not
+// model the guest's real peak: kernel, kata-agent, and Go allocator
+// transients sit on top.
 type Budget struct {
 	RAM  int64
 	Disk int64

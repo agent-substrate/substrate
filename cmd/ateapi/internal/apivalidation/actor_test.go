@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1028,49 +1028,6 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateSuspendActorRequest(context.Background(), tt.req), tt.want)
-		})
-	}
-}
-
-func TestValidateMintActorCertificateRequest(t *testing.T) {
-	validUID := "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"
-	tests := []struct {
-		name string
-		req  *ateapi.MintActorCertificateRequest
-		want field.ErrorList
-	}{{
-		"valid",
-		&ateapi.MintActorCertificateRequest{
-			Actor:                     &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid:                  validUID,
-			CertificateSigningRequest: []byte("csr"),
-		},
-		nil,
-	}, {
-		"missing actor",
-		&ateapi.MintActorCertificateRequest{
-			ActorUid:                  validUID,
-			CertificateSigningRequest: []byte("csr"),
-		},
-		field.ErrorList{field.Required(field.NewPath("actor"), "")},
-	}, {
-		"missing actor_uid",
-		&ateapi.MintActorCertificateRequest{
-			Actor:                     &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
-			CertificateSigningRequest: []byte("csr"),
-		},
-		field.ErrorList{field.Required(field.NewPath("actor_uid"), "")},
-	}, {
-		"missing csr",
-		&ateapi.MintActorCertificateRequest{
-			Actor:    &ateapi.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid: validUID,
-		},
-		field.ErrorList{field.Required(field.NewPath("certificate_signing_request"), "")},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateMintActorCertificateRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }

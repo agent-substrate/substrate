@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1772,7 +1772,7 @@ type MintActorCertificateRequest struct {
 	// corresponding private key.
 	//
 	// +k8s:required
-	// +k8s:maxBytes=16384 # matches the control-plane MintActorCertificateRequest bound this is forwarded to
+	// +k8s:maxBytes=16384 # matches the control-plane MintWorkerActorCertificateRequest bound this is forwarded to
 	CertificateSigningRequest []byte `protobuf:"bytes,4,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
@@ -2854,11 +2854,12 @@ type VolumeMount struct {
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// mount_path within the container. Must be a clean absolute Unix path.
+	// mount_path within the container. Must be a clean absolute Unix path. Must
+	// not be /dev, and must not be /dev/pts, /proc, /sys, or a path under them.
 	//
 	// +k8s:required
 	// +k8s:maxLength=4096
-	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
+	// +k8s:customValidation # clean absolute path, not /dev, outside /dev/pts, /proc and /sys
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3100,12 +3101,12 @@ type Capabilities struct {
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar; "ALL" not accepted
+	// +k8s:customValidation # one of resources.AllowedAddCapabilities
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=64
 	// +k8s:listType=set
-	// +k8s:customValidation # capability grammar
+	// +k8s:customValidation # a Linux capability name or "ALL"
 	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

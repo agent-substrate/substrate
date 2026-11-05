@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -56,6 +56,11 @@ var (
 	// runtime registered before a restart resolves the moment atelet serves
 	// again.
 	SandboxRuntimeIndexFile = filepath.Join(nodepath.BasePath, "sandbox-runtime-index.json")
+
+	// CacheBootIDFile records the boot ID of the boot that last wrote atelet's
+	// caches. atelet clears them at startup when the node has rebooted since
+	// (see clearCachesAfterReboot in package main).
+	CacheBootIDFile = filepath.Join(nodepath.BasePath, "cache-boot-id")
 
 	// SnapshotCacheDir is the node-local cache of shared snapshot files, the
 	// snapshots many actors are created from (see

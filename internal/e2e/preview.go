@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -71,6 +71,22 @@ func previewDialOptions() []grpc.DialOption {
 		}
 	}
 	return nil
+}
+
+// SnapshotLocation returns gs://$BUCKET_NAME/prefix/ when the install under
+// test enabled the PerTemplateSnapshotLocation gate, and "" otherwise. Tests
+// set it as a template's storageLocation, which the API rejects without the
+// gate, so the gate-off lane stores snapshots under --snapshot-location.
+func SnapshotLocation(t testing.TB, prefix string) string {
+	t.Helper()
+	if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+		return ""
+	}
+	env, err := CheckEnv("BUCKET_NAME")
+	if err != nil {
+		t.Fatalf("CheckEnv: %v", err)
+	}
+	return "gs://" + env["BUCKET_NAME"] + "/" + prefix + "/"
 }
 
 // RequirePreview skips t unless the install under test enabled gate. Tests of

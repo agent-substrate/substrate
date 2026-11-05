@@ -4,7 +4,7 @@ The in-tree object-store plugin. It serves the `objectstore.v1` API over a Unix
 socket as a sidecar: `node` next to atelet, moving snapshot files and sandbox
 assets, and `control` next to ate-api-server, copying and deleting whole
 snapshots. `ATE_STORAGE_BACKEND` picks GCS, the default, or S3. See
-`docs/architecture.md` for where it sits.
+`docs/concepts/architecture.md` for where it sits.
 
 ## Per-actor snapshot credentials on GCS
 
@@ -32,15 +32,27 @@ The JWT is the one ate-api-server mints for atelet through
 `WorkerService.MintWorkerActorJwt`, with the audience named on the
 `actor_jwt` proto field. Its shape is defined in `internal/actoridjwt`, and
 the exchange accepts only the worker-for-actor kind, never an actor's own
-token. Its public keys come from the `jwks` key of the `actor-id-jwt-pool`
-Secret, read through `oidcjwt.FileKeySource`.
+token. The exchange fetches the issuer's public keys through OpenID Connect
+discovery at `<issuer>/.well-known/openid-configuration`, at sidecar start
+and then as `oidcjwt.Verifier` refreshes them. An issuer it cannot reach
+fails the exchange with `UNAVAILABLE`.
+The issuer's certificate must verify against the CA bundle
+`--actor-jwt-issuer-ca-file` names, by default the service DNS trust bundle.
+For an issuer whose host ends in `.svc`, only that bundle is trusted. For any
+other issuer, the system roots are trusted too. The sidecar re-reads the bundle when it changes, so a rotated bundle
+takes effect without a restart. If a re-read fails, it keeps the last bundle
+and logs a warning. If the issuer's certificate does not verify at start, the
+sidecar exits. Any other error at start is logged, and the sidecar serves and
+fetches again on the next exchange.
 
-Three packages behind the exchange know no storage provider and are what a
+Four packages behind the exchange know no storage provider and are what a
 provider's own plugin binary reuses. The rest is this binary's.
 
 Reusable by every provider:
 
-- `internal/oidcjwt`: verifies the JWT against the `jwks` file.
+- `internal/objectstoreplugin/actorauthz`: the checks every exchange applies
+  before it issues a credential, built on the three below.
+- `internal/oidcjwt`: verifies the JWT against the issuer's published keys.
 - `internal/objectstoreplugin/actorlookup`: fetches the actor over the
   loopback, refuses a recreated one.
 - `internal/objectstoreplugin/actorscope`: turns the actor's status into
@@ -66,10 +78,11 @@ This binary's, GCS and S3:
 
 S3 has no issuer: its node plugin ignores the JWT and transfers with the
 pod's own credentials, and the exchange answers `UNIMPLEMENTED` there. A
-provider other than these two brings its own binary in this repository, with
-its own exchange handler and proto shaped for its credential, its own issuer
-and storage client, and imports the three reusable packages. A binary outside
-the repository cannot, since they are under `internal/`.
+provider other than these two brings its own binary, with its own exchange
+handler and proto shaped for its credential, its own issuer and storage
+client. In this repository it imports the four reusable packages. Outside it,
+it imports `pkg/objectstore/actorauthz`, which runs the same checks and returns
+the grants with each prefix as a URI ending in `/`.
 
 ## Upload memory
 

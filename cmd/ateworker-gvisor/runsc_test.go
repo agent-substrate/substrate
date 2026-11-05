@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -206,6 +206,29 @@ func TestBuildArgs(t *testing.T) {
 				t.Errorf("buildArgs(%q, %q, %v) = %v, want %v", tc.command, tc.containerName, tc.extraArgs, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildArgsEnableCoreTags(t *testing.T) {
+	r := &runsc{
+		path:           "/usr/bin/runsc",
+		actorUID:       "test-actor-123",
+		actorDirs:      testActorDirs,
+		flags:          mustFlagStore(t),
+		enableCoreTags: true,
+	}
+
+	got := r.buildArgs("wait", "my-container")
+	want := []string{
+		"-global1",
+		"-global2",
+		"--enable-core-tags",
+		"-root", "/node/actors/test-actor-123/runsc-state",
+		"wait",
+		"my-container",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("buildArgs(\"wait\", \"my-container\") = %v, want %v", got, want)
 	}
 }
 

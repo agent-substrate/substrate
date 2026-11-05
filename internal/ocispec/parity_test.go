@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2026 The Agent Substrate Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package ocispec
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/sizing"
+	"google.golang.org/protobuf/proto"
 )
 
 const testActorUID = "actor_uid"
@@ -94,6 +96,16 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 					t.Errorf("mount %q has no source after shaping", dest)
 				}
 			}
+			// Both runtimes keep the tmpfs mounts at /dev/shm and /tmp.
+			for _, dest := range []string{"/dev/shm", "/tmp"} {
+				if m := mountFor(t, spec, dest); m.Type != "tmpfs" {
+					t.Errorf("%s type = %q after shaping, want tmpfs", dest, m.Type)
+				}
+			}
+			// Neither mounts anything at /run, so the image's /run shows through.
+			if slices.ContainsFunc(spec.Mounts, func(m specs.Mount) bool { return m.Destination == "/run" }) {
+				t.Errorf("a mount at /run after shaping; mounts=%v", spec.Mounts)
+			}
 			// Neither shaper overrides the hostname.
 			if spec.Hostname != "actor" {
 				t.Errorf("hostname = %q, want actor", spec.Hostname)
@@ -107,25 +119,67 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}
 }
 
-// ShapeMicroVM rewrites bind sources to their guest share paths.
+// Both shapers leave the process identity and cwd as Build set them.
+func TestShapers_PreserveProcess(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		shape   func(*specs.Spec) error
+	}{{
+		runtime: "gvisor",
+		shape: func(s *specs.Spec) error {
+			ShapeGVisor(s, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: paritySize})
+			return nil
+		},
+	}, {
+		runtime: "microvm",
+		shape: func(s *specs.Spec) error {
+			return ShapeMicroVM(s, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"})
+		},
+	}} {
+		t.Run(tc.runtime, func(t *testing.T) {
+			opts := parityOptions
+			opts.Container = proto.Clone(parityOptions.Container).(*ateworkerpb.Container)
+			opts.Container.ContainerSpec.User = &ateworkerpb.ProcessUser{Uid: 65532, Gid: 65534, AdditionalGids: []uint32{44}}
+			opts.Container.ContainerSpec.Cwd = "/work"
+			spec := Build(opts)
+			if err := tc.shape(spec); err != nil {
+				t.Fatalf("shaping the spec: %v", err)
+			}
+			want := specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}
+			if !reflect.DeepEqual(spec.Process.User, want) {
+				t.Errorf("Process.User = %+v after shaping, want %+v", spec.Process.User, want)
+			}
+			if spec.Process.Cwd != "/work" {
+				t.Errorf("Process.Cwd = %q after shaping, want /work", spec.Process.Cwd)
+			}
+		})
+	}
+}
+
+// ShapeMicroVM rewrites bind sources to their guest share paths, switches bind
+// to rbind, and keeps nodev.
 func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 	spec := Build(parityOptions)
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
-	for _, tc := range []struct{ dest, wantSource string }{
-		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data"},
-		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo"},
-		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi"},
-		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent"},
+	for _, tc := range []struct {
+		dest       string
+		wantSource string
+		wantOpts   []string
+	}{
+		{"/var/data", GuestSharedDir + "/" + ShareDurable + "/data", []string{"rbind", "rw", "nodev"}},
+		{"/run/ate", GuestSharedDir + "/" + ShareSystemInfo + "/sysinfo", []string{"rbind", "ro", "nodev"}},
+		{"/mnt/csi", GuestSharedDir + "/" + ShareCSI + "/csi", []string{"rbind", "rw", "nodev"}},
+		{"/ate", GuestSharedDir + "/c_app/" + ShareVolumes + "/agent", []string{"rbind", "ro", "nodev"}},
 	} {
-		if got := mountFor(t, spec, tc.dest).Source; got != tc.wantSource {
-			t.Errorf("%s source = %q, want %q", tc.dest, got, tc.wantSource)
+		m := mountFor(t, spec, tc.dest)
+		if m.Source != tc.wantSource {
+			t.Errorf("%s source = %q, want %q", tc.dest, m.Source, tc.wantSource)
 		}
-	}
-	// Guest system mounts replace the host's.
-	if got := mountFor(t, spec, "/dev/shm").Source; got != "shm" {
-		t.Errorf("/dev/shm source = %q, want the guest system mount", got)
+		if !slices.Equal(m.Options, tc.wantOpts) {
+			t.Errorf("%s options = %v, want %v", tc.dest, m.Options, tc.wantOpts)
+		}
 	}
 }
 
@@ -138,15 +192,19 @@ func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
 	}
 }
 
-// Shaping a spec twice does not accumulate mounts.
+// Shaping a spec twice leaves its mounts and options unchanged.
 func TestShapeGVisor_Idempotent(t *testing.T) {
 	spec := Build(parityOptions)
 	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: "app", Size: paritySize}
 	ShapeGVisor(spec, o)
-	first := len(spec.Mounts)
+	first := make([]specs.Mount, len(spec.Mounts))
+	for i, m := range spec.Mounts {
+		m.Options = slices.Clone(m.Options)
+		first[i] = m
+	}
 	ShapeGVisor(spec, o)
-	if len(spec.Mounts) != first {
-		t.Errorf("mount count = %d after a second shaping, want %d", len(spec.Mounts), first)
+	if !reflect.DeepEqual(spec.Mounts, first) {
+		t.Errorf("Mounts after a second shaping =\n%+v\nwant\n%+v", spec.Mounts, first)
 	}
 }
 
@@ -169,6 +227,9 @@ func TestShapeGVisor_Sandbox(t *testing.T) {
 	}
 	if got, want := spec.Annotations["dev.gvisor.spec.mount.data.source"], "/node/actors/a/durable-dir/data"; got != want {
 		t.Errorf("durable-dir mount source annotation = %q, want %q", got, want)
+	}
+	if got, want := spec.Annotations["dev.gvisor.spec.mount.data.options"], "mode=0777"; got != want {
+		t.Errorf("durable-dir mount options annotation = %q, want %q", got, want)
 	}
 }
 

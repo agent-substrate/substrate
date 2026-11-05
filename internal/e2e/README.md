@@ -8,7 +8,9 @@ $ go test -v ./internal/e2e/suites/... -args --e2e
 ## Principles
 
 * Keep it simple -- use go test for the harness.
-* e2e tests live under `internal/e2e/suites/<suite>`
+* e2e tests live under `internal/e2e/suites/<suite>`. The upgrade suite lives in
+  `internal/e2e/upgrade` instead, so the default run leaves it out: it upgrades
+  the cluster it runs on. `.github/workflows/upgrade-e2e.yaml` runs it.
 * Each suite should implement TestMain using e2e.RunTestMain()
   * e2e tests will be skipped for ordinary unit tests unless the `--e2e` flag
     is set e.g. `go test ./internal/e2e/suites/... -args --e2e`
@@ -20,8 +22,8 @@ $ go test -v ./internal/e2e/suites/... -args --e2e
 
 The e2e tests assume you have a cluster set up with Agent Substrate installed
 with the `--e2e-tuning` component, for example via
-`hack/install-ate.sh deploy ate-system --e2e-tuning --credential-provider='{"name":"k8s.io"}'`
-or `hack/install-ate-kind.sh deploy ate-system --e2e-tuning --credential-provider='{"name":"k8s.io"}'`.
+`go run ./cmd/ate-setup deploy ate-system --e2e-tuning --credential-provider='{"name":"k8s.io"}'`
+(add `--kind` for a local Kind cluster).
 The egress credential injection suite needs that bundled provider, which is
 what CI installs on the envoy lane; see `internal/e2e/suites/egresscredinject`.
 
@@ -34,7 +36,7 @@ selects which, by repointing every fixture at its variant --- see
 [sandbox.go](sandbox.go). Unset means gVisor.
 
 ```shell
-# gVisor (the default), against the demos install-ate-kind.sh deploys
+# gVisor (the default), against the counter and egress demos
 $ hack/run-e2e-kind.sh -v -args --no-color
 
 # microVM, against the counter-microvm and egress-microvm demos
@@ -45,8 +47,8 @@ The microVM lane needs its fixtures installed first, which also needs a node
 with `/dev/kvm` (`hack/create-kind-cluster.sh` detects one and labels the node):
 
 ```shell
-$ hack/run-microvm-demo-kind.sh                        # counter-microvm + assets
-$ hack/install-ate-kind.sh --deploy-demo-egress-microvm # egress-microvm
+$ go run ./cmd/ate-setup --kind deploy demo counter-microvm # counter-microvm
+$ go run ./cmd/ate-setup --kind deploy demo egress-microvm  # egress-microvm
 ```
 
 A handful of knobs override the class defaults, mostly for a cluster that
@@ -55,12 +57,15 @@ installs the fixtures elsewhere: `E2E_SUBSTRATE_TEMPLATE_ATESPACE` /
 `E2E_SUBSTRATE_POOL_NAME` point the counter fixture somewhere else, and
 `E2E_TEMPLATE_READY_TIMEOUT` replaces the golden-snapshot budget (90s on
 gVisor, 10m on microVM, where the golden is a cloud-hypervisor cold boot plus
-a checkpoint).
+a checkpoint). The upgrade suite runs `ate-setup` with `--config
+$E2E_ATE_SETUP_CONFIG` when it is set, and otherwise with `--kind`, which
+`E2E_ATE_SETUP_FLAGS` replaces. With a record of pre-built images, it rolls the
+pool to the worker image for its sandbox class at the record's tag.
 
 ## Settings
 
 The installer reads these settings in addition to those in
-[docs/operator-install.md](../../docs/operator-install.md#settings), through the same
+[docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same
 flag, environment variable, and configuration document channels:
 
 * `e2e.tuning` layers `manifests/ate-install/components/e2e` over control
