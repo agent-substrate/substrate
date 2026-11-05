@@ -228,3 +228,80 @@ func TestAcquireLease_ConcurrentTakeover(t *testing.T) {
 		lease.Close()
 	}
 }
+
+func TestLease_LateCloseDoesNotEvictNewHolder(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := t.Context()
+
+	leaseA, err := s.AcquireLease(ctx, "fenced-lease")
+	if err != nil {
+		t.Fatalf("AcquireLease(A) failed: %v", err)
+	}
+
+	// Expire holder A's row in the database so holder B can reclaim the key
+	// while holder A still holds its Lease handle.
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE leases SET expires_at = clock_timestamp() - interval '1 second'
+		WHERE key = 'fenced-lease'`); err != nil {
+		t.Fatalf("expiring lease A: %v", err)
+	}
+
+	leaseB, err := s.AcquireLease(ctx, "fenced-lease")
+	if err != nil {
+		t.Fatalf("AcquireLease(B) after expiry failed: %v", err)
+	}
+	defer leaseB.Close()
+
+	var tokenB string
+	if err := s.pool.QueryRow(ctx, `SELECT token FROM leases WHERE key = 'fenced-lease'`).Scan(&tokenB); err != nil {
+		t.Fatalf("reading holder B token: %v", err)
+	}
+
+	// A late Close from holder A must not delete holder B's row.
+	leaseA.Close()
+
+	var tokenAfter string
+	if err := s.pool.QueryRow(ctx, `SELECT token FROM leases WHERE key = 'fenced-lease'`).Scan(&tokenAfter); err != nil {
+		t.Fatalf("reading token after leaseA.Close(): %v", err)
+	}
+	if tokenAfter != tokenB {
+		t.Errorf("token after leaseA.Close() = %q, want %q", tokenAfter, tokenB)
+	}
+	if _, err := s.AcquireLease(ctx, "fenced-lease"); !errors.Is(err, store.ErrLeaseConflict) {
+		t.Errorf("AcquireLease while holder B owns lease = %v, want ErrLeaseConflict", err)
+	}
+}
+
+func TestLease_RenewalFailsAndCancelsContextWhenTokenStolen(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	s.leaseTTL = 150 * time.Millisecond
+	ctx := t.Context()
+
+	leaseA, err := s.AcquireLease(ctx, "stolen-lease")
+	if err != nil {
+		t.Fatalf("AcquireLease failed: %v", err)
+	}
+	defer leaseA.Close()
+
+	// Replace the row's token to model another holder taking over the lease
+	// across a pause in holder A's renewal loop.
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE leases
+		SET token = 'thief-token',
+		    expires_at = clock_timestamp() + interval '1 hour'
+		WHERE key = 'stolen-lease'`); err != nil {
+		t.Fatalf("overwriting lease token: %v", err)
+	}
+
+	select {
+	case <-leaseA.Context().Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("leaseA context was not cancelled after token was overwritten")
+	}
+
+	// Closing the lost lease must leave the thief's row intact.
+	leaseA.Close()
+	if got := countLeases(t, s, "stolen-lease"); got != 1 {
+		t.Errorf("countLeases after lost lease Close = %d, want 1", got)
+	}
+}
