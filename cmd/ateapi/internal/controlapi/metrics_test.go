@@ -23,8 +23,11 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -348,6 +351,64 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 				t.Errorf("error.type = %q (present=%v), want %q", gotErrType, hasErrType, tt.wantErrorType)
 			}
 		})
+	}
+}
+
+// getActorErrStore fails GetActor with err.
+type getActorErrStore struct {
+	store.Interface
+	err error
+}
+
+func (s getActorErrStore) GetActor(context.Context, resources.ActorRef) (*ateapi.Actor, error) {
+	return nil, s.err
+}
+
+// TestLifecycleOpRecordsReturnedCode asserts error.type is the code of the
+// error the operation returns, so a store miss records NotFound and a
+// conflict records Aborted, not Internal.
+func TestLifecycleOpRecordsReturnedCode(t *testing.T) {
+	ctx := context.Background()
+	ref := resources.ActorRef{Atespace: "team-a", Name: "missing"}
+	ops := []struct {
+		op  string
+		run func(*ActorWorkflow) error
+	}{
+		{ateattr.OperationResume, func(w *ActorWorkflow) error { _, _, err := w.ResumeActor(ctx, ref); return err }},
+		{ateattr.OperationSuspend, func(w *ActorWorkflow) error { _, err := w.SuspendActor(ctx, ref, suspendSync); return err }},
+		{ateattr.OperationRevert, func(w *ActorWorkflow) error { _, err := w.RevertActor(ctx, ref); return err }},
+	}
+	causes := []struct {
+		name string
+		// getErr fails GetActor. Nil leaves the actor missing from the store.
+		getErr error
+		want   codes.Code
+	}{
+		{name: "store miss", want: codes.NotFound},
+		{name: "version conflict", getErr: store.ErrVersionConflict, want: codes.Aborted},
+	}
+	for _, op := range ops {
+		for _, c := range causes {
+			t.Run(op.op+"/"+c.name, func(t *testing.T) {
+				st, cleanup := storetest.SetupTestStore(t)
+				defer cleanup()
+				w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+				if c.getErr != nil {
+					w.store = getActorErrStore{Interface: st, err: c.getErr}
+				}
+				inst, reader := newTestInstruments(t)
+				w.instruments = inst
+
+				err := op.run(w)
+				if got := apierror.Code(err); got != c.want {
+					t.Fatalf("operation returned code %v (%v), want %v", got, err, c.want)
+				}
+				dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
+				if got, _ := attrString(dp, ateattr.ErrorTypeKey); got != apierror.Code(err).String() {
+					t.Errorf("error.type = %q, want %q", got, apierror.Code(err).String())
+				}
+			})
+		}
 	}
 }
 
