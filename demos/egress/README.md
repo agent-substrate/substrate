@@ -276,7 +276,6 @@ from the cluster, works for a manual run.
 
 ```bash
 kill "$PROXY_PID" 2>/dev/null || true
-kubectl delete namespace egress-target --ignore-not-found
 ./demos/egress/test-egress.sh --cleanup
 go run ./cmd/ate-setup delete demo egress
 ```

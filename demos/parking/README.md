@@ -148,7 +148,7 @@ curl -s 'http://localhost:4040/statusz?format=json' | jq .parking
 
 The parking metrics are also exported on the router's metrics endpoint
 (`--metrics-listen-addr`, container port `9090`): `atenet.router.parking.active`,
-`atenet.router.parking.wait.duration` (labeled by `ate.router.outcome`), and
+`atenet.router.parking.wait.duration` (labeled by `outcome`), and
 `atenet.router.parking.rejected` (labeled by `ate.router.outcome`).
 
 ### D. Compare with parking disabled
