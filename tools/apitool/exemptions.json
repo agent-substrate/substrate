@@ -348,5 +348,10 @@
     "rule": "documented",
     "subject": "substrate.ateapi.v1.WorkerStatus.state",
     "message": "field has no doc comment"
+  },
+  {
+    "rule": "resource-field-order",
+    "subject": "substrate.ateapi.v1.Tag",
+    "message": "\"status\" is declared before \"source_actor\", want it declared last"
   }
 ]
