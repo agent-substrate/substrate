@@ -36,9 +36,10 @@ token. The exchange fetches the issuer's public keys through OpenID Connect
 discovery at `<issuer>/.well-known/openid-configuration`, at sidecar start
 and then as `oidcjwt.Verifier` refreshes them. An issuer it cannot reach
 fails the exchange with `UNAVAILABLE`.
-The issuer's certificate must verify against the system roots or the CA
-bundle `--actor-jwt-issuer-ca-file` names, by default the service DNS trust
-bundle. The sidecar re-reads the bundle when it changes, so a rotated bundle
+The issuer's certificate must verify against the CA bundle
+`--actor-jwt-issuer-ca-file` names, by default the service DNS trust bundle.
+For an issuer whose host ends in `.svc`, only that bundle is trusted. For any
+other issuer, the system roots are trusted too. The sidecar re-reads the bundle when it changes, so a rotated bundle
 takes effect without a restart. If a re-read fails, it keeps the last bundle
 and logs a warning. If the issuer's certificate does not verify at start, the
 sidecar exits. Any other error at start is logged, and the sidecar serves and
@@ -77,10 +78,11 @@ This binary's, GCS and S3:
 
 S3 has no issuer: its node plugin ignores the JWT and transfers with the
 pod's own credentials, and the exchange answers `UNIMPLEMENTED` there. A
-provider other than these two brings its own binary in this repository, with
-its own exchange handler and proto shaped for its credential, its own issuer
-and storage client, and imports the four reusable packages. A binary outside
-the repository cannot, since they are under `internal/`.
+provider other than these two brings its own binary, with its own exchange
+handler and proto shaped for its credential, its own issuer and storage
+client. In this repository it imports the four reusable packages. Outside it,
+it imports `pkg/objectstore/actorauthz`, which runs the same checks and returns
+the grants with each prefix as a URI ending in `/`.
 
 ## Upload memory
 

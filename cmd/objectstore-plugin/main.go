@@ -80,7 +80,7 @@ func main() {
 	flags.StringVar(&xcfg.listen, "exchange-listen", "", "control mode: TCP address to serve the credential exchange on over TLS, for example :8445. Empty leaves it unserved.")
 	flags.StringVar(&xcfg.credBundle, "exchange-cred-bundle", "/run/servicedns.podcert.ate.dev/credential-bundle.pem", "control mode: PEM credential bundle the exchange serves with, the pod's service DNS certificate")
 	flags.StringVar(&xcfg.issuer, "actor-jwt-issuer", "", "control mode: issuer URL of the actor JWTs the exchange accepts, the value ate-api-server runs with")
-	flags.StringVar(&xcfg.issuerCAFile, "actor-jwt-issuer-ca-file", serviceDNSTrustBundle, "control mode: CA bundle trusted in addition to the system roots when verifying --actor-jwt-issuer")
+	flags.StringVar(&xcfg.issuerCAFile, "actor-jwt-issuer-ca-file", serviceDNSTrustBundle, "control mode: CA bundle that verifies --actor-jwt-issuer, trusted alone for a .svc host and with the system roots otherwise")
 	flags.StringVar(&xcfg.transferAccount, "transfer-service-account", "", "control mode on GCS: email of the Google service account snapshot transfers run as. The exchange impersonates it and downscopes its token per actor")
 	flags.StringVar(&xcfg.ateapi.Address, "ateapi-address", "127.0.0.1:443", "control mode: ate-api-server gRPC address, the loopback in the shared pod")
 	flags.StringVar(&xcfg.ateapi.CAFile, "ateapi-ca-file", serviceDNSTrustBundle, "control mode: CA bundle used to verify ate-api-server")
