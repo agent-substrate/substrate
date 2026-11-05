@@ -72,7 +72,7 @@ footer {
 }
 
 // --------------------------------------------------
-// Pre-1.0 Banner & Navbar
+// Navbar
 // --------------------------------------------------
 .ic {
   fill: none;
@@ -92,72 +92,6 @@ footer {
   top: 0;
   z-index: 1030;
   width: 100%;
-}
-
-.as-pre-banner {
-  min-height: 40px;
-  padding: 6px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: #111612;
-  border-bottom: 1px solid #243028;
-  font-size: 13px;
-  color: #9aa89f;
-
-  &__pill {
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #2a2a12;
-    color: #f0f175;
-    font-size: 12px;
-    font-weight: 600;
-    flex-shrink: 0;
-  }
-
-  &__text-mobile,
-  &__link-mobile {
-    display: none;
-  }
-
-  &__link {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-weight: 500;
-    color: $substrate-green;
-    text-decoration: none;
-
-    &:hover,
-    &:focus {
-      color: $substrate-green-light;
-    }
-  }
-
-  @media (max-width: 640px) {
-    justify-content: flex-start;
-    font-size: 12px;
-    gap: 8px;
-
-    &__text-desktop,
-    &__link-desktop {
-      display: none;
-    }
-
-    &__text-mobile {
-      display: inline;
-      flex-grow: 1;
-    }
-
-    &__link-mobile {
-      display: inline;
-    }
-
-    &__link svg {
-      display: none;
-    }
-  }
 }
 
 .td-navbar.as-navbar {
