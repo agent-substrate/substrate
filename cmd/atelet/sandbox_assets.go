@@ -42,7 +42,7 @@ import (
 	"go.ate.dev/substrate/cmd/atelet/internal/atomicfile"
 	"go.ate.dev/substrate/cmd/atelet/internal/filecache"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/pathelem"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/objectstorage"
 	"google.golang.org/grpc/codes"
@@ -143,7 +143,7 @@ func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsReco
 func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
-		if !nodepath.IsPlainName(name) {
+		if !pathelem.IsPlain(name) {
 			return nil, apierror.InvalidArgument("sandbox asset name %q is not a plain file name", name)
 		}
 		dst := filepath.Join(dstDir, name)

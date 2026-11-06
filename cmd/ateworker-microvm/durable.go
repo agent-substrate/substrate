@@ -45,8 +45,8 @@ import (
 	"slices"
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/pathelem"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/tarutil"
 )
@@ -59,7 +59,7 @@ import (
 // so a symlink planted there would expose whatever it points at in the guest
 // rootfs to the container.
 func durableTarFile(volumeName string) (string, error) {
-	if !nodepath.IsPlainName(volumeName) {
+	if !pathelem.IsPlain(volumeName) {
 		return "", fmt.Errorf("invalid durable-dir volume name %q", volumeName)
 	}
 	return "durable-dir-" + volumeName + ".tar", nil

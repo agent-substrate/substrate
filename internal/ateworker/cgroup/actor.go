@@ -28,6 +28,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"go.ate.dev/substrate/internal/pathelem"
 )
 
 const (
@@ -262,7 +264,7 @@ func removeActorLeaf(root, actorUID string) error {
 }
 
 func actorLeafPath(root, actorUID string) (string, error) {
-	if actorUID == "" || actorUID == "." || actorUID == ".." || actorUID == workerLeaf || strings.ContainsAny(actorUID, "/\x00") {
+	if !pathelem.IsPlain(actorUID) || actorUID == workerLeaf {
 		return "", fmt.Errorf("invalid actor cgroup name %q", actorUID)
 	}
 	return filepath.Join(root, actorUID), nil
