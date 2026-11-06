@@ -71,7 +71,7 @@ func (s *AteWorkerService) archiveDir(ctx context.Context, tarPath, srcDir strin
 		s.borrow.Return(size)
 		return err
 	}
-	if err := snapshotcache.StartWriteback([]string{tarPath}, func() (bool, <-chan struct{}) { return s.borrow.Tight(size) }, func() { s.borrow.Return(size) }); err != nil {
+	if err := snapshotcache.StartWriteback([]string{tarPath}, nil, func() { s.borrow.Return(size) }); err != nil {
 		s.borrow.Return(size)
 		slog.WarnContext(ctx, "Failed to start archive writeback", slog.String("path", tarPath), slog.Any("err", err))
 	}
