@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "modes": {
+    "strict": {
+      "checks": [
+        {"field": "resume_max_ms", "op": "<=", "limit": 1500, "reason": "slow_resume"},
+        {"field": "ttfe_max_ms", "op": "<=", "limit": 1000, "reason": "slow_ttfe"},
+        {"field": "cel_ms", "op": "<=", "baseline_ratio": 1.5, "reason": "slow_cel"},
+        {"field": "wall_ms", "op": "<=", "baseline_ratio": 1.5, "reason": "slow_wall"}
+      ]
+    },
+    "relaxed": {
+      "checks": [
+        {"field": "cel_ms", "op": "<=", "baseline_ratio": 2.0, "reason": "slow_cel"},
+        {"field": "wall_ms", "op": "<=", "baseline_ratio": 2.0, "reason": "slow_wall"}
+      ]
+    }
+  }
+}
