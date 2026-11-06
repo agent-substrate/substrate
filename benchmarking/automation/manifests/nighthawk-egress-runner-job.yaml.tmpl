@@ -1,0 +1,111 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Template rendered per test by orchestrator.py and
+# benchmarking/nighthawk-egress/run-dev.sh for `type: nighthawk-egress`
+# entries. Shares the `benchmarking` namespace + `benchmark-runner`
+# ServiceAccount with runner-job.yaml.tmpl so the same GKE Workload Identity
+# binding grants GCS write access.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmarking
+  labels:
+    ate.dev/api-access: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: benchmarking
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: substrate-benchmark-runner
+        benchmark: nighthawk-egress
+        test-name: "${NAME}"
+        tag: "${TAG}"
+    spec:
+      serviceAccountName: benchmark-runner
+      restartPolicy: Never
+      tolerations:
+      - key: ate.dev/benchmarking
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: runner
+        image: ${IMAGE}
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        args:
+        - "--name"
+        - "${NAME}"
+        - "--tag"
+        - "${TAG}"
+        - "--dest"
+        - "${DEST}"
+        - "--envoy-cpu"
+        - "${ENVOY_CPU}"
+        - "--mode"
+        - "${MODE}"
+        - "--measuring-period"
+        - "${MEASURING_PERIOD}"
+        - "--convergence-deadline"
+        - "${CONVERGENCE_DEADLINE}"
+        - "--testing-stage-duration"
+        - "${TESTING_STAGE_DURATION}"
+        - "--tail-latency-slo-ms"
+        - "${TAIL_LATENCY_SLO_MS}"
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt

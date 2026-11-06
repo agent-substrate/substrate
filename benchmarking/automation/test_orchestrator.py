@@ -16,6 +16,7 @@
 
 import json
 import os
+import subprocess
 import unittest
 from unittest import mock
 
@@ -92,7 +93,7 @@ class DeploySubstrateTest(unittest.TestCase):
     # denies it unless the install makes it an owner, and the Envoy ingress
     # router refuses to deploy without an allowed SPIFFE ID.
     @mock.patch("orchestrator.run")
-    def test_runner_and_client_are_bootstrap_owners(self, run):
+    def test_deploy_substrate_auth(self, run):
         orchestrator.deploy_substrate(["--credential-provider={}"])
         cmd = run.call_args.args[0]
         self.assertEqual(cmd, ["go", "run", "./cmd/ate-setup", "deploy", "ate-system", "--credential-provider={}"])
@@ -108,6 +109,13 @@ class DeploySubstrateTest(unittest.TestCase):
         self.assertEqual(
             env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
             "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner",
+        )
+
+        orchestrator.deploy_substrate([], extra_ingress_spiffe_ids=("spiffe://cluster.local/ns/foo/sa/bar",))
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(
+            env["ATE_INGRESS_ALLOWED_SPIFFE_IDS"],
+            "spiffe://cluster.local/ns/benchmarking/sa/benchmark-runner,spiffe://cluster.local/ns/foo/sa/bar",
         )
 
     @mock.patch("orchestrator.run")
@@ -228,7 +236,11 @@ class RunnerNamespaceTest(unittest.TestCase):
 
     def test_namespace_has_api_access_label(self):
         want = self.api_client_labels()
-        for name in ("runner-job.yaml.tmpl", "nighthawk-ingress-runner-job.yaml.tmpl"):
+        for name in (
+            "runner-job.yaml.tmpl",
+            "nighthawk-ingress-runner-job.yaml.tmpl",
+            "nighthawk-egress-runner-job.yaml.tmpl",
+        ):
             with self.subTest(template=name):
                 text = open(os.path.join(self.HERE, "manifests", name)).read()
                 ns = next(
@@ -239,6 +251,285 @@ class RunnerNamespaceTest(unittest.TestCase):
                 self.assertEqual(ns["metadata"]["name"], "benchmarking")
                 for k, v in want.items():
                     self.assertEqual(ns["metadata"].get("labels", {}).get(k), v)
+
+
+class NighthawkEgressTest(unittest.TestCase):
+    def _entry(self, **overrides):
+        cfg = {"envoyCpu": 2, "mode": "mitm", "tailLatencySloMs": 25, **overrides}
+        return {
+            "name": "egress_mitm",
+            "type": "nighthawk-egress",
+            "targetCluster": "dev",
+            "duration": "30m",
+            "nighthawk-egress": cfg,
+        }
+
+    def test_registration(self):
+        from testtypes import nighthawk_egress
+
+        self.assertIn("nighthawk-egress", orchestrator.TYPES)
+        self.assertFalse(nighthawk_egress.USES_SHARED_WORKLOADS)
+        self.assertEqual(
+            nighthawk_egress.EXTRA_INGRESS_SPIFFE_IDS,
+            ("spiffe://cluster.local/ns/nighthawk/sa/traffic-driver-invoker",),
+        )
+
+    def test_job_template_renders_args_labels_and_toleration(self):
+        from testtypes import nighthawk_egress
+
+        test = self._entry(mode="passthrough", envoyCpu=4, tailLatencySloMs=50)
+        subs = {
+            "JOB_NAME": "j",
+            "IMAGE": "i",
+            "TAG": "6949841e",
+            "NAME": test["name"],
+            "DEST": "gs://b/p",
+            **nighthawk_egress.job_subs(test),
+        }
+        tmpl = nighthawk_egress.job_tmpl(os.path.join(os.path.dirname(__file__), "manifests"))
+        text = orchestrator.render_template(tmpl, subs)
+        self.assertNotIn("${", text)
+        job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
+        self.assertEqual(job["spec"]["ttlSecondsAfterFinished"], 86400)
+        self.assertEqual(job["spec"]["template"]["metadata"]["labels"]["tag"], "6949841e")
+        args = job["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertEqual(args[args.index("--mode") + 1], "passthrough")
+        self.assertEqual(args[args.index("--envoy-cpu") + 1], "4")
+        self.assertEqual(args[args.index("--tail-latency-slo-ms") + 1], "50")
+        mounts = job["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+        self.assertIn({"name": "servicedns-ca", "mountPath": "/run/servicedns-ca", "readOnly": True}, mounts)
+        vols = job["spec"]["template"]["spec"]["volumes"]
+        ca_vol = next(v for v in vols if v["name"] == "servicedns-ca")
+        ctb = ca_vol["projected"]["sources"][0]["clusterTrustBundle"]
+        self.assertEqual(ctb["signerName"], "servicedns.podcert.ate.dev/identity")
+        self.assertEqual(ctb["path"], "ca.crt")
+
+    def test_tests_yaml_egress_suites(self):
+        from testtypes import nighthawk_egress
+
+        path = os.path.join(os.path.dirname(__file__), "tests.yaml")
+        with open(path) as f:
+            tests = [t for t in yaml.safe_load(f)["tests"] if t.get("type") == "nighthawk-egress"]
+        self.assertEqual(len(tests), 3)
+        for t in tests:
+            nighthawk_egress.validate(t)
+            cfg = t["nighthawk-egress"]
+            self.assertEqual(cfg["envoyCpu"], 1)
+
+    def _deployment_json(
+        self,
+        *,
+        replicas: int = 1,
+        envoy_args: list[str] | None = None,
+        envoy_req: str | None = None,
+        envoy_lim: str | None = None,
+        extproc_req: str | None = None,
+        extproc_lim: str | None = None,
+    ) -> str:
+        def _res(req: str | None, lim: str | None) -> dict:
+            out: dict = {}
+            if req is not None:
+                out["requests"] = {"cpu": req}
+            if lim is not None:
+                out["limits"] = {"cpu": lim}
+            return out
+
+        return json.dumps(
+            {
+                "spec": {
+                    "replicas": replicas,
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "envoy",
+                                    "args": envoy_args
+                                    if envoy_args is not None
+                                    else ["-c", "/etc/envoy/envoy.yaml", "--service-node", "atenet-egress"],
+                                    "resources": _res(envoy_req, envoy_lim),
+                                },
+                                {
+                                    "name": "ext-proc",
+                                    "args": ["router", "--mode=egress"],
+                                    "resources": _res(extproc_req, extproc_lim),
+                                },
+                            ]
+                        }
+                    },
+                },
+            }
+        )
+
+    @mock.patch("testtypes.nighthawk_egress.run")
+    def test_shape_atenet_egress_patches_when_unshaped(self, run):
+        from testtypes import nighthawk_egress
+
+        unshaped = self._deployment_json(
+            replicas=2,
+            envoy_args=["-c", "/etc/envoy/envoy.yaml", "--concurrency", "1", "--service-node", "atenet-egress"],
+            envoy_req="0.5",
+            envoy_lim="1",
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=unshaped),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+        ]
+        nighthawk_egress.shape_atenet_egress(2)
+
+        cmds = [c.args[0] for c in run.call_args_list]
+        self.assertEqual(len(cmds), 3)
+        self.assertEqual(
+            cmds[0],
+            ["kubectl", "-n", "ate-system", "get", "deployment/atenet-egress", "-o", "json"],
+        )
+        self.assertEqual(
+            cmds[1][:7],
+            ["kubectl", "-n", "ate-system", "patch", "deployment/atenet-egress", "--type=strategic", "-p"],
+        )
+        patch = json.loads(cmds[1][7])
+        self.assertEqual(patch["spec"]["replicas"], 1)
+        containers = {c["name"]: c for c in patch["spec"]["template"]["spec"]["containers"]}
+        self.assertEqual(
+            containers["envoy"]["args"],
+            ["-c", "/etc/envoy/envoy.yaml", "--service-node", "atenet-egress", "--concurrency", "2"],
+        )
+        self.assertEqual(
+            containers["envoy"]["resources"],
+            {"requests": {"cpu": "2000m"}, "limits": {"cpu": "2000m"}},
+        )
+        self.assertEqual(
+            containers["ext-proc"]["resources"],
+            {"requests": {"cpu": "2000m"}, "limits": {"cpu": "2000m"}},
+        )
+        self.assertEqual(
+            cmds[2],
+            ["kubectl", "-n", "ate-system", "rollout", "status", "deployment/atenet-egress", "--timeout=300s"],
+        )
+
+    @mock.patch("testtypes.nighthawk_egress.run")
+    def test_shape_atenet_egress_duplicate_concurrency_repatches(self, run):
+        from testtypes import nighthawk_egress
+
+        dup_concurrency = self._deployment_json(
+            replicas=1,
+            envoy_args=["-c", "/etc/envoy/envoy.yaml", "--concurrency=1", "--concurrency=2"],
+            envoy_req="2",
+            envoy_lim="2000m",
+            extproc_req="2000m",
+            extproc_lim="2",
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=dup_concurrency),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+        ]
+        nighthawk_egress.shape_atenet_egress(2)
+        cmds = [c.args[0] for c in run.call_args_list]
+        self.assertEqual(len(cmds), 3)
+        patched_envoy = json.loads(cmds[1][7])["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual(patched_envoy["args"], ["-c", "/etc/envoy/envoy.yaml", "--concurrency", "2"])
+
+    @mock.patch("testtypes.nighthawk_egress.run")
+    def test_pre_test(self, run):
+        from testtypes import nighthawk_egress
+
+        shaped = self._deployment_json(
+            replicas=1,
+            envoy_args=["-c", "/etc/envoy/envoy.yaml", "--concurrency", "2"],
+            envoy_req="2000m",
+            envoy_lim="2000m",
+            extproc_req="2000m",
+            extproc_lim="2000m",
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=shaped),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="gke_proj_loc_cluster\n"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+        ]
+        nighthawk_egress.pre_test(self._entry(envoyCpu=2, mode="mitm"))
+        tls = next(c for c in run.call_args_list if c.args[0] == ["hack/setup-e2e-egress-tls-kind.sh"])
+        self.assertEqual(tls.kwargs["env"]["KUBECTL_CONTEXT"], "gke_proj_loc_cluster")
+
+    @mock.patch("testtypes.nighthawk_egress.run_no_check")
+    @mock.patch("orchestrator.run_no_check")
+    def test_teardown_workloads_contract(self, orch_run_no_check, egress_run_no_check):
+        # Locust-only teardown runs shared workloads delete and never touches nighthawk-egress.
+        orchestrator.teardown_test_workloads(["locust"])
+        orch_run_no_check.assert_called_once_with(["benchmarking/workloads/deploy.sh", "--delete"])
+        egress_run_no_check.assert_not_called()
+
+        orch_run_no_check.reset_mock()
+        egress_run_no_check.reset_mock()
+
+        # nighthawk-ingress-only teardown runs shared workloads delete and never touches nighthawk-egress.
+        orchestrator.teardown_test_workloads(["nighthawk-ingress"])
+        orch_run_no_check.assert_called_once_with(["benchmarking/workloads/deploy.sh", "--delete"])
+        egress_run_no_check.assert_not_called()
+
+        orch_run_no_check.reset_mock()
+        egress_run_no_check.reset_mock()
+
+        # Pre-run sweep (None) when namespace/nighthawk does not exist skips deploy-traffic-driver.sh --delete
+        # so locust / nighthawk-ingress runs do not trigger an extra `go build ./cmd/kubectl-ate`.
+        egress_run_no_check.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+        orchestrator.teardown_test_workloads(None)
+        orch_run_no_check.assert_called_once_with(["benchmarking/workloads/deploy.sh", "--delete"])
+        egress_run_no_check.assert_called_once_with(
+            ["kubectl", "get", "namespace", "nighthawk", "-o", "name", "--ignore-not-found"],
+            capture_output=True,
+            text=True,
+        )
+
+        orch_run_no_check.reset_mock()
+        egress_run_no_check.reset_mock()
+
+        # nighthawk-egress teardown when ate-api-server exists runs both delete scripts and deletes the namespace.
+        egress_run_no_check.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="namespace/nighthawk\n"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="deployment.apps/ate-api-server\n"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+        ]
+        orchestrator.teardown_test_workloads(["nighthawk-egress"])
+        orch_run_no_check.assert_not_called()
+        self.assertEqual(
+            [c.args[0] for c in egress_run_no_check.call_args_list],
+            [
+                ["kubectl", "get", "namespace", "nighthawk", "-o", "name", "--ignore-not-found"],
+                ["kubectl", "get", "deployment", "ate-api-server", "-n", "ate-system", "-o", "name", "--ignore-not-found"],
+                ["benchmarking/nighthawk-egress/deploy-traffic-driver.sh", "--delete"],
+                ["benchmarking/nighthawk-egress/deploy.sh", "--delete"],
+                ["kubectl", "delete", "namespace", "nighthawk", "--ignore-not-found"],
+            ],
+        )
+
+        egress_run_no_check.reset_mock()
+
+        # When namespace/nighthawk exists but ate-api-server is gone, delete K8s manifests directly without building kubectl-ate.
+        egress_run_no_check.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="namespace/nighthawk\n"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=""),
+        ]
+        orchestrator.teardown_test_workloads(["nighthawk-egress"])
+        self.assertEqual(
+            [c.args[0] for c in egress_run_no_check.call_args_list],
+            [
+                ["kubectl", "get", "namespace", "nighthawk", "-o", "name", "--ignore-not-found"],
+                ["kubectl", "get", "deployment", "ate-api-server", "-n", "ate-system", "-o", "name", "--ignore-not-found"],
+                ["kubectl", "delete", "--ignore-not-found", "-f", "benchmarking/nighthawk-egress/traffic-driver.yaml.tmpl"],
+                ["benchmarking/nighthawk-egress/deploy.sh", "--delete"],
+                ["kubectl", "delete", "namespace", "nighthawk", "--ignore-not-found"],
+            ],
+        )
 
 
 class JobNameTest(unittest.TestCase):

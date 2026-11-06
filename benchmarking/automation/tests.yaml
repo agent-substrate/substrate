@@ -17,7 +17,8 @@
 #
 # Fields shared by every entry:
 #
-#   type           Required. Selects the runner: "locust" | "nighthawk-ingress".
+#   type           Required. Selects the runner: "locust" | "nighthawk-ingress" |
+#                  "nighthawk-egress".
 #                  Each type's own fields are described in its section.
 #   targetCluster  Required. Names a config file under
 #                  /etc/orchestrator/target-clusters/ (e.g. `targetCluster:
@@ -139,6 +140,15 @@
 # the "Configuration knobs" table in benchmarking/nighthawk-ingress/README.md.
 # `workerCount` is required: the benchmark warms one actor per worker, so
 # it is also the actor fleet size.
+#
+# ---- type: nighthawk-egress ---------------------------------------------------------
+#
+# Runs the Nighthawk adaptive egress-gateway capacity benchmark. `duration` is
+# the job-wait budget only; the test knobs live in a `nighthawk-egress:` block.
+# Deploys its own gVisor rig (`USES_SHARED_WORKLOADS = False`), so `sandboxClass`
+# must be `gvisor` and shared-workload fields (`workerCount`, `actorMemory`,
+# `actorCPU`, `workerMemory`, `workerWaitTimeout`, `isolate`) are rejected.
+# See the "Configuration knobs" table in benchmarking/nighthawk-egress/README.md.
 
 tests:
   - name: glutton_baseline_1_user
@@ -698,6 +708,30 @@ tests:
     nighthawk-ingress:
       envoyCpu: 16
       tailLatencySloMs: 25
+  - name: egress_gatewaycap_http_1cpu
+    description: "Egress gateway capacity (cleartext HTTP): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 1 CPU"
+    type: nighthawk-egress
+    targetCluster: dev
+    duration: 30m
+    nighthawk-egress:
+      mode: http
+      envoyCpu: 1
+  - name: egress_gatewaycap_mitm_1cpu
+    description: "Egress gateway capacity (TLS MITM + L7 policy): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 1 CPU"
+    type: nighthawk-egress
+    targetCluster: dev
+    duration: 30m
+    nighthawk-egress:
+      mode: mitm
+      envoyCpu: 1
+  - name: egress_gatewaycap_passthrough_1cpu
+    description: "Egress gateway capacity (TLS SNI passthrough): Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 1 CPU"
+    type: nighthawk-egress
+    targetCluster: dev
+    duration: 30m
+    nighthawk-egress:
+      mode: passthrough
+      envoyCpu: 1
   # ate-api-server and Postgres cold resume ceiling on the fake data plane.
   # Each user owns one actor: its first iteration creates the actor and
   # makes it cold, in the step that adds the user, and every later one

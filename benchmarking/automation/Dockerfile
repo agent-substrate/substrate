@@ -64,7 +64,10 @@ ENV PATH=/opt/automation/venv/bin:$PATH
 
 COPY orchestrator.py util.py controlplane.py /opt/automation/
 COPY testtypes/ /opt/automation/testtypes/
-COPY manifests/runner-job.yaml.tmpl manifests/nighthawk-ingress-runner-job.yaml.tmpl /opt/automation/manifests/
+COPY manifests/runner-job.yaml.tmpl \
+     manifests/nighthawk-ingress-runner-job.yaml.tmpl \
+     manifests/nighthawk-egress-runner-job.yaml.tmpl \
+     /opt/automation/manifests/
 
 ENV PYTHONUNBUFFERED=1
 
