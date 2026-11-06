@@ -170,11 +170,7 @@ func TestCache_DeletedEvent(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Delete events carry only the name.
-	fs.send(store.WorkerEvent{
-		Type:   store.WorkerEventDeleted,
-		Worker: &ateapi.Worker{Metadata: &ateapi.ResourceMetadata{Name: workerName("ns", "pod1")}},
-	})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventDeleted, Worker: w})
 
 	eventually(t, func() bool {
 		workers, err := c.Workers()
@@ -443,6 +439,7 @@ func makeWorker(namespace, pod string, version int64) *ateapi.Worker {
 	return &ateapi.Worker{
 		Metadata: &ateapi.ResourceMetadata{
 			Name:    workerName(namespace, pod),
+			Uid:     workerName(namespace, pod),
 			Version: version,
 		},
 		WorkerNamespace: namespace,
@@ -472,16 +469,21 @@ func eventually(t *testing.T, condition func() bool, timeout time.Duration) {
 }
 
 // The watch may replay an event or deliver one out of order, so an event
-// older than what the cache already holds must not regress it.
+// older than or already at what the cache holds must not regress it or
+// resurrect a deleted worker.
 func TestCache_WatchEventsAreFenced(t *testing.T) {
-	w := makeWorker("ns", "pod1", 1)
-	fs := newFakeStore(w)
+	w1 := makeWorker("ns", "pod1", 1)
+	w1.Metadata.Uid = "incarnation-1"
+	w3 := makeWorker("ns", "pod3", 2)
+	w3.Metadata.Uid = "pod3-incarnation-1"
+	fs := newFakeStore(w1, w3)
 	c := workercache.New(fs, time.Hour)
 	if err := c.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	updated := makeWorker("ns", "pod1", 2)
+	updated.Metadata.Uid = "incarnation-1"
 	updated.Status.Allocated = &ateapi.WorkerResources{Actors: 1}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
 	eventually(t, func() bool {
@@ -489,9 +491,11 @@ func TestCache_WatchEventsAreFenced(t *testing.T) {
 		return err == nil && w.GetMetadata().GetVersion() == 2 && w.GetStatus().GetAllocated().GetActors() == 1
 	}, 2*time.Second)
 
-	// A replayed and an older event must both be no-ops.
-	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
-	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	// A same-version replay and an older event must both be no-ops.
+	dupV2 := makeWorker("ns", "pod1", 2)
+	dupV2.Metadata.Uid = "incarnation-1"
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: dupV2})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: w1})
 	// Ordering on the channel means observing a later event proves the two
 	// above were already applied.
 	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod2", 1)})
@@ -505,8 +509,83 @@ func TestCache_WatchEventsAreFenced(t *testing.T) {
 		t.Fatalf("Worker: %v", err)
 	}
 	if got.GetMetadata().GetVersion() != 2 || got.GetStatus().GetAllocated().GetActors() != 1 {
-		t.Fatalf("stale event regressed the cache to version %d", got.GetMetadata().GetVersion())
+		t.Fatalf("stale or duplicate event overwrote the cache: version=%d actors=%d",
+			got.GetMetadata().GetVersion(), got.GetStatus().GetAllocated().GetActors())
 	}
+
+	// Delete pod1 and Forget pod3, then replay earlier creates/updates for both
+	// (simulating outbox replay after commit-time publishLocally or Forget).
+	fs.send(store.WorkerEvent{Type: store.WorkerEventDeleted, Worker: updated})
+	c.Forget(workerName("ns", "pod3"), w3.Metadata.Uid)
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: w1})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: w3})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod4", 1)})
+	eventually(t, func() bool {
+		_, err := c.Worker(workerName("ns", "pod4"))
+		return err == nil
+	}, 2*time.Second)
+
+	if _, err := c.Worker(workerName("ns", "pod1")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("replayed event resurrected deleted pod1: err = %v, want ErrNotFound", err)
+	}
+	if _, err := c.Worker(workerName("ns", "pod3")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("replayed event resurrected forgotten pod3: err = %v, want ErrNotFound", err)
+	}
+
+	// Re-creating pod1 under a new UID starts at version 1 and must not be
+	// blocked by incarnation-1's tombstone or clobbered by its replayed events.
+	recreated := makeWorker("ns", "pod1", 1)
+	recreated.Metadata.Uid = "incarnation-2"
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: recreated})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventDeleted, Worker: updated})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod5", 1)})
+	eventually(t, func() bool {
+		_, err := c.Worker(workerName("ns", "pod5"))
+		return err == nil
+	}, 2*time.Second)
+
+	got, err = c.Worker(workerName("ns", "pod1"))
+	if err != nil {
+		t.Fatalf("recreated pod1 missing: %v", err)
+	}
+	if got.GetMetadata().GetUid() != "incarnation-2" || got.GetMetadata().GetVersion() != 1 {
+		t.Fatalf("recreated pod1 = (%q, v%d), want (incarnation-2, v1)",
+			got.GetMetadata().GetUid(), got.GetMetadata().GetVersion())
+	}
+
+	// Forgetting incarnation-1 must neither remove nor fence incarnation-2.
+	c.Forget(workerName("ns", "pod1"), "incarnation-1")
+	recreatedV2 := makeWorker("ns", "pod1", 2)
+	recreatedV2.Metadata.Uid = "incarnation-2"
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: recreatedV2})
+	eventually(t, func() bool {
+		w, err := c.Worker(workerName("ns", "pod1"))
+		return err == nil && w.GetMetadata().GetUid() == "incarnation-2" && w.GetMetadata().GetVersion() == 2
+	}, 2*time.Second)
+}
+
+// A relist that finds a tombstoned worker drops the tombstone, so the
+// worker's later events apply again.
+func TestCache_RelistClearsTombstoneOfListedWorker(t *testing.T) {
+	fs := newFakeStore(makeWorker("ns", "pod1", 1))
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	c.Forget(workerName("ns", "pod1"), workerName("ns", "pod1"))
+	fs.disconnect()
+	eventually(t, func() bool {
+		_, err := c.Worker(workerName("ns", "pod1"))
+		return err == nil
+	}, 5*time.Second)
+
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 2)})
+	eventually(t, func() bool {
+		w, err := c.Worker(workerName("ns", "pod1"))
+		return err == nil && w.GetMetadata().GetVersion() == 2
+	}, 2*time.Second)
 }
 
 // handlerRecorder records the Workers a Cache handler is called with.
@@ -552,7 +631,7 @@ func TestCache_AddHandler_ReplaysCurrentWorkers(t *testing.T) {
 }
 
 // A handler sees each change the cache applies, and not an event it fences
-// off as stale or a delete.
+// off as stale, duplicate, or a delete.
 func TestCache_AddHandler_SeesAppliedEvents(t *testing.T) {
 	fs := newFakeStore(makeWorker("ns", "pod1", 2))
 	c := workercache.New(fs, time.Hour)
@@ -563,12 +642,16 @@ func TestCache_AddHandler_SeesAppliedEvents(t *testing.T) {
 	c.AddHandler(h.handle)
 
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 1)})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 2)})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 3)})
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: makeWorker("ns", "pod1", 3)})
 	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod2", 1)})
 	fs.send(store.WorkerEvent{Type: store.WorkerEventDeleted, Worker: makeWorker("ns", "pod2", 1)})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod2", 1)})
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: makeWorker("ns", "pod3", 1)})
 	eventually(t, func() bool {
-		_, err := c.Worker(workerName("ns", "pod2"))
-		return errors.Is(err, store.ErrNotFound) && len(h.versions(workerName("ns", "pod2"))) == 1
+		_, err := c.Worker(workerName("ns", "pod3"))
+		return err == nil
 	}, 2*time.Second)
 
 	if diff := cmp.Diff([]int64{2, 3}, h.versions(workerName("ns", "pod1"))); diff != "" {
