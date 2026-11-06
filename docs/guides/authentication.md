@@ -361,7 +361,8 @@ jwtProviders:
   issuer such as `https://kubernetes.default.svc`, and `ate-setup` sets them
   for one. `certificateAuthorityFile` replaces the system roots for that
   provider. `discoveryTokenFile` requires it, and sends the token in that file
-  to the issuer and to any `/openid/v1/jwks` URL. The example points it at
+  only to URLs under the issuer and to the HTTPS `jwks_uri` that the issuer's
+  discovery document names. The example points it at
   `ate-api-server`'s own ServiceAccount token, so set it only for the
   Substrate cluster's own issuer. `ate-api-server` re-reads both files when
   they change.
