@@ -83,32 +83,79 @@ func TestTakeWithoutPodLimit(t *testing.T) {
 	if err := l.Wait(context.Background()); err != nil {
 		t.Errorf("Wait() without a pod limit = %v", err)
 	}
-	if l.Tight(want) {
+	if tight, _ := l.Tight(want); tight {
 		t.Error("Tight() without a pod limit = true, want false")
 	}
 }
 
 func TestTight(t *testing.T) {
-	unbooked := unbookedOf(4 << 30)
-	l := ledger(8<<30, 1<<30, unbooked)
-	borrowed := l.Take(1 << 30)
-	if l.Tight(borrowed) {
-		t.Error("Tight() with room to spare = true, want false")
-	}
-	// a placement books what the write borrowed
-	unbooked.Store(1 << 30)
-	if !l.Tight(borrowed) {
-		t.Error("Tight() once unbooked memory is spoken for = false, want true")
-	}
-	if !l.Tight(0) {
-		t.Error("Tight(0) with nothing lent = false, want true")
+	const limit = 4 << 30
+	for _, tc := range []struct {
+		name string
+		// current and borrowed already include this snapshot's dirty pages and loan.
+		current, unbooked, borrowed, lent int64
+		want                              bool
+	}{
+		{name: "room to spare", current: 2 << 30, unbooked: 3 << 30, borrowed: 1 << 30, lent: 1 << 30, want: false},
+		{name: "more than a third unbooked", current: 2 << 30, unbooked: 2 << 30, borrowed: 512 << 20, lent: 512 << 20, want: false},
+		{name: "at most a third unbooked", current: 2 << 30, unbooked: 2 << 30, borrowed: 1 << 30, lent: 1 << 30, want: true},
+		{name: "a placement booked into the loan", current: 2 << 30, unbooked: 512 << 20, borrowed: 1 << 30, lent: 1 << 30, want: true},
+		{name: "short of free memory", current: limit - margin + 1, unbooked: 3 << 30, borrowed: 1 << 30, lent: 1 << 30, want: true},
+		{name: "nothing lent", current: 0, unbooked: 3 << 30, borrowed: 0, lent: 0, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := ledger(limit, tc.current, unbookedOf(tc.unbooked))
+			l.bytes = tc.borrowed
+			if got, _ := l.Tight(tc.lent); got != tc.want {
+				t.Errorf("Tight() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 	failing := &Ledger{
-		Unbooked:  func(int64) int64 { return 4 << 30 },
+		Unbooked:  func(int64) int64 { return 2 << 30 },
 		PodMemory: func() (int64, int64, error) { return 0, 0, errors.New("no cgroup") },
 	}
-	if !failing.Tight(borrowed) {
+	if tight, _ := failing.Tight(1 << 30); !tight {
 		t.Error("Tight() when pod memory can't be read = false, want true")
+	}
+}
+
+// On microVM, StartWriteback runs before the actor is torn down, so its memory
+// is still booked when Tight checks.
+func TestTightRightAfterTake(t *testing.T) {
+	var current atomic.Int64
+	current.Store(1 << 30)
+	l := &Ledger{
+		Unbooked:  func(int64) int64 { return 3 << 30 },
+		PodMemory: func() (int64, int64, error) { return 4 << 30, current.Load(), nil },
+	}
+	lent := l.Take(1 << 30)
+	current.Add(lent) // include the snapshot's dirty pages
+	if tight, _ := l.Tight(lent); tight {
+		t.Errorf("Tight() right after Take(%d) = true, want false", lent)
+	}
+}
+
+func TestTightAskedAgainWhenWaitBlocks(t *testing.T) {
+	unbooked := unbookedOf(3 << 30)
+	l := ledger(4<<30, 1<<30, unbooked)
+	lent := l.Take(1 << 30)
+	tight, recheck := l.Tight(lent)
+	if tight {
+		t.Fatal("Tight() with room to spare = true, want false")
+	}
+	// A new actor books most of the remaining memory and blocks in Wait.
+	unbooked.Store(512 << 20)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = l.Wait(ctx) }()
+	select {
+	case <-recheck:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Wait held back a placement without closing Tight's channel")
+	}
+	if tight, _ := l.Tight(lent); !tight {
+		t.Error("Tight() with a placement waiting = false, want true")
 	}
 }
 

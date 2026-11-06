@@ -1009,7 +1009,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	for i, f := range snapshotFiles {
 		written[i] = filepath.Join(checkpointPath, f)
 	}
-	if err := snapshotcache.StartWriteback(written, func() bool { return s.borrow.Tight(borrowed) }, func() { s.borrow.Return(borrowed) }); err != nil {
+	if err := snapshotcache.StartWriteback(written, func() (bool, <-chan struct{}) { return s.borrow.Tight(borrowed) }, func() { s.borrow.Return(borrowed) }); err != nil {
 		s.borrow.Return(borrowed)
 		slog.WarnContext(ctx, "Failed to start checkpoint writeback", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
