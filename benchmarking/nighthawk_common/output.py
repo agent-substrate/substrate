@@ -21,8 +21,10 @@ artifacts runner.py uploads:
                  for compatibility with the locust pipeline.
   capacity.json  capacity_summary() — one-record verdict.
 
-Measurement keys come in three tiers: metric_nighthawk.builtin_* (verbatim
-builtin metrics), plain counters / *_ms conversions, and derived verdicts
+Measurement keys come in three tiers: metric_nighthawk.builtin_* (Nighthawk's
+builtin metrics, except achieved_rps and send_rate, which are recomputed from
+the exact stage duration with Nighthawk's values kept under *_cpp), plain
+counters / *_ms conversions, and derived verdicts
 (slo_max_rps, failed_thresholds, binding_threshold — the last two use
 short native metric names, identifying thresholds).
 """
@@ -34,6 +36,8 @@ from nighthawk_common import spec as spec_mod
 
 # Statistic carrying client-measured end-to-end request latency.
 LATENCY_STAT_ID = "benchmark_http_client.request_to_response"
+CONNECT_STAT_ID = "benchmark_http_client.queue_to_connect"
+SEQUENCER_BLOCKING_STAT_ID = "sequencer.blocking"
 
 # First line of a textproto field: `name {` or `name: value`.
 _FIELD_LINE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*[:{]")
@@ -111,6 +115,25 @@ def _counters(result: dict) -> dict:
     }
 
 
+def _statistic(result: dict, stat_id: str) -> dict:
+    return next(
+        (s for s in result.get("statistics", []) if s.get("id") == stat_id), {}
+    )
+
+
+def _percentiles_ms(stat: dict, prefix: str, targets: dict) -> dict:
+    """{prefix}{label}_ms for each target. HdrHistogram points are irregular,
+    so each label takes the first point at or above its target."""
+    out: dict = {}
+    percentiles = stat.get("percentiles", [])
+    for label, target in targets.items():
+        for p in percentiles:
+            if float(p.get("percentile", 0)) >= target:
+                out[f"{prefix}{label}_ms"] = _duration_seconds(p.get("duration")) * 1000.0
+                break
+    return out
+
+
 def _latency_ms(result: dict) -> dict:
     """Extract mean + percentile latencies (ms) from the e2e statistic."""
     out: dict = {}
@@ -118,6 +141,8 @@ def _latency_ms(result: dict) -> dict:
         if stat.get("id") != LATENCY_STAT_ID:
             continue
         out["latency_mean_ms"] = _duration_seconds(stat.get("mean")) * 1000.0
+        if stat.get("pstdev") is not None:
+            out["latency_pstdev_ms"] = _duration_seconds(stat.get("pstdev")) * 1000.0
         out["latency_min_ms"] = _duration_seconds(stat.get("min")) * 1000.0
         out["latency_max_ms"] = _duration_seconds(stat.get("max")) * 1000.0
         percentiles = stat.get("percentiles", [])
@@ -128,6 +153,37 @@ def _latency_ms(result: dict) -> dict:
                     out[f"{label}_ms"] = _duration_seconds(p.get("duration")) * 1000.0
                     break
         break
+    return out
+
+
+def _connect_latency_ms(result: dict) -> dict:
+    stat = _statistic(result, CONNECT_STAT_ID)
+    if not stat:
+        return {}
+    out = {
+        "queue_to_connect_count": int(stat.get("count", 0)),
+        "queue_to_connect_mean_ms": _duration_seconds(stat.get("mean")) * 1000.0,
+    }
+    if stat.get("pstdev") is not None:
+        out["queue_to_connect_pstdev_ms"] = _duration_seconds(stat.get("pstdev")) * 1000.0
+    out["queue_to_connect_max_ms"] = _duration_seconds(stat.get("max")) * 1000.0
+    out.update(_percentiles_ms(stat, "queue_to_connect_", PERCENTILE_TARGETS))
+    return out
+
+
+def _sequencer_blocking_ms(result: dict) -> dict:
+    stat = _statistic(result, SEQUENCER_BLOCKING_STAT_ID)
+    if not stat:
+        return {}
+    out = {
+        "sequencer_blocking_mean_ms": _duration_seconds(stat.get("mean")) * 1000.0,
+        "sequencer_blocking_max_ms": _duration_seconds(stat.get("max")) * 1000.0,
+    }
+    out.update(
+        _percentiles_ms(
+            stat, "sequencer_blocking_", {"p99": PERCENTILE_TARGETS["p99"]}
+        )
+    )
     return out
 
 
@@ -155,25 +211,36 @@ def _stage_row(stage: str, benchmark_result: dict) -> dict:
         name = ev.get("metric_id", "").split("/")[-1]
         if name:
             row[_builtin_key(name)] = ev.get("metric_value", 0.0)
+            if name in ("achieved-rps", "send-rate"):
+                row[f"{_builtin_key(name)}_cpp"] = ev.get("metric_value", 0.0)
         if float(ev.get("threshold_score", 0)) < 0:
             failed.append(name)
-    # Fallbacks per the native formulas when an evaluation is absent.
+    # Nighthawk (metrics_plugin_impl.cc, DurationToSeconds) divides achieved-rps
+    # and send-rate by execution_duration truncated to whole seconds. A positive
+    # duration_s replaces both with the exact-duration values; otherwise the row
+    # keeps Nighthawk's value, or 0.0 when there is none.
     sent = counters.get("upstream_rq_total", 0)
     http_2xx = counters.get("benchmark.http_2xx", 0)
     attempted_key = _builtin_key("attempted-rps")
     achieved_key = _builtin_key("achieved-rps")
+    send_rate_key = _builtin_key("send-rate")
     row.setdefault(attempted_key, per_worker_rps * concurrency)
-    row.setdefault(achieved_key, (sent / duration_s) if duration_s else 0.0)
-    row.setdefault(
-        _builtin_key("send-rate"),
-        (row[achieved_key] / row[attempted_key]) if row[attempted_key] else 0.0,
-    )
+    if duration_s > 0:
+        row[achieved_key] = sent / duration_s
+        row[send_rate_key] = (
+            (row[achieved_key] / row[attempted_key]) if row[attempted_key] else 0.0
+        )
+    else:
+        row.setdefault(achieved_key, 0.0)
+        row.setdefault(send_rate_key, 0.0)
     row.setdefault(
         _builtin_key("success-rate"), (http_2xx / sent) if sent else 0.0
     )
     for name in COUNTERS_OF_INTEREST:
         row[name.replace("benchmark.", "")] = counters.get(name, 0)
     row.update(_latency_ms(result))
+    row.update(_connect_latency_ms(result))
+    row.update(_sequencer_blocking_ms(result))
     row["failed_thresholds"] = sorted(failed)
     return row
 
