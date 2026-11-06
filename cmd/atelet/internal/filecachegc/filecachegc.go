@@ -297,16 +297,18 @@ func (g *gc) runPass(ctx context.Context) {
 	}
 	if stats.FreedBytes < target {
 		// Everything left is linked, young, or busy: the remaining usage is
-		// not the cache's to free. Warn on the first few, then a periodic
-		// reminder, never a line per tick.
+		// not the cache's to free. Warn on the first few, log later passes
+		// that evict at info, then a periodic reminder, never a warning per
+		// tick.
 		g.consecutiveShortfalls++
+		attrs = append(attrs, slog.Int("consecutive", g.consecutiveShortfalls))
 		switch {
 		case g.consecutiveShortfalls <= shortfallWarnLimit:
-			slog.WarnContext(ctx, "File cache GC could not reach its budget",
-				append(attrs, slog.Int("consecutive", g.consecutiveShortfalls))...)
+			slog.WarnContext(ctx, "File cache GC could not reach its budget", attrs...)
+		case evicted > 0:
+			slog.InfoContext(ctx, "File cache GC evicted but could not reach its budget", attrs...)
 		case g.consecutiveShortfalls%shortfallReminderEvery == 0:
-			slog.WarnContext(ctx, "File cache GC still over its budget; what remains is linked by a consumer, younger than the min age, or busy",
-				append(attrs, slog.Int("consecutive", g.consecutiveShortfalls))...)
+			slog.WarnContext(ctx, "File cache GC still over its budget; what remains is linked by a consumer, younger than the min age, or busy", attrs...)
 		}
 		g.instruments.recordPass(ctx, g.name, ateattr.FileCacheGCOutcomeShortfall, evicted)
 		return
