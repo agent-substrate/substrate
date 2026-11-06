@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -98,7 +97,7 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	if parkCfg.Enabled() {
 		// Envoy must keep a parked request open at least as long as the router
 		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
+		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + ingress.ExtProcTimeoutMargin)
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
