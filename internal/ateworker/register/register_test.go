@@ -122,7 +122,7 @@ func TestBuildCompat(t *testing.T) {
 		hardware.AttrArchitecture:      runtime.GOARCH,
 	})
 	want := &ateletpb.VersionedSandboxCompat{
-		SchemaVersion: hardware.SchemaVersionV1,
+		SchemaVersion: hardware.SchemaVersionV2,
 		Attributes: []*ateletpb.AttributeEntry{
 			{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
 			{Key: hardware.AttrCPUFeatures, Value: "3f"},

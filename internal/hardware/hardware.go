@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	// SchemaVersionV1 is the initial compatibility schema version.
-	SchemaVersionV1 = "v1"
+	// SchemaVersionV2 is the compatibility schema version workers report. It
+	// replaced v1 when the gVisor durable-dir root became 0777. runsc refuses
+	// a MEMORY restore whose mount hints differ from the checkpoint's, so v1
+	// and v2 snapshots restore at ROOTFS on workers of the other version.
+	SchemaVersionV2 = "v2"
 
 	// AttrArchitecture is the CPU architecture ("amd64", "arm64", etc.).
 	AttrArchitecture = "architecture"
@@ -50,13 +53,13 @@ const (
 	AttrCPUModel = "cpu_model"
 )
 
-// ProbeHost returns a minimal v1 VersionedSandboxCompat with the current
+// ProbeHost returns a minimal VersionedSandboxCompat with the current
 // host's architecture in atelet wire format, for synthetic workers in tests
 // and benchmarks. Production workers report the attributes atelet writes to
 // sandbox-runtimes.json instead.
 func ProbeHost() *ateletpb.VersionedSandboxCompat {
 	return &ateletpb.VersionedSandboxCompat{
-		SchemaVersion: SchemaVersionV1,
+		SchemaVersion: SchemaVersionV2,
 		Attributes: []*ateletpb.AttributeEntry{
 			{
 				Key:   AttrArchitecture,
@@ -121,13 +124,10 @@ func (r Requirement) Matches(rt *ateapi.ActorSandboxRuntime) bool {
 }
 
 // matchesCompat reports whether worker can restore the snapshot: the same
-// non-empty schema version, and every attribute on the snapshot satisfied by
-// worker. AttrCPUFeatures is satisfied when the snapshot's feature bitmask is
-// a subset of the worker's; every other attribute must be present on worker
-// with an equal value. Keys only the worker has are ignored, so a worker can
-// start reporting a new key under the same schema version without
-// invalidating the snapshots taken before it; removing or recomputing a key
-// is a new schema version, under which older snapshots no longer match.
+// non-empty schema version, the same set of attribute keys, and every
+// attribute on the snapshot satisfied by worker. AttrCPUFeatures is satisfied
+// when the snapshot's feature bitmask is a subset of the worker's; every other
+// attribute must have an equal value.
 func (r Requirement) matchesCompat(worker *ateapi.VersionedSandboxCompat) bool {
 	if worker == nil || r.compat == nil {
 		return false
@@ -139,9 +139,13 @@ func (r Requirement) matchesCompat(worker *ateapi.VersionedSandboxCompat) bool {
 		return false
 	}
 	wAttrs := worker.GetAttributes()
+	sAttrs := r.compat.GetAttributes()
+	if len(wAttrs) != len(sAttrs) {
+		return false
+	}
 	// API validation bounds attributes to at most 32 entries with unique keys,
 	// so the nested scan is small and avoids map allocation on the hot path.
-	for _, sa := range r.compat.GetAttributes() {
+	for _, sa := range sAttrs {
 		found := false
 		for _, wa := range wAttrs {
 			if wa.GetKey() != sa.GetKey() {

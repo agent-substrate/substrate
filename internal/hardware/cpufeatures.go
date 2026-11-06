@@ -65,7 +65,7 @@ func newFeatureTable(names map[int]string) featureTable {
 
 // featureMaskWords is the width of a cpu_features bitmask in 64-bit words.
 // gVisor's amd64 blocks 0-8 use bits up to 261, and 6 words leave room for
-// blocks through 11 within SchemaVersionV1.
+// blocks through 11 without a new schema version.
 const featureMaskWords = 6
 
 // featureMask is a decoded cpu_features value: bit i set means the feature at
