@@ -108,21 +108,26 @@ def wait_for_tcp(host: str, port: int, timeout_s: float = 15.0) -> None:
 def scrape_gateway_prometheus(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname
+    if not host:
+        raise ValueError(f"gateway metrics URL missing hostname: {url!r}")
     port = parsed.port or 80
     path = parsed.path or "/stats/prometheus"
+    host_header = f"[{host}]" if ":" in host else host
 
-    addr_infos = socket.getaddrinfo(
-        host, port, family=socket.AF_INET, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
-    )
-    ips = sorted({info[4][0] for info in addr_infos})
+    addr_infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    v4_ips = sorted({info[4][0] for info in addr_infos if info[0] == socket.AF_INET})
+    v6_ips = sorted({info[4][0] for info in addr_infos if info[0] == socket.AF_INET6})
+    ips = v4_ips or v6_ips
+    if not ips:
+        raise RuntimeError(f"no TCP endpoints resolved for {host}:{port}")
 
-    # Write the list of IPs as a header comment so we can track stability
     lines = [f"# SCRAPED_IPS: {','.join(ips)}"]
     for ip in ips:
-        # Reconstruct URL with IP
         ip_str = f"[{ip}]" if ":" in ip else ip
-        ip_target = urllib.parse.urlunparse((parsed.scheme, f"{ip_str}:{port}", path, parsed.params, parsed.query, parsed.fragment))
-        req = urllib.request.Request(ip_target, headers={"Accept": "text/plain", "Host": host})
+        ip_target = urllib.parse.urlunparse(
+            (parsed.scheme, f"{ip_str}:{port}", path, parsed.params, parsed.query, parsed.fragment)
+        )
+        req = urllib.request.Request(ip_target, headers={"Accept": "text/plain", "Host": host_header})
         with urllib.request.urlopen(req, timeout=10) as resp:
             lines.append(resp.read().decode("utf-8", errors="replace"))
     return "\n".join(lines)
@@ -181,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     before_counters = parse_gateway_prometheus(before_prom)
 
     invoker_host, invoker_port = invoker_addr.rsplit(":", 1)
+    invoker_host = invoker_host.strip("[]")
     with open(logs_path, "w") as logs:
         wait_for_tcp(invoker_host, int(invoker_port), timeout_s=30.0)
         cmd = [
@@ -198,23 +204,40 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.flush()
             logs.write(line)
         adaptive_exit = proc.wait()
-    after_prom = scrape_gateway_prometheus(args.gateway_metrics_url)
-    before_ips = before_prom.split("\n", 1)[0] if before_prom.startswith("# SCRAPED_IPS") else ""
-    after_ips = after_prom.split("\n", 1)[0] if after_prom.startswith("# SCRAPED_IPS") else ""
-    gw_after_path.write_text(after_prom)
+
+    after_scrape_error: Exception | None = None
+    try:
+        after_prom = scrape_gateway_prometheus(args.gateway_metrics_url)
+    except Exception as exc:
+        after_scrape_error = exc
+        after_prom = ""
+    else:
+        gw_after_path.write_text(after_prom)
 
     ip_mismatch_error = None
     counter_reset_error = None
-    if before_ips != after_ips:
-        ip_mismatch_error = RuntimeError(f"Pod IP set changed between before and after scrapes: {before_ips} vs {after_ips}")
+    pod_ips_changed = False
+    if after_scrape_error is not None:
+        deltas = None
     else:
-        deltas = gateway_counter_deltas(before_counters, parse_gateway_prometheus(after_prom))
+        before_ips = before_prom.split("\n", 1)[0] if before_prom.startswith("# SCRAPED_IPS") else ""
+        after_ips = after_prom.split("\n", 1)[0] if after_prom.startswith("# SCRAPED_IPS") else ""
+        pod_ips_changed = before_ips != after_ips
+        if pod_ips_changed:
+            deltas = None
+            ip_mismatch_error = RuntimeError(
+                f"Pod IP set changed between before and after scrapes: {before_ips} vs {after_ips}"
+            )
+        else:
+            deltas = gateway_counter_deltas(before_counters, parse_gateway_prometheus(after_prom))
 
+    scrape_err_str = str(after_scrape_error) if after_scrape_error is not None else None
     converged = False
     testing_stage_completed = False
     slo_max_rps = None
+    gateway_checks_ok = True
 
-    if not ip_mismatch_error and output_path.exists():
+    if output_path.exists():
         output_dict = parse_output_textproto(output_path.read_text(), args.desc_path)
         results_path.write_text(json.dumps(output_dict, indent=2) + "\n")
         rows = stage_rows(output_dict)
@@ -228,11 +251,19 @@ def main(argv: list[str] | None = None) -> int:
             tail_latency_slo_ms=args.tail_latency_slo_ms,
             gateway_counters=deltas,
         )
+        summary["gateway_pod_ips_changed"] = pod_ips_changed
+        summary["gateway_scrape_error"] = scrape_err_str
         capacity_path.write_text(json.dumps(summary, indent=2) + "\n")
         testing_stage_completed = bool(summary.get("testing_stage_completed"))
         if summary.get("gateway_counter_reset"):
-            counter_reset_error = RuntimeError("Gateway Prometheus counters decreased during benchmark (container restart)")
+            counter_reset_error = RuntimeError(
+                "Gateway Prometheus counters decreased during benchmark (container restart)"
+            )
         slo_max_rps = summary.get("slo_max_rps")
+        gateway_checks_ok = (
+            summary.get("mode_exclusivity_ok") is not False
+            and summary.get("ext_proc_invariant_ok") is not False
+        )
         converged = adaptive_exit == 0 and bool(summary.get("converged"))
         print(f"Capacity summary: {json.dumps(summary)}", flush=True)
 
@@ -243,6 +274,8 @@ def main(argv: list[str] | None = None) -> int:
                 "converged": converged,
                 "testing_stage_completed": testing_stage_completed,
                 "slo_max_rps": slo_max_rps,
+                "gateway_pod_ips_changed": pod_ips_changed,
+                "gateway_scrape_error": scrape_err_str,
             },
             indent=2,
         )
@@ -263,15 +296,19 @@ def main(argv: list[str] | None = None) -> int:
         if src.exists():
             upload(src, f"{prefix}/{src.name}")
 
-    if ip_mismatch_error:
+    if after_scrape_error is not None:
+        raise after_scrape_error
+    if ip_mismatch_error is not None:
         raise ip_mismatch_error
-    if counter_reset_error:
+    if counter_reset_error is not None:
         raise counter_reset_error
 
     # Contract: runner exits 0 if and only if the underlying adaptive client exited 0
     # AND a valid capacity benchmark result was produced (converged, or testing stage ran
-    # and a clean prior stage provided an slo_max_rps reference).
-    return 0 if (adaptive_exit == 0 and testing_stage_completed and slo_max_rps is not None) else 1
+    # and a clean prior stage provided an slo_max_rps reference) AND the gateway counters
+    # show the traffic took only the mode's filter chain.
+    ok = adaptive_exit == 0 and testing_stage_completed and slo_max_rps is not None
+    return 0 if (ok and gateway_checks_ok) else 1
 
 
 if __name__ == "__main__":
