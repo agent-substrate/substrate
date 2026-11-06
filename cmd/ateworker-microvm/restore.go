@@ -22,10 +22,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -397,7 +400,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		SysProcAttr: leaf.SysProcAttr(),
 	})
 	if err != nil {
-		return fmt.Errorf("while launching VMM for restore: %w", err)
+		return restoreVMMError(ctx, "launching VMM for restore", err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -419,7 +422,7 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	slog.InfoContext(ctx, "restoring guest memory",
 		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
 	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, memMode); err != nil {
-		return fmt.Errorf("while restoring VM with net FDs: %w", err)
+		return restoreVMMError(ctx, "restoring VM with net FDs", err)
 	}
 	tVMRestore := time.Now()
 	// An eager restore has read the whole snapshot into guest memory, and nothing
@@ -627,6 +630,45 @@ func restoreGuestReadyError(ctx context.Context, step string, err error) error {
 		return fmt.Errorf("while %s: %w", step, err)
 	}
 	return apierror.Unavailable("while %s: %w", step, err)
+}
+
+// restoreVMMError classifies a failure to launch the restore VMM or to issue
+// vm.restore to it. When the VMM did not answer or its api-socket failed, the
+// snapshot has only been read and the restoreMemoryFidelity and
+// RestoreWorkload defers stop the VMM and undo the host state, so the failure
+// is Unavailable and safe to retry. An error CH itself returned, such as a
+// corrupt snapshot, would fail the same way again and stays an internal error.
+// As in restoreGuestReadyError, the caller's context ending is reported as
+// such.
+func restoreVMMError(ctx context.Context, step string, err error) error {
+	if !isVMMTransportError(err) {
+		return fmt.Errorf("while %s: %w", step, err)
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("while %s: %v: %w", step, err, ctx.Err())
+	}
+	return apierror.Unavailable("while %s: %w", step, err)
+}
+
+// isVMMTransportError reports whether err is the VMM not answering its
+// api-socket in time, or a failure of the socket itself.
+func isVMMTransportError(err error) bool {
+	if errors.Is(err, ch.ErrNotReady) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	for _, target := range []error{
+		os.ErrDeadlineExceeded, io.EOF, io.ErrUnexpectedEOF,
+		syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.EPIPE,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // rewriteSnapshotPaths repoints the snapshot config.json's per-actor paths from

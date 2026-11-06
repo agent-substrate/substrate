@@ -17,6 +17,7 @@ package ch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -144,5 +145,8 @@ func TestWaitReadyTimesOut(t *testing.T) {
 	_, err := client.WaitReady(context.Background(), 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("WaitReady returned nil for a dead socket, want timeout error")
+	}
+	if !errors.Is(err, ErrNotReady) {
+		t.Errorf("WaitReady error = %v, want it to match ErrNotReady", err)
 	}
 }
