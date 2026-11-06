@@ -136,7 +136,7 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 // down has no workload left for this path to stop.
 type drainTarget struct {
 	id          string
-	agent       *kata.AgentClient
+	agent       *agentConn
 	workloadIDs []string
 	// hosted is the activation the drain ends, for its final record.
 	hosted *hostedActor
@@ -160,7 +160,7 @@ func gracefullyStopActor(ctx context.Context, t drainTarget, deadline time.Time)
 	// connection if it's open, else dial a fresh one (best-effort). A dial we open
 	// here is closed here; the snapshotted client belongs to the log forwarder.
 	agent := t.agent
-	var dialed *kata.AgentClient
+	var dialed *agentConn
 	if agent == nil {
 		a, err := dialAgentRetry(ctx, kata.VsockSocketPath(id), 15*time.Second)
 		if err != nil {

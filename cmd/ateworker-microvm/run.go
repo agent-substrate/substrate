@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -39,6 +40,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/third_party/kata/agentpb"
+	"go.ate.dev/substrate/internal/actorlog"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
@@ -95,17 +97,17 @@ type runningActor struct {
 	// there is no delta to overlay onto restoreSourceDir.
 	snapshotIsSelfContained bool
 
-	// guestAgent is the kata-agent ttrpc client retained past boot. Two things
-	// share it: the stdout/stderr forwarding goroutines (they pump the
+	// guestAgent is the kata-agent ttrpc connection retained past boot. Two
+	// things share it: the stdout/stderr forwarding goroutines (they pump the
 	// container's output via ReadStdout/ReadStderr on this connection for the
 	// actor's lifetime) and GetWorkloadStats (via the hosted actor's guest
 	// stats target, which points at this same client). It is NOT closed when
-	// RunWorkload / RestoreWorkload return — teardownActor closes it, which
-	// makes the in-flight ReadStdout/ReadStderr calls fail and the forwarding
-	// goroutines exit (io.EOF). Both boot and restore fail if they cannot dial
-	// the agent, so a running actor always has one; nil only once teardown has
-	// closed it.
-	guestAgent *kata.AgentClient
+	// RunWorkload / RestoreWorkload return; teardownActor closes it, which
+	// makes the in-flight ReadStdout/ReadStderr calls fail and waits for the
+	// forwarding goroutines to exit. Both boot and restore fail if they cannot
+	// dial the agent, so a running actor always has one; nil only once teardown
+	// has closed it.
+	guestAgent *agentConn
 
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
@@ -580,18 +582,20 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return fmt.Errorf("while dialing kata-agent: %w", err)
 	}
 	tDialed := time.Now()
-	// The agent client must stay open past this RPC: the stdout/stderr forwarding
-	// goroutines (started below) read over it for the actor's lifetime. It is stored
-	// on the runningActor and closed by teardownActor. Close it here only if Run
-	// fails after this point (no runningActor recorded).
+	// The agent connection must stay open past this RPC: the stdout/stderr
+	// forwarding goroutines (started below) read over it for the actor's
+	// lifetime. It is stored on the runningActor and closed by teardownActor.
+	// Close it here only if Run fails after this point (no runningActor
+	// recorded).
 	defer func() {
 		if retErr != nil {
 			_ = ac.Close()
 		}
 	}()
 
+	attribution := p.actorAttribution()
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
-	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
+	if err := s.startActorContainers(ctx, ac, attribution, vsockPath, ctrs); err != nil {
 		return err
 	}
 	tContainers := time.Now()
@@ -618,22 +622,12 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
 
-	// Forward each container's stdout/stderr into the pod logs, keyed by the
-	// container id (see StartRootfsContainer). The goroutines read over ac for
-	// the actor's lifetime and exit (io.EOF) when teardownActor closes ac.
-	workloadIDs := make([]string, 0, len(ctrs))
-	attribution := p.actorAttribution()
-	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, attribution, c.id, c.name)
-		workloadIDs = append(workloadIDs, c.id)
-	}
-
 	// Publish the guest to GetWorkloadStats, past every error return above: a
 	// failing attempt closes ac on its way out (and coldBootActorRetrying may
 	// then try the whole boot again), so a target published earlier would leave
 	// the handler polling a connection nobody owns. Same client the forwarding
 	// above reads over — ttrpc multiplexes, and teardownActor ends both.
-	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
+	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: ra.workloadIDs})
 	// Looked up while the caller holds the actor's lock, so it is this
 	// activation even if the read below outlives the RPC.
 	if hosted := s.lookupActor(actorUID); hosted != nil {
@@ -857,7 +851,8 @@ func buildFsConfigs(id string) []ch.FsConfig {
 // does at boot: establish the sandbox once (mounting the kataShared virtio-fs base),
 // configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
 // container on its own overlay rootfs. On failure it dumps guest diagnostics.
-func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
+func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *agentConn, attribution resources.ActorAttribution, vsockPath string, ctrs []actorContainer) error {
+	id := attribution.UID
 	// Establish the agent sandbox + the kataShared virtio-fs mount (every
 	// container's merged rootfs, durable volumes, CSI volumes, and system-info
 	// volumes). All containers share it, so use the first container's hostname.
@@ -876,7 +871,7 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	// Configure guest networking (the shim's job): eth0 IP/MAC/MTU, routes, ARP.
 	mtu := uint64(actorTapMTUOf(ctx, s.sandboxNetNS(id), "tap0_kata"))
 	netCtx, netCancel := context.WithTimeout(ctx, 20*time.Second)
-	err = s.configureGuestNetwork(netCtx, ac, mtu)
+	err = s.configureGuestNetwork(netCtx, ac.AgentClient, mtu)
 	netCancel()
 	if err != nil {
 		if s.guestDebug {
@@ -889,7 +884,7 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, attribution, vsockPath, c); err != nil {
 			return err
 		}
 	}
@@ -902,11 +897,12 @@ func (s *AteWorkerService) startActorContainers(ctx context.Context, ac *kata.Ag
 }
 
 // startRootfsContainer brings up one container on its host-merged rootfs (the
-// stock kata flow: create + start against shared/<id>/rootfs). On failure it
-// dumps the guest's view of the shared tree.
+// stock kata flow: create + start against shared/<id>/rootfs) and starts
+// forwarding its stdout and stderr. On failure it dumps the guest's view of the
+// shared tree.
 //
 // Its spec binds every declared volume at its mount path.
-func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *agentConn, attribution resources.ActorAttribution, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := ac.StartRootfsContainer(cCtx, c.id, c.spec)
 	cancel()
@@ -920,26 +916,46 @@ func (s *AteWorkerService) startRootfsContainer(ctx context.Context, ac *kata.Ag
 		}
 		return fmt.Errorf("while starting rootfs container %q: %w", c.name, err)
 	}
+	ac.startLogForwarding(s.actorLogger, attribution, c.id, c.name)
 	return nil
 }
 
-// startActorLogForwarding spawns two goroutines that pump the actor container's
-// stdout and stderr (read over the kata-agent ttrpc client ac via repeated
-// ReadStdout/ReadStderr) through the shared actorlog forwarder, which annotates
-// each line with the actor's ate.dev/* labels and writes it to the pod's stdout.
-//
-// The streams are keyed by streamID == the kata containerID==execID (the overlay
-// workload id); lines are tagged with actorName + containerName
-// (ate.actor.container.name) so a multi-container actor demultiplexes.
-// The reader contexts are context.Background() — the goroutines are NOT bound to the
-// RPC that started them; they terminate when ac is closed (by teardownActor), which
-// makes the in-flight ReadStdout/ReadStderr fail and the StreamReader return io.EOF,
-// ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
-// concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
-// the connection.
-func (s *AteWorkerService) startActorLogForwarding(ac *kata.AgentClient, a resources.ActorAttribution, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), a, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), a, containerName)
+// agentConn pairs a guest's *kata.AgentClient with the WaitGroup for the
+// log-forwarding goroutines reading over it. Close shuts the client and waits
+// for those goroutines to exit.
+type agentConn struct {
+	*kata.AgentClient
+	closeOnce sync.Once
+	closeErr  error
+	logWG     sync.WaitGroup
+}
+
+func newAgentConn(ac *kata.AgentClient) *agentConn {
+	return &agentConn{AgentClient: ac}
+}
+
+// startLogForwarding spawns two goroutines that pump the actor container's
+// stdout and stderr over c through logger. The readers use context.Background()
+// so they outlive the RPC that started them. They exit at stdio EOF or when c
+// is closed (by teardownActor, or on a failed boot or restore).
+func (c *agentConn) startLogForwarding(logger *actorlog.ActorLogger, a resources.ActorAttribution, streamID, containerName string) {
+	for _, stderr := range []bool{false, true} {
+		c.logWG.Add(1)
+		go func(stderr bool) {
+			defer c.logWG.Done()
+			logger.WrapContainerLogs(kata.NewStdioReader(context.Background(), c.AgentClient, streamID, streamID, stderr), a, containerName)
+		}(stderr)
+	}
+}
+
+// Close shuts the underlying AgentClient to unblock live stream reads and waits
+// for the forwarding goroutines to exit. Safe to call more than once.
+func (c *agentConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.AgentClient.Close()
+	})
+	c.logWG.Wait()
+	return c.closeErr
 }
 
 // errGuestStopped reports that the micro-VM stopped before the kata-agent
@@ -973,7 +989,7 @@ const (
 // unlinks it when the VM stops (virtio-vsock device shutdown), so a socket that
 // has gone missing means the guest died. Polling on would only spend the rest
 // of the timeout to report a bare "no such file or directory".
-func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration) (*kata.AgentClient, error) {
+func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration) (*agentConn, error) {
 	deadline := time.Now().Add(timeout)
 	start := time.Now()
 	var lastErr error
@@ -984,7 +1000,7 @@ func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration
 		if err == nil {
 			slog.InfoContext(ctx, "kata-agent answered", slog.Int("attempts", attempt),
 				slog.Duration("elapsed", time.Since(start)))
-			return ac, nil
+			return newAgentConn(ac), nil
 		}
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("%w (cloud-hypervisor removed %q): %w", errGuestStopped, vsockPath, err)
