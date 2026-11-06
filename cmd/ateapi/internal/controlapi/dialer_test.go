@@ -24,6 +24,7 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"math/big"
+	"net"
 	"net/url"
 	"slices"
 	"strconv"
@@ -491,6 +492,37 @@ func TestDialForAteletOnNode(t *testing.T) {
 		}
 		if d.ateletConns.Len() != 1 {
 			t.Errorf("cache holds %d conns, want 1", d.ateletConns.Len())
+		}
+	})
+
+	t.Run("dials through the context dialer", func(t *testing.T) {
+		dialed := make(chan string, 1)
+		d := NewAteletDialer(newTestAteletIndexer(t,
+			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
+		), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "", WithDialCredentials(func(string) (credentials.TransportCredentials, error) {
+			return insecure.NewCredentials(), nil
+		}), WithContextDialer(func(_ context.Context, addr string) (net.Conn, error) {
+			select {
+			case dialed <- addr:
+			default:
+			}
+			return nil, errors.New("refused by test")
+		}))
+
+		conn, err := d.DialForAteletOnNode("node1")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode: %v", err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		conn.Connect()
+
+		select {
+		case got := <-dialed:
+			if want := "10.0.0.1:" + ateletPort; got != want {
+				t.Errorf("context dialer got address %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("context dialer was never called")
 		}
 	})
 
