@@ -28,6 +28,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/pathelem"
 )
 
 // CleanupSandboxState removes leftover host-side state for a sandbox id (the
@@ -48,6 +49,11 @@ import (
 // next sweep (the stagers tolerate a leftover dir — they unmount stale binds
 // and reuse mountpoints).
 func CleanupSandboxState(ctx context.Context, id string) {
+	// An empty or dotted id would make the dirs below the shared parents.
+	if !pathelem.IsPlain(id) {
+		slog.ErrorContext(ctx, "Refusing to clean up state for an invalid sandbox id", slog.String("id", id))
+		return
+	}
 	dirs := []string{
 		filepath.Join("/run/kata-containers/shared/sandboxes", id),
 		filepath.Join(vcVMDir, id),

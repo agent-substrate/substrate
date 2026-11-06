@@ -28,10 +28,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	vishnetns "github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
+
+	"go.ate.dev/substrate/internal/pathelem"
 )
 
 // Handle is a descriptor for a network namespace. Callers name it through this
@@ -48,7 +49,7 @@ func GetFromName(name string) (Handle, error) {
 
 // validateName rejects names that would resolve outside /run/netns.
 func validateName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+	if !pathelem.IsPlain(name) {
 		return fmt.Errorf("invalid network namespace name %q: %w", name, os.ErrInvalid)
 	}
 	return nil
