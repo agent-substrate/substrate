@@ -63,7 +63,7 @@ COUNTERS_OF_INTEREST = (
 BUILTIN_PREFIX = "metric_nighthawk.builtin_"
 
 
-def _builtin_key(metric_name: str) -> str:
+def builtin_key(metric_name: str) -> str:
     """'attempted-rps' -> 'metric_nighthawk.builtin_attempted_rps'."""
     return BUILTIN_PREFIX + metric_name.replace("-", "_")
 
@@ -100,7 +100,7 @@ def _duration_seconds(value) -> float:
     return float(str(value).rstrip("s") or 0)
 
 
-def _global_result(nighthawk_output: dict) -> dict:
+def global_result(nighthawk_output: dict) -> dict:
     results = nighthawk_output.get("results", [])
     for r in results:
         if r.get("name") == "global":
@@ -108,7 +108,7 @@ def _global_result(nighthawk_output: dict) -> dict:
     return results[0] if results else {}
 
 
-def _counters(result: dict) -> dict:
+def counters(result: dict) -> dict:
     return {
         c.get("name", ""): int(c.get("value", 0))
         for c in result.get("counters", [])
@@ -190,8 +190,8 @@ def _sequencer_blocking_ms(result: dict) -> dict:
 def _stage_row(stage: str, benchmark_result: dict) -> dict:
     nh_output = benchmark_result.get("nighthawk_service_output", {})
     options = nh_output.get("options", {})
-    result = _global_result(nh_output)
-    counters = _counters(result)
+    result = global_result(nh_output)
+    counts = counters(result)
     duration_s = _duration_seconds(result.get("execution_duration"))
 
     per_worker_rps = int(options.get("requests_per_second", 0))
@@ -210,20 +210,20 @@ def _stage_row(stage: str, benchmark_result: dict) -> dict:
     for ev in benchmark_result.get("metric_evaluations", []):
         name = ev.get("metric_id", "").split("/")[-1]
         if name:
-            row[_builtin_key(name)] = ev.get("metric_value", 0.0)
+            row[builtin_key(name)] = ev.get("metric_value", 0.0)
             if name in ("achieved-rps", "send-rate"):
-                row[f"{_builtin_key(name)}_cpp"] = ev.get("metric_value", 0.0)
+                row[f"{builtin_key(name)}_cpp"] = ev.get("metric_value", 0.0)
         if float(ev.get("threshold_score", 0)) < 0:
             failed.append(name)
     # Nighthawk (metrics_plugin_impl.cc, DurationToSeconds) divides achieved-rps
     # and send-rate by execution_duration truncated to whole seconds. A positive
     # duration_s replaces both with the exact-duration values; otherwise the row
     # keeps Nighthawk's value, or 0.0 when there is none.
-    sent = counters.get("upstream_rq_total", 0)
-    http_2xx = counters.get("benchmark.http_2xx", 0)
-    attempted_key = _builtin_key("attempted-rps")
-    achieved_key = _builtin_key("achieved-rps")
-    send_rate_key = _builtin_key("send-rate")
+    sent = counts.get("upstream_rq_total", 0)
+    http_2xx = counts.get("benchmark.http_2xx", 0)
+    attempted_key = builtin_key("attempted-rps")
+    achieved_key = builtin_key("achieved-rps")
+    send_rate_key = builtin_key("send-rate")
     row.setdefault(attempted_key, per_worker_rps * concurrency)
     if duration_s > 0:
         row[achieved_key] = sent / duration_s
@@ -234,10 +234,10 @@ def _stage_row(stage: str, benchmark_result: dict) -> dict:
         row.setdefault(achieved_key, 0.0)
         row.setdefault(send_rate_key, 0.0)
     row.setdefault(
-        _builtin_key("success-rate"), (http_2xx / sent) if sent else 0.0
+        builtin_key("success-rate"), (http_2xx / sent) if sent else 0.0
     )
     for name in COUNTERS_OF_INTEREST:
-        row[name.replace("benchmark.", "")] = counters.get(name, 0)
+        row[name.replace("benchmark.", "")] = counts.get(name, 0)
     row.update(_latency_ms(result))
     row.update(_connect_latency_ms(result))
     row.update(_sequencer_blocking_ms(result))
@@ -284,7 +284,7 @@ def capacity_summary(
     output_dict: dict,
     *,
     envoy_cpu: int,
-    actors: int,
+    actors: int | None = None,
     client_concurrency: int | None = None,
     tail_latency_slo_ms: float | None = None,
 ) -> dict:
@@ -298,18 +298,17 @@ def capacity_summary(
     # conservative counterpart.
     clean = [r for r in rows if not r.get("failed_thresholds")]
     best_clean = max(
-        clean, key=lambda r: r[_builtin_key("attempted-rps")], default=None
+        clean, key=lambda r: r[builtin_key("attempted-rps")], default=None
     )
     summary = {
         "envoy_cpu": envoy_cpu,
-        "actors": actors,
         "client_concurrency": client_concurrency,
         "tail_latency_slo_ms": tail_latency_slo_ms,
         "binding_threshold": binding,
         # achieved-rps of a clean stage is within successRateThreshold of
         # its successful throughput, so no derived 2xx/s metric is kept.
         "slo_max_rps": (
-            best_clean[_builtin_key("achieved-rps")] if best_clean else None
+            best_clean[builtin_key("achieved-rps")] if best_clean else None
         ),
         "slo_max_stage": best_clean["stage"] if best_clean else None,
         "converged": session_succeeded(output_dict) and testing is not None,
@@ -317,9 +316,11 @@ def capacity_summary(
     }
     if testing:
         for name in ("attempted-rps", "achieved-rps", "send-rate", "success-rate"):
-            summary[_builtin_key(name)] = testing.get(_builtin_key(name))
+            summary[builtin_key(name)] = testing.get(builtin_key(name))
         for name in ("p50_ms", "p95_ms", "p99_ms"):
             summary[name] = testing.get(name)
+    if actors is not None:
+        summary["actors"] = actors
     return summary
 
 
