@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -786,10 +787,14 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 		}
+		pw.Close()
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	waitExit := func(wctx context.Context, containerName string) error {
+		return s.watchContainerExit(wctx, attribution, rcmd, containerName)
+	}
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())), wakeupprobe.WithExitFunc(waitExit)); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
@@ -802,6 +807,29 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 
 	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
+}
+
+type containerExitWaiter interface {
+	cmdWaitExit(ctx context.Context, containerName string) (int, error)
+}
+
+func (s *AteWorkerService) watchContainerExit(ctx context.Context, attribution resources.ActorAttribution, rcmd containerExitWaiter, containerName string) error {
+	exitStatus, err := rcmd.cmdWaitExit(ctx, containerName)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	logs := s.actorLogger.RecentLogs(attribution.UID, containerName)
+	var logMsg string
+	if len(logs) > 0 {
+		logMsg = ": " + strings.Join(logs, "\n")
+	}
+	if exitStatus == 0 {
+		return fmt.Errorf("exit status 0 before wakeup probe succeeded%s", logMsg)
+	}
+	return fmt.Errorf("exit status %d%s", exitStatus, logMsg)
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
@@ -1304,10 +1332,14 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 				return nil, fmt.Errorf("while restoring %q application container: %w", ac.GetName(), err)
 			}
 		}
+		pw.Close()
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
+	waitExit := func(wctx context.Context, containerName string) error {
+		return s.watchContainerExit(wctx, attribution, rcmd, containerName)
+	}
+	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())), wakeupprobe.WithExitFunc(waitExit))
 	timing.wakeupProbe = lap(&tLast)
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
