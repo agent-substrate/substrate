@@ -42,13 +42,7 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapi.
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbTemplate.GetMetadata().GetUid(), dbTemplate.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		if isForeignKeyViolation(err) {
-			return nil, store.ErrFailedPrecondition
-		}
-		return nil, fmt.Errorf("inserting actor template %s/%s: %w", atespace, name, err)
+		return nil, mapToStoreError(err, "inserting actor template %s/%s", atespace, name)
 	}
 	return dbTemplate, nil
 }
@@ -57,10 +51,7 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting actor template %s: %w", templateRef, err)
+		return nil, mapToStoreError(err, "getting actor template %s", templateRef)
 	}
 	out := &ateapi.ActorTemplate{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
@@ -97,10 +88,7 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 	if err := p.pool.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actor_templates
 			WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting actor template %s for update: %w", templateRef, err)
+		return nil, mapToStoreError(err, "getting actor template %s for update", templateRef)
 	}
 
 	dbTemplate := &ateapi.ActorTemplate{}

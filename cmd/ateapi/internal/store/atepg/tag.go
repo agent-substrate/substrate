@@ -32,10 +32,7 @@ func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ate
 	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM tags
 		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting tag %s/%s: %w", atespace, name, err)
+		return nil, mapToStoreError(err, "getting tag %s/%s", atespace, name)
 	}
 	tag := &ateapi.Tag{}
 	if err := unmarshalStored(protoBytes, tag); err != nil {
@@ -172,18 +169,10 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 		VALUES ($1, $2, $3, $4, $5)`, atespace, name,
 		dbTag.GetMetadata().GetUid(), dbTag.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
+		if isForeignKeyViolation(err) && pgErrConstraint(err) != "tags_atespace_fk" {
+			return nil, fmt.Errorf("inserting tag %s/%s violated unknown foreign key %q: %w", atespace, name, pgErrConstraint(err), err)
 		}
-		if isForeignKeyViolation(err) {
-			switch pgErrConstraint(err) {
-			case "tags_atespace_fk":
-				return nil, store.ErrFailedPrecondition
-			default:
-				return nil, fmt.Errorf("inserting tag %s/%s violated unknown foreign key %q: %w", atespace, name, pgErrConstraint(err), err)
-			}
-		}
-		return nil, fmt.Errorf("inserting tag %s/%s: %w", atespace, name, err)
+		return nil, mapToStoreError(err, "inserting tag %s/%s", atespace, name)
 	}
 	return dbTag, nil
 }
@@ -239,10 +228,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := p.pool.QueryRow(ctx, `
 			SELECT uid, version, proto FROM tags
 			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting tag %s/%s for update: %w", atespace, name, err)
+		return nil, mapToStoreError(err, "getting tag %s/%s for update", atespace, name)
 	}
 
 	dbTag := &ateapi.Tag{}
