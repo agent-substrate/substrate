@@ -28,6 +28,12 @@ from typing import Any
 from util import build_and_push, parse_duration_seconds, run
 
 TEST_TYPE = "nighthawk-ingress"
+USES_SHARED_WORKLOADS = True
+EXTRA_INGRESS_SPIFFE_IDS: tuple[str, ...] = ()
+
+
+def teardown_workloads() -> None:
+    pass
 
 # Defaults for the tests.yaml `nighthawk-ingress:` block; envoyCpu has no default —
 # it is the benchmark's independent variable. Documented in

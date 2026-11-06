@@ -130,15 +130,8 @@ resolve_otlp_endpoint() {
 # kubectl-ate runs once per poll while waiting for the golden snapshots;
 # build_kubectl_ate builds it once up front instead of paying the `go run`
 # toolchain startup on every call.
-KUBECTL_ATE_BIN=""
-
-build_kubectl_ate() {
-  local dir
-  dir="$(mktemp -d)"
-  trap 'rm -rf '"${dir}" EXIT
-  KUBECTL_ATE_BIN="${dir}/kubectl-ate"
-  go build -o "${KUBECTL_ATE_BIN}" ./cmd/kubectl-ate
-}
+# shellcheck source=benchmarking/lib/kubectl-ate.sh
+source "${ROOT}/benchmarking/lib/kubectl-ate.sh"
 
 run_kubectl_ate() {
   "${KUBECTL_ATE_BIN}" "$@"
