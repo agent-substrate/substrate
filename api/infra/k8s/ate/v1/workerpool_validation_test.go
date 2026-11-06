@@ -27,7 +27,7 @@ import (
 
 const gpuResourceName = corev1.ResourceName("nvidia.com/gpu")
 
-func gpuTemplate(limits, requests corev1.ResourceList) *WorkerPoolPodTemplate {
+func resourcesTemplate(limits, requests corev1.ResourceList) *WorkerPoolPodTemplate {
 	return &WorkerPoolPodTemplate{
 		Resources: &corev1.ResourceRequirements{Limits: limits, Requests: requests},
 	}
@@ -158,6 +158,41 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.sandboxClasses[0].configRef.name",
 	}, {
+		name: "microvm selects mshv by limit",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM}}
+			wp.Spec.Template = resourcesTemplate(corev1.ResourceList{"ate.dev/mshv": resource.MustParse("1")}, nil)
+		},
+		wantErr: false,
+	}, {
+		name: "microvm selects mshv by request",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM}}
+			wp.Spec.Template = resourcesTemplate(nil, corev1.ResourceList{"ate.dev/mshv": resource.MustParse("1")})
+		},
+		wantErr: false,
+	}, {
+		name: "both hypervisors in limits",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM}}
+			wp.Spec.Template = resourcesTemplate(corev1.ResourceList{
+				"ate.dev/kvm":  resource.MustParse("1"),
+				"ate.dev/mshv": resource.MustParse("1"),
+			}, nil)
+		},
+		wantErr: true,
+		errMsg:  "resources may name at most one of ate.dev/kvm and ate.dev/mshv",
+	}, {
+		name: "hypervisors split across limits and requests",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM}}
+			wp.Spec.Template = resourcesTemplate(
+				corev1.ResourceList{"ate.dev/kvm": resource.MustParse("1")},
+				corev1.ResourceList{"ate.dev/mshv": resource.MustParse("1")})
+		},
+		wantErr: true,
+		errMsg:  "resources may name at most one of ate.dev/kvm and ate.dev/mshv",
+	}, {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.Template = &WorkerPoolPodTemplate{
@@ -278,7 +313,7 @@ func TestWorkerPoolValidation(t *testing.T) {
 		name: "extended resource on a pool is not interpreted",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM}}
-			wp.Spec.Template = gpuTemplate(corev1.ResourceList{gpuResourceName: resource.MustParse("1")}, nil)
+			wp.Spec.Template = resourcesTemplate(corev1.ResourceList{gpuResourceName: resource.MustParse("1")}, nil)
 		},
 		wantErr: false,
 	}}

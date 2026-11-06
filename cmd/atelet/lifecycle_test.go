@@ -244,7 +244,9 @@ func serveFakeWorker(t *testing.T, f *fakeWorker) {
 	if err != nil {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
-	srv := grpc.NewServer()
+	// The worker's own interceptor, so a handler's error reaches atelet coded
+	// as the worker would send it.
+	srv := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor))
 	ateworkerpb.RegisterWorkerServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -1271,7 +1273,7 @@ func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
 				}
 				serveFakeWorker(t, &fakeWorker{
 					onTerminate: func() error {
-						return status.Error(codes.Unavailable, "worker shutting down")
+						return apierror.Unavailable("worker shutting down")
 					},
 				})
 			},
@@ -3586,7 +3588,7 @@ func (a *pluginActor) checkpointed(t *testing.T, name string, generation int32) 
 	return snap
 }
 
-var errWorkerGuestNotReady = status.Error(codes.Unavailable, "while reseeding guest CRNG: context deadline exceeded")
+var errWorkerGuestNotReady = apierror.Unavailable("while reseeding guest CRNG: context deadline exceeded")
 
 func TestRestoreStopsRetryingAfterConsecutiveUnavailableFailures(t *testing.T) {
 	a := runPluginActor(t)
@@ -3980,7 +3982,7 @@ func TestCheckpointKeepsWorkerUnavailable(t *testing.T) {
 		return apierror.Code(err)
 	}
 
-	a.worker.checkpointErr = status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: dial unix /var/lib/ate/worker/sock: connect: no such file or directory"`)
+	a.worker.checkpointErr = apierror.Unavailable(`connection error: desc = "transport: Error while dialing: dial unix /var/lib/ate/worker/sock: connect: no such file or directory"`)
 	for i := 1; i <= 5; i++ {
 		if got := checkpointCode(); got != codes.Unavailable {
 			t.Fatalf("Checkpoint %d with the worker unreachable: code = %v, want %v", i, got, codes.Unavailable)
