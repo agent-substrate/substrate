@@ -269,7 +269,7 @@ func TestSparseVersionRejected(t *testing.T) {
 	}
 	defer out.Close()
 	// readSparseZstd is called with the reader positioned just after the magic.
-	if _, err := readSparseZstd(out, bytes.NewReader(blob[len(sparseMagic):])); err == nil {
+	if _, err := readSparseZstd(out, bytes.NewReader(blob[len(sparseMagic):]), true); err == nil {
 		t.Fatal("expected an unsupported-version error, got nil")
 	}
 }
@@ -467,7 +467,7 @@ func TestWriteDecodeContentRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer dst.Close()
-		dres, err := decodeContent(dst, &buf)
+		dres, err := decodeContent(dst, &buf, true)
 		if err != nil {
 			t.Fatalf("decodeContent: %v", err)
 		}
@@ -502,7 +502,7 @@ func TestWriteDecodeContentRoundTrip(t *testing.T) {
 			t.Error("writeContent: sparse=true for a non-file reader")
 		}
 		var out bytes.Buffer
-		if _, err := decodeContent(&out, &buf); err != nil {
+		if _, err := decodeContent(&out, &buf, true); err != nil {
 			t.Fatalf("decodeContent: %v", err)
 		}
 		if !bytes.Equal(out.Bytes(), want) {
