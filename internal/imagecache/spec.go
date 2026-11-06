@@ -31,6 +31,25 @@ func ImageVolumeMountPath(bundlePath, volumeName string) string {
 	return filepath.Join(bundlePath, "volumes", volumeName)
 }
 
+// validateImageVolumeName rejects any volume name that would not land under
+// the bundle's volumes/ directory as a directory of its own.
+//
+// The worker composes a mount point by joining the name onto that directory
+// and then creates, unmounts and mounts over the result, as root. A name
+// carrying a separator or a ".." element would place those operations
+// somewhere else on the host, and "." or an empty name would place them on
+// volumes/ itself, over the mount points of every other volume in the bundle.
+//
+// API validation already constrains the name to a DNS label, so this is the
+// second line: the worker reads the name back from the bundle's
+// rootfs-overlay.json rather than from the request it was validated in.
+func validateImageVolumeName(name string) error {
+	if name == "." || !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return fmt.Errorf("image volume name %q is not a single path element", name)
+	}
+	return nil
+}
+
 // OverlaySpecFileName is the file atelet writes into each container bundle
 // describing how to compose the bundle's rootfs from cached layers. Its
 // absence means the bundle's rootfs is a plain directory (e.g. one prepared by

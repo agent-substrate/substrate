@@ -114,6 +114,9 @@ func SetupBundleRootfs(bundlePath string) error {
 // bundle-local mount point, for the OCI spec to bind into the container.
 func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
 	for _, vol := range volumes {
+		if err := validateImageVolumeName(vol.Name); err != nil {
+			return err
+		}
 		for _, layerDir := range vol.Layers {
 			if err := FinalizeLayer(layerDir); err != nil {
 				return fmt.Errorf("while finalizing layer %q of image volume %q: %w", layerDir, vol.Name, err)
