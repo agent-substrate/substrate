@@ -113,7 +113,7 @@ def build_session_spec(
         thresholds.append(
             _binary_threshold("send-rate", lower_threshold=send_rate_threshold)
         )
-    if tail_latency_slo_ms is not None:
+    if tail_latency_slo_ms is not None and tail_latency_slo_ms > 0:
         thresholds.append(
             _binary_threshold(
                 "latency-ns-mean-plus-2stdev",
