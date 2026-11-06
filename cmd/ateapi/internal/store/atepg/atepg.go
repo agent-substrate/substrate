@@ -387,10 +387,16 @@ type querier interface {
 // unmarshalStored decodes a stored proto, dropping fields this binary has no
 // descriptor for. This means a newer replica can have written such a field.
 // It also backfills defaults to make all resources are properly defaulted, even
-// the ones stored before a field with defaults was introduced.
+// the ones stored before a field with defaults was introduced. An ActorTemplate
+// an older release wrote is migrated first, from the fields it dropped.
 func unmarshalStored(b []byte, m proto.Message) error {
-	if err := (proto.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, m); err != nil {
+	template, isTemplate := m.(*ateapipb.ActorTemplate)
+	if err := (proto.UnmarshalOptions{DiscardUnknown: !isTemplate}).Unmarshal(b, m); err != nil {
 		return err
+	}
+	if isTemplate {
+		migrateLegacyActorTemplate(template)
+		discardUnknown(template.ProtoReflect())
 	}
 	defaults.Apply(m)
 	return nil
