@@ -40,6 +40,8 @@ func Apply(m proto.Message) {
 		applyAtespaceDefaults(v)
 	case *ateapi.EgressPolicy:
 		applyEgressPolicyDefaults(v)
+	case *ateapi.ExternalVolumeClass:
+		applyExternalVolumeClassDefaults(v)
 	case *ateapi.Tag:
 		applyTagDefaults(v)
 	case *ateapi.Worker:
@@ -118,6 +120,8 @@ func applyEgressRuleDefaults(rules []*ateapi.EgressRule) {
 		}
 	}
 }
+
+func applyExternalVolumeClassDefaults(*ateapi.ExternalVolumeClass) {}
 
 func applyTagDefaults(*ateapi.Tag) {}
 
