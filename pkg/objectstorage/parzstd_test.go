@@ -283,3 +283,86 @@ func TestWriteAfterClose(t *testing.T) {
 		}
 	}
 }
+
+func TestParZstdChunkSize(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int64
+		want int64
+	}{
+		{"empty", 0, parZstdMinChunk},
+		{"tiny metadata file", 36, parZstdMinChunk},
+		{"just under the floor", parZstdMinChunk - 1, parZstdMinChunk},
+		{"exactly the floor", parZstdMinChunk, parZstdMinChunk},
+		{"just over the floor rounds up", parZstdMinChunk + 1, 2 * parZstdMinChunk},
+		{"just under a full chunk", parZstdChunk - 1, parZstdChunk},
+		{"exactly a full chunk", parZstdChunk, parZstdChunk},
+		{"larger than a full chunk is capped", 64 << 20, parZstdChunk},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parZstdChunkSize(tc.in)
+			if got != tc.want {
+				t.Errorf("parZstdChunkSize(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+			if got > parZstdChunk {
+				t.Errorf("parZstdChunkSize(%d) = %d exceeds parZstdChunk %d", tc.in, got, parZstdChunk)
+			}
+			if got&(got-1) != 0 {
+				t.Errorf("parZstdChunkSize(%d) = %d is not a power of two", tc.in, got)
+			}
+		})
+	}
+}
+
+// A chunk is a whole single-segment frame, so an input at or below the floor is
+// compressed with a window no larger than itself. Nothing can match past the end
+// of the frame, so that costs no ratio -- but it does mean the floor is the one
+// place a too-small window would corrupt output rather than just enlarge it.
+func TestSmallInputsRoundTripAtTheChunkFloor(t *testing.T) {
+	withGOMAXPROCS(t, 2)
+	sizes := []int{1, 36, 4 << 10, parZstdMinChunk - 1, parZstdMinChunk, parZstdMinChunk + 1}
+	for _, size := range sizes {
+		for _, workers := range []int{1, 2} {
+			data := randomBytes(11, size)
+			var out bytes.Buffer
+			zw := newParZstdChunk(&out, workers, parZstdChunkSize(int64(size)))
+			writeInPieces(t, zw, data)
+			if err := zw.Close(); err != nil {
+				t.Fatalf("size=%d workers=%d: Close: %v", size, workers, err)
+			}
+			dec, err := zstd.NewReader(bytes.NewReader(out.Bytes()))
+			if err != nil {
+				t.Fatalf("size=%d workers=%d: NewReader: %v", size, workers, err)
+			}
+			got, err := io.ReadAll(dec)
+			dec.Close()
+			if err != nil {
+				t.Fatalf("size=%d workers=%d: decode: %v", size, workers, err)
+			}
+			if !bytes.Equal(got, data) {
+				t.Errorf("size=%d workers=%d: round trip differs (%d bytes back)", size, workers, len(got))
+			}
+		}
+	}
+}
+
+// #2553 is about bounding what one upload reserves. The pool is filled eagerly
+// with workers*parZstdQueue buffers, so the floor -- not the input size -- sets
+// what a tiny file costs, and it is multiplied by the worker count. Keep that
+// product inside a budget a small file can justify.
+func TestTinyInputReservationStaysBounded(t *testing.T) {
+	const budget = 1 << 20
+	for _, workers := range []int{1, 2, 4, 8} {
+		p := newParZstdChunk(io.Discard, workers, parZstdChunkSize(36))
+		reserved := int64(cap(p.buf))
+		for range len(p.free) {
+			reserved += int64(cap(<-p.free))
+		}
+		p.Close()
+		if reserved > budget {
+			t.Errorf("workers=%d: a 36-byte input reserves %d bytes, over the %d budget",
+				workers, reserved, budget)
+		}
+	}
+}

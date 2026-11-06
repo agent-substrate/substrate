@@ -75,7 +75,7 @@ func TestUploaderPlansFromPopulatedBytes(t *testing.T) {
 		populatedMiB int
 		gcs, s3      uploadPlan
 	}{
-		{"all_holes", 0, uploadPlan{1, 1, 8<<20 + 512<<10}, uploadPlan{1, 1, 168 << 20}},
+		{"all_holes", 0, uploadPlan{1, 1, parZstdWorkerMemory(parZstdMinChunk) + 512<<10}, uploadPlan{1, 1, parZstdWorkerMemory(parZstdMinChunk) + 160<<20}},
 		{"small", 1, uploadPlan{1, 1, 8<<20 + 2560<<10}, uploadPlan{1, 1, 168 << 20}},
 		{"two_chunks", 9, uploadPlan{2, 1, 146<<20 + 512<<10}, uploadPlan{2, 1, 288 << 20}},
 		{"multiple_ranges", 192, uploadPlan{3, 3, 144 << 20}, uploadPlan{5, 3, 480 << 20}},
@@ -146,7 +146,7 @@ func TestUploaderReservesOnlyTheChosenPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := streamBufferMemory(&gcsClient{}, sparseEncodedBound(1<<20, 1)) + parZstdWorkerMemory(parZstdMinChunk); got.memory != want {
+		if want := streamBufferMemory(&gcsClient{}, sparseEncodedBound(1<<20, 1)) + parZstdWorkerMemory(parZstdChunkSize(1<<20)); got.memory != want {
 			t.Errorf("capacity %d: small plan = %+v, want %d", capacity, got, want)
 		}
 	}
