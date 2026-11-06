@@ -194,11 +194,7 @@ func (h *udpHandler) processResponses(ctx context.Context) error {
 }
 
 func (h *udpHandler) sweepLoop(ctx context.Context) {
-	interval := h.sweepInterval
-	if interval <= 0 {
-		interval = defaultSweepInterval
-	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(h.sweepInterval)
 	defer ticker.Stop()
 
 	for {

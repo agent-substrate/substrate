@@ -78,9 +78,7 @@ func startTestUDPHandler(t *testing.T, upstreams []string, configure func(*udpHa
 }
 
 func TestUDPHandlerForwardsAndRestoresID(t *testing.T) {
-	var seenUpstreamID atomic.Uint32
 	upstream := newFakeResolver(t, func(query []byte) []byte {
-		seenUpstreamID.Store(uint32(binary.BigEndian.Uint16(query[0:2])))
 		return dnsAnswer(query, 0)
 	})
 

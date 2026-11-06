@@ -60,10 +60,3 @@ func egressPolicyCheck(ctx context.Context, source PolicySource) queryPolicy {
 		return e.allowsHostname(q.Name.String())
 	}
 }
-
-// allowQuery reports whether policy lets the actor ask q. An actor without a
-// policy may resolve nothing, as it may reach nothing through the egress
-// gateway.
-func allowQuery(policy *ateletpb.EgressPolicy, q dnsmessage.Question) bool {
-	return newEvaluator(policy).allowsHostname(q.Name.String())
-}

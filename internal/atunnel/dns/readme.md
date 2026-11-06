@@ -11,7 +11,7 @@ Actor DNS relays DNS requests from the actor to the external world.
 
 ### Server
 
-`Server` is the per-Actor state for the DNS traffic, including per-Actor concurrency limits (`maxInFlightDNS` and `maxDNSConnections`).
+`Server` is the per-Actor state for the DNS traffic, including per-Actor concurrency limits (`maxInFlight` and `maxConnections`).
 
 - `Server.pendingRequests` map (UDP only):
   - Allocates a rewritten `upstreamID` (`uint16`) per in-flight UDP query to avoid transaction ID collisions across different actor source ports on the shared egress socket (and prevent predictable upstream IDs).
@@ -49,19 +49,19 @@ Actor DNS relays DNS requests from the actor to the external world.
 
 UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`), which inspects packets and returns transport-agnostic decisions:
 
-- Shared request validation (`validateRequest`):
+- Shared request validation (`onRequestCommon`):
   - **Drop**: packet `< 12` bytes or `QR == 1` (response bit set on a query).
   - **Reply** (synthesized response without upstream round-trip):
     - `FORMERR` (`RCode = 1`): malformed header/question or `QDCOUNT != 1`.
     - `NOTIMP` (`RCode = 4`): `OpCode != 0` (non-standard query) or zone transfer `QTYPE` (`AXFR`, `IXFR`).
     - `NXDOMAIN` (`RCode = 3`): disallowed by the Actor's egress policy (see [Egress policy](#egress-policy)). `NXDOMAIN` rather than `REFUSED` so stub resolvers continue to the next `resolv.conf` search suffix; glibc and musl abort the lookup on `REFUSED`. The authority section carries a root `SOA` record with `TTL` and `MINIMUM` of 0, so resolvers do not cache the denial past a policy change (RFC 2308 §5).
 - `onUDPRequest(raw []byte, clientAddr net.Addr, upstreams []string)` -> `action`:
-  - Acquires an `inFlight` slot, runs `validateRequest()`, and on `actionForward` records the query in `pendingRequests` with a rewritten `upstreamID`.
+  - Acquires an `inFlight` slot, runs `onRequestCommon()`, and on `actionForward` records the query in `pendingRequests` with a rewritten `upstreamID`.
 - `onUDPResponse(raw []byte, from net.Addr)` -> `action`:
   - Validates `QR == 1`, parses header + question, and matches against `pendingRequests` (verifying `upstreamID`, expected upstream source, and matching `QNAME`/`QTYPE`/`QCLASS`).
   - Returns **Drop**, **Failover** (on `SERVFAIL`, `NOTIMP`, or `REFUSED` when fallback upstreams remain), or **Deliver** (restoring `clientRequestID` and returning `clientAddr`).
 - `onTCPRequest(raw []byte)` -> `action`:
-  - Runs `validateRequest()` and returns **Drop**, **Reply**, or **Forward** (unmodified frame).
+  - Runs `onRequestCommon()` and returns **Drop**, **Reply**, or **Forward** (unmodified frame).
 - `onTCPResponse(raw []byte)` -> `action`:
   - Validates `QR == 1` and parses header + question, returning **Drop** or **Deliver**.
 
@@ -72,4 +72,3 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
 - `PolicySource` supplies the Actor's `EgressPolicy`. The ateworker passes atunnel's per-Actor source, which caches the policy for a few seconds so a policy created, updated, or deleted while the Actor runs takes effect without a restart, and keeps serving the stale cached entry if `atelet` is temporarily unreachable.
 - `evaluator` (`evaluator.go`) compiles the hostname and wildcard patterns from an `EgressPolicy`'s `http`, `https`, and `tls_passthrough` rules and evaluates normalized `QNAME`s via `allowsHostname(qname)`.
 - `egressPolicyCheck` adapts the source to the `dnsHandler`'s `queryPolicy` hook, caching the compiled `*evaluator` for the current `*ateletpb.EgressPolicy` pointer and consulting it for every query. Fetching uses the `Server`'s context, so `Stop()` cancels a fetch in progress.
-- `allowQuery` evaluates a single `dnsmessage.Question` against a policy using `evaluator`.

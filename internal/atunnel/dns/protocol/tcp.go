@@ -39,7 +39,7 @@ func ReadTCPFrame(r io.Reader) ([]byte, error) {
 	return msg, nil
 }
 
-// WriteTCPFrame writes msg prefixed with its 2-byte big-endian length to `w“.
+// WriteTCPFrame writes msg prefixed with its 2-byte big-endian length to w.
 func WriteTCPFrame(w io.Writer, msg []byte) error {
 	if len(msg) > 0xffff {
 		return fmt.Errorf("dns: TCP message length %d exceeds uint16 maximum", len(msg))

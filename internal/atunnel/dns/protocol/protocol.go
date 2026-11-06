@@ -53,7 +53,6 @@ func RequestSanityCheck(raw []byte) bool {
 // ResponseSanityCheck filters out obviously invalid packets.
 func ResponseSanityCheck(raw []byte) bool {
 	// DNS packets need to be at least 12 bytes.
-	const dnsHeaderLen = 12
 	if len(raw) < dnsHeaderLen {
 		return false
 	}
@@ -71,7 +70,7 @@ func SetTxnID(raw []byte, id uint16) {
 	binary.BigEndian.PutUint16(raw[0:2], id)
 }
 
-// qdCountFromRaw from the raw packet.
+// QDCount reads the question count from the raw packet.
 func QDCount(raw []byte) uint16 {
 	// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 	// |                  QDCOUNT = 0                  |  bytes 4..5
