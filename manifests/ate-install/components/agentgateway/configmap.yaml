@@ -144,7 +144,6 @@ metadata:
   namespace: ate-system
 data:
   config.yaml: |
-    # yaml-language-server: $schema=https://agentgateway.dev/schema/config
     frontendPolicies:
       connect:
         mode: tunnel
@@ -159,6 +158,9 @@ data:
             key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
             root: /run/servicedns-ca/trust-bundle.pem
 
+    # Keep the outer egress gateway on 8443, but bind it to this pod's
+    # address. Numeric CONNECT re-entry must select the wildcard
+    # internal bind instead of selecting this front door again.
     gateways:
       egress:
         port: 8443
@@ -170,17 +172,42 @@ data:
           root: /run/actor-id-ca-certs/ca.crt
 
     binds:
-
-    # Route tunneled HTTP and policy-authorized TLS passthrough.
     - mode: internal
       protocol: AUTO
       listeners:
-      - protocol: TLS
-        hostname: "*"
-        tcpRoutes:
+      - protocol: HTTPS
+        tls:
+          mode: dynamicCa
+          cert: /run/egress-mitm/tls.crt
+          key: /run/egress-mitm/tls.key
+        routes:
+        - name: reject-websocket-upgrade
+          matches:
+          - headers:
+            - name: Connection
+              value:
+                regex: '(?i)(^|,)\s*upgrade\s*(,|$)'
+            - name: Upgrade
+              value:
+                regex: '(?i)(^|,)\s*websocket\s*(,|$)'
+          policies:
+            directResponse:
+              status: 403
+              body: WebSocket egress is not supported
         - backends:
-          - dynamic:
-              target: 'destination.address + ":" + string(destination.port)'
+          - dynamic: {}
+            policies:
+              backendTLS:
+                root: /etc/ssl/certs/ca-certificates.crt
+          policies:
+            substrateEgress: &egressPolicy
+              #ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS
+              host: api.ate-system.svc:443
+              policies:
+                backendTLS:
+                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+                  root: /run/servicedns-ca/trust-bundle.pem
       - protocol: HTTP
         routes:
         - name: reject-websocket-upgrade
@@ -200,10 +227,8 @@ data:
           - dynamic:
               target: 'destination.address + ":" + string(destination.port)'
           policies:
-            substrateEgress:
-              host: api.ate-system.svc:443
-              policies:
-                backendTLS:
-                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  root: /run/servicedns-ca/trust-bundle.pem
+            substrateEgress: *egressPolicy
+      - protocol: TLS
+        tcpRoutes:
+        - backends:
+          - dynamic: {}
