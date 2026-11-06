@@ -58,7 +58,7 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevel); err != nil {
 		serverboot.Fatal(ctx, "invalid --log-level", err)
 	}
-	if err := preview.Init(*previewFlags...); err != nil {
+	if _, err := preview.New(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "invalid --preview", err)
 	}
 	slog.InfoContext(ctx, "starting ate-idp-server", slog.String("version", version.String()))

@@ -414,7 +414,7 @@ func routerManifestFlags(t *testing.T) *pflag.FlagSet {
 		if c.Name != "atenet-router" {
 			continue
 		}
-		cmd := NewRouterCmd()
+		cmd := NewRouterCmd(new([]string))
 		if len(c.Args) == 0 || c.Args[0] != cmd.Name() {
 			t.Fatalf("the atenet-router container's args are %v; they should invoke the %q subcommand", c.Args, cmd.Name())
 		}

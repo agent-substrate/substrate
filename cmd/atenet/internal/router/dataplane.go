@@ -121,7 +121,7 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 	}
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath)
 	xdsSrv.SetUpstreamConnect(s.cfg.UpstreamConnect)
-	ingressCache := preview.IsEnabled(preview.GateIngressCache)
+	ingressCache := s.cfg.Gates.IsEnabled(preview.GateIngressCache)
 	if ingressCache {
 		if err := s.cfg.IngressCache.validate(); err != nil {
 			return nil, err

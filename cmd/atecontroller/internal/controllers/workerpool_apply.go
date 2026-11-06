@@ -15,7 +15,6 @@
 package controllers
 
 import (
-	"slices"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -30,7 +29,6 @@ import (
 	"go.ate.dev/substrate/internal/deviceplugin"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/nodepath"
-	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/workercapacity"
 )
 
@@ -108,7 +106,7 @@ const (
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here. otel is propagated to the worker container (see
 // workerContainerEnv).
-func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string) *appsv1ac.DeploymentApplyConfiguration {
+func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount, dnsEgressPolicy string, previewGates []string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -153,20 +151,9 @@ func buildDeploymentApplyConfig(wp *atev1.WorkerPool, otel workerOTelSettings, s
 		"--dns-egress-policy="+dnsEgressPolicy,
 	)
 
-	// worker gets preview features when the controller has them.
-	enabledGates := func() []string {
-		ret := []string{}
-		for k, v := range preview.AsMap() {
-			if v {
-				ret = append(ret, k)
-			}
-		}
-		// Map order is random; a stable arg avoids needless rollouts.
-		slices.Sort(ret)
-		return ret
-	}
-	previewArg := "--preview=" + strings.Join(enabledGates(), ",")
-	args = append(args, previewArg)
+	// worker gets preview features when the controller has them. Enabled
+	// gates come sorted, so the arg is stable and avoids needless rollouts.
+	args = append(args, "--preview="+strings.Join(previewGates, ","))
 
 	containerAC := corev1ac.Container().
 		WithName("worker").

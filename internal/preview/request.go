@@ -52,10 +52,10 @@ func IsOptedOut(ctx context.Context) bool {
 	return restricted
 }
 
-// IsEnabledFor reports whether gate is enabled in this process and ctx has
-// not opted-out of preview features.
-func IsEnabledFor(ctx context.Context, gate Gate) bool {
-	return IsEnabled(gate) && !IsOptedOut(ctx)
+// IsEnabledFor reports whether gate is enabled in g and ctx has not opted-out
+// of preview features.
+func (g *Gates) IsEnabledFor(ctx context.Context, gate Gate) bool {
+	return g.IsEnabled(gate) && !IsOptedOut(ctx)
 }
 
 // requestOptedIn reports whether the incoming request in ctx sent Header

@@ -111,7 +111,7 @@ func TestContextWithOptInOut(t *testing.T) {
 }
 
 func TestIsEnabledFor(t *testing.T) {
-	InitForTestFake(t, []Gate{"A", "B"}, "A")
+	g := NewForTestFake(t, []Gate{"A", "B"}, "A")
 	for _, tc := range []struct {
 		name string
 		ctx  context.Context
@@ -124,7 +124,7 @@ func TestIsEnabledFor(t *testing.T) {
 		{name: "disabled, opted in", ctx: ContextWithOptIn(context.Background()), gate: "B", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := IsEnabledFor(tc.ctx, tc.gate); got != tc.want {
+			if got := g.IsEnabledFor(tc.ctx, tc.gate); got != tc.want {
 				t.Errorf("IsEnabledFor(%s) = %v, want %v", tc.gate, got, tc.want)
 			}
 		})

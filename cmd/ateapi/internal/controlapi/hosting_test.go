@@ -186,7 +186,7 @@ func TestHostingNodeAfterResumeOntoNewWorker(t *testing.T) {
 	if err := wc.Start(cacheCtx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{gates: testGates, store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapi.ActorTemplate{
 		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"pool": "b"}},
 	}

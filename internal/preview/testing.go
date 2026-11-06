@@ -18,49 +18,24 @@ package preview
 // into non-test code.
 type testingTB interface {
 	Helper()
-	Setenv(key, value string)
-	Cleanup(func())
 	Fatalf(format string, args ...any)
 	Log(args ...any)
 }
 
-// InitForTest sets the process-wide preview gates for the duration of tb, as
-// Init would with values, and restores the previous state when tb ends. It may
-// be called whether or not Init has been. Tests that use it must not run in
-// parallel.
-func InitForTest(tb testingTB, values ...string) {
+// NewForTest returns the gates New would with values. It fails tb on an
+// unknown gate.
+func NewForTest(tb testingTB, values ...string) *Gates {
 	tb.Helper()
-	InitForTestFake(tb, realKnownGates, values...)
+	return NewForTestFake(tb, realKnownGates, values...)
 }
 
-// InitForTestFake is InitForTest with fake gate names.  Tests of the preview
-// gate system itself should use this to avoid depending on the real gate
-// names. Tests that use it must not run in parallel.
-func InitForTestFake(tb testingTB, fakeKnownGates []Gate, values ...string) {
+// NewForTestFake is NewForTest with fakeKnownGates in place of the real ones.
+func NewForTestFake(tb testingTB, fakeKnownGates []Gate, values ...string) *Gates {
 	tb.Helper()
-
-	// Setenv fails the test if it, or an ancestor, is parallel.
-	tb.Setenv("ATE_PREVIEW_SET_FOR_TEST", "1")
-
-	globalInitLock.Lock()
-	defer globalInitLock.Unlock()
-
-	prevInitialized := globalInitialized
-	prevKnownGates := globalKnownGates
-	prevStateMap := globalStateMap
-	prevDisabledMap := globalDisabledMap
-
-	logFunc := func(state string) {
-		tb.Log("initialized preview gates for test:", state)
+	g, err := newGates(fakeKnownGates, values...)
+	if err != nil {
+		tb.Fatalf("preview.NewForTestFake: %v", err)
 	}
-	if err := doInit(fakeKnownGates, logFunc, values...); err != nil {
-		tb.Fatalf("preview.InitForTestFake: %v", err)
-	}
-
-	tb.Cleanup(func() {
-		globalInitialized = prevInitialized
-		globalKnownGates = prevKnownGates
-		globalStateMap = prevStateMap
-		globalDisabledMap = prevDisabledMap
-	})
+	tb.Log("preview gates for test:", g)
+	return g
 }

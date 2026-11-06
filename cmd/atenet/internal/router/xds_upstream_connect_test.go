@@ -38,6 +38,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/atenet"
 	atunnelingress "go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/internal/preview"
 )
 
 // upstreamConnectSnapshot also enables the CONNECT listener, so main_internal
@@ -118,6 +119,7 @@ func TestUpstreamConnectFlag(t *testing.T) {
 				t.Fatalf("validate() = %v, want valid", err)
 			}
 
+			cfg.Gates = preview.NewForTest(t)
 			s := &RouterServer{cfg: cfg}
 			x, err := s.newEnvoyXdsServer(t.Context(), cfg.ParkedRequest.Normalized(), 0)
 			if err != nil {

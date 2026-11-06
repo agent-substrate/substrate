@@ -22,6 +22,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -99,7 +100,7 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 
 	// The reconciler for the new epoch leaves the RESUMING actor, and its
 	// claim, to the resume.
-	if err := controlapi.NewWorkerWorkflow(tc.persistence, nil).ReconcileAssignments(ctx, podUID); err != nil {
+	if err := controlapi.NewWorkerWorkflow(tc.persistence, nil, preview.NewForTest(t)).ReconcileAssignments(ctx, podUID); err != nil {
 		t.Fatalf("ReconcileAssignments: %v", err)
 	}
 	if got := getActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RESUMING {
@@ -140,7 +141,7 @@ func TestResumeActor_RetriedAfterWorkerRestartDuringRestore(t *testing.T) {
 
 	// The claim taken by the first attempt is the one the actor runs under:
 	// the worker still books one actor, and a later reconcile keeps it.
-	if err := controlapi.NewWorkerWorkflow(tc.persistence, nil).ReconcileAssignments(ctx, podUID); err != nil {
+	if err := controlapi.NewWorkerWorkflow(tc.persistence, nil, preview.NewForTest(t)).ReconcileAssignments(ctx, podUID); err != nil {
 		t.Fatalf("ReconcileAssignments: %v", err)
 	}
 	if got := getActor().GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_RUNNING {

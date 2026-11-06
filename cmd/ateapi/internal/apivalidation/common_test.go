@@ -40,28 +40,26 @@ const (
 // Then, for each entry in wantWithPreview, it enables the gates the key names
 // and checks validate against that entry's errors. Only cases that set fields
 // behind a preview gate need wantWithPreview.
-func assertValidate(t *testing.T, validate func() field.ErrorList, want field.ErrorList, wantWithPreview map[string]field.ErrorList) {
+func assertValidate(t *testing.T, validate func(*preview.Gates) field.ErrorList, want field.ErrorList, wantWithPreview map[string]field.ErrorList) {
 	t.Helper()
-	setPreviewForTest(t, "")
-	assertValidateErr(t, validate(), want)
+	assertValidateErr(t, validate(previewForTest(t, "")), want)
 	for _, gates := range slices.Sorted(maps.Keys(wantWithPreview)) {
 		t.Run("preview="+gates, func(t *testing.T) {
 			t.Helper()
-			setPreviewForTest(t, gates)
-			assertValidateErr(t, validate(), wantWithPreview[gates])
+			assertValidateErr(t, validate(previewForTest(t, gates)), wantWithPreview[gates])
 		})
 	}
 }
 
-// setPreviewForTest enables the preview gates named by gates, a --preview
-// value such as "ALL", for the duration of t. An empty value enables none.
-func setPreviewForTest(t *testing.T, gates string) {
+// previewForTest returns the preview gates named by gates, a --preview value
+// such as "ALL". An empty value enables none.
+func previewForTest(t *testing.T, gates string) *preview.Gates {
 	t.Helper()
 	var values []string
 	if gates != "" {
 		values = strings.Split(gates, ",")
 	}
-	preview.InitForTest(t, values...)
+	return preview.NewForTest(t, values...)
 }
 
 func selectorLabelsOfSize(n int) map[string]string {

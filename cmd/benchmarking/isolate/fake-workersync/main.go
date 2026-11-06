@@ -96,7 +96,7 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
-	if err := preview.Init(*previewFlags...); err != nil {
+	if _, err := preview.New(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	if err := fakeworker.ValidateRun(*run); err != nil {

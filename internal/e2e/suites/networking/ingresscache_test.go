@@ -318,7 +318,7 @@ func TestIngressCache_BodyBypassesCache(t *testing.T) {
 // preview gate the ingress-cache filter never sees a request: it's served
 // through ext_proc and no cache counter moves.
 func TestIngressCache_DisabledByDefault(t *testing.T) {
-	if preview.IsEnabled(preview.GateIngressCache) {
+	if e2e.PreviewEnabled(preview.GateIngressCache) {
 		t.Skipf("preview gate %q is enabled; this test covers the default install", preview.GateIngressCache)
 	}
 	ctx := context.Background()

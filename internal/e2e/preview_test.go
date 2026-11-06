@@ -34,8 +34,7 @@ func TestSnapshotLocation(t *testing.T) {
 		{name: "gate on", gates: []string{string(preview.GatePerTemplateSnapshotLocation)}, want: "gs://test-bucket/ate-e2e-probe/"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			preview.InitForTest(t, tc.gates...)
-			if got := SnapshotLocation(t, "ate-e2e-probe"); got != tc.want {
+			if got := snapshotLocation(t, preview.NewForTest(t, tc.gates...), "ate-e2e-probe"); got != tc.want {
 				t.Errorf("SnapshotLocation() = %q, want %q", got, tc.want)
 			}
 		})

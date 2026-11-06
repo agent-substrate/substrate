@@ -24,6 +24,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -40,7 +41,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapi.Create
 	}
 
 	// Validate the request, including the object within it.
-	if errs := apivalidation.ValidateCreateActorTemplateRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateCreateActorTemplateRequest(ctx, s.gates, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -66,13 +67,13 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 	outTemplate.Status = &ateapi.ActorTemplateStatus{}
 
 	// Validate the final value before storing it.
-	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
+	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, s.gates, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
 		return nil, resources.ToInternalError(errs)
 	}
 
 	// Reject a template whose actors could never be snapshotted, rather than
 	// failing their first suspend or tag.
-	if _, err := resolveSnapshotLocation(s.clusterSnapshotLocation, outTemplate); err != nil {
+	if _, err := resolveSnapshotLocation(s.gates, s.clusterSnapshotLocation, outTemplate); err != nil {
 		return nil, err
 	}
 
@@ -128,7 +129,7 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapi.Delete
 }
 
 func (s *ServiceImpl) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
-	return s.store.MarkActorTemplateForDeletion(ctx, templateRef, precondition, validatedActorTemplateMutation(ctx, mutate))
+	return s.store.MarkActorTemplateForDeletion(ctx, templateRef, precondition, validatedActorTemplateMutation(ctx, s.gates, mutate))
 }
 
 func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition) (*ateapi.ActorTemplate, error) {
@@ -137,14 +138,14 @@ func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resou
 }
 
 func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
-	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, validatedActorTemplateMutation(ctx, mutate))
+	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, validatedActorTemplateMutation(ctx, s.gates, mutate))
 }
 
 // validatedActorTemplateMutation wraps mutate so the ActorTemplate it writes is
 // validated as an update of the stored ActorTemplate. There is no update RPC
 // for ActorTemplates, so only the server mutates them, and a validation
 // failure is an internal error.
-func validatedActorTemplateMutation(ctx context.Context, mutate func(*ateapi.ActorTemplate) error) func(*ateapi.ActorTemplate) error {
+func validatedActorTemplateMutation(ctx context.Context, gates *preview.Gates, mutate func(*ateapi.ActorTemplate) error) func(*ateapi.ActorTemplate) error {
 	return func(toUpdate *ateapi.ActorTemplate) error {
 		oldVal := proto.CloneOf(toUpdate)
 		if mutate != nil {
@@ -152,7 +153,7 @@ func validatedActorTemplateMutation(ctx context.Context, mutate func(*ateapi.Act
 				return err
 			}
 		}
-		if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), toUpdate, oldVal); len(errs) > 0 {
+		if errs := apivalidation.ValidateActorTemplateUpdate(ctx, gates, field.NewPath("actor_template"), toUpdate, oldVal); len(errs) > 0 {
 			return resources.ToInternalError(errs)
 		}
 		return nil
