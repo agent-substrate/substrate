@@ -38,7 +38,6 @@ import (
 type RPCService struct {
 	ateapi.UnimplementedControlServer
 	impl                  serviceStore
-	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
 	csiDriverConfigLister atelisters.CSIDriverConfigLister
@@ -91,7 +90,6 @@ func NewRPCService(
 	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
 		impl:                  impl,
-		persistence:           persistence,
 		workerCache:           workerCache,
 		csiDriverConfigLister: csiDriverConfigLister,
 		dialer:                dialer,
