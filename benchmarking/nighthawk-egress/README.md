@@ -309,12 +309,12 @@ Each run writes its artifacts under `<dest>/runs/<name>/run_date=YYYY-MM-DD/run_
 
 | File | Description |
 |---|---|
-| `capacity.json` | Verdict summary: `mode`, `envoy_cpu`, `converged`, `testing_stage_completed`, `testing_passed`, `slo_max_rps`, `slo_max_stage`, `binding_threshold`, `client_pool_bound`, `gateway_counters`, `tunnels_per_stage`, `requests_per_connection`, `cx_churn_ratio`, connection setup telemetry (`queue_to_connect_*`, `sequencer_blocking_*`), gateway checks (`ext_proc_invariant_ok`, `mode_exclusivity_ok`, `forward_proxy_overflow_ok`, `gateway_counter_reset`), and testing-stage `p50_ms`, `p95_ms`, and `p99_ms`. |
+| `capacity.json` | Verdict summary, including `mode`, `envoy_cpu`, `converged`, `testing_stage_completed`, `testing_passed`, `slo_max_rps`, `slo_max_stage`, `binding_threshold`, `client_pool_bound`, `gateway_pod_ips_changed`, `gateway_scrape_error`, `gateway_counters`, `tunnels_per_stage`, `requests_per_connection`, `cx_churn_ratio`, connection setup telemetry (`queue_to_connect_*`, `sequencer_blocking_*`), gateway checks (`ext_proc_invariant_ok`, `mode_exclusivity_ok`, `forward_proxy_overflow_ok`, `gateway_counter_reset`), and testing-stage `p50_ms`, `p95_ms`, and `p99_ms`. If `atenet-egress` pod IPs change during the run or the post-run gateway scrape fails, `runner.py` still writes and uploads `results.json`, `stats.jsonl`, `capacity.json` (with `gateway_counters: {}` and `tunnels_per_stage: null`), `logs.txt`, and `status.json` before exiting non-zero. |
 | `stats.jsonl` | Per-stage JSONL records with Nighthawk built-in metrics (`achieved_rps` and `send_rate` are recomputed from the exact stage duration, with Nighthawk's own values under the `*_cpp` keys), HTTP/SSL/pool counters, `requests_per_connection`, `cx_churn_ratio`, `queue_to_connect_*`, `sequencer_blocking_*`, latency percentiles, and `failed_thresholds`. |
 | `results.json` | Full `AdaptiveLoadSessionOutput` converted to JSON. |
 | `spec.textproto`, `output.textproto` | Raw Nighthawk input spec and output textproto. |
-| `gateway_before.prom`, `gateway_after.prom` | Raw Prometheus snapshots from `atenet-egress:15090/stats/prometheus` before and after the run. |
-| `status.json`, `logs.txt` | Adaptive client exit code, `converged`, `testing_stage_completed`, `slo_max_rps`, and combined stdout/stderr logs. |
+| `gateway_before.prom`, `gateway_after.prom` | Raw Prometheus snapshots from `atenet-egress:15090/stats/prometheus` before and after the run (`gateway_after.prom` is omitted if the post-run scrape fails). |
+| `status.json`, `logs.txt` | Adaptive client exit code, `converged`, `testing_stage_completed`, `slo_max_rps`, `gateway_pod_ips_changed`, `gateway_scrape_error`, and combined stdout/stderr logs. |
 
 ### Manual Setup and Single-Rate Check
 
