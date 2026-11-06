@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"k8s.io/utils/ptr"
 )
 
 func TestWarnLowMaxMapCount(t *testing.T) {
@@ -31,10 +33,10 @@ func TestWarnLowMaxMapCount(t *testing.T) {
 		content *string
 		want    string
 	}{
-		{name: "kernel default", content: ptr("65530\n"), want: "level=ERROR"},
-		{name: "recommended", content: ptr("4194304\n"), want: ""},
-		{name: "above recommended", content: ptr("8388608\n"), want: ""},
-		{name: "not a number", content: ptr("many\n"), want: "level=WARN"},
+		{name: "kernel default", content: ptr.To("65530\n"), want: "level=ERROR"},
+		{name: "recommended", content: ptr.To("4194304\n"), want: ""},
+		{name: "above recommended", content: ptr.To("8388608\n"), want: ""},
+		{name: "not a number", content: ptr.To("many\n"), want: "level=WARN"},
 		{name: "missing file", content: nil, want: "level=WARN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,5 +62,3 @@ func TestWarnLowMaxMapCount(t *testing.T) {
 		})
 	}
 }
-
-func ptr(s string) *string { return &s }
