@@ -49,12 +49,24 @@ usage() {
 errfile="$(mktemp)"
 trap 'rm -f "${errfile}"' EXIT
 
+source "${ROOT}/.github/scripts/release/retry.sh"
+
+# Wrapper to abort retries on 4xx errors
+gh_api_checked() {
+  gh api "$@" 2>"${errfile}"
+  local exit_code=$?
+  if [[ ${exit_code} -ne 0 ]] && grep -qE 'HTTP 4[0-9]{2}' "${errfile}"; then
+    return 150
+  fi
+  return ${exit_code}
+}
+
 # api <step> <gh api args...> prints the response. On failure it prints the
 # step and gh's error, and returns 1; gh's error stays in ${errfile}.
 api() {
   local step="$1"
   shift
-  if ! gh api "$@" 2>"${errfile}"; then
+  if ! with_retries gh_api_checked "$@"; then
     echo "error: ${step}: $(<"${errfile}")" >&2
     return 1
   fi
@@ -65,7 +77,7 @@ api() {
 # failure (gh not logged in, rate limit) stops the script with gh's error, so
 # it is not mistaken for "not found".
 exists() {
-  if gh api "$1" --silent 2>"${errfile}"; then
+  if with_retries gh_api_checked "$1" --silent; then
     return 0
   fi
   if grep -qE 'HTTP (404|422)' "${errfile}"; then
@@ -206,7 +218,7 @@ if [[ "${dry_run}" == true ]]; then
   echo "Dry run: no release created."
   exit 0
 fi
-if gh release view "${tag}" --repo "${REPO}" >/dev/null 2>&1; then
+if with_retries gh release view "${tag}" --repo "${REPO}" >/dev/null 2>&1; then
   echo "A release for ${tag} already exists; left unchanged."
   exit 0
 fi
@@ -215,4 +227,4 @@ create_args=(--repo "${REPO}" --draft --verify-tag --title "${tag}" --notes-file
 if [[ "${prerelease}" == true ]]; then
   create_args+=(--prerelease)
 fi
-gh release create "${tag}" "${create_args[@]}" <<<"${notes}"
+with_retries gh release create "${tag}" "${create_args[@]}" <<<"${notes}"

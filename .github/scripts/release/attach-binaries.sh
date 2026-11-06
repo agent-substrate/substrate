@@ -31,11 +31,14 @@ set -o errexit -o nounset -o pipefail
 }
 dir="$1"
 
+ROOT="$(git rev-parse --show-toplevel)"
+source "${ROOT}/.github/scripts/release/retry.sh"
+
 # An assignment, so a failed query (API error, rate limit) stops the script
 # under errexit instead of being read as "published" and skipping the upload.
-is_draft="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)"
+is_draft="$(with_retries gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)"
 if [[ "${is_draft}" != true ]]; then
   echo "${TAG} is published; its binaries are left unchanged."
   exit 0
 fi
-gh release upload "${TAG}" "${dir}"/* --repo "${GITHUB_REPOSITORY}" --clobber
+with_retries gh release upload "${TAG}" "${dir}"/* --repo "${GITHUB_REPOSITORY}" --clobber
