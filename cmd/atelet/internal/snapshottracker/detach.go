@@ -169,23 +169,33 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	if err == nil {
 		err = actordirs.RemoveActorFilesExceptState(actorUID)
 	}
-	t.updateOp(actorUID, func(a *actorSnapshots) {
-		switch {
-		case err == nil:
-			t.clearLatestLocalLocked(a)
-			t.markReportDueLocked(a)
-		case ctx.Err() == nil:
-			// Detach again once the retry delay has passed, and no sooner
-			// than the detach was due.
-			a.DetachAt = later(a.DetachAt, t.backOffLocked(a))
-		}
-	})
-
-	// Log and record before endOp, which ends ctx.
+	// Log and record before endOpLocked, which ends ctx.
 	elapsed := t.clock.Since(detachStart)
 	logOp(ctx, actorUID, op.kind, target, uploaded, background, elapsed, err)
 	if background && recordDetach {
 		t.instruments.recordDetach(ctx, target, elapsed, err)
 	}
-	return t.endOp(actorUID, op, err)
+
+	t.lock(actorUID)
+	defer t.unlock(actorUID)
+	// Forget cancels ctx under the actor's lock, so read it under the lock.
+	canceled := ctx.Err() != nil
+	a := t.endOpLocked(actorUID, op)
+	switch {
+	case err == nil:
+		t.clearLatestLocalLocked(a)
+		t.markReportDueLocked(a)
+		t.saveLocked(a)
+	case !canceled:
+		// Detach again once the retry delay has passed, and no sooner than
+		// the detach was due.
+		a.DetachAt = later(a.DetachAt, t.backOffLocked(a))
+		t.saveLocked(a)
+	}
+	t.requeueLocked(a)
+	t.queueReportLocked(a)
+	if err != nil {
+		return nil, err
+	}
+	return t.stateLocked(a), nil
 }
