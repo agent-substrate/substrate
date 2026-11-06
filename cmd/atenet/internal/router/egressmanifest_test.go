@@ -165,7 +165,16 @@ func TestEgressManifestsSampleThePerRequestAccessLogs(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(wantSampledLogFilter), &want); err != nil {
 		t.Fatalf("parsing wantSampledLogFilter: %v", err)
 	}
-	logs := chainAccessLogsByLeg(bootstrapTree(t))
+	tree := bootstrapTree(t)
+	// Without an admin layer, /runtime_modify fails and the keys keep their
+	// defaults.
+	if !slices.ContainsFunc(list(child(tree, "layered_runtime"), "layers"), func(l node) bool {
+		_, ok := l["admin_layer"]
+		return ok
+	}) {
+		t.Error("layered_runtime has no admin_layer, so /runtime_modify cannot set access_log.min_status or access_log.sample")
+	}
+	logs := chainAccessLogsByLeg(tree)
 	sampledLegs := []string{"mitm", "cleartext"}
 	for _, leg := range sampledLegs {
 		t.Run(leg, func(t *testing.T) {
