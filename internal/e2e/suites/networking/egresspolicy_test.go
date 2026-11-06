@@ -178,6 +178,71 @@ func TestActorEgressHTTPSByHostname(t *testing.T) {
 	})
 }
 
+// TestActorEgressDefaultPorts verifies that when an egress rule does not
+// specify ports, http only allows port 80 and https only allows port 443.
+// Any other port (such as 8080 or 8443) is denied.
+func TestActorEgressDefaultPorts(t *testing.T) {
+	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
+
+	const originBody = "default port origin"
+	standard := e2e.DeployServerPod(t, ctx, egressHTTPSTarget("standard-ports", originBody))
+	otherSpec := egressHTTPSTarget("other-ports", originBody)
+	otherSpec.Namespace = standard.Namespace
+	otherSpec.Port, otherSpec.TLSPort = 8080, 8443
+	other := e2e.DeployServerPod(t, ctx, otherSpec)
+
+	// Allow both servers by hostname without specifying any ports.
+	// Also include the .cluster.local FQDNs so Kubernetes DNS search-path
+	// queries succeed inside the sandbox.
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-default-ports", e2e.EgressFixture(),
+		e2e.EgressAllowHTTP(standard.SvcName(), standard.SvcName()+".cluster.local", other.SvcName(), other.SvcName()+".cluster.local"),
+		e2e.EgressAllowHTTPS(standard.SvcName(), other.SvcName()),
+	)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	t.Run("http on 80 allowed", func(t *testing.T) {
+		url := "http://" + standard.SvcName() + "/healthz"
+		status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, reached)
+		if status != http.StatusOK {
+			t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+		}
+		if got := decodeEgressFetch(t, body); got.Body != originBody || got.TLS {
+			t.Errorf("fetch of %s = %+v, want cleartext and body %q", url, got, originBody)
+		}
+	})
+
+	t.Run("https on 443 allowed", func(t *testing.T) {
+		url := "https://" + standard.SvcName() + "/healthz"
+		status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, reached)
+		if status != http.StatusOK {
+			t.Fatalf("fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+		}
+		if got := decodeEgressFetch(t, body); got.Body != originBody || !got.TLS {
+			t.Errorf("fetch of %s = %+v, want verified TLS and body %q", url, got, originBody)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{"http on 8080 denied", fmt.Sprintf("http://%s:%d/healthz", other.SvcName(), other.Port)},
+		{"https on 8443 denied", fmt.Sprintf("https://%s:%d/healthz", other.SvcName(), other.TLSPort)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, tc.url, notTransient)
+			if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+				t.Fatalf("fetch of %s, off the rule's default port, returned HTTP %d, want an egress-policy denial; body: %s", tc.url, status, body)
+			}
+			t.Logf("fetch of %s was denied as expected: %s", tc.url, body)
+		})
+	}
+}
+
 // This test validates that TLS passthrough connection is denied when policy changes
 // even if there are outstanding connections that were allowed by the previous policy.
 func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
