@@ -517,10 +517,10 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		waitingLogged = false
 
 		// The actor resumed on another worker.
-		switchedPod := podName != lastWorkerPod
-		if switchedPod {
+		if podName != lastWorkerPod {
 			fmt.Fprintf(r.stderr, "Actor is currently running on pod %s/%s\n", namespace, podName)
 			lastWorkerPod = podName
+			lastSeenTime = time.Time{}
 		}
 
 		// The kubelet's own timestamp on every line is the resume cursor. It
@@ -528,12 +528,13 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		// line's content: an actor's record keeps a time the actor wrote, which
 		// can run ahead of the node's clock and would make a reconnect skip
 		// lines.
+		sinceTime := lastSeenTime
 		opts := &corev1.PodLogOptions{
 			Follow:     true,
 			Timestamps: true,
 		}
-		if !lastSeenTime.IsZero() {
-			opts.SinceTime = &metav1.Time{Time: lastSeenTime}
+		if !sinceTime.IsZero() {
+			opts.SinceTime = &metav1.Time{Time: sinceTime}
 		}
 
 		streamCtx, streamCancel := context.WithCancel(ctx)
@@ -560,9 +561,8 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			if ok {
 				// SinceTime has second precision, so a reconnect to the same pod
 				// re-reads the cursor's second; lines up to the cursor were
-				// already shown. Another pod's lines are all new, and its node's
-				// clock is not this one's, so they are not compared.
-				if !switchedPod && !stamp.After(lastSeenTime) {
+				// already shown.
+				if !sinceTime.IsZero() && !stamp.After(sinceTime) {
 					continue
 				}
 				lastSeenTime = stamp
