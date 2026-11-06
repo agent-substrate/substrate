@@ -56,6 +56,7 @@ spec:
       labels:
         app: rustfs
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsUser: 10001
         runAsGroup: 10001
@@ -99,6 +100,7 @@ spec:
   backoffLimit: 10
   template:
     spec:
+      automountServiceAccountToken: false
       restartPolicy: OnFailure
       containers:
       - name: create-bucket

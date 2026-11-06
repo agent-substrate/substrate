@@ -102,6 +102,7 @@ spec:
       labels:
         app: postgres
     spec:
+      automountServiceAccountToken: false
       securityContext:
         # Group ownership of the projected certificate below, and of the data
         # volume so that a freshly provisioned one is writable. OnRootMismatch

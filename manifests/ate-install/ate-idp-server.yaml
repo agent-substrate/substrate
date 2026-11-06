@@ -41,6 +41,7 @@ spec:
         app: ate-idp-server
     spec:
       serviceAccountName: ate-idp-server
+      automountServiceAccountToken: false
       containers:
       - name: ate-idp-server
         image: ko://go.ate.dev/substrate/cmd/ate-idp-server
