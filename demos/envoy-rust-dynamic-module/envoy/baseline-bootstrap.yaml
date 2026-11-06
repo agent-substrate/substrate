@@ -1,0 +1,60 @@
+# Arm A: today's substrate architecture, unmodified.
+#
+# This is the Envoy bootstrap from manifests/ate-install/atenet-router.yaml with
+# only the xds_cluster address changed from 127.0.0.1 (same pod) to the router's
+# container name. Everything Envoy actually runs -- listeners, the ext_proc
+# filter, the ORIGINAL_DST cluster -- is served over ADS by the real
+# `atenet router` process, so this arm exercises substrate's real xds.go and its
+# real ext_proc handler rather than a hand-written approximation of them.
+admin:
+  address:
+    socket_address:
+      address: "::"
+      ipv4_compat: true
+      port_value: 9901
+
+node:
+  id: substrate-envoy-node
+  cluster: substrate-router-cluster
+
+# Required for main_internal (see xds.go's buildMainInternalListener): Envoy
+# rejects any Listener.internal_listener without this registered.
+bootstrap_extensions:
+- name: envoy.bootstrap.internal_listener
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.bootstrap.internal_listener.v3.InternalListener
+
+dynamic_resources:
+  lds_config:
+    resource_api_version: V3
+    ads: {}
+  cds_config:
+    resource_api_version: V3
+    ads: {}
+  ads_config:
+    api_type: GRPC
+    transport_api_version: V3
+    grpc_services:
+    - envoy_grpc:
+        cluster_name: xds_cluster
+
+static_resources:
+  clusters:
+  - name: xds_cluster
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: xds_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: atenet-router
+                port_value: 18000
