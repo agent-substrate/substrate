@@ -116,7 +116,7 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 	case codes.FailedPrecondition:
 		// Preserve the gRPC description for FailedPrecondition and Aborted:
 		// they carry actionable client-facing context (e.g. "another operation is
-		// in progress for this actor") and are not security-sensitive.
+		// in progress for Actor team-a/a1") and are not security-sensitive.
 		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)
 		re.Msg = fmt.Sprintf("actor %s unavailable: %s", actorRef, statusDescription(err))
 	case codes.Aborted:
