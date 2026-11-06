@@ -132,6 +132,13 @@ data:
         trusted_ca: { filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem }
         watched_directory: { path: /run/servicedns.podcert.ate.dev }
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traffic-driver-invoker
+  namespace: nighthawk
+automountServiceAccountToken: false
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -149,6 +156,7 @@ spec:
       labels:
         app: traffic-driver-invoker
     spec:
+      serviceAccountName: traffic-driver-invoker
       securityContext:
         runAsUser: 65532
         runAsGroup: 65532

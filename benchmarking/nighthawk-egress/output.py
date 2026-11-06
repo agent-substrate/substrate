@@ -26,6 +26,7 @@ from nighthawk_common.output import (
     builtin_key,
     counters,
     global_result,
+    parse_output_textproto,
     stage_rows as _common_stage_rows,
     stats_records,
     write_jsonl,
