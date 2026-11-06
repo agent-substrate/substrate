@@ -194,6 +194,91 @@ func TestTagCloneOnDisabledVersion(t *testing.T) {
 	clone.resumeAndCheck(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, hardware.ColdBootRuntime(status))
 }
 
+// TestPausedActorSandboxRuntime covers a paused actor, whose MEMORY checkpoint
+// is node-local, across SandboxConfig version changes and the loss of its
+// worker pod. atelet detaches a paused actor's checkpoint on its own after
+// --snapshot-detach-delay (30s in e2e), so each step that needs the checkpoint
+// local resumes right after pausing.
+//  1. An actor boots on v1, increments its counters twice (memory=2, file=2,
+//     rootfs=2), and suspends with a v1-stamped MEMORY snapshot.
+//  2. The SandboxConfig moves defaultVersion to v2 with v1 still Enabled. The
+//     actor restores MEMORY on v1 through restorable_runtimes (memory=3,
+//     file=3, rootfs=3) and pauses. The paused actor then restores MEMORY on
+//     its node without detaching the checkpoint (memory=4, file=4, rootfs=4).
+//  3. The SandboxConfig disables v1 while the actor runs on it. The worker
+//     re-registers without v1 and the actor keeps running.
+//  4. The actor pauses on v1. A pinned checkpoint cannot relax the runtime,
+//     so ResumeActor detaches it to durable storage first and then restores
+//     at ROOTFS on v2 (memory=1, file=5, rootfs=5).
+//  5. The actor pauses on v2 and its worker pod is deleted. The checkpoint
+//     belongs to the node, not the pod, so the actor stays SUSPENDED and
+//     restores MEMORY on the pool's replacement worker (memory=2, file=6,
+//     rootfs=6), from the local checkpoint or from the durable copy atelet's
+//     detach made meanwhile.
+func TestPausedActorSandboxRuntime(t *testing.T) {
+	t.Parallel()
+	f := setupSuspendedV1Actor(t, "paused-runtime")
+
+	// 2. Move the default to v2 with v1 still Enabled, then pause and resume
+	// in place.
+	f.updateVersions(t, f.v2.Name, []atev1.SandboxVersionConfig{f.v1, f.v2})
+	f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
+		defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
+		return defHash != "" && defHash != f.v1Hash && hardware.WorkerMatches(status, f.v1Runtime)
+	})
+	f.resume(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, f.v1Runtime)
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, f.v1Runtime)
+	status := f.resume(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, f.v1Runtime)
+	if !hasLocalSnapshot(status) {
+		t.Fatalf("local checkpoint detached although restorable_runtimes matched: %v", status.GetSnapshots())
+	}
+
+	// 3. Disable v1 while the actor runs on it.
+	f.updateVersions(t, f.v2.Name, []atev1.SandboxVersionConfig{withState(f.v1, atev1.SandboxVersionStateDisabled), f.v2})
+	workerStatus := f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
+		defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
+		return defHash != "" && defHash != f.v1Hash && !hardware.WorkerMatches(status, f.v1Runtime)
+	})
+	v2Runtime := hardware.ColdBootRuntime(workerStatus)
+
+	// 4. Pause and resume at once: ResumeActor detaches the checkpoint, then
+	// falls back to ROOTFS on v2.
+	snap := f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, f.v1Runtime)
+	status = f.resume(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, v2Runtime)
+	if hasLocalSnapshot(status) {
+		t.Fatalf("local snapshot survived the runtime fallback: %v", status.GetSnapshots())
+	}
+	detached := durableSnapshot(status)
+	if detached.GetGeneration() != snap.GetGeneration() {
+		t.Fatalf("durable snapshot generation after detach = %d, want %d", detached.GetGeneration(), snap.GetGeneration())
+	}
+	if diff := cmp.Diff(f.v1Runtime, detached.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+		t.Fatalf("detached durable snapshot sandbox_runtime mismatch (-want v1 +got):\n%s", diff)
+	}
+
+	// 5. Pause on v2, delete the worker pod, and resume on the replacement.
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS, v2Runtime)
+	worker, err := f.clients.SubstrateAPI.GetWorker(f.ctx, &ateapi.GetWorkerRequest{Worker: f.workerRef})
+	if err != nil {
+		t.Fatalf("failed to get Worker %s before pod deletion: %v", f.workerRef.GetName(), err)
+	}
+	if err := f.clients.K8s.CoreV1().Pods(f.namespace).Delete(f.ctx, worker.GetWorkerPod(), metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("failed to delete worker pod %s/%s: %v", f.namespace, worker.GetWorkerPod(), err)
+	}
+	replacement := f.waitForReplacementWorker(t, v2Runtime)
+	afterPodDelete, err := f.clients.SubstrateAPI.GetActor(f.ctx, &ateapi.GetActorRequest{Actor: f.actorRef})
+	if err != nil {
+		t.Fatalf("failed to get paused Actor after worker pod deletion: %v", err)
+	}
+	if got := afterPodDelete.GetStatus().GetState(); got != ateapi.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Fatalf("paused Actor state after worker pod deletion = %v, want SUSPENDED", got)
+	}
+	status = f.resume(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, v2Runtime)
+	if got := status.GetWorkerAssignment().GetWorker().GetName(); got != replacement.GetName() {
+		t.Fatalf("workerAssignment.worker after replacement resume = %q, want %q", got, replacement.GetName())
+	}
+}
+
 // sandboxRuntimeFixture is a suspended actor on a pool whose SandboxConfig
 // the test owns, so the test can edit versions and watch the worker
 // re-register and the actor resume.
@@ -224,10 +309,10 @@ type sandboxRuntimeFixture struct {
 // setupSuspendedV1Actor creates a SandboxConfig holding one version, v1,
 // copied from the cluster's class default, a one-worker pool pinned to it, a
 // counter ActorTemplate without a golden snapshot, and an actor. It runs the
-// actor on v1 for two calls
-// (memory=2, file=2, rootfs=2), suspends it synchronously, and checks the
-// MEMORY snapshot is stamped with v1. f.v2 is a second version with a
-// different sandbox_bundle_hash that the config does not hold yet.
+// actor on v1 for two calls (memory=2, file=2, rootfs=2), suspends it
+// synchronously, and checks the MEMORY snapshot is stamped with v1. f.v2 is a
+// second version with a different sandbox_bundle_hash that the config does
+// not hold yet.
 func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
 	t.Helper()
 	nsObj := e2e.CreateNamespace(t)
@@ -341,7 +426,7 @@ func setupSuspendedV1Actor(t *testing.T, prefix string) *sandboxRuntimeFixture {
 		file:        2,
 		rootfs:      2,
 	}
-	f.suspend(t, v1Runtime)
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, v1Runtime)
 	return f
 }
 
@@ -398,7 +483,7 @@ func (f *sandboxRuntimeFixture) waitForWorker(t *testing.T, pred func(*ateapi.Wo
 func (f *sandboxRuntimeFixture) resumeAndCheck(t *testing.T, want ateapi.SnapshotFidelity, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.ActorStatus {
 	t.Helper()
 	status := f.resume(t, want, wantRuntime)
-	f.suspend(t, wantRuntime)
+	f.suspend(t, ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS, wantRuntime)
 	return status
 }
 
@@ -442,19 +527,29 @@ func (f *sandboxRuntimeFixture) call(t *testing.T, stage string) {
 	validateRootfsCounter(t, resp, stage, f.rootfs)
 }
 
-// suspend suspends the fixture's actor synchronously and checks the new
-// MEMORY snapshot is stamped with wantRuntime.
-func (f *sandboxRuntimeFixture) suspend(t *testing.T, wantRuntime *ateapi.ActorSandboxRuntime) {
+// suspend suspends the fixture's actor with mode and checks that its new
+// MEMORY snapshot advances the generation and is stamped with wantRuntime:
+// the durable snapshot after a synchronous suspend, the node-local
+// checkpoint after an asynchronous one. It returns that snapshot.
+func (f *sandboxRuntimeFixture) suspend(t *testing.T, mode ateapi.DurabilityMode, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.Snapshot {
 	t.Helper()
-	suspended, err := f.clients.SubstrateAPI.SuspendActor(f.ctx, &ateapi.SuspendActorRequest{
+	// After an asynchronous suspend, atelet's report of the background
+	// upload can hold the actor's lease when the next suspend arrives.
+	suspended, err := e2e.RetryAborted(t, f.ctx, f.clients.SubstrateAPI.SuspendActor, &ateapi.SuspendActorRequest{
 		Actor:   f.actorRef,
-		Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+		Options: &ateapi.SuspendOptions{Mode: mode},
 	})
 	if err != nil {
 		t.Fatalf("failed to suspend Actor %s: %v", f.actorName, err)
 	}
-	waitForActorState(f.ctx, t, f.clients, f.actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
-	snap := durableSnapshot(suspended.GetActor().GetStatus())
+	var snap *ateapi.Snapshot
+	if mode == ateapi.DurabilityMode_DURABILITY_MODE_ASYNCHRONOUS {
+		waitForActorPaused(f.ctx, t, f.clients, f.actorName)
+		snap = localSnapshot(suspended.GetActor().GetStatus())
+	} else {
+		waitForActorState(f.ctx, t, f.clients, f.actorName, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
+		snap = durableSnapshot(suspended.GetActor().GetStatus())
+	}
 	if snap.GetGeneration() <= f.generation {
 		t.Fatalf("snapshot generation of %s = %d, want > %d", f.actorName, snap.GetGeneration(), f.generation)
 	}
@@ -465,6 +560,7 @@ func (f *sandboxRuntimeFixture) suspend(t *testing.T, wantRuntime *ateapi.ActorS
 		t.Fatalf("snapshot sandbox_runtime of %s (-want +got):\n%s", f.actorName, diff)
 	}
 	f.generation = snap.GetGeneration()
+	return snap
 }
 
 // cloneFromTag creates an actor named name from tag, which holds the
@@ -534,6 +630,52 @@ func (f *sandboxRuntimeFixture) repoint(t *testing.T) {
 		},
 	}); err != nil {
 		t.Fatalf("failed to update Actor %s to template %s: %v", f.actorName, name, err)
+	}
+}
+
+// waitForReplacementWorker polls ListWorkers until the fixture's worker is
+// gone and another ACTIVE worker of its pool advertises wantRuntime, and
+// returns a reference to that worker. The replacement pod starts as soon as
+// the old one is Terminating, while the old Worker record goes only once its
+// pod is gone, so a replacement alone does not mean the old worker was
+// released.
+func (f *sandboxRuntimeFixture) waitForReplacementWorker(t *testing.T, wantRuntime *ateapi.ActorSandboxRuntime) *ateapi.ObjectRef {
+	t.Helper()
+	const timeout = 2 * time.Minute
+	ctx, cancel := context.WithTimeout(f.ctx, timeout)
+	defer cancel()
+
+	var last []*ateapi.Worker
+	for {
+		resp, err := f.clients.SubstrateAPI.ListWorkers(ctx, &ateapi.ListWorkersRequest{})
+		if err == nil {
+			last = last[:0]
+			oldPresent := false
+			var replacement *ateapi.ObjectRef
+			for _, w := range resp.GetWorkers() {
+				if w.GetWorkerNamespace() != f.namespace || w.GetWorkerPool() != f.poolName {
+					continue
+				}
+				last = append(last, w)
+				if w.GetMetadata().GetName() == f.workerRef.GetName() {
+					oldPresent = true
+					continue
+				}
+				if w.GetStatus().GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE && hardware.WorkerMatches(w.GetStatus(), wantRuntime) {
+					replacement = &ateapi.ObjectRef{Name: w.GetMetadata().GetName()}
+				}
+			}
+			if !oldPresent && replacement != nil {
+				return replacement
+			}
+		}
+		select {
+		case <-ctx.Done():
+			raw, _ := json.Marshal(last)
+			t.Fatalf("timed out after %v waiting for pool %s/%s to drop Worker %s and run an ACTIVE replacement (last workers=%s, err=%v)",
+				timeout, f.namespace, f.poolName, f.workerRef.GetName(), raw, err)
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }
 
