@@ -123,13 +123,13 @@ func DropFiles(files []File) bool {
 	return dropped
 }
 
-// StartWriteback opens paths and, in the background, waits for each file's
-// dirty pages to be written back or for the file to be unlinked, then calls done
-// once. A pass starts write-out of dirty pages only if flush is nil or returns
-// true; otherwise they stay cached until the file is unlinked or the kernel
-// writes them back. If a path can't be opened it returns the error, holds
-// nothing, and never calls done.
-func StartWriteback(paths []string, flush func() bool, done func()) error {
+// StartWriteback opens paths and monitors them in the background until their
+// dirty pages reach disk or the files are unlinked, then calls done once.
+// While flush returns false, dirty pages stay in page cache instead of being
+// pushed to disk; flush is re-checked on each poll or immediately when its
+// returned channel closes. A nil flush starts disk write-out right away. If any
+// path cannot be opened, StartWriteback returns the error without calling done.
+func StartWriteback(paths []string, flush func() (bool, <-chan struct{}), done func()) error {
 	return startWriteback(kernelPageCache{}, writebackPollDelays, paths, flush, done)
 }
 
@@ -158,7 +158,10 @@ func (kernelPageCache) writeOut(f *os.File) error {
 	return unix.SyncFileRange(int(f.Fd()), 0, 0, unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER)
 }
 
-func startWriteback(pc pageCache, delays []time.Duration, paths []string, flush func() bool, done func()) error {
+func startWriteback(pc pageCache, delays []time.Duration, paths []string, flush func() (bool, <-chan struct{}), done func()) error {
+	if flush == nil {
+		flush = func() (bool, <-chan struct{}) { return true, nil }
+	}
 	var files []*os.File
 	for _, p := range paths {
 		f, err := os.Open(p)
@@ -181,9 +184,21 @@ func startWriteback(pc pageCache, delays []time.Duration, paths []string, flush 
 				done()
 			}
 		}()
-		// poll instead of waiting on write-out, so a file unlinked meanwhile is
-		// closed and its dirty pages dropped instead of written back
-		for i := 0; pollWritebackFiles(pc, files, flush == nil || flush()); i++ {
+		// Keep dirty pages in cache while memory isn't tight, still closing any
+		// files that were unlinked or flushed by the kernel in the meantime.
+		for i := 0; ; i++ {
+			tight, recheck := flush()
+			if tight || !pollWritebackFiles(pc, files, false) {
+				break
+			}
+			select {
+			case <-time.After(delays[min(i, len(delays)-1)]):
+			case <-recheck:
+			}
+		}
+		// Memory is tight now: push remaining dirty pages to disk, starting from
+		// the fast initial poll interval.
+		for i := 0; pollWritebackFiles(pc, files, true); i++ {
 			time.Sleep(delays[min(i, len(delays)-1)])
 		}
 	}()
