@@ -170,6 +170,15 @@ Start with `capacity.json`, drill into `stats.jsonl`:
 | `spec.textproto`, `output.textproto` | exact Nighthawk input/output, for reproducibility |
 | `status.json`, `logs.txt` | run metadata + process logs |
 
+`achieved_rps`, `send_rate` and therefore `slo_max_rps` are computed from
+the exact stage duration. Runs recorded before this change used Nighthawk's
+own values, which round the duration down to whole seconds and so read
+high, never low: by up to 1/N for an N-second stage, so up to 10% on a 10 s
+adjusting step and up to 1.7% on the 60 s testing stage, and only when the
+stage overran its nominal length by a fraction of a second. Stage verdicts
+(`failed_thresholds`) were and are Nighthawk's and are unaffected. The old
+values stay in `stats.jsonl` under the `*_cpp` keys.
+
 ## Tuning
 
 ### Configuration knobs (the `nighthawk-ingress:` block)
