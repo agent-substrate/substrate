@@ -313,9 +313,9 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 		return nil, apierror.Internal("Actor %s holds a snapshot at generation %d but records no template it was built under", actorRef, snap.GetGeneration())
 	}
 
-	ateletConn, err := w.dialer.DialForAteletOnNode(snap.GetLocality())
+	ateletConn, err := w.dialAtelet(snap.GetLocality())
 	if err != nil {
-		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", snap.GetLocality(), err)
+		return nil, err
 	}
 	// The fidelity is the one recorded in the snapshot, not the current
 	// template's: a suspended actor can be repointed, and atelet requires the
