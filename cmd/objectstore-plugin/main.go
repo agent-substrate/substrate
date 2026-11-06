@@ -91,7 +91,7 @@ func main() {
 
 	ctx := context.Background()
 	serverboot.InitLogger()
-	if err := preview.Init(*previewFlags...); err != nil {
+	if _, err := preview.New(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 	if *socket == "" {

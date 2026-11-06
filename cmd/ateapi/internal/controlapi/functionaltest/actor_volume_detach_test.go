@@ -22,7 +22,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
@@ -65,7 +64,6 @@ func assertDetachedNodes(t *testing.T, plugin *attachFailVolumePlugin, step stri
 // returns worker-1's Worker name.
 func createSingleVolumeActor(t *testing.T, tc *testContext, ns, name string) string {
 	t.Helper()
-	preview.InitForTest(t, "ExternalVolumes")
 	volumes := []*ateapi.Volume{{
 		Name: "vol1",
 		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{

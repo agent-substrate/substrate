@@ -23,11 +23,16 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 )
 
+// testGates are the preview gates most tests run with. Most tests store
+// snapshots under their template's storageLocation, which is honored only with
+// the PerTemplateSnapshotLocation gate. Tests that need other gates build their
+// own with preview.NewForTest.
+var testGates *preview.Gates
+
 func TestMain(m *testing.M) {
-	// Most tests store snapshots under their template's storageLocation, which
-	// is honored only with this gate. Tests that need it off call
-	// preview.InitForTest.
-	if err := preview.Init(string(preview.GatePerTemplateSnapshotLocation)); err != nil {
+	var err error
+	testGates, err = preview.New(string(preview.GatePerTemplateSnapshotLocation))
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

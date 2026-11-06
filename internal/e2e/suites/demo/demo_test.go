@@ -1035,7 +1035,7 @@ func runtimeAttribute(rt *ateapi.ActorSandboxRuntime, key string) string {
 // with.
 func wantSnapshotLocation(t *testing.T, tmpl *ateapi.ActorTemplate) string {
 	t.Helper()
-	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+	if location := tmpl.GetSnapshotConfig().GetStorageLocation(); location != "" && e2e.PreviewEnabled(preview.GatePerTemplateSnapshotLocation) {
 		return location
 	}
 	env, err := e2e.CheckEnv("SNAPSHOT_LOCATION")
@@ -1060,7 +1060,7 @@ func assertSnapshotUnderLocation(t *testing.T, snapshotURI, location string) {
 	}
 	if got := uri.OwnerPrefix(); got != want {
 		t.Errorf("snapshot %q is stored under %q, want %q (PerTemplateSnapshotLocation preview gate enabled: %t)",
-			snapshotURI, got, want, preview.IsEnabled(preview.GatePerTemplateSnapshotLocation))
+			snapshotURI, got, want, e2e.PreviewEnabled(preview.GatePerTemplateSnapshotLocation))
 	}
 }
 

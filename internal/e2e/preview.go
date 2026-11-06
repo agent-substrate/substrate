@@ -32,6 +32,10 @@ import (
 // names, or "ALL" for all of them. Empty means none.
 var previewFlag string
 
+// installGates are the preview gates the install under test enabled, set by
+// initPreview.
+var installGates *preview.Gates
+
 // previewRequired reports whether --preview must be passed. A lane that
 // forgets it would otherwise skip every preview test and still pass, so CI
 // must declare its preview mode, even if only as empty.
@@ -50,25 +54,25 @@ func previewGates(value string, set bool) ([]string, error) {
 	}), nil
 }
 
-// initPreview sets the process-wide preview gates from --preview.
+// initPreview sets installGates from --preview.
 func initPreview() error {
-	gates, err := previewGates(previewFlag, pflag.CommandLine.Changed("preview"))
+	values, err := previewGates(previewFlag, pflag.CommandLine.Changed("preview"))
 	if err != nil {
 		return err
 	}
-	if err := preview.Init(gates...); err != nil {
+	gates, err := preview.New(values...)
+	if err != nil {
 		return fmt.Errorf("--preview: %w", err)
 	}
+	installGates = gates
 	return nil
 }
 
 // previewDialOptions returns the options for the ATE API client to opt in to
 // preview features, if the install under test enabled any.
 func previewDialOptions() []grpc.DialOption {
-	for _, enabled := range preview.AsMap() {
-		if enabled {
-			return preview.DialOptionsWithOptIn()
-		}
+	if len(installGates.Enabled()) > 0 {
+		return preview.DialOptionsWithOptIn()
 	}
 	return nil
 }
@@ -79,7 +83,12 @@ func previewDialOptions() []grpc.DialOption {
 // gate, so the gate-off lane stores snapshots under --snapshot-location.
 func SnapshotLocation(t testing.TB, prefix string) string {
 	t.Helper()
-	if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+	return snapshotLocation(t, installGates, prefix)
+}
+
+func snapshotLocation(t testing.TB, gates *preview.Gates, prefix string) string {
+	t.Helper()
+	if !gates.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
 		return ""
 	}
 	env, err := CheckEnv("BUCKET_NAME")
@@ -93,7 +102,12 @@ func SnapshotLocation(t testing.TB, prefix string) string {
 // a preview feature call it first, so a run without the gate skips them.
 func RequirePreview(t testing.TB, gate preview.Gate) {
 	t.Helper()
-	if !preview.IsEnabled(gate) {
+	if !PreviewEnabled(gate) {
 		t.Skipf("preview gate %q is not enabled (pass --preview)", gate)
 	}
+}
+
+// PreviewEnabled reports whether the install under test enabled gate.
+func PreviewEnabled(gate preview.Gate) bool {
+	return installGates.IsEnabled(gate)
 }

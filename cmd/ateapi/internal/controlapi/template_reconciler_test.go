@@ -688,7 +688,7 @@ func (c *goldenEgressControl) GetActorEgressPolicy(ctx context.Context, req *ate
 }
 
 func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
-	preview.InitForTest(t, "GoldenEgressPolicy")
+	gates := preview.NewForTest(t, "GoldenEgressPolicy")
 	for _, tt := range []struct {
 		name   string
 		policy *ateapi.EgressPolicyTemplate
@@ -699,9 +699,9 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence, nil, gates)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{gates: gates, impl: impl}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
@@ -738,7 +738,8 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 			r := newTestTemplateReconciler(persistence, control)
 			defer r.queue.ShutDown()
 			// Turning the gate off must not drop an existing template's policy.
-			preview.InitForTest(t)
+			impl.gates = preview.NewForTest(t)
+			svc.gates = impl.gates
 			for range 2 {
 				if _, err := r.reconcileOne(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl)); !errors.Is(err, stop) {
 					t.Fatalf("reconcile = %v, want to reach resume with the policy present", err)
@@ -749,14 +750,14 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 }
 
 func TestReconcileOne_GoldenEgressPolicyRecovery(t *testing.T) {
-	preview.InitForTest(t, "GoldenEgressPolicy")
+	gates := preview.NewForTest(t, "GoldenEgressPolicy")
 	for _, scenario := range []string{"create fails", "create response lost", "lookup fails", "conflicting policy"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence, nil, gates)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{gates: gates, impl: impl}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
@@ -1033,7 +1034,7 @@ func TestFail_TruncatesErrorMessage(t *testing.T) {
 	if !utf8.ValidString(msg) {
 		t.Error("error_message is not valid UTF-8")
 	}
-	op := apivalidation.MakeUpdateOp(ctx)
+	op := apivalidation.MakeUpdateOp()
 	if errs := apivalidation.Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapi.GoldenSnapshotStatus{}); len(errs) != 0 {
 		t.Errorf("stored status fails validation: %v", errs)
 	}

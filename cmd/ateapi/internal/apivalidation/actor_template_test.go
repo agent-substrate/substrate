@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -246,22 +247,22 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 				want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "snapshot_config", "storage_location"), "")}
 				wantWithPreview = map[string]field.ErrorList{"PerTemplateSnapshotLocation": tt.want, "ALL": tt.want}
 			}
-			assertValidate(t, func() field.ErrorList {
-				return ValidateCreateActorTemplateRequest(context.Background(), tt.req)
+			assertValidate(t, func(gates *preview.Gates) field.ErrorList {
+				return ValidateCreateActorTemplateRequest(context.Background(), gates, tt.req)
 			}, want, wantWithPreview)
 		})
 	}
 }
 
 func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
-	setPreviewForTest(t, "ALL")
+	gates := previewForTest(t, "ALL")
 	req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 		tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, StorageClassName: "fast-ssd"}}}}
 		tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots"
 	})}
 
 	t.Run("allowed", func(t *testing.T) {
-		assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), req), nil)
+		assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), gates, req), nil)
 	})
 	t.Run("restricted", func(t *testing.T) {
 		ctx := preview.ContextWithOptOut(context.Background())
@@ -269,7 +270,7 @@ func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
 			field.Forbidden(field.NewPath("actor_template", "volumes").Index(0).Child("external"), ""),
 			field.Forbidden(field.NewPath("actor_template", "snapshot_config", "storage_location"), ""),
 		}
-		assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), want)
+		assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, gates, req), want)
 	})
 }
 
@@ -314,7 +315,7 @@ func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocation(t *testi
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setPreviewForTest(t, tt.gates)
+			gates := previewForTest(t, tt.gates)
 			ctx := context.Background()
 			if tt.optOut {
 				ctx = preview.ContextWithOptOut(ctx)
@@ -324,7 +325,7 @@ func TestValidateCreateActorTemplateRequest_PerTemplateSnapshotLocation(t *testi
 				mutations = append(mutations, tt.mutate)
 			}
 			req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(mutations...)}
-			assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), tt.want)
+			assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, gates, req), tt.want)
 		})
 	}
 }
@@ -981,9 +982,10 @@ func TestValidateActorTemplate(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(tmpl)
 			}
-			assertValidate(t, func() field.ErrorList {
-				op := MakeCreateOp(context.Background())
-				return Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil)
+			assertValidate(t, func(gates *preview.Gates) field.ErrorList {
+				ctx := context.Background()
+				op := makeGatedOp(ctx, operation.Create, gates)
+				return Validate_ActorTemplate(ctx, op, nil, tmpl, nil)
 			}, tt.want, tt.wantWithPreview)
 		})
 	}
