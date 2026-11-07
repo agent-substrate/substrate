@@ -466,6 +466,9 @@ func main() {
 		bootID,
 	)
 	store.s = wmService
+	if imageProvider != nil {
+		go wmService.monitorImageProvider(ctx, *imageProviderSocket, nodepath.ActorsDir)
+	}
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
 
@@ -747,6 +750,10 @@ type Atelet struct {
 	imageProvider providerclient.Client
 	// imageKeychain resolves the registry credentials imageProvider gets.
 	imageKeychain authn.Keychain
+	// providerLeaseMu is held for reading while bundles take or return
+	// provider leases, and for writing while atelet reconciles the plugin's
+	// leases with the overlay specs.
+	providerLeaseMu sync.RWMutex
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
@@ -2295,6 +2302,8 @@ func (s *Atelet) prepareOCIBundles(
 		}
 	}
 
+	s.providerLeaseMu.RLock()
+	defer s.providerLeaseMu.RUnlock()
 	images := s.imageSource()
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -2342,6 +2351,8 @@ func (s *Atelet) releaseProviderLeases(ctx context.Context, actorUID string) {
 	if s.imageProvider == nil {
 		return
 	}
+	s.providerLeaseMu.RLock()
+	defer s.providerLeaseMu.RUnlock()
 	bundlesDir := ateletpath.OCIBundleDir(actorUID)
 	entries, err := os.ReadDir(bundlesDir)
 	if errors.Is(err, os.ErrNotExist) {
