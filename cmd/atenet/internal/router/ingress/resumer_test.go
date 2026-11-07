@@ -29,6 +29,11 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -368,7 +373,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			// Budget large enough for a few ~100ms-spaced retries before it elapses;
 			// the pool never frees up.
 			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 1500 * time.Millisecond}))
-			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 			// The client must see the meaningful capacity error, not a generic
 			// timeout: status.Code must unwrap through the budget-exhaustion marker.
 			if got := status.Code(err); got != codes.ResourceExhausted {
@@ -377,6 +382,9 @@ func TestActorResumer_Parking(t *testing.T) {
 			var budget *budgetExhaustedError
 			if !errors.As(err, &budget) {
 				t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+			}
+			if outcome != ResumeOutcomeBudgetExhausted {
+				t.Errorf("expected outcome %q after park budget elapsed, got %q", ResumeOutcomeBudgetExhausted, outcome)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -564,13 +572,16 @@ func TestActorResumer_Parking(t *testing.T) {
 			}
 
 			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
-			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 			if got := status.Code(err); got != codes.ResourceExhausted {
 				t.Errorf("expected ResourceExhausted after a late retryable failure, got %v (err=%v)", got, err)
 			}
 			var budgetErr *budgetExhaustedError
 			if !errors.As(err, &budgetErr) {
 				t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+			}
+			if outcome != ResumeOutcomeBudgetExhausted {
+				t.Errorf("expected outcome %q after a late retryable failure, got %q", ResumeOutcomeBudgetExhausted, outcome)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -872,8 +883,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
 				t.Fatalf("expected a 503 router-at-capacity denial, got %v", err)
 			}
-			if outcome != ResumeOutcomeUnknown {
-				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeUnknown)
+			if outcome != ResumeOutcomeParkedRejected {
+				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeParkedRejected)
 			}
 			// The caller was turned away at the transition: exactly one attempt
 			// had run.
@@ -937,8 +948,8 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
 				t.Fatalf("joiner: expected a 503 router-at-capacity denial, got %v", err)
 			}
-			if outcome != ResumeOutcomeUnknown {
-				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeUnknown)
+			if outcome != ResumeOutcomeParkedRejected {
+				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeParkedRejected)
 			}
 
 			close(proceed)
@@ -1121,5 +1132,93 @@ func TestActorResumer_FlightKeepsCallerTraceContext(t *testing.T) {
 	}
 	if !got.IsSampled() {
 		t.Error("flight RPC lost the caller's sampled flag")
+	}
+}
+
+// With parking disabled the fail-fast budget retries only Aborted conflicts and
+// parks nothing, so a spent budget must not report budget_exhausted.
+func TestCallerResult_BudgetExhaustedNeedsParking(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name        string
+		parkEnabled bool
+		want        ResumeOutcome
+	}{
+		{name: "parking enabled", parkEnabled: true, want: ResumeOutcomeBudgetExhausted},
+		{name: "parking disabled", parkEnabled: false, want: ResumeOutcomeUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newResumeActorFlight()
+			f.result = &resumeCallResult{err: &budgetExhaustedError{lastErr: status.Error(codes.Aborted, "another operation is in progress")}}
+			close(f.done)
+			_, outcome, err := f.callerResult(1, tt.parkEnabled)
+			if status.Code(err) != codes.Aborted {
+				t.Fatalf("err = %v, want the wrapped Aborted", err)
+			}
+			if outcome != tt.want {
+				t.Errorf("outcome = %q, want %q", outcome, tt.want)
+			}
+		})
+	}
+}
+
+// The ResumeActor span carries the resume outcome, and a failure also sets
+// error.type and an error status, so traces and the route metric agree.
+func TestResumeActor_SpanCarriesOutcome(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)))
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	for _, tt := range []struct {
+		name       string
+		resumeErr  error
+		wantResume string
+		wantType   string
+		wantStatus otelcodes.Code
+	}{
+		{name: "activation", wantResume: ateattr.RouterResumeTriggered, wantStatus: otelcodes.Unset},
+		{name: "failure", resumeErr: status.Error(codes.NotFound, "not found"), wantResume: ateattr.RouterResumeUnknown, wantType: "NotFound", wantStatus: otelcodes.Error},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					if tt.resumeErr != nil {
+						return nil, tt.resumeErr
+					}
+					return &ateapi.ResumeActorResponse{Resumed: true}, nil
+				},
+			}
+			actorRef := resources.ActorRef{Atespace: "spans", Name: tt.name}
+			_, _, _ = NewActorResumer(mock).ResumeActor(context.Background(), actorRef)
+
+			var span sdktrace.ReadOnlySpan
+			for _, s := range sr.Ended() {
+				if s.Name() != "ResumeActor" {
+					continue
+				}
+				for _, kv := range s.Attributes() {
+					if kv.Key == ateattr.ActorNameKey && kv.Value.AsString() == tt.name {
+						span = s
+					}
+				}
+			}
+			if span == nil {
+				t.Fatal("ResumeActor span not recorded")
+			}
+			attrs := map[attribute.Key]string{}
+			for _, kv := range span.Attributes() {
+				attrs[kv.Key] = kv.Value.AsString()
+			}
+			if got := attrs[ateattr.RouterResumeKey]; got != tt.wantResume {
+				t.Errorf("ate.router.resume = %q, want %q", got, tt.wantResume)
+			}
+			if got := attrs[ateattr.ErrorTypeKey]; got != tt.wantType {
+				t.Errorf("error.type = %q, want %q", got, tt.wantType)
+			}
+			if got := span.Status().Code; got != tt.wantStatus {
+				t.Errorf("status = %v, want %v", got, tt.wantStatus)
+			}
+		})
 	}
 }
