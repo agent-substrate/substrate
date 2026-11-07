@@ -83,6 +83,9 @@ func TestXdsManifestIsLoopbackOnly(t *testing.T) {
 		if cl.Name != "xds_cluster" {
 			continue
 		}
+		if cl.Type != "STATIC" {
+			t.Errorf("Envoy xds_cluster has type %q; it dials a loopback IP, so it must be STATIC", cl.Type)
+		}
 		for _, ep := range cl.LoadAssignment.Endpoints {
 			for _, lb := range ep.LbEndpoints {
 				sa := lb.Endpoint.Address.SocketAddress
