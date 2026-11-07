@@ -365,6 +365,11 @@ spec:
           mountPropagation: HostToContainer
         - name: objectstore-plugin
           mountPath: /run/objectstore-plugin
+        # The node's image provider plugin, if any, listens on
+        # /run/ate/image-provider.sock, atelet's --image-provider-socket
+        # default.
+        - name: image-provider
+          mountPath: /run/ate
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
         - name: servicedns-ca
@@ -393,6 +398,10 @@ spec:
       - name: ate-base
         hostPath:
           path: /var/lib/ate
+          type: DirectoryOrCreate
+      - name: image-provider
+        hostPath:
+          path: /run/ate
           type: DirectoryOrCreate
       # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
       - name: kubelet-plugins
