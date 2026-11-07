@@ -162,7 +162,7 @@ func (s *Server) processRequestHeaders(
 
 		var reqErr *ReqError
 		if errors.As(err, &reqErr) {
-			return ImmediateResponse(envoy_type.StatusCode(reqErr.StatusCode), reqErr.Error())
+			return reqErr.Response()
 		}
 		return ImmediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
 	}
