@@ -164,6 +164,22 @@ var Registry = []Setting{
 		Usage:   "Atenet ingress and egress dataplane: envoy or agentgateway",
 	},
 	{
+		// Set on the envoy dataplane's atenet-router container; see steps.configureAtenetRouter.
+		Key: "atenet.router.routeTimeout", Env: "ATE_ATENET_ROUTE_TIMEOUT", Flag: "atenet-route-timeout",
+		Kind:  KindDuration,
+		Usage: "The router's --route-timeout; unset keeps the router default (envoy dataplane only)",
+	},
+	{
+		Key: "atenet.router.parkedRequestBudget", Env: "ATE_ATENET_PARKED_REQUEST_BUDGET", Flag: "atenet-parked-request-budget",
+		Kind:  KindDuration,
+		Usage: "The router's --parked-request-budget; unset keeps the router default; the router pod's grace period grows with it (envoy dataplane only)",
+	},
+	{
+		Key: "atenet.router.extprocMaxRequests", Env: "ATE_ATENET_EXTPROC_MAX_REQUESTS", Flag: "atenet-extproc-max-requests",
+		Kind:  KindInt,
+		Usage: "The router's --extproc-max-requests, the circuit breaker on Envoy's ext_proc cluster; unset keeps the router's derivation (envoy dataplane only)",
+	},
+	{
 		Key: "atenet.egress.additionalExtprocService", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		Flag: "experimental-additional-egress-extproc-service", Kind: KindString,
 		Usage: "Run an additional ext_proc authorization filter served by NS/SVC:PORT " +
