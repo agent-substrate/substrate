@@ -43,27 +43,28 @@ func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
 	return field.ErrorList{field.Invalid(fldPath, name, fmt.Sprintf("must be %q", resources.SingletonName)).WithOrigin("custom=default")}
 }
 
-// MakeCreateOp returns an operation.Operation for a create operation. If ctx
-// has opted-out of preview features, the returned operation will have all
-// preview gates disabled (see preview.Header).
-func MakeCreateOp(ctx context.Context) operation.Operation {
-	return operation.Operation{Type: operation.Create, Options: optionsFor(ctx)}
+// MakeCreateOp returns an operation.Operation for a create operation. It
+// defines no preview gates, so it is only for messages without gated fields.
+func MakeCreateOp() operation.Operation {
+	return operation.Operation{Type: operation.Create}
 }
 
-// MakeUpdateOp returns an operation.Operation for an update operation. If ctx
-// has opted-out of preview features, the returned operation will have all
-// preview gates disabled (see preview.Header).
-func MakeUpdateOp(ctx context.Context) operation.Operation {
-	return operation.Operation{Type: operation.Update, Options: optionsFor(ctx)}
+// MakeUpdateOp returns an operation.Operation for an update operation. It
+// defines no preview gates, so it is only for messages without gated fields.
+func MakeUpdateOp() operation.Operation {
+	return operation.Operation{Type: operation.Update}
 }
 
-// optionsFor returns the preview gates enabled for ctx.
-// The returned map MUST NOT be modified.
-func optionsFor(ctx context.Context) map[string]bool {
+// makeGatedOp returns an operation.Operation of type typ with the preview
+// gates enabled in gates. If ctx has opted-out of preview features, all gates
+// are disabled (see preview.Header).
+func makeGatedOp(ctx context.Context, typ operation.Type, gates *preview.Gates) operation.Operation {
+	// The options map MUST NOT be modified.
+	options := gates.AsMap()
 	if preview.IsOptedOut(ctx) {
-		return preview.DisabledMap()
+		options = gates.DisabledMap()
 	}
-	return preview.AsMap()
+	return operation.Operation{Type: typ, Options: options}
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,

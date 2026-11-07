@@ -75,7 +75,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 				worker = "uid"
 			}
 
-			w := &ActorWorkflow{store: st}
+			w := &ActorWorkflow{gates: testGates, store: st}
 			got, err := w.CrashActorReportedByWorker(ctx, actorRef, uid, worker, "cloud-hypervisor exited")
 			if code := apierror.Code(err); code != tc.wantCode {
 				t.Fatalf("code = %v (err %v), want %v", code, err, tc.wantCode)

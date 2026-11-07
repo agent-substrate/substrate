@@ -122,7 +122,7 @@ func main() {
 		return
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	if err := preview.Init(*previewFlags...); err != nil {
+	if _, err := preview.New(*previewFlags...); err != nil {
 		slog.ErrorContext(ctx, "Invalid --preview", slog.Any("err", err))
 		os.Exit(1)
 	}

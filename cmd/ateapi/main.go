@@ -149,7 +149,8 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
 
-	if err := preview.Init(*previewFlags...); err != nil {
+	previewGates, err := preview.New(*previewFlags...)
+	if err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
 
@@ -173,7 +174,7 @@ func main() {
 		if err := resources.ValidateSnapshotLocation(*snapshotLocation); err != nil {
 			serverboot.Fatal(ctx, "Invalid --snapshot-location", err)
 		}
-	} else if !preview.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
+	} else if !previewGates.IsEnabled(preview.GatePerTemplateSnapshotLocation) {
 		serverboot.Fatal(ctx, "Missing --snapshot-location", fmt.Errorf("required unless the %s preview gate is enabled", preview.GatePerTemplateSnapshotLocation))
 	}
 
@@ -356,6 +357,7 @@ func main() {
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		*snapshotLocation,
+		previewGates,
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
@@ -363,7 +365,7 @@ func main() {
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's worker restarts.
-	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
+	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache, previewGates)
 	workerAssignmentReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}

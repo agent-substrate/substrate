@@ -23,6 +23,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/preview"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -54,10 +55,10 @@ type WorkerAssignmentReconciler struct {
 	queue       workqueue.TypedRateLimitingInterface[string]
 }
 
-func NewWorkerAssignmentReconciler(persistence workerWorkflowStore, workers workerWatcher) *WorkerAssignmentReconciler {
+func NewWorkerAssignmentReconciler(persistence workerWorkflowStore, workers workerWatcher, gates *preview.Gates) *WorkerAssignmentReconciler {
 	return &WorkerAssignmentReconciler{
 		persistence: persistence,
-		workflow:    NewWorkerWorkflow(persistence, nil),
+		workflow:    NewWorkerWorkflow(persistence, nil, gates),
 		workers:     workers,
 		queue:       workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 	}

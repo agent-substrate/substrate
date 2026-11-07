@@ -25,25 +25,25 @@ import (
 )
 
 func ValidateListWorkerActorAssignmentsRequest(ctx context.Context, req *ateapi.ListWorkerActorAssignmentsRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_ListWorkerActorAssignmentsRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListWorkersRequest(ctx context.Context, req *ateapi.ListWorkersRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_ListWorkersRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetWorkerRequest(ctx context.Context, req *ateapi.GetWorkerRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_GetWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateCreateWorkerRequest(ctx context.Context, req *ateapi.CreateWorkerRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_CreateWorkerRequest(ctx, op, nil, req, nil)
 }
 
@@ -53,7 +53,7 @@ func ValidateUpdateWorkerRequest(ctx context.Context, req *ateapi.UpdateWorkerRe
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
 }
 
@@ -61,33 +61,33 @@ func ValidateDeleteWorkerRequest(ctx context.Context, req *ateapi.DeleteWorkerRe
 	// Call the generated validation. The preconditions in options are each
 	// optional: a zero value waives that guard, so only non-zero values are
 	// checked for shape.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_DeleteWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDrainWorkerRequest(ctx context.Context, req *ateapi.DrainWorkerRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateAcquireWorkerEpochRequest(ctx context.Context, req *ateapi.AcquireWorkerEpochRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_AcquireWorkerEpochRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRegisterWorkerRequest(ctx context.Context, req *ateapi.RegisterWorkerRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_RegisterWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateSetWorkerSandboxRuntimesRequest(ctx context.Context, req *ateapi.SetWorkerSandboxRuntimesRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_SetWorkerSandboxRuntimesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapi.RequestActorSuspendRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
 }
 
@@ -124,7 +124,7 @@ func ValidateReportActorSnapshotStateRequest(ctx context.Context, req *ateapi.Re
 // against.
 func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.Worker, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := MakeUpdateOp(ctx)
+	op := MakeUpdateOp()
 	errs := Validate_Worker(ctx, op, fldPath, newVal, oldVal)
 	if requireStatus {
 		// Status is optional in the schema, but is actually required to be set
