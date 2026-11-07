@@ -35,11 +35,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Tuning knobs. Sized for actor cold-start where the HTTP server may take
-// a few seconds to bind; HTTPClient below is a var so tests can substitute
-// a transport that targets a test server's loopback address.
+// Tuning knobs. RequestTimeout must outlast a slow first answer from a
+// CPU-starved sandbox, or the probe never passes however long the window;
+// PollInterval is the pause between attempts while the server is not
+// listening yet. HTTPClient below is a var so tests can substitute a
+// transport that targets a test server's loopback address.
 const (
-	RequestTimeout   = 250 * time.Millisecond
+	RequestTimeout   = 5 * time.Second
 	PollInterval     = 1 * time.Millisecond
 	maxIdleConnsHost = 1
 )
