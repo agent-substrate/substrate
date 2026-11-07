@@ -131,7 +131,7 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts)
+	got, err := resolveImageVolumes(t.Context(), imageSource{cache: newImageVolumeStore(t)}, "actor-1", "app", volumes, mounts)
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, mounts)
+	got, err := resolveImageVolumes(t.Context(), imageSource{cache: newImageVolumeStore(t)}, "actor-1", "app", volumes, mounts)
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestResolveImageVolumes_UnmountedVolumeNotPulled(t *testing.T) {
 		Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"},
 	}}
 
-	got, err := resolveImageVolumes(t.Context(), newImageVolumeStore(t), volumes, nil)
+	got, err := resolveImageVolumes(t.Context(), imageSource{cache: newImageVolumeStore(t)}, "actor-1", "app", volumes, nil)
 	if err != nil {
 		t.Fatalf("resolveImageVolumes: %v", err)
 	}
