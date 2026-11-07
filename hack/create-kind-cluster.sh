@@ -92,15 +92,6 @@ apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
 - role: control-plane
 EOF
-if [ "${HAS_KVM}" = "1" ]; then
-  cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
-  # Bind-mount /dev/kvm into the node so micro-VM (kata + cloud-hypervisor)
-  # worker pods can use KVM.
-  extraMounts:
-  - hostPath: /dev/kvm
-    containerPath: /dev/kvm
-EOF
-fi
 cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
 # cmd/podcertcontroller depends on ClusterTrustBundle & PodCertificateRequest.
 # They are not enabled by default as of Kubernetes v1.36
@@ -203,7 +194,9 @@ for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); d
   docker exec "${node}" sysctl -e net.ipv6.conf.all.proxy_ndp=1
 done
 
-# 2.6 When KVM is available: make /dev/kvm usable inside the node. Micro-VM
+# 2.6 When KVM is available: make /dev/kvm usable inside the node. The privileged
+# node has its own /dev/kvm, so the chmod stays inside it (a bind mount of the
+# host's device would share the inode and leave it 666 on the host). Micro-VM
 # WorkerPools reach these nodes through the device atelet advertises for them,
 # so no node label is needed.
 if [ "${HAS_KVM}" = "1" ]; then
