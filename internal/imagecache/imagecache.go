@@ -302,6 +302,9 @@ type Image struct {
 	// LayerDirs are the absolute cached layer directories, bottom-most layer
 	// first. Each contains the unpacked tree under "fs/".
 	LayerDirs []string
+	// LeaseID is the image provider plugin's lease on LayerDirs. It is empty
+	// when the Store unpacked them.
+	LeaseID string
 }
 
 // imageRecord is the persisted form of a cached image, stored under
