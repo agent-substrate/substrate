@@ -53,7 +53,7 @@ The PR workflow (`.github/workflows/pr-workflow.yaml`) runs three checks:
 E2E matrix. Every one of them compiles this suite, so a build error here
 fails all three.
 
-Fast, no cluster needed. This is what CI's `run-tests` job does, minus the
+Fast, no cluster needed. This is what CI's `run-tests` and `verify` jobs do, minus the
 JUnit wrapping, and it also type-checks every E2E suite:
 
 ```
