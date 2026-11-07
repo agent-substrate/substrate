@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -238,6 +239,50 @@ func TestEnsureImage_TagPullAndDigestHit(t *testing.T) {
 	}
 	if !slices.Equal(img2.Config.Env, img.Config.Env) {
 		t.Errorf("cache hit Config.Env = %v, want %v", img2.Config.Env, img.Config.Env)
+	}
+}
+
+// CachedImage serves only digest refs already on disk, and never contacts the
+// registry.
+func TestCachedImage(t *testing.T) {
+	srv, host := newTestRegistry(t)
+	ref := host + "/test/app:latest"
+	pushImage(t, ref, v1.Config{}, layerFromEntries(t, []tarEntry{
+		{name: "app", typeflag: tar.TypeReg, body: "app"},
+	}))
+	store := newTestStore(t)
+	ctx := context.Background()
+	img, err := store.EnsureImage(ctx, ref)
+	if err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	srv.Close()
+
+	for _, tc := range []struct {
+		name    string
+		ref     string
+		wantHit bool
+	}{
+		{name: "cached digest", ref: host + "/test/app@" + img.Digest.String(), wantHit: true},
+		{name: "tag", ref: ref},
+		{name: "uncached digest", ref: host + "/test/app@sha256:" + strings.Repeat("0", 64)},
+		{name: "unparseable", ref: "Not A Ref"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := store.CachedImage(ctx, tc.ref)
+			if err != nil {
+				t.Fatalf("CachedImage(%q): %v", tc.ref, err)
+			}
+			if !tc.wantHit {
+				if got != nil {
+					t.Errorf("CachedImage(%q) = %+v, want nil", tc.ref, got)
+				}
+				return
+			}
+			if got == nil || !slices.Equal(got.LayerDirs, img.LayerDirs) {
+				t.Errorf("CachedImage(%q) = %+v, want LayerDirs %v", tc.ref, got, img.LayerDirs)
+			}
+		})
 	}
 }
 
