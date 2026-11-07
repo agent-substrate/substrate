@@ -1734,90 +1734,29 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	localDir := ateletpath.LocalSnapshotDir(actorUID, req.GetSnapshot().GetSnapshotUuid())
 	directLocal := false
 
-	// Fetch the snapshot manifest stored beside the checkpoint images
-	// first: it lists the checkpoint files to download and records the actor
-	// identity used to label the restore's metrics. Try the node-local
-	// checkpoint directory first and fall back to object storage if the local
-	// copy is absent or unusable.
-	tManifest := time.Now()
-	manifestDone := false
-	defer func() {
-		if !manifestDone {
-			dManifest = time.Since(tManifest)
-		}
-	}()
-	var sandboxRec *sandboxAssetsRecord
-	localRec, localErr := readLocalSnapshot(localDir, s.bootID)
-	durable := req.GetSnapshot().GetObject()
-	if localErr == nil {
-		directLocal = true
-		checkpointDir = localDir
-		sandboxRec = localRec
-	} else {
-		if errors.Is(localErr, errUnusableLocalSnapshot) {
-			// The next checkpoint or terminate prunes the unusable copy.
-			slog.WarnContext(ctx, "Local snapshot is unusable; restoring from object storage",
-				slog.String("local_dir", localDir), slog.Any("err", localErr))
-		}
-		manifest, err := s.fetchManifestCached(ctx, actor, durable.GetSnapshotUri(), snapshotCacheMode(durable, cacheModeLink))
-		if status.Code(err) == codes.NotFound {
-			return nil, apierror.NotFound("snapshot %q has no usable local copy and no uploaded copy: %w",
-				req.GetSnapshot().GetSnapshotUuid(), localErr)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
-		}
-	}
-
-	dManifest = time.Since(tManifest)
-	manifestDone = true
-
-	// The snapshot kind is recorded once the manifest has been read.
-	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
-
 	var registration *registeredActor
-	// Undo the Register if the restore fails. The errgroup join below happens
-	// before this defer can read registration, so the handoff is synchronized.
+	// Undo the Register if the restore fails. Every return below joins the
+	// errgroup before this defer can read registration, so the handoff is
+	// synchronized.
 	defer func() {
 		if err != nil && registration != nil {
 			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
 
-	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
-	// CONCURRENTLY. They are independent — only the final worker.RestoreWorkload
-	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
-	// fetch + image unpack hides whichever leg is shorter, and on a cold node
-	// (uncached assets + image, ~2.5s unpack) that overlap is large.
+	// Three legs: the sandbox assets + OCI bundle prep, the snapshot manifest
+	// fetch, and the memory snapshot download. Only the download needs the
+	// manifest, and only the final worker.RestoreWorkload needs all of them,
+	// so the prep leg starts first and overlaps both. On a cold node the
+	// image unpack is the longest of the three.
 	var assetPaths map[string]string
 	var containerSpecs []*ateworkerpb.ContainerSpec
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
 	var prepFailedPhase string
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		t := time.Now()
-		defer func() {
-			if !directLocal {
-				dDownload = time.Since(t)
-			}
-			downloadErr = err
-		}()
-		if directLocal {
-			// Restore in place from LocalSnapshotDir, whose files
-			// readLocalSnapshot checked; no staging.
-			return nil
-		}
-		// Cache-eligible only when the control plane declared the snapshot
-		// shared; how a hit is served depends on the sandbox class that
-		// consumes it, the one the request resolved, which is what runs the
-		// restored workload.
-		mode := snapshotCacheMode(durable, cacheModeFor(runtimeRec.SandboxClass))
-		return s.downloadExternalCheckpoint(gctx, actor, durable.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, mode)
-	})
+	prepCtx, cancelPrep := context.WithCancel(ctx)
+	defer cancelPrep()
+	g, gctx := errgroup.WithContext(prepCtx)
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
 		tAssets := time.Now()
@@ -1839,6 +1778,77 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			return err
 		}
 		return nil
+	})
+	// stopPrep cancels the prep leg after a manifest failure and waits for it,
+	// so its phases are reported as cut short.
+	stopPrep := func() {
+		cancelPrep()
+		if gErr := g.Wait(); gErr != nil {
+			dAssets, dBundles = assetsAfterCollateral(prepFailedPhase, dAssets), 0
+		}
+	}
+
+	// Fetch the snapshot manifest stored beside the checkpoint images: it
+	// lists the checkpoint files to download and records the actor identity
+	// used to label the restore's metrics. Try the node-local checkpoint
+	// directory first and fall back to object storage if the local copy is
+	// absent or unusable.
+	tManifest := time.Now()
+	var sandboxRec *sandboxAssetsRecord
+	localRec, localErr := readLocalSnapshot(localDir, s.bootID)
+	durable := req.GetSnapshot().GetObject()
+	if localErr == nil {
+		directLocal = true
+		checkpointDir = localDir
+		sandboxRec = localRec
+	} else {
+		if errors.Is(localErr, errUnusableLocalSnapshot) {
+			// The next checkpoint or terminate prunes the unusable copy.
+			slog.WarnContext(ctx, "Local snapshot is unusable; restoring from object storage",
+				slog.String("local_dir", localDir), slog.Any("err", localErr))
+		}
+		manifest, err := s.fetchManifestCached(ctx, actor, durable.GetSnapshotUri(), snapshotCacheMode(durable, cacheModeLink))
+		if err == nil {
+			sandboxRec, err = unmarshalSandboxRecord(manifest)
+			if err != nil {
+				err = fmt.Errorf("while unmarshalling sandbox record: %w", err)
+			}
+		} else if status.Code(err) == codes.NotFound {
+			err = apierror.NotFound("snapshot %q has no usable local copy and no uploaded copy: %w",
+				req.GetSnapshot().GetSnapshotUuid(), localErr)
+		} else {
+			err = fmt.Errorf("while fetching snapshot manifest: %w", err)
+		}
+		if err != nil {
+			dManifest = time.Since(tManifest)
+			stopPrep()
+			return nil, err
+		}
+	}
+	dManifest = time.Since(tManifest)
+
+	// The snapshot kind is recorded once the manifest has been read.
+	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
+
+	g.Go(func() (err error) {
+		t := time.Now()
+		defer func() {
+			if !directLocal {
+				dDownload = time.Since(t)
+			}
+			downloadErr = err
+		}()
+		if directLocal {
+			// Restore in place from LocalSnapshotDir, whose files
+			// readLocalSnapshot checked; no staging.
+			return nil
+		}
+		// Cache-eligible only when the control plane declared the snapshot
+		// shared; how a hit is served depends on the sandbox class that
+		// consumes it, the one the request resolved, which is what runs the
+		// restored workload.
+		mode := snapshotCacheMode(durable, cacheModeFor(runtimeRec.SandboxClass))
+		return s.downloadExternalCheckpoint(gctx, actor, durable.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, mode)
 	})
 	if err := g.Wait(); err != nil {
 		if isCollateral(err, downloadErr) {

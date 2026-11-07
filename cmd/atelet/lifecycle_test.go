@@ -712,6 +712,9 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("activation error = %v, want %q", err, tc.wantErr)
 			}
+			if tc.failure == "manifest" {
+				waitAssetFetch(t, s, rec)
+			}
 			if _, err := os.Lstat(ateletpath.SandboxAssetsStagingDir(actorUID)); !os.IsNotExist(err) {
 				t.Errorf("failed activation left the staging dir behind (lstat err = %v)", err)
 			}
@@ -1132,6 +1135,8 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 			// The object store is empty: nothing was ever uploaded.
 			s := newPluginHerder(t, &recordingObjectStorage{})
 			s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+			// Asset staging runs alongside the manifest fetch.
+			s.anonGCSClient = fakeObjectStorage{data: release.tarball}
 			advertiseRuntime(t, s, rec)
 			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
 				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID,
@@ -1140,6 +1145,7 @@ func TestRestoreWithoutUsableLocalCopy(t *testing.T) {
 				Spec:           &ateletpb.WorkloadSpec{},
 				Snapshot:       lifecycleSnapshot(actorUID, snapshotName, 1, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 			})
+			waitAssetFetch(t, s, rec)
 			if code := apierror.Code(err); code != codes.NotFound {
 				t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
 			}
@@ -2768,6 +2774,16 @@ func TestPromoteSnapshotAfterDetach(t *testing.T) {
 
 // testSandboxRecord is the record of a gVisor runtime whose only asset is
 // release, as the syncer plans it from a SandboxConfig version.
+// waitAssetFetch stages rec's assets again after a restore that failed on its
+// manifest. That joins the asset fetch the restore left running detached, so
+// the fetch cannot write into the cache while the test cleans it up.
+func waitAssetFetch(t *testing.T, s *Atelet, rec *sandboxAssetsRecord) {
+	t.Helper()
+	if _, err := s.ensureSandboxAssets(t.Context(), rec, t.TempDir()); err != nil {
+		t.Fatalf("staging sandbox assets: %v", err)
+	}
+}
+
 func testSandboxRecord(release gvisorTestRelease) *sandboxAssetsRecord {
 	return &sandboxAssetsRecord{
 		SandboxClass: "gvisor",
@@ -3814,6 +3830,7 @@ func TestRestoreLocalSnapshotFromEarlierBoot(t *testing.T) {
 		writeLocalSnapshot(t, localDir, baseManifest(), map[string]string{"checkpoint.img": "local-memory"})
 
 		_, err := s.Restore(t.Context(), restoreReq)
+		waitAssetFetch(t, s, sandboxRec)
 		if code := apierror.Code(err); code != codes.NotFound {
 			t.Fatalf("Restore error = %v (code %v), want NotFound", err, code)
 		}
