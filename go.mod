@@ -8,6 +8,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0
 	cloud.google.com/go/storage v1.62.1
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/ai-on-gke/image-provider-plugin v0.1.0
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.16
