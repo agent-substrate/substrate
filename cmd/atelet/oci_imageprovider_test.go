@@ -289,3 +289,48 @@ func TestPrepareOCIDirectoryProviderLeases(t *testing.T) {
 		t.Errorf("released %v, want %v", released, want)
 	}
 }
+
+// releaseProviderLeases returns the leases the actor's overlay specs record,
+// once.
+func TestReleaseProviderLeases(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "actor-1"
+	for name, spec := range map[string]*imagecache.OverlaySpec{
+		"app": {
+			ImageRef:    "registry.example/app:1",
+			ImageDigest: "sha256:aaa",
+			LeaseID:     "actor-1/app",
+			LowerDirs:   []string{"/plugin/layer-0"},
+			ImageVolumes: []imagecache.ImageVolumeOverlay{
+				{Name: "models", ImageRef: "registry.example/models:1", ImageDigest: "sha256:bbb", LeaseID: "actor-1/app/models", LowerDirs: []string{"/plugin/layer-1"}},
+				{Name: "tools", ImageRef: "registry.example/tools:1", StoreLayers: []string{"/cache/layer-2"}},
+			},
+		},
+		"sidecar": {ImageRef: "registry.example/sidecar:1", StoreLayers: []string{"/cache/layer-3"}},
+	} {
+		bundle := ateletpath.OCIBundlePath(actorUID, name)
+		if err := os.MkdirAll(bundle, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := imagecache.WriteSpec(bundle, spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := providermock.New("nydus")
+	s := &Atelet{imageProvider: provider}
+
+	s.releaseProviderLeases(t.Context(), actorUID)
+	var released []string
+	for _, r := range provider.ReleaseCalls {
+		released = append(released, r.LeaseID+"@"+r.ImageDigest)
+	}
+	slices.Sort(released)
+	if want := []string{"actor-1/app/models@sha256:bbb", "actor-1/app@sha256:aaa"}; !slices.Equal(released, want) {
+		t.Errorf("released %v, want %v", released, want)
+	}
+
+	s.releaseProviderLeases(t.Context(), actorUID)
+	if got := len(provider.ReleaseCalls); got != 2 {
+		t.Errorf("ReleaseImage calls = %d after a second release, want 2", got)
+	}
+}
