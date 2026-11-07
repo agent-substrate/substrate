@@ -1,0 +1,323 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package imageprovider.v1alpha1;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/ai-on-gke/image-provider-plugin/api/imageprovider/v1alpha1;imageprovider";
+
+// ImageProviderPlugin is a node-local gRPC service that an image provider
+// plugin serves on a Unix domain socket, for example to stream images with
+// Riptide or Nydus.
+//
+// Given an OCI image reference and resolved registry credentials, the plugin
+// prepares the image's layers on the host in the requested LayerForm and
+// returns them in order for container rootfs composition.
+//
+// The extensions fields exist only for customized forks of Substrate and
+// their plugins, which define their own message types. Upstream Substrate,
+// its client and its plugin library never set, read, store or forward them,
+// and promise nothing about them beyond wire compatibility. An upstream
+// receiver ignores them, so a fork must check that a response carries the
+// extensions it asked for. Every request and response has an extensions
+// field, and so does every list item that a fork may annotate.
+service ImageProviderPlugin {
+  // CanProvide reports whether the plugin and its provider are healthy and
+  // able to serve the given OCI image in the requested form.
+  rpc CanProvide(CanProvideRequest) returns (CanProvideResponse);
+
+  // PrepareImage prepares the image's layers in the requested form, takes the
+  // lease named by lease_id on the image, and returns the complete ordered
+  // list of read-only layers.
+  //
+  // If the plugin already holds the lease, PrepareImage returns the leased
+  // image again without taking another lease, so the caller can retry it.
+  // Reusing a lease_id for a different image_ref or form returns
+  // codes.AlreadyExists.
+  //
+  // If the plugin cannot serve the image, PrepareImage returns
+  // codes.FailedPrecondition so the caller can fall back to pulling the whole
+  // image itself.
+  rpc PrepareImage(PrepareImageRequest) returns (PrepareImageResponse);
+
+  // ReleaseImage releases a lease when a workload checkpoints, suspends or
+  // terminates. Releasing a lease the plugin does not hold succeeds, so the
+  // caller can retry it. The plugin may remove an image's layers once no
+  // lease on them is left.
+  rpc ReleaseImage(ReleaseImageRequest) returns (ReleaseImageResponse);
+
+  // ReconcileImages replaces the plugin's leases with the leases that
+  // surviving workloads still hold. The caller sends it after it restarts or
+  // finds the plugin socket. The plugin removes layers that no lease uses.
+  // The caller then calls RefreshAuth on each surviving lease. Until then, a
+  // plugin that reported AUTH_REFRESH_REQUIRED may have no credentials for
+  // it.
+  rpc ReconcileImages(ReconcileImagesRequest) returns (ReconcileImagesResponse);
+
+  // RefreshAuth replaces the registry credentials of a lease the plugin
+  // holds. The plugin uses the latest credentials it got for a lease. It
+  // returns codes.NotFound if the plugin does not hold the lease, and never
+  // takes a lease.
+  rpc RefreshAuth(RefreshAuthRequest) returns (RefreshAuthResponse);
+}
+
+// LayerForm is the form in which the plugin returns an image's layers.
+enum LayerForm {
+  // LAYER_FORM_UNSPECIFIED is treated as LAYER_FORM_DIRS.
+  LAYER_FORM_UNSPECIFIED = 0;
+
+  // LAYER_FORM_DIRS returns mounted read-only host directories that the
+  // caller stacks as overlayfs lowerdirs, with its own writable upper layer
+  // on top. Each directory is used as it is, so it marks whiteouts as
+  // overlayfs does: 0:0 character devices for whiteouts and
+  // trusted.overlay.opaque=y on opaque directories.
+  LAYER_FORM_DIRS = 1;
+
+  // LAYER_FORM_EROFS returns EROFS image files that a microVM maps over
+  // virtio-pmem with DAX and stacks inside the guest. Each file is
+  // uncompressed with a 4 KiB block size and stays unchanged while the image
+  // is leased.
+  LAYER_FORM_EROFS = 2;
+
+  // LAYER_FORM_ROOTFS returns one merged read-only root filesystem directory
+  // on the host.
+  LAYER_FORM_ROOTFS = 3;
+}
+
+// RegistryAuth carries resolved registry credentials, for example from a
+// kubelet credential provider or imagePullSecrets, for one image request.
+message RegistryAuth {
+  string username = 1;
+  string password = 2 [ debug_redact = true ];
+  string auth = 3 [ debug_redact = true ];
+  string server_address = 4;
+  string identity_token = 5 [ debug_redact = true ];
+  string registry_token = 6 [ debug_redact = true ];
+}
+
+message CanProvideRequest {
+  string image_ref = 1;
+  RegistryAuth auth = 2;
+
+  // form is the layer form the caller needs. A plugin that cannot
+  // produce it returns can_provide = false.
+  LayerForm form = 3;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 4;
+}
+
+// PluginState is the plugin's lifecycle state on the node. A caller treats
+// PLUGIN_STATE_UNSPECIFIED and values it does not know as "do not use the
+// plugin, and do not evict workloads".
+enum PluginState {
+  PLUGIN_STATE_UNSPECIFIED = 0;
+
+  // PLUGIN_STATE_SERVING means the plugin serves PrepareImage normally.
+  PLUGIN_STATE_SERVING = 1;
+
+  // PLUGIN_STATE_DRAINING means the plugin is shutting down, for example
+  // after SIGTERM during a RollingUpdate. It declines PrepareImage, and
+  // workloads holding its leases should cycle so it can unmount.
+  PLUGIN_STATE_DRAINING = 2;
+}
+
+// AuthRefresh says whether the caller must refresh a lease's registry
+// credentials while it holds the lease.
+enum AuthRefresh {
+  // AUTH_REFRESH_UNSPECIFIED is treated as AUTH_REFRESH_REQUIRED.
+  AUTH_REFRESH_UNSPECIFIED = 0;
+
+  // AUTH_REFRESH_NOT_NEEDED means the plugin no longer needs the caller's
+  // credentials for the lease, because it read the whole image or renews
+  // credentials itself.
+  AUTH_REFRESH_NOT_NEEDED = 1;
+
+  // AUTH_REFRESH_REQUIRED means the plugin keeps reading the registry with
+  // the caller's credentials. The caller calls RefreshAuth with fresh
+  // credentials before the old ones expire.
+  AUTH_REFRESH_REQUIRED = 2;
+}
+
+message CanProvideResponse {
+  // can_provide reports whether the plugin can serve this image.
+  bool can_provide = 1;
+  string provider_name = 2;
+
+  // state is the plugin's lifecycle state. It does not depend on the image.
+  PluginState state = 3;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 4;
+}
+
+message PrepareImageRequest {
+  string image_ref = 1;
+  RegistryAuth auth = 2;
+
+  // form is the layer form to return.
+  LayerForm form = 3;
+
+  // required_erofs_digests, if set, lists in order the EROFS image digests
+  // ("sha256:<hex>") that a snapshot being restored mapped. The plugin
+  // returns exactly these images or codes.FailedPrecondition. Only valid with
+  // LAYER_FORM_EROFS.
+  repeated string required_erofs_digests = 4;
+
+  // lease_id names the lease this call takes, for example from the workload
+  // UID and container name. It must not be empty.
+  string lease_id = 5;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 6;
+}
+
+// LayerDirs is the complete ordered list of read-only host layer directories,
+// bottom-most base layer first, matching OCI manifest order.
+message LayerDirs {
+  repeated string dirs = 1;
+}
+
+// ErofsLayer is one read-only EROFS image file on the host.
+message ErofsLayer {
+  // path is the host path of the image file.
+  string path = 1;
+
+  // digest is the sha256 of the file ("sha256:<hex>").
+  string digest = 2;
+}
+
+// ErofsLayers is the complete ordered list of EROFS image files, bottom-most
+// first. The plugin may return one file per OCI layer or fewer merged files.
+message ErofsLayers {
+  repeated ErofsLayer layers = 1;
+}
+
+// Rootfs is the image's merged read-only root filesystem on the host. It stays
+// mounted while the image is leased.
+message Rootfs {
+  // dir is the host path of the root filesystem directory.
+  string dir = 1;
+}
+
+message PrepareImageResponse {
+  // image_digest is the resolved OCI manifest digest ("sha256:<hex>").
+  string image_digest = 1;
+
+  // config_json is the JSON-encoded OCI v1.Config (entrypoint, cmd, env, user,
+  // working_dir) for the resolved image.
+  bytes config_json = 2;
+
+  // provider_name identifies the image provider, for example "riptide" or
+  // "nydus".
+  string provider_name = 3;
+
+  // layers holds the image in the requested form. A caller rejects a response
+  // whose layers do not match the form it asked for.
+  oneof layers {
+    // layer_dirs is set for LAYER_FORM_DIRS.
+    LayerDirs layer_dirs = 4;
+
+    // erofs_layers is set for LAYER_FORM_EROFS.
+    ErofsLayers erofs_layers = 5;
+
+    // rootfs is set for LAYER_FORM_ROOTFS.
+    Rootfs rootfs = 6;
+  }
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 7;
+
+  // auth_refresh says whether the caller must call RefreshAuth on the lease.
+  AuthRefresh auth_refresh = 8;
+}
+
+message ReleaseImageRequest {
+  // lease_id is the lease_id the caller passed to PrepareImage.
+  string lease_id = 1;
+
+  // image_digest and form are the lease's image_digest, as PrepareImage
+  // returned it, and form. A plugin that lost its leases, for example in a
+  // restart, uses them to find the layers. Otherwise, if they do not match
+  // the lease, ReleaseImage returns codes.InvalidArgument. An empty
+  // image_digest matches the lease, so a caller whose PrepareImage failed
+  // can still release a lease the plugin took.
+  string image_digest = 2;
+  LayerForm form = 3;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 4;
+}
+
+message ReleaseImageResponse {
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 1;
+}
+
+// ActiveLease is a lease that a surviving workload still holds. It names the
+// layers by digest rather than by host path, since the plugin owns the paths.
+message ActiveLease {
+  // lease_id is the lease_id the caller passed to PrepareImage.
+  string lease_id = 1;
+
+  string image_ref = 2;
+
+  // image_digest is the image_digest PrepareImage returned.
+  string image_digest = 3;
+
+  LayerForm form = 4;
+
+  // erofs_digests lists in order the digests of the EROFS image files that
+  // PrepareImage returned. The plugin keeps exactly these files. Only set
+  // for LAYER_FORM_EROFS.
+  repeated string erofs_digests = 5;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 6;
+}
+
+message ReconcileImagesRequest {
+  repeated ActiveLease active_leases = 1;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 2;
+}
+
+message ReconcileImagesResponse {
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 1;
+}
+
+message RefreshAuthRequest {
+  // lease_id is the lease_id the caller passed to PrepareImage.
+  string lease_id = 1;
+
+  // auth replaces the lease's registry credentials.
+  RegistryAuth auth = 2;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 3;
+}
+
+message RefreshAuthResponse {
+  // auth_refresh says whether the caller must keep calling RefreshAuth on
+  // the lease.
+  AuthRefresh auth_refresh = 1;
+
+  // extensions is for customized forks only. See the service comment.
+  repeated google.protobuf.Any extensions = 2;
+}
