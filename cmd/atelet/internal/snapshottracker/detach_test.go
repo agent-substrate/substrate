@@ -613,6 +613,51 @@ func TestTrackerFailedDetach(t *testing.T) {
 	})
 }
 
+// The uploads of Detach calls run at most as many at once as there are detach
+// workers. When a node fills up, every resume of an actor on it detaches first,
+// and uploads that all run at once time each other out.
+func TestTrackerDetachUploadsAFewAtATime(t *testing.T) {
+	store := newFakeSnapshotStore()
+	store.setBlocking(true)
+	useActorDir(t)
+	actors := []string{trackedActorUID, "actor-uid-2", "actor-uid-3"}
+	snapshots := []string{"s1", "s2", "s3"}
+	for _, uid := range actors[1:] {
+		for _, dir := range []string{ateletpath.ActorPath(uid), ateletpath.ActorSnapshotPath(uid)} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	tr := newStoreTracker(t, store, WithDetachWorkers(1))
+	for i, uid := range actors {
+		tr.CommitLocal(uid, testRef(snapshots[i], 1, tr.clock.Now()))
+	}
+	errs := make(chan error, len(actors))
+	for _, uid := range actors {
+		go func() {
+			_, err := tr.Detach(t.Context(), uid)
+			errs <- err
+		}()
+	}
+	// Each upload starts only once the one before it has ended.
+	for range actors {
+		waitStarted(t, store)
+		store.release <- nil
+	}
+	for range actors {
+		if err := <-errs; err != nil {
+			t.Errorf("detach: %v", err)
+		}
+	}
+	if got := store.mostInFlight(); got != 1 {
+		t.Errorf("uploads at once = %d, want 1", got)
+	}
+	if got := len(store.uploads()); got != len(actors) {
+		t.Errorf("uploads = %d, want %d", got, len(actors))
+	}
+}
+
 // A detach whose cleanup fails (e.g. because an external volume mount directory
 // is still populated) keeps LatestLocal and its local snapshot on disk, records
 // the snapshot as durable, and is retried: the retry finds the snapshot durable

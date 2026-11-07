@@ -125,6 +125,23 @@ func (t *Tracker) detachCallError(ctx context.Context, err error) error {
 	return err
 }
 
+// uploadForDetach uploads target for a detach. A Detach call's detach first
+// takes one of the detachUploads slots, so the uploads of a burst of calls run
+// a few at a time, like the background detaches; its upload timeout starts once
+// it has the slot. A background detach's upload is bounded by its worker.
+func (t *Tracker) uploadForDetach(ctx context.Context, actorUID string, target SnapshotRef, background bool) (bool, error) {
+	if !background {
+		select {
+		case t.detachUploads <- struct{}{}:
+			defer func() { <-t.detachUploads }()
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	uploaded, _, err := t.uploadSnapshot(ctx, actorUID, target, background)
+	return uploaded, err
+}
+
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
 // snapshots and its other files on this node except snapshot-state.json.
@@ -140,7 +157,7 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	if !alreadyDurable {
 		err = ctx.Err()
 		if err == nil {
-			uploaded, _, err = t.uploadSnapshot(ctx, actorUID, target, background)
+			uploaded, err = t.uploadForDetach(ctx, actorUID, target, background)
 		}
 		if err == nil {
 			t.updateOp(actorUID, func(a *actorSnapshots) {
