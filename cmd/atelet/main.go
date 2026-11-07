@@ -913,6 +913,9 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	}()
 
 	s.systemInfoVolumes.Deregister(actorUID)
+	// The reset deletes the overlay specs of an earlier activation, so release
+	// the provider leases they record first.
+	s.releaseProviderLeases(ctx, actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
 		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
@@ -934,8 +937,11 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	var registration *registeredActor
 	defer func() {
-		if err != nil && registration != nil {
-			s.systemInfoVolumes.DeregisterOwned(registration)
+		if err != nil {
+			if registration != nil {
+				s.systemInfoVolumes.DeregisterOwned(registration)
+			}
+			s.releaseProviderLeases(ctx, actorUID)
 		}
 	}()
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
@@ -1274,6 +1280,8 @@ func (s *Atelet) cleanUpAfterCheckpoint(ctx context.Context, req *ateletpb.Check
 		slog.WarnContext(ctx, "failed to prune superseded local checkpoints",
 			slog.Any("actor", resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}), slog.Any("err", err))
 	}
+
+	s.releaseProviderLeases(ctx, actorUID)
 
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return fmt.Errorf("while unmounting external volumes: %w", err)
@@ -1727,6 +1735,9 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// Canceled so ate-api-server retries instead of crashing the actor. A
 	// failure here points at atelet or the node's disk, not the actor.
 	s.systemInfoVolumes.Deregister(actorUID)
+	// The reset deletes the overlay specs of an earlier activation, so release
+	// the provider leases they record first.
+	s.releaseProviderLeases(ctx, actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
 		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
 	}
@@ -1805,11 +1816,15 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
 
 	var registration *registeredActor
-	// Undo the Register if the restore fails. The errgroup join below happens
-	// before this defer can read registration, so the handoff is synchronized.
+	// Undo the Register and return the image provider leases if the restore
+	// fails. Every return below joins the errgroup before this defer can read
+	// registration or the bundles, so the handoff is synchronized.
 	defer func() {
-		if err != nil && registration != nil {
-			s.systemInfoVolumes.DeregisterOwned(registration)
+		if err != nil {
+			if registration != nil {
+				s.systemInfoVolumes.DeregisterOwned(registration)
+			}
+			s.releaseProviderLeases(ctx, actorUID)
 		}
 	}()
 
@@ -2087,6 +2102,7 @@ func (s *Atelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) 
 
 	// Deregister after teardown succeeds
 	s.systemInfoVolumes.Deregister(actorUID)
+	s.releaseProviderLeases(ctx, actorUID)
 
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
@@ -2317,6 +2333,53 @@ func (s *Atelet) prepareOCIBundles(
 		return nil, err
 	}
 	return containerSpecs, nil
+}
+
+// releaseProviderLeases returns the image provider leases that the overlay
+// specs of actorUID's bundles record, and removes the specs so that a second
+// call releases nothing. The actor's workload must no longer use its rootfs.
+func (s *Atelet) releaseProviderLeases(ctx context.Context, actorUID string) {
+	if s.imageProvider == nil {
+		return
+	}
+	bundlesDir := ateletpath.OCIBundleDir(actorUID)
+	entries, err := os.ReadDir(bundlesDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "Failed to list bundles to release image provider leases",
+			slog.String("actor_uid", actorUID), slog.Any("err", err))
+		return
+	}
+	images := s.imageSource()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bundle := filepath.Join(bundlesDir, e.Name())
+		spec, err := imagecache.ReadSpec(bundle)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to read overlay spec to release image provider leases",
+				slog.String("bundle", bundle), slog.Any("err", err))
+			continue
+		}
+		if spec == nil {
+			continue
+		}
+		if spec.LeaseID != "" {
+			images.release(ctx, spec.LeaseID, spec.ImageDigest)
+		}
+		for _, v := range spec.ImageVolumes {
+			if v.LeaseID != "" {
+				images.release(ctx, v.LeaseID, v.ImageDigest)
+			}
+		}
+		if err := os.Remove(filepath.Join(bundle, imagecache.OverlaySpecFileName)); err != nil {
+			slog.WarnContext(ctx, "Failed to remove overlay spec after releasing its leases",
+				slog.String("bundle", bundle), slog.Any("err", err))
+		}
+	}
 }
 
 func (s *Atelet) imageSource() imageSource {
