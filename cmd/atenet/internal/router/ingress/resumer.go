@@ -57,7 +57,7 @@ func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff 
 
 // budgetExhaustedError marks a resume that was still blocked on a retryable
 // condition (e.g. no worker has room) when the parking budget elapsed.
-// It wraps the last retryable error, so the HTTP boundary still maps the
+// It wraps the error the request parked on, so the HTTP boundary still maps the
 // underlying gRPC status faithfully (503 with the capacity message), while the
 // parking metrics can report budget exhaustion as its own outcome.
 type budgetExhaustedError struct{ lastErr error }
@@ -233,10 +233,15 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 		}
 
 		if r.retryable(err) {
-			// A caller that is shed reads err to pick its outcome.
-			f.signalRetrying(err)
-			lastRetryErr = err // remember it in case the budget elapses
-			return false, nil  // park: retry until the budget elapses
+			// An Aborted conflict with another operation on the actor, such as
+			// atelet reporting a snapshot upload, is momentary and is not why a
+			// request parks. The capacity or availability error stays the error
+			// a shed or budget-exhausted caller gets, once the flight has seen one.
+			if lastRetryErr == nil || status.Code(err) != codes.Aborted {
+				lastRetryErr = err
+			}
+			f.signalRetrying(lastRetryErr)
+			return false, nil // park: retry until the budget elapses
 		}
 		// Keep the final error even if the retry budget has expired.
 		lastRetryErr = nil

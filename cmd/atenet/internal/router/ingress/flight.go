@@ -36,7 +36,7 @@ type resumeActorFlight struct {
 	// retryingSignaled guards the single close of retrying; only the flight
 	// goroutine touches it.
 	retryingSignaled bool
-	// lastRetryErr is the latest retryable failure. The flight goroutine
+	// lastRetryErr is the failure the flight is parked on. The flight goroutine
 	// writes it and a caller that is shed reads it.
 	lastRetryErr atomic.Pointer[error]
 	done         chan struct{}
@@ -47,9 +47,9 @@ func newResumeActorFlight() *resumeActorFlight {
 	return &resumeActorFlight{retrying: make(chan struct{}), done: make(chan struct{})}
 }
 
-// signalRetrying records err as the latest retryable failure, then closes
-// retrying. The store comes first, so a caller that sees retrying closed also
-// sees err. It is idempotent; only the flight goroutine calls it.
+// signalRetrying records err as the failure the flight is parked on, then
+// closes retrying. The store comes first, so a caller that sees retrying closed
+// also sees err. It is idempotent; only the flight goroutine calls it.
 func (f *resumeActorFlight) signalRetrying(err error) {
 	f.lastRetryErr.Store(&err)
 	if f.retryingSignaled {
@@ -59,7 +59,7 @@ func (f *resumeActorFlight) signalRetrying(err error) {
 	close(f.retrying)
 }
 
-// retryErr returns the latest retryable failure, or nil if there is none.
+// retryErr returns the failure the flight is parked on, or nil if there is none.
 func (f *resumeActorFlight) retryErr() error {
 	if p := f.lastRetryErr.Load(); p != nil {
 		return *p
