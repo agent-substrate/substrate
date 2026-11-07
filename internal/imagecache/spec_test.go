@@ -21,13 +21,23 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestOverlaySpecRoundTrip(t *testing.T) {
 	bundle := t.TempDir()
 	in := &OverlaySpec{
+		ImageRef:  "registry.example/app:1",
+		LeaseID:   "actor-1/app",
 		Layers:    []string{"/cache/layers/sha256/aaa", "/cache/layers/sha256/bbb"},
 		ExtraDirs: []string{"/run/ate"},
+		ImageVolumes: []ImageVolumeOverlay{{
+			Name:     "models",
+			ImageRef: "registry.example/models:1",
+			LeaseID:  "actor-1/app/models",
+			Layers:   []string{"/cache/layers/sha256/ccc"},
+		}},
 	}
 	if err := WriteSpec(bundle, in); err != nil {
 		t.Fatalf("WriteSpec: %v", err)
@@ -40,11 +50,8 @@ func TestOverlaySpecRoundTrip(t *testing.T) {
 		t.Fatalf("ReadSpec returned nil for a bundle with a spec")
 		return // unreachable; makes the non-nil-ness explicit to static analysis
 	}
-	if !slices.Equal(out.Layers, in.Layers) {
-		t.Errorf("Layers = %v, want %v", out.Layers, in.Layers)
-	}
-	if !slices.Equal(out.ExtraDirs, in.ExtraDirs) {
-		t.Errorf("ExtraDirs = %v, want %v", out.ExtraDirs, in.ExtraDirs)
+	if diff := cmp.Diff(in, out); diff != "" {
+		t.Errorf("ReadSpec mismatch (-want +got):\n%s", diff)
 	}
 }
 
