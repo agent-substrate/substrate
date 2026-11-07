@@ -15,16 +15,24 @@
 package main
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	providerclient "github.com/ai-on-gke/image-provider-plugin/client"
 	providermock "github.com/ai-on-gke/image-provider-plugin/client/mock"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 )
 
 // writeTestBundle writes spec as the overlay spec of actorUID's container
@@ -143,5 +151,89 @@ func TestNewProviderSocket(t *testing.T) {
 		if got := newProviderSocket(tc.last, tc.cur); got != tc.want {
 			t.Errorf("%s: newProviderSocket = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+type fakeStatsWorkerServer struct {
+	ateworkerpb.UnimplementedWorkerServer
+	samples []*ateworkerpb.WorkloadStatsSample
+}
+
+func (f *fakeStatsWorkerServer) GetActiveWorkloadStats(context.Context, *ateworkerpb.GetActiveWorkloadStatsRequest) (*ateworkerpb.GetActiveWorkloadStatsResponse, error) {
+	return &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: f.samples}, nil
+}
+
+// fakeSuspendWorkers records RequestActorSuspend calls and fails the first
+// failFirst of them.
+type fakeSuspendWorkers struct {
+	ateapi.WorkerServiceClient
+	mu        sync.Mutex
+	failFirst int
+	requests  []*ateapi.RequestActorSuspendRequest
+}
+
+func (f *fakeSuspendWorkers) RequestActorSuspend(_ context.Context, req *ateapi.RequestActorSuspendRequest, _ ...grpc.CallOption) (*ateapi.RequestActorSuspendResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, req)
+	if len(f.requests) <= f.failFirst {
+		return nil, status.Error(codes.Unavailable, "control plane unavailable")
+	}
+	return &ateapi.RequestActorSuspendResponse{}, nil
+}
+
+// Only running actors that hold a lease are suspended, once each, and a
+// failed request is retried.
+func TestSuspendStreamedActors(t *testing.T) {
+	actorsDir, workersDir := t.TempDir(), t.TempDir()
+	writeTestBundle(t, actorsDir, "actor-streamed", "main", &imagecache.OverlaySpec{
+		ImageRef: "registry.example/app:1", StoreLayers: []string{"/cache/aaa"},
+		ImageVolumes: []imagecache.ImageVolumeOverlay{{Name: "tools", ImageRef: "registry.example/tools:1", LeaseID: "actor-streamed/main/tools", LowerDirs: []string{"/plugin/0"}}},
+	})
+	writeTestBundle(t, actorsDir, "actor-local", "main", &imagecache.OverlaySpec{
+		ImageRef: "registry.example/local:1", StoreLayers: []string{"/cache/ccc"},
+	})
+
+	const podUID = "worker-pod-1"
+	if err := os.MkdirAll(filepath.Join(workersDir, podUID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Unix socket paths are short, so the socket goes in its own temp dir.
+	sockDir, err := os.MkdirTemp("", "worker-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "w.sock")
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	ateworkerpb.RegisterWorkerServer(srv, &fakeStatsWorkerServer{samples: []*ateworkerpb.WorkloadStatsSample{
+		{Atespace: "ns", ActorName: "streamed", ActorUid: "actor-streamed"},
+		{Atespace: "ns", ActorName: "local", ActorUid: "actor-local"},
+	}})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	origSocketPath := workerSocketPath
+	workerSocketPath = func(string) string { return sock }
+	t.Cleanup(func() { workerSocketPath = origSocketPath })
+
+	workers := &fakeSuspendWorkers{failFirst: 1}
+	s := &Atelet{workerDialer: newWorkerDialer(1), workers: workers, drainSuspended: map[string]bool{}}
+
+	for i, want := range []int{0, 1, 0} {
+		if got := s.suspendStreamedActors(t.Context(), actorsDir, workersDir); got != want {
+			t.Errorf("suspendStreamedActors call %d = %d, want %d", i, got, want)
+		}
+	}
+	want := &ateapi.RequestActorSuspendRequest{
+		Worker:   &ateapi.ObjectRef{Name: podUID},
+		Actor:    &ateapi.ObjectRef{Atespace: "ns", Name: "streamed"},
+		ActorUid: "actor-streamed",
+	}
+	if diff := cmp.Diff([]*ateapi.RequestActorSuspendRequest{want, want}, workers.requests, protocmp.Transform()); diff != "" {
+		t.Errorf("RequestActorSuspend calls mismatch (-want +got):\n%s", diff)
 	}
 }

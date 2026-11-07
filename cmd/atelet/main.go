@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -467,7 +468,7 @@ func main() {
 	)
 	store.s = wmService
 	if imageProvider != nil {
-		go wmService.monitorImageProvider(ctx, *imageProviderSocket, nodepath.ActorsDir)
+		go wmService.monitorImageProvider(ctx, *imageProviderSocket, nodepath.ActorsDir, nodepath.WorkersDir())
 	}
 	snapshots.Start()
 	go systemInfoVolumes.run(ctx)
@@ -752,6 +753,14 @@ type Atelet struct {
 	// providerAuth is what the plugin reported in auth_refresh for each
 	// provider lease.
 	providerAuth providerAuthModes
+	// drainSuspended is the actors suspendStreamedActors has asked the
+	// control plane to suspend, guarded by drainMu.
+	drainMu        sync.Mutex
+	drainSuspended map[string]bool
+	// drainSuspending is set while a suspendStreamedActors call runs.
+	drainSuspending atomic.Bool
+	// workers is the control plane's WorkerService.
+	workers ateapi.WorkerServiceClient
 	// sandboxAssetCache holds every sandbox asset on the node once; actors get hard
 	// links into their own directories (see ensureSandboxAssets).
 	sandboxAssetCache *filecache.Store
@@ -859,6 +868,8 @@ func NewService(
 		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
 		snapshots:             snapshots,
+		drainSuspended:        map[string]bool{},
+		workers:               workers,
 		workerActorJWTs:       newWorkerActorJWTs(workers),
 		bootID:                bootID,
 		checkpointTimeout:     defaultCheckpointTimeout,
