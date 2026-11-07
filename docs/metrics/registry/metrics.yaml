@@ -586,6 +586,35 @@ groups:
               value: timeout
               brief: The time limit of the caller ended.
 
+  - id: registry.ate.imageprovider
+    type: attribute_group
+    brief: The labels of the image provider plugin on the node.
+    attributes:
+      - id: ate.imageprovider.outcome
+        stability: development
+        brief: The result of one request to prepare an image's layers.
+        type:
+          members:
+            - id: success
+              stability: development
+              value: success
+              brief: The image provider plugin prepared the layers.
+            - id: fallback
+              stability: development
+              value: fallback
+              brief: >
+                The plugin declined the image or failed. atelet used the image
+                cache instead.
+            - id: error
+              stability: development
+              value: error
+              brief: The plugin and the image cache both failed.
+      - id: ate.imageprovider.provider
+        stability: development
+        brief: The name of the image provider plugin.
+        type: string
+        examples: [nydus, riptide]
+
   - id: registry.ate.filecache
     type: attribute_group
     brief: >
@@ -1426,6 +1455,70 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.imageprovider.requests
+    type: metric
+    metric_name: ate.imageprovider.requests
+    instrument: counter
+    unit: "{request}"
+    stability: development
+    brief: The number of requests to the image provider plugin on the node, by provider and outcome.
+    note: >
+      A high fallback count means the images have no artifacts the plugin can
+      serve, or the plugin is unavailable.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [traffic, errors]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: Does the image provider plugin serve the container images?
+    attributes:
+      - ref: ate.imageprovider.provider
+        requirement_level: required
+      - ref: ate.imageprovider.outcome
+        requirement_level: required
+
+  - id: metric.ate.imageprovider.duration
+    type: metric
+    metric_name: ate.imageprovider.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time the image provider plugin takes to prepare an image's layers on the node.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: How long does the image provider plugin take to prepare an image?
+    attributes:
+      - ref: ate.imageprovider.provider
+        requirement_level: required
+      - ref: ate.imageprovider.outcome
+        requirement_level: required
+
+  - id: metric.ate.imageprovider.auth_refresh.failures
+    type: metric
+    metric_name: ate.imageprovider.auth_refresh.failures
+    instrument: counter
+    unit: "{failure}"
+    stability: development
+    brief: >
+      The number of failed refreshes of the registry credentials of image
+      provider leases on the node.
+    note: >
+      atelet refreshes the leases of a lazily loading plugin every minute. A
+      rising count means the plugin will read the registry with expired
+      credentials once the old ones run out.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [errors]
+        code_anchor: cmd/atelet/metrics.go
+        cuj: Does the image provider plugin keep valid registry credentials?
+    attributes:
+      - ref: ate.imageprovider.provider
+        requirement_level: required
 
   - id: metric.ate.filecache.size
     type: metric
