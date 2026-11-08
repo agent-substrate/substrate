@@ -237,7 +237,23 @@ func TestValidateActorUpdate(t *testing.T) {
 		oldVal: validInput(),
 		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Name = "invalid value" })),
 		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable")},
-
+	}, {
+		name:   "unchanged actor.metadata.annotations",
+		oldVal: validInput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+	}, {
+		name:   "change actor.metadata.annotations",
+		oldVal: validInput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v1"} })),
+		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v2"} })),
+	}, {
+		name:   "clear actor.metadata.annotations",
+		oldVal: validInput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"k": "v"} })),
+		newVal: validOutput(),
+	}, {
+		name:   "invalid actor.metadata.annotations on update",
+		oldVal: validInput(),
+		newVal: validOutput(withMetadata(func(m *ateapi.ResourceMetadata) { m.Annotations = map[string]string{"ate.dev/internal": "v"} })),
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "annotations"), nil, "")},
 	}, {
 		name:   "change actor.actor_template is allowed",
 		oldVal: validInput(withActorTemplate("as1", "nm1")),
