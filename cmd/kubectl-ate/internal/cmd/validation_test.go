@@ -429,9 +429,9 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			wantUsageLine: "kubectl-ate logs actor <actor-name> [flags]",
 		},
 		{
-			name:          "update actor without --template or --worker-selector",
+			name:          "update actor without --template, --worker-selector, or --annotations",
 			args:          []string{"update", "actor", "my-actor", "-a", "space-1"},
-			wantErrorLine: "Error: at least one of --template or --worker-selector is required",
+			wantErrorLine: "Error: at least one of --template, --worker-selector, or --annotations is required",
 			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
 		},
 		{
@@ -444,6 +444,12 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			name:          "update actor with invalid --worker-selector",
 			args:          []string{"update", "actor", "my-actor", "-a", "space-1", "--worker-selector", "===bad"},
 			wantErrorLine: `Error: invalid worker selector "===bad"`,
+			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
+		},
+		{
+			name:          "update actor with invalid --annotations",
+			args:          []string{"update", "actor", "my-actor", "-a", "space-1", "--annotations", "noequals"},
+			wantErrorLine: `Error: invalid annotations "noequals"`,
 			wantUsageLine: "kubectl-ate update actor <actor-name> [flags]",
 		},
 		{
