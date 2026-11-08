@@ -522,6 +522,48 @@ func TestXdsServer_AccessLogsOmitQueryString(t *testing.T) {
 	}
 }
 
+// Every HCM serves client-controlled requests, either directly or from inside
+// a client's CONNECT tunnel.
+func TestXdsServer_ClientFacingHCMLimits(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(50053, "127.0.0.1")
+	server.SetConnectTLSPort(8444)
+	setIngressTLS(server)
+
+	var got []string
+	for name, l := range snapshotListeners(t, server) {
+		for _, fc := range l.GetFilterChains() {
+			for _, f := range fc.GetFilters() {
+				if f.GetName() != "envoy.filters.network.http_connection_manager" {
+					continue
+				}
+				got = append(got, name)
+				hcm := &hcmv3.HttpConnectionManager{}
+				if err := f.GetTypedConfig().UnmarshalTo(hcm); err != nil {
+					t.Fatalf("listener %s: unmarshal HCM: %v", name, err)
+				}
+				h2 := hcm.GetHttp2ProtocolOptions()
+				if want := name == "connect_terminate_tls"; h2.GetAllowConnect() != want {
+					t.Errorf("listener %s: allow_connect = %v, want %v", name, h2.GetAllowConnect(), want)
+				}
+				if v := h2.GetMaxConcurrentStreams().GetValue(); v != downstreamMaxConcurrentStreams {
+					t.Errorf("listener %s: max_concurrent_streams = %d, want %d", name, v, downstreamMaxConcurrentStreams)
+				}
+				if v := h2.GetInitialStreamWindowSize().GetValue(); v != downstreamInitialWindowSize {
+					t.Errorf("listener %s: initial_stream_window_size = %d, want %d", name, v, downstreamInitialWindowSize)
+				}
+				if v := h2.GetInitialConnectionWindowSize().GetValue(); v != downstreamInitialWindowSize {
+					t.Errorf("listener %s: initial_connection_window_size = %d, want %d", name, v, downstreamInitialWindowSize)
+				}
+			}
+		}
+	}
+	slices.Sort(got)
+	if want := []string{"connect_terminate_tls", IngressHTTPSListener, MainInternalName}; !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("HCM listeners = %v, want %v", got, want)
+	}
+}
+
 func TestXdsServer_Serve_Shutdown(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(50053, "127.0.0.1")
