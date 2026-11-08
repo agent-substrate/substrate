@@ -133,6 +133,127 @@ func TestReuseCheckpointDataSnapshotFilesByFidelity(t *testing.T) {
 	}
 }
 
+// TestReuseCheckpointSnapshotNames checks reuse against the snapshot file
+// names atelet accepts. A symlink or a name that leaves the checkpoint
+// directory must not be returned: atelet rejects that list and the completion
+// marker would otherwise keep the same result on retry.
+func TestReuseCheckpointSnapshotNames(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T) (dir string, resp *ateworkerpb.CheckpointWorkloadResponse)
+		reuse   bool
+	}{
+		{
+			name: "regular file",
+			prepare: func(t *testing.T) (string, *ateworkerpb.CheckpointWorkloadResponse) {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, "checkpoint.img"), []byte("snapshot-bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return dir, &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: []string{"checkpoint.img"}}
+			},
+			reuse: true,
+		},
+		{
+			name: "fs subdirectory file",
+			prepare: func(t *testing.T) (string, *ateworkerpb.CheckpointWorkloadResponse) {
+				dir := t.TempDir()
+				if err := os.Mkdir(filepath.Join(dir, "fs"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "fs", "fscheckpoint.pb"), []byte("data"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return dir, &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: []string{"fs/fscheckpoint.pb"}}
+			},
+			reuse: true,
+		},
+		{
+			name: "symlink",
+			prepare: func(t *testing.T) (string, *ateworkerpb.CheckpointWorkloadResponse) {
+				parent := t.TempDir()
+				dir := filepath.Join(parent, "checkpoint")
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(parent, "outside")
+				if err := os.WriteFile(target, []byte("snapshot-bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(dir, "checkpoint.img")); err != nil {
+					t.Fatal(err)
+				}
+				return dir, &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: []string{"checkpoint.img"}}
+			},
+		},
+		{
+			name: "symlink directory",
+			prepare: func(t *testing.T) (string, *ateworkerpb.CheckpointWorkloadResponse) {
+				parent := t.TempDir()
+				outside := filepath.Join(parent, "outside")
+				if err := os.Mkdir(outside, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(outside, "esc"), []byte("snapshot-bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(parent, "checkpoint")
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(dir, "fs")); err != nil {
+					t.Fatal(err)
+				}
+				return dir, &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: []string{"fs/esc"}}
+			},
+		},
+		{
+			name: "escaping name",
+			prepare: func(t *testing.T) (string, *ateworkerpb.CheckpointWorkloadResponse) {
+				parent := t.TempDir()
+				dir := filepath.Join(parent, "checkpoint")
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(parent, "outside"), []byte("snapshot-bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return dir, &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: []string{"../outside"}}
+			},
+		},
+		{
+			name: "nested name",
+			prepare: func(t *testing.T) (string, *ateworkerpb.CheckpointWorkloadResponse) {
+				dir := t.TempDir()
+				if err := os.Mkdir(filepath.Join(dir, "a"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "a", "b"), []byte("snapshot-bytes"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return dir, &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: []string{"a/b"}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, resp := tc.prepare(t)
+			if err := RecordCheckpoint(dir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resp); err != nil {
+				t.Fatalf("RecordCheckpoint: %v", err)
+			}
+			got := ReuseCheckpoint(dir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+			if tc.reuse {
+				if got == nil || !slices.Equal(got.GetSnapshotFiles(), resp.GetSnapshotFiles()) || !slices.Equal(got.GetDataSnapshotFiles(), resp.GetDataSnapshotFiles()) {
+					t.Fatalf("ReuseCheckpoint() = %v, want %v", got, resp)
+				}
+				return
+			}
+			if got != nil {
+				t.Fatalf("ReuseCheckpoint() = %v, want nil", got)
+			}
+		})
+	}
+}
+
 // TestCheckpointContext checks that a checkpoint outlives its canceled caller
 // but keeps the caller's deadline.
 func TestCheckpointContext(t *testing.T) {

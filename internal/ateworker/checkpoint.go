@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // CheckpointContext returns the context a CheckpointWorkload runs in once it
@@ -72,8 +73,10 @@ func RecordCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.Snapsho
 
 // ReuseCheckpoint returns the recorded CheckpointWorkloadResponse from
 // checkpointDir if the completion marker exists, was recorded on the boot
-// bootID, its fidelity matches, and all listed snapshot files are still present
-// on disk.
+// bootID, its fidelity matches, every name passes
+// resources.ValidateSnapshotFileNames, and os.Root.Lstat shows each one is
+// a regular file in checkpointDir. Any failure returns nil so the caller
+// takes a fresh checkpoint.
 func ReuseCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.SnapshotFidelity) *ateworkerpb.CheckpointWorkloadResponse {
 	b, err := os.ReadFile(filepath.Join(checkpointDir, checkpointDoneFile))
 	if err != nil {
@@ -102,8 +105,16 @@ func ReuseCheckpoint(checkpointDir, bootID string, fidelity ateworkerpb.Snapshot
 			return nil
 		}
 	}
+	if err := resources.ValidateSnapshotFileNames(rec.SnapshotFiles); err != nil {
+		return nil
+	}
+	root, err := os.OpenRoot(checkpointDir)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
 	for _, f := range rec.SnapshotFiles {
-		info, err := os.Stat(filepath.Join(checkpointDir, f))
+		info, err := root.Lstat(f)
 		if err != nil || !info.Mode().IsRegular() {
 			return nil
 		}
