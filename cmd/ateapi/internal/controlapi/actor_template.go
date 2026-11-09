@@ -76,6 +76,14 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 		return nil, err
 	}
 
+	// Nothing resolves an ExternalVolume reference yet, so a template naming
+	// one would resume actors with a volume nothing can mount.
+	for i, vol := range outTemplate.GetVolumes() {
+		if vol.GetExternal().GetRef() != nil {
+			return nil, apierror.Unimplemented("volumes[%d].external.ref: referencing an ExternalVolume is not supported yet", i)
+		}
+	}
+
 	return s.store.CreateActorTemplate(ctx, outTemplate)
 }
 

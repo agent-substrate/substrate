@@ -146,6 +146,32 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 	}
 }
 
+// TestCreateActorTemplate_RejectsExternalVolumeRef pins that a template
+// naming an ExternalVolume is refused until the actor lifecycle can mount one.
+func TestCreateActorTemplate_RejectsExternalVolumeRef(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
+	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	s := &RPCService{impl: impl}
+	ctx := context.Background()
+	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+		tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "ns1", Name: "tmpl-ref"}
+		tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "ctx"}}}}
+		tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "shared", MountPath: "/mnt/shared"}}
+	})}
+	_, err := s.CreateActorTemplate(ctx, req)
+	if apierror.Code(err) != codes.Unimplemented {
+		t.Fatalf("CreateActorTemplate error = %v, want code %v", err, codes.Unimplemented)
+	}
+	if _, err := persistence.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "ns1", Name: "tmpl-ref"}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetActorTemplate after rejected create = %v, want ErrNotFound", err)
+	}
+}
+
 // TestCreateActorTemplateIgnoresServerOwnedFields pins the create contract:
 // status on the request is dropped and new templates start with an empty
 // status. The store persists whatever the handler hands it, so the handler is

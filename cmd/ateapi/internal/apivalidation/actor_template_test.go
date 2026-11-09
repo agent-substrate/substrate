@@ -946,6 +946,44 @@ func TestValidateActorTemplate(t *testing.T) {
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template", "storage_class_name"), nil, "").WithOrigin("format=k8s-long-name")}},
 	}, {
+		name: "valid external volume ref",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "ctx"}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
+	}, {
+		name: "external volume ref missing name",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "ref", "name"), "")}},
+	}, {
+		name: "external volume ref invalid name",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "Not A Name"}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "ref", "name"), nil, "").WithOrigin("format=k8s-short-name")}},
+	}, {
+		name: "external volume with both template and ref",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{
+				Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, StorageClassName: "fast-ssd"},
+				Ref:      &ateapi.ExternalVolumeRef{Name: "ctx"},
+			}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external"), nil, "one of").WithOrigin("union")}},
+	}, {
+		name: "external volume with no source",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external"), nil, "one of").WithOrigin("union")}},
+	}, {
 		name: "valid resources",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].Resources = &ateapi.ResourceRequirements{Limits: resources.CPUMemory(500, 2<<30)}

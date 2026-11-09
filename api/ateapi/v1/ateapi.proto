@@ -1498,7 +1498,8 @@ message Volume {
   // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
 
-  // external is a CSI volume: provisioned for this actor from a template.
+  // external is a CSI volume: provisioned for this actor from a template, or
+  // an existing ExternalVolume the template names.
   //
   // +ate:preview=ExternalVolumes
   // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
@@ -1517,7 +1518,9 @@ message Volume {
   ImageVolumeSource image = 5;
 }
 
-// ExternalVolumeSource is a CSI volume provisioned for the actor from a template.
+// ExternalVolumeSource is a CSI volume: provisioned for the actor from a
+// template, or an existing ExternalVolume the template names. Exactly one of
+// template / ref must be set.
 message ExternalVolumeSource {
   // template provisions a volume for this actor alone; it is deleted with the
   // actor.
@@ -1525,6 +1528,25 @@ message ExternalVolumeSource {
   // +k8s:optional
   // +k8s:unionMember
   ExternalVolumeTemplate template = 1;
+
+  // ref names an ExternalVolume in the actor's atespace. The volume outlives
+  // the actor.
+  //
+  // Not served yet: CreateActorTemplate rejects a template that sets it with
+  // `UNIMPLEMENTED` until the actor lifecycle can mount an ExternalVolume.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeRef ref = 2;
+}
+
+// ExternalVolumeRef names an ExternalVolume in the actor's atespace.
+message ExternalVolumeRef {
+  // name of the ExternalVolume.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string name = 1;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
