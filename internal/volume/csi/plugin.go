@@ -16,8 +16,10 @@ package csi
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,6 +55,7 @@ var defaultTLSPaths = tlsPaths{
 // Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
 	client           *Client
+	driverName       string
 	stagingDirPrefix string
 
 	// capsMu guards controllerCaps and nodeCaps. The maps are built by
@@ -69,9 +72,10 @@ var _ volume.VolumePluginWorkerPlane = (*Plugin)(nil)
 
 // NewPlugin creates a new Plugin adapter. Call InitControllerCapabilities or
 // InitNodeCapabilities before use; until then, no optional RPC is reported as supported.
-func NewPlugin(client *Client) *Plugin {
+func NewPlugin(client *Client, driverName string) *Plugin {
 	return &Plugin{
 		client:           client,
+		driverName:       driverName,
 		stagingDirPrefix: filepath.Join(nodepath.BasePath, "staging"),
 	}
 }
@@ -286,10 +290,7 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		return "", nil
 	}
 
-	stagingPath, err := p.stagingDir(req.VolumeID)
-	if err != nil {
-		return "", err
-	}
+	stagingPath := p.stagingDir(req.VolumeID)
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		return "", fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
 	}
@@ -302,7 +303,7 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		PublishContext:    req.PublishContext,
 	}
 
-	_, err = p.client.NodeStageVolume(ctx, csiReq)
+	_, err := p.client.NodeStageVolume(ctx, csiReq)
 	if status.Code(err) == codes.Unimplemented {
 		slog.WarnContext(ctx, "CSI NodeStageVolume is unimplemented by driver; skipping staging", slog.String("volume_id", req.VolumeID))
 		p.disableNodeCap(csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME)
@@ -337,20 +338,13 @@ func (p *Plugin) unstageVolume(ctx context.Context, volumeID string) error {
 		return nil
 	}
 
-	stagingPath, err := p.stagingDir(volumeID)
-	if err != nil {
-		// stageVolume rejects this ID too, so this build staged nothing. An
-		// older build may have, and that directory is left behind. Failing
-		// here would leave the actor that carries it unable to terminate.
-		slog.WarnContext(ctx, "Skipping unstage of a volume ID that cannot have been staged", slog.String("volume_id", volumeID), slog.Any("error", err))
-		return nil
-	}
+	stagingPath := p.stagingDir(volumeID)
 	req := &csi.NodeUnstageVolumeRequest{
 		VolumeId:          volumeID,
 		StagingTargetPath: stagingPath,
 	}
 
-	_, err = p.client.NodeUnstageVolume(ctx, req)
+	_, err := p.client.NodeUnstageVolume(ctx, req)
 	if status.Code(err) == codes.Unimplemented {
 		slog.WarnContext(ctx, "CSI NodeUnstageVolume is unimplemented by driver; skipping unstaging", slog.String("volume_id", volumeID))
 		p.disableNodeCap(csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME)
@@ -362,20 +356,21 @@ func (p *Plugin) unstageVolume(ctx context.Context, volumeID string) error {
 	return nil
 }
 
-// stagingDir returns the staging directory for volumeID. The ID is the
-// driver's own string and may contain slashes, but it must name a directory
-// below stagingDirPrefix.
-func (p *Plugin) stagingDir(volumeID string) (string, error) {
-	if !filepath.IsLocal(volumeID) || filepath.Clean(volumeID) == "." {
-		return "", fmt.Errorf("volume ID %q does not name a directory below the staging directory", volumeID)
-	}
-	return filepath.Join(p.stagingDirPrefix, volumeID), nil
+// stagingDir returns the staging directory for volumeID. The directory is named
+// by a hash of the ID, which is the driver's own string, and is scoped to the
+// driver because IDs are only unique within one.
+func (p *Plugin) stagingDir(volumeID string) string {
+	sum := sha256.Sum256([]byte(volumeID))
+	return filepath.Join(p.stagingDirPrefix, p.driverName, hex.EncodeToString(sum[:]), "mount")
 }
 
-// removeStagingDir removes an empty staging directory, logging any failure.
+// removeStagingDir removes an empty staging directory and its per-volume
+// parent, logging any failure.
 func removeStagingDir(ctx context.Context, stagingPath string) {
-	if err := os.Remove(stagingPath); err != nil && !os.IsNotExist(err) {
-		slog.WarnContext(ctx, "failed to remove staging directory", slog.String("path", stagingPath), slog.Any("error", err))
+	for _, dir := range []string{stagingPath, filepath.Dir(stagingPath)} {
+		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+			slog.WarnContext(ctx, "failed to remove staging directory", slog.String("path", dir), slog.Any("error", err))
+		}
 	}
 }
 
@@ -440,7 +435,7 @@ func newCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName 
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize CSI client from endpoint %q: %w", endpoint, err)
 	}
-	csiPlugin := NewPlugin(csiClient)
+	csiPlugin := NewPlugin(csiClient, driverName)
 
 	// Verify CSI plugin reported name matches requested name.
 	reportedName, err := csiPlugin.DriverName(ctx)
