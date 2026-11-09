@@ -45,6 +45,9 @@ tuples:
   - user: atespace:space-1
     relation: parent_atespace
     object: tag:v1
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: external_volume:ctx
 
   # Physical Topology & Scheduling (Node -> Worker -> Actor)
   - user: node:node-1
@@ -558,7 +561,40 @@ tests:
           can_create_tag: false
           can_list_tags: false
 
-  - name: 9. Actor Credentials (Egress Gateway Only)
+  - name: 9. External Volume Operations
+    check:
+      - user: user:carol # Only a global owner registers volumes
+        object: atespace:space-1
+        assertions:
+          can_create_external_volume: true
+          can_list_external_volumes: true
+      - user: user:alice # Atespace owner cannot
+        object: atespace:space-1
+        assertions:
+          can_create_external_volume: false
+          can_list_external_volumes: true
+      - user: user:bob # Editor reads and deletes
+        object: atespace:space-1
+        assertions:
+          can_create_external_volume: false
+          can_list_external_volumes: true
+      - user: user:bob
+        object: external_volume:ctx
+        assertions:
+          can_get: true
+          can_delete: true
+      - user: user:dave # Viewer reads only
+        object: external_volume:ctx
+        assertions:
+          can_get: true
+          can_delete: false
+      - user: user:eve # External
+        object: external_volume:ctx
+        assertions:
+          can_get: false
+          can_delete: false
+
+  - name: 10. Actor Credentials (Egress Gateway Only)
     check:
       - user: user:carol # Global owner
         object: actor:runner-1

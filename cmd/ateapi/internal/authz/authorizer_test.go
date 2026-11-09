@@ -67,6 +67,14 @@ func TestContextualTuples(t *testing.T) {
 			},
 		},
 		{
+			name:   "external volume",
+			object: ExternalVolumeObject("team-a", "ctx"),
+			want: []*openfgav1.TupleKey{
+				parentAtespace("atespace:team-a", "external_volume:team-a/ctx"),
+				parentGlobal("atespace:team-a"),
+			},
+		},
+		{
 			name:   "parent of an escaped actor is the atespace's own object",
 			object: ActorObject("a/b", "c"),
 			want: []*openfgav1.TupleKey{
