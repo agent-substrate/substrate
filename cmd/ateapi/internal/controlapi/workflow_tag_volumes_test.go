@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -809,7 +810,10 @@ func (s *updateTagCountingStore) updateTagCalls() int {
 // snapshot is in flight at once, and that the handles are recorded with a
 // fixed number of tag writes however many volumes there are.
 func TestTagActorSnapshot_SnapshotsVolumesConcurrently(t *testing.T) {
-	ctx := context.Background()
+	// A regression to one snapshot at a time blocks the rendezvous. The
+	// deadline turns that into a failure instead of a hang.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	persistence := newTestPersistence(t)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	plugin := newFakeSnapshotPlugin()

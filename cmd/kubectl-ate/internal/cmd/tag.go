@@ -280,8 +280,9 @@ func addWithVolumesFlag(cmd *cobra.Command, v *volumeSelectionValue) {
 // read them as an argument.
 func createTagArgs(cmd *cobra.Command, args []string) error {
 	err := exactlyOneArg("<tag-name>", "atespace", "actor")(cmd, args)
-	if err != nil && len(args) > 1 && createTagWithVolumesFlag.all() {
-		return usageErrorf("%v; to capture only some volumes, join the names to the flag with =, e.g. --with-volumes=%s", err, args[len(args)-1])
+	if f := cmd.Flags().Lookup("with-volumes"); err != nil && len(args) > 1 && f != nil && f.Value.String() == allVolumes {
+		last := args[len(args)-1]
+		return usageErrorf("%v; if %q names volumes, join them to the flag with =, e.g. --with-volumes=%s", err, last, last)
 	}
 	return err
 }

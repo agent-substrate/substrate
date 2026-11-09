@@ -108,8 +108,9 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, e
 	if err != nil {
 		return nil, err
 	}
-	// Volumes hold what the latest suspend wrote. Pairing them with an older
-	// snapshot's guest memory would make a tag that never existed.
+	// Volumes hold what the actor would resume with, which matches its latest
+	// snapshot. When that snapshot is not durable, the tag would fall back to
+	// an older one, so a tag that captures volumes is refused instead.
 	if len(volumes) > 0 && snapshot.GetGeneration() != latestSnapshot(actor.GetStatus(), func(*ateapi.Snapshot) bool { return true }).GetGeneration() {
 		return nil, apierror.FailedPrecondition("Actor %s's latest snapshot is not durable, so its external volumes cannot be tagged with an older one", actorRef)
 	}
@@ -505,8 +506,7 @@ func (w *ActorWorkflow) ensureTagSourceSnapshotDurable(ctx context.Context, acto
 		return actor, nil
 	}
 	// For example a PENDING upload whose node was lost. The tag falls back to
-	// the latest durable snapshot, the one the actor would resume from, unless
-	// it captures volumes.
+	// the latest durable snapshot, the one the actor would resume from.
 	if snap.GetLocality() == "" {
 		markSkipped(ctx, "the actor's latest snapshot is on no node to upload from")
 		return actor, nil
@@ -741,10 +741,10 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 // blocking here would put an unbounded storage operation inside a synchronous
 // RPC.
 //
-// No quiesce step is required. A SUSPENDED actor has already had its volumes
-// unmounted by atelet and detached by the control plane, so the filesystem is
-// cleanly unmounted with no dirty page cache, and the actor lease held by the
-// caller keeps a concurrent resume from re-attaching them mid-capture.
+// No quiesce step runs. A SUSPENDED actor's volumes are detached, and the
+// actor lease held by the caller keeps a concurrent resume from re-attaching
+// them mid-capture. atelet usually unmounts them cleanly first, but a revert
+// that detaches without atelet leaves them only crash-consistent.
 func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *ateapi.Tag, volumes []*ateapi.ExternalVolumeStatus, plugins []volume.VolumePluginControlPlane) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "SnapshotVolumes")
 	defer func() { err = done(err) }()
@@ -937,13 +937,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag,
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
-		}
-		return nil, fmt.Errorf("while finalizing tag %s: %w", tagRef, err)
+		return nil, tagCreateUpdateError(tagRef, err, "finalizing")
 	}
 	return stored, nil
 }

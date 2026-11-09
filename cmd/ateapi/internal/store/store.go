@@ -164,9 +164,10 @@ type Interface interface {
 	// exhausted, ErrImmutableField if the mutated tag changed a field that is
 	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	//
-	// status.snapshot is immutable once COMPLETED. Before that, while the tag
-	// is pending, the volume_snapshots list is fixed once recorded and each
-	// entry's storage_snapshot_id may be filled in once.
+	// status.snapshot is immutable once COMPLETED, except that a volume
+	// snapshot's ready_to_use may change from false to true. Before that, while
+	// the tag is pending, the volume_snapshots list is fixed once recorded and
+	// each entry's storage_snapshot_id may be filled in once.
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// MarkTagForDeletion initiates the deletion of a tag. It sets

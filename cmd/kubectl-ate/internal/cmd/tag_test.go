@@ -154,26 +154,25 @@ func TestWithVolumesFlag(t *testing.T) {
 // TestCreateTagArgs verifies the hint about joining names to --with-volumes
 // with = shows only when a bare --with-volumes left an extra argument.
 func TestCreateTagArgs(t *testing.T) {
-	const hint = "join the names to the flag with =, e.g. --with-volumes=data"
 	tests := []struct {
-		name     string
-		args     []string
-		wantErr  bool
-		wantHint bool
+		name    string
+		args    []string
+		wantErr bool
+		// wantHint is text the hint about joining names with = must contain,
+		// or empty when no hint may be given.
+		wantHint string
 	}{
 		{name: "one argument", args: []string{"t1", "--with-volumes"}},
-		{name: "names after bare flag", args: []string{"t1", "--with-volumes", "data"}, wantErr: true, wantHint: true},
+		{name: "names after bare flag", args: []string{"t1", "--with-volumes", "data"}, wantErr: true, wantHint: `if "data" names volumes, join them to the flag with =, e.g. --with-volumes=data`},
+		{name: "two names before bare flag", args: []string{"t1", "t2", "--with-volumes"}, wantErr: true, wantHint: `if "t2" names volumes`},
 		{name: "extra argument without flag", args: []string{"t1", "data"}, wantErr: true},
 		{name: "extra argument with names", args: []string{"t1", "--with-volumes=cache", "data"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			saved := createTagWithVolumesFlag
-			t.Cleanup(func() { createTagWithVolumesFlag = saved })
-			createTagWithVolumesFlag = volumeSelectionValue{}
-
+			var v volumeSelectionValue
 			cmd := &cobra.Command{Use: "tag"}
-			addWithVolumesFlag(cmd, &createTagWithVolumesFlag)
+			addWithVolumesFlag(cmd, &v)
 			if err := cmd.Flags().Parse(tt.args); err != nil {
 				t.Fatalf("Parse(%q): %v", tt.args, err)
 			}
@@ -181,8 +180,9 @@ func TestCreateTagArgs(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("createTagArgs() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if got := err != nil && strings.Contains(err.Error(), hint); got != tt.wantHint {
-				t.Errorf("createTagArgs() error = %v, want hint %t", err, tt.wantHint)
+			hinted := err != nil && strings.Contains(err.Error(), "join them to the flag with =")
+			if hinted != (tt.wantHint != "") || (tt.wantHint != "" && !strings.Contains(err.Error(), tt.wantHint)) {
+				t.Errorf("createTagArgs() error = %v, want hint %q", err, tt.wantHint)
 			}
 		})
 	}

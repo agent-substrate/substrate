@@ -750,8 +750,8 @@ type Snapshot struct {
 	//
 	// +k8s:optional
 	SandboxRuntime *ActorSandboxRuntime `protobuf:"bytes,8,opt,name=sandbox_runtime,json=sandboxRuntime,proto3" json:"sandbox_runtime,omitempty"`
-	// volume_snapshots holds one entry per external volume a tag captures. Only
-	// a tag's snapshot sets it.
+	// volume_snapshots holds one entry per external volume a tag captures.
+	// CreateTag sets it.
 	// Entries are added before the snapshots are taken and their
 	// storage_snapshot_id is filled in once the snapshot handles come back, so
 	// an entry with an empty storage_snapshot_id names a snapshot that did not
