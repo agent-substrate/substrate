@@ -26,17 +26,17 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// writeNextSnapshotState writes, where a future release keeps it, a snapshot
-// state file recording local snapshot uuid for the tracked actor, and returns
-// its contents.
-func writeNextSnapshotState(t *testing.T, uuid string) []byte {
+// writePreviousSnapshotState writes, where an earlier release kept it, a
+// snapshot state file recording local snapshot uuid for the tracked actor, and
+// returns its contents.
+func writePreviousSnapshotState(t *testing.T, uuid string) []byte {
 	t.Helper()
 	ref := testRef(uuid, 1, time.Now())
 	data, err := json.Marshal(actorSnapshotsRecord{LatestLocal: &ref})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := ateletpath.NextSnapshotStateFile(trackedActorUID)
+	path := ateletpath.PreviousSnapshotStateFile(trackedActorUID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -53,33 +53,26 @@ func assertNotExist(t *testing.T, path string) {
 	}
 }
 
-// A state file a future release wrote is moved to where this release keeps it,
-// so the actor keeps its snapshots after a rollback. When both copies exist, as
-// after a crash partway through an earlier move, the move is finished. The
-// snapshot directory goes if the move left it empty, as for an actor that had
-// detached, and stays if it holds anything else.
+// A state file an earlier release wrote is moved to where this release keeps
+// it, so the actor keeps its snapshots after an upgrade. When both copies
+// exist, as after a crash partway through an earlier move, the move is
+// finished. The actor's directory stays even when the state file was all it
+// held, as for an actor that had detached, since atelet treats an actor
+// without one as terminated.
 func TestMigrateSnapshotStateFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		bothCopy bool
-		// otherFile is a file left in the snapshot directory, if not empty.
-		otherFile string
 	}{
 		{name: "moves the file"},
 		{name: "finishes an interrupted move", bothCopy: true},
-		{name: "keeps a snapshot directory that holds other files", otherFile: "restore-state"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useTempNodeDirs(t)
 			if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			want := writeNextSnapshotState(t, "s1")
-			if tc.otherFile != "" {
-				if err := os.MkdirAll(filepath.Join(ateletpath.ActorSnapshotPath(trackedActorUID), tc.otherFile), 0o700); err != nil {
-					t.Fatal(err)
-				}
-			}
+			want := writePreviousSnapshotState(t, "s1")
 			to := ateletpath.ActorSnapshotStateFile(trackedActorUID)
 			if tc.bothCopy {
 				if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
@@ -96,11 +89,9 @@ func TestMigrateSnapshotStateFiles(t *testing.T) {
 			if got, err := os.ReadFile(to); err != nil || string(got) != string(want) {
 				t.Errorf("%s = (%q, %v), want (%q, nil)", to, got, err, want)
 			}
-			assertNotExist(t, ateletpath.NextSnapshotStateFile(trackedActorUID))
-			if tc.otherFile == "" {
-				assertNotExist(t, ateletpath.ActorSnapshotPath(trackedActorUID))
-			} else if _, err := os.Stat(filepath.Join(ateletpath.ActorSnapshotPath(trackedActorUID), tc.otherFile)); err != nil {
-				t.Errorf("snapshot directory entry %s: %v, want kept", tc.otherFile, err)
+			assertNotExist(t, ateletpath.PreviousSnapshotStateFile(trackedActorUID))
+			if _, err := os.Stat(ateletpath.ActorPath(trackedActorUID)); err != nil {
+				t.Errorf("actor dir stat = %v, want kept", err)
 			}
 			if got := uuidOf(newTracker(t).State(trackedActorUID).GetLatestLocal()); got != "s1" {
 				t.Errorf("latest_local = %q, want s1", got)
@@ -109,17 +100,20 @@ func TestMigrateSnapshotStateFiles(t *testing.T) {
 	}
 }
 
-// A state file whose actor directory is gone, as after a terminate that a
-// crash interrupted, is removed rather than moved, so the actor's state does
-// not come back.
-func TestMigrateSnapshotStateFilesRemovesFileOfGoneActor(t *testing.T) {
+// A save that finds the actor's directory gone also removes a state file left
+// in its snapshot directory, as after a crash between the two disks during a
+// cleanup, so the actor's state does not come back.
+func TestSaveWithoutActorDirRemovesLeftoverStateFile(t *testing.T) {
 	useTempNodeDirs(t)
-	writeNextSnapshotState(t, "s1")
-
-	if err := MigrateSnapshotStateFiles(); err != nil {
-		t.Fatalf("MigrateSnapshotStateFiles() = %v", err)
+	stateFile := ateletpath.ActorSnapshotStateFile(trackedActorUID)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	assertNotExist(t, ateletpath.NextSnapshotStateFile(trackedActorUID))
+	if err := os.WriteFile(stateFile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	newTracker(t).CommitLocal(trackedActorUID, testRef("s1", 1, time.Now()))
 	assertNotExist(t, ateletpath.ActorSnapshotPath(trackedActorUID))
 	assertNotExist(t, ateletpath.ActorPath(trackedActorUID))
 	if got := newTracker(t).State(trackedActorUID); !proto.Equal(got, &ateletpb.ActorSnapshotState{}) {
@@ -137,7 +131,7 @@ func TestMigrateSnapshotStateFilesKeepsFileWhenMoveFails(t *testing.T) {
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	want := writeNextSnapshotState(t, "s1")
+	want := writePreviousSnapshotState(t, "s1")
 	// A read-only destination directory makes the write fail.
 	toDir := filepath.Dir(ateletpath.ActorSnapshotStateFile(trackedActorUID))
 	if err := os.MkdirAll(toDir, 0o700); err != nil {
@@ -151,9 +145,27 @@ func TestMigrateSnapshotStateFilesKeepsFileWhenMoveFails(t *testing.T) {
 	if err := MigrateSnapshotStateFiles(); err == nil {
 		t.Fatal("MigrateSnapshotStateFiles() = nil, want an error")
 	}
-	from := ateletpath.NextSnapshotStateFile(trackedActorUID)
+	from := ateletpath.PreviousSnapshotStateFile(trackedActorUID)
 	if got, err := os.ReadFile(from); err != nil || string(got) != string(want) {
 		t.Errorf("%s = (%q, %v), want (%q, nil)", from, got, err, want)
+	}
+}
+
+// assertSnapshotDirHoldsOnlyState fails unless the actor's snapshot directory
+// holds only its snapshot state file.
+func assertSnapshotDirHoldsOnlyState(t *testing.T, actorUID string) {
+	t.Helper()
+	entries, err := os.ReadDir(ateletpath.ActorSnapshotPath(actorUID))
+	if err != nil {
+		t.Fatalf("reading %s snapshot dir: %v", actorUID, err)
+	}
+	want := filepath.Base(ateletpath.ActorSnapshotStateFile(actorUID))
+	if len(entries) != 1 || entries[0].Name() != want {
+		var got []string
+		for _, e := range entries {
+			got = append(got, e.Name())
+		}
+		t.Errorf("%s snapshot dir entries = %v, want [%s]", actorUID, got, want)
 	}
 }
 

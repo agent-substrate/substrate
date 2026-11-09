@@ -40,14 +40,14 @@ func TestActorDirs(t *testing.T) {
 		"system_info_volume_roots_dir":  actorDirs.GetSystemInfoVolumeRootsDir(),
 		"external_volume_mounts_dir":    actorDirs.GetExternalVolumeMountsDir(),
 		"sandbox_assets_dir":            actorDirs.GetSandboxAssetsDir(),
-		"snapshot_state_file":           ActorSnapshotStateFile(actorUID),
+		"previous_snapshot_state_file":  PreviousSnapshotStateFile(actorUID),
 	}
 	underSnapshotRoot := map[string]string{
-		"checkpoint_dir":           actorDirs.GetCheckpointDir(),
-		"restore_dir":              actorDirs.GetRestoreDir(),
-		"local_checkpoints_dir":    LocalCheckpointsDir(actorUID),
-		"local_snapshot_dir":       LocalSnapshotDir(actorUID, "snap-1"),
-		"next_snapshot_state_file": NextSnapshotStateFile(actorUID),
+		"checkpoint_dir":        actorDirs.GetCheckpointDir(),
+		"restore_dir":           actorDirs.GetRestoreDir(),
+		"local_checkpoints_dir": LocalCheckpointsDir(actorUID),
+		"local_snapshot_dir":    LocalSnapshotDir(actorUID, "snap-1"),
+		"snapshot_state_file":   ActorSnapshotStateFile(actorUID),
 	}
 
 	seen := map[string]string{}

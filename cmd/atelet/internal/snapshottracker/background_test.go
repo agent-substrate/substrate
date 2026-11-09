@@ -318,7 +318,7 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 		{
 			actorUID: "actor-suspended-old",
 			snapUUID: "s1",
-			gone:     []string{suspendedOldDir, ateletpath.ActorSnapshotPath("actor-suspended-old"), ateletpath.OCIBundleDir("actor-suspended-old")},
+			gone:     []string{suspendedOldDir, ateletpath.OCIBundleDir("actor-suspended-old")},
 		},
 		{
 			actorUID: "actor-running-old",
@@ -351,6 +351,8 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 		}
 	}
 
+	assertSnapshotDirHoldsOnlyState(t, "actor-suspended-old")
+
 	for _, path := range []string{sameBootDir, ateletpath.OCIBundleDir("actor-same-boot"), ateletpath.RestoreStateDir("actor-same-boot")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("actor-same-boot stat(%s) = %v, want kept", path, err)
@@ -360,7 +362,8 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 		t.Errorf("actor-same-boot latest_local = %q, want s3", got)
 	}
 
-	for _, path := range []string{undurableOldDir, ateletpath.ActorSnapshotPath("actor-undurable-old"), ateletpath.OCIBundleDir("actor-undurable-old")} {
+	assertSnapshotDirHoldsOnlyState(t, "actor-undurable-old")
+	for _, path := range []string{undurableOldDir, ateletpath.OCIBundleDir("actor-undurable-old")} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("actor-undurable-old stat(%s) = %v, want not exist", path, err)
 		}
@@ -398,8 +401,10 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 	if want := []string{"actor-running-old", "actor-started-no-copy", "actor-suspended-old"}; !slices.Equal(reportedActors, want) {
 		t.Errorf("reported detached actors = %v, want %v", reportedActors, want)
 	}
-	if _, err := os.Stat(ateletpath.ActorPath("actor-suspended-old")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("actor-suspended-old actor dir stat after detach report = %v, want not exist", err)
+	for _, dir := range []string{ateletpath.ActorPath("actor-suspended-old"), ateletpath.ActorSnapshotPath("actor-suspended-old")} {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("actor-suspended-old stat(%s) after detach report = %v, want not exist", dir, err)
+		}
 	}
 	// A started actor keeps its snapshot state, and so its directory.
 	if _, err := os.Stat(ateletpath.ActorSnapshotStateFile("actor-running-old")); err != nil {
@@ -415,15 +420,15 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 		s1 := testRef("s1", 1, before.clock.Now())
 		before.CommitDurable(trackedActorUID, s1)
 		before.CommitLocal(trackedActorUID, s1)
-		// With only snapshot-state.json in the actor directory,
+		// With only snapshot-state.json in the snapshot directory,
 		// RemoveActorFilesExceptState removes nothing under it and succeeds
-		// even when the actor directory is read-only, while saving the updated
-		// snapshot state file fails.
-		actorDir := ateletpath.ActorPath(trackedActorUID)
-		if err := os.Chmod(actorDir, 0o500); err != nil {
+		// even when the snapshot directory is read-only, while saving the
+		// updated snapshot state file fails.
+		snapshotDir := ateletpath.ActorSnapshotPath(trackedActorUID)
+		if err := os.Chmod(snapshotDir, 0o500); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(actorDir, 0o700) })
+		t.Cleanup(func() { _ = os.Chmod(snapshotDir, 0o700) })
 
 		after := newStoreTracker(t, newFakeSnapshotStore(), withCurrentBoot())
 		setWorkers(after, 0, 0)
@@ -431,6 +436,9 @@ func TestStartPrunesLocalSnapshotsFromEarlierBoot(t *testing.T) {
 
 		if got := after.State(trackedActorUID).GetLatestLocal(); got != nil {
 			t.Errorf("latest_local = %v, want nil kept in memory after failed save", got)
+		}
+		if got := readSnapshotState(trackedActorUID); got == nil || got.LatestLocal == nil || got.LatestLocal.uuid() != "s1" {
+			t.Error("state file no longer holds s1 as latest_local, want it unchanged after the failed save")
 		}
 	})
 

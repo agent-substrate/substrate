@@ -15,7 +15,8 @@ don't depend on it.
 
 ## Dedicated Snapshot Storage
 
-Snapshot staging lives under `/var/lib/ate/snapshots`. By default this shares
+Snapshot staging lives under `/var/lib/ate/snapshots`, together with the
+record atelet keeps of each actor's snapshots. By default this shares
 the node's boot disk, so heavy guest disk writes can slow checkpoint and
 restore. To avoid that, you can mount a dedicated disk there:
 

@@ -104,23 +104,24 @@ func ActorSandboxAssetsFile(actorUID string) string {
 
 // ActorSnapshotStateFile is the per-actor file where atelet keeps what it
 // tracks of the actor's snapshots: its latest local and durable snapshots, so
-// a restarted atelet still knows them. Like ActorSandboxAssetsFile it lives
-// directly under ActorPath, outside the subdirs actordirs.ResetActorDirs wipes.
+// a restarted atelet still knows them. It lives directly under
+// ActorSnapshotPath, on the snapshot disk with the snapshots it tracks,
+// outside the subdirs actordirs.ResetActorDirs wipes.
 func ActorSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
+		ActorSnapshotPath(actorUID),
 		snapshotStateFileName,
 	)
 }
 
-// NextSnapshotStateFile is where the next release keeps the actor's snapshot
-// state file: directly under ActorSnapshotPath. The file moves there over two
-// releases (see docs/reference/version-skew-policy.md). atelet moves a file it
-// finds here back to ActorSnapshotStateFile at startup, so a rollback from the
-// next release keeps the actor's snapshots.
-func NextSnapshotStateFile(actorUID string) string {
+// PreviousSnapshotStateFile is where the previous release kept the actor's
+// snapshot state file: directly under ActorPath. The file moved from there
+// over two releases (see docs/reference/version-skew-policy.md). atelet moves
+// a file it finds there to ActorSnapshotStateFile at startup, so a node
+// upgraded from the previous release keeps the actor's snapshots.
+func PreviousSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
-		ActorSnapshotPath(actorUID),
+		ActorPath(actorUID),
 		snapshotStateFileName,
 	)
 }
