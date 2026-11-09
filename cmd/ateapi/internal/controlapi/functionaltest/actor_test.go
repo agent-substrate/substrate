@@ -1928,8 +1928,27 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if len(resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()) != 1 {
 		t.Fatalf("expected 1 volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes())
 	}
-	if resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()[0].GetStorageVolumeId() == "" {
+	provisioned := resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()[0]
+	if provisioned.GetStorageVolumeId() == "" {
 		t.Fatalf("expected non-empty storageVolumeId after ResumeActor")
+	}
+	// The volume is recorded as an ExternalVolume in the actor's atespace.
+	if provisioned.GetExternalVolumeName() == "" {
+		t.Fatalf("expected externalVolumeName after ResumeActor, got %v", provisioned)
+	}
+	recordRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: provisioned.GetExternalVolumeName()}
+	record, err := tc.client.GetExternalVolume(context.Background(), &ateapi.GetExternalVolumeRequest{ExternalVolume: recordRef})
+	if err != nil {
+		t.Fatalf("GetExternalVolume(%s) failed: %v", provisioned.GetExternalVolumeName(), err)
+	}
+	wantRecord := &ateapi.ExternalVolume{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: provisioned.GetExternalVolumeName()},
+		VolumeId:      provisioned.GetStorageVolumeId(),
+		VolumeType:    provisioned.GetVolumeType(),
+		VolumeContext: provisioned.GetVolumeContext(),
+	}
+	if diff := cmp.Diff(wantRecord, record, protocmp.Transform(), ignoreUID, ignoreTimestamps, protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "version")); diff != "" {
+		t.Errorf("ExternalVolume of the provisioned volume mismatch (-want +got):\n%s", diff)
 	}
 
 	// 3. Async SuspendActor
@@ -1982,6 +2001,10 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if deleteResp.GetMetadata().GetName() != "actor-vol-lc" {
 		t.Errorf("deleted actor name = %q, want %q", deleteResp.GetMetadata().GetName(), "actor-vol-lc")
 	}
+
+	// The record goes with the actor.
+	_, err = tc.client.GetExternalVolume(context.Background(), &ateapi.GetExternalVolumeRequest{ExternalVolume: recordRef})
+	assertGrpcError(t, err, codes.NotFound, fmt.Sprintf("ExternalVolume %s/%s not found", testAtespace, provisioned.GetExternalVolumeName()))
 
 	// Confirm GetActor returns NotFound after deletion
 	_, err = tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{

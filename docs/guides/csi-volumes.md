@@ -119,6 +119,24 @@ volumeMounts:
 > [!NOTE]
 > All declared volumes in `volumes` must be mounted by at least one container.
 
+#### Provisioned volumes and `ExternalVolume` records
+
+The volume is provisioned on the actor's first resume. From then on the
+actor's status carries the CSI handle under `status.externalVolumes.volumes[]`
+(`storageVolumeId`, `volumeType`, `volumeContext`), and the same handle is
+recorded as an `ExternalVolume` in the actor's atespace, named in that entry's
+`externalVolumeName`:
+
+```bash
+kubectl ate get actor producer-42 -a ate-demo -o json \
+  | jq -r '.status.externalVolumes.volumes[] | [.name, .externalVolumeName] | @tsv'
+kubectl ate get externalvolumes -a ate-demo
+```
+
+Deleting the actor deletes the volume and its record. Deleting the record
+alone (`kubectl ate delete externalvolume`) leaves the volume and the actor as
+they are.
+
 ---
 
 ## 4. End-to-End Example
@@ -244,4 +262,5 @@ kubectl ate delete externalvolume ctx -a ate-demo
 
 Actor templates cannot reference an `ExternalVolume` yet. Every external volume
 an actor mounts is still provisioned for that actor from
-`volumes[].external.template`, as described above.
+`volumes[].external.template`, as described above, and recorded as an
+`ExternalVolume` of its own.

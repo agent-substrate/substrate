@@ -1135,8 +1135,17 @@ type ExternalVolumeStatus struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// external_volume_name names the ExternalVolume, in the actor's atespace,
+	// that records this volume. Set once when the volume is provisioned, then
+	// never changed. The ExternalVolume is deleted with the actor.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	// +k8s:update=NoModify
+	// +k8s:update=NoUnset
+	ExternalVolumeName string `protobuf:"bytes,5,opt,name=external_volume_name,json=externalVolumeName,proto3" json:"external_volume_name,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeStatus) Reset() {
@@ -1195,6 +1204,13 @@ func (x *ExternalVolumeStatus) GetVolumeContext() map[string]string {
 		return x.VolumeContext
 	}
 	return nil
+}
+
+func (x *ExternalVolumeStatus) GetExternalVolumeName() string {
+	if x != nil {
+		return x.ExternalVolumeName
+	}
+	return ""
 }
 
 type Actor struct {
@@ -2645,16 +2661,19 @@ func (x *Tag) GetSourceActor() *ObjectRef {
 	return nil
 }
 
-// ExternalVolume is an atespace-scoped record of a CSI volume. Its lifetime
-// is independent of any actor: it registers a volume that already exists in
-// the storage system, by the volume ID and driver the node plugin needs to
-// mount it. Identity is (atespace, name). An atespace cannot be deleted while
-// it holds an ExternalVolume.
+// ExternalVolume is an atespace-scoped record of a CSI volume, by the volume
+// ID and driver the node plugin needs to mount it. Identity is (atespace,
+// name). An atespace cannot be deleted while it holds an ExternalVolume.
+//
+// A client registers a volume that already exists in the storage system.
+// Substrate records one for every volume it provisions for an actor from
+// `ExternalVolumeTemplate`, named in the actor's
+// `ExternalVolumeStatus.external_volume_name`, and deletes it with the actor.
 //
 // Deleting an ExternalVolume removes the record only; the storage is left in
 // place.
 //
-// (-- Actors cannot reference an ExternalVolume yet. The actor template
+// (-- Actor templates cannot reference an ExternalVolume yet. The template
 // reference, actor references on the volume, and the delete trigger come in
 // later changes. --)
 type ExternalVolume struct {
@@ -10417,13 +10436,14 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"deleteTime\"V\n" +
 	"\x0fExternalVolumes\x12C\n" +
-	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\x9e\x02\n" +
+	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\xd0\x02\n" +
 	"\x14ExternalVolumeStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x12c\n" +
-	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x120\n" +
+	"\x14external_volume_name\x18\x05 \x01(\tR\x12externalVolumeName\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x02\n" +

@@ -16,18 +16,31 @@ package controlapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
+
+// externalVolumeStore keeps the ExternalVolume that records each volume
+// provisioned for an actor.
+type externalVolumeStore interface {
+	CreateExternalVolume(ctx context.Context, volume *ateapi.ExternalVolume) (*ateapi.ExternalVolume, error)
+	GetExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef) (*ateapi.ExternalVolume, error)
+	DeleteExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef, precondition store.DeletePreconditions) (*ateapi.ExternalVolume, error)
+}
 
 // externalVolumesStatus wraps vols for ActorStatus, leaving the field unset
 // when the actor has no external volumes.
@@ -65,10 +78,14 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 	return volumes, nil
 }
 
-// createActorVolumes provisions the external volumes in volumesToCreate that have no storage volume ID, using the provided volume plugin.
-// It returns the list of external volumes (with storage IDs), or an error if any creation fails.
-// Any volumes processed before or during a failure are returned alongside the error so they can be persisted on the actor.
-func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, actorUID string, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
+// createActorVolumes provisions the external volumes in volumesToCreate that
+// have no storage volume ID, using the provided volume plugin, and records
+// each as an ExternalVolume in the actor's atespace. It returns the list of
+// external volumes (with storage IDs and ExternalVolume names), or an error if
+// any creation fails. Any volumes processed before or during a failure are
+// returned alongside the error so they can be persisted on the actor.
+func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, volumeStore externalVolumeStore, actor *ateapi.Actor, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
+	actorUID := actor.GetMetadata().GetUid()
 	resultVolumes = make([]*ateapi.ExternalVolumeStatus, 0, len(volumesToCreate))
 
 	var currentIdx int
@@ -134,18 +151,75 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.Internal("volume plugin returned no ID for volume %q", specVol.GetName())
 		}
 
+		record := &ateapi.ExternalVolume{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace: actor.GetMetadata().GetAtespace(),
+				Name:     provisionedExternalVolumeName(actorUID, volName),
+			},
+			VolumeId:      resp.VolumeID,
+			VolumeType:    sc.Provisioner,
+			VolumeContext: resp.VolumeContext,
+		}
+		if err := recordExternalVolume(ctx, volumeStore, record); err != nil {
+			return resultVolumes, err
+		}
+
 		resultVolumes = append(resultVolumes, &ateapi.ExternalVolumeStatus{
-			Name:            volName,
-			StorageVolumeId: resp.VolumeID,
-			VolumeType:      sc.Provisioner,
-			VolumeContext:   resp.VolumeContext,
+			Name:               volName,
+			StorageVolumeId:    resp.VolumeID,
+			VolumeType:         sc.Provisioner,
+			VolumeContext:      resp.VolumeContext,
+			ExternalVolumeName: record.GetMetadata().GetName(),
 		})
 	}
 	return resultVolumes, nil
 }
 
-// deleteActorVolumes deletes all external volumes in the list.
-func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, actorUID string, volumes []*ateapi.ExternalVolumeStatus) error {
+// provisionedExternalVolumeName is the name of the ExternalVolume that records
+// the template volume volumeName provisioned for the actor with actorUID. The
+// UID keeps it unique across actors, including a namesake created after the
+// actor is deleted, and the hash keeps the name within a DNS label whatever
+// the volume name's length.
+func provisionedExternalVolumeName(actorUID, volumeName string) string {
+	sum := sha256.Sum256([]byte(actorUID + "/" + volumeName))
+	suffix := hex.EncodeToString(sum[:8])
+	const maxLen = 63 // k8s-short-name
+	prefix := volumeName
+	if max := maxLen - 1 - len(suffix); len(prefix) > max {
+		prefix = strings.TrimRight(prefix[:max], "-")
+	}
+	return prefix + "-" + suffix
+}
+
+// recordExternalVolume stores record. A record an earlier attempt left behind
+// is reused when it names the same storage, so a resume retried after a crash
+// between the CSI call and the actor write converges. CreateVolume is
+// idempotent on the volume's name, so the retry gets the same volume back.
+func recordExternalVolume(ctx context.Context, volumeStore externalVolumeStore, record *ateapi.ExternalVolume) error {
+	volumeRef := resources.ExternalVolumeRefFromExternalVolume(record)
+	_, err := volumeStore.CreateExternalVolume(ctx, record)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, store.ErrAlreadyExists) {
+		return apierror.Internal("while recording ExternalVolume %s: %v", volumeRef, err)
+	}
+	stored, err := volumeStore.GetExternalVolume(ctx, volumeRef)
+	if err != nil {
+		return apierror.Internal("while reading ExternalVolume %s: %v", volumeRef, err)
+	}
+	if stored.GetVolumeId() != record.GetVolumeId() || stored.GetVolumeType() != record.GetVolumeType() {
+		return apierror.FailedPrecondition("ExternalVolume %s records volume %q of %q, not the volume %q of %q provisioned for the actor",
+			volumeRef, stored.GetVolumeId(), stored.GetVolumeType(), record.GetVolumeId(), record.GetVolumeType())
+	}
+	return nil
+}
+
+// deleteActorVolumes deletes all external volumes in the list, each followed
+// by the ExternalVolume that records it. A volume whose record is already
+// gone, or was never written, is deleted all the same.
+func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, volumeStore externalVolumeStore, actor *ateapi.Actor, volumes []*ateapi.ExternalVolumeStatus) error {
+	actorUID := actor.GetMetadata().GetUid()
 	if actorUID == "" {
 		return errors.New("actorUID is required")
 	}
@@ -166,11 +240,21 @@ func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 			continue
 		}
 		if err := plugin.DeleteVolume(ctx, volID); err != nil {
-			if status.Code(err) == codes.NotFound {
-				slog.WarnContext(ctx, "Volume not found during delete, assuming already deleted", slog.String("volume_id", volID))
+			if status.Code(err) != codes.NotFound {
+				errs = append(errs, fmt.Errorf("failed to delete volume %q: %w", volID, err))
 				continue
 			}
-			errs = append(errs, fmt.Errorf("failed to delete volume %q: %w", volID, err))
+			slog.WarnContext(ctx, "Volume not found during delete, assuming already deleted", slog.String("volume_id", volID))
+		}
+		// The record outlives a failed actor write, so it is looked up by its
+		// derived name when the status does not name it.
+		recordName := vol.GetExternalVolumeName()
+		if recordName == "" {
+			recordName = provisionedExternalVolumeName(actorUID, vol.GetName())
+		}
+		volumeRef := resources.ExternalVolumeRef{Atespace: actor.GetMetadata().GetAtespace(), Name: recordName}
+		if _, err := volumeStore.DeleteExternalVolume(ctx, volumeRef, store.DeletePreconditions{}); err != nil && !errors.Is(err, store.ErrNotFound) {
+			errs = append(errs, fmt.Errorf("failed to delete ExternalVolume %s: %w", volumeRef, err))
 		}
 	}
 	return errors.Join(errs...)
