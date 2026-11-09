@@ -153,7 +153,8 @@ func (p *pendingRequests) deleteEntryLocked(upstreamID uint16) {
 }
 
 // failOverOnSendError advances an entry to the next upstream when sending to
-// failedIdx fails synchronously, or removes the entry if no upstreams remain.
+// failedIdx fails synchronously. If no upstreams remain, it removes the entry,
+// or expires it so sweep delivers a held-back response.
 func (p *pendingRequests) failOverOnSendError(
 	upstreamID uint16,
 	failedIdx int,
@@ -169,6 +170,10 @@ func (p *pendingRequests) failOverOnSendError(
 	}
 	// Drop the request if no fallback upstreams remain.
 	if entry.upstreamIdx+1 >= len(entry.upstreams) {
+		if entry.deferredResp != nil {
+			entry.expiry = time.Now()
+			return 0, nil, false
+		}
 		p.deleteEntryLocked(upstreamID)
 		return 0, nil, false
 	}
