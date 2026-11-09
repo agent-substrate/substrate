@@ -188,9 +188,10 @@ func snapshotSharing(owner ateapi.SnapshotOwner) ateletpb.SnapshotSharing {
 }
 
 // ensureVolumesCreated provisions any actor volumes that have no storage
-// volume ID yet, persisting the resulting volume state (even when creation
-// partially failed, so progress is not lost) and returning the stored copy.
-// An actor being deleted gets no new volumes.
+// volume ID yet, records each as an ExternalVolume, and persists the
+// resulting volume state (even when creation partially failed, so progress is
+// not lost), returning the stored copy. An actor being deleted gets no new
+// volumes.
 func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
@@ -206,7 +207,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return nil, apierror.FailedPrecondition("cannot create volumes for Actor %s in state %s", actorRef, st)
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes().GetVolumes())
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, w.store, actor, actorTemplate, actor.GetStatus().GetExternalVolumes().GetVolumes())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)
