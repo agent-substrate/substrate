@@ -330,38 +330,56 @@ func TestPendingRequestsSweep(t *testing.T) {
 	}
 }
 
-// A SERVFAIL beats a timeout: when the last upstream never answers, the client
-// gets the SERVFAIL held back from an earlier one.
+// A SERVFAIL beats a timeout or a failed send: when the last upstream gives no
+// answer, the client gets the SERVFAIL held back from an earlier one.
 func TestPendingRequestsSweepDeliversDeferredAnswer(t *testing.T) {
-	lim := newLimiter()
-	p := newPendingRequests(lim)
-	client := &net.UDPAddr{IP: net.ParseIP("169.254.0.2"), Port: 54321}
-	upstreams := []string{"10.96.0.10:53", "10.96.0.11:53"}
-	id, raw := recordQuery(t, p, 0x1234, client, upstreams)
+	for _, tc := range []struct {
+		name string
+		// lastUpstreamFails is how the last upstream gives no answer.
+		lastUpstreamFails func(p *pendingRequests, id uint16)
+	}{
+		{name: "timeout", lastUpstreamFails: func(*pendingRequests, uint16) {}},
+		{name: "send error", lastUpstreamFails: func(p *pendingRequests, id uint16) {
+			if _, _, ok := p.failOverOnSendError(id, 1); ok {
+				t.Error("failed over past the last upstream")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lim := newLimiter()
+			p := newPendingRequests(lim)
+			client := &net.UDPAddr{IP: net.ParseIP("169.254.0.2"), Port: 54321}
+			upstreams := []string{"10.96.0.10:53", "10.96.0.11:53"}
+			id, raw := recordQuery(t, p, 0x1234, client, upstreams)
 
-	// Leave the request as a SERVFAIL from the first upstream does: waiting on
-	// the second, with the SERVFAIL held back.
-	if _, _, ok := p.failOverOnSendError(id, 0); !ok {
-		t.Fatal("failOverOnSendError failed")
-	}
-	entry := p.entries[id]
-	entry.deferredResp = dnsAnswer(raw, byte(dnsmessage.RCodeServerFailure))
+			// Leave the request as a SERVFAIL from the first upstream does: waiting on
+			// the second, with the SERVFAIL held back.
+			if _, _, ok := p.failOverOnSendError(id, 0); !ok {
+				t.Fatal("failOverOnSendError failed")
+			}
+			entry := p.entries[id]
+			entry.deferredResp = dnsAnswer(raw, byte(dnsmessage.RCodeServerFailure))
+			expiry := entry.expiry
 
-	failovers, deliveries := p.sweep(entry.expiry.Add(time.Nanosecond))
-	if len(failovers) != 0 {
-		t.Errorf("sweep returned %d failovers past the last upstream, want 0", len(failovers))
-	}
-	wantDeliveries := []reqDelivery{{
-		clientAddr: client,
-		payload:    dnsAnswer(dnsQuery(0x1234), byte(dnsmessage.RCodeServerFailure)),
-	}}
-	if diff := cmp.Diff(wantDeliveries, deliveries, cmp.AllowUnexported(reqDelivery{})); diff != "" {
-		t.Errorf("deliveries mismatch (-want +got):\n%s", diff)
-	}
-	if len(p.entries) != 0 || p.inUse.Count() != 0 {
-		t.Errorf("expired request left %d entries and %d IDs in use", len(p.entries), p.inUse.Count())
-	}
-	if got := lim.inFlight.occupied(); got != 0 {
-		t.Errorf("%d in-flight slots held after expiry, want 0", got)
+			tc.lastUpstreamFails(p, id)
+
+			failovers, deliveries := p.sweep(expiry.Add(time.Nanosecond))
+			if len(failovers) != 0 {
+				t.Errorf("sweep returned %d failovers past the last upstream, want 0", len(failovers))
+			}
+			wantDeliveries := []reqDelivery{{
+				clientAddr: client,
+				payload:    dnsAnswer(dnsQuery(0x1234), byte(dnsmessage.RCodeServerFailure)),
+			}}
+			if diff := cmp.Diff(wantDeliveries, deliveries, cmp.AllowUnexported(reqDelivery{})); diff != "" {
+				t.Errorf("deliveries mismatch (-want +got):\n%s", diff)
+			}
+			if len(p.entries) != 0 || p.inUse.Count() != 0 {
+				t.Errorf("expired request left %d entries and %d IDs in use", len(p.entries), p.inUse.Count())
+			}
+			if got := lim.inFlight.occupied(); got != 0 {
+				t.Errorf("%d in-flight slots held after expiry, want 0", got)
+			}
+		})
 	}
 }
