@@ -152,6 +152,10 @@ func TestApply(t *testing.T) {
 			{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"tcp.example.com"}}},
 		}}},
 	}, {
+		name: "external volume has no defaults",
+		in:   &ateapi.ExternalVolume{VolumeId: "pvc-1", VolumeType: "nfs.csi.k8s.io"},
+		want: &ateapi.ExternalVolume{VolumeId: "pvc-1", VolumeType: "nfs.csi.k8s.io"},
+	}, {
 		name: "tag has no defaults",
 		in:   &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},
 		want: &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},

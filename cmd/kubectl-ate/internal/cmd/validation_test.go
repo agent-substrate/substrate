@@ -32,6 +32,8 @@ func resetFlagsRecursive(c *cobra.Command) {
 	}
 	resetFlagSet(c.LocalFlags())
 	resetFlagSet(c.PersistentFlags())
+	// pflag's stringToString merges each Set into the map and cannot empty it.
+	clear(createExternalVolumeContextFlag)
 	for _, sub := range c.Commands() {
 		resetFlagsRecursive(sub)
 	}
@@ -329,6 +331,48 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			args:          []string{"create", "tag"},
 			wantErrorLine: "Error: missing required argument <tag-name> and required flags -a/--atespace, --actor",
 			wantUsageLine: "kubectl-ate create tag <tag-name> [flags]",
+		},
+		{
+			name:          "create externalvolume missing all",
+			args:          []string{"create", "externalvolume"},
+			wantErrorLine: "Error: missing required argument <volume-name> and required flags -a/--atespace, --volume-id, --volume-type",
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "create externalvolume missing --volume-type",
+			args:          []string{"create", "externalvolume", "ctx", "-a", "space-1", "--volume-id", "vol-1"},
+			wantErrorLine: "Error: missing required flag --volume-type",
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "swallowed flag after --volume-context",
+			args:          []string{"create", "externalvolume", "ctx", "-a", "space-1", "--volume-context", "--volume-id", "vol-1"},
+			wantErrorLine: `Error: flag "--volume-context" requires a value, got flag "--volume-id"`,
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "swallowed --flag=value after --volume-context",
+			args:          []string{"create", "externalvolume", "ctx", "-a", "space-1", "--volume-context", "--volume-id=vol-1", "--volume-type", "nfs.csi.k8s.io"},
+			wantErrorLine: `Error: flag "--volume-context" requires a value, got flag "--volume-id"`,
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "swallowed -o=value after --volume-context",
+			args:          []string{"create", "externalvolume", "ctx", "-a", "space-1", "--volume-id", "vol-1", "--volume-type", "nfs.csi.k8s.io", "--volume-context", "-o=yaml"},
+			wantErrorLine: `Error: flag "--volume-context" requires a value, got flag "-o"`,
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "delete externalvolume with nothing",
+			args:          []string{"delete", "externalvolume"},
+			wantErrorLine: "Error: missing required argument <volume-name> and required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate delete externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "delete externalvolume missing -a",
+			args:          []string{"delete", "externalvolume", "ctx"},
+			wantErrorLine: "Error: missing required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate delete externalvolume <volume-name> [flags]",
 		},
 		{
 			name:          "update tag missing scope",

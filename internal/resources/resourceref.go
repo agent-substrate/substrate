@@ -107,3 +107,20 @@ func TagRefFromTag(t *ateapi.Tag) TagRef {
 		Name:     t.GetMetadata().GetName(),
 	}
 }
+
+// ExternalVolumeRef identifies an ExternalVolume by the (atespace, name).
+type ExternalVolumeRef = ResourceRef[*ateapi.ExternalVolume]
+
+// ExternalVolumeRefFromObjectRef converts an ObjectRef to an ExternalVolumeRef.
+func ExternalVolumeRefFromObjectRef(ref *ateapi.ObjectRef) ExternalVolumeRef {
+	return resourceRefFromObjectRef[*ateapi.ExternalVolume](ref)
+}
+
+// ExternalVolumeRefFromExternalVolume returns the reference addressing the
+// given volume.
+func ExternalVolumeRefFromExternalVolume(v *ateapi.ExternalVolume) ExternalVolumeRef {
+	return ExternalVolumeRef{
+		Atespace: v.GetMetadata().GetAtespace(),
+		Name:     v.GetMetadata().GetName(),
+	}
+}
