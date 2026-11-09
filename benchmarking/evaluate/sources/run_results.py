@@ -1,0 +1,100 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The run_results source: measurements of one stats.jsonl row, as values.
+
+  source_cfg:
+    metric: trial_summary                    # the row's metric; if repeated, the last row wins
+    measurements: [aggregate_failure_ratio]  # returned as values under the same names
+
+stats.jsonl keeps measurements as strings: numeric strings without '_' become
+floats, "true" and "false" become bools, and a measurement the row lacks or a
+non-finite number becomes None.
+"""
+
+import json
+import math
+from pathlib import Path
+from typing import Any, Mapping, Optional
+
+from .base import Scalar, Source, SourceInvalid, check_mapping
+
+
+def read_stats(path: Optional[Path]) -> dict[str, dict[str, Any]]:
+    """stats.jsonl rows by metric name; the last row of a metric wins."""
+    rows: dict[str, dict[str, Any]] = {}
+    if path is None or not path.exists():
+        return rows
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and isinstance(row.get("metric"), str) and row["metric"]:
+                rows[row["metric"]] = row
+    return rows
+
+
+def coerce(v: Any) -> Scalar:
+    """A measurement as a value: finite numbers (and numeric strings without '_') as float,
+    "true"/"false" as bool, and non-finite numbers as None."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return float(v) if math.isfinite(v) else None
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("true", "false"):
+            return s == "true"
+        if "_" not in v:
+            try:
+                x = float(v)
+            except ValueError:
+                return v
+            return x if math.isfinite(x) else None
+        return v
+    return json.dumps(v, sort_keys=True)  # a nested value, kept readable
+
+
+class RunResults(Source):
+    @classmethod
+    def validate(cls, cfg: Mapping[str, Any]) -> None:
+        check_mapping(cfg, required=("metric", "measurements"))
+        if not isinstance(cfg["metric"], str) or not cfg["metric"]:
+            raise ValueError("metric must be a non-empty string")
+        names = cfg["measurements"]
+        if not isinstance(names, list) or not names:
+            raise ValueError("measurements must be a non-empty list of measurement names")
+        for name in names:
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"measurements: {name!r} must be a non-empty string")
+        if len(set(names)) != len(names):
+            raise ValueError("measurements: listed twice")
+
+    def init(self, run) -> None:
+        super().init(run)
+        self._rows: Optional[dict[str, dict[str, Any]]] = None
+
+    def query(self, cfg: Mapping[str, Any]) -> Mapping[str, Scalar]:
+        if self._rows is None:
+            path = self.run.file("stats.jsonl")
+            if path is None:
+                raise SourceInvalid("stats.jsonl absent")
+            self._rows = read_stats(path)
+        row = self._rows.get(cfg["metric"])
+        if row is None:
+            raise SourceInvalid(f"no stats.jsonl row {cfg['metric']}")
+        measurements = row.get("measurements") if isinstance(row.get("measurements"), dict) else {}
+        return {name: coerce(measurements.get(name)) for name in cfg["measurements"]}
