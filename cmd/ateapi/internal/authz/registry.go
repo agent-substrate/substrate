@@ -88,6 +88,13 @@ func onWorker(relation, name string, fldPath *field.Path) ([]check, field.ErrorL
 	return []check{{relation: relation, object: WorkerObject(name)}}, nil
 }
 
+func onExternalVolumeClass(relation, name string, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateName(name, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: ExternalVolumeClassObject(name)}}, nil
+}
+
 // resourceRef identifies an atespaced resource. Both *ateapi.ObjectRef and
 // *ateapi.ResourceMetadata satisfy it, including as nil pointers.
 type resourceRef interface {
@@ -292,6 +299,20 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapi.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapi.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+
+	// External volume classes. Global-scoped like workers.
+	ateapi.Control_CreateExternalVolumeClass_FullMethodName: rule(checksOf(func(*ateapi.CreateExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanCreateExternalVolumeClass)
+	})),
+	ateapi.Control_ListExternalVolumeClasses_FullMethodName: rule(checksOf(func(*ateapi.ListExternalVolumeClassesRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanListExternalVolumeClasses)
+	})),
+	ateapi.Control_GetExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanGet, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_DeleteExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanDelete, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
 	})),
 
 	// Actor identity credentials.
