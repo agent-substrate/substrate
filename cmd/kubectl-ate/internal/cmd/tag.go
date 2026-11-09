@@ -251,8 +251,17 @@ func (v *volumeSelectionValue) Set(s string) error {
 	if v.sel == nil {
 		v.sel = &ateapi.ExternalVolumeSelection{}
 	}
-	if s != allVolumes {
-		v.sel.Names = append(v.sel.Names, strings.Split(s, ",")...)
+	if s == allVolumes {
+		return nil
+	}
+	for name := range strings.SplitSeq(s, ",") {
+		switch name {
+		case "":
+			return fmt.Errorf("empty volume name in %q", s)
+		case allVolumes:
+			return fmt.Errorf("cannot both capture every volume and name volumes")
+		}
+		v.sel.Names = append(v.sel.Names, name)
 	}
 	return nil
 }
