@@ -433,14 +433,12 @@ func TestPullStartsLargestLayersFirst(t *testing.T) {
 	pushImage(t, ref, v1.Config{}, layers...)
 
 	store := newTestStore(t)
-	type result struct {
-		img *Image
-		err error
-	}
-	done := make(chan result, 1)
+	done := make(chan error, 1)
+	var img *Image
 	go func() {
-		img, err := store.EnsureImage(context.Background(), ref)
-		done <- result{img: img, err: err}
+		var err error
+		img, err = store.EnsureImage(context.Background(), ref)
+		done <- err
 	}()
 
 	// All 5 layers are gated, so at most layerPullConcurrency (4) blob GETs can
@@ -457,14 +455,13 @@ func TestPullStartsLargestLayersFirst(t *testing.T) {
 	for _, release := range releases {
 		release()
 	}
-	res := <-done
-	if res.err != nil {
-		t.Fatalf("EnsureImage: %v", res.err)
+	if err := <-done; err != nil {
+		t.Fatalf("EnsureImage: %v", err)
 	}
-	if len(res.img.LayerDirs) != len(layers) {
-		t.Fatalf("len(LayerDirs) = %d, want %d", len(res.img.LayerDirs), len(layers))
+	if len(img.LayerDirs) != len(layers) {
+		t.Fatalf("len(LayerDirs) = %d, want %d", len(img.LayerDirs), len(layers))
 	}
-	for i, dir := range res.img.LayerDirs {
+	for i, dir := range img.LayerDirs {
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName, strconv.Itoa(i))); err != nil {
 			t.Errorf("LayerDirs[%d] missing entry %q: %v", i, strconv.Itoa(i), err)
 		}
