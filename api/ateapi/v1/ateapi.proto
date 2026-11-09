@@ -474,6 +474,16 @@ message ResourceMetadata {
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
   google.protobuf.Timestamp delete_time = 7;
+
+  // annotations are decorative, non-queryable key-value metadata for the
+  // resource. Keys in ate.dev and its subdomains are reserved, and keys and
+  // values together may not exceed 4096 bytes.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:customValidation # reserved keys and total size
+  map<string, string> annotations = 8;
 }
 
 // ExternalVolumes is the external volume state recorded on an actor, wrapped
