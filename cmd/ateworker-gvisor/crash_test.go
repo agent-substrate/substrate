@@ -25,17 +25,36 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/atunnel/egress"
+	"go.ate.dev/substrate/internal/atunnel/ingress"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 )
 
-type fakeCrashReporter struct {
-	reports chan string
+type crashReport struct {
+	actor        resources.ActorAttribution
+	executionUID string
+	message      string
 }
 
-func (f *fakeCrashReporter) ReportCrashed(_ context.Context, _ resources.ActorAttribution, message string) error {
-	f.reports <- message
+type fakeCrashReporter struct {
+	reports chan crashReport
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f *fakeCrashReporter) ReportCrashed(ctx context.Context, actor resources.ActorAttribution, executionUID, message string) error {
+	if f.started != nil {
+		f.started <- struct{}{}
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.reports <- crashReport{actor: actor, executionUID: executionUID, message: message}
 	return nil
 }
 
@@ -67,7 +86,7 @@ func TestWatchSandboxIgnoresExpectedExits(t *testing.T) {
 		{"actor no longer hosted", func(s *AteWorkerService, _ *hostedActor) { delete(s.actors, "actor-a") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reporter := &fakeCrashReporter{reports: make(chan string, 1)}
+			reporter := &fakeCrashReporter{reports: make(chan crashReport, 1)}
 			actorDirs := exitingSandbox(t)
 			sandbox, err := openSandboxProcess(actorDirs)
 			if err != nil {
@@ -79,10 +98,90 @@ func TestWatchSandboxIgnoresExpectedExits(t *testing.T) {
 			tc.setup(s, hosted)
 			s.watchSandbox(context.Background(), hosted, "", actorDirs, nil)
 			select {
-			case msg := <-reporter.reports:
-				t.Fatalf("reported %q for an expected exit", msg)
+			case report := <-reporter.reports:
+				t.Fatalf("reported %q for an expected exit", report.message)
 			case <-time.After(500 * time.Millisecond):
 			}
 		})
+	}
+}
+
+func TestWatchSandboxReportsItsExecutionAfterRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	reporter := &fakeCrashReporter{
+		reports: make(chan crashReport, 2),
+		started: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	t.Cleanup(func() { close(reporter.release) })
+	s := newStatsService(t, nil)
+	s.crashReporter = reporter
+	s.tunnel = &atunnel.Tunnel{Ingress: &ingress.Server{}, Egress: &egress.Proxy{}}
+	s.flags = &flagStore{cfg: &flagConfig{}}
+	runscPath, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := func() (*hostedActor, *ateworkerpb.ActorDirs) {
+		t.Helper()
+		hosted, _, err := s.admitActor(testActor, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actorDirs := exitingSandbox(t)
+		actorDirs.OciBundleDir = t.TempDir()
+		s.pinSandbox(t.Context(), hosted, actorDirs)
+		return hosted, actorDirs
+	}
+
+	first, firstDirs := start()
+	s.watchSandbox(t.Context(), first, runscPath, firstDirs, nil)
+	select {
+	case <-reporter.started:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the watcher to report")
+	}
+	second, secondDirs := start()
+	if first.executionUID == "" || second.executionUID == "" || first.executionUID == second.executionUID {
+		t.Fatalf("execution UIDs = %q, %q, want distinct nonempty values", first.executionUID, second.executionUID)
+	}
+	select {
+	case reporter.release <- struct{}{}:
+	case <-ctx.Done():
+		t.Fatal("timed out releasing the crash report")
+	}
+	var oldReport crashReport
+	select {
+	case oldReport = <-reporter.reports:
+	case <-ctx.Done():
+		t.Fatal("timed out receiving the crash report")
+	}
+	if oldReport.actor != testActor || oldReport.executionUID != first.executionUID || oldReport.message != "gVisor sandbox exited" {
+		t.Errorf("old crash report = %+v, want execution %q", oldReport, first.executionUID)
+	}
+	if s.lookupActor(testActor.UID) != second {
+		t.Fatal("old watcher removed the current execution")
+	}
+
+	s.watchSandbox(t.Context(), second, runscPath, secondDirs, nil)
+	select {
+	case <-reporter.started:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the watcher to report")
+	}
+	select {
+	case reporter.release <- struct{}{}:
+	case <-ctx.Done():
+		t.Fatal("timed out releasing the crash report")
+	}
+	var currentReport crashReport
+	select {
+	case currentReport = <-reporter.reports:
+	case <-ctx.Done():
+		t.Fatal("timed out receiving the crash report")
+	}
+	if currentReport.actor != testActor || currentReport.executionUID != second.executionUID || currentReport.message != "gVisor sandbox exited" {
+		t.Errorf("current crash report = %+v, want execution %q", currentReport, second.executionUID)
 	}
 }

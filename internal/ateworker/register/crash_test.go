@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
@@ -36,7 +37,7 @@ type fakeConn struct {
 }
 
 func (c *fakeConn) Invoke(_ context.Context, _ string, args, _ any, _ ...grpc.CallOption) error {
-	c.got = append(c.got, args.(*ateletpb.ReportActorCrashedRequest))
+	c.got = append(c.got, proto.CloneOf(args.(*ateletpb.ReportActorCrashedRequest)))
 	if len(c.errs) == 0 {
 		return nil
 	}
@@ -49,6 +50,8 @@ var testActor = resources.ActorAttribution{
 	Ref: resources.ActorRef{Atespace: "team-a", Name: "actor-1"},
 	UID: "01234567-89ab-cdef-0123-456789abcdef",
 }
+
+const testExecutionUID = "867a5b25-8de5-48be-9c5f-1d5f80d97a72"
 
 func TestReportCrashed(t *testing.T) {
 	tests := []struct {
@@ -65,16 +68,17 @@ func TestReportCrashed(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := &fakeConn{errs: tc.errs}
-			err := reportCrashedWithRetry(context.Background(), conn, testActor, "cloud-hypervisor exited", time.Millisecond)
+			err := reportCrashedWithRetry(context.Background(), conn, testActor, testExecutionUID, "cloud-hypervisor exited", time.Millisecond)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
 			if len(conn.got) != tc.wantCalls {
 				t.Fatalf("calls = %d, want %d", len(conn.got), tc.wantCalls)
 			}
-			req := conn.got[0]
-			if req.GetActorAtespace() != "team-a" || req.GetActorName() != "actor-1" || req.GetActorUid() != testActor.UID || req.GetMessage() != "cloud-hypervisor exited" {
-				t.Errorf("request = %v", req)
+			for _, req := range conn.got {
+				if req.GetActorAtespace() != "team-a" || req.GetActorName() != "actor-1" || req.GetActorUid() != testActor.UID || req.GetMessage() != "cloud-hypervisor exited" || req.GetExecutionUid() != testExecutionUID {
+					t.Errorf("request = %v", req)
+				}
 			}
 		})
 	}
@@ -87,7 +91,7 @@ func TestReportCrashedGivesUpWithContext(t *testing.T) {
 	for i := range conn.errs {
 		conn.errs[i] = status.Error(codes.Unavailable, "")
 	}
-	if err := reportCrashedWithRetry(ctx, conn, testActor, "x", time.Millisecond); err == nil {
+	if err := reportCrashedWithRetry(ctx, conn, testActor, testExecutionUID, "x", time.Millisecond); err == nil {
 		t.Fatal("err = nil, want the context error")
 	}
 }

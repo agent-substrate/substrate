@@ -47,7 +47,7 @@ func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef
 	}
 	// rechecked under the lease, the caller's checks raced other operations
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	if actor.GetMetadata().GetUid() != actorUID || assignment.GetWorker().GetName() != workerName || (executionUID != "" && assignment.GetExecutionUid() != executionUID) {
+	if actor.GetMetadata().GetUid() != actorUID || assignment.GetWorker().GetName() != workerName || assignment.GetExecutionUid() != executionUID {
 		return nil, apierror.NotFound("Actor %s not found", actorRef)
 	}
 	if state := actor.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_RUNNING {

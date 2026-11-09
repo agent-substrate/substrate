@@ -47,7 +47,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 		{name: "hosted by another worker", worker: "other-worker", wantCode: codes.NotFound},
 		{name: "current execution", activeExecution: currentExecution, reportedExecution: currentExecution, wantCode: codes.OK},
 		{name: "previous execution on the same worker", activeExecution: currentExecution, reportedExecution: previousExecution, wantCode: codes.NotFound},
-		{name: "missing execution identity", activeExecution: currentExecution, wantCode: codes.OK},
+		{name: "missing execution identity", activeExecution: currentExecution, wantCode: codes.NotFound},
 		{name: "report for an untracked execution", reportedExecution: previousExecution, wantCode: codes.NotFound},
 		{
 			name:     "operation in flight",
