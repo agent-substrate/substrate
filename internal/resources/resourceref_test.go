@@ -27,9 +27,10 @@ import (
 // is expected.
 func TestRefAliasesAreDistinctTypes(t *testing.T) {
 	types := map[string]reflect.Type{
-		"ActorRef":         reflect.TypeFor[ActorRef](),
-		"ActorTemplateRef": reflect.TypeFor[ActorTemplateRef](),
-		"TagRef":           reflect.TypeFor[TagRef](),
+		"ActorRef":          reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef":  reflect.TypeFor[ActorTemplateRef](),
+		"TagRef":            reflect.TypeFor[TagRef](),
+		"ExternalVolumeRef": reflect.TypeFor[ExternalVolumeRef](),
 	}
 	seen := make(map[reflect.Type]string)
 	for name, typ := range types {
@@ -58,6 +59,11 @@ func TestResourceRefLogValue(t *testing.T) {
 			name: "zero template ref",
 			val:  ActorTemplateRef{}.LogValue(),
 			want: map[string]string{"type": "*ateapi.ActorTemplate", "atespace": "", "name": ""},
+		},
+		{
+			name: "zero external volume ref",
+			val:  ExternalVolumeRef{}.LogValue(),
+			want: map[string]string{"type": "*ateapi.ExternalVolume", "atespace": "", "name": ""},
 		},
 		{
 			name: "populated actor ref",
@@ -211,6 +217,51 @@ func TestTagRefFromTag(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := TagRefFromTag(tt.tag); got != tt.want {
 				t.Errorf("TagRefFromTag() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExternalVolumeRefString(t *testing.T) {
+	got := ExternalVolumeRef{Atespace: "team-a", Name: "vol-1"}.String()
+	if want := "team-a/vol-1"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestExternalVolumeRefObjectRefRoundTrip(t *testing.T) {
+	volumeRef := ExternalVolumeRef{Atespace: "team-a", Name: "vol-1"}
+
+	obj := volumeRef.ToObjectRef()
+	if obj.GetAtespace() != "team-a" || obj.GetName() != "vol-1" {
+		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, vol-1)", obj.GetAtespace(), obj.GetName())
+	}
+	if got := ExternalVolumeRefFromObjectRef(obj); got != volumeRef {
+		t.Errorf("round-trip = %+v, want %+v", got, volumeRef)
+	}
+}
+
+func TestExternalVolumeRefFromExternalVolume(t *testing.T) {
+	tests := []struct {
+		name   string
+		volume *ateapi.ExternalVolume
+		want   ExternalVolumeRef
+	}{
+		{
+			name: "populated",
+			volume: &ateapi.ExternalVolume{Metadata: &ateapi.ResourceMetadata{
+				Atespace: "team-a",
+				Name:     "vol-1",
+			}},
+			want: ExternalVolumeRef{Atespace: "team-a", Name: "vol-1"},
+		},
+		{"nil volume", nil, ExternalVolumeRef{}},
+		{"nil metadata", &ateapi.ExternalVolume{}, ExternalVolumeRef{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExternalVolumeRefFromExternalVolume(tt.volume); got != tt.want {
+				t.Errorf("ExternalVolumeRefFromExternalVolume() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
