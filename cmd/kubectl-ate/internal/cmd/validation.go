@@ -79,6 +79,15 @@ func handleFlagError(cmd *cobra.Command, err error) error {
 		return usageErrorf("unknown flag %q", specifiedNotExistFlag(notExist))
 	}
 
+	// A map flag such as --volume-context parses its value eagerly, so a
+	// swallowed flag token fails here rather than in checkSwallowedFlags.
+	var invalid *pflag.InvalidValueError
+	if errors.As(err, &invalid) {
+		if f, val := invalid.GetFlag(), invalid.GetValue(); f != nil && strings.HasPrefix(val, "-") {
+			return usageErrorf("flag %q requires a value, got flag %q", formatFlagName(f), val)
+		}
+	}
+
 	return wrapUsageError(err)
 }
 

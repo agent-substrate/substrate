@@ -120,6 +120,29 @@ service Control {
     option (method).resource = "Tag";
   }
 
+  // Register a volume that already exists in the storage system as an
+  // ExternalVolume. Requires the ExternalVolumes preview gate.
+  rpc CreateExternalVolume(CreateExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // Get an ExternalVolume.
+  rpc GetExternalVolume(GetExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // List ExternalVolumes.
+  rpc ListExternalVolumes(ListExternalVolumesRequest) returns (ListExternalVolumesResponse) {
+    option (method).resource = "ExternalVolume";
+  }
+
+  // Delete an ExternalVolume. Removes the record only; the storage is left in
+  // place. Rejects (FailedPrecondition) if any Actor or ActorTemplate
+  // references the volume.
+  rpc DeleteExternalVolume(DeleteExternalVolumeRequest) returns (ExternalVolume) {
+    option (method).resource = "ExternalVolume";
+  }
+
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
     option (method).resource = "Worker";
@@ -197,8 +220,8 @@ service Control {
     option (method).resource = "Atespace";
   }
 
-  // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
-  // Tags remain.
+  // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors,
+  // ActorTemplates, Tags or ExternalVolumes remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {
     option (method).resource = "Atespace";
   }
@@ -526,9 +549,9 @@ message ExternalVolumeStatus {
   string volume_type = 3;
 
   // volume_context contains metadata returned by the CSI driver during volume
-  // provisioning, needed by the node plugin for mounting (e.g. attachment
-  // info). Keys and values are the driver's own, so the map is only bounded,
-  // not validated.
+  // provisioning, needed by the node plugin for mounting, such as an NFS
+  // server and export path. Keys and values are the driver's own, so the map
+  // is only bounded, not validated.
   //
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
@@ -1114,6 +1137,62 @@ message Tag {
   // +k8s:subfield(atespace)=+k8s:required
   // +k8s:immutable
   ObjectRef source_actor = 4;
+}
+
+// ExternalVolume is an atespace-scoped record of a CSI volume. Its lifetime
+// is independent of any actor: it registers a volume that already exists in
+// the storage system, by the volume ID and driver the node plugin needs to
+// mount it. Identity is (atespace, name). An atespace cannot be deleted while
+// it holds an ExternalVolume.
+//
+// Deleting an ExternalVolume removes the record only; the storage is left in
+// place.
+//
+// (-- Actors cannot reference an ExternalVolume yet. The actor template
+// reference, actor references on the volume, and the delete trigger come in
+// later changes. --)
+message ExternalVolume {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "ExternalVolumes"
+  };
+
+  // Common resource metadata: atespace, name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ResourceMetadata metadata = 1;
+
+  // volume_id is the volume's ID in the storage system, as the CSI driver
+  // reports it. Its format is the storage system's own, so it is only bounded
+  // and checked for control characters, like
+  // `ExternalVolumeStatus.storage_volume_id`.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:immutable
+  // +k8s:customValidation # no control characters
+  string volume_id = 2;
+
+  // volume_type is the CSI driver name, with the syntax of
+  // `ExternalVolumeStatus.volume_type`.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:immutable
+  // +k8s:customValidation # CSI driver name syntax
+  string volume_type = 3;
+
+  // volume_context is the driver metadata the node plugin needs to mount the
+  // volume, as the CSI driver returned it when the volume was provisioned.
+  // Keys and values are the driver's own, so the map is only bounded, like
+  // `ExternalVolumeStatus.volume_context`. Attachment metadata is per node
+  // and not recorded here.
+  //
+  // +k8s:optional
+  // +k8s:immutable
+  // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
+  map<string, string> volume_context = 4;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -2071,6 +2150,62 @@ message DeleteTagRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef tag = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
+}
+
+// Request to register an ExternalVolume.
+message CreateExternalVolumeRequest {
+  // The volume to register. metadata.atespace and metadata.name are its
+  // identity; the other metadata fields are server-assigned and ignored.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:required
+  ExternalVolume external_volume = 1;
+}
+
+// GetExternalVolumeRequest identifies one ExternalVolume.
+message GetExternalVolumeRequest {
+  // The volume to get.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef external_volume = 1;
+}
+
+// ListExternalVolumesRequest selects a page of ExternalVolumes.
+message ListExternalVolumesRequest {
+  // The atespace to list from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // Pagination controls.
+  //
+  // +k8s:optional
+  ListOptions options = 2;
+}
+
+// ListExternalVolumesResponse is one page of ExternalVolumes.
+message ListExternalVolumesResponse {
+  // The volumes in this page.
+  repeated ExternalVolume external_volumes = 1;
+
+  // Pagination token for the next page. Empty on the last page.
+  string next_page_token = 2;
+}
+
+// DeleteExternalVolumeRequest identifies one ExternalVolume to delete.
+message DeleteExternalVolumeRequest {
+  // The volume to delete.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef external_volume = 1;
 
   // Optional per-delete preconditions.
   //

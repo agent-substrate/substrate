@@ -35,6 +35,7 @@ const (
 	kindActor         resourceKind = "actor"
 	kindActorTemplate resourceKind = "actor-template"
 	kindTag           resourceKind = "tag"
+	kindExternalVol   resourceKind = "external-volume"
 	kindWorker        resourceKind = "worker"
 	kindWorkerAssign  resourceKind = "worker-assignment"
 )

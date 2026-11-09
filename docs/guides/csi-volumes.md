@@ -212,3 +212,36 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+## 5. Registering an Existing Volume
+
+An `ExternalVolume` is an atespace-scoped record of a CSI volume that already
+exists in the storage system. It names the volume the way the node plugin needs
+it: the CSI driver (`volumeType`), the volume ID the driver reports
+(`volumeId`), and the mount metadata the driver returned when the volume was
+provisioned (`volumeContext`). Its lifetime is independent of any actor, and an
+atespace cannot be deleted while it holds one.
+
+Registering a volume names storage that the provider does not scope to an
+atespace, so only a global owner may do it; see
+[Authorization](authorization.md#external-volumes). It needs the
+`ExternalVolumes` preview gate and `--preview`:
+
+```bash
+kubectl ate --preview create externalvolume ctx -a ate-demo \
+  --volume-type nfs.csi.k8s.io \
+  --volume-id nfs-server.default.svc.cluster.local#exports#ctx \
+  --volume-context server=nfs-server.default.svc.cluster.local,share=/exports/ctx
+kubectl ate get externalvolumes -a ate-demo
+```
+
+Deleting an `ExternalVolume` removes the record only. The storage stays where
+it is:
+
+```bash
+kubectl ate delete externalvolume ctx -a ate-demo
+```
+
+Actor templates cannot reference an `ExternalVolume` yet. Every external volume
+an actor mounts is still provisioned for that actor from
+`volumes[].external.template`, as described above.
