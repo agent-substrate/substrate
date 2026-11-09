@@ -29,7 +29,6 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelcodes "go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -1162,52 +1161,57 @@ func TestCallerResult_BudgetExhaustedNeedsParking(t *testing.T) {
 	}
 }
 
-// The ResumeActor span carries the resume outcome, and a failure also sets
-// error.type and an error status, so traces and the route metric agree.
+// The ResumeActor span carries the resume outcome and, on failure, error.type.
+// Only a failed resume sets the error status: a caller that disconnects keeps
+// error.type=Canceled with the status unset.
 func TestResumeActor_SpanCarriesOutcome(t *testing.T) {
-	sr := tracetest.NewSpanRecorder()
-	prev := otel.GetTracerProvider()
-	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)))
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
-
+	t.Parallel()
 	for _, tt := range []struct {
 		name       string
 		resumeErr  error
+		cancelCtx  bool
 		wantResume string
 		wantType   string
 		wantStatus otelcodes.Code
 	}{
 		{name: "activation", wantResume: ateattr.RouterResumeTriggered, wantStatus: otelcodes.Unset},
 		{name: "failure", resumeErr: status.Error(codes.NotFound, "not found"), wantResume: ateattr.RouterResumeUnknown, wantType: "NotFound", wantStatus: otelcodes.Error},
+		{name: "caller canceled", cancelCtx: true, wantResume: ateattr.RouterResumeUnknown, wantType: "Canceled", wantStatus: otelcodes.Unset},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// A canceled caller must find its flight still open, or the select
+			// on the context and the flight's completion picks at random.
+			gate := make(chan struct{})
+			defer close(gate)
 			mock := &resumerMockClient{
 				resumeFn: func(ctx context.Context, in *ateapi.ResumeActorRequest, opts ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+					if tt.cancelCtx {
+						<-gate
+					}
 					if tt.resumeErr != nil {
 						return nil, tt.resumeErr
 					}
 					return &ateapi.ResumeActorResponse{Resumed: true}, nil
 				},
 			}
-			actorRef := resources.ActorRef{Atespace: "spans", Name: tt.name}
-			_, _, _ = NewActorResumer(mock).ResumeActor(context.Background(), actorRef)
-
-			var span sdktrace.ReadOnlySpan
-			for _, s := range sr.Ended() {
-				if s.Name() != "ResumeActor" {
-					continue
-				}
-				for _, kv := range s.Attributes() {
-					if kv.Key == ateattr.ActorNameKey && kv.Value.AsString() == tt.name {
-						span = s
-					}
-				}
+			ctx := context.Background()
+			if tt.cancelCtx {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
 			}
-			if span == nil {
-				t.Fatal("ResumeActor span not recorded")
+			sr := tracetest.NewSpanRecorder()
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+			resumer := NewActorResumer(mock, withTracerProvider(tp))
+			_, _, _ = resumer.ResumeActor(ctx, resources.ActorRef{Atespace: "spans", Name: "actor"})
+
+			spans := sr.Ended()
+			if len(spans) != 1 || spans[0].Name() != "ResumeActor" {
+				t.Fatalf("recorded %d spans, want one ResumeActor span", len(spans))
 			}
 			attrs := map[attribute.Key]string{}
-			for _, kv := range span.Attributes() {
+			for _, kv := range spans[0].Attributes() {
 				attrs[kv.Key] = kv.Value.AsString()
 			}
 			if got := attrs[ateattr.RouterResumeKey]; got != tt.wantResume {
@@ -1216,7 +1220,7 @@ func TestResumeActor_SpanCarriesOutcome(t *testing.T) {
 			if got := attrs[ateattr.ErrorTypeKey]; got != tt.wantType {
 				t.Errorf("error.type = %q, want %q", got, tt.wantType)
 			}
-			if got := span.Status().Code; got != tt.wantStatus {
+			if got := spans[0].Status().Code; got != tt.wantStatus {
 				t.Errorf("status = %v, want %v", got, tt.wantStatus)
 			}
 		})

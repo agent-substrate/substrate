@@ -16,6 +16,7 @@ package ingress
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -118,6 +119,8 @@ type ActorResumer struct {
 	// Used as a unique ID to identify requests (reqID) and disambiguate the
 	// leader vs joiners for flight outcome classification.
 	nextID uint64
+	// tracer starts the ResumeActor spans.
+	tracer trace.Tracer
 }
 
 // resumerOption configures an ActorResumer.
@@ -145,11 +148,18 @@ func withParkingLot(lot *parkingLot) resumerOption {
 	return func(r *ActorResumer) { r.lot = lot }
 }
 
+// withTracerProvider starts the ResumeActor spans from tp instead of the
+// global provider.
+func withTracerProvider(tp trace.TracerProvider) resumerOption {
+	return func(r *ActorResumer) { r.tracer = tp.Tracer(serviceName) }
+}
+
 func NewActorResumer(apiClient ateapi.ControlClient, opts ...resumerOption) *ActorResumer {
 	r := &ActorResumer{
 		apiClient: apiClient,
 		flights:   make(map[string]*resumeActorFlight),
 		budget:    failFastResumeBudget,
+		tracer:    otel.Tracer(serviceName),
 		backoff: resumeBackoff(DefaultParkedRequestRetryInterval,
 			DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter),
 	}
@@ -184,7 +194,7 @@ func (r *ActorResumer) retryable(err error) bool {
 // ResumeActor ensures the actor is running.
 // This method will block until the actor is resumed or error.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, ResumeOutcome, error) {
-	ctx, span := otel.Tracer(serviceName).Start(ctx, "ResumeActor",
+	ctx, span := r.tracer.Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 
@@ -214,8 +224,12 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	span.SetAttributes(ateattr.RouterResumeKey.String(string(outcome)))
 	if err != nil {
 		span.SetAttributes(ateattr.ErrorTypeKey.String(resumeErrorType(err)))
-		span.RecordError(err)
-		span.SetStatus(otelcodes.Error, err.Error())
+		// A disconnected caller is not a router failure, so Canceled leaves
+		// the status unset, as gRPC server spans do.
+		if !errors.Is(err, context.Canceled) {
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+		}
 	}
 	return actor, outcome, err
 }
