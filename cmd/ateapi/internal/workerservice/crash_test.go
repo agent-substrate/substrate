@@ -31,10 +31,11 @@ import (
 
 func crashRequest(actorUID string) *ateapi.ReportActorCrashedRequest {
 	return &ateapi.ReportActorCrashedRequest{
-		Worker:   &ateapi.ObjectRef{Name: testWorkerName},
-		Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
-		ActorUid: actorUID,
-		Message:  "cloud-hypervisor exited: signal: killed",
+		Worker:       &ateapi.ObjectRef{Name: testWorkerName},
+		Actor:        &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
+		ActorUid:     actorUID,
+		Message:      "cloud-hypervisor exited: signal: killed",
+		ExecutionUid: "f91585ad-2435-4c49-bc02-1096554b774c",
 	}
 }
 
@@ -51,10 +52,11 @@ func TestReportActorCrashed(t *testing.T) {
 		t.Fatalf("ReportActorCrashed() failed: %v", err)
 	}
 	want := []crashCall{{
-		ActorRef:   resources.ActorRef{Atespace: suspendAtespace, Name: suspendActor},
-		ActorUID:   uid,
-		WorkerName: testWorkerName,
-		Message:    "cloud-hypervisor exited: signal: killed",
+		ActorRef:     resources.ActorRef{Atespace: suspendAtespace, Name: suspendActor},
+		ActorUID:     uid,
+		WorkerName:   testWorkerName,
+		Message:      "cloud-hypervisor exited: signal: killed",
+		ExecutionUID: "f91585ad-2435-4c49-bc02-1096554b774c",
 	}}
 	if diff := cmp.Diff(want, control.crashCalls); diff != "" {
 		t.Errorf("crash calls mismatch (-want +got):\n%s", diff)
@@ -73,6 +75,8 @@ func TestReportActorCrashed_Refused(t *testing.T) {
 	noMessage.Message = ""
 	longMessage := crashRequest(uid)
 	longMessage.Message = strings.Repeat("x", 4097)
+	invalidExecution := crashRequest(uid)
+	invalidExecution.ExecutionUid = "invalid"
 
 	tests := []struct {
 		name string
@@ -85,6 +89,7 @@ func TestReportActorCrashed_Refused(t *testing.T) {
 		{"stale actor incarnation", authed, crashRequest("3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"), codes.NotFound},
 		{"no message", authed, noMessage, codes.InvalidArgument},
 		{"message too long", authed, longMessage, codes.InvalidArgument},
+		{"invalid execution UID", authed, invalidExecution, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

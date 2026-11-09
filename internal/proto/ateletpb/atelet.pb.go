@@ -1284,7 +1284,12 @@ type ReportActorCrashedRequest struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=4096
-	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	// The execution that exited, as returned by RunWorkload or RestoreWorkload.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,5,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1343,6 +1348,13 @@ func (x *ReportActorCrashedRequest) GetActorUid() string {
 func (x *ReportActorCrashedRequest) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *ReportActorCrashedRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
 	}
 	return ""
 }
@@ -3342,7 +3354,9 @@ type RunResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The epoch of the worker process that started the workload, as it
 	// registered with the control plane.
-	WorkerEpoch   int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	WorkerEpoch int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	// The worker-generated identity of this execution.
+	ExecutionUid  string `protobuf:"bytes,2,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3382,6 +3396,13 @@ func (x *RunResponse) GetWorkerEpoch() int64 {
 		return x.WorkerEpoch
 	}
 	return 0
+}
+
+func (x *RunResponse) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
+	}
+	return ""
 }
 
 type ObjectStorage struct {
@@ -4120,7 +4141,9 @@ type RestoreResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The epoch of the worker process that restored the workload, as it
 	// registered with the control plane.
-	WorkerEpoch   int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	WorkerEpoch int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
+	// The worker-generated identity of this execution.
+	ExecutionUid  string `protobuf:"bytes,2,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4160,6 +4183,13 @@ func (x *RestoreResponse) GetWorkerEpoch() int64 {
 		return x.WorkerEpoch
 	}
 	return 0
+}
+
+func (x *RestoreResponse) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
+	}
+	return ""
 }
 
 type PromoteSnapshotRequest struct {
@@ -4475,13 +4505,14 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"\x1d\n" +
-	"\x1bRequestActorSuspendResponse\"\x98\x01\n" +
+	"\x1bRequestActorSuspendResponse\"\xbd\x01\n" +
 	"\x19ReportActorCrashedRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\x1c\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12#\n" +
+	"\rexecution_uid\x18\x05 \x01(\tR\fexecutionUid\"\x1c\n" +
 	"\x1aReportActorCrashedResponse\"c\n" +
 	"\x1bGetActorEgressPolicyRequest\x12%\n" +
 	"\x0eactor_atespace\x18\x01 \x01(\tR\ractorAtespace\x12\x1d\n" +
@@ -4606,9 +4637,10 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"0\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"U\n" +
 	"\vRunResponse\x12!\n" +
-	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"e\n" +
+	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\x12#\n" +
+	"\rexecution_uid\x18\x02 \x01(\tR\fexecutionUid\"e\n" +
 	"\rObjectStorage\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x121\n" +
 	"\asharing\x18\x02 \x01(\x0e2\x17.atelet.SnapshotSharingR\asharing\"\xb4\x01\n" +
@@ -4657,9 +4689,10 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12D\n" +
 	"\x0fsandbox_runtime\x18\f \x01(\v2\x1b.atelet.ActorSandboxRuntimeR\x0esandboxRuntimeB\x11\n" +
-	"\x0f_egress_gateway\"4\n" +
+	"\x0f_egress_gateway\"Y\n" +
 	"\x0fRestoreResponse\x12!\n" +
-	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"\x86\x02\n" +
+	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\x12#\n" +
+	"\rexecution_uid\x18\x02 \x01(\tR\fexecutionUid\"\x86\x02\n" +
 	"\x16PromoteSnapshotRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +

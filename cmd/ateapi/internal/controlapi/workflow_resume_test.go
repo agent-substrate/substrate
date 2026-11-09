@@ -165,7 +165,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1, "")
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -181,16 +181,20 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 // worker process, is stamped with that process's epoch and the IPs it
 // registered, so the reconciler keeps it and traffic reaches it.
 func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
+	const executionUID = "89a2bbd3-87a5-4f5a-a5f5-825c60ec41c9"
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2)
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2, executionUID)
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
 	assignment := got.GetStatus().GetWorkerAssignment()
+	if assignment.GetExecutionUid() != executionUID {
+		t.Errorf("execution_uid = %q, want %q", assignment.GetExecutionUid(), executionUID)
+	}
 	if assignment.GetWorkerEpoch() != 2 {
 		t.Errorf("worker_epoch = %d, want 2", assignment.GetWorkerEpoch())
 	}
@@ -226,7 +230,7 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 			}
 			w := &ActorWorkflow{store: persistence}
 
-			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported)
+			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported, "")
 			if got := apierror.Code(err); got != tc.want {
 				t.Fatalf("finalizeRunning() = %v (err %v), want %v", got, err, tc.want)
 			}
@@ -258,7 +262,7 @@ func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
 	})
 	w := &ActorWorkflow{store: persistence}
 
-	got, err := w.finalizeRunning(ctx, ref, 1)
+	got, err := w.finalizeRunning(ctx, ref, 1, "")
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -1926,7 +1930,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actor, loadedTmpl, err := w.loadActorForResume(ctx, actorRef)
 			var tele restoreTelemetry
 			if err == nil {
-				tele, _, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
+				tele, _, _, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
