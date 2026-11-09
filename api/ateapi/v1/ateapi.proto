@@ -203,6 +203,28 @@ service Control {
     option (method).resource = "Atespace";
   }
 
+  // Create an ExternalVolumeClass.
+  rpc CreateExternalVolumeClass(CreateExternalVolumeClassRequest) returns (ExternalVolumeClass) {
+    option (method).resource = "ExternalVolumeClass";
+  }
+
+  // Get an ExternalVolumeClass by name.
+  rpc GetExternalVolumeClass(GetExternalVolumeClassRequest) returns (ExternalVolumeClass) {
+    option (method).resource = "ExternalVolumeClass";
+  }
+
+  // List ExternalVolumeClasses.
+  rpc ListExternalVolumeClasses(ListExternalVolumeClassesRequest) returns (ListExternalVolumeClassesResponse) {
+    option (method).resource = "ExternalVolumeClass";
+  }
+
+  // Delete an ExternalVolumeClass. Delete does not check for ActorTemplates
+  // that still reference the class. Volumes from those templates then fail to
+  // provision.
+  rpc DeleteExternalVolumeClass(DeleteExternalVolumeClassRequest) returns (ExternalVolumeClass) {
+    option (method).resource = "ExternalVolumeClass";
+  }
+
   rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {
     option (method).resource = "ActorTemplate";
   }
@@ -1746,6 +1768,57 @@ message DeleteAtespaceRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
+}
+
+// CreateExternalVolumeClassRequest creates an ExternalVolumeClass.
+message CreateExternalVolumeClassRequest {
+  // The class to create. metadata.name is required and metadata.atespace
+  // must be empty.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:required
+  ExternalVolumeClass external_volume_class = 1;
+}
+
+// GetExternalVolumeClassRequest identifies the ExternalVolumeClass to get.
+message GetExternalVolumeClassRequest {
+  // The class to get. atespace must be empty.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef external_volume_class = 1;
+}
+
+// ListExternalVolumeClassesRequest asks for a page of ExternalVolumeClasses.
+message ListExternalVolumeClassesRequest {
+  // Pagination controls.
+  //
+  // +k8s:optional
+  ListOptions options = 1;
+}
+
+// ListExternalVolumeClassesResponse is one page of ExternalVolumeClasses.
+message ListExternalVolumeClassesResponse {
+  // The page of classes. This list may be empty even if there are more results.
+  repeated ExternalVolumeClass external_volume_classes = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
+}
+
+// DeleteExternalVolumeClassRequest identifies the ExternalVolumeClass to delete.
+message DeleteExternalVolumeClassRequest {
+  // The class to delete. atespace must be empty.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef external_volume_class = 1;
 
   // Optional per-delete preconditions.
   //
