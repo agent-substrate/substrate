@@ -59,6 +59,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -631,10 +632,22 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 		}
 	}
 
+	// Unpack largest layers first so a large layer does not queue behind small ones.
+	order := make([]int, len(layers))
+	sizes := make([]int64, len(layers))
+	for i, l := range layers {
+		order[i] = i
+		sizes[i], _ = l.Size()
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return sizes[order[a]] > sizes[order[b]]
+	})
+
 	layerDirs := make([]string, len(layers))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(layerPullConcurrency)
-	for i, layer := range layers {
+	for _, i := range order {
+		layer := layers[i]
 		g.Go(func() error {
 			// This is the config's claim. Unpack hashes the content to check
 			// it, since a remote layer's DiffID() would just repeat the config.

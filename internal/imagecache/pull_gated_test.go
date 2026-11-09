@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,7 +39,8 @@ import (
 // gatedRegistry is an in-memory registry whose blob GETs block while their
 // digest hex is gated.
 type gatedRegistry struct {
-	host string
+	host    string
+	arrived chan string
 
 	mu    sync.Mutex
 	gates map[string]chan struct{}
@@ -45,20 +48,28 @@ type gatedRegistry struct {
 
 func newGatedRegistry(t *testing.T) *gatedRegistry {
 	t.Helper()
-	g := &gatedRegistry{gates: map[string]chan struct{}{}}
+	g := &gatedRegistry{
+		arrived: make(chan string, 16),
+		gates:   map[string]chan struct{}{},
+	}
 	_, g.host = newWrappedRegistry(t, func(inner http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
 				g.mu.Lock()
-				var ch chan struct{}
+				var (
+					matched string
+					ch      chan struct{}
+				)
 				for hex, c := range g.gates {
 					if strings.Contains(r.URL.Path, hex) {
+						matched = hex
 						ch = c
 						break
 					}
 				}
 				g.mu.Unlock()
 				if ch != nil {
+					g.arrived <- matched
 					<-ch
 				}
 			}
@@ -387,5 +398,75 @@ func TestDetachedPullBoundedByPullTimeout(t *testing.T) {
 
 	if _, err := store.EnsureImage(context.Background(), ref); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("EnsureImage on a wedged pull = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// A large layer at the end of the manifest must start in the first
+// layerPullConcurrency wave rather than queueing behind smaller layers, while
+// LayerDirs still returns layers in manifest order.
+func TestPullStartsLargestLayersFirst(t *testing.T) {
+	reg := newGatedRegistry(t)
+	layers := make([]v1.Layer, layerPullConcurrency+1)
+	releases := make([]func(), len(layers))
+	for i := range layerPullConcurrency {
+		layers[i] = layerFromEntries(t, []tarEntry{
+			{name: strconv.Itoa(i), typeflag: tar.TypeReg, mode: 0o644, body: strconv.Itoa(i)},
+		})
+		releases[i] = reg.gate(t, layers[i])
+	}
+	// Make the final layer incompressible enough to have the largest compressed blob.
+	largeBody := make([]byte, 4096)
+	for i := range largeBody {
+		largeBody[i] = byte(i*31 + i>>3)
+	}
+	large := layerFromEntries(t, []tarEntry{
+		{name: strconv.Itoa(layerPullConcurrency), typeflag: tar.TypeReg, mode: 0o644, body: string(largeBody)},
+	})
+	layers[layerPullConcurrency] = large
+	releases[layerPullConcurrency] = reg.gate(t, large)
+	largeDigest, err := large.Digest()
+	if err != nil {
+		t.Fatalf("large layer digest: %v", err)
+	}
+
+	ref := reg.host + "/test/lpt:latest"
+	pushImage(t, ref, v1.Config{}, layers...)
+
+	store := newTestStore(t)
+	type result struct {
+		img *Image
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		img, err := store.EnsureImage(context.Background(), ref)
+		done <- result{img: img, err: err}
+	}()
+
+	// All 5 layers are gated, so at most layerPullConcurrency (4) blob GETs can
+	// arrive before a gate opens. The largest layer (manifest index 4) must be
+	// among them.
+	firstWave := make([]string, layerPullConcurrency)
+	for i := range firstWave {
+		firstWave[i] = <-reg.arrived
+	}
+	if !slices.Contains(firstWave, largeDigest.Hex) {
+		t.Errorf("first %d layer pulls = %v, want largest layer %s started in first wave", layerPullConcurrency, firstWave, largeDigest.Hex)
+	}
+
+	for _, release := range releases {
+		release()
+	}
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("EnsureImage: %v", res.err)
+	}
+	if len(res.img.LayerDirs) != len(layers) {
+		t.Fatalf("len(LayerDirs) = %d, want %d", len(res.img.LayerDirs), len(layers))
+	}
+	for i, dir := range res.img.LayerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName, strconv.Itoa(i))); err != nil {
+			t.Errorf("LayerDirs[%d] missing entry %q: %v", i, strconv.Itoa(i), err)
+		}
 	}
 }
