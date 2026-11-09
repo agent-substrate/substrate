@@ -30,18 +30,25 @@ import (
 
 func TestCrashActorReportedByWorker(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	const currentExecution = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5"
+	const previousExecution = "a6ba5a75-ad36-48fc-ad2e-e845527a25b1"
 
 	tests := []struct {
 		name string
 		// mutate edits the seeded RUNNING actor before the report.
 		mutate func(*ateapi.Actor)
 		// uid and worker the report names; empty means the real ones.
-		uid, worker string
-		wantCode    codes.Code
+		uid, worker                        string
+		activeExecution, reportedExecution string
+		wantCode                           codes.Code
 	}{
 		{name: "running actor is crashed", wantCode: codes.OK},
 		{name: "stale incarnation", uid: "not-the-uid", wantCode: codes.NotFound},
 		{name: "hosted by another worker", worker: "other-worker", wantCode: codes.NotFound},
+		{name: "current execution", activeExecution: currentExecution, reportedExecution: currentExecution, wantCode: codes.OK},
+		{name: "previous execution on the same worker", activeExecution: currentExecution, reportedExecution: previousExecution, wantCode: codes.NotFound},
+		{name: "missing execution identity", activeExecution: currentExecution, wantCode: codes.NotFound},
+		{name: "report for an untracked execution", reportedExecution: previousExecution, wantCode: codes.NotFound},
 		{
 			name:     "operation in flight",
 			mutate:   func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING },
@@ -59,9 +66,12 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.mutate != nil {
+			if tc.mutate != nil || tc.activeExecution != "" {
 				if actor, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
-					tc.mutate(a)
+					a.Status.WorkerAssignment.ActorExecutionUid = tc.activeExecution
+					if tc.mutate != nil {
+						tc.mutate(a)
+					}
 					return nil
 				}); err != nil {
 					t.Fatal(err)
@@ -76,7 +86,7 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 			}
 
 			w := &ActorWorkflow{store: st}
-			got, err := w.CrashActorReportedByWorker(ctx, actorRef, uid, worker, "cloud-hypervisor exited")
+			got, err := w.CrashActorReportedByWorker(ctx, actorRef, uid, worker, tc.reportedExecution, "cloud-hypervisor exited")
 			if code := apierror.Code(err); code != tc.wantCode {
 				t.Fatalf("code = %v (err %v), want %v", code, err, tc.wantCode)
 			}

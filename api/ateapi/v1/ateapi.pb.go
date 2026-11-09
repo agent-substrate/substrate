@@ -8913,8 +8913,8 @@ type ReportActorCrashedRequest struct {
 	// +k8s:maxLength=4096
 	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	// execution_uid identifies the runtime that exited.
-	// Accepted for protocol compatibility; crash handling uses the Actor and
-	// Worker identities.
+	// It must match the Actor's current worker_assignment.actor_execution_uid.
+	// Empty for executions started by an older API server.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid

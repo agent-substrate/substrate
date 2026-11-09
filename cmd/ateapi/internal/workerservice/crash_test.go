@@ -52,10 +52,11 @@ func TestReportActorCrashed(t *testing.T) {
 		t.Fatalf("ReportActorCrashed() failed: %v", err)
 	}
 	want := []crashCall{{
-		ActorRef:   resources.ActorRef{Atespace: suspendAtespace, Name: suspendActor},
-		ActorUID:   uid,
-		WorkerName: testWorkerName,
-		Message:    "cloud-hypervisor exited: signal: killed",
+		ActorRef:     resources.ActorRef{Atespace: suspendAtespace, Name: suspendActor},
+		ActorUID:     uid,
+		WorkerName:   testWorkerName,
+		ExecutionUID: crashRequest(uid).GetExecutionUid(),
+		Message:      "cloud-hypervisor exited: signal: killed",
 	}}
 	if diff := cmp.Diff(want, control.crashCalls); diff != "" {
 		t.Errorf("crash calls mismatch (-want +got):\n%s", diff)
