@@ -897,9 +897,11 @@ type ExternalVolumeSnapshot struct {
 	// +k8s:update=NoUnset
 	// +k8s:customValidation
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
-	// ready_to_use is whether the storage system had finished the snapshot when
-	// the tag recorded it. Drivers may return a usable handle while the copy
+	// ready_to_use is whether the storage system has finished the snapshot.
+	// Drivers may return a handle with ready_to_use false while the copy
 	// continues in the background, and tag creation does not wait for it.
+	// ready_to_use may move from false to true once the snapshot is observed
+	// ready, even after the tag completes. It never moves back.
 	//
 	// +k8s:optional
 	ReadyToUse bool `protobuf:"varint,4,opt,name=ready_to_use,json=readyToUse,proto3" json:"ready_to_use,omitempty"`

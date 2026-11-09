@@ -194,9 +194,16 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 // and volume_snapshots may be recorded once. After that, the list's length and
 // each entry's source_volume_name, source_volume_id and volume_type are fixed.
 // An entry's other fields may change until its storage_snapshot_id is set, and
-// then the entry is fixed too. Nothing else may change.
+// then the entry is fixed too, except that its ready_to_use may move from
+// false to true, also once COMPLETED. Nothing else may change.
 func validateUpdateTagSnapshotMutation(stored, mutated *ateapi.Snapshot) error {
-	if stored == nil || proto.Equal(stored, mutated) {
+	if stored == nil {
+		return nil
+	}
+	// base is stored with the allowed ready_to_use changes applied, so the
+	// checks below reject any other change.
+	base := withReadyVolumeSnapshots(stored, mutated)
+	if proto.Equal(base, mutated) {
 		return nil
 	}
 	pending := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
@@ -205,6 +212,7 @@ func validateUpdateTagSnapshotMutation(stored, mutated *ateapi.Snapshot) error {
 	if stored.GetDurableSnapshot().GetState() != pending || (mutatedState != pending && mutatedState != completed) {
 		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
 	}
+	stored = base
 	storedRest, mutatedRest := proto.CloneOf(stored), proto.CloneOf(mutated)
 	storedRest.DurableSnapshot.State = mutatedState
 	storedRest.VolumeSnapshots, mutatedRest.VolumeSnapshots = nil, nil
@@ -234,6 +242,31 @@ func validateUpdateTagSnapshotMutation(stored, mutated *ateapi.Snapshot) error {
 		}
 	}
 	return nil
+}
+
+// withReadyVolumeSnapshots returns stored with ready_to_use set on each volume
+// snapshot that has a handle and that mutated marks ready. The storage system
+// may finish a snapshot after the tag records it, and this is the one change
+// allowed to a recorded volume snapshot.
+func withReadyVolumeSnapshots(stored, mutated *ateapi.Snapshot) *ateapi.Snapshot {
+	storedVols, mutatedVols := stored.GetVolumeSnapshots(), mutated.GetVolumeSnapshots()
+	if len(storedVols) != len(mutatedVols) {
+		return stored
+	}
+	var out *ateapi.Snapshot
+	for i, sv := range storedVols {
+		if sv.GetStorageSnapshotId() == "" || sv.GetReadyToUse() || !mutatedVols[i].GetReadyToUse() {
+			continue
+		}
+		if out == nil {
+			out = proto.CloneOf(stored)
+		}
+		out.VolumeSnapshots[i].ReadyToUse = true
+	}
+	if out == nil {
+		return stored
+	}
+	return out
 }
 
 func validateUpdateTagMutation(storedTag, mutatedTag *ateapi.Tag) error {

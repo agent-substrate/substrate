@@ -1720,6 +1720,44 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}); !errors.Is(err, store.ErrImmutableField) {
 			t.Errorf("filling in a handle after finalize = %v, want one matching store.ErrImmutableField", err)
 		}
+
+		// A recorded volume snapshot may still become ready, and only that.
+		for _, tt := range []struct {
+			name   string
+			mutate func(*ateapi.Tag)
+		}{
+			{
+				name:   "marking a volume without a handle ready",
+				mutate: func(toUpdate *ateapi.Tag) { toUpdate.Status.Snapshot.VolumeSnapshots[1].ReadyToUse = true },
+			},
+			{
+				name: "marking a volume ready and changing its size",
+				mutate: func(toUpdate *ateapi.Tag) {
+					toUpdate.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = true
+					toUpdate.Status.Snapshot.VolumeSnapshots[0].SizeBytes = 1
+				},
+			},
+		} {
+			t.Run("completed "+tt.name, func(t *testing.T) {
+				if _, err := update(ready, tt.mutate); !errors.Is(err, store.ErrImmutableField) {
+					t.Errorf("UpdateTag error = %v, want one matching store.ErrImmutableField", err)
+				}
+			})
+		}
+		readyToUse, err := update(ready, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = true
+		})
+		if err != nil {
+			t.Fatalf("marking a volume snapshot ready after finalize failed: %v", err)
+		}
+		if !readyToUse.GetStatus().GetSnapshot().GetVolumeSnapshots()[0].GetReadyToUse() {
+			t.Errorf("volume snapshot ready_to_use = false after marking it ready")
+		}
+		if _, err := update(readyToUse, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = false
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("marking a ready volume snapshot not ready = %v, want one matching store.ErrImmutableField", err)
+		}
 	})
 
 	t.Run("CreateTag_ReusedTagName", func(t *testing.T) {

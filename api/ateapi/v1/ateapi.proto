@@ -419,9 +419,11 @@ message ExternalVolumeSnapshot {
   // +k8s:customValidation
   string volume_type = 3;
 
-  // ready_to_use is whether the storage system had finished the snapshot when
-  // the tag recorded it. Drivers may return a usable handle while the copy
+  // ready_to_use is whether the storage system has finished the snapshot.
+  // Drivers may return a handle with ready_to_use false while the copy
   // continues in the background, and tag creation does not wait for it.
+  // ready_to_use may move from false to true once the snapshot is observed
+  // ready, even after the tag completes. It never moves back.
   //
   // +k8s:optional
   bool ready_to_use = 4;
