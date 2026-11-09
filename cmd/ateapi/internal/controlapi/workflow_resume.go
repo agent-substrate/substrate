@@ -121,11 +121,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	var workerEpoch int64
-	if tele, workerEpoch, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
+	var executionUID string
+	if tele, workerEpoch, executionUID, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts); err != nil {
 		return nil, false, err
 	}
 	var running *ateapi.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef, workerEpoch); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, workerEpoch, executionUID); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -708,25 +709,25 @@ func checkVolumesAttachable(volumes []*ateapi.ExternalVolumeStatus) error {
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, executionUID string, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
 	// A re-entered resume skips assignWorkerAttempt, which checks this too.
 	if err := checkSnapshotUpload(actorRef, actor); err != nil {
-		return tele, 0, err
+		return tele, 0, "", err
 	}
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
-		return tele, 0, err
+		return tele, 0, "", err
 	}
 	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, volumePublishContexts)
 	if err != nil {
-		return tele, 0, err
+		return tele, 0, "", err
 	}
 	egressGateway := w.egressGateway()
 
@@ -759,9 +760,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		resp, err := client.Run(ctx, req)
 		if err != nil {
-			return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
+			return tele, 0, "", handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
 		}
-		return tele, resp.GetWorkerEpoch(), nil
+		return tele, resp.GetWorkerEpoch(), resp.GetExecutionUid(), nil
 	}
 
 	slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot", slog.String("snapshot_uuid", snap.GetUuid()))
@@ -818,11 +819,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
 			message := fmt.Sprintf("%s: %s", crashMessageLocalSnapshotNodeGone, ateletCrashMessage("Restore", err))
-			return tele, 0, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationResume, message)
+			return tele, 0, "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationResume, message)
 		}
-		return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
+		return tele, 0, "", handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 	}
-	return tele, resp.GetWorkerEpoch(), nil
+	return tele, resp.GetWorkerEpoch(), resp.GetExecutionUid(), nil
 }
 
 // logRuntimeFallback records a resume that restores without memory state
@@ -852,7 +853,7 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 // started did not carry. If a later epoch is registered, that process has exited and taken
 // the sandbox with it, so RUNNING is not committed: the error is Unavailable,
 // and the retried resume restores the Actor on the current process.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, workerEpoch int64) (_ *ateapi.Actor, err error) {
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, workerEpoch int64, executionUID string) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
@@ -883,6 +884,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
+		toUpdate.Status.WorkerAssignment.ExecutionUid = executionUID
 		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
 		// The workload already runs, so a record that can't take the upload
 		// doesn't hold the actor in RESUMING. The next suspend prunes the entry.

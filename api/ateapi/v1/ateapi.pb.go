@@ -2381,8 +2381,15 @@ type WorkerAssignment struct {
 	// +k8s:customValidation # a SPIFFE ID
 	// +k8s:update=NoModify
 	WorkerSpiffeId string `protobuf:"bytes,10,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// execution_uid identifies the execution returned by Run or Restore.
+	// A retry that starts a new execution replaces it, even on the same Worker.
+	// Empty until the Actor becomes RUNNING, or for an older worker.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,11,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WorkerAssignment) Reset() {
@@ -2481,6 +2488,13 @@ func (x *WorkerAssignment) GetSandboxRuntime() *ActorSandboxRuntime {
 func (x *WorkerAssignment) GetWorkerSpiffeId() string {
 	if x != nil {
 		return x.WorkerSpiffeId
+	}
+	return ""
+}
+
+func (x *WorkerAssignment) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
 	}
 	return ""
 }
@@ -8889,7 +8903,14 @@ type ReportActorCrashedRequest struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=4096
-	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	// The execution that exited, as returned by the Worker's Run or Restore.
+	// It must match the Actor's current worker_assignment.execution_uid.
+	// Empty for a worker predating execution tracking.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,5,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8948,6 +8969,13 @@ func (x *ReportActorCrashedRequest) GetActorUid() string {
 func (x *ReportActorCrashedRequest) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *ReportActorCrashedRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
 	}
 	return ""
 }
@@ -10101,7 +10129,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
 	"\n" +
-	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xbe\x03\n" +
+	"crash_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcrashTime\"\xe3\x03\n" +
 	"\x10WorkerAssignment\x126\n" +
 	"\x06worker\x18\x06 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
@@ -10115,7 +10143,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fworker_epoch\x18\b \x01(\x03R\vworkerEpoch\x12Q\n" +
 	"\x0fsandbox_runtime\x18\t \x01(\v2(.substrate.ateapi.v1.ActorSandboxRuntimeR\x0esandboxRuntime\x12(\n" +
 	"\x10worker_spiffe_id\x18\n" +
-	" \x01(\tR\x0eworkerSpiffeId\"t\n" +
+	" \x01(\tR\x0eworkerSpiffeId\x12#\n" +
+	"\rexecution_uid\x18\v \x01(\tR\fexecutionUid\"t\n" +
 	"\tTagStatus\x129\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x1d.substrate.ateapi.v1.SnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\"\x86\x02\n" +
@@ -10438,12 +10467,13 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x05actor\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"O\n" +
 	"\x1bRequestActorSuspendResponse\x120\n" +
-	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\"\xc0\x01\n" +
+	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\"\xe5\x01\n" +
 	"\x19ReportActorCrashedRequest\x126\n" +
 	"\x06worker\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\x124\n" +
 	"\x05actor\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"N\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12#\n" +
+	"\rexecution_uid\x18\x05 \x01(\tR\fexecutionUid\"N\n" +
 	"\x1aReportActorCrashedResponse\x120\n" +
 	"\x05actor\x18\x01 \x01(\v2\x1a.substrate.ateapi.v1.ActorR\x05actor\"\xb3\x01\n" +
 	"\x1fReportActorSnapshotStateRequest\x124\n" +

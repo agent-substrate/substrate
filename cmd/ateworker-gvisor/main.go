@@ -801,7 +801,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 
-	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: hosted.executionUID}, nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
@@ -1338,7 +1338,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
-	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: hosted.executionUID}, nil
 }
 
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {

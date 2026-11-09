@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
@@ -37,7 +39,9 @@ import (
 type hostedActor struct {
 	// Attribution is available during boot.
 	attribution resources.ActorAttribution
-	network     *actornet.SandboxSession
+	// executionUID identifies this run or restore. Immutable after admission.
+	executionUID string
+	network      *actornet.SandboxSession
 	// Set once the containers exist.
 	session *workloadSession
 	// usage is this activation's epoch, CPU baseline, and latest sample.
@@ -81,7 +85,7 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, me
 	// The sandbox cgroup is new with every activation, so its counters start
 	// at zero.
 	ctx, cancel := context.WithCancel(context.Background())
-	hosted := &hostedActor{attribution: attribution, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes}
+	hosted := &hostedActor{attribution: attribution, executionUID: uuid.NewString(), usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }

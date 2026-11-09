@@ -35,6 +35,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
 
+	"github.com/google/uuid"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
@@ -54,6 +55,9 @@ import (
 // cloud-hypervisor process directly (booted by RunWorkload or relaunched by
 // RestoreWorkload), so it tracks that process and its api-socket for teardown.
 type runningActor struct {
+	// executionUID identifies this run or restore. Immutable once published.
+	executionUID string
+
 	// baseID is the FROZEN base sandbox id propagated across this actor's restore
 	// lineage. For a cold-run actor this is the actor's own id; for a restored
 	// actor it is the id read from the snapshot's base-id file (the golden id,
@@ -110,6 +114,10 @@ type runningActor struct {
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
 	workloadIDs []string
+}
+
+func newRunningActor(chProc, vfsdProc *child.Process) *runningActor {
+	return &runningActor{executionUID: uuid.NewString(), chProc: chProc, vfsdProc: vfsdProc}
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
@@ -298,7 +306,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
-	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: s.runningVM(p.actorUID).executionUID}, nil
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
@@ -610,7 +618,12 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := newRunningActor(chProc, vfsdProc)
+	ra.apiSocket = apiSocket
+	ra.memoryBytes = p.size.MemoryBytes
+	ra.baseID = actorUID
+	ra.guestAgent = ac
+	ra.workloadIDs = workloadIDs(ctrs)
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}

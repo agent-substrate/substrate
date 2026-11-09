@@ -344,6 +344,12 @@ message ReportActorCrashedRequest {
   // +k8s:required
   // +k8s:maxLength=4096
   string message = 4;
+
+  // The execution that exited, as returned by RunWorkload or RestoreWorkload.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 5;
 }
 
 message ReportActorCrashedResponse {
@@ -918,6 +924,9 @@ message RunResponse {
   // The epoch of the worker process that started the workload, as it
   // registered with the control plane.
   int64 worker_epoch = 1;
+
+  // The worker-generated identity of this execution.
+  string execution_uid = 2;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -1229,6 +1238,9 @@ message RestoreResponse {
   // The epoch of the worker process that restored the workload, as it
   // registered with the control plane.
   int64 worker_epoch = 1;
+
+  // The worker-generated identity of this execution.
+  string execution_uid = 2;
 }
 
 message PromoteSnapshotRequest {

@@ -237,7 +237,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: s.runningVM(p.actorUID).executionUID}, nil
 }
 
 // restoreMemoryFidelity restores a whole-guest snapshot: relaunch cloud-hypervisor
@@ -522,16 +522,17 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 			{Name: phaseTotal, D: dTotal},
 		})
 
-	ra := &runningActor{
-		chProc: chProc, vfsdProc: vfsdProc,
-		apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
-		preserveRestoreSource:   preserveRestoreDir,
-		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
-		// Signaling an id the agent does not know fails the whole graceful
-		// shutdown with InvalidContainerId, so these must be what the guest runs.
-		workloadIDs: workloadIDs(ctrs),
-		guestAgent:  guestAC,
-	}
+	ra := newRunningActor(chProc, vfsdProc)
+	ra.apiSocket = apiSocket
+	ra.memoryBytes = p.size.MemoryBytes
+	ra.baseID = srcID
+	ra.restoreSourceDir = restoreDir
+	ra.preserveRestoreSource = preserveRestoreDir
+	ra.snapshotIsSelfContained = memMode == ch.MemRestoreEager
+	// Signaling an id the agent does not know fails the whole graceful
+	// shutdown with InvalidContainerId, so these must be what the guest runs.
+	ra.workloadIDs = workloadIDs(ctrs)
+	ra.guestAgent = guestAC
 
 	// Re-attach stdout/stderr forwarding for each container over the agent
 	// connection dialed after resume: the restored guest's containers are alive, so
