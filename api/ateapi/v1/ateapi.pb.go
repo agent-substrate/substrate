@@ -6250,7 +6250,8 @@ type CreateTagRequest struct {
 	// every external volume; names narrows the set.
 	//
 	// Capturing requires the driver of every captured volume to support
-	// snapshots, and fails the call if any does not.
+	// snapshots, and fails the call if any does not. It also fails if the
+	// Actor has no external volumes.
 	//
 	// +ate:preview=ExternalVolumes
 	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden

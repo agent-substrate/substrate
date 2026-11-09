@@ -157,7 +157,7 @@ func selectTagVolumes(actor *ateapi.Actor, sel *ateapi.ExternalVolumeSelection) 
 		return nil, apierror.InvalidArgument("Actor %s has no external volumes named %s", actorRef, strings.Join(sets.List(requested), ", "))
 	}
 	if len(selected) == 0 {
-		return nil, apierror.InvalidArgument("No volumes of Actor %s can be snapshotted; create the tag without a volume selection", actorRef)
+		return nil, apierror.FailedPrecondition("Actor %s has no external volumes to snapshot; create the tag without a volume selection", actorRef)
 	}
 	return selected, nil
 }
@@ -291,40 +291,47 @@ func (w *ActorWorkflow) ensureTagVolumeSnapshotsReleased(ctx context.Context, ta
 		return nil
 	}
 	tagRef := resources.TagRefFromTag(tag)
-	var errs []error
+	// Each entry is independent, and driver calls can take seconds, so the
+	// entries are recovered and then deleted concurrently.
 	handles := make([]string, len(snapshots))
-	recovered := map[int]string{}
+	recoverErrs := make([]error, len(snapshots))
+	var wg sync.WaitGroup
 	for i, snap := range snapshots {
 		if handles[i] = snap.GetStorageSnapshotId(); handles[i] != "" {
 			continue
 		}
-		handle, err := w.recoverVolumeSnapshotHandle(ctx, tag.GetMetadata().GetUid(), snap)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if handle != "" {
-			handles[i] = handle
-			recovered[i] = handle
+		wg.Go(func() {
+			handles[i], recoverErrs[i] = w.recoverVolumeSnapshotHandle(ctx, tag.GetMetadata().GetUid(), snap)
+		})
+	}
+	wg.Wait()
+	recovered := map[int]string{}
+	for i, snap := range snapshots {
+		if snap.GetStorageSnapshotId() == "" && handles[i] != "" {
+			recovered[i] = handles[i]
 		}
 	}
 	if len(recovered) > 0 {
 		w.recordRecoveredVolumeSnapshotHandles(ctx, tag, recovered)
 	}
+	deleteErrs := make([]error, len(snapshots))
 	for i, snap := range snapshots {
 		if handles[i] == "" {
 			continue
 		}
-		plugin, err := w.pluginRegistry.GetPlugin(ctx, snap.GetVolumeType())
-		if err != nil {
-			errs = append(errs, fmt.Errorf("while getting volume plugin for driver %q: %w", snap.GetVolumeType(), err))
-			continue
-		}
-		if err := plugin.DeleteSnapshot(ctx, handles[i]); err != nil {
-			errs = append(errs, fmt.Errorf("while deleting volume snapshot %q: %w", handles[i], err))
-		}
+		wg.Go(func() {
+			plugin, err := w.pluginRegistry.GetPlugin(ctx, snap.GetVolumeType())
+			if err != nil {
+				deleteErrs[i] = fmt.Errorf("while getting volume plugin for driver %q: %w", snap.GetVolumeType(), err)
+				return
+			}
+			if err := plugin.DeleteSnapshot(ctx, handles[i]); err != nil {
+				deleteErrs[i] = fmt.Errorf("while deleting volume snapshot %q: %w", handles[i], err)
+			}
+		})
 	}
-	if err := errors.Join(errs...); err != nil {
+	wg.Wait()
+	if err := errors.Join(append(recoverErrs, deleteErrs...)...); err != nil {
 		return fmt.Errorf("while releasing the volume snapshots of tag %s: %w", tagRef, err)
 	}
 	return nil
@@ -399,10 +406,11 @@ func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, tagUID 
 
 // transientSnapshotError reports whether a failed CreateSnapshot may succeed on
 // a retry. An error without a gRPC status has code Unknown and counts as
-// transient.
+// transient. So does ResourceExhausted, which drivers return for rate limits
+// and quota that clear over time.
 func transientSnapshotError(err error) bool {
 	switch status.Code(err) {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.Unknown, codes.Internal:
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.Unknown, codes.Internal, codes.ResourceExhausted:
 		return true
 	}
 	return false
