@@ -900,8 +900,8 @@ type ExternalVolumeSnapshot struct {
 	// ready_to_use is whether the storage system has finished the snapshot.
 	// Drivers may return a handle with ready_to_use false while the copy
 	// continues in the background, and tag creation does not wait for it.
-	// ready_to_use may move from false to true once the snapshot is observed
-	// ready, even after the tag completes. It never moves back.
+	// GetTag and CreateActor ask the storage system again and set it once the
+	// snapshot is ready, even after the tag completes. It never moves back.
 	//
 	// +k8s:optional
 	ReadyToUse bool `protobuf:"varint,4,opt,name=ready_to_use,json=readyToUse,proto3" json:"ready_to_use,omitempty"`
@@ -1384,6 +1384,10 @@ type Actor struct {
 	// The tag specified by the caller at CreateActor to seed this Actor from an
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
 	// once at creation and immutable afterward.
+	// If the tag captured external volumes, the first resume restores each of
+	// them from its snapshot, and the Actor's other external volumes start
+	// empty. CreateActor fails with FAILED_PRECONDITION while one of those
+	// snapshots is not ready to use.
 	//
 	// +k8s:optional
 	// +k8s:subfield(atespace)=+k8s:required
@@ -6252,6 +6256,8 @@ type CreateTagRequest struct {
 	// Capturing requires the driver of every captured volume to support
 	// snapshots, and fails the call if any does not. It also fails if the
 	// Actor has no external volumes.
+	// An Actor created from the tag restores each captured volume on its first
+	// resume.
 	//
 	// +ate:preview=ExternalVolumes
 	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
