@@ -236,6 +236,40 @@ func (s *ServiceImpl) ensureTagVolumeSnapshotsUsable(ctx context.Context, tag *a
 	return s.recordTagVolumeSnapshotsReady(ctx, tag, nowReady), nil
 }
 
+// refreshTagVolumeSnapshots asks the storage system whether the volume
+// snapshots a finished tag records as not ready have become ready, and records
+// those that have. CreateTag does not wait for snapshots, so GetTag uses this
+// to show when a tag can seed an Actor. A failed lookup is logged and leaves
+// the snapshot not ready.
+func (s *ServiceImpl) refreshTagVolumeSnapshots(ctx context.Context, tag *ateapi.Tag) *ateapi.Tag {
+	// Only a finished tag is refreshed. A pending one may still lack
+	// handles, and a deleting one is going away.
+	completed := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) != ""
+	deleting := tag.GetMetadata().GetDeleteTime() != nil
+	if !completed || deleting {
+		return tag
+	}
+	var nowReady []string
+	for _, snap := range tag.GetStatus().GetSnapshot().GetVolumeSnapshots() {
+		if snap.GetReadyToUse() {
+			continue
+		}
+		observed, found, err := s.lookupVolumeSnapshot(ctx, snap)
+		if err != nil {
+			if !errors.Is(err, errors.ErrUnsupported) {
+				slog.WarnContext(ctx, "failed to read tag volume snapshot",
+					slog.String("tag", resources.TagRefFromTag(tag).String()),
+					slog.String("snapshot_id", snap.GetStorageSnapshotId()), slog.Any("error", err))
+			}
+			continue
+		}
+		if found && observed.ReadyToUse {
+			nowReady = append(nowReady, snap.GetSourceVolumeName())
+		}
+	}
+	return s.recordTagVolumeSnapshotsReady(ctx, tag, nowReady)
+}
+
 // lookupVolumeSnapshot asks the driver that took snap about it.
 func (s *ServiceImpl) lookupVolumeSnapshot(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) (volume.Snapshot, bool, error) {
 	plugin, err := s.pluginRegistry.GetPlugin(ctx, snap.GetVolumeType())

@@ -845,6 +845,86 @@ func TestEnsureTagVolumeSnapshotsUsableReadiness(t *testing.T) {
 	}
 }
 
+func TestRefreshTagVolumeSnapshots(t *testing.T) {
+	tests := []struct {
+		name      string
+		modify    func(*ateapi.Tag)
+		plugin    *snapshotLookupPlugin
+		wantCalls int
+		wantReady bool
+	}{
+		{
+			name:      "snapshot the driver now reports ready is recorded",
+			plugin:    &snapshotLookupPlugin{snap: volume.Snapshot{ReadyToUse: true}, found: true},
+			wantCalls: 1,
+			wantReady: true,
+		},
+		{
+			name:      "snapshot still copying stays not ready",
+			plugin:    &snapshotLookupPlugin{found: true},
+			wantCalls: 1,
+		},
+		{
+			name:      "snapshot deleted from the storage system stays not ready",
+			plugin:    &snapshotLookupPlugin{},
+			wantCalls: 1,
+		},
+		{
+			name:      "lookup failure stays not ready",
+			plugin:    &snapshotLookupPlugin{err: errors.New("driver unavailable")},
+			wantCalls: 1,
+		},
+		{
+			name: "snapshot recorded ready is not looked up",
+			modify: func(tag *ateapi.Tag) {
+				tag.Status.Snapshot.VolumeSnapshots[0].ReadyToUse = true
+			},
+			plugin:    &snapshotLookupPlugin{},
+			wantReady: true,
+		},
+		{
+			name: "pending tag is not looked up",
+			modify: func(tag *ateapi.Tag) {
+				tag.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+			},
+			plugin: &snapshotLookupPlugin{snap: volume.Snapshot{ReadyToUse: true}, found: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			actor := newTestSuspendedActor(t, ctx, persistence, "team-a", "source")
+			seeded := newTestTag(t, "with-volumes", actor)
+			seeded.Status.Snapshot.VolumeSnapshots = []*ateapi.ExternalVolumeSnapshot{
+				{SourceVolumeName: "data", SourceVolumeId: "vol-data", StorageSnapshotId: "snap-data", VolumeType: "mock-standard"},
+			}
+			if tt.modify != nil {
+				tt.modify(seeded)
+			}
+			tag := storetest.MustCreateTag(t, ctx, persistence, seeded)
+			impl := newServiceImpl(persistence, nil)
+			impl.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock-standard": tt.plugin}}
+
+			got := impl.refreshTagVolumeSnapshots(ctx, tag)
+			if tt.plugin.calls != tt.wantCalls {
+				t.Errorf("GetSnapshot calls = %d, want %d", tt.plugin.calls, tt.wantCalls)
+			}
+			if ready := got.GetStatus().GetSnapshot().GetVolumeSnapshots()[0].GetReadyToUse(); ready != tt.wantReady {
+				t.Errorf("returned tag ready_to_use = %v, want %v", ready, tt.wantReady)
+			}
+			stored, err := persistence.GetTag(ctx, resources.TagRefFromTag(tag))
+			if err != nil {
+				t.Fatalf("GetTag: %v", err)
+			}
+			if ready := stored.GetStatus().GetSnapshot().GetVolumeSnapshots()[0].GetReadyToUse(); ready != tt.wantReady {
+				t.Errorf("stored tag ready_to_use = %v, want %v", ready, tt.wantReady)
+			}
+		})
+	}
+}
+
 func TestEnsureTagVolumeSnapshotsUsable(t *testing.T) {
 	vols := []*ateapi.ExternalVolumeStatus{
 		{Name: "data", VolumeType: "mock-standard"},

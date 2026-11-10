@@ -76,7 +76,7 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*at
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
-	return tag, nil
+	return s.impl.refreshTagVolumeSnapshots(ctx, tag), nil
 }
 
 func (s *ServiceImpl) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapi.Tag, error) {
