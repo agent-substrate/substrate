@@ -26,6 +26,10 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 )
 
+// maxParametersWidth caps the PARAMETERS table column, in runes. -o yaml and
+// -o json print every parameter.
+const maxParametersWidth = 40
+
 func formatParameters(params map[string]string) string {
 	if len(params) == 0 {
 		return "-"
@@ -34,7 +38,16 @@ func formatParameters(params map[string]string) string {
 	for i, k := range keys {
 		keys[i] = k + "=" + params[k]
 	}
-	return strings.Join(keys, ",")
+	return truncateColumn(strings.Join(keys, ","), maxParametersWidth)
+}
+
+// truncateColumn shortens s to at most n runes, ending in "..." when it cuts.
+func truncateColumn(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-3]) + "..."
 }
 
 // PrintExternalVolumeClassesTo prints a slice of external volume classes to the provided writer.

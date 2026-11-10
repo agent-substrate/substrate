@@ -80,3 +80,31 @@ func TestPrintExternalVolumeClasses(t *testing.T) {
 		})
 	}
 }
+
+func TestPrintExternalVolumeClassTruncatesParameters(t *testing.T) {
+	nfs := &ateapi.ExternalVolumeClass{
+		Metadata:   &ateapi.ResourceMetadata{Name: "nfs"},
+		DriverName: "nfs.csi.k8s.io",
+		Parameters: map[string]string{"server": "nfs-server.default.svc.cluster.local", "share": "/exports/team-a"},
+	}
+	var table bytes.Buffer
+	if err := PrintExternalVolumeClassTo(&table, nfs, "table"); err != nil {
+		t.Fatal(err)
+	}
+	// "server=nfs-server.default.svc.cluster" is 37 runes; +"..." = 40.
+	if got := table.String(); !strings.Contains(got, "server=nfs-server.default.svc.cluster...") || strings.Contains(got, "share=") {
+		t.Errorf("table = %q, want PARAMETERS cut to 40 runes", got)
+	}
+	var yamlOut bytes.Buffer
+	if err := PrintExternalVolumeClassTo(&yamlOut, nfs, "yaml"); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"server: nfs-server.default.svc.cluster.local", "share: /exports/team-a"} {
+		if !strings.Contains(yamlOut.String(), w) {
+			t.Errorf("yaml = %q, want lossless %q", yamlOut.String(), w)
+		}
+	}
+	if got := truncateColumn("ééééé", 4); got != "é..." {
+		t.Errorf(`truncateColumn("ééééé", 4) = %q, want "é..."`, got)
+	}
+}
