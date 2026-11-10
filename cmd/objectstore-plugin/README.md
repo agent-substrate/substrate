@@ -96,7 +96,16 @@ Reservations cover parallel compression input buffers, queued compressed frames,
 zstd state, and the storage client's upload buffers. GCS range uploads reserve
 serial encoders and resumable-upload buffers together. Large files reduce their
 compression or range parallelism to fit the budget; file size does not need to fit
-in memory. The sparse format and download readers are unchanged.
+in memory.
+
+Snapshot data files upload in the `ATESPRSE` v2 sparse-extent format
+(`pkg/objectstorage`), with all integers little-endian: an 8-byte `ATESPRSE`
+magic and `uint32(2)` version in the clear, followed by concatenated zstd frames
+carrying the logical file size (`int64`), `(offset: int64, length: int64, data)`
+records covering the populated ranges found via `SEEK_DATA` and `SEEK_HOLE`, and
+a `-1` (`int64`) end sentinel. Non-file readers upload as plain zstd, and
+download readers dispatch on the leading magic so both formats restore into
+sparse files on disk.
 
 With the current buffer sizes, the minimum budget is `384Mi` for GCS and `224Mi`
 for S3. Startup rejects smaller values. Each upload reserves for the path it

@@ -60,9 +60,9 @@ type sparseFile struct {
 // The magic + version are in the clear so a reader can dispatch on them; everything
 // after is a single zstd stream of the metadata interleaved with ONLY the populated
 // extents' data (holes are neither read nor compressed), terminated by the
-// end-offset sentinel. The extents are discovered and emitted incrementally
-// (SEEK_DATA/SEEK_HOLE), so the format is streamable — no extent count is written
-// up front.
+// end-offset sentinel. sparseExtents scans src with SEEK_DATA and SEEK_HOLE up front
+// so writeSparseExtents can size its zstd frame chunks from the populated byte count;
+// the wire format still omits an extent count and terminates with sparseEndOffset.
 //
 // This is the upload mirror of the sparse DOWNLOAD: a guest memory-ranges image is
 // mostly holes (free RAM), so feeding only the real extents to zstd cuts the
@@ -85,6 +85,8 @@ func writeSparseZstd(ctx context.Context, dst io.Writer, src *os.File, workers i
 	return writeSparseExtents(ctx, dst, src, size, exts, populated, workers)
 }
 
+// writeSparseExtents encodes pre-scanned extents of src in the ATESPRSE v2 format,
+// sizing per-frame zstd chunks from populated.
 func writeSparseExtents(ctx context.Context, dst io.Writer, src *os.File, size int64, exts []extentRange, populated int64, workers int) (logical, dataBytes int64, err error) {
 	// magic + version in the clear (buffered: a couple of tiny writes).
 	bw := bufio.NewWriter(dst)
