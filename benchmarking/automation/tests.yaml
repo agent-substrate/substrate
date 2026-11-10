@@ -114,8 +114,8 @@
 #
 # `--density-step-duration <duration>` in `flags` makes `runner.py` run the
 # actor density search in `density_runner.py` (see "Density Limit Benchmark"
-# in docs/guides/benchmarking.md). It steps concurrent users up toward `users`
-# and binary-searches the highest passing count within `duration`.
+# in docs/guides/benchmarking.md). `duration` bounds when the search may
+# start a new step, and the orchestrator sizes the Job timeout from it.
 #
 # An optional `controlPlane:` block shapes the control plane for a capacity
 # run; pre_test applies it after the deploy. Its `apiServer:` section, which
@@ -768,6 +768,11 @@ tests:
       - "50"
       - "--ladder"
       - "50:2m@20,50:2m@50"
+  # Single-worker actor density ceiling on personal-assistant-light. One
+  # worker isolates per-pod saturation, actorCPU 250m keeps scheduler CPU
+  # booking from capping concurrency on 4-vCPU dev nodes, think-scale 0.005
+  # compresses multi-minute idle gaps into a 5m step, and phase-in 90 spreads
+  # initial session creation across 90s so cold boots do not burst at t=0.
   - name: density_pa_light_gvisor
     type: locust
     description: "Actor density limit: personal-assistant-light on 1 gVisor worker"
@@ -776,7 +781,6 @@ tests:
     duration: 90m
     users: 1024
     workerCount: 1
-    actorMemory: "256Mi"
     actorCPU: "250m"
     runnerCpu: "4"
     runnerMemory: "8Gi"
@@ -791,8 +795,6 @@ tests:
       - "0.005"
       - "--agentsession-phase-in"
       - "90"
-      - "--lifecycle-mode"
-      - "async"
       - "--resume-mode"
       - "implicit"
   - name: density_pa_light_microvm
@@ -804,7 +806,6 @@ tests:
     users: 1024
     workerCount: 1
     sandboxClass: microvm
-    actorMemory: "256Mi"
     actorCPU: "250m"
     runnerCpu: "4"
     runnerMemory: "8Gi"
@@ -819,7 +820,5 @@ tests:
       - "0.005"
       - "--agentsession-phase-in"
       - "90"
-      - "--lifecycle-mode"
-      - "async"
       - "--resume-mode"
       - "implicit"
