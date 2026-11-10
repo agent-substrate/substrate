@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,6 +69,26 @@ func TestValidateCreateExternalVolumeClassRequest(t *testing.T) {
 		mutate:          func(c *ateapi.ExternalVolumeClass) { c.Parameters = map[string]string{"k": strings.Repeat("v", 257)} },
 		want:            field.ErrorList{field.Forbidden(evc, "")},
 		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("parameters").Key("k"), "", 256).WithOrigin("maxLength")},
+	}, {
+		name:            "valid mount_options",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{"nfsvers=4.1", "noatime"} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: nil,
+	}, {
+		name:            "empty mount_options item",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{""} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooShort(evc.Child("mount_options").Index(0), "", 1).WithOrigin("minLength")},
+	}, {
+		name:            "too-long mount_options item",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = []string{strings.Repeat("a", 257)} },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooLong(evc.Child("mount_options").Index(0), "", 256).WithOrigin("maxLength")},
+	}, {
+		name:            "too many mount_options",
+		mutate:          func(c *ateapi.ExternalVolumeClass) { c.MountOptions = slices.Repeat([]string{"ro"}, 33) },
+		want:            field.ErrorList{field.Forbidden(evc, "")},
+		wantWithPreview: field.ErrorList{field.TooMany(evc.Child("mount_options"), 33, 32).WithOrigin("maxItems")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

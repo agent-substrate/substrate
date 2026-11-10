@@ -1135,6 +1135,15 @@ type ExternalVolumeStatus struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// mount_options from the volume's class, passed to the CSI driver as
+	// VolumeCapability.Mount.MountFlags at mount time.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=32
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:minLength=1
+	// +k8s:eachVal=+k8s:maxLength=256
+	MountOptions  []string `protobuf:"bytes,5,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1193,6 +1202,13 @@ func (x *ExternalVolumeStatus) GetVolumeType() string {
 func (x *ExternalVolumeStatus) GetVolumeContext() map[string]string {
 	if x != nil {
 		return x.VolumeContext
+	}
+	return nil
+}
+
+func (x *ExternalVolumeStatus) GetMountOptions() []string {
+	if x != nil {
+		return x.MountOptions
 	}
 	return nil
 }
@@ -4089,7 +4105,16 @@ type ExternalVolumeClass struct {
 	// +k8s:maxProperties=32
 	// +k8s:eachKey=+k8s:maxLength=128
 	// +k8s:eachVal=+k8s:maxLength=256
-	Parameters    map[string]string `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Parameters map[string]string `protobuf:"bytes,3,rep,name=parameters,proto3" json:"parameters,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// mount_options are passed to the CSI driver as
+	// VolumeCapability.Mount.MountFlags at mount time.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=32
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:minLength=1
+	// +k8s:eachVal=+k8s:maxLength=256
+	MountOptions  []string `protobuf:"bytes,4,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4141,6 +4166,13 @@ func (x *ExternalVolumeClass) GetDriverName() string {
 func (x *ExternalVolumeClass) GetParameters() map[string]string {
 	if x != nil {
 		return x.Parameters
+	}
+	return nil
+}
+
+func (x *ExternalVolumeClass) GetMountOptions() []string {
+	if x != nil {
+		return x.MountOptions
 	}
 	return nil
 }
@@ -10395,13 +10427,14 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"deleteTime\"V\n" +
 	"\x0fExternalVolumes\x12C\n" +
-	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\x9e\x02\n" +
+	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\xc3\x02\n" +
 	"\x14ExternalVolumeStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x12c\n" +
-	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x12#\n" +
+	"\rmount_options\x18\x05 \x03(\tR\fmountOptions\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x02\n" +
@@ -10559,14 +10592,15 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x16ExternalVolumeTemplate\x12%\n" +
 	"\x0ecapacity_bytes\x18\x01 \x01(\x03R\rcapacityBytes\x12,\n" +
 	"\x12storage_class_name\x18\x02 \x01(\tR\x10storageClassName\x12R\n" +
-	"\x15external_volume_class\x18\x03 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x13externalVolumeClass\"\xb1\x02\n" +
+	"\x15external_volume_class\x18\x03 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x13externalVolumeClass\"\xd6\x02\n" +
 	"\x13ExternalVolumeClass\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata\x12\x1f\n" +
 	"\vdriver_name\x18\x02 \x01(\tR\n" +
 	"driverName\x12X\n" +
 	"\n" +
 	"parameters\x18\x03 \x03(\v28.substrate.ateapi.v1.ExternalVolumeClass.ParametersEntryR\n" +
-	"parameters\x1a=\n" +
+	"parameters\x12#\n" +
+	"\rmount_options\x18\x04 \x03(\tR\fmountOptions\x1a=\n" +
 	"\x0fParametersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x1d\x82\xb5\x18\x19\x18\x02\"\x15ExternalVolumeClasses\"f\n" +
