@@ -3637,7 +3637,7 @@ func runExternalVolumeClassContractTests(t *testing.T, setup func(t *testing.T) 
 		if err != nil {
 			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
 		}
-		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{})
+		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.Precondition{})
 		if err != nil {
 			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
 		}
@@ -3655,12 +3655,12 @@ func runExternalVolumeClassContractTests(t *testing.T, setup func(t *testing.T) 
 	t.Run("DeleteExternalVolumeClass_Preconditions", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
-		del := func(precondition store.DeletePreconditions) error {
+		del := func(precondition store.Precondition) error {
 			_, err := s.DeleteExternalVolumeClass(ctx, "nfs", precondition)
 			return err
 		}
 
-		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+		if err := del(store.Precondition{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("guarded delete of a missing class = %v, want ErrNotFound", err)
 		}
 
@@ -3669,16 +3669,16 @@ func runExternalVolumeClassContractTests(t *testing.T, setup func(t *testing.T) 
 			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
 		}
 		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
-		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+		if err := del(store.Precondition{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
 		}
-		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+		if err := del(store.Precondition{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
 			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
 		}
 		if _, err := s.GetExternalVolumeClass(ctx, "nfs"); err != nil {
 			t.Fatalf("a refused delete removed the class: %v", err)
 		}
-		if err := del(store.DeletePreconditions{UID: uid, Version: version}); err != nil {
+		if err := del(store.Precondition{UID: uid, Version: version}); err != nil {
 			t.Errorf("matching uid and version = %v, want nil", err)
 		}
 	})
@@ -3953,7 +3953,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "ListExternalVolumeClasses", created, list.Items[0])
 
-		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{})
+		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.Precondition{})
 		if err != nil {
 			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
 		}

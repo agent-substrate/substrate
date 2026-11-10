@@ -118,7 +118,7 @@ func (p *Persistence) ListExternalVolumeClasses(ctx context.Context, opts store.
 	return store.ListResponse[*ateapi.ExternalVolumeClass]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) DeleteExternalVolumeClass(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.ExternalVolumeClass, error) {
+func (p *Persistence) DeleteExternalVolumeClass(ctx context.Context, name string, precondition store.Precondition) (*ateapi.ExternalVolumeClass, error) {
 	var protoBytes []byte
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM external_volume_classes

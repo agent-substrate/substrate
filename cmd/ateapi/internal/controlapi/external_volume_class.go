@@ -95,7 +95,7 @@ func (s *RPCService) DeleteExternalVolumeClass(ctx context.Context, req *ateapi.
 	return s.impl.DeleteExternalVolumeClass(ctx, req.GetExternalVolumeClass().GetName(), toDeletePreconditions(req.GetOptions()))
 }
 
-func (s *ServiceImpl) DeleteExternalVolumeClass(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.ExternalVolumeClass, error) {
+func (s *ServiceImpl) DeleteExternalVolumeClass(ctx context.Context, name string, precondition store.Precondition) (*ateapi.ExternalVolumeClass, error) {
 	deleted, err := s.store.DeleteExternalVolumeClass(ctx, name, precondition)
 	switch {
 	case err == nil:
