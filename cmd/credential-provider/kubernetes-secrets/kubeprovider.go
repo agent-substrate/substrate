@@ -133,6 +133,10 @@ func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server
 // when authorization is disabled.
 func (s *Server) Grants() map[string][]string { return s.nsAuth.Grants() }
 
+// GrantDetails exposes each grant and its secretSelector labels for /statusz.
+// Nil when authorization is disabled.
+func (s *Server) GrantDetails() map[string][]NamespaceGrant { return s.nsAuth.GrantDetails() }
+
 // FetchSecret resolves one ate-secret:// URI to its Secret value.
 func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretRequest) (*credprovider.FetchSecretResponse, error) {
 	ref, err := ParseURI(req.GetUri())
