@@ -935,6 +935,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "external volume template with no class",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30}}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template"), nil, "one of").WithOrigin("union")}},
@@ -942,6 +943,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "valid external volume template with external_volume_class",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, ExternalVolumeClass: &ateapi.ObjectRef{Name: "fast-ssd"}}}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
@@ -949,6 +951,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "external volume template with both storage_class_name and external_volume_class",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, StorageClassName: "fast-ssd", ExternalVolumeClass: &ateapi.ObjectRef{Name: "fast-ssd"}}}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template"), nil, "one of").WithOrigin("union")}},
@@ -956,6 +959,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "external_volume_class with an atespace",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, ExternalVolumeClass: &ateapi.ObjectRef{Atespace: "ns1", Name: "fast-ssd"}}}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Forbidden(field.NewPath("volumes").Index(0).Child("external", "template", "external_volume_class", "atespace"), "")}},
@@ -963,6 +967,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "external_volume_class missing name",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, ExternalVolumeClass: &ateapi.ObjectRef{}}}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "template", "external_volume_class", "name"), "")}},
