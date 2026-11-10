@@ -15,17 +15,27 @@
 package imagecache
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
 )
 
 // errDiffIDMismatch marks layer content that does not hash to its claimed
 // diffID. It is a property of the image, so retrying cannot fix it.
 var errDiffIDMismatch = errors.New("layer content does not match its claimed diffID")
+
+// Magic numbers at the start of gzip (RFC 1952) and zstd (RFC 8878) streams.
+var (
+	gzipMagic = []byte{0x1f, 0x8b}
+	zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+)
 
 // readVerifiedLayer passes the layer's uncompressed stream to consume, then
 // reads whatever consume left unread and checks that the whole stream
@@ -39,17 +49,39 @@ var errDiffIDMismatch = errors.New("layer content does not match its claimed dif
 // go-containerregistry check the compressed blob against the manifest
 // digest, which it does only at EOF.
 func readVerifiedLayer(layer v1.Layer, diffID v1.Hash, consume func(io.Reader) error) (int64, error) {
-	rc, err := layer.Uncompressed()
+	rc, err := layer.Compressed()
 	if err != nil {
 		return 0, fmt.Errorf("while opening layer stream: %w", err)
 	}
 	defer rc.Close()
 
+	buf := bufio.NewReader(rc)
+	var r io.Reader = buf
+	if magic, err := buf.Peek(len(gzipMagic)); err != nil && !errors.Is(err, io.EOF) {
+		return 0, fmt.Errorf("while peeking layer stream: %w", err)
+	} else if bytes.Equal(magic, gzipMagic) {
+		gzr, err := gzip.NewReader(buf)
+		if err != nil {
+			return 0, fmt.Errorf("while opening gzip layer stream: %w", err)
+		}
+		defer gzr.Close()
+		r = gzr
+	} else if magic, err := buf.Peek(len(zstdMagic)); err != nil && !errors.Is(err, io.EOF) {
+		return 0, fmt.Errorf("while peeking layer stream: %w", err)
+	} else if bytes.Equal(magic, zstdMagic) {
+		zr, err := zstd.NewReader(buf)
+		if err != nil {
+			return 0, fmt.Errorf("while opening zstd layer stream: %w", err)
+		}
+		defer zr.Close()
+		r = zr
+	}
+
 	hasher, err := v1.Hasher(diffID.Algorithm)
 	if err != nil {
 		return 0, fmt.Errorf("while creating hasher for %s: %w", diffID, err)
 	}
-	tee := io.TeeReader(rc, hasher)
+	tee := io.TeeReader(r, hasher)
 	counter := &countingReader{r: tee}
 	if err := consume(counter); err != nil {
 		return 0, err
