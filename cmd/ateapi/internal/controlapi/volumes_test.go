@@ -164,8 +164,9 @@ func TestInitialActorVolumes(t *testing.T) {
 			VolumeType: "mock-standard",
 		},
 		{
-			Name:       "data-vol-2",
-			VolumeType: "mock-fast",
+			Name:         "data-vol-2",
+			VolumeType:   "mock-fast",
+			MountOptions: []string{"noatime"},
 		},
 	}
 
@@ -176,8 +177,9 @@ func TestInitialActorVolumes(t *testing.T) {
 				Provisioner: "mock-standard",
 			},
 			"fast": {
-				ObjectMeta:  metav1.ObjectMeta{Name: "fast"},
-				Provisioner: "mock-fast",
+				ObjectMeta:   metav1.ObjectMeta{Name: "fast"},
+				Provisioner:  "mock-fast",
+				MountOptions: []string{"noatime"},
 			},
 		},
 	}
@@ -284,7 +286,7 @@ func TestCreateActorVolumes(t *testing.T) {
 			},
 		},
 		{
-			name: "storage class parameters are propagated to volume context",
+			name: "storage class parameters and mount options are propagated",
 			tmpl: standardTmpl,
 			inputVolumes: []*ateapi.ExternalVolumeStatus{
 				{
@@ -300,6 +302,7 @@ func TestCreateActorVolumes(t *testing.T) {
 						"type":                      "pd-ssd",
 						"csi.storage.k8s.io/fstype": "ext4",
 					},
+					MountOptions: []string{"rw", "noatime"},
 				},
 			},
 			wantErr: false,
@@ -312,6 +315,7 @@ func TestCreateActorVolumes(t *testing.T) {
 						"type":                      "pd-ssd",
 						"csi.storage.k8s.io/fstype": "ext4",
 					},
+					MountOptions: []string{"rw", "noatime"},
 				},
 			},
 		},
@@ -354,19 +358,25 @@ func TestCreateActorVolumes(t *testing.T) {
 func TestResolveExternalVolumeClass(t *testing.T) {
 	ref := &ateapi.ObjectRef{Name: "gold"}
 	for _, tt := range []struct {
-		name       string
-		getter     *fakeExternalVolumeClassGetter
-		wantCode   codes.Code
-		wantDriver string
-		wantParams map[string]string
+		name             string
+		getter           *fakeExternalVolumeClassGetter
+		wantCode         codes.Code
+		wantDriver       string
+		wantParams       map[string]string
+		wantMountOptions []string
 	}{{
 		name: "found",
 		getter: &fakeExternalVolumeClassGetter{classes: map[string]*ateapi.ExternalVolumeClass{
-			"gold": {DriverName: "mock-standard", Parameters: map[string]string{"tier": "gold"}},
+			"gold": {
+				DriverName:   "mock-standard",
+				Parameters:   map[string]string{"tier": "gold"},
+				MountOptions: []string{"nfsvers=4.1", "noatime"},
+			},
 		}},
-		wantCode:   codes.OK,
-		wantDriver: "mock-standard",
-		wantParams: map[string]string{"tier": "gold"},
+		wantCode:         codes.OK,
+		wantDriver:       "mock-standard",
+		wantParams:       map[string]string{"tier": "gold"},
+		wantMountOptions: []string{"nfsvers=4.1", "noatime"},
 	}, {
 		name:     "missing",
 		getter:   &fakeExternalVolumeClassGetter{},
@@ -377,7 +387,7 @@ func TestResolveExternalVolumeClass(t *testing.T) {
 		wantCode: codes.Internal,
 	}} {
 		t.Run(tt.name, func(t *testing.T) {
-			driver, params, err := resolveExternalVolumeClass(context.Background(), tt.getter, ref)
+			driver, params, mountOptions, err := resolveExternalVolumeClass(context.Background(), tt.getter, ref)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("resolveExternalVolumeClass() code = %v, want %v; error = %v", got, tt.wantCode, err)
 			}
@@ -392,6 +402,9 @@ func TestResolveExternalVolumeClass(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.wantParams, params); diff != "" {
 				t.Errorf("resolveExternalVolumeClass() params mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tt.wantMountOptions, mountOptions); diff != "" {
+				t.Errorf("resolveExternalVolumeClass() mountOptions mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -409,24 +422,32 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 		}},
 	}
 	classes := &fakeExternalVolumeClassGetter{classes: map[string]*ateapi.ExternalVolumeClass{
-		"gold": {DriverName: "mock-standard", Parameters: map[string]string{"tier": "gold"}},
+		"gold": {
+			DriverName:   "mock-standard",
+			Parameters:   map[string]string{"tier": "gold"},
+			MountOptions: []string{"nfsvers=4.1"},
+		},
 	}}
 	registry := &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
 		"mock-standard": volume.NewMockVolumePlugin(),
 	}}
 
-	t.Run("initial volume takes the class driver as its type", func(t *testing.T) {
+	t.Run("initial volume takes the class driver and mount options", func(t *testing.T) {
 		got, err := initialExternalVolumes(ctx, classes, nil, tmpl)
 		if err != nil {
 			t.Fatalf("initialExternalVolumes() failed: %v", err)
 		}
-		want := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
+		want := []*ateapi.ExternalVolumeStatus{{
+			Name:         "data-vol",
+			VolumeType:   "mock-standard",
+			MountOptions: []string{"nfsvers=4.1"},
+		}}
 		if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 			t.Errorf("initialExternalVolumes() mismatch (-want +got):\n%s", diff)
 		}
 	})
 
-	t.Run("create passes the class parameters to the driver", func(t *testing.T) {
+	t.Run("create passes the class parameters and mount options", func(t *testing.T) {
 		input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
 		got, err := createActorVolumes(ctx, registry, classes, nil, "actor-uid-123", tmpl, input)
 		if err != nil {
@@ -437,6 +458,7 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 			StorageVolumeId: "mock-vol-substrate-actor-uid-123-data-vol",
 			VolumeType:      "mock-standard",
 			VolumeContext:   map[string]string{"tier": "gold"},
+			MountOptions:    []string{"nfsvers=4.1"},
 		}}
 		if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 			t.Errorf("createActorVolumes() mismatch (-want +got):\n%s", diff)

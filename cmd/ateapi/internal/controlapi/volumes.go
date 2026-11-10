@@ -45,12 +45,13 @@ type externalVolumeClassGetter interface {
 }
 
 // volumeClass is what an external volume template resolves to: the CSI driver,
-// the parameters for its CreateVolume call, and a label that names the class
-// in errors.
+// the parameters for its CreateVolume call, its mount options, and a label
+// that names the class in errors.
 type volumeClass struct {
-	driver string
-	params map[string]string
-	label  string
+	driver       string
+	params       map[string]string
+	mountOptions []string
+	label        string
 }
 
 // resolveVolumeClass resolves the class of an external volume template from
@@ -58,11 +59,11 @@ type volumeClass struct {
 // StorageClass named by storage_class_name.
 func resolveVolumeClass(ctx context.Context, classes externalVolumeClassGetter, scLister storagev1listers.StorageClassLister, tmpl *ateapi.ExternalVolumeTemplate) (volumeClass, error) {
 	if ref := tmpl.GetExternalVolumeClass(); ref != nil {
-		driver, params, err := resolveExternalVolumeClass(ctx, classes, ref)
+		driver, params, mountOptions, err := resolveExternalVolumeClass(ctx, classes, ref)
 		if err != nil {
 			return volumeClass{}, err
 		}
-		return volumeClass{driver: driver, params: params, label: fmt.Sprintf("ExternalVolumeClass %q", ref.GetName())}, nil
+		return volumeClass{driver: driver, params: params, mountOptions: mountOptions, label: fmt.Sprintf("ExternalVolumeClass %q", ref.GetName())}, nil
 	}
 
 	scName := tmpl.GetStorageClassName()
@@ -76,22 +77,22 @@ func resolveVolumeClass(ctx context.Context, classes externalVolumeClassGetter, 
 		}
 		return volumeClass{}, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 	}
-	return volumeClass{driver: sc.Provisioner, params: sc.Parameters, label: fmt.Sprintf("StorageClass %q", scName)}, nil
+	return volumeClass{driver: sc.Provisioner, params: sc.Parameters, mountOptions: sc.MountOptions, label: fmt.Sprintf("StorageClass %q", scName)}, nil
 }
 
-// resolveExternalVolumeClass returns the driver and CreateVolume parameters of
-// the ExternalVolumeClass that ref names. A missing class is a
+// resolveExternalVolumeClass returns the driver, CreateVolume parameters, and
+// mount options of the ExternalVolumeClass that ref names. A missing class is a
 // FailedPrecondition: the template is valid, but the class it names does not
 // exist yet or was deleted.
-func resolveExternalVolumeClass(ctx context.Context, classes externalVolumeClassGetter, ref *ateapi.ObjectRef) (driver string, params map[string]string, err error) {
+func resolveExternalVolumeClass(ctx context.Context, classes externalVolumeClassGetter, ref *ateapi.ObjectRef) (driver string, params map[string]string, mountOptions []string, err error) {
 	class, err := classes.GetExternalVolumeClass(ctx, ref.GetName())
 	if err != nil {
 		if apierror.Code(err) == codes.NotFound {
-			return "", nil, apierror.FailedPrecondition("ExternalVolumeClass %q not found", ref.GetName())
+			return "", nil, nil, apierror.FailedPrecondition("ExternalVolumeClass %q not found", ref.GetName())
 		}
-		return "", nil, apierror.Internal("failed to get ExternalVolumeClass %q: %v", ref.GetName(), err)
+		return "", nil, nil, apierror.Internal("failed to get ExternalVolumeClass %q: %v", ref.GetName(), err)
 	}
-	return class.GetDriverName(), class.GetParameters(), nil
+	return class.GetDriverName(), class.GetParameters(), class.GetMountOptions(), nil
 }
 
 // initialExternalVolumes constructs the actor's volume objects before volume
@@ -109,8 +110,9 @@ func initialExternalVolumes(ctx context.Context, classes externalVolumeClassGett
 			}
 
 			volumes = append(volumes, &ateapi.ExternalVolumeStatus{
-				Name:       vol.GetName(),
-				VolumeType: class.driver,
+				Name:         vol.GetName(),
+				VolumeType:   class.driver,
+				MountOptions: class.mountOptions,
 			})
 		}
 	}
@@ -187,6 +189,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, clas
 			StorageVolumeId: resp.VolumeID,
 			VolumeType:      class.driver,
 			VolumeContext:   resp.VolumeContext,
+			MountOptions:    class.mountOptions,
 		})
 	}
 	return resultVolumes, nil
