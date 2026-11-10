@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -426,8 +427,10 @@ func TestAppendExternalVolumes(t *testing.T) {
 
 	for _, tt := range []struct {
 		name                  string
+		mountOptions          []string
 		volumePublishContexts map[string]map[string]string
 		wantPublishCtx        map[string]string
+		wantMountOptions      []string
 	}{
 		{
 			name:                  "with attachment metadata",
@@ -437,10 +440,17 @@ func TestAppendExternalVolumes(t *testing.T) {
 		{
 			name: "without attachment metadata",
 		},
+		{
+			name:             "with mount options",
+			mountOptions:     []string{"nfsvers=4.1", "noatime"},
+			wantMountOptions: []string{"nfsvers=4.1", "noatime"},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			testActor := proto.Clone(actor).(*ateapi.Actor)
+			testActor.Status.ExternalVolumes.Volumes[0].MountOptions = tt.mountOptions
 			workloadSpec := &ateletpb.WorkloadSpec{}
-			if err := appendExternalVolumes(workloadSpec, template, actor, tt.volumePublishContexts); err != nil {
+			if err := appendExternalVolumes(workloadSpec, template, testActor, tt.volumePublishContexts); err != nil {
 				t.Fatalf("appendExternalVolumes unexpected error: %v", err)
 			}
 
@@ -453,6 +463,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 							VolumeType:      "pd-standard",
 							VolumeContext:   map[string]string{"foo": "bar"},
 							PublishContext:  tt.wantPublishCtx,
+							MountOptions:    tt.wantMountOptions,
 						},
 					},
 				},

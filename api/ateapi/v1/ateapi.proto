@@ -564,7 +564,7 @@ message ExternalVolumeStatus {
   // +k8s:listType=atomic
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=256
-  repeated string mount_options = 5;
+  repeated string mount_options = 6;
 }
 
 message Actor {
