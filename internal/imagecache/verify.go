@@ -49,6 +49,7 @@ var (
 // go-containerregistry check the compressed blob against the manifest
 // digest, which it does only at EOF.
 func readVerifiedLayer(layer v1.Layer, diffID v1.Hash, consume func(io.Reader) error) (int64, error) {
+	// Decompress here because layer.Uncompressed() uses the slower stdlib gzip.
 	rc, err := layer.Compressed()
 	if err != nil {
 		return 0, fmt.Errorf("while opening layer stream: %w", err)
@@ -56,19 +57,21 @@ func readVerifiedLayer(layer v1.Layer, diffID v1.Hash, consume func(io.Reader) e
 	defer rc.Close()
 
 	buf := bufio.NewReader(rc)
-	var r io.Reader = buf
-	if magic, err := buf.Peek(len(gzipMagic)); err != nil && !errors.Is(err, io.EOF) {
+	// A stream shorter than zstdMagic returns io.EOF with the bytes it has.
+	magic, err := buf.Peek(len(zstdMagic))
+	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, fmt.Errorf("while peeking layer stream: %w", err)
-	} else if bytes.Equal(magic, gzipMagic) {
+	}
+	var r io.Reader = buf
+	switch {
+	case bytes.HasPrefix(magic, gzipMagic):
 		gzr, err := gzip.NewReader(buf)
 		if err != nil {
 			return 0, fmt.Errorf("while opening gzip layer stream: %w", err)
 		}
 		defer gzr.Close()
 		r = gzr
-	} else if magic, err := buf.Peek(len(zstdMagic)); err != nil && !errors.Is(err, io.EOF) {
-		return 0, fmt.Errorf("while peeking layer stream: %w", err)
-	} else if bytes.Equal(magic, zstdMagic) {
+	case bytes.HasPrefix(magic, zstdMagic):
 		zr, err := zstd.NewReader(buf)
 		if err != nil {
 			return 0, fmt.Errorf("while opening zstd layer stream: %w", err)
