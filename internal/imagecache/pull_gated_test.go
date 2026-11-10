@@ -38,19 +38,16 @@ import (
 // gatedRegistry is an in-memory registry whose blob GETs block while their
 // digest hex is gated.
 type gatedRegistry struct {
-	host    string
-	arrived chan string
+	host string
 
-	mu    sync.Mutex
-	gates map[string]chan struct{}
+	mu      sync.Mutex
+	gates   map[string]chan struct{}
+	arrived chan string // nil until arrivals is called
 }
 
 func newGatedRegistry(t *testing.T) *gatedRegistry {
 	t.Helper()
-	g := &gatedRegistry{
-		arrived: make(chan string, 16),
-		gates:   map[string]chan struct{}{},
-	}
+	g := &gatedRegistry{gates: map[string]chan struct{}{}}
 	_, g.host = newWrappedRegistry(t, func(inner http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
@@ -66,9 +63,12 @@ func newGatedRegistry(t *testing.T) *gatedRegistry {
 						break
 					}
 				}
+				arrived := g.arrived
 				g.mu.Unlock()
 				if ch != nil {
-					g.arrived <- matched
+					if arrived != nil {
+						arrived <- matched
+					}
 					<-ch
 				}
 			}
@@ -76,6 +76,15 @@ func newGatedRegistry(t *testing.T) *gatedRegistry {
 		})
 	})
 	return g
+}
+
+// arrivals returns a channel that receives the digest hex of each gated blob
+// GET as it reaches its gate.
+func (g *gatedRegistry) arrivals() <-chan string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.arrived = make(chan string, 16)
+	return g.arrived
 }
 
 // gate blocks future GETs of the layer's compressed blob until release.
@@ -430,13 +439,18 @@ func TestPullStartsLargestLayersFirst(t *testing.T) {
 		releases[i] = reg.gate(t, layers[i])
 	}
 
-	if got, want := layerPullOrder(layers), []int{4, 3, 2, 0, 1}; !slices.Equal(got, want) {
-		t.Fatalf("layerPullOrder = %v, want %v", got, want)
+	order, err := layerPullOrder(layers)
+	if err != nil {
+		t.Fatalf("layerPullOrder: %v", err)
+	}
+	if want := []int{4, 3, 2, 0, 1}; !slices.Equal(order, want) {
+		t.Fatalf("layerPullOrder = %v, want %v", order, want)
 	}
 
 	ref := reg.host + "/test/lpt:latest"
 	pushImage(t, ref, v1.Config{}, layers...)
 
+	arrived := reg.arrivals()
 	store := newTestStore(t)
 	done := make(chan error, 1)
 	var img *Image
@@ -451,7 +465,11 @@ func TestPullStartsLargestLayersFirst(t *testing.T) {
 	// equal-sized "b" by manifest order.
 	firstWave := make([]string, layerPullConcurrency)
 	for i := range firstWave {
-		firstWave[i] = <-reg.arrived
+		select {
+		case firstWave[i] = <-arrived:
+		case err := <-done:
+			t.Fatalf("EnsureImage returned before %d layer pulls arrived: %v", layerPullConcurrency, err)
+		}
 	}
 	if slices.Contains(firstWave, digests[1]) {
 		t.Errorf("first %d layer pulls = %v, want layer b (%s) queued behind larger layers c..e and earlier tie a", layerPullConcurrency, firstWave, digests[1])
