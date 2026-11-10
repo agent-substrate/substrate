@@ -17,10 +17,15 @@ package csi
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/resolver/manual"
 )
 
 func TestParseEndpoint(t *testing.T) {
@@ -152,5 +157,91 @@ func TestNewCSIClient_TCP(t *testing.T) {
 
 	if resp.GetName() != "mock-driver" {
 		t.Errorf("expected driver name 'mock-driver', got %q", resp.GetName())
+	}
+}
+
+// countingIdentityServer counts its GetPluginInfo calls.
+type countingIdentityServer struct {
+	csi.UnimplementedIdentityServer
+	calls atomic.Int64
+}
+
+func (s *countingIdentityServer) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+	s.calls.Add(1)
+	return &csi.GetPluginInfoResponse{Name: "mock-driver"}, nil
+}
+
+// startCountingServer serves a countingIdentityServer on a local TCP port.
+func startCountingServer(t *testing.T) (*countingIdentityServer, string) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	srv := &countingIdentityServer{}
+	grpcServer := grpc.NewServer()
+	csi.RegisterIdentityServer(grpcServer, srv)
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	t.Cleanup(grpcServer.Stop)
+	return srv, lis.Addr().String()
+}
+
+// An endpoint that resolves to two addresses spreads calls over both for tcp
+// and dns, and sends every call to one address for unix.
+func TestDialOptionsLoadBalancing(t *testing.T) {
+	tests := []struct {
+		scheme     string
+		wantSpread bool
+	}{
+		{scheme: "tcp", wantSpread: true},
+		{scheme: "dns", wantSpread: true},
+		{scheme: "unix", wantSpread: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.scheme, func(t *testing.T) {
+			srv1, addr1 := startCountingServer(t)
+			srv2, addr2 := startCountingServer(t)
+
+			r := manual.NewBuilderWithScheme("csitest")
+			r.InitialState(resolver.State{Addresses: []resolver.Address{{Addr: addr1}, {Addr: addr2}}})
+			opts := append(dialOptions(tt.scheme, insecure.NewCredentials()), grpc.WithResolvers(r))
+			conn, err := grpc.NewClient(r.Scheme()+":///csi", opts...)
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+			defer conn.Close()
+			client := csi.NewIdentityClient(conn)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			call := func() {
+				t.Helper()
+				if _, err := client.GetPluginInfo(ctx, &csi.GetPluginInfoRequest{}, grpc.WaitForReady(true)); err != nil {
+					t.Fatalf("GetPluginInfo failed: %v", err)
+				}
+			}
+
+			if tt.wantSpread {
+				// round_robin adds each address once it connects, so call
+				// until both have served one.
+				deadline := time.Now().Add(5 * time.Second)
+				for srv1.calls.Load() == 0 || srv2.calls.Load() == 0 {
+					if time.Now().After(deadline) {
+						t.Fatalf("calls per server = [%d %d], want both above 0", srv1.calls.Load(), srv2.calls.Load())
+					}
+					call()
+				}
+				return
+			}
+			const n = 20
+			for range n {
+				call()
+			}
+			if got1, got2 := srv1.calls.Load(), srv2.calls.Load(); got1 != n && got2 != n {
+				t.Errorf("calls per server = [%d %d], want all %d on one server", got1, got2, n)
+			}
+		})
 	}
 }

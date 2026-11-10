@@ -21,15 +21,12 @@ import (
 	"fmt"
 
 	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/grpclb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
 const DefaultServiceAccountCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-
-// roundRobinServiceConfig spreads RPCs across every address the resolver
-// returns.
-const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
 
 // ClientConfig configures how to dial the ateapi gRPC server with mutual TLS.
 // The credential bundle is re-read on every handshake so in-place
@@ -87,7 +84,7 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	}
 
 	opts := []grpc.DialOption{
-		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+		grpc.WithDefaultServiceConfig(grpclb.RoundRobinServiceConfig),
 	}
 
 	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
