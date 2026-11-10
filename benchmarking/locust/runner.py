@@ -195,6 +195,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--test-entry",
+        type=json_object,
+        default={},
+        help="The run's test entry from tests.yaml, as a JSON object",
+    )
+    p.add_argument(
         "--phase-breakdown",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -208,6 +214,17 @@ def parse_args() -> argparse.Namespace:
     args, extra = p.parse_known_args()
     args.locust_extra = extra
     return args
+
+
+def json_object(value: str) -> dict[str, Any]:
+    """An argparse type: a JSON object."""
+    try:
+        obj = json.loads(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"not JSON: {e}") from None
+    if not isinstance(obj, dict):
+        raise argparse.ArgumentTypeError("not a JSON object")
+    return obj
 
 
 # Tests whose User class is implemented in Python. Closed set: new load
