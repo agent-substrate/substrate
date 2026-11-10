@@ -406,6 +406,9 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         if ttype == "locust":
             # A malformed --metadata fails here rather than mid-sweep.
             split_metadata_flag(t)
+        elif "evaluations" in t:
+            # Only the locust runner judges evaluations (runner.py --test-entry).
+            raise ValueError(f"test {name!r}: 'evaluations' is supported only for type locust")
         isolate_block(t)
 
 

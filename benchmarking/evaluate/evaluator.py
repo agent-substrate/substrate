@@ -35,7 +35,7 @@ from typing import Any, Final, Literal, Mapping, NamedTuple, Optional, Sequence
 from . import cel_env
 from .config import Condition, Evaluation, to_json
 from .sources import SOURCES
-from .sources.base import BenchmarkRunContext, Scalar, Source, SourceInvalid
+from .sources.base import BenchmarkRunContext, RunIdentity, Scalar, Source, SourceInvalid
 
 Status = Literal["pass", "fail", "invalid"]
 PASS: Final = "pass"
@@ -85,7 +85,8 @@ class Summary:
 class Report:
     """A run judged against its evaluations."""
     run: Mapping[str, str]  # which run was judged: its RunIdentity.record()
-    evaluated_at: str
+    evaluated_at: Optional[str]  # None when the evaluations failed to load
+    error: Optional[str]  # why the evaluations failed to load, None when they loaded
     summary: Summary
     evaluations: tuple[EvaluationResult, ...]
 
@@ -143,7 +144,8 @@ class Evaluator:
                 name=ev.name, description=ev.description, status=status, passed=status == PASS, reason=reason,
                 conditions=conditions, variables=tuple(variables), config=echoed))
         status, failed, invalid = _combine(evaluation_results)
-        return Report(run=self.run.identity.record(), evaluated_at=now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        return Report(run=self.run.identity.record(),
+                      evaluated_at=now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), error=None,
                       summary=Summary(status=status, passed=status == PASS, failed=failed, invalid=invalid),
                       evaluations=tuple(evaluation_results))
 
@@ -168,6 +170,12 @@ class Evaluator:
                                           "bool, string or null")
         values = {k: None if isinstance(v, float) and not math.isfinite(v) else v for k, v in raw.items()}
         return ResolvedValues(values, invalid_reason)
+
+
+def error_report(identity: RunIdentity, error: str) -> Report:
+    """The Report of evaluations that failed to load: no verdict, and why."""
+    return Report(run=identity.record(), evaluated_at=None, error=error,
+                  summary=Summary(status=INVALID, passed=False, failed=(), invalid=()), evaluations=())
 
 
 def _combine(results: Sequence[ConditionResult | EvaluationResult]) -> tuple[Status, tuple[str, ...], tuple[str, ...]]:

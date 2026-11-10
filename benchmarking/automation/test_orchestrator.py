@@ -360,6 +360,12 @@ class RunMetadataTest(unittest.TestCase):
         args = render.call_args.args[2]
         self.assertEqual(json.loads(args[args.index("--test-entry") + 1]), test)
 
+    def test_evaluations_only_on_locust(self):
+        test = {"name": "n", "type": "nighthawk-ingress", "targetCluster": "t", "evaluations": [{"name": "e"}]}
+        with mock.patch.object(orchestrator.TYPES["nighthawk-ingress"], "validate"), \
+             self.assertRaisesRegex(ValueError, "test 'n': 'evaluations' is supported only for type locust"):
+            orchestrator.validate_and_normalize_tests([test])
+
     def test_metadata_survives_yaml(self):
         md = json.dumps({"cluster_name": "c: d", "q": "\"'"})
         subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}

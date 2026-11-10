@@ -44,8 +44,13 @@ class ConfigError(ValueError):
     """The evaluations block is invalid; the message names where."""
 
 
+# A variable name can't contain "__" or end in "_": stats.jsonl rows key each value as
+# <variable>__<value name>, so trial__x with value y and trial with value x__y would collide.
+VariableName = Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$", max_length=64)]
+
+
 class Variable(Model):
-    name: Name
+    name: VariableName
     source: str
     # JSON, as the results echo it: a YAML date or a non-string key is an error here.
     # Validation builds new containers, so later edits to the input don't reach it.

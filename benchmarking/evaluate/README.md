@@ -47,7 +47,8 @@ checks two envelope health gates:
 ```
 
 - Evaluation, variable and condition names match `^[a-z][a-z0-9_]*$`, at most
-  64 characters, and are unique where they live. CEL itself rejects a
+  64 characters, and are unique where they live. A variable name can't contain
+  `__` or end in `_` (see [Outputs](#outputs)). CEL itself rejects a
   variable named after a CEL type (`int`, `map`) or a keyword (`in`, `true`)
   when a condition compiles. Value names come from the source
   and may be any non-empty string
@@ -308,6 +309,36 @@ variable with its values (and why it is invalid), and the evaluation as loaded
 (`config`). An evaluation's reason names the conditions that failed, else the
 invalid conditions and variables.
 
+## Outputs
+
+- `evaluation.json`: the `Report` as JSON. When the evaluations failed to
+  load, `error` says why and nothing is judged.
+- `stats.jsonl` rows in the file's usual five keys: one `evaluation_<name>` row
+  per evaluation and one `evaluations` row for the summary. Measurements are
+  strings, or null. An evaluation's row has its `status`, `passed`, `reason`,
+  `failed_conditions` and `invalid_conditions`, and each value as
+  `<variable>__<value name>`. Value names follow the rule in
+  [Sources](#sources), so the keys stay bounded. A variable name can't contain
+  `__` or end in `_`, so no two values share a key.
+
+## In the runner
+
+The orchestrator passes the whole `locust` test entry to `runner.py` as
+`--test-entry` (JSON), and the runner reads its `evaluations`. Before the
+load test, the runner loads them and runs the
+sources' `init`, so a config error is in `logs.txt` from the start. As its
+last step after the run, it runs the queries, writes `evaluation.json` (a
+config error goes there too), uploads it with the run's other files, appends
+the rows to `stats.jsonl`, and logs one line per evaluation. `status.json` and
+the exit code don't change: an evaluation never fails a run.
+
+The runner's `paired_run(test)` returns the run of `test` under the same
+`--dest` with the same `--tag` and the latest `run_ts`, at most 6 h before
+this run (`rundir.py`). When both runs record a cluster (`trial_summary`'s
+`metadata_cluster_name`), it must be the same. On a `gs://` `--dest`, this
+needs read access to the bucket (see the
+[automation README](../automation/README.md#iam-prerequisites)).
+
 ## Layout
 
 | file | |
@@ -315,7 +346,10 @@ invalid conditions and variables.
 | `config.py` | loads and validates an `evaluations` block (pydantic models) |
 | `cel_env.py` | shared CEL environment, helpers (`round`, `percentile`), and evaluation |
 | `evaluator.py` | runs the source hooks and judges a run into a `Report` |
+| `outputs.py` | `evaluation.json` and the `stats.jsonl` rows |
 | `sources/` | the hooks (`base.py`) and the sources |
+| `rundir.py` | the runner's storage layout: opening local or `gs://` runs (a `gs://` artifact is downloaded on first use), finding a paired run |
+| `__init__.py` | `prepare` and `write`, which `runner.py` calls |
 
 ## Tests
 
