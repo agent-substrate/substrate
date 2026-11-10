@@ -104,7 +104,6 @@ class ConfigTest(unittest.TestCase):
     def test_load_and_echo(self):
         evs = config.load(evaluations())
         self.assertEqual([(e.name, len(e.variables), len(e.conditions)) for e in evs], [("envelope_health", 2, 2)])
-        self.assertEqual([c.reads for c in evs[0].conditions], [("trial",), ("trial", "server")])
         echoed = config.to_json(evs)
         self.assertEqual(config.to_json(config.load(echoed)), echoed)
         self.assertEqual(echoed[0]["description"], "")
@@ -114,21 +113,9 @@ class ConfigTest(unittest.TestCase):
             "variables": [{"name": "nh", "source": "run_results", "source_cfg": {
                 "metric": "nighthawk", "measurements": ["metric_nighthawk.builtin_attempted_rps", "p99.9"]}}],
             "conditions": [{"name": "rps__min",
-                            "cel": 'nh["metric_nighthawk.builtin_attempted_rps"] >= 2 * nh["p99.9"]'}],
+                            "cel": 'nh["metric_nighthawk.builtin_attempted_rps"] >= 2.0 * nh["p99.9"]'}],
         }]
-        loaded = config.load(dotted)
-        self.assertEqual(loaded[0].conditions[0].reads, ("nh",))
-
-    def test_ints_as_doubles(self):
-        for written, compiled in (("trial.x <= 1500", "trial.x <= 1500.0"),
-                                  ("-1 + 2 * 3", "-1.0 + 2.0 * 3.0"),
-                                  ("p99 <= 1 // 2", "p99 <= 1.0 // 2")):
-            self.assertEqual(cel_env.ints_as_doubles(written), compiled)
-        for kept in ('"1500" + \'1\'', '"""a "1" \'2\' b"""', "'''3'''", 'r"\\d1"', 'b"1"', 'rb"1"',
-                     "BR'1'", '"\\"1"', 'r"""\\"1"""', "x_1 + p99", "0x1F + 1u + 1e3 + 1.5 + .5 + 2E-3",
-                     "a.`b1`", "// 1"):
-            self.assertEqual(cel_env.ints_as_doubles(kept), kept)
-        self.assertEqual(cel_env.ints_as_doubles('"""' + "\\" * 50_000 + " 1"), '"""' + "\\" * 50_000 + " 1.0")
+        self.assertEqual(config.load(dotted)[0].conditions[0].name, "rps__min")
 
     def test_errors(self):
         def broken(path: str, value) -> list:
@@ -144,56 +131,78 @@ class ConfigTest(unittest.TestCase):
             return evs
 
         cases = {
-            "evaluations: needs a non-empty list": {"name": "x"},
-            "evaluations: needs a non-empty list (no evaluations": [],
-            "evaluations[0]: name 'Bad'": [{"name": "Bad"}],
-            "evaluations[0]: non-string keys [7]": [{**evaluations()[0], 7: "x"}],
-            "source ['run_results'] is not one of": broken("variables.0.source", ["run_results"]),
-            "unknown keys ['severity']": broken("severity", "record"),
-            "unknown keys ['actions']": broken("actions", []),
-            "name 'Envelope'": broken("name", "Envelope"),
-            "needs variables": broken("variables", []),
-            "needs conditions": broken("conditions", KeyError),
-            "description must be a string": broken("description", 1),
-            "source 'prometheus' is not one of": broken("variables.0.source", "prometheus"),
-            "source_cfg must be a mapping": broken("variables.0.source_cfg", ["x"]),
-            "source_cfg: non-string keys [0]": broken("variables.0.source_cfg", {0: "x"}),
-            "source_cfg: needs 'measurements'": broken("variables.0.source_cfg", {"metric": "trial_summary"}),
-            "conditions[0]: non-string keys [0]": broken("conditions.0", {"name": "failure_rate", 0: "x"}),
-            "conditions[0]: unknown keys ['check', 'type']": broken(
+            "evaluations: Input should be a valid list": {"name": "x"},
+            "evaluations: List should have at least 1 item": [],
+            "evaluations: 0.name: String should match pattern '^[a-z][a-z0-9_]*$'": [{"name": "Bad"}],
+            "0.7: Keys should be strings": [{**evaluations()[0], 7: "x"}],
+            "0.variables.0.source: Input should be a valid string": broken("variables.0.source", ["run_results"]),
+            "0.severity: Extra inputs are not permitted": broken("severity", "record"),
+            "0.actions: Extra inputs are not permitted": broken("actions", []),
+            "0.name: String should match pattern": broken("name", "Envelope"),
+            "0.variables.0.name: String should have at most 64 characters": broken("variables.0.name", "a" * 65),
+            "0.variables: List should have at least 1 item": broken("variables", []),
+            "0.conditions: Field required": broken("conditions", KeyError),
+            "0.conditions: List should have at least 1 item": broken("conditions", []),
+            "0.description: Input should be a valid string": broken("description", 1),
+            "0.variables.0.source: source 'prometheus' is not one of": broken("variables.0.source", "prometheus"),
+            "0.variables.0.source_cfg: Input should be a valid dictionary": broken("variables.0.source_cfg", ["x"]),
+            "0.variables.0.source_cfg.0.[key]: Input should be a valid string": broken("variables.0.source_cfg", {0: "x"}),
+            "0.variables.0: source_cfg: measurements: Field required": broken(
+                "variables.0.source_cfg", {"metric": "trial_summary"}),
+            "0.conditions.0.0: Keys should be strings": broken("conditions.0", {"name": "failure_rate", 0: "x"}),
+            "0.conditions.0.type: Extra inputs are not permitted": broken(
                 "conditions.0", {"name": "failure_rate", "type": "threshold", "check": {}}),
-            "condition 'failure_rate': needs 'cel'": broken("conditions.0", {"name": "failure_rate"}),
-            "condition 'failure_rate': cel: needs a CEL expression": broken("conditions.0.cel", ["<="]),
+            "0.conditions.0.cel: Field required": broken("conditions.0", {"name": "failure_rate"}),
+            "0.conditions.0.cel: Input should be a valid string": broken("conditions.0.cel", ["<="]),
             "Syntax error": broken("conditions.0.cel", "trial.aggregate_failure_ratio <="),
             "undeclared reference to 'gp.goodput_ratio_pct'": broken("conditions.0.cel", "gp.goodput_ratio_pct >= 80"),
-            "must give a bool, gives DOUBLE": broken("conditions.0.cel", "trial.aggregate_failure_ratio + 1"),
-            "cel must read at least one variable": broken("conditions.0.cel", "true"),
-            "condition names repeated": broken("conditions", evaluations()[0]["conditions"] * 2),
-            "variable names repeated": broken("variables.1.name", "trial"),
-            "every variable must be read by a condition; unread ['server']": broken(
-                "conditions", evaluations()[0]["conditions"][:1]),
+            "condition 'failure_rate': cel: must give a bool, gives DOUBLE": broken(
+                "conditions.0.cel", "trial.aggregate_failure_ratio + 1.0"),
+            "no matching overload": broken("conditions.0.cel", "trial.aggregate_failure_ratio + 1 > 1.0"),
+            "0: condition names repeated": broken("conditions", evaluations()[0]["conditions"] * 2),
+            "0: variable names repeated": broken("variables.1.name", "trial"),
+            "evaluations: evaluation names repeated": evaluations() + evaluations(),
         }
         for message, evs in cases.items():
             with self.assertRaisesRegex(config.ConfigError, re.escape(message), msg=message):
                 config.load(evs)
-        for zero_read in ("1 < 2", "[1].all(trial, trial > 0)"):
-            with self.assertRaisesRegex(config.ConfigError, "cel must read at least one variable"):
-                config.load(broken("conditions.0.cel", zero_read))
-        for reserved in ("int", "double", "map", "dyn", "true", "false", "null", "in", "return"):
+
+    def test_one_bad_item_is_one_error(self):
+        evs = evaluations()
+        evs[0]["variables"] = evs[0]["variables"][:1]
+        evs[0]["conditions"] = [{"name": "c", "cel": 1}]
+        evs[0]["variables"][0]["source_cfg"] = None  # an error; leaving source_cfg out means {}
+        with self.assertRaises(config.ConfigError) as e:
+            config.load(evs)
+        self.assertEqual(str(e.exception), "evaluations: 0.variables.0.source_cfg: Input should be a valid dictionary; "
+                                           "0.conditions.0.cel: Input should be a valid string")
+
+    def test_cel_names_cannot_name_a_variable(self):
+        # CEL rejects a built-in type name as a variable, whether or not a condition reads it.
+        for type_name in ("int", "double", "map", "dyn", "type"):
             evs = evaluations()
-            evs[0]["variables"][0]["name"] = reserved
-            evs[0]["conditions"][0]["cel"] = f"{reserved}.aggregate_failure_ratio <= 0.001"
-            with self.assertRaisesRegex(config.ConfigError, f"{reserved!r} is reserved in CEL"):
+            evs[0]["variables"][0]["name"] = type_name
+            with self.assertRaisesRegex(config.ConfigError, f"variable '{type_name}' declared multiple times"):
                 config.load(evs)
-        with self.assertRaisesRegex(config.ConfigError, "evaluation names repeated"):
-            config.load(evaluations() + evaluations())
+        # A keyword parses as itself, so a condition that uses one as a variable doesn't compile.
+        for keyword in ("true", "null", "in", "return"):
+            evs = evaluations()
+            evs[0]["variables"][0]["name"] = keyword
+            evs[0]["conditions"][0]["cel"] = f"{keyword}.aggregate_failure_ratio <= 0.001"
+            with self.assertRaisesRegex(config.ConfigError, "condition 'failure_rate': cel: INVALID_ARGUMENT"):
+                config.load(evs)
+
+    def test_conditions_need_not_read_every_variable(self):
+        evs = evaluations()
+        evs[0]["conditions"] = [{"name": "constant", "cel": "1 < 2"}]
+        self.assertEqual(len(config.load(evs)[0].variables), 2)
 
     def test_source_cfg_defaults_to_empty(self):
         with mock.patch.dict(SOURCES, {"fake": Fake}):
             ev = fake_evaluation("e", {})
             del ev["variables"][0]["source_cfg"]
             self.assertEqual(config.load([ev])[0].variables[0].source_cfg, {})
-            with self.assertRaisesRegex(config.ConfigError, "variable 'f': source_cfg: unknown keys"):
+            with self.assertRaisesRegex(config.ConfigError, "0.variables.0: source_cfg: unknown keys"):
                 config.load([fake_evaluation("e", {"what": 1})])
 
 
@@ -248,15 +257,15 @@ class RunResultsTest(unittest.TestCase):
     def test_validate(self):
         RunResults.validate({"metric": "m", "measurements": ["locust_ResumeActor", "p99.9", "a__b"]})
         cases = {
-            "not a mapping": [],
-            "non-string keys [0]": {"metric": "m", "measurements": ["a"], 0: "x"},
-            "unknown keys ['run']": {"metric": "m", "measurements": ["a"], "run": "baseline"},
-            "needs 'metric'": {},
-            "needs 'measurements'": {"metric": "m"},
-            "metric must be a non-empty string": {"metric": "", "measurements": ["a"]},
-            "a non-empty list": {"metric": "m", "measurements": []},
-            "must be a non-empty string": {"metric": "m", "measurements": [""]},
-            "listed twice": {"metric": "m", "measurements": ["a", "a"]},
+            "Input should be a valid dictionary": [],
+            "0: Keys should be strings": {"metric": "m", "measurements": ["a"], 0: "x"},
+            "run: Extra inputs are not permitted": {"metric": "m", "measurements": ["a"], "run": "baseline"},
+            "metric: Field required": {"measurements": ["a"]},
+            "measurements: Field required": {"metric": "m"},
+            "metric: String should have at least 1 character": {"metric": "", "measurements": ["a"]},
+            "measurements: List should have at least 1 item": {"metric": "m", "measurements": []},
+            "measurements.0: String should have at least 1 character": {"metric": "m", "measurements": [""]},
+            "measurements: listed twice": {"metric": "m", "measurements": ["a", "a"]},
         }
         for message, cfg in cases.items():
             with self.assertRaisesRegex(ValueError, re.escape(message), msg=message):
@@ -294,10 +303,11 @@ class EvaluateTest(unittest.TestCase):
                                "source_cfg": {"values": {"good": 9, "records": 10, "pct": 90.04, "ok": True}}}],
                 "conditions": [
                     {"name": "ratio", "cel": "counts.good / counts.records >= 0.9"},
-                    {"name": "scaled_int", "cel": "2 * counts.good == 18 && counts.records / 2 == 5"},
-                    {"name": "scaled_float", "cel": "1.5 * counts.records <= 15"},
-                    {"name": "rounded_pct", "cel": "round(counts.pct, 1) >= 90"},
-                    {"name": "rounded_int", "cel": "round(counts.good, 0) == 9"},
+                    {"name": "scaled", "cel": "2.0 * counts.good == 18.0 && counts.records / 2.0 == 5.0"},
+                    {"name": "scaled_float", "cel": "1.5 * counts.records <= 15.0"},
+                    {"name": "rounded_pct", "cel": "round(counts.pct, 1) >= 90.0"},
+                    {"name": "rounded_int", "cel": "round(counts.good, 0) == 9.0"},
+                    {"name": "int_literal_compare", "cel": "counts.records <= 1500 && counts.pct > 90"},
                     {"name": "logic", "cel": "counts.ok && !(counts.good < 1 || counts.records == 0)"},
                 ],
             }]
@@ -308,6 +318,21 @@ class EvaluateTest(unittest.TestCase):
         self.assertEqual(ev.variables[0].values, {"good": 9, "records": 10, "pct": 90.04, "ok": True})
         self.assertTrue(all(isinstance(ev.variables[0].values[k], int) for k in ("good", "records")))
         self.assertIs(ev.variables[0].values["ok"], True)
+
+    def test_int_literal_with_a_value_of_unknown_type_makes_the_condition_invalid(self):
+        with mock.patch.dict(SOURCES, {"fake": Fake}):
+            report = judge(BenchmarkRunContext(files={}), [fake_evaluation("e", {"answer": 1}, "f.answer * 100 >= 99")])
+        (c,) = report.evaluations[0].conditions
+        self.assertEqual(c.status, "invalid")
+        self.assertIn("No matching overloads found : _*_(double, int64)", c.reason)
+
+    def test_int_literal_mixed_with_a_double_is_a_config_error(self):
+        # Values are doubles in CEL, which has no int-double overloads for arithmetic, nor for comparing
+        # an expression known to be a double: write 2.0. A value compared directly is dyn, so f.answer <= 1500 works.
+        with mock.patch.dict(SOURCES, {"fake": Fake}):
+            for expression in ("2 * f.answer > 1.0", "round(f.answer, 1) >= 90", "f.answer / 2.0 == 1"):
+                with self.assertRaisesRegex(config.ConfigError, "no matching overload", msg=expression):
+                    config.load([fake_evaluation("e", {}, cel_expr=expression)])
 
     def test_external_measurement_keys(self):
         evs = [{"name": "phases", "variables": [
@@ -375,24 +400,44 @@ class EvaluateTest(unittest.TestCase):
         self.assertEqual((conds["has_restarts"].status, conds["restarts"].status), ("pass", "pass"))
         self.assertIsNone(report.evaluations[0].variables[0].values["oom_events_node"])
 
-    def test_invalid_variable_makes_its_conditions_invalid(self):
+    def test_a_condition_reading_an_invalid_variable_is_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = judge(write_run(Path(tmp)), evaluations())
         (ev,) = report.evaluations
         self.assertEqual((ev.variables[1].status, ev.variables[1].invalid_reason),
                          ("invalid", "no stats.jsonl row server_summary"))
         self.assertEqual([c.status for c in ev.conditions], ["pass", "invalid"])
-        self.assertEqual(ev.conditions[1].reason, "server is invalid: no stats.jsonl row server_summary")
-        self.assertEqual((ev.status, ev.passed, ev.reason), ("invalid", False, "invalid: worker_memory"))
+        self.assertEqual(ev.conditions[1].reason,
+                         'worker_memory: UNKNOWN: No value with name "server" found in Activation')
+        self.assertEqual((ev.status, ev.passed, ev.reason), (
+            "invalid", False, "invalid: worker_memory; variable server is invalid: no stats.jsonl row server_summary"))
         self.assertEqual(report.summary,
                          Summary(status="invalid", passed=False, failed=(), invalid=("envelope_health",)))
 
-    def test_holds_turns_a_runtime_error_into_a_value_error(self):
+    def test_an_invalid_variable_no_condition_reads_makes_the_evaluation_invalid(self):
+        evs = evaluations()
+        evs[0]["conditions"] = evs[0]["conditions"][:1]  # reads trial only; server has no row
+        with tempfile.TemporaryDirectory() as tmp:
+            report = judge(write_run(Path(tmp)), evs)
+        (ev,) = report.evaluations
+        self.assertEqual([c.status for c in ev.conditions], ["pass"])
+        self.assertEqual((ev.status, ev.passed, ev.reason),
+                         ("invalid", False, "variable server is invalid: no stats.jsonl row server_summary"))
+
+    def test_a_failed_condition_beats_an_invalid_variable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = judge(write_run(Path(tmp)), evaluations(limit=0.0001))
+        (ev,) = report.evaluations
+        self.assertEqual(ev.variables[1].status, "invalid")
+        self.assertEqual([c.status for c in ev.conditions], ["fail", "invalid"])
+        self.assertEqual((ev.status, ev.reason), ("fail", "failed: failure_rate"))
+
+    def test_evaluate_condition_turns_a_runtime_error_into_a_value_error(self):
         # A stub, since the real trigger (a string with a lone surrogate) is undefined behavior in the macOS build.
         expr = mock.Mock()
         expr.eval.side_effect = RuntimeError("basic_string: construction from null is not valid")
         with self.assertRaisesRegex(ValueError, "^basic_string: construction from null is not valid$"):
-            cel_env.holds(expr, {})
+            cel_env.evaluate_condition(expr, {})
 
 
 class HooksTest(unittest.TestCase):
@@ -419,7 +464,9 @@ class HooksTest(unittest.TestCase):
             report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"answer": 42, "invalid": reason})])
             (var,) = report.evaluations[0].variables
             self.assertEqual((var.status, var.invalid_reason, var.values), ("invalid", reason, {"answer": 42}))
-            self.assertEqual(report.evaluations[0].conditions[0].reason, f"f is invalid: {reason}")
+            self.assertEqual(report.evaluations[0].conditions[0].reason,
+                             'c: UNKNOWN: No value with name "f" found in Activation')
+            self.assertEqual(report.evaluations[0].reason, f"invalid: c; variable f is invalid: {reason}")
             self.assertEqual(report.summary.status, "invalid")
 
     def test_non_finite_floats_from_source_are_normalized_at_boundary(self):

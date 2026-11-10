@@ -2,8 +2,8 @@
 
 `evaluate` judges a finished benchmark run against CEL conditions declared in
 its test entry, and returns the verdicts as a `Report`.
-Depends on [`cel-expr-python`](https://github.com/cel-expr/cel-python)
-(`requirements.txt`, Python 3.11 or later).
+Depends on [`cel-expr-python`](https://github.com/cel-expr/cel-python) and
+[pydantic](https://docs.pydantic.dev/) (`requirements.txt`, Python 3.11 or later).
 
 ## Model
 
@@ -14,10 +14,10 @@ Depends on [`cel-expr-python`](https://github.com/cel-expr/cel-python)
   are exposed to CEL as a map under `<variable>` (`<variable>.<value>`, or
   `<variable>["<value>"]` when `<value>` contains dots or CEL keywords).
 - A **condition** is `{name, cel}`: a [CEL](https://cel.dev/) boolean
-  expression that reads at least one variable.
+  expression over the variables.
 - An **evaluation** is a named set of variables and conditions, AND-ed: it
-  `fail`s if any condition failed, else is `invalid` if any was invalid, else
-  `pass`es. Evaluations are judged independently, with no hierarchy between
+  `fail`s if any condition failed, else is `invalid` if any condition or
+  variable is invalid, else `pass`es. Evaluations are judged independently, with no hierarchy between
   them.
 - The run's **summary** combines its evaluations the same way.
 - `passed` is true for `pass` only, and false for both `fail` and `invalid`,
@@ -47,26 +47,32 @@ checks two envelope health gates:
 ```
 
 - Evaluation, variable and condition names match `^[a-z][a-z0-9_]*$`, at most
-  64 characters, and are unique where they live. CEL reserved words and
-  built-in type names (`true`, `in`, `int`, `double`, `map`, and the rest of
-  `cel_env.RESERVED`) cannot name a variable. Value names come from the source
+  64 characters, and are unique where they live. CEL itself rejects a
+  variable named after a CEL type (`int`, `map`) or a keyword (`in`, `true`)
+  when a condition compiles. Value names come from the source
   and may be any non-empty string
   (`locust_ResumeActor`, `metric_nighthawk.builtin_attempted_rps`, `p99.9`).
   Unknown or non-string mapping keys are errors. There is no version field
   while the schema is experimental.
-- Conditions compile when the evaluations load, with `round(x, digits)`
-  available and integer literals rewritten as doubles (`ints_as_doubles=True`,
-  so `1000` compiles as `1000.0`). At evaluation time, integer variable values
-  are widened to floats in the CEL activation map (`size(var)` still returns
-  `int`), while the results keep the source's own value types. Every
-  condition must evaluate to `bool` and read at least one variable, and every
-  variable must be read by a condition.
+- Conditions are standard CEL, compiled when the evaluations load, with
+  `round(x, digits)` added. Each must evaluate to `bool`.
+- Values enter CEL as doubles, whatever number type the source returns,
+  since they come from JSON, which has one number type, and as ints `a / b`
+  would be integer division. The results keep the source's own value types.
+  CEL has no arithmetic between int and double, so write `2.0 * t.x`, not
+  `2 * t.x`; the same goes for comparing a double expression
+  (`round(t.x, 1) >= 90.0`). A value compared directly may use an int
+  literal (`t.x <= 1500`). Mixing int and double fails when the evaluations
+  load if CEL can see both types; otherwise (`t.x * 100 >= 99`, where
+  `t.x` is only known at run time) the condition is `invalid` on every run,
+  so it never passes.
 - Missing or null values are omitted from `<variable>`'s map: reading one
   directly fails lookup and makes the condition `invalid`, while
   `has(<variable>.<key>)` returns `false` without error. A value CEL can't
-  hold makes every condition that reads its variable `invalid`. If any
-  variable a condition reads is `invalid`, the condition is `invalid`, so an
-  evaluation with an `invalid` variable never passes.
+  hold makes the conditions `invalid`. An `invalid` variable is left out of
+  the CEL data, so a condition that reads it is `invalid` with CEL's error,
+  and the evaluation is `invalid` even if no condition reads it: a source
+  failure never lets an evaluation pass.
 - CEL `==` and `!=` across distinct dynamic types (`1.1 == "1.10"`,
   `true == 1.0`) evaluate to `false` and `true` without raising an error. Float
   division inside a condition follows IEEE-754 (`1.0 / 0.0` produces `+Inf`
@@ -112,14 +118,14 @@ that isn't finite (NaN, an infinity, `1e999`), is null.
 status and reason, each condition with its CEL expression and verdict, each
 variable with its values (and why it is invalid), and the evaluation as loaded
 (`config`). An evaluation's reason names the conditions that failed, else the
-invalid ones.
+invalid conditions and variables.
 
 ## Layout
 
 | file | |
 |---|---|
-| `config.py` | loads and validates an `evaluations` block |
-| `cel_env.py` | shared CEL environment, literal rewriting, `round()`, and evaluation |
+| `config.py` | loads and validates an `evaluations` block (pydantic models) |
+| `cel_env.py` | shared CEL environment, `round()`, and evaluation |
 | `evaluator.py` | runs the source hooks and judges a run into a `Report` |
 | `sources/` | the hooks (`base.py`) and the sources |
 

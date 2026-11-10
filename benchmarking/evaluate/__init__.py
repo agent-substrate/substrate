@@ -17,5 +17,5 @@
 A test entry's `evaluations:` (config.py) name sources, which read the run's
 files into values (sources/), and CEL conditions over those values
 (cel_env.py). evaluator.py judges them into a Report. Depends on
-cel-expr-python (requirements.txt). See README.md.
+cel-expr-python and pydantic (requirements.txt). See README.md.
 """

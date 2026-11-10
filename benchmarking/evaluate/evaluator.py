@@ -17,12 +17,13 @@
 Creating an Evaluator runs the sources' init hook: one instance of each source
 the evaluations name, given the run, before the run's data exists. evaluate()
 runs the query hook once the data is there, once per distinct (source,
-source_cfg), and judges the CEL conditions. A condition passes, fails, or is
-invalid when a value it reads is missing or its variable couldn't judge the
-run. An evaluation fails if any condition failed, else is invalid if any was
-invalid, else passes. Every variable is read by a condition (config.py), so an
-evaluation with an invalid variable never passes. The run summary combines the
-evaluations the same way.
+source_cfg), and judges the CEL conditions. A variable whose source couldn't
+judge the run is invalid and left out of the CEL data, so a condition that
+reads it fails to evaluate. A condition passes, fails, or is invalid when it
+fails to evaluate. An evaluation fails if any condition failed, else is invalid
+if any condition or variable is invalid, else passes: a source failure never
+lets an evaluation pass. The run summary combines the evaluations as
+fail, else invalid, else pass.
 """
 
 import json
@@ -66,7 +67,7 @@ class EvaluationResult:
     description: str
     status: Status
     passed: bool
-    reason: str  # the conditions that failed, else those that are invalid; "" when it passed
+    reason: str  # the conditions that failed, else the invalid conditions and variables; "" when it passed
     conditions: tuple[ConditionResult, ...]
     variables: tuple[VariableResult, ...]
     config: Mapping[str, Any]  # the evaluation as loaded (config.to_json)
@@ -125,9 +126,18 @@ class Evaluator:
                 variables.append(VariableResult(name=v.name, source=v.source,
                                                 status="ok" if r.invalid_reason is None else INVALID,
                                                 invalid_reason=r.invalid_reason, values=r.values))
-            conditions = tuple(_condition(c, resolved_variables) for c in ev.conditions)
+            data = {name: cel_env.to_cel(r.values) for name, r in resolved_variables.items()
+                    if r.invalid_reason is None}
+            conditions = tuple(_condition(c, data) for c in ev.conditions)
             status, failed, invalid = _combine(conditions)
-            reason = f"failed: {', '.join(failed)}" if failed else f"invalid: {', '.join(invalid)}" if invalid else ""
+            invalid_variables = [f"variable {v.name} is invalid: {v.invalid_reason}"
+                                 for v in variables if v.status == INVALID]
+            if status == PASS and invalid_variables:
+                status = INVALID
+            if failed:
+                reason = f"failed: {', '.join(failed)}"
+            else:
+                reason = "; ".join(([f"invalid: {', '.join(invalid)}"] if invalid else []) + invalid_variables)
             evaluation_results.append(EvaluationResult(
                 name=ev.name, description=ev.description, status=status, passed=status == PASS, reason=reason,
                 conditions=conditions, variables=tuple(variables), config=echoed))
@@ -166,16 +176,9 @@ def _combine(results: Sequence[ConditionResult | EvaluationResult]) -> tuple[Sta
     return (FAIL if failed else INVALID if invalid else PASS), failed, invalid
 
 
-def _condition(c: Condition, resolved_variables: Mapping[str, ResolvedValues]) -> ConditionResult:
-    data = {}
-    for var in c.reads:
-        resolved = resolved_variables[var]
-        if resolved.invalid_reason is not None:
-            return ConditionResult(name=c.name, cel=c.cel, status=INVALID, passed=False,
-                                   reason=f"{var} is invalid: {resolved.invalid_reason}")
-        data[var] = cel_env.to_cel(resolved.values)
+def _condition(c: Condition, data: Mapping[str, Any]) -> ConditionResult:
     try:
-        passed = cel_env.holds(c.expr, data)
+        passed = cel_env.evaluate_condition(c.expr, data)
     except ValueError as e:
         return ConditionResult(name=c.name, cel=c.cel, status=INVALID, passed=False, reason=f"{c.name}: {e}")
     return ConditionResult(name=c.name, cel=c.cel, status=PASS if passed else FAIL, passed=passed,

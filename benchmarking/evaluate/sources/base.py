@@ -19,7 +19,8 @@ A source is a class, picked by a variable's `source` key, with three hooks:
   validate(cfg)  A classmethod. Raises ValueError for a bad source_cfg. Called
                  when the evaluations are loaded, before anything is read.
   init(run)      Once per run, when the run starts, so its files may not exist
-                 yet: what the source will read. The default keeps run.
+                 yet: what the source will read. The default stores run as
+                 self.run for query to read.
   query(cfg)     Once per distinct source_cfg, after the run: named values, or
                  SourceInvalid when the source can't judge the run. Value names
                  come from source_cfg or are fixed by the source, never from the
@@ -30,50 +31,49 @@ same code serves the runner, which evaluates the run it just finished, and a
 re-evaluation of a stored run.
 """
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Annotated, Any, Mapping, Optional, TypeVar, Union
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 Scalar = Union[int, float, bool, str, None]
 
-# Names of config identifiers (evaluations, variables and conditions).
-NAME = re.compile(r"^[a-z][a-z0-9_]*$")
-NAME_MAX = 64
+# A name the config defines: an evaluation, variable or condition.
+Name = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
 
 
-def valid_name(name: object) -> bool:
-    return isinstance(name, str) and bool(NAME.match(name)) and len(name) <= NAME_MAX
+class Model(BaseModel):
+    """A config shape: unknown keys are errors and loaded values don't change."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def check_mapping(
-    obj: Any,
-    *,
-    required: tuple[str, ...] = (),
-    optional: tuple[str, ...] = (),
-    where: str = "",
-) -> Mapping[str, Any]:
-    """Verifies obj is a string-keyed mapping with required keys and no unknown keys."""
-    prefix = f"{where}: " if where else ""
-    if not isinstance(obj, Mapping):
-        raise ValueError(f"{prefix}not a mapping")
-    if bad := [k for k in obj if not isinstance(k, str)]:
-        raise ValueError(f"{prefix}non-string keys {sorted(bad, key=repr)}")
-    allowed = set(required) | set(optional)
-    if unknown := set(obj) - allowed:
-        raise ValueError(f"{prefix}unknown keys {sorted(unknown)}")
-    if missing := [k for k in required if k not in obj]:
-        raise ValueError(f"{prefix}needs {missing[0]!r}")
-    return obj
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+def parse(model: type[ModelT], obj: Any) -> ModelT:
+    """obj as a model, or ValueError with describe's message."""
+    try:
+        return model.model_validate(obj)
+    except ValidationError as e:
+        raise ValueError(describe(e)) from None
+
+
+def describe(e: ValidationError) -> str:
+    """e's errors on one line, each after where it is in the input."""
+    def text(err) -> str:
+        return str(err["ctx"]["error"]) if err["type"] == "value_error" else err["msg"]
+    return "; ".join(f"{'.'.join(map(str, err['loc']))}: {text(err)}" if err["loc"] else text(err)
+                     for err in e.errors())
 
 
 @dataclass(frozen=True)
 class BenchmarkRunContext:
-    """One benchmark run (one run of a test entry), as a source sees it at init.
+    """The run being evaluated: what every source gets at init, whatever it reads.
 
-    files is the run's files by name ("logs.txt", "stats.jsonl",
-    "server_summary.json", "stats_history.csv"), as local paths that exist once
-    the run has finished.
+    files is the run's files by name, as local paths that exist once the run has
+    finished; the locust runner produces "logs.txt", "stats.jsonl",
+    "server_summary.json" and "stats_history.csv", for example.
     """
     files: Mapping[str, Path]
 

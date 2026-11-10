@@ -26,9 +26,11 @@ non-finite number becomes None.
 import json
 import math
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Annotated, Any, Mapping, Optional
 
-from .base import Scalar, Source, SourceInvalid, check_mapping
+from pydantic import Field, field_validator
+
+from .base import Model, Scalar, Source, SourceInvalid, parse
 
 
 def read_stats(path: Optional[Path]) -> dict[str, dict[str, Any]]:
@@ -68,20 +70,22 @@ def coerce(v: Any) -> Scalar:
     return json.dumps(v, sort_keys=True)  # a nested value, kept readable
 
 
+class Config(Model):
+    metric: Annotated[str, Field(min_length=1)]
+    measurements: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+
+    @field_validator("measurements")
+    @classmethod
+    def _distinct(cls, names: list[str]) -> list[str]:
+        if len(set(names)) != len(names):
+            raise ValueError("listed twice")
+        return names
+
+
 class RunResults(Source):
     @classmethod
     def validate(cls, cfg: Mapping[str, Any]) -> None:
-        check_mapping(cfg, required=("metric", "measurements"))
-        if not isinstance(cfg["metric"], str) or not cfg["metric"]:
-            raise ValueError("metric must be a non-empty string")
-        names = cfg["measurements"]
-        if not isinstance(names, list) or not names:
-            raise ValueError("measurements must be a non-empty list of measurement names")
-        for name in names:
-            if not isinstance(name, str) or not name:
-                raise ValueError(f"measurements: {name!r} must be a non-empty string")
-        if len(set(names)) != len(names):
-            raise ValueError("measurements: listed twice")
+        parse(Config, cfg)
 
     def init(self, run) -> None:
         super().init(run)
