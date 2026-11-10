@@ -45,7 +45,9 @@ Standard CSI controller deployments can be made network-accessible and secured i
 
 ### Exposing via a Kubernetes `Service`
 
-Create a Kubernetes `Service` targeting the CSI Controller pods. This provides a stable DNS name and load balancing across controller replicas.
+Create a Kubernetes `Service` targeting the CSI Controller pods. This provides a stable DNS name for the controller.
+
+`ateapi` spreads controller RPCs across replicas only when the `Service` is headless (`clusterIP: None`), so its DNS name returns each pod's address. With a regular `Service`, every RPC from one `ateapi` replica goes to the same controller pod. Even with a headless `Service`, `ateapi` spreads RPCs only over the pods it resolved when it connected. A controller pod added later gets no RPCs until a connection to the controller fails or drops.
 
 Create the `Service` before the controller pods when the proxy's serving certificate comes from Substrate's `servicedns.podcert.ate.dev/identity` signer: it issues the certificate for the `<service>.<namespace>.svc` names of the `Service`s selecting the pod, and refuses to issue one for a pod no `Service` selects yet. The `Service` name is also what `spec.tls.serverName` in the `CSIDriverConfig` must be.
 

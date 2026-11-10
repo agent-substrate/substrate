@@ -27,6 +27,11 @@ import (
 
 // roundRobinServiceConfig spreads RPCs across every address the resolver
 // returns, such as each ready pod behind a headless Service.
+//
+// The dns resolver looks up addresses again only after a connection fails or
+// drops, and ate-api-server keeps its client for the life of the process. So
+// RPCs spread only over the pods resolved when the client connected, and a
+// pod added later gets no RPCs until a connection breaks.
 const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
 
 // Client wraps the gRPC connection and the individual service clients for a CSI driver.
