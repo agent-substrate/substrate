@@ -1140,7 +1140,7 @@ type ExternalVolumeStatus struct {
 	// ExternalVolumeSnapshot the source tag captured of this volume. Empty
 	// means the volume is provisioned empty. It is cleared once the volume is
 	// provisioned. Like `storage_volume_id`, it is only bounded and checked for
-	// control characters.
+	// the control characters listed there. Tab, LF and CR are allowed.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=256
