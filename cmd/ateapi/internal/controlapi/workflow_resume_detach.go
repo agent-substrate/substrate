@@ -24,7 +24,6 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/hardware"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
@@ -55,7 +54,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	}
 	constraints := schedulingConstraints(actor, actorTemplate)
 	constraints.RequiredNodes = nil
-	constraints.RequiredRuntime = hardware.Requirement{}
+	constraints.MinFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			return nil, assignErr
