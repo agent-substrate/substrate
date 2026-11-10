@@ -632,21 +632,10 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 		}
 	}
 
-	// Unpack largest layers first so a large layer does not queue behind small ones.
-	order := make([]int, len(layers))
-	sizes := make([]int64, len(layers))
-	for i, l := range layers {
-		order[i] = i
-		sizes[i], _ = l.Size()
-	}
-	sort.SliceStable(order, func(a, b int) bool {
-		return sizes[order[a]] > sizes[order[b]]
-	})
-
 	layerDirs := make([]string, len(layers))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(layerPullConcurrency)
-	for _, i := range order {
+	for _, i := range layerPullOrder(layers) {
 		layer := layers[i]
 		g.Go(func() error {
 			// This is the config's claim. Unpack hashes the content to check
@@ -705,6 +694,21 @@ func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v
 		slog.Duration("took", time.Since(tStart)))
 
 	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs}, nil
+}
+
+// layerPullOrder returns manifest indices sorted by descending compressed size,
+// preserving manifest order on ties so the largest layers unpack first.
+func layerPullOrder(layers []v1.Layer) []int {
+	order := make([]int, len(layers))
+	sizes := make([]int64, len(layers))
+	for i, l := range layers {
+		order[i] = i
+		sizes[i], _ = l.Size()
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return sizes[order[a]] > sizes[order[b]]
+	})
+	return order
 }
 
 // pinLayers marks the layers as in use by an in-flight pull and returns the

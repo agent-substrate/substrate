@@ -27,7 +27,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -401,32 +400,38 @@ func TestDetachedPullBoundedByPullTimeout(t *testing.T) {
 	}
 }
 
-// A large layer at the end of the manifest must start in the first
-// layerPullConcurrency wave rather than queueing behind smaller layers, while
-// LayerDirs still returns layers in manifest order.
+// Larger layers at the end of the manifest must start in the first
+// layerPullConcurrency wave ahead of smaller layers, breaking ties in manifest
+// order while LayerDirs still returns layers in manifest order.
 func TestPullStartsLargestLayersFirst(t *testing.T) {
 	reg := newGatedRegistry(t)
-	layers := make([]v1.Layer, layerPullConcurrency+1)
-	releases := make([]func(), len(layers))
-	for i := range layerPullConcurrency {
+	specs := []struct {
+		name string
+		size int
+	}{
+		{"a", 1 << 11},
+		{"b", 1 << 11}, // ties with "a"; manifest order picks "a" before "b"
+		{"c", 1 << 16},
+		{"d", 1 << 18},
+		{"e", 1 << 20},
+	}
+	layers := make([]v1.Layer, len(specs))
+	digests := make([]string, len(specs))
+	releases := make([]func(), len(specs))
+	for i, s := range specs {
 		layers[i] = layerFromEntries(t, []tarEntry{
-			{name: strconv.Itoa(i), typeflag: tar.TypeReg, mode: 0o644, body: strconv.Itoa(i)},
+			{name: s.name, typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat(s.name, s.size)},
 		})
+		d, err := layers[i].Digest()
+		if err != nil {
+			t.Fatalf("layer %s digest: %v", s.name, err)
+		}
+		digests[i] = d.Hex
 		releases[i] = reg.gate(t, layers[i])
 	}
-	// Make the final layer incompressible enough to have the largest compressed blob.
-	largeBody := make([]byte, 4096)
-	for i := range largeBody {
-		largeBody[i] = byte(i*31 + i>>3)
-	}
-	large := layerFromEntries(t, []tarEntry{
-		{name: strconv.Itoa(layerPullConcurrency), typeflag: tar.TypeReg, mode: 0o644, body: string(largeBody)},
-	})
-	layers[layerPullConcurrency] = large
-	releases[layerPullConcurrency] = reg.gate(t, large)
-	largeDigest, err := large.Digest()
-	if err != nil {
-		t.Fatalf("large layer digest: %v", err)
+
+	if got, want := layerPullOrder(layers), []int{4, 3, 2, 0, 1}; !slices.Equal(got, want) {
+		t.Fatalf("layerPullOrder = %v, want %v", got, want)
 	}
 
 	ref := reg.host + "/test/lpt:latest"
@@ -442,14 +447,14 @@ func TestPullStartsLargestLayersFirst(t *testing.T) {
 	}()
 
 	// All 5 layers are gated, so at most layerPullConcurrency (4) blob GETs can
-	// arrive before a gate opens. The largest layer (manifest index 4) must be
-	// among them.
+	// arrive before a gate opens: "c", "d", "e" by size, plus "a" ahead of
+	// equal-sized "b" by manifest order.
 	firstWave := make([]string, layerPullConcurrency)
 	for i := range firstWave {
 		firstWave[i] = <-reg.arrived
 	}
-	if !slices.Contains(firstWave, largeDigest.Hex) {
-		t.Errorf("first %d layer pulls = %v, want largest layer %s started in first wave", layerPullConcurrency, firstWave, largeDigest.Hex)
+	if slices.Contains(firstWave, digests[1]) {
+		t.Errorf("first %d layer pulls = %v, want layer b (%s) queued behind larger layers c..e and earlier tie a", layerPullConcurrency, firstWave, digests[1])
 	}
 
 	for _, release := range releases {
@@ -462,8 +467,8 @@ func TestPullStartsLargestLayersFirst(t *testing.T) {
 		t.Fatalf("len(LayerDirs) = %d, want %d", len(img.LayerDirs), len(layers))
 	}
 	for i, dir := range img.LayerDirs {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName, strconv.Itoa(i))); err != nil {
-			t.Errorf("LayerDirs[%d] missing entry %q: %v", i, strconv.Itoa(i), err)
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName, specs[i].name)); err != nil {
+			t.Errorf("LayerDirs[%d] missing entry %q: %v", i, specs[i].name, err)
 		}
 	}
 }
