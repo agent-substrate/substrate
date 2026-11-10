@@ -2005,9 +2005,10 @@ func TestActorLifecycle_WithExternalVolumeClass(t *testing.T) {
 
 	class, err := tc.client.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{
 		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
-			Metadata:   &ateapi.ResourceMetadata{Name: "evc-gold"},
-			DriverName: "substrate.io/mock",
-			Parameters: map[string]string{"tier": "gold"},
+			Metadata:     &ateapi.ResourceMetadata{Name: "evc-gold"},
+			DriverName:   "substrate.io/mock",
+			Parameters:   map[string]string{"tier": "gold"},
+			MountOptions: []string{"nfsvers=4.1"},
 		},
 	})
 	if err != nil {
@@ -2041,6 +2042,9 @@ func TestActorLifecycle_WithExternalVolumeClass(t *testing.T) {
 	if len(created) != 1 || created[0].GetVolumeType() != "substrate.io/mock" || created[0].GetStorageVolumeId() != "" {
 		t.Fatalf("CreateActor volumes = %v, want 1 unprovisioned volume of type substrate.io/mock", created)
 	}
+	if diff := cmp.Diff([]string{"nfsvers=4.1"}, created[0].GetMountOptions()); diff != "" {
+		t.Errorf("CreateActor mount options mismatch (-want +got):\n%s", diff)
+	}
 
 	resumeResp, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef})
 	if err != nil {
@@ -2052,6 +2056,9 @@ func TestActorLifecycle_WithExternalVolumeClass(t *testing.T) {
 	}
 	if got := resumed[0].GetVolumeContext()["tier"]; got != "gold" {
 		t.Errorf("volume context tier = %q, want %q from the class parameters", got, "gold")
+	}
+	if diff := cmp.Diff([]string{"nfsvers=4.1"}, resumed[0].GetMountOptions()); diff != "" {
+		t.Errorf("ResumeActor mount options mismatch (-want +got):\n%s", diff)
 	}
 
 	if _, err := tc.client.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: actorRef}); err != nil {
