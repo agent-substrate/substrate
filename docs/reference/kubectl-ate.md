@@ -4,7 +4,7 @@ linkTitle: "CLI Reference"
 weight: 3
 card_icon: "fa-solid fa-terminal"
 description: >
-  Manage atespaces, actor templates, actors, snapshots, egress policies, and logs with the kubectl-ate plugin.
+  Manage atespaces, external volume classes, actor templates, actors, snapshots, egress policies, and logs with the kubectl-ate plugin.
 ---
 
 # `kubectl-ate`
@@ -102,7 +102,7 @@ kubectl ate top workers
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
-> **Note:** Actors, workers, and actor templates are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, and `kubectl get actortemplate` will not return anything; only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates)). `kubectl get workerpool` *does* work, because pools are CRDs.
+> **Note:** Actors, workers, actor templates, and external volume classes are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, `kubectl get actortemplate`, and `kubectl get externalvolumeclass` will not return anything; only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates) and [External Volume Classes](#external-volume-classes)). `kubectl get workerpool` *does* work, because pools are CRDs.
 
 #### `kubectl ate get actor` output columns
 
@@ -156,6 +156,44 @@ kubectl ate delete atespace <atespace>
 |---|---|
 | `NAME` | The atespace name. Globally unique — atespaces are global-scoped. |
 | `AGE` | Time elapsed since the atespace was created. |
+
+### External Volume Classes
+
+An **external volume class** (`ExternalVolumeClass`) is a global-scoped resource that names the CSI driver (`driverName`) and driver-specific `parameters` used to provision external volumes for actors. External volume classes are immutable. To change one, delete and recreate it. Creating an external volume class requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI.
+
+Example `volume-class.yaml`:
+
+```yaml
+metadata:
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.default.svc.cluster.local
+  share: /
+```
+
+```bash
+# Create an external volume class from a manifest (protojson-shaped
+# ateapi.ExternalVolumeClass, a single YAML/JSON document; use -f - for stdin).
+kubectl ate create external-volume-class -f volume-class.yaml --preview
+
+# List all external volume classes, or get one (also: -o yaml prints the re-applyable manifest).
+kubectl ate get external-volume-classes
+kubectl ate get external-volume-class <name> -o yaml
+
+# Delete an external volume class (optionally guarded by --uid and/or --version).
+kubectl ate delete external-volume-class <name>
+kubectl ate delete external-volume-class <name> --uid <uid> --version <version>
+```
+
+#### `kubectl ate get external-volume-class` output columns
+
+| Column | Meaning |
+|---|---|
+| `NAME` | The external volume class name. Globally unique; external volume classes are global-scoped. |
+| `DRIVER` | The CSI driver name (`driverName`) that provisions volumes of this class. |
+| `PARAMETERS` | Comma-separated `key=value` driver parameters sorted by key, cut to 40 characters with `...`; `-o yaml` shows them all. `-` when the class defines no parameters. |
+| `AGE` | Time elapsed since the external volume class was created. |
 
 ### Actor Templates
 
