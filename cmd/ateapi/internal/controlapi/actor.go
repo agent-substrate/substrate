@@ -86,15 +86,6 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	tagRef := inActor.GetSourceTag()
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else {
-		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
-		// support cloning from a tag that has external volumes.
-		for _, volume := range template.GetVolumes() {
-			if volume.GetExternal().GetTemplate() != nil {
-				// TODO: Permit cloning after CSI volume snapshots are supported.
-				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
-			}
-		}
 	}
 	var sourceTag *ateapi.Tag
 	if tagRef != nil {
@@ -119,6 +110,11 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
 		}
 		return nil, resources.ToAPIError(errs)
+	}
+	// The volumes are provisioned on the first resume, restored from the
+	// tag's volume snapshots, so a tag that cannot fill them is refused now.
+	if err := validateTagVolumeSnapshots(sourceTag, initVols); err != nil {
+		return nil, err
 	}
 
 	// Verify that the result is properly valid before storing it.

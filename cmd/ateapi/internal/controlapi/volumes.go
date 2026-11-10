@@ -23,6 +23,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -69,7 +70,11 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 // createActorVolumes provisions the external volumes in volumesToCreate that have no storage volume ID, using the provided volume plugin.
 // It returns the list of external volumes (with storage IDs), or an error if any creation fails.
 // Any volumes processed before or during a failure are returned alongside the error so they can be persisted on the actor.
-func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, actorUID string, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
+//
+// sourceSnapshots are the volume snapshots of the tag the Actor was created
+// from, matched to volumes by name. A volume with an entry is restored from its
+// snapshot. A volume without one is provisioned empty.
+func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, actorUID string, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus, sourceSnapshots []*ateapi.ExternalVolumeSnapshot) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
 	resultVolumes = make([]*ateapi.ExternalVolumeStatus, 0, len(volumesToCreate))
 
 	var currentIdx int
@@ -121,10 +126,16 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
 
+		sourceSnapshotID, err := resolveVolumeSource(ctx, plugin, findVolumeSnapshot(sourceSnapshots, volName), vol)
+		if err != nil {
+			return resultVolumes, err
+		}
+
 		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
-			Name:          actVolID,
-			CapacityBytes: specVol.GetExternal().GetTemplate().GetCapacityBytes(),
-			Parameters:    sc.Parameters,
+			Name:             actVolID,
+			CapacityBytes:    specVol.GetExternal().GetTemplate().GetCapacityBytes(),
+			Parameters:       sc.Parameters,
+			SourceSnapshotID: sourceSnapshotID,
 		})
 		if volErr != nil {
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
@@ -143,6 +154,86 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		})
 	}
 	return resultVolumes, nil
+}
+
+// findVolumeSnapshot returns the entry in snapshots for the named volume, or
+// nil if there is none.
+func findVolumeSnapshot(snapshots []*ateapi.ExternalVolumeSnapshot, volName string) *ateapi.ExternalVolumeSnapshot {
+	for _, snap := range snapshots {
+		if snap.GetSourceVolumeName() == volName {
+			return snap
+		}
+	}
+	return nil
+}
+
+// tagVolumeSnapshots returns the volume snapshots of the tag an Actor was
+// created from, held by the tag-owned snapshot it starts with. It returns nil
+// once the Actor has replaced that snapshot with its own, by which time its
+// volumes have been provisioned.
+func tagVolumeSnapshots(status *ateapi.ActorStatus) []*ateapi.ExternalVolumeSnapshot {
+	return latestSnapshot(status, func(snap *ateapi.Snapshot) bool {
+		return snap.GetOwner() == ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG
+	}).GetVolumeSnapshots()
+}
+
+// validateTagVolumeSnapshots checks that the volume snapshots tag recorded can
+// seed the external volumes vols an Actor would get. A volume the tag has no
+// snapshot for is provisioned empty, whether the tag left it out or captured no
+// volumes.
+func validateTagVolumeSnapshots(tag *ateapi.Tag, vols []*ateapi.ExternalVolumeStatus) error {
+	for _, vol := range vols {
+		snap := findVolumeSnapshot(tag.GetStatus().GetSnapshot().GetVolumeSnapshots(), vol.GetName())
+		if snap == nil {
+			continue
+		}
+		if snap.GetStorageSnapshotId() == "" {
+			return apierror.FailedPrecondition("Tag %s has no snapshot handle for volume %q", resources.TagRefFromTag(tag), vol.GetName())
+		}
+		if snap.GetVolumeType() != vol.GetVolumeType() {
+			return apierror.FailedPrecondition("Tag %s snapshot of volume %q was taken by driver %q, but the volume is provisioned by %q", resources.TagRefFromTag(tag), vol.GetName(), snap.GetVolumeType(), vol.GetVolumeType())
+		}
+	}
+	return nil
+}
+
+// resolveVolumeSource returns the snapshot handle to restore vol from, or ""
+// to provision it empty when source is nil.
+//
+// CreateTag does not wait for snapshots to become ready, so readiness is
+// checked here, where the data is first needed. A snapshot the tag recorded as
+// ready is used without asking the driver again. CreateVolume rejects it if it
+// has since been deleted.
+func resolveVolumeSource(ctx context.Context, plugin volume.VolumePluginControlPlane, source *ateapi.ExternalVolumeSnapshot, vol *ateapi.ExternalVolumeStatus) (string, error) {
+	if source == nil {
+		return "", nil
+	}
+	volName := vol.GetName()
+	// A handle means nothing to another driver.
+	if source.GetVolumeType() != vol.GetVolumeType() {
+		return "", apierror.FailedPrecondition("snapshot of volume %q was taken by driver %q, but the volume is provisioned by %q", volName, source.GetVolumeType(), vol.GetVolumeType())
+	}
+	snapshotID := source.GetStorageSnapshotId()
+	if snapshotID == "" {
+		return "", apierror.FailedPrecondition("snapshot of volume %q has no handle", volName)
+	}
+	if source.GetReadyToUse() {
+		return snapshotID, nil
+	}
+	observed, found, err := plugin.GetSnapshot(ctx, snapshotID)
+	switch {
+	case errors.Is(err, errors.ErrUnsupported):
+		slog.WarnContext(ctx, "driver cannot report snapshot readiness; restoring anyway",
+			slog.String("snapshot_id", snapshotID), slog.String("volume_name", volName))
+		return snapshotID, nil
+	case err != nil:
+		return "", apierror.Internal("failed to read snapshot %q of volume %q: %v", snapshotID, volName, err)
+	case !found:
+		return "", apierror.FailedPrecondition("snapshot %q of volume %q no longer exists in the storage system", snapshotID, volName)
+	case !observed.ReadyToUse:
+		return "", apierror.FailedPrecondition("snapshot %q of volume %q is not ready to use yet; retry later", snapshotID, volName)
+	}
+	return snapshotID, nil
 }
 
 // deleteActorVolumes deletes all external volumes in the list.
