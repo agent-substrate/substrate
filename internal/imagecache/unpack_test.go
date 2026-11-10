@@ -544,6 +544,27 @@ func TestUnpackLayer_LaterEntryWins(t *testing.T) {
 			t.Errorf("bin/sh content was overwritten to %q (hardlink was not unlinked)", gotSh)
 		}
 	})
+
+	t.Run("implicit parent recreated after ancestor replaced by symlink", func(t *testing.T) {
+		// "a/b/first" populates existingDirs["a/b"]. Replacing "a" with a
+		// symlink to "cc" (which has no "b/" yet) must invalidate existingDirs
+		// so "a/b/second" creates "cc/b".
+		entries := []tarEntry{
+			{name: "a/b/first", typeflag: tar.TypeReg, body: "first"},
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+			{name: "a/b/second", typeflag: tar.TypeReg, body: "second"},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		if got, err := os.ReadFile(filepath.Join(dir, "cc/b/second")); err != nil {
+			t.Fatalf("read cc/b/second: %v", err)
+		} else if string(got) != "second" {
+			t.Errorf("cc/b/second = %q, want %q", got, "second")
+		}
+	})
 }
 
 // A read-only directory in the image (e.g. ko ships /ko-app as 0555) must still

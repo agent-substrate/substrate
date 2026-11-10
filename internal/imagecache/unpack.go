@@ -128,6 +128,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// fabricated attrs.
 	declared := map[string]bool{}
 	implicit := map[string]bool{}
+	existingDirs := map[string]bool{}
 	markAncestors := func(name string) {
 		for p := filepath.Dir(name); p != "."; p = filepath.Dir(p) {
 			if !declared[p] {
@@ -151,6 +152,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if err := root.RemoveAll(name); err != nil {
 				return fmt.Errorf("while replacing existing path at %q before %s: %w", name, before, err)
 			}
+			clear(existingDirs)
 			for inode := range removed {
 				delete(dirHdrs, inode)
 			}
@@ -161,6 +163,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	}
 
 	tarReader := tar.NewReader(tarData)
+	copyBuf := make([]byte, 32*1024)
 	for {
 		hdr, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
@@ -211,44 +214,49 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		// parents must be created here; overlayfs merges them with the
 		// lower layers' directories at compose time.
 		markAncestors(name)
-		if parent := filepath.Dir(name); parent != "." {
+		if parent := filepath.Dir(name); parent != "." && !existingDirs[parent] {
 			if err := root.MkdirAll(parent, 0o755); err != nil {
 				return nil, fmt.Errorf("while creating parent directories for %q: %w", name, err)
+			}
+			for p := parent; p != "." && !existingDirs[p]; p = filepath.Dir(p) {
+				existingDirs[p] = true
 			}
 		}
 
 		switch hdr.Typeflag {
 		case tar.TypeReg: // Regular file
-			// "Later entry wins" within the layer: if any entry exists at the target
-			// path, remove it first. This ensures that:
-			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
-			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
-			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if err := replaceExisting(name, "regular file"); err != nil {
-				return nil, err
-			}
-
 			// Stream directly from tarReader to target file to avoid buffering in memory.
-			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
+			// O_EXCL fast-paths the common case where name does not exist yet; on
+			// collision ("later entry wins"), remove the existing entry first so we
+			// do not follow a symlink, truncate a shared hardlink inode, or fail on a
+			// directory.
+			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, mode)
+			if errors.Is(err, os.ErrExist) {
+				if err := replaceExisting(name, "regular file"); err != nil {
+					return nil, err
+				}
+				outFile, err = root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, mode)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("while creating file %q: %w", name, err)
 			}
-			_, err = io.Copy(outFile, tarReader)
-			closeErr := outFile.Close()
-			if err != nil {
+			if _, err := io.CopyBuffer(writerOnly{outFile}, tarReader, copyBuf); err != nil {
+				outFile.Close()
 				return nil, fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
-			}
-			if closeErr != nil {
-				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
 			// OpenFile's mode passed through atelet's umask and carries no
 			// setuid, setgid or sticky bit, and chown clears setuid and
 			// setgid, so the header's mode goes after the owner.
-			if err := tarutil.Lchown(root, name, hdr); err != nil {
+			if err := tarutil.Fchown(outFile, hdr); err != nil {
+				outFile.Close()
 				return nil, err
 			}
-			if err := setFileMode(root, name, tarutil.Mode(hdr)); err != nil {
+			if err := setOpenFileMode(outFile, name, tarutil.Mode(hdr)); err != nil {
+				outFile.Close()
 				return nil, err
+			}
+			if err := outFile.Close(); err != nil {
+				return nil, fmt.Errorf("while closing file %q: %w", name, err)
 			}
 			if err := restoreModTime(root, name, hdr.ModTime); err != nil {
 				return nil, err
@@ -273,6 +281,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("while checking directory %q: %w", name, err)
 			}
 			if fi.IsDir() {
+				existingDirs[name] = true
 				inode, err := dirInodeOf(name, fi)
 				if err != nil {
 					return nil, err
@@ -500,6 +509,29 @@ func dirPaths(root *os.Root, dir string) (map[dirInode]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// writerOnly hides *os.File's io.ReaderFrom so io.CopyBuffer uses the caller's
+// buffer instead of falling back to genericReadFrom's per-file allocation.
+type writerOnly struct{ io.Writer }
+
+// setOpenFileMode is setFileMode on an already-open regular file, avoiding a
+// path walk through root when the caller still holds the descriptor.
+func setOpenFileMode(f *os.File, name string, mode os.FileMode) error {
+	if err := f.Chmod(mode); err != nil {
+		return fmt.Errorf("while setting mode %v on %q: %w", mode, name, err)
+	}
+	if mode&os.ModeSetgid == 0 {
+		return nil
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("while checking mode of %q: %w", name, err)
+	}
+	if got := fi.Mode() & tarutil.ModeBits; got != mode {
+		return fmt.Errorf("mode of %q is %v after setting %v: keeping setgid for a group the caller is not in takes CAP_FSETID", name, got, mode)
+	}
+	return nil
 }
 
 // setFileMode sets name, a regular file whose owner was just applied, to
