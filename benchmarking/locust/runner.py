@@ -211,7 +211,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Run an actor density search (density_runner.py) up to -u users "
-            "with this duration per step (e.g. 5m); -t bounds the total search"
+            "with this duration per step (e.g. 5m); -t bounds when a new step "
+            "may start"
         ),
     )
     args, extra = p.parse_known_args()

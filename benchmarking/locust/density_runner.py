@@ -40,8 +40,9 @@ from common.ateapi_channel import ateapi_channel
 import grpc
 
 RUNNER_SCRIPT = Path(__file__).with_name("runner.py")
-# At one or two users a step has so few wakes that its P90 is its max, and one
-# slow wake would fail the knee check.
+# Eight users produce enough wake samples per 5m step for P90 to reflect
+# steady tail latency rather than a single slow wake, while staying well
+# below single-node saturation.
 START_USERS = 8
 SEARCH_RESOLUTION = 8
 KNEE_MULTIPLIER = 2.0
@@ -127,14 +128,14 @@ def next_step_users(steps: list[StepResult], max_users: int) -> int | None:
     high = min((s.users for s in steps if not s.passed and s.users > low), default=None)
     if high is None:
         return min(2 * low, max_users) if low < max_users else None
-    # Stop once the bracket is within 8 users or 12.5% of the failing step.
+    # Caps bisection to at most three steps per doubling bracket, floored at 8.
     if high - low <= max(SEARCH_RESOLUTION, high // 8):
         return None
     return (low + high) // 2
 
 
 def parse_step_stats(users: int, exit_code: int, jsonl_path: Path | None) -> StepResult:
-    """Reads wake, suspend, actor survival, and server fields from stats.jsonl."""
+    """Reads wake, suspend, live_actors, replaced_actors, and server fields."""
     res = StepResult(users=users, exit_code=exit_code)
     if jsonl_path is None or not jsonl_path.exists():
         return res
@@ -370,6 +371,8 @@ def cleanup_benchmark_actors() -> int:
     from common import ateapi_pb2, ateapi_pb2_grpc
     from common.atespace import ATESPACE
 
+    # 30s per RPC and 32 threads bound cleanup latency outside Locust's window
+    # so an unresponsive API server surfaces well inside SETTLE_TIMEOUT_S.
     with ateapi_channel(ATE_API_HOST) as channel:
         stub = ateapi_pb2_grpc.ControlStub(channel)
         names: list[str] = []
