@@ -234,6 +234,11 @@ class ParseAndSweepTest(unittest.TestCase):
                 trial_summary={"machine_type": "c4-standard-16"},
             )
 
+        def crash_second_step(_args, users, step_dest, logs):
+            if users == 8:
+                return ok_step(_args, users, step_dest, logs)
+            return StepResult(users=users, exit_code=2)
+
         cases = [
             (
                 "ok",
@@ -250,8 +255,17 @@ class ParseAndSweepTest(unittest.TestCase):
                 lambda *_a: StepResult(users=8, exit_code=2),
                 1,
                 {"locust_exit_code": 1, "stats_generated": False},
-                {"max_actors": "0", "first_failed_users": "8", "abort_reason": "step exited with code 2"},
+                {"max_actors": "0", "first_failed_users": None, "abort_reason": "step u=8 exited with code 2"},
                 1,
+            ),
+            (
+                "crash_after_passing_step",
+                True,
+                crash_second_step,
+                1,
+                {"locust_exit_code": 1, "stats_generated": True},
+                {"max_actors": "8", "first_failed_users": None, "abort_reason": "step u=16 exited with code 2"},
+                2,
             ),
             (
                 "cluster_not_idle",

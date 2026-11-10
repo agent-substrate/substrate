@@ -471,15 +471,15 @@ def run_density_sweep(
                     break
                 step = run_step(args, users, steps_root / f"u{users:04d}", logs)
                 step_budget_s = max(step_budget_s, int(time.monotonic() - iter_start))
+                if step.exit_code != 0:
+                    abort_reason = f"step u={users} exited with code {step.exit_code}"
+                    tee(logs, f"Stopping search: {abort_reason}")
+                    break
                 step.failure_reason = evaluate_step(step, steps[0] if steps else None)
                 step.passed = step.failure_reason == ""
                 steps.append(step)
                 verdict = "PASS" if step.passed else f"FAIL ({step.failure_reason})"
                 tee(logs, f"Step users={users} verdict: {verdict}")
-                if step.exit_code != 0:
-                    abort_reason = f"step exited with code {step.exit_code}"
-                    tee(logs, f"Stopping search: {abort_reason}")
-                    break
 
             summary = summarize_sweep(steps)
             tee(
@@ -510,7 +510,9 @@ def run_density_sweep(
 
         sweep_ok = summary["max_actors"] >= 1 and abort_reason is None
         status_path.write_text(
-            json.dumps({"locust_exit_code": 0 if sweep_ok else 1, "stats_generated": sweep_ok}),
+            json.dumps(
+                {"locust_exit_code": 0 if sweep_ok else 1, "stats_generated": bool(steps)}
+            ),
             encoding="utf-8",
         )
         for src, basename in (
