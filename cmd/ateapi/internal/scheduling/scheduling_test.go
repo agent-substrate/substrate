@@ -380,29 +380,112 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-busy-big",
 		},
 		{
-			name: "required runtime matches worker default runtime",
+			name: "snapshot runtime matches worker default runtime",
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 				worker("w-amd", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 			wantPod:     "w-amd",
 		},
 		{
-			name: "required runtime matches worker restorable runtime",
+			name: "snapshot runtime matches worker restorable runtime",
 			fleet: fleet{
 				worker("w-upgraded", "gvisor", "node-a", tierTwo,
 					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			wantPod:     "w-upgraded",
 		},
 		{
-			name: "required runtime with no matching worker yields ErrNoCapacity",
+			name: "snapshot runtime with no matching worker yields ErrNoCapacity when MinFidelity is MEMORY",
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+		},
+		{
+			name: "single pass upgrades from earlier ROOTFS worker to later MEMORY worker",
+			fleet: fleet{
+				worker("w-rootfs", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+				worker("w-memory-full", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64", "old")), assigned("demo", "other")),
+				worker("w-memory-free", "gvisor", "node-c", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
+			},
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				MinFidelity:     ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+			wantPod: "w-memory-free",
+		},
+		{
+			name: "single pass falls back to ROOTFS worker when all MEMORY workers are full",
+			fleet: fleet{
+				worker("w-memory-full", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64", "old")), assigned("demo", "other")),
+				worker("w-rootfs-free", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+			},
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				MinFidelity:     ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+			wantPod: "w-rootfs-free",
+		},
+		{
+			name: "later ROOTFS worker does not displace earlier MEMORY candidate",
+			fleet: fleet{
+				worker("w-memory", "gvisor", "node-a", tierTwo, withMaxActors(4), assigned("demo", "a"),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
+				worker("w-rootfs-idle", "gvisor", "node-b", tierTwo, withMaxActors(4),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+			},
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				MinFidelity:     ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+			wantPod: "w-memory",
+		},
+		{
+			name: "a small worker with an incompatible runtime yields ErrNoCapacity for a MEMORY restore",
+			fleet: fleet{
+				worker("w-small-other", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+			},
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				Limits:          resources.CPUMemory(2000, 0),
+			},
+		},
+		{
+			name: "a large worker with an incompatible runtime does not fit a MEMORY restore",
+			fleet: fleet{
+				worker("w-small-match", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
+				worker("w-big-other", "gvisor", "node-b", tierTwo, withCapacity(4000, 4<<30),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+			},
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				Limits:          resources.CPUMemory(2000, 0),
+			},
+			wantDoesNotFit: true,
+		},
+		{
+			name: "a small worker with an incompatible runtime yields ErrDoesNotFit when ROOTFS is allowed",
+			fleet: fleet{
+				worker("w-small-other", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30),
+					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+			},
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				MinFidelity:     ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				Limits:          resources.CPUMemory(2000, 0),
+			},
+			wantDoesNotFit: true,
 		},
 	}
 
@@ -565,23 +648,33 @@ func TestApplies(t *testing.T) {
 			want:        false,
 		},
 		{
-			name:        "matches required runtime via default runtime",
+			name:        "matches snapshot runtime via default runtime",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			want:        true,
 		},
 		{
-			name: "matches required runtime via restorable runtimes",
+			name: "matches snapshot runtime via restorable runtimes",
 			worker: worker("w", "gvisor", "node-a", nil,
 				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
 			want:        true,
 		},
 		{
-			name:        "skips worker when required runtime does not match",
+			name:        "skips worker when snapshot runtime does not match and MinFidelity is MEMORY",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
 			want:        false,
+		},
+		{
+			name:   "accepts mismatched runtime of same class when MinFidelity is ROOTFS",
+			worker: worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "new"))),
+			constraints: Constraints{
+				SandboxClass:    "gvisor",
+				SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old")),
+				MinFidelity:     ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+			want: true,
 		},
 	}
 
@@ -805,14 +898,14 @@ func TestBooking(t *testing.T) {
 		{name: "cold boot books the default runtime's", constraints: Constraints{Limits: limits}, want: gib/2 + 4<<20 + 4<<20},
 		{
 			name:        "a restore books the matching runtime's",
-			constraints: Constraints{Limits: limits, RequiredRuntime: hardware.NewRequirement(old), SnapshotRuntime: hardware.NewRequirement(old)},
+			constraints: Constraints{Limits: limits, SnapshotRuntime: hardware.NewRequirement(old)},
 			want:        gib/2 + 16<<20,
 		},
 		{
 			// relaxing what the worker must match doesn't change the runtime the
 			// actor restores under, so it doesn't change the price
 			name:        "a relaxed restore still books the matching runtime's",
-			constraints: Constraints{Limits: limits, SnapshotRuntime: hardware.NewRequirement(old)},
+			constraints: Constraints{Limits: limits, SnapshotRuntime: hardware.NewRequirement(old), MinFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
 			want:        gib/2 + 16<<20,
 		},
 	} {
