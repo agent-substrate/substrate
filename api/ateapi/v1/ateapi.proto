@@ -1529,24 +1529,16 @@ message ExternalVolumeSource {
   // +k8s:unionMember
   ExternalVolumeTemplate template = 1;
 
-  // ref names an ExternalVolume in the actor's atespace. The volume outlives
-  // the actor.
+  // ref references an existing ExternalVolume. The volume outlives the
+  // actor. ref.atespace must match the template's metadata.atespace.
   //
   // Not served yet: CreateActorTemplate rejects a template that sets it with
   // `UNIMPLEMENTED` until the actor lifecycle can mount an ExternalVolume.
   //
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeRef ref = 2;
-}
-
-// ExternalVolumeRef names an ExternalVolume in the actor's atespace.
-message ExternalVolumeRef {
-  // name of the ExternalVolume.
-  //
-  // +k8s:required
-  // +k8s:format=k8s-short-name
-  string name = 1;
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef ref = 2;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The

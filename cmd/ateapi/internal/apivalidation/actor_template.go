@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -56,14 +57,27 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
 // that span more than one field of a template.
-func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ActorTemplate) field.ErrorList {
+func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(ctx context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
 	if value.GetGoldenEgressPolicy() != nil && value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		errs = append(errs, field.Forbidden(fldPath.Child("golden_egress_policy"), "requires golden snapshots to be enabled"))
 	}
 	declared := make(map[string]bool, len(value.GetVolumes()))
-	for _, vol := range value.GetVolumes() {
+	templateAtespace := value.GetMetadata().GetAtespace()
+	externalVolumes := preview.IsEnabledFor(ctx, preview.GateExternalVolumes)
+	for i, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = true
+		// An ExternalVolume is mounted into actors of this template, so it
+		// must live in the template's atespace. With the gate off, external
+		// is already forbidden; an empty side is already required.
+		if !externalVolumes {
+			continue
+		}
+		if refAtespace := vol.GetExternal().GetRef().GetAtespace(); refAtespace != "" && templateAtespace != "" && refAtespace != templateAtespace {
+			errs = append(errs, field.Invalid(
+				fldPath.Child("volumes").Index(i).Child("external", "ref", "atespace"),
+				refAtespace, "must match metadata.atespace"))
+		}
 	}
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {

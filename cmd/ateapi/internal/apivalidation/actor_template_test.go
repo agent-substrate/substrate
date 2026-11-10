@@ -78,6 +78,12 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.TooMany(field.NewPath("actor_template", "golden_egress_policy", "rules"), 257, 256).WithOrigin("maxItems")},
 	}, {
+		"external volume ref in another atespace",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Atespace: "ns2", Name: "ctx"}}}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "volumes").Index(0).Child("external", "ref", "atespace"), "ns2", "must match metadata.atespace")},
+	}, {
 		"missing actor_template",
 		&ateapi.CreateActorTemplateRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
@@ -245,6 +251,12 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			if tt.req.GetActorTemplate().GetSnapshotConfig().GetStorageLocation() != "" {
 				want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "snapshot_config", "storage_location"), "")}
 				wantWithPreview = map[string]field.ErrorList{"PerTemplateSnapshotLocation": tt.want, "ALL": tt.want}
+			}
+			for i, vol := range tt.req.GetActorTemplate().GetVolumes() {
+				if vol.GetExternal() != nil {
+					want = field.ErrorList{field.Forbidden(field.NewPath("actor_template", "volumes").Index(i).Child("external"), "")}
+					wantWithPreview = map[string]field.ErrorList{"ExternalVolumes": tt.want, "ALL": tt.want}
+				}
 			}
 			assertValidate(t, func() field.ErrorList {
 				return ValidateCreateActorTemplateRequest(context.Background(), tt.req)
@@ -948,30 +960,44 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "valid external volume ref",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
-			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "ctx"}}}}
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Atespace: "ns1", Name: "ctx"}}}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
 	}, {
 		name: "external volume ref missing name",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
-			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{}}}}
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Atespace: "ns1"}}}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "ref", "name"), "")}},
 	}, {
 		name: "external volume ref invalid name",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
-			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "Not A Name"}}}}
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Atespace: "ns1", Name: "Not A Name"}}}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "ref", "name"), nil, "").WithOrigin("format=k8s-short-name")}},
+	}, {
+		name: "external volume ref missing atespace",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Name: "ctx"}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "ref", "atespace"), "")}},
+	}, {
+		name: "external volume ref invalid atespace",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Atespace: "NS_1", Name: "ctx"}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "ref", "atespace"), nil, "").WithOrigin("format=k8s-short-name")}},
 	}, {
 		name: "external volume with both template and ref",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{
 				Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 10 << 30, StorageClassName: "fast-ssd"},
-				Ref:      &ateapi.ExternalVolumeRef{Name: "ctx"},
+				Ref:      &ateapi.ObjectRef{Atespace: "ns1", Name: "ctx"},
 			}}}
 		},
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},

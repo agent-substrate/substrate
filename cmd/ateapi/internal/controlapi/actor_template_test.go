@@ -160,7 +160,7 @@ func TestCreateActorTemplate_RejectsExternalVolumeRef(t *testing.T) {
 	}
 	req := &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 		tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "ns1", Name: "tmpl-ref"}
-		tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ExternalVolumeRef{Name: "ctx"}}}}
+		tmpl.Volumes = []*ateapi.Volume{{Name: "shared", External: &ateapi.ExternalVolumeSource{Ref: &ateapi.ObjectRef{Atespace: "ns1", Name: "ctx"}}}}
 		tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "shared", MountPath: "/mnt/shared"}}
 	})}
 	_, err := s.CreateActorTemplate(ctx, req)

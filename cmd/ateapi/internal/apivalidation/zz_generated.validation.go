@@ -3898,47 +3898,6 @@ func Validate_EnvVar(
 	return errs
 }
 
-// Validate_ExternalVolumeRef validates an instance of ExternalVolumeRef according
-// to declarative validation rules in the API schema.
-func Validate_ExternalVolumeRef(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *v1.ExternalVolumeRef) (errs field.ErrorList) {
-
-	{ // field v1.ExternalVolumeRef.Name
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.ExternalVolumeRef) *string {
-				return &oldObj.Name
-			})
-		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ExternalVolumeSource_ = validate.NewUnionMembership(validate.NewUnionMember("template"), validate.NewUnionMember("ref"))
 
 // Validate_ExternalVolumeSource validates an instance of ExternalVolumeSource according
@@ -3996,7 +3955,7 @@ func Validate_ExternalVolumeSource(
 	{ // field v1.ExternalVolumeSource.Ref
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *v1.ExternalVolumeRef,
+			obj, oldObj *v1.ObjectRef,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -4012,12 +3971,27 @@ func Validate_ExternalVolumeSource(
 			if earlyReturn {
 				return // do not proceed
 			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
 			// call the type's validation function
-			errs = append(errs, Validate_ExternalVolumeRef(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *v1.ExternalVolumeSource) *v1.ExternalVolumeRef {
+			func(oldObj *v1.ExternalVolumeSource) *v1.ObjectRef {
 				return oldObj.Ref
 			})
 		errs = append(errs, fn(fldPath.Child("ref"), obj.Ref, oldVal, oldObj != nil)...)
