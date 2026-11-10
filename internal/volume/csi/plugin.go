@@ -295,6 +295,8 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 		return "", fmt.Errorf("failed to create staging directory %q: %w", stagingPath, err)
 	}
 
+	// Staging dirs are named by a hash, so log which volume this one is for.
+	slog.InfoContext(ctx, "Staging CSI volume", slog.String("volume_id", req.VolumeID), slog.String("staging_path", stagingPath))
 	csiReq := &csi.NodeStageVolumeRequest{
 		VolumeId:          req.VolumeID,
 		StagingTargetPath: stagingPath,
@@ -370,6 +372,7 @@ func removeStagingDir(ctx context.Context, stagingPath string) {
 	for _, dir := range []string{stagingPath, filepath.Dir(stagingPath)} {
 		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
 			slog.WarnContext(ctx, "failed to remove staging directory", slog.String("path", dir), slog.Any("error", err))
+			return // The parent cannot be empty either.
 		}
 	}
 }
