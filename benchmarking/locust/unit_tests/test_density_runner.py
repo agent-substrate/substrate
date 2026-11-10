@@ -18,17 +18,39 @@ import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
-import shutil
 import sys
 import tempfile
 import types
 import unittest
 from unittest import mock
 
+import grpc
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import density_runner
 from density_runner import StepResult
+import runner
+
+
+def _make_args(**overrides) -> argparse.Namespace:
+    defaults = {
+        "file": "/app/tests/agentsession.py",
+        "duration": "90m",
+        "density_step_duration": "5m",
+        "users": 1024,
+        "tag": "abc123",
+        "name": "density_pa_light_gvisor",
+        "dest": "/tmp/out",
+        "prometheus_url": "http://prom:9090",
+        "atelet_lag_s": 0,
+        "cluster_facts": False,
+        "actors_per_user": None,
+        "metadata": {},
+        "locust_extra": [],
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
 class NextStepUsersTest(unittest.TestCase):
@@ -185,18 +207,9 @@ class ParseAndSweepTest(unittest.TestCase):
             self.assertEqual(by_metric["density_step_0064"]["passed"], "false")
 
     def test_build_step_cmd(self):
-        args = argparse.Namespace(
-            file="/app/tests/agentsession.py",
-            duration="90m",
-            density_step_duration="5m",
-            users=1024,
-            tag="t",
-            name="n",
-            dest="/tmp/out",
-            prometheus_url="http://prom:9090",
+        args = _make_args(
             atelet_lag_s=70,
             cluster_facts=True,
-            actors_per_user=None,
             metadata={"cluster_name": "c"},
             locust_extra=["--spawn-rate", "64", "--agentsession-phase-in", "90"],
         )
@@ -209,98 +222,84 @@ class ParseAndSweepTest(unittest.TestCase):
             density_runner.build_step_cmd(args, 8, Path("/tmp/s8"))
 
     def test_run_density_sweep_writes_status_json(self):
-        def make_args(dest: Path) -> argparse.Namespace:
-            return argparse.Namespace(
-                file="/app/tests/agentsession.py",
-                duration="90m",
-                density_step_duration="1m",
-                users=16,
-                tag="abc123",
-                name="density_pa_light_gvisor",
-                dest=str(dest),
-                prometheus_url="http://prom:9090",
-                atelet_lag_s=0,
-                cluster_facts=False,
-                actors_per_user=None,
-                metadata={},
-                locust_extra=[],
+        def ok_step(_args, users, _step_dest, _logs):
+            return StepResult(
+                users=users,
+                live_actors=users,
+                wake_p50_ms=80.0,
+                wake_p90_ms=120.0 if users == 8 else 1500.0,
+                suspend_p50_ms=90.0,
+                suspend_p90_ms=130.0,
+                failure_ratio=0.0,
+                trial_summary={"machine_type": "c4-standard-16"},
             )
 
-        def copy_upload(src: Path, dest: str) -> None:
-            out = Path(dest)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(src, out)
+        cases = [
+            (
+                "ok",
+                True,
+                ok_step,
+                0,
+                {"locust_exit_code": 0, "stats_generated": True},
+                {"max_actors": "8", "first_failed_users": "16", "abort_reason": None},
+                2,
+            ),
+            (
+                "crash_first_step",
+                True,
+                lambda *_a: StepResult(users=8, exit_code=2),
+                1,
+                {"locust_exit_code": 1, "stats_generated": False},
+                {"max_actors": "0", "first_failed_users": "8", "abort_reason": "step exited with code 2"},
+                1,
+            ),
+            (
+                "cluster_not_idle",
+                False,
+                ok_step,
+                1,
+                {"locust_exit_code": 1, "stats_generated": False},
+                {"max_actors": "0", "first_failed_users": None, "abort_reason": "cluster did not go idle"},
+                1,
+            ),
+        ]
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            ok_dest, ok_work = root / "ok_out", root / "ok_work"
-            ok_work.mkdir()
-
-            def fake_ok_step(_args, users, _step_dest, _logs):
-                return StepResult(
-                    users=users,
-                    live_actors=users,
-                    wake_p50_ms=80.0,
-                    wake_p90_ms=120.0 if users == 8 else 1500.0,
-                    suspend_p50_ms=90.0,
-                    suspend_p90_ms=130.0,
-                    failure_ratio=0.0,
-                    trial_summary={"machine_type": "c4-standard-16"},
-                )
-
-            with (
-                mock.patch("density_runner.tempfile.mkdtemp", return_value=str(ok_work)),
-                mock.patch("density_runner.run_step", side_effect=fake_ok_step),
-                mock.patch("density_runner.wait_for_idle", return_value=True) as idle,
-            ):
-                density_runner.run_density_sweep(make_args(ok_dest), copy_upload)
-            self.assertEqual(idle.call_count, 2)
-
-            status_file = next(ok_dest.rglob("status.json"))
-            self.assertEqual(
-                json.loads(status_file.read_text(encoding="utf-8")),
-                {"locust_exit_code": 0, "stats_generated": True},
-            )
-
-            fail_dest, fail_work = root / "fail_out", root / "fail_work"
-            fail_work.mkdir()
-            with (
-                mock.patch("density_runner.tempfile.mkdtemp", return_value=str(fail_work)),
-                mock.patch("density_runner.wait_for_idle", return_value=True),
-                mock.patch("density_runner.run_step", return_value=StepResult(users=8, exit_code=2)),
-                self.assertRaises(SystemExit) as cm,
-            ):
-                density_runner.run_density_sweep(make_args(fail_dest), copy_upload)
-
-            self.assertEqual(cm.exception.code, 1)
-            fail_status = next(fail_dest.rglob("status.json"))
-            self.assertEqual(
-                json.loads(fail_status.read_text(encoding="utf-8")),
-                {"locust_exit_code": 1, "stats_generated": False},
-            )
-
-            stuck_dest, stuck_work = root / "stuck_out", root / "stuck_work"
-            stuck_work.mkdir()
-            with (
-                mock.patch("density_runner.tempfile.mkdtemp", return_value=str(stuck_work)),
-                mock.patch("density_runner.run_step", side_effect=fake_ok_step) as run_step,
-                mock.patch("density_runner.wait_for_idle", return_value=False),
-                self.assertRaises(SystemExit),
-            ):
-                density_runner.run_density_sweep(make_args(stuck_dest), copy_upload)
-            run_step.assert_not_called()
-            stuck_rows = {
-                r["metric"]: r["measurements"]
-                for r in map(
-                    json.loads,
-                    next(stuck_dest.rglob("stats.jsonl")).read_text(encoding="utf-8").splitlines(),
-                )
-            }
-            self.assertEqual(stuck_rows["density_limit"]["abort_reason"], "cluster did not go idle")
+            for name, is_idle, step_fn, want_exit, want_status, want_limit, want_idle_calls in cases:
+                with self.subTest(name=name):
+                    dest, work = root / f"{name}_out", root / f"{name}_work"
+                    work.mkdir()
+                    args = _make_args(dest=str(dest), density_step_duration="1m", users=16)
+                    with (
+                        mock.patch("density_runner.tempfile.mkdtemp", return_value=str(work)),
+                        mock.patch("density_runner.run_step", side_effect=step_fn) as run_step,
+                        mock.patch("density_runner.wait_for_idle", return_value=is_idle) as idle,
+                    ):
+                        if want_exit == 0:
+                            density_runner.run_density_sweep(args, runner.upload)
+                        else:
+                            with self.assertRaises(SystemExit) as cm:
+                                density_runner.run_density_sweep(args, runner.upload)
+                            self.assertEqual(cm.exception.code, want_exit)
+                    self.assertEqual(idle.call_count, want_idle_calls)
+                    if not is_idle:
+                        run_step.assert_not_called()
+                    status = json.loads(next(dest.rglob("status.json")).read_text(encoding="utf-8"))
+                    self.assertEqual(status, want_status)
+                    rows = {
+                        r["metric"]: r["measurements"]
+                        for r in map(
+                            json.loads,
+                            next(dest.rglob("stats.jsonl")).read_text(encoding="utf-8").splitlines(),
+                        )
+                    }
+                    for k, v in want_limit.items():
+                        self.assertEqual(rows["density_limit"][k], v)
 
 
-class _FakeRpcError(density_runner.grpc.RpcError):
-    def __init__(self, code=density_runner.grpc.StatusCode.UNAVAILABLE, details="unavailable"):
+class _FakeRpcError(grpc.RpcError):
+    def __init__(self, code=grpc.StatusCode.UNAVAILABLE, details="unavailable"):
         super().__init__()
         self._code = code
         self._details = details
@@ -335,13 +334,13 @@ class WaitForIdleTest(unittest.TestCase):
             def DeleteActor(self, req, timeout=None):
                 deleted.append(req.actor.name)
                 if req.actor.name == "a2":
-                    raise _FakeRpcError(density_runner.grpc.StatusCode.NOT_FOUND, "gone")
+                    raise _FakeRpcError(grpc.StatusCode.NOT_FOUND, "gone")
 
         fake_pb2 = types.SimpleNamespace(
-            ListActorsRequest=lambda **kw: types.SimpleNamespace(**kw),
-            ListOptions=lambda **kw: types.SimpleNamespace(**kw),
-            DeleteActorRequest=lambda **kw: types.SimpleNamespace(**kw),
-            ObjectRef=lambda **kw: types.SimpleNamespace(**kw),
+            ListActorsRequest=types.SimpleNamespace,
+            ListOptions=types.SimpleNamespace,
+            DeleteActorRequest=types.SimpleNamespace,
+            ObjectRef=types.SimpleNamespace,
         )
         fake_pb2_grpc = types.SimpleNamespace(ControlStub=FakeStub)
         fake_atespace = types.SimpleNamespace(ATESPACE="benchmark")
@@ -350,9 +349,6 @@ class WaitForIdleTest(unittest.TestCase):
             mock.patch.dict(
                 sys.modules,
                 {
-                    "common": types.SimpleNamespace(
-                        ateapi_pb2=fake_pb2, ateapi_pb2_grpc=fake_pb2_grpc
-                    ),
                     "common.ateapi_pb2": fake_pb2,
                     "common.ateapi_pb2_grpc": fake_pb2_grpc,
                     "common.atespace": fake_atespace,

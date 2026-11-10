@@ -122,6 +122,13 @@ def snapshot(api):
         return cluster_facts.snapshot_worker_pods()
 
 
+def ready(api):
+    with mock.patch.object(cluster_facts, "_load_kube_config", return_value=True), \
+         mock.patch.object(cluster_facts.client, "CoreV1Api", return_value=api), \
+         contextlib.redirect_stdout(io.StringIO()):
+        return cluster_facts.worker_pods_ready()
+
+
 def summarize(facts, directory, stats=STATS_HEADER + ",Aggregated,100,25\n",
               users=10, user_counts=None, actors_per_user=None,
               run_start=None, run_end=None, metadata=None):
@@ -556,9 +563,9 @@ class ClusterFactsTest(unittest.TestCase):
             self.assertIsNone(cluster_facts.snapshot_worker_pods())
 
     def test_worker_pods_ready(self):
-        def ready_pod(ready, phase="Running"):
+        def ready_pod(status, phase="Running"):
             p = pod(phase=phase)
-            p.status.conditions = [SimpleNamespace(type="Ready", status=ready)]
+            p.status.conditions = [SimpleNamespace(type="Ready", status=status)]
             return p
 
         def pending_pod():
@@ -566,19 +573,13 @@ class ClusterFactsTest(unittest.TestCase):
             p.status.conditions = None
             return p
 
-        def check(api):
-            with mock.patch.object(cluster_facts, "_load_kube_config", return_value=True), \
-                 mock.patch.object(cluster_facts.client, "CoreV1Api", return_value=api), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                return cluster_facts.worker_pods_ready()
-
-        self.assertTrue(check(fake_api(ns_pods=[ready_pod("True"), ready_pod("True")])))
+        self.assertTrue(ready(fake_api(ns_pods=[ready_pod("True"), ready_pod("True")])))
         # Terminated pods are not part of the pool.
-        self.assertTrue(check(fake_api(ns_pods=[ready_pod("True"), ready_pod("False", "Failed")])))
-        self.assertFalse(check(fake_api(ns_pods=[ready_pod("True"), ready_pod("False")])))
-        self.assertFalse(check(fake_api(ns_pods=[pending_pod()])))
-        self.assertFalse(check(fake_api(ns_pods=[])))
-        self.assertIsNone(check(fake_api(ns_pods=None)))
+        self.assertTrue(ready(fake_api(ns_pods=[ready_pod("True"), ready_pod("False", "Failed")])))
+        self.assertFalse(ready(fake_api(ns_pods=[ready_pod("True"), ready_pod("False")])))
+        self.assertFalse(ready(fake_api(ns_pods=[pending_pod()])))
+        self.assertFalse(ready(fake_api(ns_pods=[])))
+        self.assertIsNone(ready(fake_api(ns_pods=None)))
 
     def test_evicted_pods_from_events(self):
         def event(uid, last=None, event_time=None, created=None):
