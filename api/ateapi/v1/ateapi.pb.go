@@ -1143,7 +1143,7 @@ type ExternalVolumeStatus struct {
 	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=256
-	MountOptions  []string `protobuf:"bytes,5,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
+	MountOptions  []string `protobuf:"bytes,6,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -10441,7 +10441,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x12c\n" +
 	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x12#\n" +
-	"\rmount_options\x18\x05 \x03(\tR\fmountOptions\x1a@\n" +
+	"\rmount_options\x18\x06 \x03(\tR\fmountOptions\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x02\n" +

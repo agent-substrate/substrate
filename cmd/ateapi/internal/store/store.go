@@ -237,7 +237,7 @@ type Interface interface {
 	// Removes an ExternalVolumeClass and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
 	// precondition does not describe the class the caller observed.
-	DeleteExternalVolumeClass(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.ExternalVolumeClass, error)
+	DeleteExternalVolumeClass(ctx context.Context, name string, precondition Precondition) (*ateapi.ExternalVolumeClass, error)
 
 	// Stores a new ActorTemplate and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
