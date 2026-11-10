@@ -119,7 +119,8 @@
 # --test-entry. A cel input's `test` names another test of the suite (such
 # as its 1-user test), whose latest run under the same --dest with the same
 # tag (at most 6h older, on the same cluster) it reads. See
-# benchmarking/evaluate/README.md.
+# benchmarking/evaluate/README.md; check a file with
+# `cd benchmarking && python3 -m evaluate --check-config --tests-file F`.
 #
 #   evaluations:
 #   - name: envelope

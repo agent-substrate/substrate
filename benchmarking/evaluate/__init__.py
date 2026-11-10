@@ -19,7 +19,8 @@ files into values (sources/), and CEL conditions over those values
 (cel_env.py). evaluator.py judges them into a Report, which outputs.py writes
 as evaluation.json and stats.jsonl rows. runner.py calls prepare when a run
 starts and write once it has finished. rundir.py finds the runs a run is
-paired with under the runner's --dest. Depends on cel-expr-python
+paired with under the runner's --dest. `python -m evaluate` (__main__.py)
+judges a stored run with the same code. Depends on cel-expr-python
 and pydantic (requirements.txt). See README.md.
 """
 
