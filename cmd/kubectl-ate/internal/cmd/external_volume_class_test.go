@@ -17,6 +17,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +28,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -34,6 +38,8 @@ func TestExternalVolumeClassCommandArgs(t *testing.T) {
 		{name: "list", command: getExternalVolumeClassesCmd},
 		{name: "get", command: getExternalVolumeClassesCmd, args: []string{"fast-ssd"}},
 		{name: "get multiple", command: getExternalVolumeClassesCmd, args: []string{"fast-ssd", "standard-rwo"}},
+		{name: "create missing -f", command: createExternalVolumeClassCmd, wantErr: true},
+		{name: "create extra arg", command: createExternalVolumeClassCmd, args: []string{"fast-ssd"}, wantErr: true},
 		{name: "delete", command: deleteExternalVolumeClassCmd, args: []string{"fast-ssd"}},
 		{name: "delete missing name", command: deleteExternalVolumeClassCmd, wantErr: true},
 		{name: "delete extra name", command: deleteExternalVolumeClassCmd, args: []string{"a", "b"}, wantErr: true},
@@ -95,13 +101,20 @@ type fakeExternalVolumeClassClient struct {
 	listReqs  []*ateapi.ListExternalVolumeClassesRequest
 	createReq *ateapi.CreateExternalVolumeClassRequest
 	deleteReq *ateapi.DeleteExternalVolumeClassRequest
+	err       error
 }
 
 func (f *fakeExternalVolumeClassClient) GetExternalVolumeClass(_ context.Context, req *ateapi.GetExternalVolumeClassRequest, _ ...grpc.CallOption) (*ateapi.ExternalVolumeClass, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.byName[req.GetExternalVolumeClass().GetName()], nil
 }
 func (f *fakeExternalVolumeClassClient) ListExternalVolumeClasses(_ context.Context, req *ateapi.ListExternalVolumeClassesRequest, _ ...grpc.CallOption) (*ateapi.ListExternalVolumeClassesResponse, error) {
 	f.listReqs = append(f.listReqs, req)
+	if f.err != nil {
+		return nil, f.err
+	}
 	if len(f.listPages) == 0 {
 		return &ateapi.ListExternalVolumeClassesResponse{}, nil
 	}
@@ -111,10 +124,18 @@ func (f *fakeExternalVolumeClassClient) ListExternalVolumeClasses(_ context.Cont
 }
 func (f *fakeExternalVolumeClassClient) CreateExternalVolumeClass(_ context.Context, req *ateapi.CreateExternalVolumeClassRequest, _ ...grpc.CallOption) (*ateapi.ExternalVolumeClass, error) {
 	f.createReq = req
-	return req.GetExternalVolumeClass(), nil
+	if f.err != nil {
+		return nil, f.err
+	}
+	created := proto.Clone(req.GetExternalVolumeClass()).(*ateapi.ExternalVolumeClass)
+	created.Metadata.Uid, created.Metadata.Version = "srv-uid-1", 7
+	return created, nil
 }
 func (f *fakeExternalVolumeClassClient) DeleteExternalVolumeClass(_ context.Context, req *ateapi.DeleteExternalVolumeClassRequest, _ ...grpc.CallOption) (*ateapi.ExternalVolumeClass, error) {
 	f.deleteReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
 	return &ateapi.ExternalVolumeClass{Metadata: &ateapi.ResourceMetadata{Name: req.GetExternalVolumeClass().GetName()}}, nil
 }
 
@@ -146,6 +167,11 @@ func TestExternalVolumeClassRunners(t *testing.T) {
 	if err := runCreateExternalVolumeClass(ctx, client, &out, "yaml", fastSSD); err != nil || cmp.Diff(fastSSD, client.createReq.GetExternalVolumeClass(), protocmp.Transform()) != "" {
 		t.Fatalf("create err = %v, req = %v", err, client.createReq)
 	}
+	for _, w := range []string{"uid: srv-uid-1", `version: "7"`, "driverName: pd.csi.storage.gke.io"} {
+		if !strings.Contains(out.String(), w) {
+			t.Errorf("create out = %q, want server response field %q", out.String(), w)
+		}
+	}
 	out.Reset()
 	opts := &ateapi.DeleteOptions{Uid: "u-1", Version: 3}
 	if err := runDeleteExternalVolumeClass(ctx, client, &out, "fast-ssd", opts); err != nil || out.String() != "external volume class \"fast-ssd\" deleted\n" {
@@ -154,10 +180,45 @@ func TestExternalVolumeClassRunners(t *testing.T) {
 	if diff := cmp.Diff(&ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "fast-ssd"}, Options: opts}, client.deleteReq, protocmp.Transform()); diff != "" {
 		t.Errorf("deleteReq mismatch (-want +got):\n%s", diff)
 	}
+	bad := filepath.Join(t.TempDir(), "evc.yaml")
+	if err := os.WriteFile(bad, []byte("metadata: {atespace: a, name: b}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runRootCLI(t, "create", "external-volume-class", "-f", bad); err == nil || !strings.Contains(err.Error(), "metadata.atespace must be empty") {
+		t.Fatalf("create -f bad error = %v, want metadata.atespace must be empty", err)
+	}
 	if _, _, err := runRootCLI(t, "delete", "external-volume-class", "fast-ssd", "--version", "0"); err == nil || !strings.Contains(err.Error(), "--version must be at least 1") {
 		t.Fatalf("delete --version 0 error = %v, want --version must be at least 1", err)
 	}
 	if _, _, err := runRootCLI(t, "delete", "external-volume-class", "fast-ssd", "--uid", ""); err == nil || !strings.Contains(err.Error(), "--uid must not be empty") {
 		t.Fatalf("delete --uid '' error = %v, want --uid must not be empty", err)
+	}
+}
+
+func TestExternalVolumeClassRunnersPropagateErrors(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	client := &fakeExternalVolumeClassClient{err: boom}
+	class := &ateapi.ExternalVolumeClass{Metadata: &ateapi.ResourceMetadata{Name: "x"}, DriverName: "d"}
+	var out bytes.Buffer
+	for _, tc := range []struct {
+		name, want string
+		run        func() error
+	}{
+		{"get", `failed to get external volume class "x"`, func() error { return runGetExternalVolumeClasses(ctx, client, &out, "table", []string{"x"}) }},
+		{"list", "failed to list external volume classes", func() error { return runGetExternalVolumeClasses(ctx, client, &out, "table", nil) }},
+		{"create", "failed to create external volume class", func() error { return runCreateExternalVolumeClass(ctx, client, &out, "yaml", class) }},
+		{"delete", "failed to delete external volume class", func() error { return runDeleteExternalVolumeClass(ctx, client, &out, "x", nil) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out.Reset()
+			err := tc.run()
+			if !errors.Is(err, boom) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q wrapping boom", err, tc.want)
+			}
+			if out.Len() != 0 {
+				t.Errorf("out = %q, want nothing printed on error", out.String())
+			}
+		})
 	}
 }
