@@ -182,22 +182,28 @@ echo ">>> waiting for job/${JOB} (progress lines only; full logs land in logs.tx
 ( until kubectl logs -f "job/${JOB}" -n "${NAMESPACE}" 2>/dev/null \
     | grep --line-buffered -vE '^\[(service|adaptive)\] '; do sleep 5; done ) &
 LOGS_PID=$!
+stop_logs() {
+  pkill -P "${LOGS_PID}" 2>/dev/null || true
+  kill "${LOGS_PID}" 2>/dev/null || true
+}
+trap stop_logs EXIT
 STATUS="timeout"
 for _ in $(seq 1 150); do  # 150 x 10s = 25 min
-  S="$(kubectl get job "${JOB}" -n "${NAMESPACE}" -o jsonpath='{.status.succeeded}' 2>/dev/null)"
-  F="$(kubectl get job "${JOB}" -n "${NAMESPACE}" -o jsonpath='{.status.failed}' 2>/dev/null)"
-  [[ "${S}" == "1" ]] && { STATUS="complete"; break; }
-  [[ "${F}" == "1" ]] && { STATUS="failed"; break; }
+  JOB_STATUS="$(kubectl get job "${JOB}" -n "${NAMESPACE}" -o jsonpath='{.status.succeeded}|{.status.failed}' || true)"
+  [[ "${JOB_STATUS%%|*}" == "1" ]] && { STATUS="complete"; break; }
+  [[ "${JOB_STATUS##*|}" == "1" ]] && { STATUS="failed"; break; }
   sleep 10
 done
-kill "${LOGS_PID}" 2>/dev/null || true
+stop_logs
 
 # --- verdict --------------------------------------------------------------------
 if [[ "${STATUS}" == "complete" ]]; then
-  CAPACITY="$(gcloud storage ls "${DEST}/runs/${NAME}/**/run_tag=${TAG}/capacity.json" 2>/dev/null | tail -1)"
+  CAPACITY="$(gcloud storage ls "${DEST}/runs/${NAME}/**/run_tag=${TAG}/capacity.json" 2>/dev/null | tail -1 || true)"
   if [[ -n "${CAPACITY}" ]]; then
     echo ">>> ${CAPACITY}"
     gcloud storage cat "${CAPACITY}"
+  else
+    echo ">>> no capacity.json under ${DEST}/runs/${NAME}/ for tag ${TAG}" >&2
   fi
   kubectl delete job "${JOB}" -n "${NAMESPACE}" >/dev/null
   echo ">>> ${NAME}: complete (tag ${TAG})"
