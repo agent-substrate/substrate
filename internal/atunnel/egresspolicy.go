@@ -35,7 +35,7 @@ import (
 
 const (
 	// egressPolicyTTL is how long an actor's egress policy is reused before it
-	// is fetched again.
+	// is fetched again, and how long a failed refresh waits before the next.
 	//
 	// TODO: tune once the cost of fetching is known at scale.
 	egressPolicyTTL = 5 * time.Second
@@ -93,12 +93,13 @@ func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicyS
 // Callers must not modify the policy as it may be shared in response to concurrent calls
 // to EgressPolicy.
 func (p *actorEgressPolicy) EgressPolicy(ctx context.Context) (*ateletpb.EgressPolicy, error) {
-	if policy, ok := p.cached(); ok {
+	policy, fresh, stale := p.cached()
+	if fresh {
 		return policy, nil
 	}
 	results := p.flight.DoChan("", func() (any, error) {
-		// A fetch may have finished since this query found the policy stale.
-		if policy, ok := p.cached(); ok {
+		// A fetch may have finished since this query found the policy expired.
+		if policy, fresh, _ := p.cached(); fresh {
 			return policy, nil
 		}
 		// Not canceled with the query that started the fetch: the others
@@ -108,6 +109,12 @@ func (p *actorEgressPolicy) EgressPolicy(ctx context.Context) (*ateletpb.EgressP
 		policy, err := p.fetch(fetchCtx)
 		return p.record(ctx, policy, err)
 	})
+	if stale {
+		// The last refresh failed, so this one may hang until its timeout too.
+		// Answer from the stale entry now and let the refresh finish in the
+		// background, rather than hold up every query of the actor.
+		return policy, nil
+	}
 	select {
 	case res := <-results:
 		if res.Err != nil {
@@ -120,21 +127,26 @@ func (p *actorEgressPolicy) EgressPolicy(ctx context.Context) (*ateletpb.EgressP
 	}
 }
 
-// cached returns the policy last fetched, unless it has expired.
-func (p *actorEgressPolicy) cached() (*ateletpb.EgressPolicy, bool) {
+// cached returns the policy last fetched. fresh reports that it has not
+// expired; stale reports that it has, and that the last refresh failed.
+func (p *actorEgressPolicy) cached() (policy *ateletpb.EgressPolicy, fresh, stale bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.fetched || !p.now().Before(p.expires) {
-		return nil, false
+	if !p.fetched {
+		return nil, false, false
 	}
-	return p.policy, true
+	if p.now().Before(p.expires) {
+		return p.policy, true, false
+	}
+	return p.policy, false, p.failing
 }
 
 // record updates the cache with a fetch's result and returns the policy and
 // error EgressPolicy should report. When a refresh fails after a policy has
-// already been fetched, record keeps and returns the stale entry (fail static),
-// logging an error on the first failure and a warning every
-// egressPolicyStaleWarnInterval while stale entries are used.
+// already been fetched, record keeps and returns the stale entry (fail static)
+// for another TTL before the next refresh, logging an error on the first
+// failure and a warning every egressPolicyStaleWarnInterval while stale
+// entries are used.
 func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressPolicy, err error) (*ateletpb.EgressPolicy, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -162,6 +174,8 @@ func (p *actorEgressPolicy) record(ctx context.Context, policy *ateletpb.EgressP
 			p.nextStaleWarn = now.Add(egressPolicyStaleWarnInterval)
 		}
 		p.log.LogAttrs(ctx, level, "Could not refresh the actor's egress policy; using stale cached policy", slog.Any("err", err))
+		// Try again after a TTL rather than on the next query.
+		p.expires = now.Add(p.ttl)
 		return p.policy, nil
 	}
 
