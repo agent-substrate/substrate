@@ -58,7 +58,7 @@ Global
 | `ActorTemplate` | Atespace | 0..N | Clients |
 | `Actor` | Atespace | 0..N | Clients |
 | `Tag` | Atespace | 0..N | Clients |
-| `ExternalVolume` | Atespace | 0..N | Clients |
+| `ExternalVolume` | Atespace | 0..N | Clients and Substrate |
 | `Worker` | Global | 0..N | Substrate |
 
 ## Subresources
