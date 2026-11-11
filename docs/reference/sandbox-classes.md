@@ -29,7 +29,7 @@ An [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) select
 An actor's CPU size comes from `resources.limits.cpuMillicores` on its `ActorTemplate`:
 
 - **gVisor (`gvisor`):** `ateworker-gvisor` sets the sandbox's cgroup v2 `cpu.max` quota from `cpuMillicores` and passes `--cpu-num-from-quota` to `runsc`. `runsc` rounds the quota up to whole CPUs, with a minimum of 2, and never reports more CPUs than the sandbox can use. An actor with `cpuMillicores: 500` or `1000` sees 2 CPUs, and the host kernel throttles it to its quota.
-- **MicroVM (`microvm`):** `ateworker-microvm` sets Cloud Hypervisor `BootVcpus` and `MaxVcpus` to `ceil(cpuMillicores / 1000)` with a minimum of 1. It also caps the VMM and `virtiofsd` at `cpuMillicores` with a host cgroup v2 `cpu.max`. An actor with `cpuMillicores: 500` boots with 1 vCPU and gets half a CPU of host time.
+- **MicroVM (`microvm`):** `ateworker-microvm` sets Cloud Hypervisor `BootVcpus` and `MaxVcpus` to `ceil(cpuMillicores / 1000)` with a minimum of 1. It also caps the VMM and `virtiofsd` at `cpuMillicores` with a host cgroup v2 `cpu.max`. An actor with `cpuMillicores: 500` boots with 1 vCPU and gets half a CPU of host time. While the worker boots, restores, snapshots or stops the actor, the cap is four times `cpuMillicores`, and at least one CPU, like gVisor's default `--sandbox-lifecycle-cpu-policy`. The actor's own cap applies from its wakeup probe on.
 
 ## Memory Sizing
 
