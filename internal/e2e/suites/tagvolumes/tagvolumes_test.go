@@ -54,6 +54,7 @@ type suite struct {
 	ctx     context.Context
 	clients *e2e.Clients
 	ns      *e2e.Namespace
+	probe   e2e.SubstrateFixture
 	tmpl    *ateapi.ActorTemplate
 	router  *e2e.RouterClient
 }
@@ -72,14 +73,22 @@ func TestTagVolumes(t *testing.T) {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
 	defer router.Close()
-	s := &suite{ctx: ctx, clients: clients, ns: ns, tmpl: createTemplate(ctx, t, clients, ns), router: router}
+	probeAtespace, _ := e2e.DeployProbe(t, "tagvolumes")
+	s := &suite{ctx: ctx, clients: clients, ns: ns, router: router, probe: e2e.SubstrateFixture{
+		Atespace:      probeAtespace,
+		Name:          e2e.ProbeName,
+		PoolNamespace: probeAtespace,
+		PoolName:      e2e.ProbeName,
+		DeployWith:    "the tagvolumes suite's own DeployProbe",
+	}}
+	s.tmpl = s.createTemplate(t, "probe", "")
 
 	// A tag of every volume seeds an Actor whose volumes start as copies of
 	// the source's, and the copies outlive the tag.
 	t.Run("RestoresEveryVolume", func(t *testing.T) {
 		src := s.newSource(t, "all-src")
 		tagRef := s.createTag(t, "all", src, &ateapi.ExternalVolumeSelection{}, dataVolume, cacheVolume)
-		clone := s.newClone(t, "all-clone", tagRef)
+		clone := s.newClone(t, s.tmpl, "all-clone", tagRef)
 
 		s.requireFile(t, clone, dataPath+"/"+sourceFile)
 		s.requireFile(t, clone, cachePath+"/"+sourceFile)
@@ -103,7 +112,7 @@ func TestTagVolumes(t *testing.T) {
 	t.Run("RestoresNamedVolumes", func(t *testing.T) {
 		src := s.newSource(t, "named-src")
 		tagRef := s.createTag(t, "named", src, &ateapi.ExternalVolumeSelection{Names: []string{dataVolume}}, dataVolume)
-		clone := s.newClone(t, "named-clone", tagRef)
+		clone := s.newClone(t, s.tmpl, "named-clone", tagRef)
 
 		s.requireFile(t, clone, dataPath+"/"+sourceFile)
 		s.requireNoFile(t, clone, cachePath+"/"+sourceFile)
@@ -114,7 +123,7 @@ func TestTagVolumes(t *testing.T) {
 	t.Run("WithoutVolumeSelectionRestoresNothing", func(t *testing.T) {
 		src := s.newSource(t, "none-src")
 		tagRef := s.createTag(t, "none", src, nil)
-		clone := s.newClone(t, "none-clone", tagRef)
+		clone := s.newClone(t, s.tmpl, "none-clone", tagRef)
 
 		s.requireNoFile(t, clone, dataPath+"/"+sourceFile)
 		s.requireNoFile(t, clone, cachePath+"/"+sourceFile)
@@ -124,8 +133,8 @@ func TestTagVolumes(t *testing.T) {
 	t.Run("ClonesAreIndependent", func(t *testing.T) {
 		src := s.newSource(t, "multi-src")
 		tagRef := s.createTag(t, "multi", src, &ateapi.ExternalVolumeSelection{}, dataVolume, cacheVolume)
-		cloneA := s.newClone(t, "multi-a", tagRef)
-		cloneB := s.newClone(t, "multi-b", tagRef)
+		cloneA := s.newClone(t, s.tmpl, "multi-a", tagRef)
+		cloneB := s.newClone(t, s.tmpl, "multi-b", tagRef)
 
 		s.requireFile(t, cloneA, dataPath+"/"+sourceFile)
 		s.requireFile(t, cloneB, dataPath+"/"+sourceFile)
@@ -141,10 +150,45 @@ func TestTagVolumes(t *testing.T) {
 		if _, err := e2e.RetryAborted(t, ctx, clients.SubstrateAPI.DeleteActor, &ateapi.DeleteActorRequest{Actor: src.ToObjectRef()}); err != nil {
 			t.Fatalf("DeleteActor %s: %v", src.Name, err)
 		}
-		clone := s.newClone(t, "gone-clone", tagRef)
+		clone := s.newClone(t, s.tmpl, "gone-clone", tagRef)
 
 		s.requireFile(t, clone, dataPath+"/"+sourceFile)
 		s.requireFile(t, clone, cachePath+"/"+sourceFile)
+	})
+
+	// A template whose data volume imports a snapshot starts each Actor's
+	// data volume from it. An Actor created from a tag of such an Actor
+	// restores data from the tag's snapshot if the tag captured it, and from
+	// the template's snapshot otherwise.
+	t.Run("TemplateContentSource", func(t *testing.T) {
+		seed := s.createTag(t, "import-seed", s.newSource(t, "import-seed-src"), &ateapi.ExternalVolumeSelection{}, dataVolume, cacheVolume)
+		tag, err := clients.SubstrateAPI.GetTag(ctx, &ateapi.GetTagRequest{Tag: seed})
+		if err != nil {
+			t.Fatalf("GetTag: %v", err)
+		}
+		var seedData string
+		for _, snap := range tag.GetStatus().GetSnapshot().GetVolumeSnapshots() {
+			if snap.GetSourceVolumeName() == dataVolume {
+				seedData = snap.GetStorageSnapshotId()
+			}
+		}
+		tmpl := s.createTemplate(t, "import", seedData)
+
+		src := s.actorRef("import-src")
+		s.createActor(t, tmpl, src, nil)
+		s.resume(t, src)
+		s.requireFile(t, src, dataPath+"/"+sourceFile)
+		s.requireNoFile(t, src, cachePath+"/"+sourceFile)
+		s.write(t, src, dataPath+"/"+cloneFile)
+		s.suspend(t, src)
+
+		withData := s.newClone(t, tmpl, "import-with-data", s.createTag(t, "import-with-data", src, &ateapi.ExternalVolumeSelection{Names: []string{dataVolume}}, dataVolume))
+		s.requireFile(t, withData, dataPath+"/"+cloneFile)
+		s.suspend(t, withData)
+
+		withoutData := s.newClone(t, tmpl, "import-without-data", s.createTag(t, "import-without-data", src, &ateapi.ExternalVolumeSelection{Names: []string{cacheVolume}}, cacheVolume))
+		s.requireFile(t, withoutData, dataPath+"/"+sourceFile)
+		s.requireNoFile(t, withoutData, dataPath+"/"+cloneFile)
 	})
 
 	// DeleteTag deletes the volume snapshots from the storage system. The API
@@ -178,39 +222,34 @@ func TestTagVolumes(t *testing.T) {
 }
 
 // createTemplate creates a probe ActorTemplate with the external volumes
-// "data" and "cache", and a WorkerPool of two workers for its Actors.
-func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace) *ateapi.ActorTemplate {
+// "data" and "cache", and a WorkerPool of two workers for its Actors. name
+// keeps the template and its pool apart from the suite's others. When
+// dataSnapshot is set, the data volume starts from that snapshot.
+func (s *suite) createTemplate(t *testing.T, name, dataSnapshot string) *ateapi.ActorTemplate {
 	t.Helper()
 
-	probeAtespace, _ := e2e.DeployProbe(t, "tagvolumes")
-	src := e2e.SubstrateFixture{
-		Atespace:      probeAtespace,
-		Name:          e2e.ProbeName,
-		PoolNamespace: probeAtespace,
-		PoolName:      e2e.ProbeName,
-		DeployWith:    "the tagvolumes suite's own DeployProbe",
-	}
-	return e2e.CreateSubstrateTemplateFrom(ctx, t, clients, ns.Name, src, e2e.SubstrateTemplateOptions{
+	return e2e.CreateSubstrateTemplateFrom(s.ctx, t, s.clients, s.ns.Name, s.probe, e2e.SubstrateTemplateOptions{
 		Atespace:     atespace,
-		Name:         "probe-" + ns.Name,
-		PoolName:     e2e.ProbeName,
+		Name:         name + "-" + s.ns.Name,
+		PoolName:     name,
 		PoolReplicas: 2,
-		// The pool is labeled uniquely to this namespace so the cluster-wide
-		// scheduler cannot hand its workers to another suite's actors.
-		Labels: map[string]string{"tagvolumes": ns.Name},
+		// The pool is labeled uniquely to this namespace and template so the
+		// cluster-wide scheduler cannot hand its workers to other actors.
+		Labels: map[string]string{"tagvolumes": name + "-" + s.ns.Name},
 		SnapshotConfig: &ateapi.SnapshotConfig{
-			StorageLocation: e2e.SnapshotLocation(t, ns.Name),
+			StorageLocation: e2e.SnapshotLocation(t, s.ns.Name),
 		},
 		Modify: func(tmpl *ateapi.ActorTemplate) {
-			for name, path := range map[string]string{dataVolume: dataPath, cacheVolume: cachePath} {
-				tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts, &ateapi.VolumeMount{Name: name, MountPath: path})
-				tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{
-					Name: name,
-					External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-						CapacityBytes:    extCapacity,
-						StorageClassName: e2e.StorageClass,
-					}},
-				})
+			for vol, path := range map[string]string{dataVolume: dataPath, cacheVolume: cachePath} {
+				ext := &ateapi.ExternalVolumeTemplate{
+					CapacityBytes:    extCapacity,
+					StorageClassName: e2e.StorageClass,
+				}
+				if vol == dataVolume && dataSnapshot != "" {
+					ext.ContentSource = &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: dataSnapshot}}
+				}
+				tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts, &ateapi.VolumeMount{Name: vol, MountPath: path})
+				tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{Name: vol, External: &ateapi.ExternalVolumeSource{Template: ext}})
 			}
 		},
 	})
@@ -221,15 +260,15 @@ func (s *suite) actorRef(name string) resources.ActorRef {
 	return resources.ActorRef{Atespace: atespace, Name: name + "-" + s.ns.Name}
 }
 
-// createActor creates an Actor, from tagRef when it is set, and deletes it
-// when the test ends.
-func (s *suite) createActor(t *testing.T, ref resources.ActorRef, tagRef *ateapi.ObjectRef) {
+// createActor creates an Actor of tmpl, from tagRef when it is set, and
+// deletes it when the test ends.
+func (s *suite) createActor(t *testing.T, tmpl *ateapi.ActorTemplate, ref resources.ActorRef, tagRef *ateapi.ObjectRef) {
 	t.Helper()
 
 	if _, err := s.clients.SubstrateAPI.CreateActor(s.ctx, &ateapi.CreateActorRequest{
 		Actor: &ateapi.Actor{
 			Metadata:      &ateapi.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
-			ActorTemplate: e2e.TemplateRef(s.tmpl),
+			ActorTemplate: e2e.TemplateRef(tmpl),
 			SourceTag:     tagRef,
 		},
 	}); err != nil {
@@ -248,7 +287,7 @@ func (s *suite) newSource(t *testing.T, name string) resources.ActorRef {
 	t.Helper()
 
 	ref := s.actorRef(name)
-	s.createActor(t, ref, nil)
+	s.createActor(t, s.tmpl, ref, nil)
 	s.resume(t, ref)
 	s.write(t, ref, dataPath+"/"+sourceFile)
 	s.write(t, ref, cachePath+"/"+sourceFile)
@@ -256,12 +295,12 @@ func (s *suite) newSource(t *testing.T, name string) resources.ActorRef {
 	return ref
 }
 
-// newClone creates an Actor from tagRef and resumes it.
-func (s *suite) newClone(t *testing.T, name string, tagRef *ateapi.ObjectRef) resources.ActorRef {
+// newClone creates an Actor of tmpl from tagRef and resumes it.
+func (s *suite) newClone(t *testing.T, tmpl *ateapi.ActorTemplate, name string, tagRef *ateapi.ObjectRef) resources.ActorRef {
 	t.Helper()
 
 	ref := s.actorRef(name)
-	s.createActor(t, ref, tagRef)
+	s.createActor(t, tmpl, ref, tagRef)
 	s.resume(t, ref)
 	return ref
 }
