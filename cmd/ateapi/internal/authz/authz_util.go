@@ -82,6 +82,8 @@ const (
 
 	RelationCanCreateExternalVolumeClass = "can_create_external_volume_class"
 	RelationCanListExternalVolumeClasses = "can_list_external_volume_classes"
+	RelationCanCreateCsiDriverConfig     = "can_create_csi_driver_config"
+	RelationCanListCsiDriverConfigs      = "can_list_csi_driver_configs"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -135,6 +137,12 @@ func WorkerObject(name string) string {
 // OpenFGA object string. External volume classes are global-scoped.
 func ExternalVolumeClassObject(name string) string {
 	return "external_volume_class:" + objectIDReplacer.Replace(name)
+}
+
+// CsiDriverConfigObject formats a CSI driver config name as an OpenFGA object
+// string. CSI driver configs are global-scoped.
+func CsiDriverConfigObject(name string) string {
+	return "csi_driver_config:" + objectIDReplacer.Replace(name)
 }
 
 // ActorObject formats an actor as an OpenFGA object string.

@@ -56,6 +56,11 @@ func TestContextualTuples(t *testing.T) {
 			want:   []*openfgav1.TupleKey{parentGlobal("external_volume_class:nfs-gold")},
 		},
 		{
+			name:   "csi driver config",
+			object: CsiDriverConfigObject("csi-nfs"),
+			want:   []*openfgav1.TupleKey{parentGlobal("csi_driver_config:csi-nfs")},
+		},
+		{
 			name:   "actor",
 			object: ActorObject("team-a", "runner"),
 			want: []*openfgav1.TupleKey{

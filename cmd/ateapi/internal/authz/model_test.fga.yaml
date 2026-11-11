@@ -99,6 +99,11 @@ tuples:
     relation: parent_global
     object: external_volume_class:nfs-gold
 
+  # CSI driver config (csi-nfs linked to global:root)
+  - user: global:root
+    relation: parent_global
+    object: csi_driver_config:csi-nfs
+
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
     check:
@@ -609,4 +614,51 @@ tests:
         object: external_volume_class:nfs-gold
         assertions:
           can_get: false
+          can_delete: false
+
+  - name: 11. CSI Driver Configs (Inherited from Global)
+    check:
+      - user: user:carol # Global owner
+        object: global:root
+        assertions:
+          can_create_csi_driver_config: true
+          can_list_csi_driver_configs: true
+      - user: user:frank # Global viewer
+        object: global:root
+        assertions:
+          can_create_csi_driver_config: false
+          can_list_csi_driver_configs: true
+      - user: user:sys-atelet # atelet system role
+        object: global:root
+        assertions:
+          can_create_csi_driver_config: false
+          can_list_csi_driver_configs: true
+      - user: user:bob # Atespace editor
+        object: global:root
+        assertions:
+          can_create_csi_driver_config: false
+          can_list_csi_driver_configs: false
+      - user: user:carol
+        object: csi_driver_config:csi-nfs
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:frank
+        object: csi_driver_config:csi-nfs
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+      - user: user:sys-atelet
+        object: csi_driver_config:csi-nfs
+        assertions:
+          can_get: true
+          can_update: false
+          can_delete: false
+      - user: user:bob
+        object: csi_driver_config:csi-nfs
+        assertions:
+          can_get: false
+          can_update: false
           can_delete: false
