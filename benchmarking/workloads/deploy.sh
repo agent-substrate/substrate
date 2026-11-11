@@ -134,7 +134,9 @@ resolve_otlp_endpoint() {
 source "${ROOT}/benchmarking/lib/kubectl-ate.sh"
 
 run_kubectl_ate() {
-  "${KUBECTL_ATE_BIN}" "$@"
+  # glutton-storage has an external volume, which is a preview feature, so
+  # kubectl ate must opt in to preview features to create it.
+  "${KUBECTL_ATE_BIN}" --preview "$@"
 }
 
 # cpu_millicores converts a Kubernetes cpu quantity like 250m or 1.5 to
