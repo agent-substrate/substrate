@@ -212,3 +212,6 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+To measure suspend and resume latency and density with external volumes, see
+[benchmarking/storage/README.md](../../benchmarking/storage/README.md).
