@@ -171,7 +171,9 @@ func setupVethPair(ctx context.Context, actorNS netns.Handle) error {
 		if err := netlink.LinkAdd(veth); err != nil {
 			return fmt.Errorf("while creating the veth pair: %w", err)
 		}
-		// A link-local IPv6 address would make runsc import atside too.
+		// Linux assigns an IPv6 link-local address when an interface comes up.
+		// runsc imports addressed interfaces into its network stack, so disable IPv6
+		// on atside to keep it addressless and let runsc import only eth0.
 		if err := netns.SetSysctls(netns.Sysctl{Key: "net/ipv6/conf/" + gatewayVethName + "/disable_ipv6", Value: "1"}); err != nil {
 			return err
 		}
