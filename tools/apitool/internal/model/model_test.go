@@ -243,6 +243,7 @@ func TestBuild_Annotations(t *testing.T) {
 		"Atespace":            {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Atespaces"},
 		"ActorTemplate":       {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "ActorTemplates"},
 		"ExternalVolumeClass": {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "ExternalVolumeClasses"},
+		"CsiDriverConfig":     {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "CsiDriverConfigs"},
 		"Worker":              {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Workers"},
 		"ActorAssignment":     {Parents: []string{"Worker"}, Plural: "ActorAssignments"},
 		"AccessPolicy":        {Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"},
