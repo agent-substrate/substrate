@@ -429,12 +429,13 @@ turnover. Three things keep them apart:
   the `SuspendActor` and `SuspendActorAsync` rows hold only the turnover's
   parks.
 * The runner finds the end of the fill in boomer's log line
-  `agentsession: turnover fill done` and adds a `turnover_window` row to
-  `stats.jsonl` ([`locust/turnover_window.py`](../../benchmarking/locust/turnover_window.py)).
-  It holds each request's count (`requests_<name>`), failures
-  (`failures_<name>`) and rate (`rps_<name>`) from there to the end of the run
-  (`window_start`, `window_end`), read from `stats_history.csv`. Read the swap
-  rate from `rps_TimeToWake` against `--target-rps`.
+  `agentsession: turnover fill done` and adds a `turnover_<name>` row for
+  each request to `stats.jsonl` ([`locust/turnover_window.py`](../../benchmarking/locust/turnover_window.py)).
+  Each holds the request's `request_count`, `failure_count`, `requests_per_s`
+  and `failures_per_s` from there to the end of the run (`window_start`,
+  `window_end`), read from `stats_history.csv`. These are the keys of the
+  whole-run rows. Read the swap rate from the `requests_per_s` of
+  `turnover_TimeToWake` against `--target-rps`.
 * The server telemetry's steady-state window starts at the same point, so the
   memory, PSI and snapshot figures cover the turnover only.
 

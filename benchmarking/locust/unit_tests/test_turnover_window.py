@@ -121,29 +121,31 @@ class AppendTest(unittest.TestCase):
                 jsonl, start, d / "stats_history.csv", "ts", "tag", "test", io.StringIO())
             return ok, [json.loads(line) for line in jsonl.read_text().splitlines()]
 
-    def test_appends_the_window_row(self):
+    def test_appends_a_row_per_request(self):
         ok, rows = self.append(HISTORY, T0 + 250)
         self.assertTrue(ok)
-        self.assertEqual(rows[1], {
-            "timestamp": "ts",
-            "tag": "tag",
-            "test_name": "test",
-            "metric": "turnover_window",
-            "measurements": {
-                "window_start": T0 + 250,
-                "window_end": T0 + 350,
-                "window_s": 100,
-                "requests_ResumeActor": 500,
-                "failures_ResumeActor": 2,
-                "rps_ResumeActor": 5.0,
-                "requests_SuspendActorAsync": 500,
-                "failures_SuspendActorAsync": 1,
-                "rps_SuspendActorAsync": 5.0,
-                "requests_SuspendActorAsync_Register": 0,
-                "failures_SuspendActorAsync_Register": 0,
-                "rps_SuspendActorAsync_Register": 0.0,
-            },
-        })
+        self.assertEqual(rows[1:], [
+            {
+                "timestamp": "ts",
+                "tag": "tag",
+                "test_name": "test",
+                "metric": f"turnover_{name}",
+                "measurements": {
+                    "window_start": T0 + 250,
+                    "window_end": T0 + 350,
+                    "window_s": 100,
+                    "request_count": requests,
+                    "failure_count": failures,
+                    "requests_per_s": rps,
+                    "failures_per_s": fps,
+                },
+            }
+            for name, requests, failures, rps, fps in (
+                ("ResumeActor", 500, 2, 5.0, 0.02),
+                ("SuspendActorAsync", 500, 1, 5.0, 0.01),
+                ("SuspendActorAsync_Register", 0, 0, 0.0, 0.0),
+            )
+        ])
 
     def test_appends_nothing_without_a_history(self):
         self.assertEqual(self.append(None, T0 + 250), (False, [{"metric": "locust"}]))
