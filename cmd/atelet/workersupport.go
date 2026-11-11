@@ -365,6 +365,7 @@ func (s *workerSupportServer) ReportActorCrashed(ctx context.Context, req *atele
 		},
 		ActorUid: req.GetActorUid(),
 		Message:  req.GetMessage(),
+		Detail:   crashDetailToAPI(req.GetDetail()),
 	}); err != nil {
 		return nil, err
 	}
@@ -372,6 +373,31 @@ func (s *workerSupportServer) ReportActorCrashed(ctx context.Context, req *atele
 		slog.String("pod_uid", workerIdentity.PodUID),
 		slog.String("actor_atespace", req.GetActorAtespace()),
 		slog.String("actor_name", req.GetActorName()),
-		slog.String("actor_uid", req.GetActorUid()))
+		slog.String("actor_uid", req.GetActorUid()),
+		slog.String("crash_reason", req.GetDetail().GetReason().String()))
 	return &ateletpb.ReportActorCrashedResponse{}, nil
+}
+
+// crashDetailToAPI converts a worker's crash detail to the public API's.
+//
+// The worker-facing proto mirrors substrate.ateapi.v1.CrashReason value for
+// value rather than importing it, so the reason converts by number;
+// TestCrashReasonMirrorsTheAPI keeps the two in step. A number the worker's
+// proto does not name arrives as unspecified, which is what an older atelet
+// forwarding a newer worker's reason should record.
+func crashDetailToAPI(detail *ateletpb.CrashDetail) *ateapi.CrashDetail {
+	if detail == nil {
+		return nil
+	}
+	reason := ateapi.CrashReason(detail.GetReason())
+	if _, named := ateapi.CrashReason_name[int32(reason)]; !named {
+		reason = ateapi.CrashReason_CRASH_REASON_UNSPECIFIED
+	}
+	return &ateapi.CrashDetail{
+		Reason:         reason,
+		ContainerName:  detail.GetContainerName(),
+		ExitCode:       detail.GetExitCode(),
+		Signal:         detail.GetSignal(),
+		LastStderrLine: detail.GetLastStderrLine(),
+	}
 }

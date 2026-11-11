@@ -24,6 +24,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/child"
 	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -31,7 +32,7 @@ type fakeCrashReporter struct {
 	reports chan string
 }
 
-func (f *fakeCrashReporter) ReportCrashed(_ context.Context, _ resources.ActorAttribution, message string) error {
+func (f *fakeCrashReporter) ReportCrashed(_ context.Context, _ resources.ActorAttribution, message string, detail *ateletpb.CrashDetail) error {
 	f.reports <- message
 	return nil
 }

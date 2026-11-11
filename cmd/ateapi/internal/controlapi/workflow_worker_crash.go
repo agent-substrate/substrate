@@ -30,7 +30,9 @@ import (
 // CrashActorReportedByWorker crashes a RUNNING actor whose sandbox the worker
 // hosting it saw die. It holds the actor's lease, so an operation in flight
 // keeps the actor and fails on its own if the sandbox is gone.
-func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error) {
+// detail is what the worker observed, and may be nil when the worker does not
+// classify the crash; the actor's reason then stays unspecified.
+func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef resources.ActorRef, actorUID, workerName, message string, detail *ateapi.CrashDetail) (*ateapi.Actor, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
@@ -52,7 +54,7 @@ func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef
 	if state := actor.GetStatus().GetState(); state != ateapi.ActorState_ACTOR_STATE_RUNNING {
 		return nil, apierror.FailedPrecondition("actor %s is %s, not RUNNING", actorRef, state)
 	}
-	if err := crashActor(leaseCtx, w.store, actorRef, ateattr.OperationUnknown, message); err != nil {
+	if err := crashActor(leaseCtx, w.store, actorRef, ateattr.OperationUnknown, crashCause{message: message, detail: detail}); err != nil {
 		return nil, err
 	}
 	return w.store.GetActor(leaseCtx, actorRef)

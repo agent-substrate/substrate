@@ -65,7 +65,7 @@ func TestReportCrashed(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := &fakeConn{errs: tc.errs}
-			err := reportCrashedWithRetry(context.Background(), conn, testActor, "cloud-hypervisor exited", time.Millisecond)
+			err := reportCrashedWithRetry(context.Background(), conn, testActor, "cloud-hypervisor exited", nil, time.Millisecond)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -87,7 +87,7 @@ func TestReportCrashedGivesUpWithContext(t *testing.T) {
 	for i := range conn.errs {
 		conn.errs[i] = status.Error(codes.Unavailable, "")
 	}
-	if err := reportCrashedWithRetry(ctx, conn, testActor, "x", time.Millisecond); err == nil {
+	if err := reportCrashedWithRetry(ctx, conn, testActor, "x", nil, time.Millisecond); err == nil {
 		t.Fatal("err = nil, want the context error")
 	}
 }

@@ -180,5 +180,5 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 		// Restore was cut short by the restart.
 		return nil
 	}
-	return w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", crashMessageWorkerRestarted)
+	return w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_LOST, crashMessageWorkerRestarted))
 }

@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func crashRequest(actorUID string) *ateapi.ReportActorCrashedRequest {
@@ -35,6 +36,9 @@ func crashRequest(actorUID string) *ateapi.ReportActorCrashedRequest {
 		Actor:    &ateapi.ObjectRef{Atespace: suspendAtespace, Name: suspendActor},
 		ActorUid: actorUID,
 		Message:  "cloud-hypervisor exited: signal: killed",
+		Detail: &ateapi.CrashDetail{
+			Reason: ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED,
+		},
 	}
 }
 
@@ -55,8 +59,13 @@ func TestReportActorCrashed(t *testing.T) {
 		ActorUID:   uid,
 		WorkerName: testWorkerName,
 		Message:    "cloud-hypervisor exited: signal: killed",
+		// What the worker saw has to reach the workflow, or the actor's
+		// reason reads as unspecified for a crash the worker classified.
+		Detail: &ateapi.CrashDetail{
+			Reason: ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED,
+		},
 	}}
-	if diff := cmp.Diff(want, control.crashCalls); diff != "" {
+	if diff := cmp.Diff(want, control.crashCalls, protocmp.Transform()); diff != "" {
 		t.Errorf("crash calls mismatch (-want +got):\n%s", diff)
 	}
 }

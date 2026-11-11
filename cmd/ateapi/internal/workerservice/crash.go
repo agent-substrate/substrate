@@ -21,6 +21,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -41,7 +42,7 @@ func (s *Server) ReportActorCrashed(ctx context.Context, req *ateapi.ReportActor
 	if err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid()); err != nil {
 		return nil, err
 	}
-	actor, err := s.control.CrashActorReportedByWorker(ctx, actorRef, req.GetActorUid(), workerName, req.GetMessage())
+	actor, err := s.control.CrashActorReportedByWorker(ctx, actorRef, req.GetActorUid(), workerName, req.GetMessage(), req.GetDetail())
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +51,7 @@ func (s *Server) ReportActorCrashed(ctx context.Context, req *ateapi.ReportActor
 		slog.String("actor", actorRef.String()),
 		slog.String("actor_uid", req.GetActorUid()),
 		slog.String("node", caller.NodeName),
-		slog.String("message", req.GetMessage()))
+		slog.String("message", req.GetMessage()),
+		slog.String(string(ateattr.CrashReasonKey), ateattr.CrashReasonValue(req.GetDetail().GetReason())))
 	return &ateapi.ReportActorCrashedResponse{Actor: actor}, nil
 }
