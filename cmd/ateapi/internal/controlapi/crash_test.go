@@ -986,6 +986,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		string(ateattr.TemplateNameKey):       "counter-template",
 		string(ateattr.ActorOperationNameKey): ateattr.OperationResume,
 		string(ateattr.ActorStateKey):         ateattr.ActorStateCrashed,
+		string(ateattr.CrashReasonKey):        ateattr.CrashReasonSandboxExited,
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("crash record = %v, want %v", got, want)
