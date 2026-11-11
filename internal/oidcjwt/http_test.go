@@ -205,6 +205,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 // TestNewHTTPClientTrustsRotatedCA swaps the CA file between key fetches, the
 // way kubelet updates a projected trust bundle, and breaks it in between.
 func TestNewHTTPClientTrustsRotatedCA(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	ti := &testIssuer{}
 	ti.addRSA("key", &testRSAKey(t).PublicKey)
 	ti.server = httptest.NewUnstartedServer(ti.handler(t))

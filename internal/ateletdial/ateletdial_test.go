@@ -30,12 +30,14 @@ import (
 	"testing"
 	"time"
 
+	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/substratex509"
 )
 
 const ateletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
 
 func TestTLSConfigReloadsAteletTrustBundle(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	dir := t.TempDir()
 	ca := newTestCA(t)
 
