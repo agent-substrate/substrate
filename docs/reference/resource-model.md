@@ -46,6 +46,7 @@ Global
 │   │   └── EgressPolicy "default" subresource (singleton)
 │   └── Tag
 ├── ExternalVolumeClass
+├── CsiDriverConfig
 └── Worker
     └── ActorAssignment            subresource (one per hosted Actor, managed by Substrate)
 ```
@@ -59,6 +60,7 @@ Global
 | `Actor` | Atespace | 0..N | Clients |
 | `Tag` | Atespace | 0..N | Clients |
 | `ExternalVolumeClass` | Global | 0..N | Clients |
+| `CsiDriverConfig` | Global | 0..N | Clients |
 | `Worker` | Global | 0..N | Substrate |
 
 ## Subresources
@@ -102,6 +104,7 @@ classDiagram
         class Worker
         class ActorAssignment
         class ExternalVolumeClass
+        class CsiDriverConfig
     }
 
     Atespace "1" *-- "0..1" AtespaceAccessPolicy
@@ -115,6 +118,7 @@ classDiagram
     Tag "*" --> "1" Actor : source_actor
     ActorAssignment "0..1" --> "1" Actor : actor
     ActorTemplate ..> WorkerPool : worker_selector
+    ExternalVolumeClass ..> CsiDriverConfig : driver_name
     WorkerPool ..> SandboxConfig : sandboxClasses
     WorkerPool "1" *-- "*" WorkerPod
     Worker "1" --> "1" WorkerPod
