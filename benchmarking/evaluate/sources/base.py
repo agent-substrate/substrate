@@ -26,14 +26,14 @@ A source is a class, picked by a variable's `source` key, with three hooks:
                  come from source_cfg or are fixed by the source, never from the
                  run's data.
 
-Sources read only what the BenchmarkRunContext gives them and never write files, so the
-same code serves the runner, which evaluates the run it just finished, and a
-re-evaluation of a stored run.
+Sources read the run only through its BenchmarkRunContext and never write
+files, so the same code serves the runner, which evaluates the run it just
+finished, and a re-evaluation of a stored run.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Mapping, Optional, TypeVar, Union
+from typing import Annotated, Any, Mapping, Optional, Protocol, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -68,19 +68,57 @@ def describe(e: ValidationError) -> str:
 
 
 @dataclass(frozen=True)
+class RunIdentity:
+    """Which run it is. uri is where the run is stored; the other fields are
+    None when they aren't known, as for a local directory outside the runner's
+    layout."""
+    uri: str
+    test_name: Optional[str] = None
+    tag: Optional[str] = None
+    run_date: Optional[str] = None  # YYYY-MM-DD
+    run_ts: Optional[int] = None  # unix seconds
+
+    def record(self) -> dict[str, str]:
+        """The known fields as strings, as a Report records them."""
+        known = {"test_name": self.test_name, "tag": self.tag, "run_date": self.run_date,
+                 "run_ts": None if self.run_ts is None else str(self.run_ts), "uri": self.uri}
+        return {k: v for k, v in known.items() if v is not None}
+
+
+class ArtifactStore(Protocol):
+    """Where a run's artifacts are stored."""
+
+    def fetch(self, name: str) -> Optional[Path]:
+        """The local path of the stored artifact name; None when the run didn't store it."""
+
+
+@dataclass(frozen=True)
+class LocalArtifacts:
+    """A run's artifacts in a local directory, under the names they are stored under."""
+    dir: Path
+
+    def fetch(self, name: str) -> Optional[Path]:
+        path = self.dir / name
+        return path if path.is_file() else None
+
+
+@dataclass(frozen=True)
 class BenchmarkRunContext:
-    """The run being evaluated: what every source gets at init, whatever it reads.
-
-    files is the run's files by name, as local paths that exist once the run has
-    finished; the locust runner produces "logs.txt", "stats.jsonl",
-    "server_summary.json" and "stats_history.csv", for example.
+    """The run being evaluated: which run it is (identity), where it is stored
+    (identity.uri, artifacts) and its stored artifacts. Each source chooses
+    what it reads: one of the run's artifacts, by name, or another store,
+    keyed by the run's identity.
     """
-    files: Mapping[str, Path]
+    identity: RunIdentity
+    artifacts: ArtifactStore
 
-    def file(self, name: str) -> Optional[Path]:
-        """The local path of artifact name; None when the run did not produce it."""
-        path = self.files.get(name)
-        return path if path is not None and Path(path).is_file() else None
+    def artifact(self, name: str) -> Optional[Path]:
+        """The local path of the run's stored artifact name, fetched on first
+        use; None when the run didn't store it (or hasn't yet). Raises
+        ValueError for a name outside the run."""
+        if name.startswith("/") or ".." in name.split("/"):
+            raise ValueError(f"artifact name {name!r} is outside the run")
+        return self.artifacts.fetch(name)
 
 
 class SourceInvalid(Exception):

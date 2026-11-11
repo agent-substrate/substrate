@@ -28,11 +28,10 @@ and that each condition compiles, so a bad config fails before a run is read.
 There is no version field while the schema is experimental.
 """
 
-import json
 from typing import Annotated, Any
 
 from cel_expr_python import cel
-from pydantic import Field, PrivateAttr, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import Field, JsonValue, PrivateAttr, TypeAdapter, ValidationError, field_validator, model_validator
 
 from . import cel_env
 from .sources import SOURCES
@@ -48,7 +47,9 @@ class ConfigError(ValueError):
 class Variable(Model):
     name: Name
     source: str
-    source_cfg: dict[str, Any] = {}
+    # JSON, as the results echo it: a YAML date or a non-string key is an error here.
+    # Validation builds new containers, so later edits to the input don't reach it.
+    source_cfg: dict[str, JsonValue] = {}
 
     @field_validator("source")
     @classmethod
@@ -56,12 +57,6 @@ class Variable(Model):
         if source not in SOURCES:
             raise ValueError(f"source {source!r} is not one of {sorted(SOURCES)}")
         return source
-
-    @field_validator("source_cfg")
-    @classmethod
-    def _canonical(cls, cfg: dict[str, Any]) -> dict[str, Any]:
-        """A JSON copy: what the results echo, safe from later edits to the input."""
-        return json.loads(json.dumps(cfg, sort_keys=True))
 
     @model_validator(mode="after")
     def _source_cfg(self) -> "Variable":
@@ -97,7 +92,10 @@ class Evaluation(Model):
         env = cel_env.Env({v.name: cel.Type.Map(cel.Type.STRING, cel.Type.DYN) for v in self.variables},
                           functions=(cel_env.ROUND,))
         for c in self.conditions:
-            c._expr = env.compile(c.cel, f"condition {c.name!r}: cel")  # pylint: disable=protected-access
+            # DYN too, as when a condition is just a value (`trial.ok`); a non-bool
+            # result then makes the condition invalid when it runs.
+            c._expr = env.compile(c.cel, f"condition {c.name!r}: cel",  # pylint: disable=protected-access
+                                  gives=(cel.Type.BOOL, cel.Type.DYN))
         return self
 
 

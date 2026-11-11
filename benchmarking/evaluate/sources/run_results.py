@@ -34,18 +34,25 @@ from .base import Model, Scalar, Source, SourceInvalid, parse
 
 
 def read_stats(path: Optional[Path]) -> dict[str, dict[str, Any]]:
-    """stats.jsonl rows by metric name; the last row of a metric wins."""
+    """stats.jsonl rows by metric name; the last row of a metric wins.
+
+    The runner writes one JSON object with a "metric" per line, so blank lines
+    are skipped and any other line raises ValueError naming its line number.
+    """
     rows: dict[str, dict[str, Any]] = {}
     if path is None or not path.exists():
         return rows
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for n, line in enumerate(f, 1):
+            if not line.strip():
+                continue
             try:
                 row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict) and isinstance(row.get("metric"), str) and row["metric"]:
-                rows[row["metric"]] = row
+            except ValueError as e:
+                raise ValueError(f"stats.jsonl line {n} isn't JSON: {e}") from None
+            if not isinstance(row, dict) or not isinstance(row.get("metric"), str) or not row["metric"]:
+                raise ValueError(f"stats.jsonl line {n} isn't an object with a metric")
+            rows[row["metric"]] = row
     return rows
 
 
@@ -93,10 +100,13 @@ class RunResults(Source):
 
     def query(self, cfg: Mapping[str, Any]) -> Mapping[str, Scalar]:
         if self._rows is None:
-            path = self.run.file("stats.jsonl")
+            path = self.run.artifact("stats.jsonl")
             if path is None:
                 raise SourceInvalid("stats.jsonl absent")
-            self._rows = read_stats(path)
+            try:
+                self._rows = read_stats(path)
+            except ValueError as e:
+                raise SourceInvalid(str(e)) from None
         row = self._rows.get(cfg["metric"])
         if row is None:
             raise SourceInvalid(f"no stats.jsonl row {cfg['metric']}")

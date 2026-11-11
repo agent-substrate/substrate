@@ -84,7 +84,7 @@ class Summary:
 @dataclass(frozen=True)
 class Report:
     """A run judged against its evaluations."""
-    run: Mapping[str, str]  # the run's identity (test_name, tag, run_ts, uri...), which only labels it
+    run: Mapping[str, str]  # which run was judged: its RunIdentity.record()
     evaluated_at: str
     summary: Summary
     evaluations: tuple[EvaluationResult, ...]
@@ -99,6 +99,7 @@ class ResolvedValues(NamedTuple):
 class Evaluator:
     def __init__(self, evaluations: list[Evaluation], run: BenchmarkRunContext):
         self.evaluations = evaluations
+        self.run = run
         # Each source the evaluations name, or why its init failed.
         self.sources: dict[str, Source | str] = {}
         for name in dict.fromkeys(v.source for e in evaluations for v in e.variables):
@@ -109,8 +110,8 @@ class Evaluator:
             except Exception as e:  # pylint: disable=broad-except  # a source bug must not cost the others
                 self.sources[name] = f"init failed: {type(e).__name__}: {e}"
 
-    def evaluate(self, identity: Mapping[str, str], now: Optional[datetime] = None) -> Report:
-        """The run's Report; identity (test_name, tag, run_ts, uri...) only labels it."""
+    def evaluate(self, now: Optional[datetime] = None) -> Report:
+        """The run's Report."""
         now = now or datetime.now(timezone.utc)
         # Each distinct source query runs once per run, and every variable that makes it shares the values.
         resolved_queries: dict[tuple[str, str], ResolvedValues] = {}
@@ -142,7 +143,7 @@ class Evaluator:
                 name=ev.name, description=ev.description, status=status, passed=status == PASS, reason=reason,
                 conditions=conditions, variables=tuple(variables), config=echoed))
         status, failed, invalid = _combine(evaluation_results)
-        return Report(run=dict(identity), evaluated_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        return Report(run=self.run.identity.record(), evaluated_at=now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                       summary=Summary(status=status, passed=status == PASS, failed=failed, invalid=invalid),
                       evaluations=tuple(evaluation_results))
 

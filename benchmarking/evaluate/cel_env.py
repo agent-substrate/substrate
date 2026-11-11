@@ -47,8 +47,10 @@ def evaluate_condition(expr: cel.Expression, data: Mapping[str, Any]) -> bool:
         result = expr.eval(data=data)
     except RuntimeError as e:  # a value CEL can't take in, such as a string with a lone surrogate
         raise ValueError(str(e)) from None
-    if result.type() != cel.Type.BOOL:
+    if result.type() == cel.Type.ERROR:
         raise ValueError(str(result.value()))
+    if result.type() != cel.Type.BOOL:
+        raise ValueError(f"gives a {result.type().name().lower()}, not a bool")
     return result.value()
 
 
@@ -70,6 +72,6 @@ class Env:
         except RuntimeError as e:  # a syntax or type error, or a variable CEL already declares
             raise ValueError(f"{where}: {e}") from None
         if expr.return_type() not in gives:
-            wanted = " or a ".join(t.name().lower() for t in gives)
+            wanted = " or a ".join(t.name().lower() for t in gives if t != cel.Type.DYN)
             raise ValueError(f"{where}: must give a {wanted}, gives {expr.return_type().name()}")
         return expr

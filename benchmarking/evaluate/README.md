@@ -7,7 +7,7 @@ Depends on [`cel-expr-python`](https://github.com/cel-expr/cel-python) and
 
 ## Model
 
-- A **source** reads a run's files and returns several named **values**, or
+- A **source** reads the run and returns several named **values**, or
   says it can't judge the run (`invalid`, with a reason). Sources:
   `run_results`.
 - A **variable** is one source query: `{name, source, source_cfg}`. Its values
@@ -52,10 +52,12 @@ checks two envelope health gates:
   when a condition compiles. Value names come from the source
   and may be any non-empty string
   (`locust_ResumeActor`, `metric_nighthawk.builtin_attempted_rps`, `p99.9`).
-  Unknown or non-string mapping keys are errors. There is no version field
+  Unknown or non-string mapping keys are errors, and `source_cfg` holds JSON
+  values only, so a YAML date in it is an error too. There is no version field
   while the schema is experimental.
 - Conditions are standard CEL, compiled when the evaluations load, with
-  `round(x, digits)` added. Each must evaluate to `bool`.
+  `round(x, digits)` added. Each must evaluate to `bool`: a bare value such as
+  `trial.ok` compiles, and a result that isn't a bool makes the condition `invalid`.
 - Values enter CEL as doubles, whatever number type the source returns,
   since they come from JSON, which has one number type, and as ints `a / b`
   would be integer division. The results keep the source's own value types.
@@ -85,7 +87,7 @@ A source is a class with three hooks (`sources/base.py`):
 | hook | runs | does |
 |---|---|---|
 | `validate(cfg)`, a classmethod | when the evaluations are loaded | raises `ValueError` for a bad `source_cfg` |
-| `init(run)` | once, when the run starts (its files may not exist yet) | takes the `BenchmarkRunContext`: the run's files by name |
+| `init(run)` | once, when the run starts (its files may not exist yet) | takes the `BenchmarkRunContext`, the run being evaluated: which run it is (`identity`: `uri`, and `test_name`, `tag`, `run_date`, `run_ts` when known), where it is stored, and its stored artifacts (`artifact(name)`, a local path or None); the source chooses what it reads |
 | `query(cfg)` | after the run, once per distinct `source_cfg` | returns named values (numbers, bools, strings or null), or raises `SourceInvalid(reason, values)` when it can't judge the run |
 
 Value names come from `source_cfg` or are fixed by the source, never from the
@@ -109,7 +111,9 @@ source_cfg:
 
 Numeric strings without `_` become floats and `"true"`/`"false"` bools. Strings
 with `_` (`"2026_11"`) stay strings. A measurement the row lacks, or a number
-that isn't finite (NaN, an infinity, `1e999`), is null.
+that isn't finite (NaN, an infinity, `1e999`), is null. Blank lines are skipped;
+any other line that isn't a JSON object with a `metric` makes the variable
+`invalid`, naming the line, since the runner writes one such object per line.
 
 ## Results
 

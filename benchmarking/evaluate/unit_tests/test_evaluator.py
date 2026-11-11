@@ -22,7 +22,7 @@ import re
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -31,11 +31,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from evaluate import cel_env, config, evaluator  # noqa: E402
 from evaluate.evaluator import ConditionResult, Summary  # noqa: E402
 from evaluate.sources import SOURCES, BenchmarkRunContext, Source, SourceInvalid  # noqa: E402
+from evaluate.sources.base import LocalArtifacts, RunIdentity  # noqa: E402
 from evaluate.sources.run_results import RunResults, coerce  # noqa: E402
 
 TAG = "abc123"
 NOW = datetime(2026, 11, 2, 10, 0, 0, tzinfo=timezone.utc)
-IDENTITY = {"test_name": "t150", "tag": TAG, "run_ts": "1791700000"}
+IDENTITY = RunIdentity(uri="gs://b/runs/t150", test_name="t150", tag=TAG, run_ts=1791700000)
+
+
+def local_run(d: Path) -> BenchmarkRunContext:
+    return BenchmarkRunContext(IDENTITY, LocalArtifacts(d))
+
+
+NO_RUN = local_run(Path(tempfile.gettempdir()) / "evaluate-unit-tests-no-run")  # holds no files
 
 
 def stats_row(metric: str, **m) -> dict:
@@ -47,7 +55,7 @@ def write_run(d: Path, rows: list[dict] = ()) -> BenchmarkRunContext:
     d.mkdir(parents=True, exist_ok=True)
     trial = stats_row("trial_summary", aggregate_failure_ratio=0.0005, allocatable_ram_gb=400, ok=True)
     (d / "stats.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [trial, *rows]))
-    return BenchmarkRunContext(files={"stats.jsonl": d / "stats.jsonl", "logs.txt": d / "logs.txt"})
+    return local_run(d)
 
 
 def evaluations(limit: float = 0.001) -> list[dict]:
@@ -66,7 +74,7 @@ def evaluations(limit: float = 0.001) -> list[dict]:
 
 
 def judge(run: BenchmarkRunContext, evs: list[dict]) -> evaluator.Report:
-    return evaluator.Evaluator(config.load(evs), run).evaluate(IDENTITY, now=NOW)
+    return evaluator.Evaluator(config.load(evs), run).evaluate(now=NOW)
 
 
 class Fake(Source):
@@ -197,6 +205,25 @@ class ConfigTest(unittest.TestCase):
         evs[0]["conditions"] = [{"name": "constant", "cel": "1 < 2"}]
         self.assertEqual(len(config.load(evs)[0].variables), 2)
 
+    def test_source_cfg_is_json(self):
+        with mock.patch.dict(SOURCES, {"fake": Fake}):
+            cases = {
+                "0.variables.0.source_cfg.values.dict.when: input was not a valid JSON value":
+                    {"values": {"when": date(2026, 11, 11)}},
+                "0.variables.0.source_cfg.values.dict.1.[key]: Input should be a valid string": {"values": {1: "x"}},
+            }
+            for message, cfg in cases.items():
+                with self.assertRaisesRegex(config.ConfigError, re.escape(message), msg=message):
+                    config.load([fake_evaluation("e", cfg)])
+
+    def test_source_cfg_is_a_copy_of_the_input(self):
+        with mock.patch.dict(SOURCES, {"fake": Fake}):
+            evs = [fake_evaluation("e", {"values": {"answer": 42, "list": [{"a": 1}]}})]
+            loaded = config.load(evs)
+            evs[0]["variables"][0]["source_cfg"]["values"]["answer"] = 0
+            evs[0]["variables"][0]["source_cfg"]["values"]["list"][0]["a"] = 2
+            self.assertEqual(loaded[0].variables[0].source_cfg, {"values": {"answer": 42, "list": [{"a": 1}]}})
+
     def test_source_cfg_defaults_to_empty(self):
         with mock.patch.dict(SOURCES, {"fake": Fake}):
             ev = fake_evaluation("e", {})
@@ -239,12 +266,28 @@ class RunResultsTest(unittest.TestCase):
         self.assertEqual(coerce("1_000"), "1_000")
         with tempfile.TemporaryDirectory() as tmp:
             run = write_run(Path(tmp))
-            with open(run.files["stats.jsonl"], "a", encoding="utf-8") as f:
+            with open(run.artifacts.dir / "stats.jsonl", "a", encoding="utf-8") as f:
                 f.write('{"metric": "m", "measurements": {"nan": NaN, "inf": -Infinity, "big": "1e999", '
                         '"snan": "nan", "sinf": "-inf", "ok": "2"}}\n')
             self.assertEqual(self.query(run, {"metric": "m",
                                               "measurements": ["nan", "inf", "big", "snan", "sinf", "ok"]}),
                              {"nan": None, "inf": None, "big": None, "snan": None, "sinf": None, "ok": 2.0})
+
+    def test_blank_lines_are_skipped_and_other_lines_must_be_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = write_run(Path(tmp))
+            with open(run.artifacts.dir / "stats.jsonl", "a", encoding="utf-8") as f:
+                f.write("\n   \n")
+            self.assertEqual(self.query(run, {"metric": "trial_summary", "measurements": ["ok"]}), {"ok": True})
+            for line, message in (("not json", "stats.jsonl line 4 isn't JSON"),
+                                  ("[1, 2]", "stats.jsonl line 4 isn't an object with a metric"),
+                                  ('{"measurements": {}}', "stats.jsonl line 4 isn't an object with a metric"),
+                                  ('{"metric": ""}', "stats.jsonl line 4 isn't an object with a metric")):
+                bad = write_run(Path(tmp) / "bad")
+                with open(bad.artifacts.dir / "stats.jsonl", "a", encoding="utf-8") as f:
+                    f.write(f"\n\n{line}\n")
+                with self.assertRaisesRegex(SourceInvalid, re.escape(message), msg=line):
+                    self.query(bad, {"metric": "trial_summary", "measurements": ["ok"]})
 
     def test_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -252,7 +295,7 @@ class RunResultsTest(unittest.TestCase):
             with self.assertRaisesRegex(SourceInvalid, "no stats.jsonl row ladder_step_001"):
                 self.query(run, {"metric": "ladder_step_001", "measurements": ["users"]})
             with self.assertRaisesRegex(SourceInvalid, "stats.jsonl absent"):
-                self.query(BenchmarkRunContext(files={}), {"metric": "trial_summary", "measurements": ["ok"]})
+                self.query(NO_RUN, {"metric": "trial_summary", "measurements": ["ok"]})
 
     def test_validate(self):
         RunResults.validate({"metric": "m", "measurements": ["locust_ResumeActor", "p99.9", "a__b"]})
@@ -280,7 +323,8 @@ class EvaluateTest(unittest.TestCase):
             pass_run = write_run(Path(tmp) / "pass", [stats_row("server_summary", working_set_node_max_gb=300)])
             pass_report = judge(pass_run, evaluations())
         (ev,) = report.evaluations
-        self.assertEqual((report.run, report.evaluated_at), (IDENTITY, "2026-11-02T10:00:00Z"))
+        self.assertEqual((report.run, report.evaluated_at), (
+            {"test_name": "t150", "tag": TAG, "run_ts": "1791700000", "uri": "gs://b/runs/t150"}, "2026-11-02T10:00:00Z"))
         self.assertEqual((ev.status, ev.passed, ev.reason), ("fail", False, "failed: worker_memory"))
         worker_memory = "server.working_set_node_max_gb < 0.85 * trial.allocatable_ram_gb"
         self.assertEqual(ev.conditions, (
@@ -311,7 +355,7 @@ class EvaluateTest(unittest.TestCase):
                     {"name": "logic", "cel": "counts.ok && !(counts.good < 1 || counts.records == 0)"},
                 ],
             }]
-            report = judge(BenchmarkRunContext(files={}), evs)
+            report = judge(NO_RUN, evs)
         (ev,) = report.evaluations
         self.assertEqual(ev.status, "pass")
         # Source int and bool values stay untouched in the results.
@@ -321,7 +365,7 @@ class EvaluateTest(unittest.TestCase):
 
     def test_int_literal_with_a_value_of_unknown_type_makes_the_condition_invalid(self):
         with mock.patch.dict(SOURCES, {"fake": Fake}):
-            report = judge(BenchmarkRunContext(files={}), [fake_evaluation("e", {"answer": 1}, "f.answer * 100 >= 99")])
+            report = judge(NO_RUN, [fake_evaluation("e", {"answer": 1}, "f.answer * 100 >= 99")])
         (c,) = report.evaluations[0].conditions
         self.assertEqual(c.status, "invalid")
         self.assertIn("No matching overloads found : _*_(double, int64)", c.reason)
@@ -432,6 +476,23 @@ class EvaluateTest(unittest.TestCase):
         self.assertEqual([c.status for c in ev.conditions], ["fail", "invalid"])
         self.assertEqual((ev.status, ev.reason), ("fail", "failed: failure_rate"))
 
+    def test_a_condition_may_be_a_bare_value(self):
+        with mock.patch.dict(SOURCES, {"fake": Fake}):
+            def status(values, cel_expr):
+                return judge(NO_RUN, [fake_evaluation("e", {"values": values}, cel_expr)]).evaluations[0].conditions[0]
+            self.assertEqual(status({"ok": True}, "f.ok").status, "pass")
+            self.assertEqual(status({"ok": False}, "f.ok").status, "fail")
+            c = status({"name": "n"}, "f.name")
+            self.assertEqual((c.status, c.reason), ("invalid", "c: gives a string, not a bool"))
+
+    def test_evaluated_at_is_utc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = write_run(Path(tmp), [stats_row("server_summary", working_set_node_max_gb=300)])
+            pacific = timezone(timedelta(hours=-8))
+            report = evaluator.Evaluator(config.load(evaluations()), run).evaluate(
+                now=datetime(2026, 11, 2, 2, 0, 0, tzinfo=pacific))
+        self.assertEqual(report.evaluated_at, "2026-11-02T10:00:00Z")
+
     def test_evaluate_condition_turns_a_runtime_error_into_a_value_error(self):
         # A stub, since the real trigger (a string with a lone surrogate) is undefined behavior in the macOS build.
         expr = mock.Mock()
@@ -450,18 +511,18 @@ class HooksTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_init_once_then_one_query_per_distinct_cfg(self):
-        run = BenchmarkRunContext(files={})
+        run = NO_RUN
         evs = config.load([fake_evaluation("a", {"answer": 42}), fake_evaluation("b", {"answer": 42}),
                            fake_evaluation("c", {"answer": 7}, cel_expr="f.answer == 7")])
         e = evaluator.Evaluator(evs, run)
         self.assertEqual(Fake.calls, [("init", run)])
-        report = e.evaluate({}, now=NOW)
+        report = e.evaluate(now=NOW)
         self.assertEqual(Fake.calls[1:], [("query", {"answer": 42}), ("query", {"answer": 7})])
         self.assertEqual(report.summary.status, "pass")
 
     def test_source_invalid_keeps_its_values(self):
         for reason in ("no baseline", ""):  # the exception makes the variable invalid, whatever its reason says
-            report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"answer": 42, "invalid": reason})])
+            report = judge(NO_RUN, [fake_evaluation("a", {"answer": 42, "invalid": reason})])
             (var,) = report.evaluations[0].variables
             self.assertEqual((var.status, var.invalid_reason, var.values), ("invalid", reason, {"answer": 42}))
             self.assertEqual(report.evaluations[0].conditions[0].reason,
@@ -472,11 +533,11 @@ class HooksTest(unittest.TestCase):
     def test_non_finite_floats_from_source_are_normalized_at_boundary(self):
         for val in (float("nan"), float("inf"), float("-inf")):
             with mock.patch.object(Fake, "query", return_value={"answer": val}):
-                report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"answer": 1})])
+                report = judge(NO_RUN, [fake_evaluation("a", {"answer": 1})])
             self.assertEqual(report.evaluations[0].variables[0].values, {"answer": None})
             self.assertEqual(report.evaluations[0].conditions[0].status, "invalid")
         with mock.patch.object(Fake, "query", side_effect=SourceInvalid("bad", {"answer": float("nan")})):
-            report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"answer": 1})])
+            report = judge(NO_RUN, [fake_evaluation("a", {"answer": 1})])
         self.assertEqual(report.evaluations[0].variables[0].values, {"answer": None})
 
     def test_values_must_be_scalars_with_string_names(self):
@@ -491,16 +552,16 @@ class HooksTest(unittest.TestCase):
         for reason, values in cases.items():
             for query in ({"return_value": values}, {"side_effect": SourceInvalid("bad", values)}):
                 with mock.patch.object(Fake, "query", **query):
-                    report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"answer": 42})])
+                    report = judge(NO_RUN, [fake_evaluation("a", {"answer": 42})])
                 (var,) = report.evaluations[0].variables
                 self.assertEqual((var.status, var.invalid_reason, var.values), ("invalid", reason, {}))
                 self.assertEqual(report.evaluations[0].conditions[0].status, "invalid")
 
     def test_errors_become_invalid(self):
-        report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"boom": True})])
+        report = judge(NO_RUN, [fake_evaluation("a", {"boom": True})])
         self.assertEqual(report.evaluations[0].variables[0].invalid_reason, "error: RuntimeError: boom")
         with mock.patch.object(Fake, "init", side_effect=OSError("no disk")):
-            report = judge(BenchmarkRunContext(files={}), [fake_evaluation("a", {"answer": 42})])
+            report = judge(NO_RUN, [fake_evaluation("a", {"answer": 42})])
         self.assertEqual(report.evaluations[0].variables[0].invalid_reason, "init failed: OSError: no disk")
 
 
