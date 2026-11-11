@@ -129,48 +129,9 @@ func TestTheHostpathControllerServiceIsCreatedBeforeTheDriver(t *testing.T) {
 	}
 }
 
-// The e2e tests, the demos and the benchmarks all provision from csi-nfs-sc, so
-// both NFS setups apply the one manifest that defines it rather than each
-// carrying a copy that can drift. The step wants a cluster, so which file it
-// applies is pinned in the source.
-func TestTheNFSSetupsApplyTheSharedStorageClass(t *testing.T) {
-	const manifest = "hack/third_party/csi-driver-nfs/deploy/example/storageclass-nfs.yaml"
-	root := repoRoot(t)
-
-	objs, err := kube.LoadPath(filepath.Join(root, manifest))
-	if err != nil {
-		t.Fatalf("loading %s: %v", manifest, err)
-	}
-	if len(objs) != 1 || objs[0].GetKind() != "StorageClass" || objs[0].GetName() != "csi-nfs-sc" {
-		t.Fatalf("%s holds %d object(s), want only the csi-nfs-sc StorageClass", manifest, len(objs))
-	}
-	if p, _, _ := unstructured.NestedString(objs[0].Object, "provisioner"); p != "nfs.csi.k8s.io" {
-		t.Errorf("csi-nfs-sc provisioner = %q, want nfs.csi.k8s.io", p)
-	}
-
-	goSetup := functionBody(t, "csi.go", "func (e *Env) setupCSINFS(")
-	if !strings.Contains(goSetup, `deployDir+"/example/storageclass-nfs.yaml"`) {
-		t.Errorf("setupCSINFS no longer applies %s", manifest)
-	}
-	script, err := os.ReadFile(filepath.Join(root, "hack", "setup-csi-nfs-kind.sh"))
-	if err != nil {
-		t.Fatalf("reading the shell setup: %v", err)
-	}
-	if !strings.Contains(string(script), manifest) {
-		t.Errorf("hack/setup-csi-nfs-kind.sh no longer applies %s", manifest)
-	}
-	for name, src := range map[string]string{
-		"setupCSINFS":                goSetup,
-		"hack/setup-csi-nfs-kind.sh": string(script),
-	} {
-		if strings.Contains(src, "kind: StorageClass") {
-			t.Errorf("%s defines a StorageClass inline; apply %s instead", name, manifest)
-		}
-	}
-}
-
-// Both NFS setups register the canonical csi-nfs ExternalVolumeClass from the
-// same checked-in manifest so neither carries an inline copy that can drift.
+// The e2e tests, the demos and the benchmarks all provision from csi-nfs, so
+// both NFS setups register the one manifest that defines it rather than each
+// carrying a copy that can drift.
 func TestTheNFSSetupsRegisterTheSharedExternalVolumeClass(t *testing.T) {
 	const manifest = "hack/csi/external-volume-class-nfs.yaml"
 	root := repoRoot(t)
@@ -193,9 +154,17 @@ func TestTheNFSSetupsRegisterTheSharedExternalVolumeClass(t *testing.T) {
 		t.Errorf("csi-nfs mountOptions = %v, want [nfsvers=4.1]", class.GetMountOptions())
 	}
 
-	goSetup := functionBody(t, "substrate.go", "func externalVolumeClassesForDriver(")
-	if !strings.Contains(goSetup, `"external-volume-class-nfs.yaml"`) {
+	goRegister := functionBody(t, "substrate.go", "func externalVolumeClassesForDriver(")
+	if !strings.Contains(goRegister, `"external-volume-class-nfs.yaml"`) {
 		t.Errorf("externalVolumeClassesForDriver no longer loads %s", manifest)
+	}
+	for fn, sig := range map[string]string{
+		"setupCSINFS":      "func (e *Env) setupCSINFS(",
+		"setupCSIHostpath": "func (e *Env) setupCSIHostpath(",
+	} {
+		if strings.Contains(functionBody(t, "csi.go", sig), "StorageClass") {
+			t.Errorf("%s still references a Kubernetes StorageClass", fn)
+		}
 	}
 	script, err := os.ReadFile(filepath.Join(root, "hack", "setup-csi-nfs-kind.sh"))
 	if err != nil {
@@ -205,7 +174,7 @@ func TestTheNFSSetupsRegisterTheSharedExternalVolumeClass(t *testing.T) {
 		t.Errorf("hack/setup-csi-nfs-kind.sh no longer registers %s", manifest)
 	}
 	for name, src := range map[string]string{
-		"externalVolumeClassesForDriver": goSetup,
+		"externalVolumeClassesForDriver": goRegister,
 		"hack/setup-csi-nfs-kind.sh":     string(script),
 	} {
 		if strings.Contains(src, "\ndriverName:") {
@@ -283,7 +252,7 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 	}
 	src := string(script)
 
-	for _, forbidden := range []string{"socat:", "privileged: true"} {
+	for _, forbidden := range []string{"socat:", "privileged: true", "StorageClass"} {
 		if strings.Contains(src, forbidden) {
 			t.Errorf("hack/setup-csi-nfs-kind.sh still contains %q", forbidden)
 		}
