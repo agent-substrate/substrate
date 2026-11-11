@@ -156,28 +156,111 @@ func TestActorEgressPolicyRetriesAfterAFailure(t *testing.T) {
 	}
 }
 
-// Once a policy (or no-policy) has been cached, a failed refresh keeps serving
-// the stale cache entry (fail static) until atelet responds again.
-func TestActorEgressPolicyFailsStaticOnRefreshFailure(t *testing.T) {
+// waitRecords waits until the source has logged want records. A refresh's
+// record is the last thing its fetch updates, so this also means any
+// background refresh has finished changing the cache.
+func waitRecords(t *testing.T, h *recordingHandler, want int) {
+	t.Helper()
+	waitFor(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.records) >= want
+	})
+}
+
+// waitFor polls cond until it holds or 5 seconds pass.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 5000; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("gave up waiting after 5s")
+}
+
+// While refreshes fail, queries are answered with the stale cache entry
+// without waiting, even while the retrying fetch itself hangs; the fetch
+// retries at most once per TTL in the background; and a retry that succeeds
+// takes effect without a query waiting on it.
+func TestActorEgressPolicyServesStaleWhileRefreshesFail(t *testing.T) {
 	errUnavailable := errors.New("atelet is unavailable")
 	policy1 := &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{Http: &ateletpb.EgressDestinations{Hostnames: []string{"one.example.com"}}}}}
 	policy2 := &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{Http: &ateletpb.EgressDestinations{Hostnames: []string{"two.example.com"}}}}}
-	script := &scriptedFetch{results: []fetchResult{
-		{policy: policy1},
-		{err: errUnavailable},
-		{err: errUnavailable},
-		{policy: policy2},
-		{policy: nil},
-		{err: errUnavailable},
-	}}
-	source, clock := newTestSource(script.fetch)
-
-	for i, want := range []*ateletpb.EgressPolicy{policy1, policy1, policy1, policy2, nil, nil} {
-		got, err := source.EgressPolicy(context.Background())
-		if err != nil || got != want {
-			t.Fatalf("step %d: EgressPolicy = %v, %v; want %v, nil", i, got, err, want)
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	source, clock := newTestSource(func(ctx context.Context) (*ateletpb.EgressPolicy, error) {
+		switch n := fetches.Add(1); {
+		case n == 1:
+			return policy1, nil
+		case n == 2:
+			return nil, errUnavailable // the first refresh fails fast
+		case n == 3:
+			<-release // later refreshes hang, like an unreachable atelet
+			return policy2, nil
+		case n == 4:
+			return policy2, nil // the healthy refresh after the recovery
+		default:
+			t.Error("started a fetch the test did not expect")
+			return policy2, nil
 		}
-		clock.advance(egressPolicyTTL)
+	})
+	var logged recordingHandler
+	source.log = slog.New(&logged)
+
+	// The initial fetch caches policy1, and the first refresh (a healthy,
+	// blocking one) fails and starts the failure run.
+	if got, err := source.EgressPolicy(context.Background()); err != nil || got != policy1 {
+		t.Fatalf("initial EgressPolicy = %v, %v; want %v", got, err, policy1)
+	}
+	clock.advance(egressPolicyTTL)
+	if got, err := source.EgressPolicy(context.Background()); err != nil || got != policy1 {
+		t.Fatalf("EgressPolicy after the failed refresh = %v, %v; want the stale %v", got, err, policy1)
+	}
+	waitRecords(t, &logged, 2)
+
+	// While refreshes keep failing, every query gets the stale entry without
+	// waiting, and only one refresh is retried per TTL.
+	clock.advance(egressPolicyTTL)
+	start := time.Now()
+	for i := range 3 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		got, err := source.EgressPolicy(ctx)
+		cancel()
+		if err != nil || got != policy1 {
+			t.Fatalf("stale query %d = %v, %v; want %v without waiting", i, got, err, policy1)
+		}
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("3 queries took %s while refreshes fail; want each not to wait on a fetch", elapsed)
+	}
+	waitFor(t, func() bool { return fetches.Load() == 3 })
+	if n := fetches.Load(); n != 3 { // initial, failed refresh, one hung retry
+		t.Errorf("%d fetches after 3 stale queries within one TTL, want 3", n)
+	}
+
+	// The retry that succeeds replaces the stale entry without a query
+	// waiting for it.
+	close(release)
+	var got *ateletpb.EgressPolicy
+	waitFor(t, func() bool {
+		got, _ = source.EgressPolicy(context.Background())
+		return got == policy2
+	})
+	if got != policy2 {
+		t.Fatalf("EgressPolicy = %v after the retry succeeded; want %v", got, policy2)
+	}
+
+	// The recovered entry expires and refreshes block again, as in the
+	// healthy path.
+	clock.advance(egressPolicyTTL)
+	got, err := source.EgressPolicy(context.Background())
+	if err != nil || got != policy2 {
+		t.Fatalf("EgressPolicy after the recovery = %v, %v; want %v", got, err, policy2)
+	}
+	if n := fetches.Load(); n != 4 {
+		t.Errorf("%d fetches after the recovery, want 4", n)
 	}
 }
 
@@ -289,33 +372,42 @@ func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
 
 // The source logs when the actor gains or loses its policy, an error on the
 // first failure in a run, and a warning every 5 minutes while a stale cached
-// policy is used.
+// policy is used. While refreshes fail, the stale entry is served to queries
+// without a log; the failures of the background retries retrying them once
+// per TTL are what get logged.
 func TestActorEgressPolicyLogsChanges(t *testing.T) {
 	errUnavailable := errors.New("atelet is unavailable")
 	policy := &ateletpb.EgressPolicy{}
 	steps := []struct {
-		advance time.Duration
-		result  fetchResult
+		advance     time.Duration
+		result      fetchResult
+		wantRecords int
 	}{
 		// Initial fetch fails twice before any entry is cached.
-		{0, fetchResult{err: errUnavailable}},
-		{0, fetchResult{err: errUnavailable}},
+		{0, fetchResult{err: errUnavailable}, 1},
+		{0, fetchResult{err: errUnavailable}, 2},
 		// First successful fetch caches "no policy".
-		{0, fetchResult{}},
-		{egressPolicyTTL, fetchResult{}},
-		// Refresh fails: first failure logs ERROR, 1ns before 5m logs DEBUG,
-		// at 5m logs WARN, within the next 5m logs DEBUG, at 10m logs WARN.
-		{egressPolicyTTL, fetchResult{err: errUnavailable}},
-		{egressPolicyStaleWarnInterval - time.Nanosecond, fetchResult{err: errUnavailable}},
-		{time.Nanosecond, fetchResult{err: errUnavailable}},
-		{egressPolicyTTL, fetchResult{err: errUnavailable}},
-		{egressPolicyStaleWarnInterval - egressPolicyTTL, fetchResult{err: errUnavailable}},
-		// Recovery logs INFO and resets failure state.
-		{egressPolicyTTL, fetchResult{policy: policy}},
-		{egressPolicyTTL, fetchResult{policy: policy}},
+		{0, fetchResult{}, 3},
+		{egressPolicyTTL, fetchResult{}, 3},
+		// Refresh fails: the first failure of the run logs ERROR.
+		{egressPolicyTTL, fetchResult{err: errUnavailable}, 4},
+		// The background retries fail once per TTL: DEBUG, DEBUG, WARN at the
+		// 5m boundary, DEBUG.
+		{egressPolicyTTL, fetchResult{err: errUnavailable}, 5},
+		{egressPolicyTTL, fetchResult{err: errUnavailable}, 6},
+		{egressPolicyStaleWarnInterval - 2*egressPolicyTTL, fetchResult{err: errUnavailable}, 7},
+		{egressPolicyTTL, fetchResult{err: errUnavailable}, 8},
+		// A retry that recovers logs INFO and resets failure state.
+		{egressPolicyTTL, fetchResult{policy: policy}, 9},
+		{egressPolicyTTL, fetchResult{policy: policy}, 9},
 		// A new outage logs ERROR again on its first failure.
-		{egressPolicyTTL, fetchResult{err: errUnavailable}},
-		{egressPolicyTTL, fetchResult{}},
+		{egressPolicyTTL, fetchResult{err: errUnavailable}, 10},
+		{egressPolicyTTL, fetchResult{}, 11},
+		// A "no policy" entry fails static like any other while its refreshes
+		// fail; the run's first failure logs ERROR again, and a recovering
+		// retry logs INFO.
+		{egressPolicyTTL, fetchResult{err: errUnavailable}, 12},
+		{egressPolicyTTL, fetchResult{policy: policy}, 13},
 	}
 	results := make([]fetchResult, len(steps))
 	for i, s := range steps {
@@ -326,9 +418,14 @@ func TestActorEgressPolicyLogsChanges(t *testing.T) {
 	var logged recordingHandler
 	source.log = slog.New(&logged)
 
-	for _, s := range steps {
+	for i, s := range steps {
 		clock.advance(s.advance)
-		_, _ = source.EgressPolicy(context.Background())
+		// Once an entry (including "no policy") is cached, a failed refresh
+		// never turns into an error for the query.
+		if _, err := source.EgressPolicy(context.Background()); s.wantRecords > 3 && err != nil {
+			t.Errorf("step %d: EgressPolicy error = %v; want the stale entry", i, err)
+		}
+		waitRecords(t, &logged, s.wantRecords)
 	}
 	want := []string{
 		"ERROR Could not fetch the actor's egress policy; refusing its DNS queries",
@@ -336,12 +433,14 @@ func TestActorEgressPolicyLogsChanges(t *testing.T) {
 		"INFO Actor has no egress policy; blocking all DNS queries",
 		"ERROR Could not refresh the actor's egress policy; using stale cached policy",
 		"DEBUG Could not refresh the actor's egress policy; using stale cached policy",
-		"WARN Could not refresh the actor's egress policy; using stale cached policy",
 		"DEBUG Could not refresh the actor's egress policy; using stale cached policy",
 		"WARN Could not refresh the actor's egress policy; using stale cached policy",
+		"DEBUG Could not refresh the actor's egress policy; using stale cached policy",
 		"INFO Actor has an egress policy",
 		"ERROR Could not refresh the actor's egress policy; using stale cached policy",
 		"INFO Actor has no egress policy; blocking all DNS queries",
+		"ERROR Could not refresh the actor's egress policy; using stale cached policy",
+		"INFO Actor has an egress policy",
 	}
 	logged.mu.Lock()
 	defer logged.mu.Unlock()

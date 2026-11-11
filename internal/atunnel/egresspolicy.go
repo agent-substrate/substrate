@@ -68,6 +68,9 @@ type actorEgressPolicy struct {
 	// logged at error level and subsequent stale-cache warnings are rate-limited.
 	failing       bool
 	nextStaleWarn time.Time
+	// nextRetry bounds background refresh attempts while fetches keep failing
+	// to one per ttl.
+	nextRetry time.Time
 }
 
 // ActorEgressPolicy returns the source of actor's egress policy for its DNS
@@ -94,6 +97,16 @@ func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicyS
 // to EgressPolicy.
 func (p *actorEgressPolicy) EgressPolicy(ctx context.Context) (*ateletpb.EgressPolicy, error) {
 	if policy, ok := p.cached(); ok {
+		return policy, nil
+	}
+	// While refreshes fail, answer with the stale entry without waiting and
+	// let a background fetch retry at most once per TTL. Waiting here would
+	// stall the relay: it reads the actor's queries one at a time, so the
+	// queries queued behind one that waits egressPolicyFetchTimeout for a
+	// fetch that keeps failing would each wait too, and each would start
+	// another failing fetch.
+	if policy, ok := p.staleWhileFailing(); ok {
+		p.refreshInBackground()
 		return policy, nil
 	}
 	results := p.flight.DoChan("", func() (any, error) {
@@ -128,6 +141,51 @@ func (p *actorEgressPolicy) cached() (*ateletpb.EgressPolicy, bool) {
 		return nil, false
 	}
 	return p.policy, true
+}
+
+// staleWhileFailing returns the last fetched policy while refreshes of it keep
+// failing, even though the entry has expired. It is the fail-static answer the
+// relay documents for an unreachable atelet, served without waiting for the
+// next refresh attempt.
+func (p *actorEgressPolicy) staleWhileFailing() (*ateletpb.EgressPolicy, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.fetched || !p.failing {
+		return nil, false
+	}
+	return p.policy, true
+}
+
+// refreshInBackground starts one fetch of the policy in the background, at
+// most once per ttl, while queries are being answered with the stale entry.
+// Its result updates the cache like any other fetch's, so recovery takes
+// effect without waiting for an entry to expire.
+func (p *actorEgressPolicy) refreshInBackground() {
+	p.mu.Lock()
+	now := p.now()
+	due := p.nextRetry.IsZero() || !now.Before(p.nextRetry)
+	if due {
+		p.nextRetry = now.Add(p.ttl)
+	}
+	p.mu.Unlock()
+	if !due {
+		return
+	}
+	go func() {
+		// Not canceled with any query: no query is waiting on it.
+		ctx := context.Background()
+		results := p.flight.DoChan("", func() (any, error) {
+			// A fetch may have finished since this retry was scheduled.
+			if policy, ok := p.cached(); ok {
+				return policy, nil
+			}
+			fetchCtx, cancel := context.WithTimeout(ctx, egressPolicyFetchTimeout)
+			defer cancel()
+			policy, err := p.fetch(fetchCtx)
+			return p.record(ctx, policy, err)
+		})
+		<-results
+	}()
 }
 
 // record updates the cache with a fetch's result and returns the policy and
