@@ -162,7 +162,9 @@ func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, actor *at
 	templateRef := resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate())
 	template, err := st.GetActorTemplate(ctx, templateRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, fmt.Errorf("%w; ObjectRef: %s ", errActorTemplateNotFound, templateRef)
+		// The first apierror in the chain sets the client's message, so it
+		// names the template. errActorTemplateNotFound stays matchable.
+		return nil, fmt.Errorf("%w: %w", apierror.FailedPrecondition("actor template %s not found", templateRef), errActorTemplateNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
