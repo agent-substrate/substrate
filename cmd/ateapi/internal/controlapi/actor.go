@@ -117,6 +117,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	if sourceTag, err = s.ensureTagVolumeSnapshotsUsable(ctx, sourceTag, initVols); err != nil {
 		return nil, err
 	}
+	if err := s.ensureContentSourcesRestorable(ctx, template, sourceTag, initVols); err != nil {
+		return nil, err
+	}
 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)

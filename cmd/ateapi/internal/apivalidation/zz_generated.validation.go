@@ -4490,6 +4490,36 @@ func Validate_ExternalVolumeTemplate(
 		errs = append(errs, fn(fldPath.Child("storage_class_name"), &obj.StorageClassName, oldVal, oldObj != nil)...)
 	}
 
+	{ // field v1.ExternalVolumeTemplate.ContentSource
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.VolumeContentSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_VolumeContentSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ExternalVolumeTemplate) *v1.VolumeContentSource {
+				return oldObj.ContentSource
+			})
+		errs = append(errs, fn(fldPath.Child("content_source"), obj.ContentSource, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -8640,6 +8670,51 @@ func Validate_SnapshotConfig(
 	return errs
 }
 
+// Validate_SnapshotContentSource validates an instance of SnapshotContentSource according
+// to declarative validation rules in the API schema.
+func Validate_SnapshotContentSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.SnapshotContentSource) (errs field.ErrorList) {
+
+	{ // field v1.SnapshotContentSource.StorageSnapshotId
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_SnapshotContentSource_StorageSnapshotId(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.SnapshotContentSource) *string {
+				return &oldObj.StorageSnapshotId
+			})
+		errs = append(errs, fn(fldPath.Child("storage_snapshot_id"), &obj.StorageSnapshotId, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_SnapshotReport validates an instance of SnapshotReport according
 // to declarative validation rules in the API schema.
 func Validate_SnapshotReport(
@@ -10278,6 +10353,57 @@ func Validate_Volume(
 				return oldObj.Image
 			})
 		errs = append(errs, fn(fldPath.Child("image"), obj.Image, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_VolumeContentSource_ = validate.NewUnionMembership(validate.NewUnionMember("snapshot"))
+
+// Validate_VolumeContentSource validates an instance of VolumeContentSource according
+// to declarative validation rules in the API schema.
+func Validate_VolumeContentSource(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.VolumeContentSource) (errs field.ErrorList) {
+
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_VolumeContentSource_,
+		func(obj *v1.VolumeContentSource) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.Snapshot != nil
+		}); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
+	{ // field v1.VolumeContentSource.Snapshot
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.SnapshotContentSource,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_SnapshotContentSource(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.VolumeContentSource) *v1.SnapshotContentSource {
+				return oldObj.Snapshot
+			})
+		errs = append(errs, fn(fldPath.Child("snapshot"), obj.Snapshot, oldVal, oldObj != nil)...)
 	}
 
 	return errs

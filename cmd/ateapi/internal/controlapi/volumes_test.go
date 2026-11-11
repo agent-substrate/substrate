@@ -963,3 +963,51 @@ func TestEnsureTagVolumeSnapshotsUsable(t *testing.T) {
 		})
 	}
 }
+
+// noSnapshotVolumePlugin is a driver without snapshot support.
+type noSnapshotVolumePlugin struct {
+	*volume.MockVolumePlugin
+}
+
+func (noSnapshotVolumePlugin) ControllerCapabilities(context.Context) (volume.Capabilities, error) {
+	return volume.Capabilities{}, nil
+}
+
+func TestEnsureContentSourcesRestorable(t *testing.T) {
+	externalVol := func(name, snapshotID string) *ateapi.Volume {
+		tmpl := &ateapi.ExternalVolumeTemplate{StorageClassName: "standard"}
+		if snapshotID != "" {
+			tmpl.ContentSource = &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: snapshotID}}
+		}
+		return &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: tmpl}}
+	}
+	tmpl := &ateapi.ActorTemplate{Volumes: []*ateapi.Volume{externalVol("data", "imported"), externalVol("cache", "")}}
+	tagWithData := &ateapi.Tag{Status: &ateapi.TagStatus{Snapshot: &ateapi.Snapshot{VolumeSnapshots: []*ateapi.ExternalVolumeSnapshot{
+		{SourceVolumeName: "data", StorageSnapshotId: "tag-snap", VolumeType: "no-snapshots"},
+	}}}}
+	tests := []struct {
+		name     string
+		driver   string
+		tag      *ateapi.Tag
+		wantCode codes.Code
+	}{
+		{name: "driver supports snapshots", driver: "mock-standard"},
+		{name: "driver without snapshots", driver: "no-snapshots", wantCode: codes.FailedPrecondition},
+		{name: "tag captured the volume", driver: "no-snapshots", tag: tagWithData},
+		{name: "unknown driver", driver: "missing", wantCode: codes.FailedPrecondition},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newServiceImpl(nil, nil)
+			s.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+				"mock-standard": volume.NewMockVolumePlugin(),
+				"no-snapshots":  noSnapshotVolumePlugin{volume.NewMockVolumePlugin()},
+			}}
+			vols := []*ateapi.ExternalVolumeStatus{{Name: "data", VolumeType: tt.driver}, {Name: "cache", VolumeType: tt.driver}}
+			err := s.ensureContentSourcesRestorable(context.Background(), tmpl, tt.tag, vols)
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Errorf("ensureContentSourcesRestorable() = %v, want code %v", err, tt.wantCode)
+			}
+		})
+	}
+}

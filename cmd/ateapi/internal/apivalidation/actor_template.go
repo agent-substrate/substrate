@@ -184,3 +184,10 @@ func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, f
 func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
 	return resources.ValidateDropCapabilities(fldPath, value)
 }
+
+// ValidateCustom_SnapshotContentSource_StorageSnapshotId checks an imported
+// snapshot handle. Like storage_volume_id, its format belongs to the storage
+// system.
+func ValidateCustom_SnapshotContentSource_StorageSnapshotId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}

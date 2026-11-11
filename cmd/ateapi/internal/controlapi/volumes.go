@@ -74,7 +74,8 @@ func initialExternalVolumes(ctx context.Context, scLister storagev1listers.Stora
 //
 // sourceSnapshots are the volume snapshots of the tag the Actor was created
 // from, matched to volumes by name. A volume with an entry is restored from its
-// snapshot. A volume without one is provisioned empty.
+// snapshot. A volume without one starts from its template's content_source, or
+// empty without one.
 func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLister storagev1listers.StorageClassLister, actorUID string, template *ateapi.ActorTemplate, volumesToCreate []*ateapi.ExternalVolumeStatus, sourceSnapshots []*ateapi.ExternalVolumeSnapshot) (resultVolumes []*ateapi.ExternalVolumeStatus, err error) {
 	resultVolumes = make([]*ateapi.ExternalVolumeStatus, 0, len(volumesToCreate))
 
@@ -90,14 +91,8 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 	for idx, vol := range volumesToCreate {
 		currentIdx = idx
 
-		var specVol *ateapi.Volume
 		volName := vol.GetName()
-		for _, tVol := range template.GetVolumes() {
-			if tVol.GetName() == volName {
-				specVol = tVol
-				break
-			}
-		}
+		specVol := findTemplateVolume(template, volName)
 		if specVol == nil || specVol.GetExternal().GetTemplate() == nil {
 			return resultVolumes, apierror.NotFound("volume %q not found in template", volName)
 		}
@@ -127,8 +122,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (StorageClass %q): %v", sc.Provisioner, scName, err)
 		}
 
-		// CreateActor checked that the snapshot is ready.
-		sourceSnapshotID := findVolumeSnapshot(sourceSnapshots, volName).GetStorageSnapshotId()
+		sourceSnapshotID := volumeSourceSnapshotID(specVol, sourceSnapshots)
 
 		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
 			Name:             actVolID,
@@ -137,11 +131,11 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			SourceSnapshotID: sourceSnapshotID,
 		})
 		if volErr != nil {
-			// CSI answers NotFound when the content source is gone, as when
-			// the tag was deleted before this Actor first resumed. Retrying
-			// cannot help.
+			// CSI answers NotFound when the content source does not exist,
+			// as when the tag was deleted before this Actor first resumed,
+			// or the template names a wrong snapshot. Retrying cannot help.
 			if sourceSnapshotID != "" && status.Code(volErr) == codes.NotFound {
-				return resultVolumes, apierror.FailedPrecondition("snapshot %q to restore volume %q from no longer exists in the storage system: %v", sourceSnapshotID, volName, volErr)
+				return resultVolumes, apierror.FailedPrecondition("snapshot %q to restore volume %q from does not exist in the storage system: %v", sourceSnapshotID, volName, volErr)
 			}
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
 		}
@@ -172,6 +166,55 @@ func findVolumeSnapshot(snapshots []*ateapi.ExternalVolumeSnapshot, volName stri
 	return nil
 }
 
+// findTemplateVolume returns the template's volume with the given name, or nil
+// if there is none.
+func findTemplateVolume(template *ateapi.ActorTemplate, volName string) *ateapi.Volume {
+	for _, vol := range template.GetVolumes() {
+		if vol.GetName() == volName {
+			return vol
+		}
+	}
+	return nil
+}
+
+// volumeSourceSnapshotID returns the snapshot a new volume is restored from:
+// the tag's snapshot of it if there is one, which CreateActor checked is ready,
+// then the template's content_source. Empty provisions the volume empty.
+func volumeSourceSnapshotID(specVol *ateapi.Volume, tagSnapshots []*ateapi.ExternalVolumeSnapshot) string {
+	if snap := findVolumeSnapshot(tagSnapshots, specVol.GetName()); snap != nil {
+		return snap.GetStorageSnapshotId()
+	}
+	return specVol.GetExternal().GetTemplate().GetContentSource().GetSnapshot().GetStorageSnapshotId()
+}
+
+// ensureContentSourcesRestorable fails with FailedPrecondition when one of vols
+// would be restored from its template's content_source by a driver that cannot
+// restore snapshots. Volumes the tag captured are skipped: the driver that took
+// their snapshot can restore it.
+func (s *ServiceImpl) ensureContentSourcesRestorable(ctx context.Context, template *ateapi.ActorTemplate, tag *ateapi.Tag, vols []*ateapi.ExternalVolumeStatus) error {
+	for _, vol := range vols {
+		volName := vol.GetName()
+		if findVolumeSnapshot(tag.GetStatus().GetSnapshot().GetVolumeSnapshots(), volName) != nil {
+			continue
+		}
+		if findTemplateVolume(template, volName).GetExternal().GetTemplate().GetContentSource() == nil {
+			continue
+		}
+		plugin, err := s.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
+		if err != nil {
+			return apierror.FailedPrecondition("failed to get volume plugin for driver %q: %v", vol.GetVolumeType(), err)
+		}
+		caps, err := plugin.ControllerCapabilities(ctx)
+		if err != nil {
+			return apierror.FailedPrecondition("failed to read capabilities of driver %q for volume %q: %v", vol.GetVolumeType(), volName, err)
+		}
+		if !caps.CreateDeleteSnapshot {
+			return apierror.FailedPrecondition("volume %q restores from a snapshot, but its driver %q does not support snapshots", volName, vol.GetVolumeType())
+		}
+	}
+	return nil
+}
+
 // tagVolumeSnapshots returns the volume snapshots of the tag an Actor was
 // created from, held by the tag-owned snapshot it starts with. It returns nil
 // once the Actor has replaced that snapshot with its own, by which time its
@@ -184,8 +227,9 @@ func tagVolumeSnapshots(status *ateapi.ActorStatus) []*ateapi.ExternalVolumeSnap
 
 // ensureTagVolumeSnapshotsUsable checks that the volume snapshots tag
 // recorded can seed the external volumes vols an Actor would get, and returns
-// the tag. A volume the tag has no snapshot for is provisioned empty, whether
-// the tag left it out or captured no volumes.
+// the tag. A volume the tag has no snapshot for starts from its template's
+// content_source, or empty without one, whether the tag left it out or
+// captured no volumes.
 //
 // CreateTag does not wait for snapshots to become ready, so a snapshot the tag
 // recorded as not ready is looked up in the storage system, and the call fails

@@ -64,8 +64,9 @@ func (p *restoreRecordingPlugin) restoreSources(t *testing.T, actor *ateapi.Acto
 
 // setupTagVolumesTest starts a server whose mock volume plugin records restore
 // sources, and creates a template declaring the external volumes "data" and
-// "cache" plus a worker to run its Actors on.
-func setupTagVolumesTest(t *testing.T, ns string) (*testContext, *restoreRecordingPlugin, string) {
+// "cache" plus a worker to run its Actors on. contentSources maps a volume name
+// to the snapshot its template imports.
+func setupTagVolumesTest(t *testing.T, ns string, contentSources map[string]string) (*testContext, *restoreRecordingPlugin, string) {
 	t.Helper()
 	preview.InitForTest(t, "ExternalVolumes")
 	plugin := &restoreRecordingPlugin{MockVolumePlugin: volume.NewMockVolumePlugin(), sources: map[string]string{}}
@@ -75,10 +76,11 @@ func setupTagVolumesTest(t *testing.T, ns string) (*testContext, *restoreRecordi
 	var volumes []*ateapi.Volume
 	var mounts []*ateapi.VolumeMount
 	for _, name := range []string{"data", "cache"} {
-		volumes = append(volumes, &ateapi.Volume{
-			Name:     name,
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
-		})
+		tmpl := &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}
+		if id := contentSources[name]; id != "" {
+			tmpl.ContentSource = &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: id}}
+		}
+		volumes = append(volumes, &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: tmpl}})
 		mounts = append(mounts, &ateapi.VolumeMount{Name: name, MountPath: "/mnt/" + name})
 	}
 	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
@@ -123,7 +125,7 @@ func tagVolumeHandles(tag *ateapi.Tag) map[string]string {
 // can then be deleted.
 func TestCreateTag_CapturesVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-tag-capture-volumes")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -167,7 +169,7 @@ func TestCreateTag_CapturesVolumes(t *testing.T) {
 // restores them and provisions the rest empty.
 func TestCreateTag_CapturesNamedVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-tag-capture-named-volumes")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -199,7 +201,7 @@ func TestCreateTag_CapturesNamedVolumes(t *testing.T) {
 // Actor does not have fails the create and leaves no tag behind.
 func TestCreateTag_UnknownVolumeName(t *testing.T) {
 	ns := namespaceForTest("ns-tag-unknown-volume")
-	tc, _, workerName := setupTagVolumesTest(t, ns)
+	tc, _, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -218,5 +220,70 @@ func TestCreateTag_UnknownVolumeName(t *testing.T) {
 	_, err = tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: &ateapi.ObjectRef{Atespace: testAtespace, Name: "typo"}})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("GetTag() after a failed create = %v, want NotFound", err)
+	}
+}
+
+// TestCreateTag_TemplateContentSource verifies that a volume whose template
+// imports a snapshot starts from it, unless the Actor is created from a tag
+// that captured the volume.
+func TestCreateTag_TemplateContentSource(t *testing.T) {
+	ns := namespaceForTest("ns-tag-content-source")
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, map[string]string{"data": "imported-data"})
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	suspendActorForTest(t, tc, workerName, "source")
+	source, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "source"}})
+	if err != nil {
+		t.Fatalf("GetActor(source) failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]string{"data": "imported-data", "cache": ""}, plugin.restoreSources(t, source, "data", "cache")); diff != "" {
+		t.Errorf("source restore sources mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, tt := range []struct {
+		name string
+		sel  *ateapi.ExternalVolumeSelection
+		// want maps each volume to the snapshot it restores from. "tag" stands
+		// for the tag's snapshot of the volume.
+		want map[string]string
+	}{
+		{name: "all", sel: &ateapi.ExternalVolumeSelection{}, want: map[string]string{"data": "tag", "cache": "tag"}},
+		{name: "with-data", sel: &ateapi.ExternalVolumeSelection{Names: []string{"data"}}, want: map[string]string{"data": "tag", "cache": ""}},
+		{name: "without-data", sel: &ateapi.ExternalVolumeSelection{Names: []string{"cache"}}, want: map[string]string{"data": "imported-data", "cache": "tag"}},
+		{name: "no-volumes", want: map[string]string{"data": "imported-data", "cache": ""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tag, err := tc.client.CreateTag(ctx, &ateapi.CreateTagRequest{
+				Tag: &ateapi.Tag{
+					Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: tt.name},
+					Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
+					SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "source"},
+				},
+				VolumeSelection: tt.sel,
+			})
+			if err != nil {
+				t.Fatalf("CreateTag failed: %v", err)
+			}
+			handles := tagVolumeHandles(tag)
+			want := map[string]string{}
+			for vol, src := range tt.want {
+				if src == "tag" {
+					src = handles[vol]
+				}
+				want[vol] = src
+			}
+			clone := cloneAndResume(t, tc, workerName, tt.name, "clone-"+tt.name)
+			if diff := cmp.Diff(want, plugin.restoreSources(t, clone, "data", "cache")); diff != "" {
+				t.Errorf("restore sources mismatch (-want +got):\n%s", diff)
+			}
+			// Frees the one worker for the next clone.
+			if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+				Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: clone.GetMetadata().GetName()},
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			}); err != nil {
+				t.Fatalf("SuspendActor(%s) failed: %v", clone.GetMetadata().GetName(), err)
+			}
+		})
 	}
 }

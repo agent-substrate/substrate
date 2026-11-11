@@ -655,9 +655,10 @@ message Actor {
   // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
   // once at creation and immutable afterward.
   // If the tag captured external volumes, the first resume restores each of
-  // them from its snapshot, and the Actor's other external volumes start
-  // empty. CreateActor fails with FAILED_PRECONDITION while one of those
-  // snapshots is not ready to use.
+  // them from its snapshot. The Actor's other external volumes start from
+  // their template's content_source, or empty without one. CreateActor fails
+  // with FAILED_PRECONDITION while one of the tag's snapshots is not ready to
+  // use.
   //
   // +k8s:optional
   // +k8s:subfield(atespace)=+k8s:required
@@ -1648,6 +1649,43 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+
+  // content_source fills each new volume from existing content instead of
+  // provisioning it empty. Every Actor of this template starts from the same
+  // content. An Actor created from a tag that captured this volume restores
+  // the tag's snapshot instead.
+  //
+  // +k8s:optional
+  VolumeContentSource content_source = 3;
+}
+
+// VolumeContentSource is the existing content a new volume is filled from.
+// Exactly one member must be set.
+message VolumeContentSource {
+  // snapshot fills the volume from a snapshot in the storage system.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  SnapshotContentSource snapshot = 1;
+}
+
+// SnapshotContentSource names a snapshot in the storage system, which may have
+// been taken outside Substrate.
+message SnapshotContentSource {
+  // storage_snapshot_id is the storage system's handle for the snapshot, as
+  // the StorageClass's CSI driver reports it. The driver must support
+  // CREATE_DELETE_SNAPSHOT, or CreateActor fails with FAILED_PRECONDITION.
+  // CreateActor does not look the snapshot up: a snapshot that does not exist
+  // fails the Actor's first resume with FAILED_PRECONDITION.
+  // capacity_bytes must be at least the snapshot's size.
+  //
+  // The handle is opaque, so it is only bounded and checked for control
+  // characters, like ExternalVolumeSnapshot.storage_snapshot_id.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:customValidation # no control characters
+  string storage_snapshot_id = 1;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
