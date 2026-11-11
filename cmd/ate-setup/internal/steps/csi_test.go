@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -168,6 +169,51 @@ func TestTheNFSSetupsApplyTheSharedStorageClass(t *testing.T) {
 	}
 }
 
+// Both NFS setups register the canonical csi-nfs ExternalVolumeClass from the
+// same checked-in manifest so neither carries an inline copy that can drift.
+func TestTheNFSSetupsRegisterTheSharedExternalVolumeClass(t *testing.T) {
+	const manifest = "hack/csi/external-volume-class-nfs.yaml"
+	root := repoRoot(t)
+
+	raw, err := os.ReadFile(filepath.Join(root, manifest))
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifest, err)
+	}
+	class, err := ExternalVolumeClassFromManifest(raw)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", manifest, err)
+	}
+	if class.GetMetadata().GetName() != "csi-nfs" {
+		t.Errorf("csi-nfs metadata.name = %q, want csi-nfs", class.GetMetadata().GetName())
+	}
+	if class.GetDriverName() != "nfs.csi.k8s.io" {
+		t.Errorf("csi-nfs driverName = %q, want nfs.csi.k8s.io", class.GetDriverName())
+	}
+	if !slices.Equal(class.GetMountOptions(), []string{"nfsvers=4.1"}) {
+		t.Errorf("csi-nfs mountOptions = %v, want [nfsvers=4.1]", class.GetMountOptions())
+	}
+
+	goSetup := functionBody(t, "substrate.go", "func externalVolumeClassesForDriver(")
+	if !strings.Contains(goSetup, `"external-volume-class-nfs.yaml"`) {
+		t.Errorf("externalVolumeClassesForDriver no longer loads %s", manifest)
+	}
+	script, err := os.ReadFile(filepath.Join(root, "hack", "setup-csi-nfs-kind.sh"))
+	if err != nil {
+		t.Fatalf("reading the shell setup: %v", err)
+	}
+	if !strings.Contains(string(script), manifest) {
+		t.Errorf("hack/setup-csi-nfs-kind.sh no longer registers %s", manifest)
+	}
+	for name, src := range map[string]string{
+		"externalVolumeClassesForDriver": goSetup,
+		"hack/setup-csi-nfs-kind.sh":     string(script),
+	} {
+		if strings.Contains(src, "\ndriverName:") {
+			t.Errorf("%s defines an ExternalVolumeClass inline; register %s instead", name, manifest)
+		}
+	}
+}
+
 // Each --setup-csi value selects the drivers its name says.
 func TestCSIDriverSpellings(t *testing.T) {
 	for _, tc := range []struct {
@@ -247,6 +293,8 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 		"serverName: csi-nfs-controller.kube-system.svc\n",
 		"usePodIdentity: true",
 		"/sa/ate-api-server",
+		"ExternalVolumes",
+		"--preview create external-volume-class -f",
 	} {
 		if !strings.Contains(src, required) {
 			t.Errorf("hack/setup-csi-nfs-kind.sh no longer contains %q", required)
@@ -254,6 +302,9 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 	}
 	if service, driver := strings.Index(src, "name: csi-nfs-controller\n  namespace: kube-system"), strings.Index(src, "csi-nfs-controller.yaml"); service < 0 || driver < 0 || service > driver {
 		t.Error("hack/setup-csi-nfs-kind.sh deploys the NFS driver before creating the csi-nfs-controller Service")
+	}
+	if cdc, evc := strings.Index(src, "kind: CSIDriverConfig"), strings.Index(src, "external-volume-class-nfs.yaml"); cdc < 0 || evc < 0 || cdc > evc {
+		t.Error("hack/setup-csi-nfs-kind.sh registers the csi-nfs ExternalVolumeClass before creating the CSIDriverConfig")
 	}
 }
 
