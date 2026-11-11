@@ -300,6 +300,40 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanDelete, "external_volume_class:nfs-gold"}},
 		},
 
+		// CSI driver configs.
+		{
+			name:       "CreateCsiDriverConfig",
+			fullMethod: ateapi.Control_CreateCsiDriverConfig_FullMethodName,
+			req:        &ateapi.CreateCsiDriverConfigRequest{},
+			want:       []check{{RelationCanCreateCsiDriverConfig, GlobalRootObject}},
+		},
+		{
+			name:       "ListCsiDriverConfigs",
+			fullMethod: ateapi.Control_ListCsiDriverConfigs_FullMethodName,
+			req:        &ateapi.ListCsiDriverConfigsRequest{},
+			want:       []check{{RelationCanListCsiDriverConfigs, GlobalRootObject}},
+		},
+		{
+			name:       "GetCsiDriverConfig",
+			fullMethod: ateapi.Control_GetCsiDriverConfig_FullMethodName,
+			req:        &ateapi.GetCsiDriverConfigRequest{CsiDriverConfig: &ateapi.ObjectRef{Name: "csi-nfs"}},
+			want:       []check{{RelationCanGet, "csi_driver_config:csi-nfs"}},
+		},
+		{
+			name:       "UpdateCsiDriverConfig",
+			fullMethod: ateapi.Control_UpdateCsiDriverConfig_FullMethodName,
+			req: &ateapi.UpdateCsiDriverConfigRequest{CsiDriverConfig: &ateapi.CsiDriverConfig{
+				Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"},
+			}},
+			want: []check{{RelationCanUpdate, "csi_driver_config:csi-nfs"}},
+		},
+		{
+			name:       "DeleteCsiDriverConfig",
+			fullMethod: ateapi.Control_DeleteCsiDriverConfig_FullMethodName,
+			req:        &ateapi.DeleteCsiDriverConfigRequest{CsiDriverConfig: &ateapi.ObjectRef{Name: "csi-nfs"}},
+			want:       []check{{RelationCanDelete, "csi_driver_config:csi-nfs"}},
+		},
+
 		// Actor identity credentials.
 		{
 			name:       "MintActorJWT",
@@ -628,6 +662,32 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			fullMethod: ateapi.Control_DeleteExternalVolumeClass_FullMethodName,
 			req:        &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs/gold"}},
 			wantField:  "external_volume_class.name",
+		},
+		{
+			name:       "GetCsiDriverConfig without a config",
+			fullMethod: ateapi.Control_GetCsiDriverConfig_FullMethodName,
+			req:        &ateapi.GetCsiDriverConfigRequest{},
+			wantField:  "csi_driver_config.name",
+		},
+		{
+			name:       "UpdateCsiDriverConfig without metadata",
+			fullMethod: ateapi.Control_UpdateCsiDriverConfig_FullMethodName,
+			req:        &ateapi.UpdateCsiDriverConfigRequest{CsiDriverConfig: &ateapi.CsiDriverConfig{}},
+			wantField:  "csi_driver_config.metadata.name",
+		},
+		{
+			name:       "UpdateCsiDriverConfig with an invalid name",
+			fullMethod: ateapi.Control_UpdateCsiDriverConfig_FullMethodName,
+			req: &ateapi.UpdateCsiDriverConfigRequest{CsiDriverConfig: &ateapi.CsiDriverConfig{
+				Metadata: &ateapi.ResourceMetadata{Name: "csi/nfs"},
+			}},
+			wantField: "csi_driver_config.metadata.name",
+		},
+		{
+			name:       "DeleteCsiDriverConfig with an invalid name",
+			fullMethod: ateapi.Control_DeleteCsiDriverConfig_FullMethodName,
+			req:        &ateapi.DeleteCsiDriverConfigRequest{CsiDriverConfig: &ateapi.ObjectRef{Name: "csi/nfs"}},
+			wantField:  "csi_driver_config.name",
 		},
 		{
 			name:       "MintActorJWT without an actor",

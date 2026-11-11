@@ -2449,6 +2449,53 @@ func Validate_CreateAtespaceRequest(
 	return errs
 }
 
+// Validate_CreateCsiDriverConfigRequest validates an instance of CreateCsiDriverConfigRequest according
+// to declarative validation rules in the API schema.
+func Validate_CreateCsiDriverConfigRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.CreateCsiDriverConfigRequest) (errs field.ErrorList) {
+
+	{ // field v1.CreateCsiDriverConfigRequest.CsiDriverConfig
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.CsiDriverConfig,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_CsiDriverConfig(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CreateCsiDriverConfigRequest) *v1.CsiDriverConfig {
+				return oldObj.CsiDriverConfig
+			})
+		errs = append(errs, fn(fldPath.Child("csi_driver_config"), obj.CsiDriverConfig, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_CreateExternalVolumeClassRequest validates an instance of CreateExternalVolumeClassRequest according
 // to declarative validation rules in the API schema.
 func Validate_CreateExternalVolumeClassRequest(
@@ -3581,6 +3628,95 @@ func Validate_DeleteAtespaceRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.DeleteAtespaceRequest) *v1.DeleteOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_DeleteCsiDriverConfigRequest validates an instance of DeleteCsiDriverConfigRequest according
+// to declarative validation rules in the API schema.
+func Validate_DeleteCsiDriverConfigRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.DeleteCsiDriverConfigRequest) (errs field.ErrorList) {
+
+	{ // field v1.DeleteCsiDriverConfigRequest.CsiDriverConfig
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ObjectRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.DeleteCsiDriverConfigRequest) *v1.ObjectRef {
+				return oldObj.CsiDriverConfig
+			})
+		errs = append(errs, fn(fldPath.Child("csi_driver_config"), obj.CsiDriverConfig, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.DeleteCsiDriverConfigRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.DeleteOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_DeleteOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.DeleteCsiDriverConfigRequest) *v1.DeleteOptions {
 				return oldObj.Options
 			})
 		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
@@ -5245,6 +5381,65 @@ func Validate_GetAtespaceRequest(
 	return errs
 }
 
+// Validate_GetCsiDriverConfigRequest validates an instance of GetCsiDriverConfigRequest according
+// to declarative validation rules in the API schema.
+func Validate_GetCsiDriverConfigRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.GetCsiDriverConfigRequest) (errs field.ErrorList) {
+
+	{ // field v1.GetCsiDriverConfigRequest.CsiDriverConfig
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ObjectRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.ForbiddenValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *v1.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.GetCsiDriverConfigRequest) *v1.ObjectRef {
+				return oldObj.CsiDriverConfig
+			})
+		errs = append(errs, fn(fldPath.Child("csi_driver_config"), obj.CsiDriverConfig, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_GetExternalVolumeClassRequest validates an instance of GetExternalVolumeClassRequest according
 // to declarative validation rules in the API schema.
 func Validate_GetExternalVolumeClassRequest(
@@ -6196,6 +6391,45 @@ func Validate_ListAtespacesRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.ListAtespacesRequest) *v1.ListOptions {
+				return oldObj.Options
+			})
+		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_ListCsiDriverConfigsRequest validates an instance of ListCsiDriverConfigsRequest according
+// to declarative validation rules in the API schema.
+func Validate_ListCsiDriverConfigsRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.ListCsiDriverConfigsRequest) (errs field.ErrorList) {
+
+	{ // field v1.ListCsiDriverConfigsRequest.Options
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.ListOptions,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ListOptions(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ListCsiDriverConfigsRequest) *v1.ListOptions {
 				return oldObj.Options
 			})
 		errs = append(errs, fn(fldPath.Child("options"), obj.Options, oldVal, oldObj != nil)...)
@@ -10238,6 +10472,66 @@ func Validate_UpdateAtespaceAccessPolicyRequest(
 				return oldObj.AccessPolicy
 			})
 		errs = append(errs, fn(fldPath.Child("access_policy"), obj.AccessPolicy, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_UpdateCsiDriverConfigRequest validates an instance of UpdateCsiDriverConfigRequest according
+// to declarative validation rules in the API schema.
+func Validate_UpdateCsiDriverConfigRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.UpdateCsiDriverConfigRequest) (errs field.ErrorList) {
+
+	{ // field v1.UpdateCsiDriverConfigRequest.CsiDriverConfig
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.CsiDriverConfig,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "ExternalVolumes", false, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_UpdateCsiDriverConfigRequest_CsiDriverConfig(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			func() { // cohort = "metadata"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *v1.CsiDriverConfig) *v1.ResourceMetadata { return o.Metadata }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.UpdateCsiDriverConfigRequest) *v1.CsiDriverConfig {
+				return oldObj.CsiDriverConfig
+			})
+		errs = append(errs, fn(fldPath.Child("csi_driver_config"), obj.CsiDriverConfig, oldVal, oldObj != nil)...)
 	}
 
 	return errs

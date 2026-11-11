@@ -26,9 +26,43 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func ValidateCreateCsiDriverConfigRequest(ctx context.Context, req *ateapi.CreateCsiDriverConfigRequest) field.ErrorList {
+	return Validate_CreateCsiDriverConfigRequest(ctx, MakeCreateOp(ctx), nil, req, nil)
+}
+
+func ValidateGetCsiDriverConfigRequest(ctx context.Context, req *ateapi.GetCsiDriverConfigRequest) field.ErrorList {
+	return Validate_GetCsiDriverConfigRequest(ctx, MakeCreateOp(ctx), nil, req, nil)
+}
+
+func ValidateListCsiDriverConfigsRequest(ctx context.Context, req *ateapi.ListCsiDriverConfigsRequest) field.ErrorList {
+	return Validate_ListCsiDriverConfigsRequest(ctx, MakeCreateOp(ctx), nil, req, nil)
+}
+
+func ValidateUpdateCsiDriverConfigRequest(ctx context.Context, req *ateapi.UpdateCsiDriverConfigRequest) field.ErrorList {
+	return Validate_UpdateCsiDriverConfigRequest(ctx, MakeCreateOp(ctx), nil, req, nil)
+}
+
+func ValidateDeleteCsiDriverConfigRequest(ctx context.Context, req *ateapi.DeleteCsiDriverConfigRequest) field.ErrorList {
+	return Validate_DeleteCsiDriverConfigRequest(ctx, MakeCreateOp(ctx), nil, req, nil)
+}
+
+func ValidateCsiDriverConfigUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.CsiDriverConfig) field.ErrorList {
+	return Validate_CsiDriverConfig(ctx, MakeUpdateOp(ctx), fldPath, newVal, oldVal)
+}
+
+func ValidateCustom_UpdateCsiDriverConfigRequest_CsiDriverConfig(ctx context.Context, op operation.Operation, fldPath *field.Path, cfg, _ *ateapi.CsiDriverConfig) field.ErrorList {
+	if cfg == nil || cfg.Metadata == nil {
+		return nil // handled by DV
+	}
+	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), cfg.Metadata, nil)
+	errs = append(errs, validate.ForbiddenValue(ctx, op, fldPath.Child("metadata", "atespace"), &cfg.Metadata.Atespace, nil)...)
+	return errs
+}
 
 func ValidateCustom_CsiDriverConfig_DriverName(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateVolumeType(fldPath, *value)

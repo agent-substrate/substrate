@@ -4147,8 +4147,6 @@ func (x *ExternalVolumeClass) GetParameters() map[string]string {
 
 // CsiDriverConfig configures how the control plane and worker nodes connect to
 // a CSI driver. Global-scoped: metadata.atespace must be empty.
-//
-// +k8s:validation-gen=true
 type CsiDriverConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
@@ -5218,6 +5216,329 @@ func (x *DeleteExternalVolumeClassRequest) GetOptions() *DeleteOptions {
 	return nil
 }
 
+// CreateCsiDriverConfigRequest creates a CsiDriverConfig.
+type CreateCsiDriverConfigRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The config to create. metadata.name is required and metadata.atespace
+	// must be empty.
+	//
+	// +ate:preview=ExternalVolumes
+	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+	// +k8s:required
+	CsiDriverConfig *CsiDriverConfig `protobuf:"bytes,1,opt,name=csi_driver_config,json=csiDriverConfig,proto3" json:"csi_driver_config,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CreateCsiDriverConfigRequest) Reset() {
+	*x = CreateCsiDriverConfigRequest{}
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateCsiDriverConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateCsiDriverConfigRequest) ProtoMessage() {}
+
+func (x *CreateCsiDriverConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateCsiDriverConfigRequest.ProtoReflect.Descriptor instead.
+func (*CreateCsiDriverConfigRequest) Descriptor() ([]byte, []int) {
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *CreateCsiDriverConfigRequest) GetCsiDriverConfig() *CsiDriverConfig {
+	if x != nil {
+		return x.CsiDriverConfig
+	}
+	return nil
+}
+
+// GetCsiDriverConfigRequest identifies the CsiDriverConfig to get.
+type GetCsiDriverConfigRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The config to get. atespace must be empty.
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	CsiDriverConfig *ObjectRef `protobuf:"bytes,1,opt,name=csi_driver_config,json=csiDriverConfig,proto3" json:"csi_driver_config,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GetCsiDriverConfigRequest) Reset() {
+	*x = GetCsiDriverConfigRequest{}
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCsiDriverConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCsiDriverConfigRequest) ProtoMessage() {}
+
+func (x *GetCsiDriverConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCsiDriverConfigRequest.ProtoReflect.Descriptor instead.
+func (*GetCsiDriverConfigRequest) Descriptor() ([]byte, []int) {
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *GetCsiDriverConfigRequest) GetCsiDriverConfig() *ObjectRef {
+	if x != nil {
+		return x.CsiDriverConfig
+	}
+	return nil
+}
+
+// ListCsiDriverConfigsRequest asks for a page of CsiDriverConfigs.
+type ListCsiDriverConfigsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Pagination controls.
+	//
+	// +k8s:optional
+	Options       *ListOptions `protobuf:"bytes,1,opt,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCsiDriverConfigsRequest) Reset() {
+	*x = ListCsiDriverConfigsRequest{}
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCsiDriverConfigsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCsiDriverConfigsRequest) ProtoMessage() {}
+
+func (x *ListCsiDriverConfigsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCsiDriverConfigsRequest.ProtoReflect.Descriptor instead.
+func (*ListCsiDriverConfigsRequest) Descriptor() ([]byte, []int) {
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *ListCsiDriverConfigsRequest) GetOptions() *ListOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+// ListCsiDriverConfigsResponse is one page of CsiDriverConfigs.
+type ListCsiDriverConfigsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page of configs. This list may be empty even if there are more results.
+	CsiDriverConfigs []*CsiDriverConfig `protobuf:"bytes,1,rep,name=csi_driver_configs,json=csiDriverConfigs,proto3" json:"csi_driver_configs,omitempty"`
+	// Pagination token for the next page. Empty if this is the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCsiDriverConfigsResponse) Reset() {
+	*x = ListCsiDriverConfigsResponse{}
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCsiDriverConfigsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCsiDriverConfigsResponse) ProtoMessage() {}
+
+func (x *ListCsiDriverConfigsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCsiDriverConfigsResponse.ProtoReflect.Descriptor instead.
+func (*ListCsiDriverConfigsResponse) Descriptor() ([]byte, []int) {
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *ListCsiDriverConfigsResponse) GetCsiDriverConfigs() []*CsiDriverConfig {
+	if x != nil {
+		return x.CsiDriverConfigs
+	}
+	return nil
+}
+
+func (x *ListCsiDriverConfigsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+// UpdateCsiDriverConfigRequest updates a CsiDriverConfig.
+type UpdateCsiDriverConfigRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The config to update. csi_driver_config.metadata.name identifies which
+	// resource to update, and metadata.atespace must be empty.
+	// csi_driver_config.metadata.uid and csi_driver_config.metadata.version are
+	// required preconditions.
+	//
+	// controller_endpoint, node_socket_override, and tls are replaced with what
+	// the request carries, and any omitted optional field is cleared.
+	// driver_name is immutable.
+	//
+	// +ate:preview=ExternalVolumes
+	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+	// +k8s:required
+	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:subfield(metadata)=+k8s:required
+	// +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
+	CsiDriverConfig *CsiDriverConfig `protobuf:"bytes,1,opt,name=csi_driver_config,json=csiDriverConfig,proto3" json:"csi_driver_config,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UpdateCsiDriverConfigRequest) Reset() {
+	*x = UpdateCsiDriverConfigRequest{}
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateCsiDriverConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateCsiDriverConfigRequest) ProtoMessage() {}
+
+func (x *UpdateCsiDriverConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateCsiDriverConfigRequest.ProtoReflect.Descriptor instead.
+func (*UpdateCsiDriverConfigRequest) Descriptor() ([]byte, []int) {
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *UpdateCsiDriverConfigRequest) GetCsiDriverConfig() *CsiDriverConfig {
+	if x != nil {
+		return x.CsiDriverConfig
+	}
+	return nil
+}
+
+// DeleteCsiDriverConfigRequest identifies the CsiDriverConfig to delete.
+type DeleteCsiDriverConfigRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The config to delete. atespace must be empty.
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	CsiDriverConfig *ObjectRef `protobuf:"bytes,1,opt,name=csi_driver_config,json=csiDriverConfig,proto3" json:"csi_driver_config,omitempty"`
+	// Optional per-delete preconditions.
+	//
+	// +k8s:optional
+	Options       *DeleteOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteCsiDriverConfigRequest) Reset() {
+	*x = DeleteCsiDriverConfigRequest{}
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteCsiDriverConfigRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteCsiDriverConfigRequest) ProtoMessage() {}
+
+func (x *DeleteCsiDriverConfigRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteCsiDriverConfigRequest.ProtoReflect.Descriptor instead.
+func (*DeleteCsiDriverConfigRequest) Descriptor() ([]byte, []int) {
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *DeleteCsiDriverConfigRequest) GetCsiDriverConfig() *ObjectRef {
+	if x != nil {
+		return x.CsiDriverConfig
+	}
+	return nil
+}
+
+func (x *DeleteCsiDriverConfigRequest) GetOptions() *DeleteOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
 type CreateActorTemplateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor template version to create. Server-assigned metadata (uid,
@@ -5232,7 +5553,7 @@ type CreateActorTemplateRequest struct {
 
 func (x *CreateActorTemplateRequest) Reset() {
 	*x = CreateActorTemplateRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[63]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5244,7 +5565,7 @@ func (x *CreateActorTemplateRequest) String() string {
 func (*CreateActorTemplateRequest) ProtoMessage() {}
 
 func (x *CreateActorTemplateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[63]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5257,7 +5578,7 @@ func (x *CreateActorTemplateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateActorTemplateRequest.ProtoReflect.Descriptor instead.
 func (*CreateActorTemplateRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{63}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *CreateActorTemplateRequest) GetActorTemplate() *ActorTemplate {
@@ -5278,7 +5599,7 @@ type GetActorTemplateRequest struct {
 
 func (x *GetActorTemplateRequest) Reset() {
 	*x = GetActorTemplateRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[64]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5290,7 +5611,7 @@ func (x *GetActorTemplateRequest) String() string {
 func (*GetActorTemplateRequest) ProtoMessage() {}
 
 func (x *GetActorTemplateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[64]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5303,7 +5624,7 @@ func (x *GetActorTemplateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorTemplateRequest.ProtoReflect.Descriptor instead.
 func (*GetActorTemplateRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{64}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *GetActorTemplateRequest) GetActorTemplate() *ObjectRef {
@@ -5331,7 +5652,7 @@ type ListActorTemplatesRequest struct {
 
 func (x *ListActorTemplatesRequest) Reset() {
 	*x = ListActorTemplatesRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[65]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5343,7 +5664,7 @@ func (x *ListActorTemplatesRequest) String() string {
 func (*ListActorTemplatesRequest) ProtoMessage() {}
 
 func (x *ListActorTemplatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[65]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5356,7 +5677,7 @@ func (x *ListActorTemplatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActorTemplatesRequest.ProtoReflect.Descriptor instead.
 func (*ListActorTemplatesRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{65}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListActorTemplatesRequest) GetAtespace() string {
@@ -5386,7 +5707,7 @@ type ListActorTemplatesResponse struct {
 
 func (x *ListActorTemplatesResponse) Reset() {
 	*x = ListActorTemplatesResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[66]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5398,7 +5719,7 @@ func (x *ListActorTemplatesResponse) String() string {
 func (*ListActorTemplatesResponse) ProtoMessage() {}
 
 func (x *ListActorTemplatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[66]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5411,7 +5732,7 @@ func (x *ListActorTemplatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActorTemplatesResponse.ProtoReflect.Descriptor instead.
 func (*ListActorTemplatesResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{66}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ListActorTemplatesResponse) GetActorTemplates() []*ActorTemplate {
@@ -5443,7 +5764,7 @@ type DeleteActorTemplateRequest struct {
 
 func (x *DeleteActorTemplateRequest) Reset() {
 	*x = DeleteActorTemplateRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[67]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5455,7 +5776,7 @@ func (x *DeleteActorTemplateRequest) String() string {
 func (*DeleteActorTemplateRequest) ProtoMessage() {}
 
 func (x *DeleteActorTemplateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[67]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5468,7 +5789,7 @@ func (x *DeleteActorTemplateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteActorTemplateRequest.ProtoReflect.Descriptor instead.
 func (*DeleteActorTemplateRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{67}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DeleteActorTemplateRequest) GetActorTemplate() *ObjectRef {
@@ -5496,7 +5817,7 @@ type GetActorRequest struct {
 
 func (x *GetActorRequest) Reset() {
 	*x = GetActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[68]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5508,7 +5829,7 @@ func (x *GetActorRequest) String() string {
 func (*GetActorRequest) ProtoMessage() {}
 
 func (x *GetActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[68]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5521,7 +5842,7 @@ func (x *GetActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorRequest.ProtoReflect.Descriptor instead.
 func (*GetActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{68}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *GetActorRequest) GetActor() *ObjectRef {
@@ -5544,7 +5865,7 @@ type CreateActorRequest struct {
 
 func (x *CreateActorRequest) Reset() {
 	*x = CreateActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[69]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5556,7 +5877,7 @@ func (x *CreateActorRequest) String() string {
 func (*CreateActorRequest) ProtoMessage() {}
 
 func (x *CreateActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[69]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5569,7 +5890,7 @@ func (x *CreateActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateActorRequest.ProtoReflect.Descriptor instead.
 func (*CreateActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{69}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *CreateActorRequest) GetActor() *Actor {
@@ -5600,7 +5921,7 @@ type UpdateActorRequest struct {
 
 func (x *UpdateActorRequest) Reset() {
 	*x = UpdateActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[70]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5612,7 +5933,7 @@ func (x *UpdateActorRequest) String() string {
 func (*UpdateActorRequest) ProtoMessage() {}
 
 func (x *UpdateActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[70]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5625,7 +5946,7 @@ func (x *UpdateActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateActorRequest.ProtoReflect.Descriptor instead.
 func (*UpdateActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{70}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *UpdateActorRequest) GetActor() *Actor {
@@ -5650,7 +5971,7 @@ type SuspendActorRequest struct {
 
 func (x *SuspendActorRequest) Reset() {
 	*x = SuspendActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[71]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5662,7 +5983,7 @@ func (x *SuspendActorRequest) String() string {
 func (*SuspendActorRequest) ProtoMessage() {}
 
 func (x *SuspendActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[71]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5675,7 +5996,7 @@ func (x *SuspendActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendActorRequest.ProtoReflect.Descriptor instead.
 func (*SuspendActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{71}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *SuspendActorRequest) GetActor() *ObjectRef {
@@ -5701,7 +6022,7 @@ type SuspendActorResponse struct {
 
 func (x *SuspendActorResponse) Reset() {
 	*x = SuspendActorResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[72]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5713,7 +6034,7 @@ func (x *SuspendActorResponse) String() string {
 func (*SuspendActorResponse) ProtoMessage() {}
 
 func (x *SuspendActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[72]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5726,7 +6047,7 @@ func (x *SuspendActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendActorResponse.ProtoReflect.Descriptor instead.
 func (*SuspendActorResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{72}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *SuspendActorResponse) GetActor() *Actor {
@@ -5752,7 +6073,7 @@ type SuspendOptions struct {
 
 func (x *SuspendOptions) Reset() {
 	*x = SuspendOptions{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[73]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5764,7 +6085,7 @@ func (x *SuspendOptions) String() string {
 func (*SuspendOptions) ProtoMessage() {}
 
 func (x *SuspendOptions) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[73]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5777,7 +6098,7 @@ func (x *SuspendOptions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendOptions.ProtoReflect.Descriptor instead.
 func (*SuspendOptions) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{73}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *SuspendOptions) GetMode() DurabilityMode {
@@ -5798,7 +6119,7 @@ type ResumeActorRequest struct {
 
 func (x *ResumeActorRequest) Reset() {
 	*x = ResumeActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[74]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5810,7 +6131,7 @@ func (x *ResumeActorRequest) String() string {
 func (*ResumeActorRequest) ProtoMessage() {}
 
 func (x *ResumeActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[74]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5823,7 +6144,7 @@ func (x *ResumeActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeActorRequest.ProtoReflect.Descriptor instead.
 func (*ResumeActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{74}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ResumeActorRequest) GetActor() *ObjectRef {
@@ -5845,7 +6166,7 @@ type ResumeActorResponse struct {
 
 func (x *ResumeActorResponse) Reset() {
 	*x = ResumeActorResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[75]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5857,7 +6178,7 @@ func (x *ResumeActorResponse) String() string {
 func (*ResumeActorResponse) ProtoMessage() {}
 
 func (x *ResumeActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[75]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5870,7 +6191,7 @@ func (x *ResumeActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeActorResponse.ProtoReflect.Descriptor instead.
 func (*ResumeActorResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{75}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ResumeActorResponse) GetActor() *Actor {
@@ -5900,7 +6221,7 @@ type RevertActorRequest struct {
 
 func (x *RevertActorRequest) Reset() {
 	*x = RevertActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[76]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5912,7 +6233,7 @@ func (x *RevertActorRequest) String() string {
 func (*RevertActorRequest) ProtoMessage() {}
 
 func (x *RevertActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[76]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5925,7 +6246,7 @@ func (x *RevertActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevertActorRequest.ProtoReflect.Descriptor instead.
 func (*RevertActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{76}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *RevertActorRequest) GetActor() *ObjectRef {
@@ -5947,7 +6268,7 @@ type RevertActorResponse struct {
 
 func (x *RevertActorResponse) Reset() {
 	*x = RevertActorResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[77]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5959,7 +6280,7 @@ func (x *RevertActorResponse) String() string {
 func (*RevertActorResponse) ProtoMessage() {}
 
 func (x *RevertActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[77]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5972,7 +6293,7 @@ func (x *RevertActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevertActorResponse.ProtoReflect.Descriptor instead.
 func (*RevertActorResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{77}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *RevertActorResponse) GetActor() *Actor {
@@ -5997,7 +6318,7 @@ type DeleteActorRequest struct {
 
 func (x *DeleteActorRequest) Reset() {
 	*x = DeleteActorRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[78]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6009,7 +6330,7 @@ func (x *DeleteActorRequest) String() string {
 func (*DeleteActorRequest) ProtoMessage() {}
 
 func (x *DeleteActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[78]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6022,7 +6343,7 @@ func (x *DeleteActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteActorRequest.ProtoReflect.Descriptor instead.
 func (*DeleteActorRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{78}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *DeleteActorRequest) GetActor() *ObjectRef {
@@ -6059,7 +6380,7 @@ type GetActorEgressPolicyRequest struct {
 
 func (x *GetActorEgressPolicyRequest) Reset() {
 	*x = GetActorEgressPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[79]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6071,7 +6392,7 @@ func (x *GetActorEgressPolicyRequest) String() string {
 func (*GetActorEgressPolicyRequest) ProtoMessage() {}
 
 func (x *GetActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[79]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6084,7 +6405,7 @@ func (x *GetActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorEgressPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetActorEgressPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{79}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *GetActorEgressPolicyRequest) GetActor() *ObjectRef {
@@ -6122,7 +6443,7 @@ type CreateActorEgressPolicyRequest struct {
 
 func (x *CreateActorEgressPolicyRequest) Reset() {
 	*x = CreateActorEgressPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[80]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6134,7 +6455,7 @@ func (x *CreateActorEgressPolicyRequest) String() string {
 func (*CreateActorEgressPolicyRequest) ProtoMessage() {}
 
 func (x *CreateActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[80]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6147,7 +6468,7 @@ func (x *CreateActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateActorEgressPolicyRequest.ProtoReflect.Descriptor instead.
 func (*CreateActorEgressPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{80}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *CreateActorEgressPolicyRequest) GetActor() *ObjectRef {
@@ -6185,7 +6506,7 @@ type UpdateActorEgressPolicyRequest struct {
 
 func (x *UpdateActorEgressPolicyRequest) Reset() {
 	*x = UpdateActorEgressPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[81]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6197,7 +6518,7 @@ func (x *UpdateActorEgressPolicyRequest) String() string {
 func (*UpdateActorEgressPolicyRequest) ProtoMessage() {}
 
 func (x *UpdateActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[81]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6210,7 +6531,7 @@ func (x *UpdateActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateActorEgressPolicyRequest.ProtoReflect.Descriptor instead.
 func (*UpdateActorEgressPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{81}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *UpdateActorEgressPolicyRequest) GetActor() *ObjectRef {
@@ -6251,7 +6572,7 @@ type DeleteActorEgressPolicyRequest struct {
 
 func (x *DeleteActorEgressPolicyRequest) Reset() {
 	*x = DeleteActorEgressPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[82]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6263,7 +6584,7 @@ func (x *DeleteActorEgressPolicyRequest) String() string {
 func (*DeleteActorEgressPolicyRequest) ProtoMessage() {}
 
 func (x *DeleteActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[82]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6276,7 +6597,7 @@ func (x *DeleteActorEgressPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteActorEgressPolicyRequest.ProtoReflect.Descriptor instead.
 func (*DeleteActorEgressPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{82}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *DeleteActorEgressPolicyRequest) GetActor() *ObjectRef {
@@ -6311,7 +6632,7 @@ type GetTagRequest struct {
 
 func (x *GetTagRequest) Reset() {
 	*x = GetTagRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[83]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6323,7 +6644,7 @@ func (x *GetTagRequest) String() string {
 func (*GetTagRequest) ProtoMessage() {}
 
 func (x *GetTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[83]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6336,7 +6657,7 @@ func (x *GetTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTagRequest.ProtoReflect.Descriptor instead.
 func (*GetTagRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{83}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *GetTagRequest) GetTag() *ObjectRef {
@@ -6375,7 +6696,7 @@ type MintActorJwtRequest struct {
 
 func (x *MintActorJwtRequest) Reset() {
 	*x = MintActorJwtRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[84]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6387,7 +6708,7 @@ func (x *MintActorJwtRequest) String() string {
 func (*MintActorJwtRequest) ProtoMessage() {}
 
 func (x *MintActorJwtRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[84]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6400,7 +6721,7 @@ func (x *MintActorJwtRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintActorJwtRequest.ProtoReflect.Descriptor instead.
 func (*MintActorJwtRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{84}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *MintActorJwtRequest) GetActor() *ObjectRef {
@@ -6455,7 +6776,7 @@ type MintActorJwtResponse struct {
 
 func (x *MintActorJwtResponse) Reset() {
 	*x = MintActorJwtResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[85]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6467,7 +6788,7 @@ func (x *MintActorJwtResponse) String() string {
 func (*MintActorJwtResponse) ProtoMessage() {}
 
 func (x *MintActorJwtResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[85]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6480,7 +6801,7 @@ func (x *MintActorJwtResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintActorJwtResponse.ProtoReflect.Descriptor instead.
 func (*MintActorJwtResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{85}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *MintActorJwtResponse) GetActorJwt() string {
@@ -6514,7 +6835,7 @@ type ListTagsRequest struct {
 
 func (x *ListTagsRequest) Reset() {
 	*x = ListTagsRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[86]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6526,7 +6847,7 @@ func (x *ListTagsRequest) String() string {
 func (*ListTagsRequest) ProtoMessage() {}
 
 func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[86]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6539,7 +6860,7 @@ func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTagsRequest.ProtoReflect.Descriptor instead.
 func (*ListTagsRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{86}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *ListTagsRequest) GetAtespace() string {
@@ -6566,7 +6887,7 @@ type ListTagsResponse struct {
 
 func (x *ListTagsResponse) Reset() {
 	*x = ListTagsResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[87]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6578,7 +6899,7 @@ func (x *ListTagsResponse) String() string {
 func (*ListTagsResponse) ProtoMessage() {}
 
 func (x *ListTagsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[87]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6591,7 +6912,7 @@ func (x *ListTagsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTagsResponse.ProtoReflect.Descriptor instead.
 func (*ListTagsResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{87}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *ListTagsResponse) GetTags() []*Tag {
@@ -6636,7 +6957,7 @@ type CreateTagRequest struct {
 
 func (x *CreateTagRequest) Reset() {
 	*x = CreateTagRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[88]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6648,7 +6969,7 @@ func (x *CreateTagRequest) String() string {
 func (*CreateTagRequest) ProtoMessage() {}
 
 func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[88]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6661,7 +6982,7 @@ func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTagRequest.ProtoReflect.Descriptor instead.
 func (*CreateTagRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{88}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *CreateTagRequest) GetTag() *Tag {
@@ -6691,7 +7012,7 @@ type UpdateTagRequest struct {
 
 func (x *UpdateTagRequest) Reset() {
 	*x = UpdateTagRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[89]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6703,7 +7024,7 @@ func (x *UpdateTagRequest) String() string {
 func (*UpdateTagRequest) ProtoMessage() {}
 
 func (x *UpdateTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[89]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6716,7 +7037,7 @@ func (x *UpdateTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateTagRequest.ProtoReflect.Descriptor instead.
 func (*UpdateTagRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{89}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *UpdateTagRequest) GetTag() *Tag {
@@ -6741,7 +7062,7 @@ type DeleteTagRequest struct {
 
 func (x *DeleteTagRequest) Reset() {
 	*x = DeleteTagRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[90]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6753,7 +7074,7 @@ func (x *DeleteTagRequest) String() string {
 func (*DeleteTagRequest) ProtoMessage() {}
 
 func (x *DeleteTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[90]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6766,7 +7087,7 @@ func (x *DeleteTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTagRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTagRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{90}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *DeleteTagRequest) GetTag() *ObjectRef {
@@ -6805,7 +7126,7 @@ type DeleteOptions struct {
 
 func (x *DeleteOptions) Reset() {
 	*x = DeleteOptions{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[91]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6817,7 +7138,7 @@ func (x *DeleteOptions) String() string {
 func (*DeleteOptions) ProtoMessage() {}
 
 func (x *DeleteOptions) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[91]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6830,7 +7151,7 @@ func (x *DeleteOptions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOptions.ProtoReflect.Descriptor instead.
 func (*DeleteOptions) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{91}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *DeleteOptions) GetVersion() int64 {
@@ -6869,7 +7190,7 @@ type ListOptions struct {
 
 func (x *ListOptions) Reset() {
 	*x = ListOptions{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[92]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6881,7 +7202,7 @@ func (x *ListOptions) String() string {
 func (*ListOptions) ProtoMessage() {}
 
 func (x *ListOptions) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[92]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6894,7 +7215,7 @@ func (x *ListOptions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListOptions.ProtoReflect.Descriptor instead.
 func (*ListOptions) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{92}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *ListOptions) GetPageSize() int32 {
@@ -6930,7 +7251,7 @@ type ListWorkerActorAssignmentsRequest struct {
 
 func (x *ListWorkerActorAssignmentsRequest) Reset() {
 	*x = ListWorkerActorAssignmentsRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[93]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6942,7 +7263,7 @@ func (x *ListWorkerActorAssignmentsRequest) String() string {
 func (*ListWorkerActorAssignmentsRequest) ProtoMessage() {}
 
 func (x *ListWorkerActorAssignmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[93]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6955,7 +7276,7 @@ func (x *ListWorkerActorAssignmentsRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ListWorkerActorAssignmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkerActorAssignmentsRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{93}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *ListWorkerActorAssignmentsRequest) GetWorker() *ObjectRef {
@@ -6985,7 +7306,7 @@ type ListWorkerActorAssignmentsResponse struct {
 
 func (x *ListWorkerActorAssignmentsResponse) Reset() {
 	*x = ListWorkerActorAssignmentsResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[94]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6997,7 +7318,7 @@ func (x *ListWorkerActorAssignmentsResponse) String() string {
 func (*ListWorkerActorAssignmentsResponse) ProtoMessage() {}
 
 func (x *ListWorkerActorAssignmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[94]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7010,7 +7331,7 @@ func (x *ListWorkerActorAssignmentsResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ListWorkerActorAssignmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkerActorAssignmentsResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{94}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *ListWorkerActorAssignmentsResponse) GetActorAssignments() []*ActorAssignment {
@@ -7039,7 +7360,7 @@ type ListWorkersRequest struct {
 
 func (x *ListWorkersRequest) Reset() {
 	*x = ListWorkersRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[95]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7051,7 +7372,7 @@ func (x *ListWorkersRequest) String() string {
 func (*ListWorkersRequest) ProtoMessage() {}
 
 func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[95]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7064,7 +7385,7 @@ func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkersRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{95}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *ListWorkersRequest) GetOptions() *ListOptions {
@@ -7086,7 +7407,7 @@ type ListWorkersResponse struct {
 
 func (x *ListWorkersResponse) Reset() {
 	*x = ListWorkersResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[96]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7098,7 +7419,7 @@ func (x *ListWorkersResponse) String() string {
 func (*ListWorkersResponse) ProtoMessage() {}
 
 func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[96]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7111,7 +7432,7 @@ func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkersResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{96}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *ListWorkersResponse) GetWorkers() []*Worker {
@@ -7141,7 +7462,7 @@ type GetWorkerRequest struct {
 
 func (x *GetWorkerRequest) Reset() {
 	*x = GetWorkerRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[97]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7153,7 +7474,7 @@ func (x *GetWorkerRequest) String() string {
 func (*GetWorkerRequest) ProtoMessage() {}
 
 func (x *GetWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[97]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7166,7 +7487,7 @@ func (x *GetWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWorkerRequest.ProtoReflect.Descriptor instead.
 func (*GetWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{97}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *GetWorkerRequest) GetWorker() *ObjectRef {
@@ -7188,7 +7509,7 @@ type CreateWorkerRequest struct {
 
 func (x *CreateWorkerRequest) Reset() {
 	*x = CreateWorkerRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[98]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7200,7 +7521,7 @@ func (x *CreateWorkerRequest) String() string {
 func (*CreateWorkerRequest) ProtoMessage() {}
 
 func (x *CreateWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[98]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7213,7 +7534,7 @@ func (x *CreateWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateWorkerRequest.ProtoReflect.Descriptor instead.
 func (*CreateWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{98}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *CreateWorkerRequest) GetWorker() *Worker {
@@ -7248,7 +7569,7 @@ type UpdateWorkerRequest struct {
 
 func (x *UpdateWorkerRequest) Reset() {
 	*x = UpdateWorkerRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[99]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7260,7 +7581,7 @@ func (x *UpdateWorkerRequest) String() string {
 func (*UpdateWorkerRequest) ProtoMessage() {}
 
 func (x *UpdateWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[99]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7273,7 +7594,7 @@ func (x *UpdateWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateWorkerRequest.ProtoReflect.Descriptor instead.
 func (*UpdateWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{99}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *UpdateWorkerRequest) GetWorker() *Worker {
@@ -7300,7 +7621,7 @@ type DeleteWorkerRequest struct {
 
 func (x *DeleteWorkerRequest) Reset() {
 	*x = DeleteWorkerRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[100]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7312,7 +7633,7 @@ func (x *DeleteWorkerRequest) String() string {
 func (*DeleteWorkerRequest) ProtoMessage() {}
 
 func (x *DeleteWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[100]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7325,7 +7646,7 @@ func (x *DeleteWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWorkerRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{100}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *DeleteWorkerRequest) GetWorker() *ObjectRef {
@@ -7355,7 +7676,7 @@ type DrainWorkerRequest struct {
 
 func (x *DrainWorkerRequest) Reset() {
 	*x = DrainWorkerRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[101]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7367,7 +7688,7 @@ func (x *DrainWorkerRequest) String() string {
 func (*DrainWorkerRequest) ProtoMessage() {}
 
 func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[101]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7380,7 +7701,7 @@ func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainWorkerRequest.ProtoReflect.Descriptor instead.
 func (*DrainWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{101}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *DrainWorkerRequest) GetWorker() *ObjectRef {
@@ -7401,7 +7722,7 @@ type DrainWorkerResponse struct {
 
 func (x *DrainWorkerResponse) Reset() {
 	*x = DrainWorkerResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[102]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7413,7 +7734,7 @@ func (x *DrainWorkerResponse) String() string {
 func (*DrainWorkerResponse) ProtoMessage() {}
 
 func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[102]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7426,7 +7747,7 @@ func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainWorkerResponse.ProtoReflect.Descriptor instead.
 func (*DrainWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{102}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *DrainWorkerResponse) GetWorker() *Worker {
@@ -7450,7 +7771,7 @@ type MarkWorkerAvailableRequest struct {
 
 func (x *MarkWorkerAvailableRequest) Reset() {
 	*x = MarkWorkerAvailableRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[103]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7462,7 +7783,7 @@ func (x *MarkWorkerAvailableRequest) String() string {
 func (*MarkWorkerAvailableRequest) ProtoMessage() {}
 
 func (x *MarkWorkerAvailableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[103]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7475,7 +7796,7 @@ func (x *MarkWorkerAvailableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkWorkerAvailableRequest.ProtoReflect.Descriptor instead.
 func (*MarkWorkerAvailableRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{103}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *MarkWorkerAvailableRequest) GetWorker() *ObjectRef {
@@ -7496,7 +7817,7 @@ type MarkWorkerAvailableResponse struct {
 
 func (x *MarkWorkerAvailableResponse) Reset() {
 	*x = MarkWorkerAvailableResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[104]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7508,7 +7829,7 @@ func (x *MarkWorkerAvailableResponse) String() string {
 func (*MarkWorkerAvailableResponse) ProtoMessage() {}
 
 func (x *MarkWorkerAvailableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[104]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7521,7 +7842,7 @@ func (x *MarkWorkerAvailableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkWorkerAvailableResponse.ProtoReflect.Descriptor instead.
 func (*MarkWorkerAvailableResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{104}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *MarkWorkerAvailableResponse) GetWorker() *Worker {
@@ -7545,7 +7866,7 @@ type MarkWorkerUnavailableRequest struct {
 
 func (x *MarkWorkerUnavailableRequest) Reset() {
 	*x = MarkWorkerUnavailableRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[105]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7557,7 +7878,7 @@ func (x *MarkWorkerUnavailableRequest) String() string {
 func (*MarkWorkerUnavailableRequest) ProtoMessage() {}
 
 func (x *MarkWorkerUnavailableRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[105]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7570,7 +7891,7 @@ func (x *MarkWorkerUnavailableRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkWorkerUnavailableRequest.ProtoReflect.Descriptor instead.
 func (*MarkWorkerUnavailableRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{105}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *MarkWorkerUnavailableRequest) GetWorker() *ObjectRef {
@@ -7591,7 +7912,7 @@ type MarkWorkerUnavailableResponse struct {
 
 func (x *MarkWorkerUnavailableResponse) Reset() {
 	*x = MarkWorkerUnavailableResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[106]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7603,7 +7924,7 @@ func (x *MarkWorkerUnavailableResponse) String() string {
 func (*MarkWorkerUnavailableResponse) ProtoMessage() {}
 
 func (x *MarkWorkerUnavailableResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[106]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7616,7 +7937,7 @@ func (x *MarkWorkerUnavailableResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkWorkerUnavailableResponse.ProtoReflect.Descriptor instead.
 func (*MarkWorkerUnavailableResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{106}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *MarkWorkerUnavailableResponse) GetWorker() *Worker {
@@ -7645,7 +7966,7 @@ type ListActorsRequest struct {
 
 func (x *ListActorsRequest) Reset() {
 	*x = ListActorsRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[107]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7657,7 +7978,7 @@ func (x *ListActorsRequest) String() string {
 func (*ListActorsRequest) ProtoMessage() {}
 
 func (x *ListActorsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[107]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7670,7 +7991,7 @@ func (x *ListActorsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActorsRequest.ProtoReflect.Descriptor instead.
 func (*ListActorsRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{107}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ListActorsRequest) GetAtespace() string {
@@ -7699,7 +8020,7 @@ type ListActorsResponse struct {
 
 func (x *ListActorsResponse) Reset() {
 	*x = ListActorsResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[108]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7711,7 +8032,7 @@ func (x *ListActorsResponse) String() string {
 func (*ListActorsResponse) ProtoMessage() {}
 
 func (x *ListActorsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[108]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7724,7 +8045,7 @@ func (x *ListActorsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActorsResponse.ProtoReflect.Descriptor instead.
 func (*ListActorsResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{108}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ListActorsResponse) GetActors() []*Actor {
@@ -7812,7 +8133,7 @@ type Worker struct {
 
 func (x *Worker) Reset() {
 	*x = Worker{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[109]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7824,7 +8145,7 @@ func (x *Worker) String() string {
 func (*Worker) ProtoMessage() {}
 
 func (x *Worker) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[109]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7837,7 +8158,7 @@ func (x *Worker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Worker.ProtoReflect.Descriptor instead.
 func (*Worker) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{109}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *Worker) GetMetadata() *ResourceMetadata {
@@ -7979,7 +8300,7 @@ type WorkerStatus struct {
 
 func (x *WorkerStatus) Reset() {
 	*x = WorkerStatus{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[110]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7991,7 +8312,7 @@ func (x *WorkerStatus) String() string {
 func (*WorkerStatus) ProtoMessage() {}
 
 func (x *WorkerStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[110]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8004,7 +8325,7 @@ func (x *WorkerStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerStatus.ProtoReflect.Descriptor instead.
 func (*WorkerStatus) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{110}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *WorkerStatus) GetState() WorkerState {
@@ -8092,7 +8413,7 @@ type WorkerSandboxClass struct {
 
 func (x *WorkerSandboxClass) Reset() {
 	*x = WorkerSandboxClass{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[111]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8104,7 +8425,7 @@ func (x *WorkerSandboxClass) String() string {
 func (*WorkerSandboxClass) ProtoMessage() {}
 
 func (x *WorkerSandboxClass) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[111]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8117,7 +8438,7 @@ func (x *WorkerSandboxClass) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerSandboxClass.ProtoReflect.Descriptor instead.
 func (*WorkerSandboxClass) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{111}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *WorkerSandboxClass) GetSandboxClass() string {
@@ -8169,7 +8490,7 @@ type WorkerSandboxRuntime struct {
 
 func (x *WorkerSandboxRuntime) Reset() {
 	*x = WorkerSandboxRuntime{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[112]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8181,7 +8502,7 @@ func (x *WorkerSandboxRuntime) String() string {
 func (*WorkerSandboxRuntime) ProtoMessage() {}
 
 func (x *WorkerSandboxRuntime) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[112]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8194,7 +8515,7 @@ func (x *WorkerSandboxRuntime) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerSandboxRuntime.ProtoReflect.Descriptor instead.
 func (*WorkerSandboxRuntime) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{112}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *WorkerSandboxRuntime) GetVersion() *VersionedSandboxCompat {
@@ -8235,7 +8556,7 @@ type RuntimeOverhead struct {
 
 func (x *RuntimeOverhead) Reset() {
 	*x = RuntimeOverhead{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[113]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8247,7 +8568,7 @@ func (x *RuntimeOverhead) String() string {
 func (*RuntimeOverhead) ProtoMessage() {}
 
 func (x *RuntimeOverhead) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[113]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8260,7 +8581,7 @@ func (x *RuntimeOverhead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeOverhead.ProtoReflect.Descriptor instead.
 func (*RuntimeOverhead) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{113}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *RuntimeOverhead) GetMemoryBytes() int64 {
@@ -8299,7 +8620,7 @@ type ActorSandboxRuntime struct {
 
 func (x *ActorSandboxRuntime) Reset() {
 	*x = ActorSandboxRuntime{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[114]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8311,7 +8632,7 @@ func (x *ActorSandboxRuntime) String() string {
 func (*ActorSandboxRuntime) ProtoMessage() {}
 
 func (x *ActorSandboxRuntime) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[114]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8324,7 +8645,7 @@ func (x *ActorSandboxRuntime) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorSandboxRuntime.ProtoReflect.Descriptor instead.
 func (*ActorSandboxRuntime) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{114}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *ActorSandboxRuntime) GetSandboxClass() string {
@@ -8375,7 +8696,7 @@ type VersionedSandboxCompat struct {
 
 func (x *VersionedSandboxCompat) Reset() {
 	*x = VersionedSandboxCompat{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[115]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8387,7 +8708,7 @@ func (x *VersionedSandboxCompat) String() string {
 func (*VersionedSandboxCompat) ProtoMessage() {}
 
 func (x *VersionedSandboxCompat) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[115]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8400,7 +8721,7 @@ func (x *VersionedSandboxCompat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionedSandboxCompat.ProtoReflect.Descriptor instead.
 func (*VersionedSandboxCompat) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{115}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *VersionedSandboxCompat) GetSchemaVersion() string {
@@ -8436,7 +8757,7 @@ type AttributeEntry struct {
 
 func (x *AttributeEntry) Reset() {
 	*x = AttributeEntry{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[116]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8448,7 +8769,7 @@ func (x *AttributeEntry) String() string {
 func (*AttributeEntry) ProtoMessage() {}
 
 func (x *AttributeEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[116]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8461,7 +8782,7 @@ func (x *AttributeEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttributeEntry.ProtoReflect.Descriptor instead.
 func (*AttributeEntry) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{116}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *AttributeEntry) GetKey() string {
@@ -8508,7 +8829,7 @@ type WorkerResources struct {
 
 func (x *WorkerResources) Reset() {
 	*x = WorkerResources{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[117]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8520,7 +8841,7 @@ func (x *WorkerResources) String() string {
 func (*WorkerResources) ProtoMessage() {}
 
 func (x *WorkerResources) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[117]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8533,7 +8854,7 @@ func (x *WorkerResources) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerResources.ProtoReflect.Descriptor instead.
 func (*WorkerResources) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{117}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *WorkerResources) GetCpuMillicores() int64 {
@@ -8589,7 +8910,7 @@ type ActorAssignment struct {
 
 func (x *ActorAssignment) Reset() {
 	*x = ActorAssignment{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[118]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8601,7 +8922,7 @@ func (x *ActorAssignment) String() string {
 func (*ActorAssignment) ProtoMessage() {}
 
 func (x *ActorAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[118]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8614,7 +8935,7 @@ func (x *ActorAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorAssignment.ProtoReflect.Descriptor instead.
 func (*ActorAssignment) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{118}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *ActorAssignment) GetMetadata() *ResourceMetadata {
@@ -8659,7 +8980,7 @@ type AcquireWorkerEpochRequest struct {
 
 func (x *AcquireWorkerEpochRequest) Reset() {
 	*x = AcquireWorkerEpochRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[119]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8671,7 +8992,7 @@ func (x *AcquireWorkerEpochRequest) String() string {
 func (*AcquireWorkerEpochRequest) ProtoMessage() {}
 
 func (x *AcquireWorkerEpochRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[119]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8684,7 +9005,7 @@ func (x *AcquireWorkerEpochRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireWorkerEpochRequest.ProtoReflect.Descriptor instead.
 func (*AcquireWorkerEpochRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{119}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *AcquireWorkerEpochRequest) GetWorker() *ObjectRef {
@@ -8704,7 +9025,7 @@ type AcquireWorkerEpochResponse struct {
 
 func (x *AcquireWorkerEpochResponse) Reset() {
 	*x = AcquireWorkerEpochResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[120]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8716,7 +9037,7 @@ func (x *AcquireWorkerEpochResponse) String() string {
 func (*AcquireWorkerEpochResponse) ProtoMessage() {}
 
 func (x *AcquireWorkerEpochResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[120]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8729,7 +9050,7 @@ func (x *AcquireWorkerEpochResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireWorkerEpochResponse.ProtoReflect.Descriptor instead.
 func (*AcquireWorkerEpochResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{120}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *AcquireWorkerEpochResponse) GetEpoch() int64 {
@@ -8772,7 +9093,7 @@ type RegisterWorkerRequest struct {
 
 func (x *RegisterWorkerRequest) Reset() {
 	*x = RegisterWorkerRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[121]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8784,7 +9105,7 @@ func (x *RegisterWorkerRequest) String() string {
 func (*RegisterWorkerRequest) ProtoMessage() {}
 
 func (x *RegisterWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[121]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8797,7 +9118,7 @@ func (x *RegisterWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterWorkerRequest.ProtoReflect.Descriptor instead.
 func (*RegisterWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{121}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *RegisterWorkerRequest) GetWorker() *ObjectRef {
@@ -8838,7 +9159,7 @@ type RegisterWorkerResponse struct {
 
 func (x *RegisterWorkerResponse) Reset() {
 	*x = RegisterWorkerResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[122]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8850,7 +9171,7 @@ func (x *RegisterWorkerResponse) String() string {
 func (*RegisterWorkerResponse) ProtoMessage() {}
 
 func (x *RegisterWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[122]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8863,7 +9184,7 @@ func (x *RegisterWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterWorkerResponse.ProtoReflect.Descriptor instead.
 func (*RegisterWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{122}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *RegisterWorkerResponse) GetWorker() *Worker {
@@ -8903,7 +9224,7 @@ type SetWorkerSandboxRuntimesRequest struct {
 
 func (x *SetWorkerSandboxRuntimesRequest) Reset() {
 	*x = SetWorkerSandboxRuntimesRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[123]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8915,7 +9236,7 @@ func (x *SetWorkerSandboxRuntimesRequest) String() string {
 func (*SetWorkerSandboxRuntimesRequest) ProtoMessage() {}
 
 func (x *SetWorkerSandboxRuntimesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[123]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8928,7 +9249,7 @@ func (x *SetWorkerSandboxRuntimesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetWorkerSandboxRuntimesRequest.ProtoReflect.Descriptor instead.
 func (*SetWorkerSandboxRuntimesRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{123}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *SetWorkerSandboxRuntimesRequest) GetWorker() *ObjectRef {
@@ -8962,7 +9283,7 @@ type SetWorkerSandboxRuntimesResponse struct {
 
 func (x *SetWorkerSandboxRuntimesResponse) Reset() {
 	*x = SetWorkerSandboxRuntimesResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[124]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8974,7 +9295,7 @@ func (x *SetWorkerSandboxRuntimesResponse) String() string {
 func (*SetWorkerSandboxRuntimesResponse) ProtoMessage() {}
 
 func (x *SetWorkerSandboxRuntimesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[124]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8987,7 +9308,7 @@ func (x *SetWorkerSandboxRuntimesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetWorkerSandboxRuntimesResponse.ProtoReflect.Descriptor instead.
 func (*SetWorkerSandboxRuntimesResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{124}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *SetWorkerSandboxRuntimesResponse) GetWorker() *Worker {
@@ -9034,7 +9355,7 @@ type MintWorkerActorCertificateRequest struct {
 
 func (x *MintWorkerActorCertificateRequest) Reset() {
 	*x = MintWorkerActorCertificateRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[125]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9046,7 +9367,7 @@ func (x *MintWorkerActorCertificateRequest) String() string {
 func (*MintWorkerActorCertificateRequest) ProtoMessage() {}
 
 func (x *MintWorkerActorCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[125]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9059,7 +9380,7 @@ func (x *MintWorkerActorCertificateRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use MintWorkerActorCertificateRequest.ProtoReflect.Descriptor instead.
 func (*MintWorkerActorCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{125}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *MintWorkerActorCertificateRequest) GetActor() *ObjectRef {
@@ -9103,7 +9424,7 @@ type MintWorkerActorCertificateResponse struct {
 
 func (x *MintWorkerActorCertificateResponse) Reset() {
 	*x = MintWorkerActorCertificateResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[126]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9115,7 +9436,7 @@ func (x *MintWorkerActorCertificateResponse) String() string {
 func (*MintWorkerActorCertificateResponse) ProtoMessage() {}
 
 func (x *MintWorkerActorCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[126]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9128,7 +9449,7 @@ func (x *MintWorkerActorCertificateResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use MintWorkerActorCertificateResponse.ProtoReflect.Descriptor instead.
 func (*MintWorkerActorCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{126}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *MintWorkerActorCertificateResponse) GetActorCertificates() [][]byte {
@@ -9169,7 +9490,7 @@ type MintWorkerActorJwtRequest struct {
 
 func (x *MintWorkerActorJwtRequest) Reset() {
 	*x = MintWorkerActorJwtRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[127]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9181,7 +9502,7 @@ func (x *MintWorkerActorJwtRequest) String() string {
 func (*MintWorkerActorJwtRequest) ProtoMessage() {}
 
 func (x *MintWorkerActorJwtRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[127]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9194,7 +9515,7 @@ func (x *MintWorkerActorJwtRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintWorkerActorJwtRequest.ProtoReflect.Descriptor instead.
 func (*MintWorkerActorJwtRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{127}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *MintWorkerActorJwtRequest) GetActor() *ObjectRef {
@@ -9242,7 +9563,7 @@ type MintWorkerActorJwtResponse struct {
 
 func (x *MintWorkerActorJwtResponse) Reset() {
 	*x = MintWorkerActorJwtResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[128]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9254,7 +9575,7 @@ func (x *MintWorkerActorJwtResponse) String() string {
 func (*MintWorkerActorJwtResponse) ProtoMessage() {}
 
 func (x *MintWorkerActorJwtResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[128]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9267,7 +9588,7 @@ func (x *MintWorkerActorJwtResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintWorkerActorJwtResponse.ProtoReflect.Descriptor instead.
 func (*MintWorkerActorJwtResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{128}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *MintWorkerActorJwtResponse) GetActorJwt() string {
@@ -9318,7 +9639,7 @@ type RequestActorSuspendRequest struct {
 
 func (x *RequestActorSuspendRequest) Reset() {
 	*x = RequestActorSuspendRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[129]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9330,7 +9651,7 @@ func (x *RequestActorSuspendRequest) String() string {
 func (*RequestActorSuspendRequest) ProtoMessage() {}
 
 func (x *RequestActorSuspendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[129]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9343,7 +9664,7 @@ func (x *RequestActorSuspendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestActorSuspendRequest.ProtoReflect.Descriptor instead.
 func (*RequestActorSuspendRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{129}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *RequestActorSuspendRequest) GetWorker() *ObjectRef {
@@ -9377,7 +9698,7 @@ type RequestActorSuspendResponse struct {
 
 func (x *RequestActorSuspendResponse) Reset() {
 	*x = RequestActorSuspendResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[130]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9389,7 +9710,7 @@ func (x *RequestActorSuspendResponse) String() string {
 func (*RequestActorSuspendResponse) ProtoMessage() {}
 
 func (x *RequestActorSuspendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[130]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9402,7 +9723,7 @@ func (x *RequestActorSuspendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestActorSuspendResponse.ProtoReflect.Descriptor instead.
 func (*RequestActorSuspendResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{130}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *RequestActorSuspendResponse) GetActor() *Actor {
@@ -9442,7 +9763,7 @@ type ReportActorCrashedRequest struct {
 
 func (x *ReportActorCrashedRequest) Reset() {
 	*x = ReportActorCrashedRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[131]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9454,7 +9775,7 @@ func (x *ReportActorCrashedRequest) String() string {
 func (*ReportActorCrashedRequest) ProtoMessage() {}
 
 func (x *ReportActorCrashedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[131]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9467,7 +9788,7 @@ func (x *ReportActorCrashedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportActorCrashedRequest.ProtoReflect.Descriptor instead.
 func (*ReportActorCrashedRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{131}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *ReportActorCrashedRequest) GetWorker() *ObjectRef {
@@ -9508,7 +9829,7 @@ type ReportActorCrashedResponse struct {
 
 func (x *ReportActorCrashedResponse) Reset() {
 	*x = ReportActorCrashedResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[132]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9520,7 +9841,7 @@ func (x *ReportActorCrashedResponse) String() string {
 func (*ReportActorCrashedResponse) ProtoMessage() {}
 
 func (x *ReportActorCrashedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[132]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9533,7 +9854,7 @@ func (x *ReportActorCrashedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportActorCrashedResponse.ProtoReflect.Descriptor instead.
 func (*ReportActorCrashedResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{132}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *ReportActorCrashedResponse) GetActor() *Actor {
@@ -9564,7 +9885,7 @@ type ReportActorSnapshotStateRequest struct {
 
 func (x *ReportActorSnapshotStateRequest) Reset() {
 	*x = ReportActorSnapshotStateRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[133]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9576,7 +9897,7 @@ func (x *ReportActorSnapshotStateRequest) String() string {
 func (*ReportActorSnapshotStateRequest) ProtoMessage() {}
 
 func (x *ReportActorSnapshotStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[133]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9589,7 +9910,7 @@ func (x *ReportActorSnapshotStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportActorSnapshotStateRequest.ProtoReflect.Descriptor instead.
 func (*ReportActorSnapshotStateRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{133}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *ReportActorSnapshotStateRequest) GetActor() *ObjectRef {
@@ -9621,7 +9942,7 @@ type ReportActorSnapshotStateResponse struct {
 
 func (x *ReportActorSnapshotStateResponse) Reset() {
 	*x = ReportActorSnapshotStateResponse{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[134]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9633,7 +9954,7 @@ func (x *ReportActorSnapshotStateResponse) String() string {
 func (*ReportActorSnapshotStateResponse) ProtoMessage() {}
 
 func (x *ReportActorSnapshotStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[134]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9646,7 +9967,7 @@ func (x *ReportActorSnapshotStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportActorSnapshotStateResponse.ProtoReflect.Descriptor instead.
 func (*ReportActorSnapshotStateResponse) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{134}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{140}
 }
 
 // ActorSnapshotState is what atelet holds for one Actor on its node. It
@@ -9680,7 +10001,7 @@ type ActorSnapshotState struct {
 
 func (x *ActorSnapshotState) Reset() {
 	*x = ActorSnapshotState{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[135]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9692,7 +10013,7 @@ func (x *ActorSnapshotState) String() string {
 func (*ActorSnapshotState) ProtoMessage() {}
 
 func (x *ActorSnapshotState) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[135]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9705,7 +10026,7 @@ func (x *ActorSnapshotState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorSnapshotState.ProtoReflect.Descriptor instead.
 func (*ActorSnapshotState) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{135}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *ActorSnapshotState) GetLatestLocal() *SnapshotReport {
@@ -9777,7 +10098,7 @@ type SnapshotReport struct {
 
 func (x *SnapshotReport) Reset() {
 	*x = SnapshotReport{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[136]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9789,7 +10110,7 @@ func (x *SnapshotReport) String() string {
 func (*SnapshotReport) ProtoMessage() {}
 
 func (x *SnapshotReport) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[136]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9802,7 +10123,7 @@ func (x *SnapshotReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotReport.ProtoReflect.Descriptor instead.
 func (*SnapshotReport) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{136}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *SnapshotReport) GetUuid() string {
@@ -9872,7 +10193,7 @@ type AccessPolicy struct {
 
 func (x *AccessPolicy) Reset() {
 	*x = AccessPolicy{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[137]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9884,7 +10205,7 @@ func (x *AccessPolicy) String() string {
 func (*AccessPolicy) ProtoMessage() {}
 
 func (x *AccessPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[137]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9897,7 +10218,7 @@ func (x *AccessPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccessPolicy.ProtoReflect.Descriptor instead.
 func (*AccessPolicy) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{137}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *AccessPolicy) GetMetadata() *ResourceMetadata {
@@ -9939,7 +10260,7 @@ type Binding struct {
 
 func (x *Binding) Reset() {
 	*x = Binding{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[138]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9951,7 +10272,7 @@ func (x *Binding) String() string {
 func (*Binding) ProtoMessage() {}
 
 func (x *Binding) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[138]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9964,7 +10285,7 @@ func (x *Binding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Binding.ProtoReflect.Descriptor instead.
 func (*Binding) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{138}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *Binding) GetRole() string {
@@ -9996,7 +10317,7 @@ type GetGlobalAccessPolicyRequest struct {
 
 func (x *GetGlobalAccessPolicyRequest) Reset() {
 	*x = GetGlobalAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[139]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10008,7 +10329,7 @@ func (x *GetGlobalAccessPolicyRequest) String() string {
 func (*GetGlobalAccessPolicyRequest) ProtoMessage() {}
 
 func (x *GetGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[139]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10021,7 +10342,7 @@ func (x *GetGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{139}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *GetGlobalAccessPolicyRequest) GetName() string {
@@ -10045,7 +10366,7 @@ type CreateGlobalAccessPolicyRequest struct {
 
 func (x *CreateGlobalAccessPolicyRequest) Reset() {
 	*x = CreateGlobalAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[140]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10057,7 +10378,7 @@ func (x *CreateGlobalAccessPolicyRequest) String() string {
 func (*CreateGlobalAccessPolicyRequest) ProtoMessage() {}
 
 func (x *CreateGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[140]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10070,7 +10391,7 @@ func (x *CreateGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*CreateGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{140}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *CreateGlobalAccessPolicyRequest) GetAccessPolicy() *AccessPolicy {
@@ -10094,7 +10415,7 @@ type UpdateGlobalAccessPolicyRequest struct {
 
 func (x *UpdateGlobalAccessPolicyRequest) Reset() {
 	*x = UpdateGlobalAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[141]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10106,7 +10427,7 @@ func (x *UpdateGlobalAccessPolicyRequest) String() string {
 func (*UpdateGlobalAccessPolicyRequest) ProtoMessage() {}
 
 func (x *UpdateGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[141]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10119,7 +10440,7 @@ func (x *UpdateGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*UpdateGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{141}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *UpdateGlobalAccessPolicyRequest) GetAccessPolicy() *AccessPolicy {
@@ -10149,7 +10470,7 @@ type GetAtespaceAccessPolicyRequest struct {
 
 func (x *GetAtespaceAccessPolicyRequest) Reset() {
 	*x = GetAtespaceAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[142]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10161,7 +10482,7 @@ func (x *GetAtespaceAccessPolicyRequest) String() string {
 func (*GetAtespaceAccessPolicyRequest) ProtoMessage() {}
 
 func (x *GetAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[142]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10174,7 +10495,7 @@ func (x *GetAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{142}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *GetAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
@@ -10210,7 +10531,7 @@ type CreateAtespaceAccessPolicyRequest struct {
 
 func (x *CreateAtespaceAccessPolicyRequest) Reset() {
 	*x = CreateAtespaceAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[143]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10222,7 +10543,7 @@ func (x *CreateAtespaceAccessPolicyRequest) String() string {
 func (*CreateAtespaceAccessPolicyRequest) ProtoMessage() {}
 
 func (x *CreateAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[143]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10235,7 +10556,7 @@ func (x *CreateAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use CreateAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*CreateAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{143}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *CreateAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
@@ -10271,7 +10592,7 @@ type UpdateAtespaceAccessPolicyRequest struct {
 
 func (x *UpdateAtespaceAccessPolicyRequest) Reset() {
 	*x = UpdateAtespaceAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[144]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10283,7 +10604,7 @@ func (x *UpdateAtespaceAccessPolicyRequest) String() string {
 func (*UpdateAtespaceAccessPolicyRequest) ProtoMessage() {}
 
 func (x *UpdateAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[144]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10296,7 +10617,7 @@ func (x *UpdateAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use UpdateAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{144}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *UpdateAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
@@ -10337,7 +10658,7 @@ type DeleteAtespaceAccessPolicyRequest struct {
 
 func (x *DeleteAtespaceAccessPolicyRequest) Reset() {
 	*x = DeleteAtespaceAccessPolicyRequest{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[145]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10349,7 +10670,7 @@ func (x *DeleteAtespaceAccessPolicyRequest) String() string {
 func (*DeleteAtespaceAccessPolicyRequest) ProtoMessage() {}
 
 func (x *DeleteAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[145]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10362,7 +10683,7 @@ func (x *DeleteAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use DeleteAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*DeleteAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{145}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *DeleteAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
@@ -10408,7 +10729,7 @@ type ResourceAnnotation struct {
 
 func (x *ResourceAnnotation) Reset() {
 	*x = ResourceAnnotation{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[146]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10420,7 +10741,7 @@ func (x *ResourceAnnotation) String() string {
 func (*ResourceAnnotation) ProtoMessage() {}
 
 func (x *ResourceAnnotation) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[146]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10433,7 +10754,7 @@ func (x *ResourceAnnotation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResourceAnnotation.ProtoReflect.Descriptor instead.
 func (*ResourceAnnotation) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{146}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *ResourceAnnotation) GetParents() []string {
@@ -10476,7 +10797,7 @@ type MethodAnnotation struct {
 
 func (x *MethodAnnotation) Reset() {
 	*x = MethodAnnotation{}
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[147]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10488,7 +10809,7 @@ func (x *MethodAnnotation) String() string {
 func (*MethodAnnotation) ProtoMessage() {}
 
 func (x *MethodAnnotation) ProtoReflect() protoreflect.Message {
-	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[147]
+	mi := &file_api_ateapi_v1_ateapi_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10501,7 +10822,7 @@ func (x *MethodAnnotation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MethodAnnotation.ProtoReflect.Descriptor instead.
 func (*MethodAnnotation) Descriptor() ([]byte, []int) {
-	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{147}
+	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *MethodAnnotation) GetResource() string {
@@ -10807,6 +11128,20 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xb4\x01\n" +
 	" DeleteExternalVolumeClassRequest\x12R\n" +
 	"\x15external_volume_class\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x13externalVolumeClass\x12<\n" +
+	"\aoptions\x18\x02 \x01(\v2\".substrate.ateapi.v1.DeleteOptionsR\aoptions\"p\n" +
+	"\x1cCreateCsiDriverConfigRequest\x12P\n" +
+	"\x11csi_driver_config\x18\x01 \x01(\v2$.substrate.ateapi.v1.CsiDriverConfigR\x0fcsiDriverConfig\"g\n" +
+	"\x19GetCsiDriverConfigRequest\x12J\n" +
+	"\x11csi_driver_config\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x0fcsiDriverConfig\"Y\n" +
+	"\x1bListCsiDriverConfigsRequest\x12:\n" +
+	"\aoptions\x18\x01 \x01(\v2 .substrate.ateapi.v1.ListOptionsR\aoptions\"\x9a\x01\n" +
+	"\x1cListCsiDriverConfigsResponse\x12R\n" +
+	"\x12csi_driver_configs\x18\x01 \x03(\v2$.substrate.ateapi.v1.CsiDriverConfigR\x10csiDriverConfigs\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"p\n" +
+	"\x1cUpdateCsiDriverConfigRequest\x12P\n" +
+	"\x11csi_driver_config\x18\x01 \x01(\v2$.substrate.ateapi.v1.CsiDriverConfigR\x0fcsiDriverConfig\"\xa8\x01\n" +
+	"\x1cDeleteCsiDriverConfigRequest\x12J\n" +
+	"\x11csi_driver_config\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x0fcsiDriverConfig\x12<\n" +
 	"\aoptions\x18\x02 \x01(\v2\".substrate.ateapi.v1.DeleteOptionsR\aoptions\"g\n" +
 	"\x1aCreateActorTemplateRequest\x12I\n" +
 	"\x0eactor_template\x18\x01 \x01(\v2\".substrate.ateapi.v1.ActorTemplateR\ractorTemplate\"`\n" +
@@ -11128,7 +11463,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x05Scope\x12\x15\n" +
 	"\x11SCOPE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSCOPE_ATESPACE\x10\x01\x12\x10\n" +
-	"\fSCOPE_GLOBAL\x10\x022\xba+\n" +
+	"\fSCOPE_GLOBAL\x10\x022\xf10\n" +
 	"\aControl\x12Y\n" +
 	"\bGetActor\x12$.substrate.ateapi.v1.GetActorRequest\x1a\x1a.substrate.ateapi.v1.Actor\"\v\x82\xb5\x18\a\n" +
 	"\x05Actor\x12_\n" +
@@ -11204,7 +11539,17 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x19ListExternalVolumeClasses\x125.substrate.ateapi.v1.ListExternalVolumeClassesRequest\x1a6.substrate.ateapi.v1.ListExternalVolumeClassesResponse\"\x19\x82\xb5\x18\x15\n" +
 	"\x13ExternalVolumeClass\x12\x97\x01\n" +
 	"\x19DeleteExternalVolumeClass\x125.substrate.ateapi.v1.DeleteExternalVolumeClassRequest\x1a(.substrate.ateapi.v1.ExternalVolumeClass\"\x19\x82\xb5\x18\x15\n" +
-	"\x13ExternalVolumeClass\x12\x7f\n" +
+	"\x13ExternalVolumeClass\x12\x87\x01\n" +
+	"\x15CreateCsiDriverConfig\x121.substrate.ateapi.v1.CreateCsiDriverConfigRequest\x1a$.substrate.ateapi.v1.CsiDriverConfig\"\x15\x82\xb5\x18\x11\n" +
+	"\x0fCsiDriverConfig\x12\x81\x01\n" +
+	"\x12GetCsiDriverConfig\x12..substrate.ateapi.v1.GetCsiDriverConfigRequest\x1a$.substrate.ateapi.v1.CsiDriverConfig\"\x15\x82\xb5\x18\x11\n" +
+	"\x0fCsiDriverConfig\x12\x92\x01\n" +
+	"\x14ListCsiDriverConfigs\x120.substrate.ateapi.v1.ListCsiDriverConfigsRequest\x1a1.substrate.ateapi.v1.ListCsiDriverConfigsResponse\"\x15\x82\xb5\x18\x11\n" +
+	"\x0fCsiDriverConfig\x12\x87\x01\n" +
+	"\x15UpdateCsiDriverConfig\x121.substrate.ateapi.v1.UpdateCsiDriverConfigRequest\x1a$.substrate.ateapi.v1.CsiDriverConfig\"\x15\x82\xb5\x18\x11\n" +
+	"\x0fCsiDriverConfig\x12\x87\x01\n" +
+	"\x15DeleteCsiDriverConfig\x121.substrate.ateapi.v1.DeleteCsiDriverConfigRequest\x1a$.substrate.ateapi.v1.CsiDriverConfig\"\x15\x82\xb5\x18\x11\n" +
+	"\x0fCsiDriverConfig\x12\x7f\n" +
 	"\x13CreateActorTemplate\x12/.substrate.ateapi.v1.CreateActorTemplateRequest\x1a\".substrate.ateapi.v1.ActorTemplate\"\x13\x82\xb5\x18\x0f\n" +
 	"\rActorTemplate\x12y\n" +
 	"\x10GetActorTemplate\x12,.substrate.ateapi.v1.GetActorTemplateRequest\x1a\".substrate.ateapi.v1.ActorTemplate\"\x13\x82\xb5\x18\x0f\n" +
@@ -11252,7 +11597,7 @@ func file_api_ateapi_v1_ateapi_proto_rawDescGZIP() []byte {
 }
 
 var file_api_ateapi_v1_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
-var file_api_ateapi_v1_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 152)
+var file_api_ateapi_v1_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 158)
 var file_api_ateapi_v1_ateapi_proto_goTypes = []any{
 	(SnapshotOwner)(0),                         // 0: substrate.ateapi.v1.SnapshotOwner
 	(SnapshotStorageState)(0),                  // 1: substrate.ateapi.v1.SnapshotStorageState
@@ -11327,98 +11672,104 @@ var file_api_ateapi_v1_ateapi_proto_goTypes = []any{
 	(*ListExternalVolumeClassesRequest)(nil),   // 70: substrate.ateapi.v1.ListExternalVolumeClassesRequest
 	(*ListExternalVolumeClassesResponse)(nil),  // 71: substrate.ateapi.v1.ListExternalVolumeClassesResponse
 	(*DeleteExternalVolumeClassRequest)(nil),   // 72: substrate.ateapi.v1.DeleteExternalVolumeClassRequest
-	(*CreateActorTemplateRequest)(nil),         // 73: substrate.ateapi.v1.CreateActorTemplateRequest
-	(*GetActorTemplateRequest)(nil),            // 74: substrate.ateapi.v1.GetActorTemplateRequest
-	(*ListActorTemplatesRequest)(nil),          // 75: substrate.ateapi.v1.ListActorTemplatesRequest
-	(*ListActorTemplatesResponse)(nil),         // 76: substrate.ateapi.v1.ListActorTemplatesResponse
-	(*DeleteActorTemplateRequest)(nil),         // 77: substrate.ateapi.v1.DeleteActorTemplateRequest
-	(*GetActorRequest)(nil),                    // 78: substrate.ateapi.v1.GetActorRequest
-	(*CreateActorRequest)(nil),                 // 79: substrate.ateapi.v1.CreateActorRequest
-	(*UpdateActorRequest)(nil),                 // 80: substrate.ateapi.v1.UpdateActorRequest
-	(*SuspendActorRequest)(nil),                // 81: substrate.ateapi.v1.SuspendActorRequest
-	(*SuspendActorResponse)(nil),               // 82: substrate.ateapi.v1.SuspendActorResponse
-	(*SuspendOptions)(nil),                     // 83: substrate.ateapi.v1.SuspendOptions
-	(*ResumeActorRequest)(nil),                 // 84: substrate.ateapi.v1.ResumeActorRequest
-	(*ResumeActorResponse)(nil),                // 85: substrate.ateapi.v1.ResumeActorResponse
-	(*RevertActorRequest)(nil),                 // 86: substrate.ateapi.v1.RevertActorRequest
-	(*RevertActorResponse)(nil),                // 87: substrate.ateapi.v1.RevertActorResponse
-	(*DeleteActorRequest)(nil),                 // 88: substrate.ateapi.v1.DeleteActorRequest
-	(*GetActorEgressPolicyRequest)(nil),        // 89: substrate.ateapi.v1.GetActorEgressPolicyRequest
-	(*CreateActorEgressPolicyRequest)(nil),     // 90: substrate.ateapi.v1.CreateActorEgressPolicyRequest
-	(*UpdateActorEgressPolicyRequest)(nil),     // 91: substrate.ateapi.v1.UpdateActorEgressPolicyRequest
-	(*DeleteActorEgressPolicyRequest)(nil),     // 92: substrate.ateapi.v1.DeleteActorEgressPolicyRequest
-	(*GetTagRequest)(nil),                      // 93: substrate.ateapi.v1.GetTagRequest
-	(*MintActorJwtRequest)(nil),                // 94: substrate.ateapi.v1.MintActorJwtRequest
-	(*MintActorJwtResponse)(nil),               // 95: substrate.ateapi.v1.MintActorJwtResponse
-	(*ListTagsRequest)(nil),                    // 96: substrate.ateapi.v1.ListTagsRequest
-	(*ListTagsResponse)(nil),                   // 97: substrate.ateapi.v1.ListTagsResponse
-	(*CreateTagRequest)(nil),                   // 98: substrate.ateapi.v1.CreateTagRequest
-	(*UpdateTagRequest)(nil),                   // 99: substrate.ateapi.v1.UpdateTagRequest
-	(*DeleteTagRequest)(nil),                   // 100: substrate.ateapi.v1.DeleteTagRequest
-	(*DeleteOptions)(nil),                      // 101: substrate.ateapi.v1.DeleteOptions
-	(*ListOptions)(nil),                        // 102: substrate.ateapi.v1.ListOptions
-	(*ListWorkerActorAssignmentsRequest)(nil),  // 103: substrate.ateapi.v1.ListWorkerActorAssignmentsRequest
-	(*ListWorkerActorAssignmentsResponse)(nil), // 104: substrate.ateapi.v1.ListWorkerActorAssignmentsResponse
-	(*ListWorkersRequest)(nil),                 // 105: substrate.ateapi.v1.ListWorkersRequest
-	(*ListWorkersResponse)(nil),                // 106: substrate.ateapi.v1.ListWorkersResponse
-	(*GetWorkerRequest)(nil),                   // 107: substrate.ateapi.v1.GetWorkerRequest
-	(*CreateWorkerRequest)(nil),                // 108: substrate.ateapi.v1.CreateWorkerRequest
-	(*UpdateWorkerRequest)(nil),                // 109: substrate.ateapi.v1.UpdateWorkerRequest
-	(*DeleteWorkerRequest)(nil),                // 110: substrate.ateapi.v1.DeleteWorkerRequest
-	(*DrainWorkerRequest)(nil),                 // 111: substrate.ateapi.v1.DrainWorkerRequest
-	(*DrainWorkerResponse)(nil),                // 112: substrate.ateapi.v1.DrainWorkerResponse
-	(*MarkWorkerAvailableRequest)(nil),         // 113: substrate.ateapi.v1.MarkWorkerAvailableRequest
-	(*MarkWorkerAvailableResponse)(nil),        // 114: substrate.ateapi.v1.MarkWorkerAvailableResponse
-	(*MarkWorkerUnavailableRequest)(nil),       // 115: substrate.ateapi.v1.MarkWorkerUnavailableRequest
-	(*MarkWorkerUnavailableResponse)(nil),      // 116: substrate.ateapi.v1.MarkWorkerUnavailableResponse
-	(*ListActorsRequest)(nil),                  // 117: substrate.ateapi.v1.ListActorsRequest
-	(*ListActorsResponse)(nil),                 // 118: substrate.ateapi.v1.ListActorsResponse
-	(*Worker)(nil),                             // 119: substrate.ateapi.v1.Worker
-	(*WorkerStatus)(nil),                       // 120: substrate.ateapi.v1.WorkerStatus
-	(*WorkerSandboxClass)(nil),                 // 121: substrate.ateapi.v1.WorkerSandboxClass
-	(*WorkerSandboxRuntime)(nil),               // 122: substrate.ateapi.v1.WorkerSandboxRuntime
-	(*RuntimeOverhead)(nil),                    // 123: substrate.ateapi.v1.RuntimeOverhead
-	(*ActorSandboxRuntime)(nil),                // 124: substrate.ateapi.v1.ActorSandboxRuntime
-	(*VersionedSandboxCompat)(nil),             // 125: substrate.ateapi.v1.VersionedSandboxCompat
-	(*AttributeEntry)(nil),                     // 126: substrate.ateapi.v1.AttributeEntry
-	(*WorkerResources)(nil),                    // 127: substrate.ateapi.v1.WorkerResources
-	(*ActorAssignment)(nil),                    // 128: substrate.ateapi.v1.ActorAssignment
-	(*AcquireWorkerEpochRequest)(nil),          // 129: substrate.ateapi.v1.AcquireWorkerEpochRequest
-	(*AcquireWorkerEpochResponse)(nil),         // 130: substrate.ateapi.v1.AcquireWorkerEpochResponse
-	(*RegisterWorkerRequest)(nil),              // 131: substrate.ateapi.v1.RegisterWorkerRequest
-	(*RegisterWorkerResponse)(nil),             // 132: substrate.ateapi.v1.RegisterWorkerResponse
-	(*SetWorkerSandboxRuntimesRequest)(nil),    // 133: substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest
-	(*SetWorkerSandboxRuntimesResponse)(nil),   // 134: substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse
-	(*MintWorkerActorCertificateRequest)(nil),  // 135: substrate.ateapi.v1.MintWorkerActorCertificateRequest
-	(*MintWorkerActorCertificateResponse)(nil), // 136: substrate.ateapi.v1.MintWorkerActorCertificateResponse
-	(*MintWorkerActorJwtRequest)(nil),          // 137: substrate.ateapi.v1.MintWorkerActorJwtRequest
-	(*MintWorkerActorJwtResponse)(nil),         // 138: substrate.ateapi.v1.MintWorkerActorJwtResponse
-	(*RequestActorSuspendRequest)(nil),         // 139: substrate.ateapi.v1.RequestActorSuspendRequest
-	(*RequestActorSuspendResponse)(nil),        // 140: substrate.ateapi.v1.RequestActorSuspendResponse
-	(*ReportActorCrashedRequest)(nil),          // 141: substrate.ateapi.v1.ReportActorCrashedRequest
-	(*ReportActorCrashedResponse)(nil),         // 142: substrate.ateapi.v1.ReportActorCrashedResponse
-	(*ReportActorSnapshotStateRequest)(nil),    // 143: substrate.ateapi.v1.ReportActorSnapshotStateRequest
-	(*ReportActorSnapshotStateResponse)(nil),   // 144: substrate.ateapi.v1.ReportActorSnapshotStateResponse
-	(*ActorSnapshotState)(nil),                 // 145: substrate.ateapi.v1.ActorSnapshotState
-	(*SnapshotReport)(nil),                     // 146: substrate.ateapi.v1.SnapshotReport
-	(*AccessPolicy)(nil),                       // 147: substrate.ateapi.v1.AccessPolicy
-	(*Binding)(nil),                            // 148: substrate.ateapi.v1.Binding
-	(*GetGlobalAccessPolicyRequest)(nil),       // 149: substrate.ateapi.v1.GetGlobalAccessPolicyRequest
-	(*CreateGlobalAccessPolicyRequest)(nil),    // 150: substrate.ateapi.v1.CreateGlobalAccessPolicyRequest
-	(*UpdateGlobalAccessPolicyRequest)(nil),    // 151: substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest
-	(*GetAtespaceAccessPolicyRequest)(nil),     // 152: substrate.ateapi.v1.GetAtespaceAccessPolicyRequest
-	(*CreateAtespaceAccessPolicyRequest)(nil),  // 153: substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest
-	(*UpdateAtespaceAccessPolicyRequest)(nil),  // 154: substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest
-	(*DeleteAtespaceAccessPolicyRequest)(nil),  // 155: substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest
-	(*ResourceAnnotation)(nil),                 // 156: substrate.ateapi.v1.ResourceAnnotation
-	(*MethodAnnotation)(nil),                   // 157: substrate.ateapi.v1.MethodAnnotation
-	nil,                                        // 158: substrate.ateapi.v1.Selector.MatchLabelsEntry
-	nil,                                        // 159: substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
-	nil,                                        // 160: substrate.ateapi.v1.ExternalVolumeClass.ParametersEntry
-	nil,                                        // 161: substrate.ateapi.v1.Worker.LabelsEntry
-	(*timestamppb.Timestamp)(nil),              // 162: google.protobuf.Timestamp
-	(*descriptorpb.MessageOptions)(nil),        // 163: google.protobuf.MessageOptions
-	(*descriptorpb.MethodOptions)(nil),         // 164: google.protobuf.MethodOptions
+	(*CreateCsiDriverConfigRequest)(nil),       // 73: substrate.ateapi.v1.CreateCsiDriverConfigRequest
+	(*GetCsiDriverConfigRequest)(nil),          // 74: substrate.ateapi.v1.GetCsiDriverConfigRequest
+	(*ListCsiDriverConfigsRequest)(nil),        // 75: substrate.ateapi.v1.ListCsiDriverConfigsRequest
+	(*ListCsiDriverConfigsResponse)(nil),       // 76: substrate.ateapi.v1.ListCsiDriverConfigsResponse
+	(*UpdateCsiDriverConfigRequest)(nil),       // 77: substrate.ateapi.v1.UpdateCsiDriverConfigRequest
+	(*DeleteCsiDriverConfigRequest)(nil),       // 78: substrate.ateapi.v1.DeleteCsiDriverConfigRequest
+	(*CreateActorTemplateRequest)(nil),         // 79: substrate.ateapi.v1.CreateActorTemplateRequest
+	(*GetActorTemplateRequest)(nil),            // 80: substrate.ateapi.v1.GetActorTemplateRequest
+	(*ListActorTemplatesRequest)(nil),          // 81: substrate.ateapi.v1.ListActorTemplatesRequest
+	(*ListActorTemplatesResponse)(nil),         // 82: substrate.ateapi.v1.ListActorTemplatesResponse
+	(*DeleteActorTemplateRequest)(nil),         // 83: substrate.ateapi.v1.DeleteActorTemplateRequest
+	(*GetActorRequest)(nil),                    // 84: substrate.ateapi.v1.GetActorRequest
+	(*CreateActorRequest)(nil),                 // 85: substrate.ateapi.v1.CreateActorRequest
+	(*UpdateActorRequest)(nil),                 // 86: substrate.ateapi.v1.UpdateActorRequest
+	(*SuspendActorRequest)(nil),                // 87: substrate.ateapi.v1.SuspendActorRequest
+	(*SuspendActorResponse)(nil),               // 88: substrate.ateapi.v1.SuspendActorResponse
+	(*SuspendOptions)(nil),                     // 89: substrate.ateapi.v1.SuspendOptions
+	(*ResumeActorRequest)(nil),                 // 90: substrate.ateapi.v1.ResumeActorRequest
+	(*ResumeActorResponse)(nil),                // 91: substrate.ateapi.v1.ResumeActorResponse
+	(*RevertActorRequest)(nil),                 // 92: substrate.ateapi.v1.RevertActorRequest
+	(*RevertActorResponse)(nil),                // 93: substrate.ateapi.v1.RevertActorResponse
+	(*DeleteActorRequest)(nil),                 // 94: substrate.ateapi.v1.DeleteActorRequest
+	(*GetActorEgressPolicyRequest)(nil),        // 95: substrate.ateapi.v1.GetActorEgressPolicyRequest
+	(*CreateActorEgressPolicyRequest)(nil),     // 96: substrate.ateapi.v1.CreateActorEgressPolicyRequest
+	(*UpdateActorEgressPolicyRequest)(nil),     // 97: substrate.ateapi.v1.UpdateActorEgressPolicyRequest
+	(*DeleteActorEgressPolicyRequest)(nil),     // 98: substrate.ateapi.v1.DeleteActorEgressPolicyRequest
+	(*GetTagRequest)(nil),                      // 99: substrate.ateapi.v1.GetTagRequest
+	(*MintActorJwtRequest)(nil),                // 100: substrate.ateapi.v1.MintActorJwtRequest
+	(*MintActorJwtResponse)(nil),               // 101: substrate.ateapi.v1.MintActorJwtResponse
+	(*ListTagsRequest)(nil),                    // 102: substrate.ateapi.v1.ListTagsRequest
+	(*ListTagsResponse)(nil),                   // 103: substrate.ateapi.v1.ListTagsResponse
+	(*CreateTagRequest)(nil),                   // 104: substrate.ateapi.v1.CreateTagRequest
+	(*UpdateTagRequest)(nil),                   // 105: substrate.ateapi.v1.UpdateTagRequest
+	(*DeleteTagRequest)(nil),                   // 106: substrate.ateapi.v1.DeleteTagRequest
+	(*DeleteOptions)(nil),                      // 107: substrate.ateapi.v1.DeleteOptions
+	(*ListOptions)(nil),                        // 108: substrate.ateapi.v1.ListOptions
+	(*ListWorkerActorAssignmentsRequest)(nil),  // 109: substrate.ateapi.v1.ListWorkerActorAssignmentsRequest
+	(*ListWorkerActorAssignmentsResponse)(nil), // 110: substrate.ateapi.v1.ListWorkerActorAssignmentsResponse
+	(*ListWorkersRequest)(nil),                 // 111: substrate.ateapi.v1.ListWorkersRequest
+	(*ListWorkersResponse)(nil),                // 112: substrate.ateapi.v1.ListWorkersResponse
+	(*GetWorkerRequest)(nil),                   // 113: substrate.ateapi.v1.GetWorkerRequest
+	(*CreateWorkerRequest)(nil),                // 114: substrate.ateapi.v1.CreateWorkerRequest
+	(*UpdateWorkerRequest)(nil),                // 115: substrate.ateapi.v1.UpdateWorkerRequest
+	(*DeleteWorkerRequest)(nil),                // 116: substrate.ateapi.v1.DeleteWorkerRequest
+	(*DrainWorkerRequest)(nil),                 // 117: substrate.ateapi.v1.DrainWorkerRequest
+	(*DrainWorkerResponse)(nil),                // 118: substrate.ateapi.v1.DrainWorkerResponse
+	(*MarkWorkerAvailableRequest)(nil),         // 119: substrate.ateapi.v1.MarkWorkerAvailableRequest
+	(*MarkWorkerAvailableResponse)(nil),        // 120: substrate.ateapi.v1.MarkWorkerAvailableResponse
+	(*MarkWorkerUnavailableRequest)(nil),       // 121: substrate.ateapi.v1.MarkWorkerUnavailableRequest
+	(*MarkWorkerUnavailableResponse)(nil),      // 122: substrate.ateapi.v1.MarkWorkerUnavailableResponse
+	(*ListActorsRequest)(nil),                  // 123: substrate.ateapi.v1.ListActorsRequest
+	(*ListActorsResponse)(nil),                 // 124: substrate.ateapi.v1.ListActorsResponse
+	(*Worker)(nil),                             // 125: substrate.ateapi.v1.Worker
+	(*WorkerStatus)(nil),                       // 126: substrate.ateapi.v1.WorkerStatus
+	(*WorkerSandboxClass)(nil),                 // 127: substrate.ateapi.v1.WorkerSandboxClass
+	(*WorkerSandboxRuntime)(nil),               // 128: substrate.ateapi.v1.WorkerSandboxRuntime
+	(*RuntimeOverhead)(nil),                    // 129: substrate.ateapi.v1.RuntimeOverhead
+	(*ActorSandboxRuntime)(nil),                // 130: substrate.ateapi.v1.ActorSandboxRuntime
+	(*VersionedSandboxCompat)(nil),             // 131: substrate.ateapi.v1.VersionedSandboxCompat
+	(*AttributeEntry)(nil),                     // 132: substrate.ateapi.v1.AttributeEntry
+	(*WorkerResources)(nil),                    // 133: substrate.ateapi.v1.WorkerResources
+	(*ActorAssignment)(nil),                    // 134: substrate.ateapi.v1.ActorAssignment
+	(*AcquireWorkerEpochRequest)(nil),          // 135: substrate.ateapi.v1.AcquireWorkerEpochRequest
+	(*AcquireWorkerEpochResponse)(nil),         // 136: substrate.ateapi.v1.AcquireWorkerEpochResponse
+	(*RegisterWorkerRequest)(nil),              // 137: substrate.ateapi.v1.RegisterWorkerRequest
+	(*RegisterWorkerResponse)(nil),             // 138: substrate.ateapi.v1.RegisterWorkerResponse
+	(*SetWorkerSandboxRuntimesRequest)(nil),    // 139: substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest
+	(*SetWorkerSandboxRuntimesResponse)(nil),   // 140: substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse
+	(*MintWorkerActorCertificateRequest)(nil),  // 141: substrate.ateapi.v1.MintWorkerActorCertificateRequest
+	(*MintWorkerActorCertificateResponse)(nil), // 142: substrate.ateapi.v1.MintWorkerActorCertificateResponse
+	(*MintWorkerActorJwtRequest)(nil),          // 143: substrate.ateapi.v1.MintWorkerActorJwtRequest
+	(*MintWorkerActorJwtResponse)(nil),         // 144: substrate.ateapi.v1.MintWorkerActorJwtResponse
+	(*RequestActorSuspendRequest)(nil),         // 145: substrate.ateapi.v1.RequestActorSuspendRequest
+	(*RequestActorSuspendResponse)(nil),        // 146: substrate.ateapi.v1.RequestActorSuspendResponse
+	(*ReportActorCrashedRequest)(nil),          // 147: substrate.ateapi.v1.ReportActorCrashedRequest
+	(*ReportActorCrashedResponse)(nil),         // 148: substrate.ateapi.v1.ReportActorCrashedResponse
+	(*ReportActorSnapshotStateRequest)(nil),    // 149: substrate.ateapi.v1.ReportActorSnapshotStateRequest
+	(*ReportActorSnapshotStateResponse)(nil),   // 150: substrate.ateapi.v1.ReportActorSnapshotStateResponse
+	(*ActorSnapshotState)(nil),                 // 151: substrate.ateapi.v1.ActorSnapshotState
+	(*SnapshotReport)(nil),                     // 152: substrate.ateapi.v1.SnapshotReport
+	(*AccessPolicy)(nil),                       // 153: substrate.ateapi.v1.AccessPolicy
+	(*Binding)(nil),                            // 154: substrate.ateapi.v1.Binding
+	(*GetGlobalAccessPolicyRequest)(nil),       // 155: substrate.ateapi.v1.GetGlobalAccessPolicyRequest
+	(*CreateGlobalAccessPolicyRequest)(nil),    // 156: substrate.ateapi.v1.CreateGlobalAccessPolicyRequest
+	(*UpdateGlobalAccessPolicyRequest)(nil),    // 157: substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest
+	(*GetAtespaceAccessPolicyRequest)(nil),     // 158: substrate.ateapi.v1.GetAtespaceAccessPolicyRequest
+	(*CreateAtespaceAccessPolicyRequest)(nil),  // 159: substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest
+	(*UpdateAtespaceAccessPolicyRequest)(nil),  // 160: substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest
+	(*DeleteAtespaceAccessPolicyRequest)(nil),  // 161: substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest
+	(*ResourceAnnotation)(nil),                 // 162: substrate.ateapi.v1.ResourceAnnotation
+	(*MethodAnnotation)(nil),                   // 163: substrate.ateapi.v1.MethodAnnotation
+	nil,                                        // 164: substrate.ateapi.v1.Selector.MatchLabelsEntry
+	nil,                                        // 165: substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
+	nil,                                        // 166: substrate.ateapi.v1.ExternalVolumeClass.ParametersEntry
+	nil,                                        // 167: substrate.ateapi.v1.Worker.LabelsEntry
+	(*timestamppb.Timestamp)(nil),              // 168: google.protobuf.Timestamp
+	(*descriptorpb.MessageOptions)(nil),        // 169: google.protobuf.MessageOptions
+	(*descriptorpb.MethodOptions)(nil),         // 170: google.protobuf.MethodOptions
 }
 var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	1,   // 0: substrate.ateapi.v1.SnapshotStorage.state:type_name -> substrate.ateapi.v1.SnapshotStorageState
@@ -11426,13 +11777,13 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	0,   // 2: substrate.ateapi.v1.Snapshot.owner:type_name -> substrate.ateapi.v1.SnapshotOwner
 	2,   // 3: substrate.ateapi.v1.Snapshot.fidelity:type_name -> substrate.ateapi.v1.SnapshotFidelity
 	11,  // 4: substrate.ateapi.v1.Snapshot.durable_snapshot:type_name -> substrate.ateapi.v1.SnapshotStorage
-	124, // 5: substrate.ateapi.v1.Snapshot.sandbox_runtime:type_name -> substrate.ateapi.v1.ActorSandboxRuntime
-	158, // 6: substrate.ateapi.v1.Selector.match_labels:type_name -> substrate.ateapi.v1.Selector.MatchLabelsEntry
-	162, // 7: substrate.ateapi.v1.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
-	162, // 8: substrate.ateapi.v1.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
-	162, // 9: substrate.ateapi.v1.ResourceMetadata.delete_time:type_name -> google.protobuf.Timestamp
+	130, // 5: substrate.ateapi.v1.Snapshot.sandbox_runtime:type_name -> substrate.ateapi.v1.ActorSandboxRuntime
+	164, // 6: substrate.ateapi.v1.Selector.match_labels:type_name -> substrate.ateapi.v1.Selector.MatchLabelsEntry
+	168, // 7: substrate.ateapi.v1.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
+	168, // 8: substrate.ateapi.v1.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
+	168, // 9: substrate.ateapi.v1.ResourceMetadata.delete_time:type_name -> google.protobuf.Timestamp
 	16,  // 10: substrate.ateapi.v1.ExternalVolumes.volumes:type_name -> substrate.ateapi.v1.ExternalVolumeStatus
-	159, // 11: substrate.ateapi.v1.ExternalVolumeStatus.volume_context:type_name -> substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
+	165, // 11: substrate.ateapi.v1.ExternalVolumeStatus.volume_context:type_name -> substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
 	14,  // 12: substrate.ateapi.v1.Actor.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
 	35,  // 13: substrate.ateapi.v1.Actor.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
 	13,  // 14: substrate.ateapi.v1.Actor.worker_selector:type_name -> substrate.ateapi.v1.Selector
@@ -11457,9 +11808,9 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	15,  // 33: substrate.ateapi.v1.ActorStatus.external_volumes:type_name -> substrate.ateapi.v1.ExternalVolumes
 	30,  // 34: substrate.ateapi.v1.ActorStatus.crash:type_name -> substrate.ateapi.v1.ActorCrash
 	12,  // 35: substrate.ateapi.v1.ActorStatus.snapshots:type_name -> substrate.ateapi.v1.Snapshot
-	162, // 36: substrate.ateapi.v1.ActorCrash.crash_time:type_name -> google.protobuf.Timestamp
+	168, // 36: substrate.ateapi.v1.ActorCrash.crash_time:type_name -> google.protobuf.Timestamp
 	35,  // 37: substrate.ateapi.v1.WorkerAssignment.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	124, // 38: substrate.ateapi.v1.WorkerAssignment.sandbox_runtime:type_name -> substrate.ateapi.v1.ActorSandboxRuntime
+	130, // 38: substrate.ateapi.v1.WorkerAssignment.sandbox_runtime:type_name -> substrate.ateapi.v1.ActorSandboxRuntime
 	12,  // 39: substrate.ateapi.v1.TagStatus.snapshot:type_name -> substrate.ateapi.v1.Snapshot
 	14,  // 40: substrate.ateapi.v1.Tag.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
 	32,  // 41: substrate.ateapi.v1.Tag.status:type_name -> substrate.ateapi.v1.TagStatus
@@ -11476,7 +11827,7 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	40,  // 52: substrate.ateapi.v1.ActorTemplate.status:type_name -> substrate.ateapi.v1.ActorTemplateStatus
 	38,  // 53: substrate.ateapi.v1.ResourceRequirements.limits:type_name -> substrate.ateapi.v1.Resources
 	35,  // 54: substrate.ateapi.v1.GoldenSnapshotStatus.golden_tag:type_name -> substrate.ateapi.v1.ObjectRef
-	162, // 55: substrate.ateapi.v1.GoldenSnapshotStatus.snapshot_time:type_name -> google.protobuf.Timestamp
+	168, // 55: substrate.ateapi.v1.GoldenSnapshotStatus.snapshot_time:type_name -> google.protobuf.Timestamp
 	39,  // 56: substrate.ateapi.v1.ActorTemplateStatus.golden_snapshot_status:type_name -> substrate.ateapi.v1.GoldenSnapshotStatus
 	2,   // 57: substrate.ateapi.v1.SnapshotConfig.preferred_fidelity:type_name -> substrate.ateapi.v1.SnapshotFidelity
 	42,  // 58: substrate.ateapi.v1.SnapshotConfig.golden_snapshot_config:type_name -> substrate.ateapi.v1.GoldenSnapshotConfig
@@ -11495,7 +11846,7 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	53,  // 71: substrate.ateapi.v1.ExternalVolumeSource.template:type_name -> substrate.ateapi.v1.ExternalVolumeTemplate
 	35,  // 72: substrate.ateapi.v1.ExternalVolumeTemplate.external_volume_class:type_name -> substrate.ateapi.v1.ObjectRef
 	14,  // 73: substrate.ateapi.v1.ExternalVolumeClass.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
-	160, // 74: substrate.ateapi.v1.ExternalVolumeClass.parameters:type_name -> substrate.ateapi.v1.ExternalVolumeClass.ParametersEntry
+	166, // 74: substrate.ateapi.v1.ExternalVolumeClass.parameters:type_name -> substrate.ateapi.v1.ExternalVolumeClass.ParametersEntry
 	14,  // 75: substrate.ateapi.v1.CsiDriverConfig.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
 	56,  // 76: substrate.ateapi.v1.CsiDriverConfig.tls:type_name -> substrate.ateapi.v1.CsiDriverTlsConfig
 	58,  // 77: substrate.ateapi.v1.SystemInfoVolumeSource.data_sources:type_name -> substrate.ateapi.v1.SystemInfoDataSource
@@ -11505,241 +11856,258 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	6,   // 81: substrate.ateapi.v1.ActorMetadataItem.field:type_name -> substrate.ateapi.v1.ActorMetadataField
 	34,  // 82: substrate.ateapi.v1.CreateAtespaceRequest.atespace:type_name -> substrate.ateapi.v1.Atespace
 	35,  // 83: substrate.ateapi.v1.GetAtespaceRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
-	102, // 84: substrate.ateapi.v1.ListAtespacesRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	108, // 84: substrate.ateapi.v1.ListAtespacesRequest.options:type_name -> substrate.ateapi.v1.ListOptions
 	34,  // 85: substrate.ateapi.v1.ListAtespacesResponse.atespaces:type_name -> substrate.ateapi.v1.Atespace
 	35,  // 86: substrate.ateapi.v1.DeleteAtespaceRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 87: substrate.ateapi.v1.DeleteAtespaceRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	107, // 87: substrate.ateapi.v1.DeleteAtespaceRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
 	54,  // 88: substrate.ateapi.v1.CreateExternalVolumeClassRequest.external_volume_class:type_name -> substrate.ateapi.v1.ExternalVolumeClass
 	35,  // 89: substrate.ateapi.v1.GetExternalVolumeClassRequest.external_volume_class:type_name -> substrate.ateapi.v1.ObjectRef
-	102, // 90: substrate.ateapi.v1.ListExternalVolumeClassesRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	108, // 90: substrate.ateapi.v1.ListExternalVolumeClassesRequest.options:type_name -> substrate.ateapi.v1.ListOptions
 	54,  // 91: substrate.ateapi.v1.ListExternalVolumeClassesResponse.external_volume_classes:type_name -> substrate.ateapi.v1.ExternalVolumeClass
 	35,  // 92: substrate.ateapi.v1.DeleteExternalVolumeClassRequest.external_volume_class:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 93: substrate.ateapi.v1.DeleteExternalVolumeClassRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	36,  // 94: substrate.ateapi.v1.CreateActorTemplateRequest.actor_template:type_name -> substrate.ateapi.v1.ActorTemplate
-	35,  // 95: substrate.ateapi.v1.GetActorTemplateRequest.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
-	102, // 96: substrate.ateapi.v1.ListActorTemplatesRequest.options:type_name -> substrate.ateapi.v1.ListOptions
-	36,  // 97: substrate.ateapi.v1.ListActorTemplatesResponse.actor_templates:type_name -> substrate.ateapi.v1.ActorTemplate
-	35,  // 98: substrate.ateapi.v1.DeleteActorTemplateRequest.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 99: substrate.ateapi.v1.DeleteActorTemplateRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	35,  // 100: substrate.ateapi.v1.GetActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	17,  // 101: substrate.ateapi.v1.CreateActorRequest.actor:type_name -> substrate.ateapi.v1.Actor
-	17,  // 102: substrate.ateapi.v1.UpdateActorRequest.actor:type_name -> substrate.ateapi.v1.Actor
-	35,  // 103: substrate.ateapi.v1.SuspendActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	83,  // 104: substrate.ateapi.v1.SuspendActorRequest.options:type_name -> substrate.ateapi.v1.SuspendOptions
-	17,  // 105: substrate.ateapi.v1.SuspendActorResponse.actor:type_name -> substrate.ateapi.v1.Actor
-	7,   // 106: substrate.ateapi.v1.SuspendOptions.mode:type_name -> substrate.ateapi.v1.DurabilityMode
-	35,  // 107: substrate.ateapi.v1.ResumeActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	17,  // 108: substrate.ateapi.v1.ResumeActorResponse.actor:type_name -> substrate.ateapi.v1.Actor
-	35,  // 109: substrate.ateapi.v1.RevertActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	17,  // 110: substrate.ateapi.v1.RevertActorResponse.actor:type_name -> substrate.ateapi.v1.Actor
-	35,  // 111: substrate.ateapi.v1.DeleteActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 112: substrate.ateapi.v1.DeleteActorRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	35,  // 113: substrate.ateapi.v1.GetActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 114: substrate.ateapi.v1.CreateActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	18,  // 115: substrate.ateapi.v1.CreateActorEgressPolicyRequest.egress_policy:type_name -> substrate.ateapi.v1.EgressPolicy
-	35,  // 116: substrate.ateapi.v1.UpdateActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	18,  // 117: substrate.ateapi.v1.UpdateActorEgressPolicyRequest.egress_policy:type_name -> substrate.ateapi.v1.EgressPolicy
-	35,  // 118: substrate.ateapi.v1.DeleteActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 119: substrate.ateapi.v1.DeleteActorEgressPolicyRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	35,  // 120: substrate.ateapi.v1.GetTagRequest.tag:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 121: substrate.ateapi.v1.MintActorJwtRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	162, // 122: substrate.ateapi.v1.MintActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
-	102, // 123: substrate.ateapi.v1.ListTagsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
-	33,  // 124: substrate.ateapi.v1.ListTagsResponse.tags:type_name -> substrate.ateapi.v1.Tag
-	33,  // 125: substrate.ateapi.v1.CreateTagRequest.tag:type_name -> substrate.ateapi.v1.Tag
-	33,  // 126: substrate.ateapi.v1.UpdateTagRequest.tag:type_name -> substrate.ateapi.v1.Tag
-	35,  // 127: substrate.ateapi.v1.DeleteTagRequest.tag:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 128: substrate.ateapi.v1.DeleteTagRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	35,  // 129: substrate.ateapi.v1.ListWorkerActorAssignmentsRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	102, // 130: substrate.ateapi.v1.ListWorkerActorAssignmentsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
-	128, // 131: substrate.ateapi.v1.ListWorkerActorAssignmentsResponse.actor_assignments:type_name -> substrate.ateapi.v1.ActorAssignment
-	102, // 132: substrate.ateapi.v1.ListWorkersRequest.options:type_name -> substrate.ateapi.v1.ListOptions
-	119, // 133: substrate.ateapi.v1.ListWorkersResponse.workers:type_name -> substrate.ateapi.v1.Worker
-	35,  // 134: substrate.ateapi.v1.GetWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	119, // 135: substrate.ateapi.v1.CreateWorkerRequest.worker:type_name -> substrate.ateapi.v1.Worker
-	119, // 136: substrate.ateapi.v1.UpdateWorkerRequest.worker:type_name -> substrate.ateapi.v1.Worker
-	35,  // 137: substrate.ateapi.v1.DeleteWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 138: substrate.ateapi.v1.DeleteWorkerRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	35,  // 139: substrate.ateapi.v1.DrainWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	119, // 140: substrate.ateapi.v1.DrainWorkerResponse.worker:type_name -> substrate.ateapi.v1.Worker
-	35,  // 141: substrate.ateapi.v1.MarkWorkerAvailableRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	119, // 142: substrate.ateapi.v1.MarkWorkerAvailableResponse.worker:type_name -> substrate.ateapi.v1.Worker
-	35,  // 143: substrate.ateapi.v1.MarkWorkerUnavailableRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	119, // 144: substrate.ateapi.v1.MarkWorkerUnavailableResponse.worker:type_name -> substrate.ateapi.v1.Worker
-	102, // 145: substrate.ateapi.v1.ListActorsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
-	17,  // 146: substrate.ateapi.v1.ListActorsResponse.actors:type_name -> substrate.ateapi.v1.Actor
-	14,  // 147: substrate.ateapi.v1.Worker.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
-	161, // 148: substrate.ateapi.v1.Worker.labels:type_name -> substrate.ateapi.v1.Worker.LabelsEntry
-	120, // 149: substrate.ateapi.v1.Worker.status:type_name -> substrate.ateapi.v1.WorkerStatus
-	8,   // 150: substrate.ateapi.v1.WorkerStatus.state:type_name -> substrate.ateapi.v1.WorkerState
-	127, // 151: substrate.ateapi.v1.WorkerStatus.capacity:type_name -> substrate.ateapi.v1.WorkerResources
-	127, // 152: substrate.ateapi.v1.WorkerStatus.allocated:type_name -> substrate.ateapi.v1.WorkerResources
-	121, // 153: substrate.ateapi.v1.WorkerStatus.sandbox_classes:type_name -> substrate.ateapi.v1.WorkerSandboxClass
-	122, // 154: substrate.ateapi.v1.WorkerSandboxClass.default_runtime:type_name -> substrate.ateapi.v1.WorkerSandboxRuntime
-	122, // 155: substrate.ateapi.v1.WorkerSandboxClass.restorable_runtimes:type_name -> substrate.ateapi.v1.WorkerSandboxRuntime
-	125, // 156: substrate.ateapi.v1.WorkerSandboxRuntime.version:type_name -> substrate.ateapi.v1.VersionedSandboxCompat
-	123, // 157: substrate.ateapi.v1.WorkerSandboxRuntime.actor_overhead:type_name -> substrate.ateapi.v1.RuntimeOverhead
-	125, // 158: substrate.ateapi.v1.ActorSandboxRuntime.version:type_name -> substrate.ateapi.v1.VersionedSandboxCompat
-	126, // 159: substrate.ateapi.v1.VersionedSandboxCompat.attributes:type_name -> substrate.ateapi.v1.AttributeEntry
-	14,  // 160: substrate.ateapi.v1.ActorAssignment.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
-	35,  // 161: substrate.ateapi.v1.ActorAssignment.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	38,  // 162: substrate.ateapi.v1.ActorAssignment.resources:type_name -> substrate.ateapi.v1.Resources
-	35,  // 163: substrate.ateapi.v1.AcquireWorkerEpochRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 164: substrate.ateapi.v1.RegisterWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	127, // 165: substrate.ateapi.v1.RegisterWorkerRequest.capacity:type_name -> substrate.ateapi.v1.WorkerResources
-	119, // 166: substrate.ateapi.v1.RegisterWorkerResponse.worker:type_name -> substrate.ateapi.v1.Worker
-	35,  // 167: substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	121, // 168: substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest.sandbox_classes:type_name -> substrate.ateapi.v1.WorkerSandboxClass
-	119, // 169: substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse.worker:type_name -> substrate.ateapi.v1.Worker
-	35,  // 170: substrate.ateapi.v1.MintWorkerActorCertificateRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 171: substrate.ateapi.v1.MintWorkerActorCertificateRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 172: substrate.ateapi.v1.MintWorkerActorJwtRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	162, // 173: substrate.ateapi.v1.MintWorkerActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
-	35,  // 174: substrate.ateapi.v1.RequestActorSuspendRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 175: substrate.ateapi.v1.RequestActorSuspendRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	17,  // 176: substrate.ateapi.v1.RequestActorSuspendResponse.actor:type_name -> substrate.ateapi.v1.Actor
-	35,  // 177: substrate.ateapi.v1.ReportActorCrashedRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 178: substrate.ateapi.v1.ReportActorCrashedRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	17,  // 179: substrate.ateapi.v1.ReportActorCrashedResponse.actor:type_name -> substrate.ateapi.v1.Actor
-	35,  // 180: substrate.ateapi.v1.ReportActorSnapshotStateRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
-	145, // 181: substrate.ateapi.v1.ReportActorSnapshotStateRequest.state:type_name -> substrate.ateapi.v1.ActorSnapshotState
-	146, // 182: substrate.ateapi.v1.ActorSnapshotState.latest_local:type_name -> substrate.ateapi.v1.SnapshotReport
-	146, // 183: substrate.ateapi.v1.ActorSnapshotState.uploading:type_name -> substrate.ateapi.v1.SnapshotReport
-	146, // 184: substrate.ateapi.v1.ActorSnapshotState.latest_durable:type_name -> substrate.ateapi.v1.SnapshotReport
-	162, // 185: substrate.ateapi.v1.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
-	2,   // 186: substrate.ateapi.v1.SnapshotReport.fidelity:type_name -> substrate.ateapi.v1.SnapshotFidelity
-	10,  // 187: substrate.ateapi.v1.SnapshotReport.object:type_name -> substrate.ateapi.v1.ObjectSnapshot
-	162, // 188: substrate.ateapi.v1.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
-	162, // 189: substrate.ateapi.v1.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
-	14,  // 190: substrate.ateapi.v1.AccessPolicy.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
-	148, // 191: substrate.ateapi.v1.AccessPolicy.bindings:type_name -> substrate.ateapi.v1.Binding
-	147, // 192: substrate.ateapi.v1.CreateGlobalAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
-	147, // 193: substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
-	35,  // 194: substrate.ateapi.v1.GetAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
-	35,  // 195: substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
-	147, // 196: substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
-	35,  // 197: substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
-	147, // 198: substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
-	35,  // 199: substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
-	101, // 200: substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
-	9,   // 201: substrate.ateapi.v1.ResourceAnnotation.scope:type_name -> substrate.ateapi.v1.Scope
-	163, // 202: substrate.ateapi.v1.resource:extendee -> google.protobuf.MessageOptions
-	164, // 203: substrate.ateapi.v1.method:extendee -> google.protobuf.MethodOptions
-	156, // 204: substrate.ateapi.v1.resource:type_name -> substrate.ateapi.v1.ResourceAnnotation
-	157, // 205: substrate.ateapi.v1.method:type_name -> substrate.ateapi.v1.MethodAnnotation
-	78,  // 206: substrate.ateapi.v1.Control.GetActor:input_type -> substrate.ateapi.v1.GetActorRequest
-	79,  // 207: substrate.ateapi.v1.Control.CreateActor:input_type -> substrate.ateapi.v1.CreateActorRequest
-	80,  // 208: substrate.ateapi.v1.Control.UpdateActor:input_type -> substrate.ateapi.v1.UpdateActorRequest
-	81,  // 209: substrate.ateapi.v1.Control.SuspendActor:input_type -> substrate.ateapi.v1.SuspendActorRequest
-	84,  // 210: substrate.ateapi.v1.Control.ResumeActor:input_type -> substrate.ateapi.v1.ResumeActorRequest
-	86,  // 211: substrate.ateapi.v1.Control.RevertActor:input_type -> substrate.ateapi.v1.RevertActorRequest
-	88,  // 212: substrate.ateapi.v1.Control.DeleteActor:input_type -> substrate.ateapi.v1.DeleteActorRequest
-	89,  // 213: substrate.ateapi.v1.Control.GetActorEgressPolicy:input_type -> substrate.ateapi.v1.GetActorEgressPolicyRequest
-	90,  // 214: substrate.ateapi.v1.Control.CreateActorEgressPolicy:input_type -> substrate.ateapi.v1.CreateActorEgressPolicyRequest
-	91,  // 215: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:input_type -> substrate.ateapi.v1.UpdateActorEgressPolicyRequest
-	92,  // 216: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:input_type -> substrate.ateapi.v1.DeleteActorEgressPolicyRequest
-	94,  // 217: substrate.ateapi.v1.Control.MintActorJwt:input_type -> substrate.ateapi.v1.MintActorJwtRequest
-	98,  // 218: substrate.ateapi.v1.Control.CreateTag:input_type -> substrate.ateapi.v1.CreateTagRequest
-	93,  // 219: substrate.ateapi.v1.Control.GetTag:input_type -> substrate.ateapi.v1.GetTagRequest
-	96,  // 220: substrate.ateapi.v1.Control.ListTags:input_type -> substrate.ateapi.v1.ListTagsRequest
-	99,  // 221: substrate.ateapi.v1.Control.UpdateTag:input_type -> substrate.ateapi.v1.UpdateTagRequest
-	100, // 222: substrate.ateapi.v1.Control.DeleteTag:input_type -> substrate.ateapi.v1.DeleteTagRequest
-	105, // 223: substrate.ateapi.v1.Control.ListWorkers:input_type -> substrate.ateapi.v1.ListWorkersRequest
-	107, // 224: substrate.ateapi.v1.Control.GetWorker:input_type -> substrate.ateapi.v1.GetWorkerRequest
-	108, // 225: substrate.ateapi.v1.Control.CreateWorker:input_type -> substrate.ateapi.v1.CreateWorkerRequest
-	109, // 226: substrate.ateapi.v1.Control.UpdateWorker:input_type -> substrate.ateapi.v1.UpdateWorkerRequest
-	110, // 227: substrate.ateapi.v1.Control.DeleteWorker:input_type -> substrate.ateapi.v1.DeleteWorkerRequest
-	111, // 228: substrate.ateapi.v1.Control.DrainWorker:input_type -> substrate.ateapi.v1.DrainWorkerRequest
-	113, // 229: substrate.ateapi.v1.Control.MarkWorkerAvailable:input_type -> substrate.ateapi.v1.MarkWorkerAvailableRequest
-	115, // 230: substrate.ateapi.v1.Control.MarkWorkerUnavailable:input_type -> substrate.ateapi.v1.MarkWorkerUnavailableRequest
-	103, // 231: substrate.ateapi.v1.Control.ListWorkerActorAssignments:input_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsRequest
-	117, // 232: substrate.ateapi.v1.Control.ListActors:input_type -> substrate.ateapi.v1.ListActorsRequest
-	63,  // 233: substrate.ateapi.v1.Control.CreateAtespace:input_type -> substrate.ateapi.v1.CreateAtespaceRequest
-	64,  // 234: substrate.ateapi.v1.Control.GetAtespace:input_type -> substrate.ateapi.v1.GetAtespaceRequest
-	65,  // 235: substrate.ateapi.v1.Control.ListAtespaces:input_type -> substrate.ateapi.v1.ListAtespacesRequest
-	67,  // 236: substrate.ateapi.v1.Control.DeleteAtespace:input_type -> substrate.ateapi.v1.DeleteAtespaceRequest
-	68,  // 237: substrate.ateapi.v1.Control.CreateExternalVolumeClass:input_type -> substrate.ateapi.v1.CreateExternalVolumeClassRequest
-	69,  // 238: substrate.ateapi.v1.Control.GetExternalVolumeClass:input_type -> substrate.ateapi.v1.GetExternalVolumeClassRequest
-	70,  // 239: substrate.ateapi.v1.Control.ListExternalVolumeClasses:input_type -> substrate.ateapi.v1.ListExternalVolumeClassesRequest
-	72,  // 240: substrate.ateapi.v1.Control.DeleteExternalVolumeClass:input_type -> substrate.ateapi.v1.DeleteExternalVolumeClassRequest
-	73,  // 241: substrate.ateapi.v1.Control.CreateActorTemplate:input_type -> substrate.ateapi.v1.CreateActorTemplateRequest
-	74,  // 242: substrate.ateapi.v1.Control.GetActorTemplate:input_type -> substrate.ateapi.v1.GetActorTemplateRequest
-	75,  // 243: substrate.ateapi.v1.Control.ListActorTemplates:input_type -> substrate.ateapi.v1.ListActorTemplatesRequest
-	77,  // 244: substrate.ateapi.v1.Control.DeleteActorTemplate:input_type -> substrate.ateapi.v1.DeleteActorTemplateRequest
-	149, // 245: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:input_type -> substrate.ateapi.v1.GetGlobalAccessPolicyRequest
-	150, // 246: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.CreateGlobalAccessPolicyRequest
-	151, // 247: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest
-	152, // 248: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.GetAtespaceAccessPolicyRequest
-	153, // 249: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest
-	154, // 250: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest
-	155, // 251: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest
-	129, // 252: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:input_type -> substrate.ateapi.v1.AcquireWorkerEpochRequest
-	131, // 253: substrate.ateapi.v1.WorkerService.RegisterWorker:input_type -> substrate.ateapi.v1.RegisterWorkerRequest
-	133, // 254: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:input_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest
-	135, // 255: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:input_type -> substrate.ateapi.v1.MintWorkerActorCertificateRequest
-	137, // 256: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:input_type -> substrate.ateapi.v1.MintWorkerActorJwtRequest
-	139, // 257: substrate.ateapi.v1.WorkerService.RequestActorSuspend:input_type -> substrate.ateapi.v1.RequestActorSuspendRequest
-	143, // 258: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:input_type -> substrate.ateapi.v1.ReportActorSnapshotStateRequest
-	141, // 259: substrate.ateapi.v1.WorkerService.ReportActorCrashed:input_type -> substrate.ateapi.v1.ReportActorCrashedRequest
-	17,  // 260: substrate.ateapi.v1.Control.GetActor:output_type -> substrate.ateapi.v1.Actor
-	17,  // 261: substrate.ateapi.v1.Control.CreateActor:output_type -> substrate.ateapi.v1.Actor
-	17,  // 262: substrate.ateapi.v1.Control.UpdateActor:output_type -> substrate.ateapi.v1.Actor
-	82,  // 263: substrate.ateapi.v1.Control.SuspendActor:output_type -> substrate.ateapi.v1.SuspendActorResponse
-	85,  // 264: substrate.ateapi.v1.Control.ResumeActor:output_type -> substrate.ateapi.v1.ResumeActorResponse
-	87,  // 265: substrate.ateapi.v1.Control.RevertActor:output_type -> substrate.ateapi.v1.RevertActorResponse
-	17,  // 266: substrate.ateapi.v1.Control.DeleteActor:output_type -> substrate.ateapi.v1.Actor
-	18,  // 267: substrate.ateapi.v1.Control.GetActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	18,  // 268: substrate.ateapi.v1.Control.CreateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	18,  // 269: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	18,  // 270: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
-	95,  // 271: substrate.ateapi.v1.Control.MintActorJwt:output_type -> substrate.ateapi.v1.MintActorJwtResponse
-	33,  // 272: substrate.ateapi.v1.Control.CreateTag:output_type -> substrate.ateapi.v1.Tag
-	33,  // 273: substrate.ateapi.v1.Control.GetTag:output_type -> substrate.ateapi.v1.Tag
-	97,  // 274: substrate.ateapi.v1.Control.ListTags:output_type -> substrate.ateapi.v1.ListTagsResponse
-	33,  // 275: substrate.ateapi.v1.Control.UpdateTag:output_type -> substrate.ateapi.v1.Tag
-	33,  // 276: substrate.ateapi.v1.Control.DeleteTag:output_type -> substrate.ateapi.v1.Tag
-	106, // 277: substrate.ateapi.v1.Control.ListWorkers:output_type -> substrate.ateapi.v1.ListWorkersResponse
-	119, // 278: substrate.ateapi.v1.Control.GetWorker:output_type -> substrate.ateapi.v1.Worker
-	119, // 279: substrate.ateapi.v1.Control.CreateWorker:output_type -> substrate.ateapi.v1.Worker
-	119, // 280: substrate.ateapi.v1.Control.UpdateWorker:output_type -> substrate.ateapi.v1.Worker
-	119, // 281: substrate.ateapi.v1.Control.DeleteWorker:output_type -> substrate.ateapi.v1.Worker
-	112, // 282: substrate.ateapi.v1.Control.DrainWorker:output_type -> substrate.ateapi.v1.DrainWorkerResponse
-	114, // 283: substrate.ateapi.v1.Control.MarkWorkerAvailable:output_type -> substrate.ateapi.v1.MarkWorkerAvailableResponse
-	116, // 284: substrate.ateapi.v1.Control.MarkWorkerUnavailable:output_type -> substrate.ateapi.v1.MarkWorkerUnavailableResponse
-	104, // 285: substrate.ateapi.v1.Control.ListWorkerActorAssignments:output_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsResponse
-	118, // 286: substrate.ateapi.v1.Control.ListActors:output_type -> substrate.ateapi.v1.ListActorsResponse
-	34,  // 287: substrate.ateapi.v1.Control.CreateAtespace:output_type -> substrate.ateapi.v1.Atespace
-	34,  // 288: substrate.ateapi.v1.Control.GetAtespace:output_type -> substrate.ateapi.v1.Atespace
-	66,  // 289: substrate.ateapi.v1.Control.ListAtespaces:output_type -> substrate.ateapi.v1.ListAtespacesResponse
-	34,  // 290: substrate.ateapi.v1.Control.DeleteAtespace:output_type -> substrate.ateapi.v1.Atespace
-	54,  // 291: substrate.ateapi.v1.Control.CreateExternalVolumeClass:output_type -> substrate.ateapi.v1.ExternalVolumeClass
-	54,  // 292: substrate.ateapi.v1.Control.GetExternalVolumeClass:output_type -> substrate.ateapi.v1.ExternalVolumeClass
-	71,  // 293: substrate.ateapi.v1.Control.ListExternalVolumeClasses:output_type -> substrate.ateapi.v1.ListExternalVolumeClassesResponse
-	54,  // 294: substrate.ateapi.v1.Control.DeleteExternalVolumeClass:output_type -> substrate.ateapi.v1.ExternalVolumeClass
-	36,  // 295: substrate.ateapi.v1.Control.CreateActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
-	36,  // 296: substrate.ateapi.v1.Control.GetActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
-	76,  // 297: substrate.ateapi.v1.Control.ListActorTemplates:output_type -> substrate.ateapi.v1.ListActorTemplatesResponse
-	36,  // 298: substrate.ateapi.v1.Control.DeleteActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
-	147, // 299: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	147, // 300: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	147, // 301: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	147, // 302: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	147, // 303: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	147, // 304: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	147, // 305: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
-	130, // 306: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:output_type -> substrate.ateapi.v1.AcquireWorkerEpochResponse
-	132, // 307: substrate.ateapi.v1.WorkerService.RegisterWorker:output_type -> substrate.ateapi.v1.RegisterWorkerResponse
-	134, // 308: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:output_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse
-	136, // 309: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:output_type -> substrate.ateapi.v1.MintWorkerActorCertificateResponse
-	138, // 310: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:output_type -> substrate.ateapi.v1.MintWorkerActorJwtResponse
-	140, // 311: substrate.ateapi.v1.WorkerService.RequestActorSuspend:output_type -> substrate.ateapi.v1.RequestActorSuspendResponse
-	144, // 312: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:output_type -> substrate.ateapi.v1.ReportActorSnapshotStateResponse
-	142, // 313: substrate.ateapi.v1.WorkerService.ReportActorCrashed:output_type -> substrate.ateapi.v1.ReportActorCrashedResponse
-	260, // [260:314] is the sub-list for method output_type
-	206, // [206:260] is the sub-list for method input_type
-	204, // [204:206] is the sub-list for extension type_name
-	202, // [202:204] is the sub-list for extension extendee
-	0,   // [0:202] is the sub-list for field type_name
+	107, // 93: substrate.ateapi.v1.DeleteExternalVolumeClassRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	55,  // 94: substrate.ateapi.v1.CreateCsiDriverConfigRequest.csi_driver_config:type_name -> substrate.ateapi.v1.CsiDriverConfig
+	35,  // 95: substrate.ateapi.v1.GetCsiDriverConfigRequest.csi_driver_config:type_name -> substrate.ateapi.v1.ObjectRef
+	108, // 96: substrate.ateapi.v1.ListCsiDriverConfigsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	55,  // 97: substrate.ateapi.v1.ListCsiDriverConfigsResponse.csi_driver_configs:type_name -> substrate.ateapi.v1.CsiDriverConfig
+	55,  // 98: substrate.ateapi.v1.UpdateCsiDriverConfigRequest.csi_driver_config:type_name -> substrate.ateapi.v1.CsiDriverConfig
+	35,  // 99: substrate.ateapi.v1.DeleteCsiDriverConfigRequest.csi_driver_config:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 100: substrate.ateapi.v1.DeleteCsiDriverConfigRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	36,  // 101: substrate.ateapi.v1.CreateActorTemplateRequest.actor_template:type_name -> substrate.ateapi.v1.ActorTemplate
+	35,  // 102: substrate.ateapi.v1.GetActorTemplateRequest.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
+	108, // 103: substrate.ateapi.v1.ListActorTemplatesRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	36,  // 104: substrate.ateapi.v1.ListActorTemplatesResponse.actor_templates:type_name -> substrate.ateapi.v1.ActorTemplate
+	35,  // 105: substrate.ateapi.v1.DeleteActorTemplateRequest.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 106: substrate.ateapi.v1.DeleteActorTemplateRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	35,  // 107: substrate.ateapi.v1.GetActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	17,  // 108: substrate.ateapi.v1.CreateActorRequest.actor:type_name -> substrate.ateapi.v1.Actor
+	17,  // 109: substrate.ateapi.v1.UpdateActorRequest.actor:type_name -> substrate.ateapi.v1.Actor
+	35,  // 110: substrate.ateapi.v1.SuspendActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	89,  // 111: substrate.ateapi.v1.SuspendActorRequest.options:type_name -> substrate.ateapi.v1.SuspendOptions
+	17,  // 112: substrate.ateapi.v1.SuspendActorResponse.actor:type_name -> substrate.ateapi.v1.Actor
+	7,   // 113: substrate.ateapi.v1.SuspendOptions.mode:type_name -> substrate.ateapi.v1.DurabilityMode
+	35,  // 114: substrate.ateapi.v1.ResumeActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	17,  // 115: substrate.ateapi.v1.ResumeActorResponse.actor:type_name -> substrate.ateapi.v1.Actor
+	35,  // 116: substrate.ateapi.v1.RevertActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	17,  // 117: substrate.ateapi.v1.RevertActorResponse.actor:type_name -> substrate.ateapi.v1.Actor
+	35,  // 118: substrate.ateapi.v1.DeleteActorRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 119: substrate.ateapi.v1.DeleteActorRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	35,  // 120: substrate.ateapi.v1.GetActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 121: substrate.ateapi.v1.CreateActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	18,  // 122: substrate.ateapi.v1.CreateActorEgressPolicyRequest.egress_policy:type_name -> substrate.ateapi.v1.EgressPolicy
+	35,  // 123: substrate.ateapi.v1.UpdateActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	18,  // 124: substrate.ateapi.v1.UpdateActorEgressPolicyRequest.egress_policy:type_name -> substrate.ateapi.v1.EgressPolicy
+	35,  // 125: substrate.ateapi.v1.DeleteActorEgressPolicyRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 126: substrate.ateapi.v1.DeleteActorEgressPolicyRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	35,  // 127: substrate.ateapi.v1.GetTagRequest.tag:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 128: substrate.ateapi.v1.MintActorJwtRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	168, // 129: substrate.ateapi.v1.MintActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
+	108, // 130: substrate.ateapi.v1.ListTagsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	33,  // 131: substrate.ateapi.v1.ListTagsResponse.tags:type_name -> substrate.ateapi.v1.Tag
+	33,  // 132: substrate.ateapi.v1.CreateTagRequest.tag:type_name -> substrate.ateapi.v1.Tag
+	33,  // 133: substrate.ateapi.v1.UpdateTagRequest.tag:type_name -> substrate.ateapi.v1.Tag
+	35,  // 134: substrate.ateapi.v1.DeleteTagRequest.tag:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 135: substrate.ateapi.v1.DeleteTagRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	35,  // 136: substrate.ateapi.v1.ListWorkerActorAssignmentsRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	108, // 137: substrate.ateapi.v1.ListWorkerActorAssignmentsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	134, // 138: substrate.ateapi.v1.ListWorkerActorAssignmentsResponse.actor_assignments:type_name -> substrate.ateapi.v1.ActorAssignment
+	108, // 139: substrate.ateapi.v1.ListWorkersRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	125, // 140: substrate.ateapi.v1.ListWorkersResponse.workers:type_name -> substrate.ateapi.v1.Worker
+	35,  // 141: substrate.ateapi.v1.GetWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	125, // 142: substrate.ateapi.v1.CreateWorkerRequest.worker:type_name -> substrate.ateapi.v1.Worker
+	125, // 143: substrate.ateapi.v1.UpdateWorkerRequest.worker:type_name -> substrate.ateapi.v1.Worker
+	35,  // 144: substrate.ateapi.v1.DeleteWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 145: substrate.ateapi.v1.DeleteWorkerRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	35,  // 146: substrate.ateapi.v1.DrainWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	125, // 147: substrate.ateapi.v1.DrainWorkerResponse.worker:type_name -> substrate.ateapi.v1.Worker
+	35,  // 148: substrate.ateapi.v1.MarkWorkerAvailableRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	125, // 149: substrate.ateapi.v1.MarkWorkerAvailableResponse.worker:type_name -> substrate.ateapi.v1.Worker
+	35,  // 150: substrate.ateapi.v1.MarkWorkerUnavailableRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	125, // 151: substrate.ateapi.v1.MarkWorkerUnavailableResponse.worker:type_name -> substrate.ateapi.v1.Worker
+	108, // 152: substrate.ateapi.v1.ListActorsRequest.options:type_name -> substrate.ateapi.v1.ListOptions
+	17,  // 153: substrate.ateapi.v1.ListActorsResponse.actors:type_name -> substrate.ateapi.v1.Actor
+	14,  // 154: substrate.ateapi.v1.Worker.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
+	167, // 155: substrate.ateapi.v1.Worker.labels:type_name -> substrate.ateapi.v1.Worker.LabelsEntry
+	126, // 156: substrate.ateapi.v1.Worker.status:type_name -> substrate.ateapi.v1.WorkerStatus
+	8,   // 157: substrate.ateapi.v1.WorkerStatus.state:type_name -> substrate.ateapi.v1.WorkerState
+	133, // 158: substrate.ateapi.v1.WorkerStatus.capacity:type_name -> substrate.ateapi.v1.WorkerResources
+	133, // 159: substrate.ateapi.v1.WorkerStatus.allocated:type_name -> substrate.ateapi.v1.WorkerResources
+	127, // 160: substrate.ateapi.v1.WorkerStatus.sandbox_classes:type_name -> substrate.ateapi.v1.WorkerSandboxClass
+	128, // 161: substrate.ateapi.v1.WorkerSandboxClass.default_runtime:type_name -> substrate.ateapi.v1.WorkerSandboxRuntime
+	128, // 162: substrate.ateapi.v1.WorkerSandboxClass.restorable_runtimes:type_name -> substrate.ateapi.v1.WorkerSandboxRuntime
+	131, // 163: substrate.ateapi.v1.WorkerSandboxRuntime.version:type_name -> substrate.ateapi.v1.VersionedSandboxCompat
+	129, // 164: substrate.ateapi.v1.WorkerSandboxRuntime.actor_overhead:type_name -> substrate.ateapi.v1.RuntimeOverhead
+	131, // 165: substrate.ateapi.v1.ActorSandboxRuntime.version:type_name -> substrate.ateapi.v1.VersionedSandboxCompat
+	132, // 166: substrate.ateapi.v1.VersionedSandboxCompat.attributes:type_name -> substrate.ateapi.v1.AttributeEntry
+	14,  // 167: substrate.ateapi.v1.ActorAssignment.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
+	35,  // 168: substrate.ateapi.v1.ActorAssignment.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	38,  // 169: substrate.ateapi.v1.ActorAssignment.resources:type_name -> substrate.ateapi.v1.Resources
+	35,  // 170: substrate.ateapi.v1.AcquireWorkerEpochRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 171: substrate.ateapi.v1.RegisterWorkerRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	133, // 172: substrate.ateapi.v1.RegisterWorkerRequest.capacity:type_name -> substrate.ateapi.v1.WorkerResources
+	125, // 173: substrate.ateapi.v1.RegisterWorkerResponse.worker:type_name -> substrate.ateapi.v1.Worker
+	35,  // 174: substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	127, // 175: substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest.sandbox_classes:type_name -> substrate.ateapi.v1.WorkerSandboxClass
+	125, // 176: substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse.worker:type_name -> substrate.ateapi.v1.Worker
+	35,  // 177: substrate.ateapi.v1.MintWorkerActorCertificateRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 178: substrate.ateapi.v1.MintWorkerActorCertificateRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 179: substrate.ateapi.v1.MintWorkerActorJwtRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	168, // 180: substrate.ateapi.v1.MintWorkerActorJwtResponse.expire_time:type_name -> google.protobuf.Timestamp
+	35,  // 181: substrate.ateapi.v1.RequestActorSuspendRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 182: substrate.ateapi.v1.RequestActorSuspendRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	17,  // 183: substrate.ateapi.v1.RequestActorSuspendResponse.actor:type_name -> substrate.ateapi.v1.Actor
+	35,  // 184: substrate.ateapi.v1.ReportActorCrashedRequest.worker:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 185: substrate.ateapi.v1.ReportActorCrashedRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	17,  // 186: substrate.ateapi.v1.ReportActorCrashedResponse.actor:type_name -> substrate.ateapi.v1.Actor
+	35,  // 187: substrate.ateapi.v1.ReportActorSnapshotStateRequest.actor:type_name -> substrate.ateapi.v1.ObjectRef
+	151, // 188: substrate.ateapi.v1.ReportActorSnapshotStateRequest.state:type_name -> substrate.ateapi.v1.ActorSnapshotState
+	152, // 189: substrate.ateapi.v1.ActorSnapshotState.latest_local:type_name -> substrate.ateapi.v1.SnapshotReport
+	152, // 190: substrate.ateapi.v1.ActorSnapshotState.uploading:type_name -> substrate.ateapi.v1.SnapshotReport
+	152, // 191: substrate.ateapi.v1.ActorSnapshotState.latest_durable:type_name -> substrate.ateapi.v1.SnapshotReport
+	168, // 192: substrate.ateapi.v1.ActorSnapshotState.upload_due_time:type_name -> google.protobuf.Timestamp
+	2,   // 193: substrate.ateapi.v1.SnapshotReport.fidelity:type_name -> substrate.ateapi.v1.SnapshotFidelity
+	10,  // 194: substrate.ateapi.v1.SnapshotReport.object:type_name -> substrate.ateapi.v1.ObjectSnapshot
+	168, // 195: substrate.ateapi.v1.SnapshotReport.local_commit_time:type_name -> google.protobuf.Timestamp
+	168, // 196: substrate.ateapi.v1.SnapshotReport.durable_complete_time:type_name -> google.protobuf.Timestamp
+	14,  // 197: substrate.ateapi.v1.AccessPolicy.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
+	154, // 198: substrate.ateapi.v1.AccessPolicy.bindings:type_name -> substrate.ateapi.v1.Binding
+	153, // 199: substrate.ateapi.v1.CreateGlobalAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
+	153, // 200: substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
+	35,  // 201: substrate.ateapi.v1.GetAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 202: substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
+	153, // 203: substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
+	35,  // 204: substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
+	153, // 205: substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest.access_policy:type_name -> substrate.ateapi.v1.AccessPolicy
+	35,  // 206: substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest.atespace:type_name -> substrate.ateapi.v1.ObjectRef
+	107, // 207: substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest.options:type_name -> substrate.ateapi.v1.DeleteOptions
+	9,   // 208: substrate.ateapi.v1.ResourceAnnotation.scope:type_name -> substrate.ateapi.v1.Scope
+	169, // 209: substrate.ateapi.v1.resource:extendee -> google.protobuf.MessageOptions
+	170, // 210: substrate.ateapi.v1.method:extendee -> google.protobuf.MethodOptions
+	162, // 211: substrate.ateapi.v1.resource:type_name -> substrate.ateapi.v1.ResourceAnnotation
+	163, // 212: substrate.ateapi.v1.method:type_name -> substrate.ateapi.v1.MethodAnnotation
+	84,  // 213: substrate.ateapi.v1.Control.GetActor:input_type -> substrate.ateapi.v1.GetActorRequest
+	85,  // 214: substrate.ateapi.v1.Control.CreateActor:input_type -> substrate.ateapi.v1.CreateActorRequest
+	86,  // 215: substrate.ateapi.v1.Control.UpdateActor:input_type -> substrate.ateapi.v1.UpdateActorRequest
+	87,  // 216: substrate.ateapi.v1.Control.SuspendActor:input_type -> substrate.ateapi.v1.SuspendActorRequest
+	90,  // 217: substrate.ateapi.v1.Control.ResumeActor:input_type -> substrate.ateapi.v1.ResumeActorRequest
+	92,  // 218: substrate.ateapi.v1.Control.RevertActor:input_type -> substrate.ateapi.v1.RevertActorRequest
+	94,  // 219: substrate.ateapi.v1.Control.DeleteActor:input_type -> substrate.ateapi.v1.DeleteActorRequest
+	95,  // 220: substrate.ateapi.v1.Control.GetActorEgressPolicy:input_type -> substrate.ateapi.v1.GetActorEgressPolicyRequest
+	96,  // 221: substrate.ateapi.v1.Control.CreateActorEgressPolicy:input_type -> substrate.ateapi.v1.CreateActorEgressPolicyRequest
+	97,  // 222: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:input_type -> substrate.ateapi.v1.UpdateActorEgressPolicyRequest
+	98,  // 223: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:input_type -> substrate.ateapi.v1.DeleteActorEgressPolicyRequest
+	100, // 224: substrate.ateapi.v1.Control.MintActorJwt:input_type -> substrate.ateapi.v1.MintActorJwtRequest
+	104, // 225: substrate.ateapi.v1.Control.CreateTag:input_type -> substrate.ateapi.v1.CreateTagRequest
+	99,  // 226: substrate.ateapi.v1.Control.GetTag:input_type -> substrate.ateapi.v1.GetTagRequest
+	102, // 227: substrate.ateapi.v1.Control.ListTags:input_type -> substrate.ateapi.v1.ListTagsRequest
+	105, // 228: substrate.ateapi.v1.Control.UpdateTag:input_type -> substrate.ateapi.v1.UpdateTagRequest
+	106, // 229: substrate.ateapi.v1.Control.DeleteTag:input_type -> substrate.ateapi.v1.DeleteTagRequest
+	111, // 230: substrate.ateapi.v1.Control.ListWorkers:input_type -> substrate.ateapi.v1.ListWorkersRequest
+	113, // 231: substrate.ateapi.v1.Control.GetWorker:input_type -> substrate.ateapi.v1.GetWorkerRequest
+	114, // 232: substrate.ateapi.v1.Control.CreateWorker:input_type -> substrate.ateapi.v1.CreateWorkerRequest
+	115, // 233: substrate.ateapi.v1.Control.UpdateWorker:input_type -> substrate.ateapi.v1.UpdateWorkerRequest
+	116, // 234: substrate.ateapi.v1.Control.DeleteWorker:input_type -> substrate.ateapi.v1.DeleteWorkerRequest
+	117, // 235: substrate.ateapi.v1.Control.DrainWorker:input_type -> substrate.ateapi.v1.DrainWorkerRequest
+	119, // 236: substrate.ateapi.v1.Control.MarkWorkerAvailable:input_type -> substrate.ateapi.v1.MarkWorkerAvailableRequest
+	121, // 237: substrate.ateapi.v1.Control.MarkWorkerUnavailable:input_type -> substrate.ateapi.v1.MarkWorkerUnavailableRequest
+	109, // 238: substrate.ateapi.v1.Control.ListWorkerActorAssignments:input_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsRequest
+	123, // 239: substrate.ateapi.v1.Control.ListActors:input_type -> substrate.ateapi.v1.ListActorsRequest
+	63,  // 240: substrate.ateapi.v1.Control.CreateAtespace:input_type -> substrate.ateapi.v1.CreateAtespaceRequest
+	64,  // 241: substrate.ateapi.v1.Control.GetAtespace:input_type -> substrate.ateapi.v1.GetAtespaceRequest
+	65,  // 242: substrate.ateapi.v1.Control.ListAtespaces:input_type -> substrate.ateapi.v1.ListAtespacesRequest
+	67,  // 243: substrate.ateapi.v1.Control.DeleteAtespace:input_type -> substrate.ateapi.v1.DeleteAtespaceRequest
+	68,  // 244: substrate.ateapi.v1.Control.CreateExternalVolumeClass:input_type -> substrate.ateapi.v1.CreateExternalVolumeClassRequest
+	69,  // 245: substrate.ateapi.v1.Control.GetExternalVolumeClass:input_type -> substrate.ateapi.v1.GetExternalVolumeClassRequest
+	70,  // 246: substrate.ateapi.v1.Control.ListExternalVolumeClasses:input_type -> substrate.ateapi.v1.ListExternalVolumeClassesRequest
+	72,  // 247: substrate.ateapi.v1.Control.DeleteExternalVolumeClass:input_type -> substrate.ateapi.v1.DeleteExternalVolumeClassRequest
+	73,  // 248: substrate.ateapi.v1.Control.CreateCsiDriverConfig:input_type -> substrate.ateapi.v1.CreateCsiDriverConfigRequest
+	74,  // 249: substrate.ateapi.v1.Control.GetCsiDriverConfig:input_type -> substrate.ateapi.v1.GetCsiDriverConfigRequest
+	75,  // 250: substrate.ateapi.v1.Control.ListCsiDriverConfigs:input_type -> substrate.ateapi.v1.ListCsiDriverConfigsRequest
+	77,  // 251: substrate.ateapi.v1.Control.UpdateCsiDriverConfig:input_type -> substrate.ateapi.v1.UpdateCsiDriverConfigRequest
+	78,  // 252: substrate.ateapi.v1.Control.DeleteCsiDriverConfig:input_type -> substrate.ateapi.v1.DeleteCsiDriverConfigRequest
+	79,  // 253: substrate.ateapi.v1.Control.CreateActorTemplate:input_type -> substrate.ateapi.v1.CreateActorTemplateRequest
+	80,  // 254: substrate.ateapi.v1.Control.GetActorTemplate:input_type -> substrate.ateapi.v1.GetActorTemplateRequest
+	81,  // 255: substrate.ateapi.v1.Control.ListActorTemplates:input_type -> substrate.ateapi.v1.ListActorTemplatesRequest
+	83,  // 256: substrate.ateapi.v1.Control.DeleteActorTemplate:input_type -> substrate.ateapi.v1.DeleteActorTemplateRequest
+	155, // 257: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:input_type -> substrate.ateapi.v1.GetGlobalAccessPolicyRequest
+	156, // 258: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.CreateGlobalAccessPolicyRequest
+	157, // 259: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:input_type -> substrate.ateapi.v1.UpdateGlobalAccessPolicyRequest
+	158, // 260: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.GetAtespaceAccessPolicyRequest
+	159, // 261: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.CreateAtespaceAccessPolicyRequest
+	160, // 262: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.UpdateAtespaceAccessPolicyRequest
+	161, // 263: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:input_type -> substrate.ateapi.v1.DeleteAtespaceAccessPolicyRequest
+	135, // 264: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:input_type -> substrate.ateapi.v1.AcquireWorkerEpochRequest
+	137, // 265: substrate.ateapi.v1.WorkerService.RegisterWorker:input_type -> substrate.ateapi.v1.RegisterWorkerRequest
+	139, // 266: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:input_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesRequest
+	141, // 267: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:input_type -> substrate.ateapi.v1.MintWorkerActorCertificateRequest
+	143, // 268: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:input_type -> substrate.ateapi.v1.MintWorkerActorJwtRequest
+	145, // 269: substrate.ateapi.v1.WorkerService.RequestActorSuspend:input_type -> substrate.ateapi.v1.RequestActorSuspendRequest
+	149, // 270: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:input_type -> substrate.ateapi.v1.ReportActorSnapshotStateRequest
+	147, // 271: substrate.ateapi.v1.WorkerService.ReportActorCrashed:input_type -> substrate.ateapi.v1.ReportActorCrashedRequest
+	17,  // 272: substrate.ateapi.v1.Control.GetActor:output_type -> substrate.ateapi.v1.Actor
+	17,  // 273: substrate.ateapi.v1.Control.CreateActor:output_type -> substrate.ateapi.v1.Actor
+	17,  // 274: substrate.ateapi.v1.Control.UpdateActor:output_type -> substrate.ateapi.v1.Actor
+	88,  // 275: substrate.ateapi.v1.Control.SuspendActor:output_type -> substrate.ateapi.v1.SuspendActorResponse
+	91,  // 276: substrate.ateapi.v1.Control.ResumeActor:output_type -> substrate.ateapi.v1.ResumeActorResponse
+	93,  // 277: substrate.ateapi.v1.Control.RevertActor:output_type -> substrate.ateapi.v1.RevertActorResponse
+	17,  // 278: substrate.ateapi.v1.Control.DeleteActor:output_type -> substrate.ateapi.v1.Actor
+	18,  // 279: substrate.ateapi.v1.Control.GetActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	18,  // 280: substrate.ateapi.v1.Control.CreateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	18,  // 281: substrate.ateapi.v1.Control.UpdateActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	18,  // 282: substrate.ateapi.v1.Control.DeleteActorEgressPolicy:output_type -> substrate.ateapi.v1.EgressPolicy
+	101, // 283: substrate.ateapi.v1.Control.MintActorJwt:output_type -> substrate.ateapi.v1.MintActorJwtResponse
+	33,  // 284: substrate.ateapi.v1.Control.CreateTag:output_type -> substrate.ateapi.v1.Tag
+	33,  // 285: substrate.ateapi.v1.Control.GetTag:output_type -> substrate.ateapi.v1.Tag
+	103, // 286: substrate.ateapi.v1.Control.ListTags:output_type -> substrate.ateapi.v1.ListTagsResponse
+	33,  // 287: substrate.ateapi.v1.Control.UpdateTag:output_type -> substrate.ateapi.v1.Tag
+	33,  // 288: substrate.ateapi.v1.Control.DeleteTag:output_type -> substrate.ateapi.v1.Tag
+	112, // 289: substrate.ateapi.v1.Control.ListWorkers:output_type -> substrate.ateapi.v1.ListWorkersResponse
+	125, // 290: substrate.ateapi.v1.Control.GetWorker:output_type -> substrate.ateapi.v1.Worker
+	125, // 291: substrate.ateapi.v1.Control.CreateWorker:output_type -> substrate.ateapi.v1.Worker
+	125, // 292: substrate.ateapi.v1.Control.UpdateWorker:output_type -> substrate.ateapi.v1.Worker
+	125, // 293: substrate.ateapi.v1.Control.DeleteWorker:output_type -> substrate.ateapi.v1.Worker
+	118, // 294: substrate.ateapi.v1.Control.DrainWorker:output_type -> substrate.ateapi.v1.DrainWorkerResponse
+	120, // 295: substrate.ateapi.v1.Control.MarkWorkerAvailable:output_type -> substrate.ateapi.v1.MarkWorkerAvailableResponse
+	122, // 296: substrate.ateapi.v1.Control.MarkWorkerUnavailable:output_type -> substrate.ateapi.v1.MarkWorkerUnavailableResponse
+	110, // 297: substrate.ateapi.v1.Control.ListWorkerActorAssignments:output_type -> substrate.ateapi.v1.ListWorkerActorAssignmentsResponse
+	124, // 298: substrate.ateapi.v1.Control.ListActors:output_type -> substrate.ateapi.v1.ListActorsResponse
+	34,  // 299: substrate.ateapi.v1.Control.CreateAtespace:output_type -> substrate.ateapi.v1.Atespace
+	34,  // 300: substrate.ateapi.v1.Control.GetAtespace:output_type -> substrate.ateapi.v1.Atespace
+	66,  // 301: substrate.ateapi.v1.Control.ListAtespaces:output_type -> substrate.ateapi.v1.ListAtespacesResponse
+	34,  // 302: substrate.ateapi.v1.Control.DeleteAtespace:output_type -> substrate.ateapi.v1.Atespace
+	54,  // 303: substrate.ateapi.v1.Control.CreateExternalVolumeClass:output_type -> substrate.ateapi.v1.ExternalVolumeClass
+	54,  // 304: substrate.ateapi.v1.Control.GetExternalVolumeClass:output_type -> substrate.ateapi.v1.ExternalVolumeClass
+	71,  // 305: substrate.ateapi.v1.Control.ListExternalVolumeClasses:output_type -> substrate.ateapi.v1.ListExternalVolumeClassesResponse
+	54,  // 306: substrate.ateapi.v1.Control.DeleteExternalVolumeClass:output_type -> substrate.ateapi.v1.ExternalVolumeClass
+	55,  // 307: substrate.ateapi.v1.Control.CreateCsiDriverConfig:output_type -> substrate.ateapi.v1.CsiDriverConfig
+	55,  // 308: substrate.ateapi.v1.Control.GetCsiDriverConfig:output_type -> substrate.ateapi.v1.CsiDriverConfig
+	76,  // 309: substrate.ateapi.v1.Control.ListCsiDriverConfigs:output_type -> substrate.ateapi.v1.ListCsiDriverConfigsResponse
+	55,  // 310: substrate.ateapi.v1.Control.UpdateCsiDriverConfig:output_type -> substrate.ateapi.v1.CsiDriverConfig
+	55,  // 311: substrate.ateapi.v1.Control.DeleteCsiDriverConfig:output_type -> substrate.ateapi.v1.CsiDriverConfig
+	36,  // 312: substrate.ateapi.v1.Control.CreateActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
+	36,  // 313: substrate.ateapi.v1.Control.GetActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
+	82,  // 314: substrate.ateapi.v1.Control.ListActorTemplates:output_type -> substrate.ateapi.v1.ListActorTemplatesResponse
+	36,  // 315: substrate.ateapi.v1.Control.DeleteActorTemplate:output_type -> substrate.ateapi.v1.ActorTemplate
+	153, // 316: substrate.ateapi.v1.Control.GetGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	153, // 317: substrate.ateapi.v1.Control.CreateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	153, // 318: substrate.ateapi.v1.Control.UpdateGlobalAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	153, // 319: substrate.ateapi.v1.Control.GetAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	153, // 320: substrate.ateapi.v1.Control.CreateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	153, // 321: substrate.ateapi.v1.Control.UpdateAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	153, // 322: substrate.ateapi.v1.Control.DeleteAtespaceAccessPolicy:output_type -> substrate.ateapi.v1.AccessPolicy
+	136, // 323: substrate.ateapi.v1.WorkerService.AcquireWorkerEpoch:output_type -> substrate.ateapi.v1.AcquireWorkerEpochResponse
+	138, // 324: substrate.ateapi.v1.WorkerService.RegisterWorker:output_type -> substrate.ateapi.v1.RegisterWorkerResponse
+	140, // 325: substrate.ateapi.v1.WorkerService.SetWorkerSandboxRuntimes:output_type -> substrate.ateapi.v1.SetWorkerSandboxRuntimesResponse
+	142, // 326: substrate.ateapi.v1.WorkerService.MintWorkerActorCertificate:output_type -> substrate.ateapi.v1.MintWorkerActorCertificateResponse
+	144, // 327: substrate.ateapi.v1.WorkerService.MintWorkerActorJwt:output_type -> substrate.ateapi.v1.MintWorkerActorJwtResponse
+	146, // 328: substrate.ateapi.v1.WorkerService.RequestActorSuspend:output_type -> substrate.ateapi.v1.RequestActorSuspendResponse
+	150, // 329: substrate.ateapi.v1.WorkerService.ReportActorSnapshotState:output_type -> substrate.ateapi.v1.ReportActorSnapshotStateResponse
+	148, // 330: substrate.ateapi.v1.WorkerService.ReportActorCrashed:output_type -> substrate.ateapi.v1.ReportActorCrashedResponse
+	272, // [272:331] is the sub-list for method output_type
+	213, // [213:272] is the sub-list for method input_type
+	211, // [211:213] is the sub-list for extension type_name
+	209, // [209:211] is the sub-list for extension extendee
+	0,   // [0:209] is the sub-list for field type_name
 }
 
 func init() { file_api_ateapi_v1_ateapi_proto_init() }
@@ -11753,7 +12121,7 @@ func file_api_ateapi_v1_ateapi_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_ateapi_v1_ateapi_proto_rawDesc), len(file_api_ateapi_v1_ateapi_proto_rawDesc)),
 			NumEnums:      10,
-			NumMessages:   152,
+			NumMessages:   158,
 			NumExtensions: 2,
 			NumServices:   2,
 		},

@@ -225,6 +225,32 @@ service Control {
     option (method).resource = "ExternalVolumeClass";
   }
 
+  // Create a CsiDriverConfig.
+  rpc CreateCsiDriverConfig(CreateCsiDriverConfigRequest) returns (CsiDriverConfig) {
+    option (method).resource = "CsiDriverConfig";
+  }
+
+  // Get a CsiDriverConfig by name.
+  rpc GetCsiDriverConfig(GetCsiDriverConfigRequest) returns (CsiDriverConfig) {
+    option (method).resource = "CsiDriverConfig";
+  }
+
+  // List CsiDriverConfigs.
+  rpc ListCsiDriverConfigs(ListCsiDriverConfigsRequest) returns (ListCsiDriverConfigsResponse) {
+    option (method).resource = "CsiDriverConfig";
+  }
+
+  // Update a CsiDriverConfig.
+  rpc UpdateCsiDriverConfig(UpdateCsiDriverConfigRequest) returns (CsiDriverConfig) {
+    option (method).resource = "CsiDriverConfig";
+  }
+
+  // Delete a CsiDriverConfig. Rejects (FailedPrecondition) if an
+  // ExternalVolumeClass still references its driver_name.
+  rpc DeleteCsiDriverConfig(DeleteCsiDriverConfigRequest) returns (CsiDriverConfig) {
+    option (method).resource = "CsiDriverConfig";
+  }
+
   rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {
     option (method).resource = "ActorTemplate";
   }
@@ -1630,8 +1656,6 @@ message ExternalVolumeClass {
 
 // CsiDriverConfig configures how the control plane and worker nodes connect to
 // a CSI driver. Global-scoped: metadata.atespace must be empty.
-//
-// +k8s:validation-gen=true
 message CsiDriverConfig {
   option (resource) = {
     scope : SCOPE_GLOBAL
@@ -1904,6 +1928,77 @@ message DeleteExternalVolumeClassRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef external_volume_class = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
+}
+
+// CreateCsiDriverConfigRequest creates a CsiDriverConfig.
+message CreateCsiDriverConfigRequest {
+  // The config to create. metadata.name is required and metadata.atespace
+  // must be empty.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:required
+  CsiDriverConfig csi_driver_config = 1;
+}
+
+// GetCsiDriverConfigRequest identifies the CsiDriverConfig to get.
+message GetCsiDriverConfigRequest {
+  // The config to get. atespace must be empty.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef csi_driver_config = 1;
+}
+
+// ListCsiDriverConfigsRequest asks for a page of CsiDriverConfigs.
+message ListCsiDriverConfigsRequest {
+  // Pagination controls.
+  //
+  // +k8s:optional
+  ListOptions options = 1;
+}
+
+// ListCsiDriverConfigsResponse is one page of CsiDriverConfigs.
+message ListCsiDriverConfigsResponse {
+  // The page of configs. This list may be empty even if there are more results.
+  repeated CsiDriverConfig csi_driver_configs = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
+}
+
+// UpdateCsiDriverConfigRequest updates a CsiDriverConfig.
+message UpdateCsiDriverConfigRequest {
+  // The config to update. csi_driver_config.metadata.name identifies which
+  // resource to update, and metadata.atespace must be empty.
+  // csi_driver_config.metadata.uid and csi_driver_config.metadata.version are
+  // required preconditions.
+  //
+  // controller_endpoint, node_socket_override, and tls are replaced with what
+  // the request carries, and any omitted optional field is cleared.
+  // driver_name is immutable.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
+  CsiDriverConfig csi_driver_config = 1;
+}
+
+// DeleteCsiDriverConfigRequest identifies the CsiDriverConfig to delete.
+message DeleteCsiDriverConfigRequest {
+  // The config to delete. atespace must be empty.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef csi_driver_config = 1;
 
   // Optional per-delete preconditions.
   //
