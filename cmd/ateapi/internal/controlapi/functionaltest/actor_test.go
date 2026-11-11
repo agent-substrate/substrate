@@ -2015,6 +2015,21 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	}
 }
 
+// listExternalVolumeNames returns the names of the ExternalVolumes in
+// testAtespace.
+func listExternalVolumeNames(t *testing.T, tc *testContext) []string {
+	t.Helper()
+	listed, err := tc.client.ListExternalVolumes(context.Background(), &ateapi.ListExternalVolumesRequest{Atespace: testAtespace})
+	if err != nil {
+		t.Fatalf("ListExternalVolumes failed: %v", err)
+	}
+	var names []string
+	for _, v := range listed.GetExternalVolumes() {
+		names = append(names, v.GetMetadata().GetName())
+	}
+	return names
+}
+
 type partialFailVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	deleted []string
@@ -2125,6 +2140,15 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		t.Errorf("fail-vol2 unexpected state: %v", v2)
 	}
 
+	// Only the provisioned volume has an ExternalVolume.
+	wantRecords := []string{volsByName["succ-vol1"].GetExternalVolumeName()}
+	if wantRecords[0] == "" {
+		t.Errorf("succ-vol1 names no ExternalVolume: %v", volsByName["succ-vol1"])
+	}
+	if diff := cmp.Diff(wantRecords, listExternalVolumeNames(t, tc)); diff != "" {
+		t.Errorf("ExternalVolumes after the failed resume mismatch (-want +got):\n%s", diff)
+	}
+
 	// Call DeleteActor on the actor in ACTOR_STATE_SUSPENDED
 	_, err = tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
@@ -2140,6 +2164,9 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantDeleted, plugin.deleted); diff != "" {
 		t.Errorf("deleted volume IDs mismatch (-want +got):\n%s", diff)
+	}
+	if left := listExternalVolumeNames(t, tc); len(left) != 0 {
+		t.Errorf("ExternalVolumes left after DeleteActor = %v, want none", left)
 	}
 
 	// Confirm GetActor returns NotFound after deletion

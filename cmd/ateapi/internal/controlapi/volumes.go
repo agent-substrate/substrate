@@ -185,8 +185,8 @@ func provisionedExternalVolumeName(actorUID, volumeName string) string {
 	suffix := hex.EncodeToString(sum[:8])
 	const maxLen = 63 // k8s-short-name
 	prefix := volumeName
-	if max := maxLen - 1 - len(suffix); len(prefix) > max {
-		prefix = strings.TrimRight(prefix[:max], "-")
+	if maxPrefix := maxLen - 1 - len(suffix); len(prefix) > maxPrefix {
+		prefix = strings.TrimRight(prefix[:maxPrefix], "-")
 	}
 	return prefix + "-" + suffix
 }
