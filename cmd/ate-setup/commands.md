@@ -200,7 +200,7 @@ is absent); the other two are flags of the benchmark commands. See
 | Command | Description |
 |---|---|
 | `deploy demo counter` | A counter actor exercising snapshot, resume, and atenet ingress |
-| `deploy demo counter --with-external-volume [--storage-class NAME]` | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
+| `deploy demo counter --with-external-volume [--external-volume-class NAME]` | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi --preview=ExternalVolumes` first and name the class it registered, e.g. `csi-nfs`; defaults to `csi-nfs` |
 | `deploy demo counter-microvm` | The counter demo on microVM workers |
 | `deploy demo egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
 | `deploy demo egress-microvm` | The same on microVM workers |
