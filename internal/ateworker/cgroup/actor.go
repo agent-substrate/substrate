@@ -43,6 +43,17 @@ type ActorLeaf struct {
 	dir *os.File
 }
 
+// LifecycleMilliCPU is the CPU limit for an actor's leaf while the worker
+// boots, restores, snapshots or tears down the actor: four times milliCPU, and
+// at least one CPU. It matches gVisor's default --sandbox-lifecycle-cpu-policy.
+// An unset milliCPU stays unset.
+func LifecycleMilliCPU(milliCPU int64) int64 {
+	if milliCPU <= 0 {
+		return 0
+	}
+	return max(4*milliCPU, 1000)
+}
+
 // OpenActorLeaf creates the actor's leaf under the delegated scope, or reuses a
 // leftover one, caps it at milliCPU and sets memory.high to memoryHigh bytes
 // when those are set. Close it once its processes are started.
@@ -75,6 +86,20 @@ func openActorLeaf(root, actorUID string, milliCPU, memoryHigh int64) (*ActorLea
 		return nil, fmt.Errorf("while opening cgroup %q: %w", path, err)
 	}
 	return &ActorLeaf{dir: dir}, nil
+}
+
+// SetActorLeafCPU caps the actor's leaf at milliCPU, or lifts the cap when
+// milliCPU is unset. A node that did not delegate the cpu controller has
+// nothing written.
+func SetActorLeafCPU(actorUID string, milliCPU int64) error {
+	path, err := actorLeafPath(Root, actorUID)
+	if err != nil {
+		return err
+	}
+	if err := writeExisting(filepath.Join(path, "cpu.max"), cpuMax(milliCPU)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("while limiting cgroup %q: %w", path, err)
+	}
+	return nil
 }
 
 // writeExisting writes a cgroup interface file without creating it: cgroupfs
