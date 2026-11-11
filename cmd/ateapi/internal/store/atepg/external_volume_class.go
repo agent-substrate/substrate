@@ -38,9 +38,9 @@ func (p *Persistence) CreateExternalVolumeClass(ctx context.Context, class *atea
 	}
 
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO external_volume_classes (name, uid, version, proto)
-		VALUES ($1, $2, $3, $4)`,
-		name, dbClass.GetMetadata().GetUid(), dbClass.GetMetadata().GetVersion(), protoBytes)
+		INSERT INTO external_volume_classes (name, uid, version, driver_name, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		name, dbClass.GetMetadata().GetUid(), dbClass.GetMetadata().GetVersion(), dbClass.GetDriverName(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -51,8 +51,9 @@ func (p *Persistence) CreateExternalVolumeClass(ctx context.Context, class *atea
 }
 
 func (p *Persistence) GetExternalVolumeClass(ctx context.Context, name string) (*ateapi.ExternalVolumeClass, error) {
+	var driverName string
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `SELECT proto FROM external_volume_classes WHERE name = $1`, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT driver_name, proto FROM external_volume_classes WHERE name = $1`, name).Scan(&driverName, &protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -62,6 +63,9 @@ func (p *Persistence) GetExternalVolumeClass(ctx context.Context, name string) (
 	out := &ateapi.ExternalVolumeClass{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling external volume class: %w", err)
+	}
+	if driverName != "" && out.GetDriverName() != driverName {
+		return nil, fmt.Errorf("external volume class %q driver_name projection %q does not match proto driver_name %q", name, driverName, out.GetDriverName())
 	}
 	return out, nil
 }
@@ -82,7 +86,7 @@ func (p *Persistence) ListExternalVolumeClasses(ctx context.Context, opts store.
 	}
 
 	rows, err := p.pool.Query(ctx, `
-		SELECT name, proto FROM external_volume_classes
+		SELECT name, driver_name, proto FROM external_volume_classes
 		WHERE $1::text IS NULL OR name > $1
 		ORDER BY name
 		LIMIT $2`, last, int64(pageSize)+1)
@@ -94,14 +98,17 @@ func (p *Persistence) ListExternalVolumeClasses(ctx context.Context, opts store.
 	var names []string
 	var result []*ateapi.ExternalVolumeClass
 	for rows.Next() {
-		var name string
+		var name, driverName string
 		var protoBytes []byte
-		if err := rows.Scan(&name, &protoBytes); err != nil {
+		if err := rows.Scan(&name, &driverName, &protoBytes); err != nil {
 			return store.ListResponse[*ateapi.ExternalVolumeClass]{}, fmt.Errorf("scanning external volume class row: %w", err)
 		}
 		c := &ateapi.ExternalVolumeClass{}
 		if err := unmarshalRow(protoBytes, c, "external volume class", name); err != nil {
 			return store.ListResponse[*ateapi.ExternalVolumeClass]{}, err
+		}
+		if driverName != "" && c.GetDriverName() != driverName {
+			return store.ListResponse[*ateapi.ExternalVolumeClass]{}, fmt.Errorf("external volume class %q driver_name projection %q does not match proto driver_name %q", name, driverName, c.GetDriverName())
 		}
 		result = append(result, c)
 		names = append(names, name)
