@@ -641,7 +641,7 @@ def main() -> None:
 
         # A turnover run is measured from the end of its fill, past the
         # registration of its fleet: the server telemetry's steady window and
-        # the turnover_window row start there. Other runs have no such line.
+        # the turnover_<name> rows start there. Other runs have no such line.
         turnover_start = None
         try:
             with open(logs_path, errors="replace") as f:
@@ -692,7 +692,7 @@ def main() -> None:
                     jsonl_path, turnover_start, stats_history_csv, data_ts,
                     args.tag, args.name, logs,
                 ):
-                    tee(logs, f"Appended the turnover_window row to {jsonl_path}")
+                    tee(logs, f"Appended the turnover rows to {jsonl_path}")
             except Exception as e:
                 tee(logs, f"Warning: Failed to summarize the turnover window: {e}")
 

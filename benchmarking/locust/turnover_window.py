@@ -19,8 +19,8 @@ fleet: each session creates its actor, runs step 1 and parks. The conductor
 then wakes the awake sessions, and only after that fill does it swap at
 --target-rps. stats.jsonl's other rows cover the whole run, so their rates
 divide by the time spent registering. This finds the end of the fill in the
-line boomer logs then, and writes one `turnover_window` row with each
-request's count, failures and rate from there to the end of the run, read
+line boomer logs then, and writes a `turnover_<name>` row for each request
+with its count, failures and rate from there to the end of the run, read
 from stats_history.csv. runner.py also starts the server telemetry's
 steady-state window there.
 
@@ -109,30 +109,41 @@ def window_counts(
     }
 
 
-def window_record(
+def window_records(
     start: int,
     end: int,
     counts: dict[str, tuple[int, int]],
     timestamp: str,
     tag: str,
     test_name: str,
-) -> dict[str, Any]:
-    """The window as a stats.jsonl row: each request's count, failures and
-    rate. The rate counts every request, failed or not, like locust's
-    Requests/s."""
+) -> list[dict[str, Any]]:
+    """The window as stats.jsonl rows, one turnover_<name> row per request.
+    Each uses the measurement keys of the whole-run rows, so tools that read
+    those rows read these too. requests_per_s counts every request, failed
+    or not, like locust's Requests/s."""
     secs = end - start
-    m: dict[str, Any] = {"window_start": start, "window_end": end, "window_s": secs}
-    for name, (requests, failures) in sorted(counts.items()):
-        m[f"requests_{name}"] = requests
-        m[f"failures_{name}"] = failures
-        m[f"rps_{name}"] = round(requests / secs, 4) if secs > 0 else None
-    return {
-        "timestamp": timestamp,
-        "tag": tag,
-        "test_name": test_name,
-        "metric": "turnover_window",
-        "measurements": m,
-    }
+
+    def rate(n: int) -> float | None:
+        return round(n / secs, 4) if secs > 0 else None
+
+    return [
+        {
+            "timestamp": timestamp,
+            "tag": tag,
+            "test_name": test_name,
+            "metric": f"turnover_{name}",
+            "measurements": {
+                "window_start": start,
+                "window_end": end,
+                "window_s": secs,
+                "request_count": requests,
+                "failure_count": failures,
+                "requests_per_s": rate(requests),
+                "failures_per_s": rate(failures),
+            },
+        }
+        for name, (requests, failures) in sorted(counts.items())
+    ]
 
 
 def append_turnover_window(
@@ -144,19 +155,19 @@ def append_turnover_window(
     test_name: str,
     logs: TextIO,
 ) -> bool:
-    """Append the turnover_window row of a run whose fill ended at start to
-    jsonl_path, and return whether there was one to append."""
+    """Append the turnover rows of a run whose fill ended at start to
+    jsonl_path, and return whether there were any to append."""
     if not stats_history_csv.exists():
-        _log(logs, f"No {stats_history_csv}; no turnover_window row")
+        _log(logs, f"No {stats_history_csv}; no turnover rows")
         return False
     counts = window_counts(stats_history_csv, start)
     if counts is None:
-        _log(logs, f"No stats_history sample after the turnover start {start}; no turnover_window row")
+        _log(logs, f"No stats_history sample after the turnover start {start}; no turnover rows")
         return False
     end, per_request = counts
-    row = window_record(start, end, per_request, timestamp, tag, test_name)
     with open(jsonl_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row) + "\n")
+        for row in window_records(start, end, per_request, timestamp, tag, test_name):
+            f.write(json.dumps(row) + "\n")
     return True
 
 

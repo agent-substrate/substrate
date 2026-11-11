@@ -809,7 +809,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertTrue(upload.called)
 
     # The fill-done line of a turnover run starts the telemetry's steady
-    # window and the turnover_window row; a run without one gets neither.
+    # window and the turnover rows; a run without one gets neither.
     @mock.patch.object(runner, "upload")
     def test_turnover_start_reaches_telemetry_and_window(self, _up):
         for line, start in (
