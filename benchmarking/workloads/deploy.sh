@@ -32,8 +32,8 @@ SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # read from SWEPERF_TEMPLATE_DIR, the rest from MANIFEST_DIR. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default. The glutton-storage
-# template is added when a StorageClass is set, because it needs a CSI driver
-# that not every cluster has; ate-env is added when ATE_ENV_IMAGE is set.
+# template is added when an ExternalVolumeClass is set, because it needs a CSI
+# driver that not every cluster has; ate-env is added when ATE_ENV_IMAGE is set.
 read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
 # template_manifest prints the manifest path for ActorTemplate NAME.
@@ -63,9 +63,9 @@ ACTOR_CPU="1"
 # and limit. Empty leaves the pod unsized. The limit, less what the worker
 # keeps for itself, is the memory it reports as its actor capacity.
 WORKER_MEMORY=""
-# The StorageClass for the glutton-storage external volume. Empty means the
-# template is not deployed.
-STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-}"
+# The ExternalVolumeClass for the glutton-storage external volume. Empty means
+# the template is not deployed.
+EXTERNAL_VOLUME_CLASS="${EXTERNAL_VOLUME_CLASS:-}"
 # The image for the ate-env benchmark ActorTemplate. Empty means the
 # template is not deployed.
 ATE_ENV_IMAGE="${ATE_ENV_IMAGE:-}"
@@ -92,8 +92,10 @@ usage() {
   echo "  --actor-cpu CPU             CPU limit for the benchmark ActorTemplates (default: 1)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
-  echo "  --storage-class-name NAME   StorageClass for the glutton-storage external volume. Setting it"
-  echo "                              deploys glutton-storage (default: not deployed). Env: STORAGE_CLASS_NAME."
+  echo "  --external-volume-class NAME"
+  echo "                              ExternalVolumeClass for the glutton-storage external volume. Setting"
+  echo "                              it deploys glutton-storage (default: not deployed)."
+  echo "                              Env: EXTERNAL_VOLUME_CLASS."
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
@@ -193,7 +195,7 @@ substitute() {
       -e "s|\${ACTOR_CPU_MILLICORES}|${ACTOR_CPU_MILLICORES}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${ATE_ENV_IMAGE}|${ATE_ENV_IMAGE:-}|g" \
-      -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
+      -e "s|\${EXTERNAL_VOLUME_CLASS}|${EXTERNAL_VOLUME_CLASS}|g" \
       "${manifest}"
 }
 
@@ -302,7 +304,7 @@ deploy() {
   fi
   ACTOR_CPU_MILLICORES="$(cpu_millicores "${ACTOR_CPU}")"
   ACTOR_MEMORY_BYTES="$(memory_bytes "${ACTOR_MEMORY}")"
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, actor_cpu=${ACTOR_CPU}, worker_memory=${WORKER_MEMORY:-unset}, external_volume_class=${EXTERNAL_VOLUME_CLASS:-none}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   if fake_data_plane; then
@@ -332,11 +334,15 @@ deploy() {
   for template in "${TEMPLATES[@]}"; do
     run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
       >/dev/null 2>&1 || true
+    local create_args=(create actor-template -f -)
+    if [[ "${template}" == "glutton-storage" ]]; then
+      create_args=(--preview "${create_args[@]}")
+    fi
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
     substitute "$(template_manifest "${template}")" \
       | hack/run-tool.sh ko resolve -f - \
-      | run_kubectl_ate create actor-template -f -
+      | run_kubectl_ate "${create_args[@]}"
   done
 
   wait_templates_ready
@@ -412,12 +418,12 @@ while [[ "$#" -gt 0 ]]; do
     --worker-memory=*)
       WORKER_MEMORY="${1#*=}"
       ;;
-    --storage-class-name)
+    --external-volume-class)
       shift
-      STORAGE_CLASS_NAME="$1"
+      EXTERNAL_VOLUME_CLASS="$1"
       ;;
-    --storage-class-name=*)
-      STORAGE_CLASS_NAME="${1#*=}"
+    --external-volume-class=*)
+      EXTERNAL_VOLUME_CLASS="${1#*=}"
       ;;
     --wait-timeout)
       shift
@@ -459,11 +465,11 @@ if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# glutton-storage joins the default set only when it has a StorageClass. Delete
-# always includes it, because deleting a template that does not exist is a
-# no-op.
+# glutton-storage joins the default set only when it has an ExternalVolumeClass.
+# Delete always includes it, because deleting a template that does not exist is
+# a no-op.
 if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
-  && { [[ -n "${STORAGE_CLASS_NAME}" ]] || [[ "${action}" == "delete" ]]; }; then
+  && { [[ -n "${EXTERNAL_VOLUME_CLASS}" ]] || [[ "${action}" == "delete" ]]; }; then
   TEMPLATES+=(glutton-storage)
 fi
 
@@ -474,8 +480,8 @@ if [[ -z "${WORKLOAD_TEMPLATES:-}" ]] \
   TEMPLATES+=(ate-env)
 fi
 
-if [[ "${action}" == "deploy" && -z "${STORAGE_CLASS_NAME}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then
-  echo "Error: the glutton-storage template needs --storage-class-name" >&2
+if [[ "${action}" == "deploy" && -z "${EXTERNAL_VOLUME_CLASS}" && " ${TEMPLATES[*]} " == *" glutton-storage "* ]]; then
+  echo "Error: the glutton-storage template needs --external-volume-class" >&2
   exit 1
 fi
 
