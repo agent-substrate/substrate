@@ -127,7 +127,9 @@ var (
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(), "Unix socket to serve the OTLP relay on, which forwards the node's worker telemetry to OTEL_EXPORTER_OTLP_ENDPOINT so worker pods need no network path to the collector. Empty disables the relay.")
 
-	actorStatsPollInterval = pflag.Duration("actor-stats-poll-interval", time.Minute, fmt.Sprintf("Actor resource utilization sampling frequency. 0 disables the sampling entirely; minimum accepted value is %v.", minActorStatsPollInterval))
+	actorStatsPollInterval     = pflag.Duration("actor-stats-poll-interval", time.Minute, fmt.Sprintf("Actor resource utilization sampling frequency. 0 disables the sampling entirely; minimum accepted value is %v.", minActorStatsPollInterval))
+	actorGuestMetricsUIDs      = pflag.StringSlice("debug-actor-guest-metrics-uids", nil, "Actor UIDs to expose on the loopback guest metrics endpoint (127.0.0.1:9092). Empty disables the endpoint.")
+	actorGuestMetricsTokenFile = pflag.String("debug-actor-guest-metrics-token-file", "", "File containing the bearer token required by the actor guest metrics endpoint.")
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
@@ -329,7 +331,12 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
 	}
 
-	if interval := clampActorStatsPollInterval(ctx, *actorStatsPollInterval); interval > 0 {
+	statsInterval := clampActorStatsPollInterval(ctx, *actorStatsPollInterval)
+	guestMetrics, err := newActorGuestMetrics(*actorGuestMetricsUIDs, statsInterval, *actorGuestMetricsTokenFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid actor guest debug metrics configuration", err)
+	}
+	if statsInterval > 0 {
 		if statsInst, err := newStatsInstruments(otel.Meter("atelet")); err != nil {
 			// Telemetry must not take the node's lifecycle daemon down with
 			// it. Instrument creation only fails on programmer error
@@ -339,7 +346,10 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient)
+			startStatsPoller(ctx, statsInterval, statsInst, k8sClient, guestMetrics)
+			if guestMetrics != nil {
+				go guestMetrics.serve(shutdownCtx)
+			}
 		}
 	}
 

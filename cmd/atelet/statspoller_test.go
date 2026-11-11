@@ -19,8 +19,11 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -184,6 +187,114 @@ func assertClosed(t *testing.T, fakes map[string]*fakeStatsWorker, closers map[s
 		}
 		if got := closers[uid].closes; got != sweeps {
 			t.Errorf("worker %s connection closed %d times over %d sweeps, want %d", uid, got, sweeps, sweeps)
+		}
+	}
+}
+
+func TestActorGuestDebugMetrics(t *testing.T) {
+	const uid = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a0"
+	const other = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a1"
+	const unselected = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a2"
+	const token = "test-bearer-token-for-actor-guest-metrics"
+	const labels = `{actor_atespace="team",actor_name="my-agent",actor_uid="` + uid + `"}`
+	const cpu = "ate_debug_actor_guest_cpu_usage_cores" + labels + " 1"
+	const memory = "ate_debug_actor_guest_memory_usage_bytes" + labels + " 4096"
+	const workingSet = "ate_debug_actor_guest_memory_working_set_bytes" + labels + " 2048"
+	now := time.Now()
+	start := now.Add(-10 * time.Second)
+	guest := func(actorUID string, epoch, observed time.Time, cpuUsec uint64) *ateworkerpb.WorkloadStatsSample {
+		sample := atEpoch(measuredSample(actorUID, "ns", "template", 4096, 2048, cpuUsec), epoch.UnixNano())
+		sample.Source = ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT
+		sample.SandboxClass = "microvm"
+		sample.Atespace = "team"
+		sample.ActorName = "my-agent"
+		sample.ObservedAtUnixNano = observed.UnixNano()
+		return sample
+	}
+
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := newActorGuestMetrics([]string{uid, other}, time.Minute, tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &fakeStatsWorker{}
+	poller, _ := newPollerFixture(t, map[string]*fakeStatsWorker{"worker": worker})
+	poller.guestMetrics = metrics
+	handler := metrics.handler()
+	for _, header := range []string{"", "Bearer incorrect"} {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.Header.Set("Authorization", header)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthorized scrape returned %d", res.Code)
+		}
+	}
+	scrape := func(samples ...*ateworkerpb.WorkloadStatsSample) string {
+		t.Helper()
+		worker.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: samples}
+		poller.collect(t.Context())
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusOK {
+			t.Fatalf("scrape returned %d: %s", res.Code, res.Body)
+		}
+		return res.Body.String()
+	}
+
+	first := guest(uid, start, start, 100_000)
+	if got := scrape(first, guest(unselected, start, start, 1),
+		measuredSample(other, "ns", "template", 4096, 2048, 1)); !strings.Contains(got, memory) ||
+		!strings.Contains(got, workingSet) || strings.Contains(got, "cpu_usage_cores") ||
+		strings.Contains(got, other) || strings.Contains(got, unselected) {
+		t.Fatalf("first scrape should contain only the selected guest memory: %s", got)
+	}
+	second := guest(uid, start, start.Add(time.Second), 1_100_000)
+	for _, sample := range []*ateworkerpb.WorkloadStatsSample{second, second} {
+		if got := scrape(sample, first); !strings.Contains(got, cpu+"\n") {
+			t.Fatalf("new or cached reading should report one CPU core: %s", got)
+		}
+	}
+	if got := scrape(second, guest(uid, now, now, 2_100_000)); !strings.Contains(got, memory) ||
+		strings.Contains(got, "cpu_usage_cores") {
+		t.Fatalf("a new activation should start with a fresh CPU baseline: %s", got)
+	}
+	if got := scrape(guest(other, now, now, 2_200_000)); !strings.Contains(got, other) ||
+		strings.Contains(got, uid) || strings.Contains(got, "cpu_usage_cores") {
+		t.Fatalf("a recreated actor should have its own series and CPU baseline: %s", got)
+	}
+	scrape(second)
+	pending := atEpoch(pendingSample(uid, "ns", "template"), now.UnixNano())
+	if got := scrape(second, pending); strings.Contains(got, uid) {
+		t.Fatalf("pending restore exposed the previous activation's series: %s", got)
+	}
+	expired := now.Add(-3 * time.Minute)
+	if got := scrape(guest(uid, expired, expired, 1)); strings.Contains(got, uid) {
+		t.Fatalf("expired guest sample still had a series: %s", got)
+	}
+}
+
+func TestActorGuestDebugMetricsConfig(t *testing.T) {
+	const uid = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a0"
+	if metrics, err := newActorGuestMetrics(nil, 0, ""); metrics != nil || err != nil {
+		t.Fatalf("empty allowlist should disable the endpoint, got %v, %v", metrics, err)
+	}
+	for _, tc := range []struct {
+		uids     []string
+		interval time.Duration
+	}{
+		{[]string{uid}, 0},
+		{[]string{"*"}, time.Minute},
+		{make([]string, maxDebugActorUIDs+1), time.Minute},
+		{[]string{uid}, time.Minute},
+	} {
+		if _, err := newActorGuestMetrics(tc.uids, tc.interval, ""); err == nil {
+			t.Errorf("accepted invalid config with UIDs %q and interval %v", tc.uids, tc.interval)
 		}
 	}
 }
