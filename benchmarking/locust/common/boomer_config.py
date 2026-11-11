@@ -24,7 +24,7 @@ Flag registration lives in the modules that own each flag:
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
   * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
-  * --target-rps                    → common.rate_config.add_rate_arguments
+  * --target-rps / --burst-size     → common.rate_config.add_rate_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
 the operator set in the web UI form:
@@ -86,6 +86,7 @@ _FLAGS = {
     "--spawn-concurrency": int,
     "--actor-deadline": float,
     "--target-rps": float,
+    "--burst-size": int,
 }
 
 

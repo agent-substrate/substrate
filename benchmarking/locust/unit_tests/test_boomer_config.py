@@ -71,6 +71,17 @@ class TestBoomerConfig(unittest.TestCase):
         self.assertEqual(parsed["agentsession_awake"], 650)
         self.assertEqual(parsed["target_rps"], 2.5)
 
+    def test_build_config_json_burst_size(self):
+        raw = boomer_config.build_config_json([
+            "--target-rps",
+            "200",
+            "--burst-size",
+            "50",
+        ])
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["target_rps"], 200.0)
+        self.assertEqual(parsed["burst_size"], 50)
+
 
 if __name__ == "__main__":
     unittest.main()

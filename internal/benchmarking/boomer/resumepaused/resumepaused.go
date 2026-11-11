@@ -63,18 +63,29 @@ func init() {
 }
 
 // knobs is the ResumePausedUser slice of the runtime config. The master
-// populates target_rps from the --target-rps locust flag
-// (common/rate_config.py) or the ladder step's @rps suffix.
+// populates target_rps and burst_size from the --target-rps and --burst-size
+// locust flags (common/rate_config.py), and a ladder step's @rps suffix
+// updates target_rps.
 type knobs struct {
 	// TargetRPS is the cold resumes per second this worker paces to; zero
 	// means unpaced.
 	TargetRPS float64 `json:"target_rps"`
+	// BurstSize, when positive, releases cold resumes in waves of up to
+	// this many users every BurstSize/TargetRPS seconds instead of spacing
+	// them one by one. Zero paces smoothly.
+	BurstSize int `json:"burst_size"`
 }
 
 var knobsCodec = dynconfig.Typed[knobs]{
 	Validate: func(k knobs) error {
 		if k.TargetRPS < 0 {
 			return fmt.Errorf("target_rps cannot be negative: %v", k.TargetRPS)
+		}
+		if k.BurstSize < 0 {
+			return fmt.Errorf("burst_size cannot be negative: %d", k.BurstSize)
+		}
+		if k.BurstSize > 0 && k.TargetRPS <= 0 {
+			return fmt.Errorf("burst_size (%d) requires target_rps > 0", k.BurstSize)
 		}
 		return nil
 	},
@@ -104,10 +115,14 @@ type runtime struct {
 	// actorsMu guards actors, every actor that may exist, for shutdown.
 	actorsMu sync.Mutex
 	actors   map[string]struct{}
-	// limiter paces the resumes of every user. Its burst of 1 spaces them
-	// evenly: Wait hands each caller the next slot rather than releasing a
-	// second's budget at once.
+	// limiter paces the resumes of every user when burst_size is 0. Its
+	// burst of 1 spaces them evenly: Wait hands each caller the next slot
+	// rather than releasing a second's budget at once.
 	limiter *rate.Limiter
+	// waveMu guards the wave schedule used when burst_size > 0.
+	waveMu    sync.Mutex
+	waveTime  time.Time
+	waveCount int
 	// retryBackoff spaces the retries of a delete.
 	retryBackoff time.Duration
 	// setupRetryWait is how long a user waits after its actor failed to
@@ -146,6 +161,19 @@ func newRuntime(cfg *userclass.Config) *runtime {
 		cancelCycles:   cancelCycles,
 		recordSuccess:  bmetrics.RecordSuccess,
 		recordFailure:  bmetrics.RecordFailure,
+	}
+}
+
+// sleepCtx blocks for d or until ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
 	}
 }
 
@@ -289,17 +317,54 @@ func (r *runtime) startCycle() bool {
 	return true
 }
 
-// pace blocks until the limiter grants the next resume slot, applying the
-// current TargetRPS first. Zero means unpaced.
+// pace blocks until the next resume slot. When BurstSize is 0, the limiter
+// spaces resumes one by one at TargetRPS (zero means unpaced). When BurstSize
+// is positive, up to BurstSize callers sleep until the same wave boundary,
+// spaced by BurstSize/TargetRPS seconds.
 func (r *runtime) pace(ctx context.Context) {
+	k := dynconfig.Get[knobs](r.cfg.Dyn)
+	if k.BurstSize > 0 {
+		r.waveMu.Lock()
+		now := time.Now()
+		r.waveTime, r.waveCount = waveSlot(now, r.waveTime, r.waveCount, k.BurstSize, k.TargetRPS)
+		slot := r.waveTime
+		r.waveMu.Unlock()
+		sleepCtx(ctx, slot.Sub(now))
+		return
+	}
 	want := rate.Inf
-	if target := dynconfig.Get[knobs](r.cfg.Dyn).TargetRPS; target > 0 {
-		want = rate.Limit(target)
+	if k.TargetRPS > 0 {
+		want = rate.Limit(k.TargetRPS)
 	}
 	if r.limiter.Limit() != want {
 		r.limiter.SetLimit(want)
 	}
 	_ = r.limiter.Wait(ctx)
+}
+
+// waveSlot returns the wave boundary at which a caller arriving at now should
+// fire its resume, along with the updated caller count for that boundary. At
+// most burstSize callers share one boundary, and boundaries sit on a grid
+// spaced by burstSize/targetRPS seconds.
+func waveSlot(now, waveTime time.Time, waveCount, burstSize int, targetRPS float64) (slot time.Time, nextCount int) {
+	period := time.Duration(float64(time.Second) * float64(burstSize) / targetRPS)
+	if period <= 0 {
+		return now, waveCount
+	}
+	switch {
+	case waveTime.IsZero():
+		waveTime = now.Add(period)
+		waveCount = 0
+	case !now.Before(waveTime):
+		steps := (now.Sub(waveTime))/period + 1
+		waveTime = waveTime.Add(steps * period)
+		waveCount = 0
+	case waveCount >= burstSize:
+		waveTime = waveTime.Add(period)
+		waveCount = 0
+	}
+	waveCount++
+	return waveTime, waveCount
 }
 
 // errAlreadyRunning marks a ResumeActor that found its actor running, so no
