@@ -134,7 +134,7 @@ func main() {
 	}
 	workers := ateapi.NewWorkerServiceClient(ateapiConn)
 	epochs := newWorkerEpochs()
-	h := &herder{delays: callDelays, storage: storage, epochs: epochs}
+	h := &herder{ctx: ctx, delays: callDelays, storage: storage, reporter: workers, epochs: epochs}
 	if *mintActorCertificate {
 		if h.csr, err = newActorCSR(); err != nil {
 			serverboot.Fatal(ctx, "Failed to create the actor CSR", err)
@@ -181,6 +181,7 @@ func main() {
 	<-ctx.Done()
 	slog.InfoContext(context.Background(), "Shutting down")
 	srv.GracefulStop()
+	h.snapshots.close()
 	relaySrv.GracefulStop()
 	_ = health.Shutdown(context.Background())
 }
