@@ -73,9 +73,9 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(ctx context.Context
 		if !externalVolumes {
 			continue
 		}
-		if refAtespace := vol.GetExternal().GetRef().GetAtespace(); refAtespace != "" && templateAtespace != "" && refAtespace != templateAtespace {
+		if refAtespace := vol.GetExternal().GetExternalVolume().GetAtespace(); refAtespace != "" && templateAtespace != "" && refAtespace != templateAtespace {
 			errs = append(errs, field.Invalid(
-				fldPath.Child("volumes").Index(i).Child("external", "ref", "atespace"),
+				fldPath.Child("volumes").Index(i).Child("external", "external_volume", "atespace"),
 				refAtespace, "must match metadata.atespace"))
 		}
 	}

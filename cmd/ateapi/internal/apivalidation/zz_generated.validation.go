@@ -3898,7 +3898,7 @@ func Validate_EnvVar(
 	return errs
 }
 
-var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ExternalVolumeSource_ = validate.NewUnionMembership(validate.NewUnionMember("template"), validate.NewUnionMember("ref"))
+var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ExternalVolumeSource_ = validate.NewUnionMembership(validate.NewUnionMember("template"), validate.NewUnionMember("external_volume"))
 
 // Validate_ExternalVolumeSource validates an instance of ExternalVolumeSource according
 // to declarative validation rules in the API schema.
@@ -3917,7 +3917,7 @@ func Validate_ExternalVolumeSource(
 			if obj == nil {
 				return false
 			}
-			return obj.Ref != nil
+			return obj.ExternalVolume != nil
 		}); len(e) != 0 {
 		errs = append(errs, e...)
 	}
@@ -3952,7 +3952,7 @@ func Validate_ExternalVolumeSource(
 		errs = append(errs, fn(fldPath.Child("template"), obj.Template, oldVal, oldObj != nil)...)
 	}
 
-	{ // field v1.ExternalVolumeSource.Ref
+	{ // field v1.ExternalVolumeSource.ExternalVolume
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *v1.ObjectRef,
@@ -3992,9 +3992,9 @@ func Validate_ExternalVolumeSource(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *v1.ExternalVolumeSource) *v1.ObjectRef {
-				return oldObj.Ref
+				return oldObj.ExternalVolume
 			})
-		errs = append(errs, fn(fldPath.Child("ref"), obj.Ref, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("external_volume"), obj.ExternalVolume, oldVal, oldObj != nil)...)
 	}
 
 	return errs

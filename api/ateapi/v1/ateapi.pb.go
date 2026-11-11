@@ -3846,7 +3846,7 @@ func (x *Volume) GetImage() *ImageVolumeSource {
 
 // ExternalVolumeSource is a CSI volume: provisioned for the actor from a
 // template, or an existing ExternalVolume the template names. Exactly one of
-// template / ref must be set.
+// template / external_volume must be set.
 type ExternalVolumeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// template provisions a volume for this actor alone; it is deleted with the
@@ -3855,8 +3855,9 @@ type ExternalVolumeSource struct {
 	// +k8s:optional
 	// +k8s:unionMember
 	Template *ExternalVolumeTemplate `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
-	// ref references an existing ExternalVolume. The volume outlives the
-	// actor. ref.atespace must match the template's metadata.atespace.
+	// external_volume references an existing ExternalVolume. The volume
+	// outlives the actor. external_volume.atespace must match the template's
+	// metadata.atespace.
 	//
 	// Not served yet: CreateActorTemplate rejects a template that sets it with
 	// `UNIMPLEMENTED` until the actor lifecycle can mount an ExternalVolume.
@@ -3864,9 +3865,9 @@ type ExternalVolumeSource struct {
 	// +k8s:optional
 	// +k8s:unionMember
 	// +k8s:subfield(atespace)=+k8s:required
-	Ref           *ObjectRef `protobuf:"bytes,2,opt,name=ref,proto3" json:"ref,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ExternalVolume *ObjectRef `protobuf:"bytes,2,opt,name=external_volume,json=externalVolume,proto3" json:"external_volume,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeSource) Reset() {
@@ -3906,9 +3907,9 @@ func (x *ExternalVolumeSource) GetTemplate() *ExternalVolumeTemplate {
 	return nil
 }
 
-func (x *ExternalVolumeSource) GetRef() *ObjectRef {
+func (x *ExternalVolumeSource) GetExternalVolume() *ObjectRef {
 	if x != nil {
-		return x.Ref
+		return x.ExternalVolume
 	}
 	return nil
 }
@@ -10209,10 +10210,10 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\bexternal\x18\x03 \x01(\v2).substrate.ateapi.v1.ExternalVolumeSourceR\bexternal\x12L\n" +
 	"\vsystem_info\x18\x04 \x01(\v2+.substrate.ateapi.v1.SystemInfoVolumeSourceR\n" +
 	"systemInfo\x12<\n" +
-	"\x05image\x18\x05 \x01(\v2&.substrate.ateapi.v1.ImageVolumeSourceR\x05image\"\x91\x01\n" +
+	"\x05image\x18\x05 \x01(\v2&.substrate.ateapi.v1.ImageVolumeSourceR\x05image\"\xa8\x01\n" +
 	"\x14ExternalVolumeSource\x12G\n" +
-	"\btemplate\x18\x01 \x01(\v2+.substrate.ateapi.v1.ExternalVolumeTemplateR\btemplate\x120\n" +
-	"\x03ref\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x03ref\"1\n" +
+	"\btemplate\x18\x01 \x01(\v2+.substrate.ateapi.v1.ExternalVolumeTemplateR\btemplate\x12G\n" +
+	"\x0fexternal_volume\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x0eexternalVolume\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
 	"\treference\x18\x01 \x01(\tR\treference\"\x18\n" +
 	"\x16DurableDirVolumeSource\"m\n" +
@@ -10916,7 +10917,7 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	54,  // 69: substrate.ateapi.v1.Volume.system_info:type_name -> substrate.ateapi.v1.SystemInfoVolumeSource
 	51,  // 70: substrate.ateapi.v1.Volume.image:type_name -> substrate.ateapi.v1.ImageVolumeSource
 	53,  // 71: substrate.ateapi.v1.ExternalVolumeSource.template:type_name -> substrate.ateapi.v1.ExternalVolumeTemplate
-	35,  // 72: substrate.ateapi.v1.ExternalVolumeSource.ref:type_name -> substrate.ateapi.v1.ObjectRef
+	35,  // 72: substrate.ateapi.v1.ExternalVolumeSource.external_volume:type_name -> substrate.ateapi.v1.ObjectRef
 	55,  // 73: substrate.ateapi.v1.SystemInfoVolumeSource.data_sources:type_name -> substrate.ateapi.v1.SystemInfoDataSource
 	56,  // 74: substrate.ateapi.v1.SystemInfoDataSource.actor_metadata:type_name -> substrate.ateapi.v1.ActorMetadataDataSource
 	58,  // 75: substrate.ateapi.v1.SystemInfoDataSource.trust_bundle:type_name -> substrate.ateapi.v1.TrustBundleDataSource
