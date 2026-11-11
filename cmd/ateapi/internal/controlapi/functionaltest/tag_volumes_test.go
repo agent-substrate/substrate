@@ -103,8 +103,9 @@ func (p *restoringPlugin) restoreSources(t *testing.T, actor *ateapi.Actor, volN
 
 // setupTagVolumesTest starts a server whose mock volume plugin records restore
 // sources, and creates a template declaring the external volumes "data" and
-// "cache" plus a worker to run its Actors on.
-func setupTagVolumesTest(t *testing.T, ns string) (*testContext, *restoringPlugin, string) {
+// "cache" plus a worker to run its Actors on. contentSources maps a volume name
+// to the snapshot its template imports.
+func setupTagVolumesTest(t *testing.T, ns string, contentSources map[string]string) (*testContext, *restoringPlugin, string) {
 	t.Helper()
 	preview.InitForTest(t, "ExternalVolumes")
 	plugin := &restoringPlugin{MockVolumePlugin: volume.NewMockVolumePlugin(), sources: map[string]string{}, deleted: map[string]bool{}}
@@ -114,10 +115,11 @@ func setupTagVolumesTest(t *testing.T, ns string) (*testContext, *restoringPlugi
 	var volumes []*ateapi.Volume
 	var mounts []*ateapi.VolumeMount
 	for _, name := range []string{"data", "cache"} {
-		volumes = append(volumes, &ateapi.Volume{
-			Name:     name,
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}},
-		})
+		tmpl := &ateapi.ExternalVolumeTemplate{StorageClassName: "standard", CapacityBytes: 1 << 30}
+		if id := contentSources[name]; id != "" {
+			tmpl.ContentSource = &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: id}}
+		}
+		volumes = append(volumes, &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: tmpl}})
 		mounts = append(mounts, &ateapi.VolumeMount{Name: name, MountPath: "/mnt/" + name})
 	}
 	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
@@ -214,7 +216,7 @@ func tagVolumesReady(t *testing.T, tc *testContext, tag *ateapi.Tag) map[string]
 // with its snapshots.
 func TestCreateTag_CapturesVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-tag-capture-volumes")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -258,7 +260,7 @@ func TestCreateTag_CapturesVolumes(t *testing.T) {
 // restores them and provisions the rest empty.
 func TestCreateTag_CapturesNamedVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-tag-capture-named-volumes")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 
 	suspendActorForTest(t, tc, workerName, "source")
@@ -280,7 +282,7 @@ func TestCreateTag_CapturesNamedVolumes(t *testing.T) {
 // it once the snapshot is ready, recording it as ready to use.
 func TestCreateActor_TagVolumeSnapshotNotReady(t *testing.T) {
 	ns := namespaceForTest("ns-tag-volume-not-ready")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	plugin.setReady(false)
 
@@ -312,7 +314,7 @@ func TestCreateActor_TagVolumeSnapshotNotReady(t *testing.T) {
 // GetTag record them as ready to use.
 func TestGetTag_RefreshesVolumeSnapshotReadiness(t *testing.T) {
 	ns := namespaceForTest("ns-get-tag-refresh")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 	plugin.setReady(false)
@@ -369,7 +371,7 @@ func tagVolumeSnapshotName(t *testing.T, tc *testContext, tag *ateapi.Tag, volNa
 // FailedPrecondition, instead of coming up with an empty volume.
 func TestResumeActor_TagDeletedBeforeFirstResume(t *testing.T) {
 	ns := namespaceForTest("ns-tag-deleted-before-resume")
-	tc, _, workerName := setupTagVolumesTest(t, ns)
+	tc, _, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -395,7 +397,7 @@ func TestResumeActor_TagDeletedBeforeFirstResume(t *testing.T) {
 // another atespace, created from a published tag, restores the tag's volumes.
 func TestCreateActor_PublishedTagRestoresVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-published-tag-volumes")
-	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -418,7 +420,7 @@ func TestCreateActor_PublishedTagRestoresVolumes(t *testing.T) {
 // Actor does not have fails the create and leaves no tag behind.
 func TestCreateTag_UnknownVolumeName(t *testing.T) {
 	ns := namespaceForTest("ns-tag-unknown-volume")
-	tc, _, workerName := setupTagVolumesTest(t, ns)
+	tc, _, workerName := setupTagVolumesTest(t, ns, nil)
 	defer tc.cleanup()
 	ctx := context.Background()
 
@@ -479,4 +481,59 @@ func seedTagWithVolumeSnapshot(t *testing.T, tc *testContext, actorName, tagName
 		t.Fatalf("finalizing tag %s: %v", tagName, err)
 	}
 	return tag
+}
+
+// TestCreateTag_TemplateContentSource verifies that a volume whose template
+// imports a snapshot starts from it, unless the Actor is created from a tag
+// that captured the volume.
+func TestCreateTag_TemplateContentSource(t *testing.T) {
+	ns := namespaceForTest("ns-tag-content-source")
+	tc, plugin, workerName := setupTagVolumesTest(t, ns, map[string]string{"data": "imported-data"})
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	suspendActorForTest(t, tc, workerName, "source")
+	source, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "source"}})
+	if err != nil {
+		t.Fatalf("GetActor(source) failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]string{"data": "imported-data", "cache": ""}, plugin.restoreSources(t, source, "data", "cache")); diff != "" {
+		t.Errorf("source restore sources mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, tt := range []struct {
+		name string
+		sel  *ateapi.ExternalVolumeSelection
+		// want maps each volume to the snapshot it restores from. "tag" stands
+		// for the tag's snapshot of the volume.
+		want map[string]string
+	}{
+		{name: "all", sel: &ateapi.ExternalVolumeSelection{}, want: map[string]string{"data": "tag", "cache": "tag"}},
+		{name: "with-data", sel: &ateapi.ExternalVolumeSelection{Names: []string{"data"}}, want: map[string]string{"data": "tag", "cache": ""}},
+		{name: "without-data", sel: &ateapi.ExternalVolumeSelection{Names: []string{"cache"}}, want: map[string]string{"data": "imported-data", "cache": "tag"}},
+		{name: "no-volumes", want: map[string]string{"data": "imported-data", "cache": ""}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tag := createVolumeTag(t, tc, tt.name, tt.sel)
+			handles := tagVolumeHandles(t, tc, tag)
+			want := map[string]string{}
+			for vol, src := range tt.want {
+				if src == "tag" {
+					src = handles[vol]
+				}
+				want[vol] = src
+			}
+			clone := cloneAndResume(t, tc, workerName, &ateapi.ObjectRef{Atespace: testAtespace, Name: "clone-" + tt.name}, &ateapi.ObjectRef{Atespace: testAtespace, Name: tt.name})
+			if diff := cmp.Diff(want, plugin.restoreSources(t, clone, "data", "cache")); diff != "" {
+				t.Errorf("restore sources mismatch (-want +got):\n%s", diff)
+			}
+			// Frees the one worker for the next clone.
+			if _, err := tc.client.SuspendActor(ctx, &ateapi.SuspendActorRequest{
+				Actor:   &ateapi.ObjectRef{Atespace: testAtespace, Name: clone.GetMetadata().GetName()},
+				Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS},
+			}); err != nil {
+				t.Fatalf("SuspendActor(%s) failed: %v", clone.GetMetadata().GetName(), err)
+			}
+		})
+	}
 }

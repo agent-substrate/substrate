@@ -1332,3 +1332,64 @@ func TestRefreshVolumeSnapshot(t *testing.T) {
 		})
 	}
 }
+
+// noSnapshotVolumePlugin is a driver without snapshot support.
+type noSnapshotVolumePlugin struct {
+	*volume.MockVolumePlugin
+}
+
+func (noSnapshotVolumePlugin) ControllerCapabilities(context.Context) (volume.Capabilities, error) {
+	return volume.Capabilities{}, nil
+}
+
+func TestSetContentSources(t *testing.T) {
+	externalVol := func(name, snapshotID string) *ateapi.Volume {
+		tmpl := &ateapi.ExternalVolumeTemplate{StorageClassName: "standard"}
+		if snapshotID != "" {
+			tmpl.ContentSource = &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: snapshotID}}
+		}
+		return &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: tmpl}}
+	}
+	tmpl := &ateapi.ActorTemplate{Volumes: []*ateapi.Volume{externalVol("data", "imported"), externalVol("cache", "")}}
+	tests := []struct {
+		name   string
+		driver string
+		// tagSource is the source_snapshot_id setTagVolumeSources gave data.
+		tagSource string
+		// want maps each volume to its source_snapshot_id afterward.
+		want     map[string]string
+		wantCode codes.Code
+	}{
+		{name: "driver supports snapshots", driver: "mock-standard", want: map[string]string{"data": "imported", "cache": ""}},
+		{name: "driver without snapshots", driver: "no-snapshots", wantCode: codes.FailedPrecondition},
+		{name: "tag captured the volume", driver: "no-snapshots", tagSource: "tag-snap", want: map[string]string{"data": "tag-snap", "cache": ""}},
+		{name: "unknown driver", driver: "missing", wantCode: codes.FailedPrecondition},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newServiceImpl(nil, nil)
+			s.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+				"mock-standard": volume.NewMockVolumePlugin(),
+				"no-snapshots":  noSnapshotVolumePlugin{volume.NewMockVolumePlugin()},
+			}}
+			vols := []*ateapi.ExternalVolumeStatus{
+				{Name: "data", VolumeType: tt.driver, SourceSnapshotId: tt.tagSource},
+				{Name: "cache", VolumeType: tt.driver},
+			}
+			err := s.setContentSources(context.Background(), tmpl, vols)
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("setContentSources() = %v, want code %v", err, tt.wantCode)
+			}
+			if err != nil {
+				return
+			}
+			got := map[string]string{}
+			for _, vol := range vols {
+				got[vol.GetName()] = vol.GetSourceSnapshotId()
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("source_snapshot_id mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

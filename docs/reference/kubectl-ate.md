@@ -264,10 +264,11 @@ kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 
 # Create an actor from a tag. Its first resume restores the external volumes
-# the tag captured, and its other external volumes start empty. While a volume
-# snapshot is not ready, create actor fails. `get external-volume-snapshot
-# <snapshot-name>` asks the storage system for the snapshot's state. A template
-# with external volumes needs --preview.
+# the tag captured. Its other external volumes start from their template's
+# contentSource, or empty without one. While a volume snapshot is not ready,
+# create actor fails. `get external-volume-snapshot <snapshot-name>` asks the
+# storage system for the snapshot's state. A template with external volumes
+# needs --preview.
 kubectl ate --preview create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
 kubectl ate delete tag <tag-name> -a <atespace>
 ```

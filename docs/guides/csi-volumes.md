@@ -210,6 +210,32 @@ volumes:
       storageClassName: csi-nfs-sc
 ```
 
+### Starting volumes from an existing snapshot
+
+`contentSource` fills each actor's volume from a snapshot in the storage
+system, which may have been taken outside Substrate. Every actor of the
+template starts from the same content, in its own volume:
+
+```yaml
+volumes:
+- name: shared-storage
+  external:
+    template:
+      capacityBytes: 5368709120 # 5Gi
+      storageClassName: csi-nfs-sc
+      contentSource:
+        snapshot:
+          storageSnapshotId: <snapshot-id>
+```
+
+`storageSnapshotId` is the handle the StorageClass's CSI driver uses for the
+snapshot. `capacityBytes` must be at least the snapshot's size.
+
+- The driver must support CSI snapshots, or `create actor` fails with
+  `FAILED_PRECONDITION`.
+- `create actor` does not check that the snapshot exists. A missing snapshot
+  fails the actor's first resume with `FAILED_PRECONDITION`.
+
 ## 5. Snapshotting Volumes with a Tag
 
 A tag can also snapshot a suspended actor's external volumes. An actor created
@@ -226,7 +252,8 @@ kubectl ate resume actor <new-actor> -a <atespace>
 
 - Each restored volume is a new volume with its own copy of the data. Writes
   to it don't reach the source actor or other actors created from the tag.
-- A volume the tag did not capture starts empty.
+- A volume the tag did not capture starts from its template's `contentSource`,
+  or empty without one.
 - The driver of every captured volume must support CSI snapshots, or
   `create tag` fails.
 - `create tag` does not wait for the storage system to finish the snapshots.
@@ -259,3 +286,9 @@ kubectl ate resume actor <new-actor> -a <atespace>
   upgraded ate API server finishes the delete on a retry, and nothing leaks.
   Use `--with-volumes` only after the roll finishes, and before a rollback,
   delete the tags that captured volumes.
+- **`contentSource` needs every ate API server on the same release.** An ate
+  API server from a release without this feature ignores `contentSource` and
+  provisions the volume empty, without an error. When it updates the
+  template's status, it also removes `contentSource` from the stored template
+  for good. Don't create templates with `contentSource` until every ate API
+  server runs the new release, and recreate them after a rollback.

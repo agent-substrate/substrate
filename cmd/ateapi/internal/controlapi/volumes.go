@@ -88,14 +88,8 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 	for idx, vol := range volumesToCreate {
 		currentIdx = idx
 
-		var specVol *ateapi.Volume
 		volName := vol.GetName()
-		for _, tVol := range template.GetVolumes() {
-			if tVol.GetName() == volName {
-				specVol = tVol
-				break
-			}
-		}
+		specVol := findTemplateVolume(template, volName)
 		if specVol == nil || specVol.GetExternal().GetTemplate() == nil {
 			return resultVolumes, apierror.NotFound("volume %q not found in template", volName)
 		}
@@ -159,9 +153,10 @@ func createVolumeError(volName, sourceSnapshotID string, err error) error {
 	if sourceSnapshotID != "" {
 		switch code {
 		case codes.NotFound:
-			// The snapshot is gone, as when the tag was deleted before this
-			// Actor first resumed. Retrying cannot help.
-			return apierror.FailedPrecondition("snapshot %q to restore volume %q from no longer exists in the storage system: %v", sourceSnapshotID, volName, err)
+			// The snapshot does not exist, as when the tag was deleted
+			// before this Actor first resumed, or the template names a
+			// wrong snapshot. Retrying cannot help.
+			return apierror.FailedPrecondition("snapshot %q to restore volume %q from does not exist in the storage system: %v", sourceSnapshotID, volName, err)
 		case codes.FailedPrecondition:
 			// For example, a snapshot that is not ready to use yet, from a
 			// driver that cannot report readiness.
@@ -186,8 +181,9 @@ func createVolumeError(volName, sourceSnapshotID string, err error) error {
 
 // setTagVolumeSources sets source_snapshot_id on each of vols, the external
 // volumes of an Actor created from tag, that tag captured, so its first resume
-// restores them. A volume the tag did not capture keeps no source and is
-// provisioned empty, whether the tag left it out or captured no volumes.
+// restores them. A volume the tag did not capture keeps no source here, whether
+// the tag left it out or captured no volumes. setContentSources may then give
+// it its template's content_source.
 //
 // CreateTag does not wait for snapshots to become ready. A snapshot that is
 // not yet ready to use is looked up in the storage system, and the call fails
@@ -279,6 +275,45 @@ func (s *ServiceImpl) setTagVolumeSources(ctx context.Context, tag *ateapi.Tag, 
 		if sources[i] != nil {
 			vol.SourceSnapshotId = sources[i].GetStatus().GetSnapshotId()
 		}
+	}
+	return nil
+}
+
+// findTemplateVolume returns the template's volume with the given name, or nil
+// if there is none.
+func findTemplateVolume(template *ateapi.ActorTemplate, volName string) *ateapi.Volume {
+	for _, vol := range template.GetVolumes() {
+		if vol.GetName() == volName {
+			return vol
+		}
+	}
+	return nil
+}
+
+// setContentSources sets source_snapshot_id on each of vols that has none to
+// its template's content_source, so its first resume restores the volume from
+// that snapshot. Call it after setTagVolumeSources: a tag's snapshot of a
+// volume takes precedence. It fails with FailedPrecondition if the volume's
+// driver cannot restore snapshots.
+func (s *ServiceImpl) setContentSources(ctx context.Context, template *ateapi.ActorTemplate, vols []*ateapi.ExternalVolumeStatus) error {
+	for _, vol := range vols {
+		volName := vol.GetName()
+		snapshotID := findTemplateVolume(template, volName).GetExternal().GetTemplate().GetContentSource().GetSnapshot().GetStorageSnapshotId()
+		if vol.GetSourceSnapshotId() != "" || snapshotID == "" {
+			continue
+		}
+		plugin, err := s.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
+		if err != nil {
+			return apierror.FailedPrecondition("failed to get volume plugin for driver %q: %v", vol.GetVolumeType(), err)
+		}
+		caps, err := plugin.ControllerCapabilities(ctx)
+		if err != nil {
+			return apierror.FailedPrecondition("failed to read capabilities of driver %q for volume %q: %v", vol.GetVolumeType(), volName, err)
+		}
+		if !caps.CreateDeleteSnapshot {
+			return apierror.FailedPrecondition("volume %q restores from a snapshot, but its driver %q does not support snapshots", volName, vol.GetVolumeType())
+		}
+		vol.SourceSnapshotId = snapshotID
 	}
 	return nil
 }

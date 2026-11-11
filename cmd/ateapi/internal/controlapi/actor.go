@@ -116,6 +116,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 			return nil, err
 		}
 	}
+	if err := s.setContentSources(ctx, template, initVols); err != nil {
+		return nil, err
+	}
 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
