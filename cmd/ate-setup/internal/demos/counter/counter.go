@@ -30,11 +30,11 @@ const (
 	namespace = "ate-demo-counter"
 	template  = "demos/counter/counter-template.yaml.tmpl"
 
-	defaultStorageClass = "standard"
+	defaultExternalVolumeClass = "csi-nfs"
 )
 
 func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
-	sc := e.Cfg.Resolved().String("demo.counter.storageClass")
+	evc := e.Cfg.Resolved().String("demo.counter.externalVolumeClass")
 	return map[string]string{
 		"VALIDATE_EXISTING_FILE_PATH_ARG": "  - --validate-existing-file-path=/external-data/test.txt",
 		"EXTERNAL_VOLUME_MOUNTS": "  - name: external-data\n" +
@@ -43,7 +43,8 @@ func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
 			"  external:\n" +
 			"    template:\n" +
 			"      capacityBytes: 1073741824 # 1Gi\n" +
-			"      storageClassName: " + sc,
+			"      externalVolumeClass:\n" +
+			"        name: " + evc,
 	}
 }
 
@@ -79,9 +80,9 @@ func (d *demo) Settings() []config.Setting {
 			Usage: "Attach an external volume and validate a pre-seeded file on it (run \"setup csi\" first)",
 		},
 		{
-			Key: "demo.counter.storageClass", Env: "STORAGE_CLASS",
-			Flag: "storage-class", Kind: config.KindString, Default: defaultStorageClass,
-			Usage: "StorageClass backing the external volume, e.g. csi-nfs-sc or csi-hostpath-sc. Must be used --with-external-volume=true.",
+			Key: "demo.counter.externalVolumeClass", Env: "EXTERNAL_VOLUME_CLASS",
+			Flag: "external-volume-class", Kind: config.KindString, Default: defaultExternalVolumeClass,
+			Usage: "ExternalVolumeClass backing the external volume, e.g. csi-nfs or csi-hostpath. Must be used --with-external-volume=true.",
 		},
 	}
 }
