@@ -44,6 +44,9 @@ type Ledger struct {
 	bytes int64
 	// returned is closed and replaced whenever bytes drops
 	returned chan struct{}
+	// waiting is closed when Wait blocks a new actor, waking sleeping
+	// background writers so they start flushing right away.
+	waiting chan struct{}
 }
 
 func (l *Ledger) podMemory() (limit, unreclaimable int64, err error) {
@@ -102,6 +105,36 @@ func (l *Ledger) Return(n int64) {
 	l.returned = make(chan struct{})
 }
 
+// Tight reports whether a snapshot that borrowed lent bytes should flush to
+// disk now instead of staying in page cache. Without a pod memory limit it
+// returns false and lets the kernel flush lazily. When it returns false, the
+// returned channel is closed if Wait blocks an incoming actor so the caller
+// can wake up and re-check immediately.
+func (l *Ledger) Tight(lent int64) (bool, <-chan struct{}) {
+	// Nothing was lent when the snapshot started, so the pod had no spare room.
+	if l == nil || lent <= 0 {
+		return true, nil
+	}
+	limit, unreclaimable, err := l.podMemory()
+	if err != nil {
+		// Assume tight if cgroup stats fail: flushing early only costs disk
+		// bandwidth, while skipping a needed flush can OOM the pod.
+		return true, nil
+	}
+	if limit == 0 {
+		return false, nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.waiting == nil {
+		l.waiting = make(chan struct{})
+	}
+	// Flush once unbooked memory left after active loans drops to 1/3 of the
+	// pod limit, or free pod memory drops below margin (l.bytes and
+	// unreclaimable already include this snapshot).
+	return l.Unbooked(limit)-l.bytes <= limit/3 || limit-unreclaimable < margin, l.waiting
+}
+
 // Wait holds a newly hosted actor, already counted by Unbooked, until what is
 // borrowed fits in what is still unbooked, so it doesn't grow into dirty page
 // cache.
@@ -126,6 +159,11 @@ func (l *Ledger) Wait(ctx context.Context) error {
 		}
 		returned := l.returned
 		borrowed := l.bytes
+		// Wake sleeping background writers so they flush borrowed pages right away.
+		if l.waiting != nil {
+			close(l.waiting)
+			l.waiting = nil
+		}
 		l.mu.Unlock()
 		if !logged {
 			slog.InfoContext(ctx, "Waiting for snapshot writeback before booting", slog.Int64("borrowedBytes", borrowed))
