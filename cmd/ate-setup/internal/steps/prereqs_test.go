@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
@@ -145,9 +146,9 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 		Data:       map[string]string{"authentication.yaml": multiProviderConfig},
 	}
 
-	mustBuild := func(issuer string) string {
+	mustBuild := func(issuer, apiServerURL string) string {
 		t.Helper()
-		s, err := buildAuthenticationConfig(issuer)
+		s, err := buildAuthenticationConfig(issuer, apiServerURL)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,19 +164,20 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name       string
-		existing   runtime.Object
-		issuerFlag string
-		wantYAML   string
+		name         string
+		existing     runtime.Object
+		issuerFlag   string
+		apiServerURL string
+		wantYAML     string
 	}{
 		{
 			name:     "new install defaults to in-cluster issuer",
-			wantYAML: mustBuild(inClusterIssuer),
+			wantYAML: mustBuild(inClusterIssuer, ""),
 		},
 		{
 			name:       "new install with explicit issuer flag",
 			issuerFlag: "https://custom-issuer.example.com",
-			wantYAML:   mustBuild("https://custom-issuer.example.com"),
+			wantYAML:   mustBuild("https://custom-issuer.example.com", ""),
 		},
 		{
 			name:     "existing valid custom issuer is kept when flag is unset",
@@ -190,18 +192,18 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 		{
 			name:     "existing config with legacy actorIdentityJWTProvider is rewritten",
 			existing: legacyCM,
-			wantYAML: mustBuild(inClusterIssuer),
+			wantYAML: mustBuild(inClusterIssuer, ""),
 		},
 		{
 			name:     "existing config with unknown future field is rewritten",
 			existing: unknownFieldCM,
-			wantYAML: mustBuild(inClusterIssuer),
+			wantYAML: mustBuild(inClusterIssuer, ""),
 		},
 		{
 			name:       "explicit issuer flag overwrites existing valid config",
 			existing:   customIssuerCM,
 			issuerFlag: "https://new-issuer.example.com",
-			wantYAML:   mustBuild("https://new-issuer.example.com"),
+			wantYAML:   mustBuild("https://new-issuer.example.com", ""),
 		},
 		{
 			name:       "explicit issuer flag updates only kubernetes provider when extra jwtProviders exist",
@@ -209,7 +211,29 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 			issuerFlag: "https://new-issuer.example.com",
 			wantYAML: mustMarshal(&apiconfig.AuthenticationConfig{
 				JWTProviders: []apiconfig.JWTProviderConfig{
-					kubernetesJWTProvider("https://new-issuer.example.com"),
+					kubernetesJWTProvider("https://new-issuer.example.com", ""),
+					{
+						Name:      "google-oidc",
+						Issuer:    "https://accounts.google.com",
+						Audiences: []string{"api.ate-system.svc"},
+					},
+				},
+			}),
+		},
+		{
+			name:         "explicit issuer flag matching the API server URL projects the CA and token",
+			issuerFlag:   "https://192.0.2.10:6443",
+			apiServerURL: "https://192.0.2.10:6443",
+			wantYAML:     mustBuild("https://192.0.2.10:6443", "https://192.0.2.10:6443"),
+		},
+		{
+			name:         "explicit issuer flag matching the API server URL updates only the kubernetes provider",
+			existing:     multiProviderCM,
+			issuerFlag:   "https://192.0.2.10:6443",
+			apiServerURL: "https://192.0.2.10:6443",
+			wantYAML: mustMarshal(&apiconfig.AuthenticationConfig{
+				JWTProviders: []apiconfig.JWTProviderConfig{
+					kubernetesJWTProvider("https://192.0.2.10:6443", "https://192.0.2.10:6443"),
 					{
 						Name:      "google-oidc",
 						Issuer:    "https://accounts.google.com",
@@ -225,8 +249,11 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 				objects = append(objects, tc.existing)
 			}
 			e := &Env{
-				Cfg:  &config.Config{ExpectedJWTIssuer: tc.issuerFlag},
-				Kube: &kube.Client{Typed: fake.NewClientset(objects...)},
+				Cfg: &config.Config{ExpectedJWTIssuer: tc.issuerFlag},
+				Kube: &kube.Client{
+					Typed:  fake.NewClientset(objects...),
+					Config: restConfig(tc.apiServerURL),
+				},
 			}
 
 			if err := e.ensureAPIAuthenticationConfig(t.Context()); err != nil {
@@ -246,4 +273,13 @@ func TestEnsureAPIAuthenticationConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// restConfig returns a rest.Config whose Host is apiServerURL, or nil when
+// the URL is empty so tests without one keep a Client with no Config.
+func restConfig(apiServerURL string) *rest.Config {
+	if apiServerURL == "" {
+		return nil
+	}
+	return &rest.Config{Host: apiServerURL}
 }
