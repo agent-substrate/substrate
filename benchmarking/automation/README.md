@@ -3,7 +3,7 @@
 Scheduled, repeatable benchmark runs of a substrate branch. A CronJob on an
 **orchestration cluster** drives the full build/deploy/run/teardown cycle
 against a separate **test cluster**, once per entry in [tests.yaml](tests.yaml).
-Each run uploads results to GCS via `benchmarking/locust/runner.py`
+Each run uploads results to object storage via `benchmarking/locust/runner.py`
 (`type: locust`), `benchmarking/nighthawk-ingress/runner.py` (`type: nighthawk-ingress`,
 the router capacity benchmark — see
 [benchmarking/nighthawk-ingress/README.md](../nighthawk-ingress/README.md)), or
@@ -12,6 +12,12 @@ gateway capacity benchmark, see
 [benchmarking/nighthawk-egress/README.md](../nighthawk-egress/README.md)).
 To run the cold resume tests from your workstation instead, see
 [ateapi-cold-resume.md](ateapi-cold-resume.md).
+
+Pass `--dest s3://benchmark-results/substrate` (or a `gs://` or
+`az://container/prefix` URL). See the
+[storage configuration](../../docs/guides/benchmarking.md#headless-automation-only)
+for credentials and local-path limitations. The cluster provisioning steps
+below still describe GKE; result storage does not need to be GCS.
 
 ## How it works
 
@@ -143,7 +149,8 @@ gcloud container clusters create <ORCH_CLUSTER_NAME> \
 
 ## IAM prerequisites
 
-This setup assumes both clusters and the destination GCS bucket already exist.
+This GKE setup assumes both clusters already exist. Create a result bucket or
+container in your chosen provider; the GCS grants below apply only to GCS destinations.
 Two Workload Identity bindings are needed.
 
 Both ServiceAccounts are created by the manifests (`cronjob.yaml` for the

@@ -15,7 +15,7 @@
 """Headless locust runner that publishes results as JSONL + CSVs.
 
 Runs locust with the given flags, converts the resulting stats CSV
-to JSONL, and uploads everything to either GCS or local disk under
+to JSONL, and uploads everything to object storage or local disk under
 <dest>/runs/<tag>/<timestamp>/.
 
 When the test target is glutton.py, also spawns the boomer-worker Go
@@ -33,7 +33,6 @@ import csv
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -42,6 +41,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, TextIO
+
+# Also find the shared module when running directly from the source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from result_store import upload
 
 from cluster_facts import (
     EMPTY_FACTS,
@@ -110,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--dest",
         required=True,
-        help="Root destination (gs://bucket/path or local path)",
+        help="Root destination (gs://bucket/path, s3://bucket/path, az://container/path, or local path)",
     )
     p.add_argument(
         "--allow-empty-stats",
@@ -492,25 +495,6 @@ def stats_to_jsonl(stats_csv: Path, jsonl_path: Path, timestamp: str, tag: str, 
             out.write(json.dumps(entry) + "\n")
             rows_written += 1
     return rows_written
-
-
-def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
-    # Imported here so non-GCS use doesn't require google-cloud-storage.
-    from google.cloud import storage
-
-    bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
-    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
-        str(local_path)
-    )
-
-
-def upload(src: Path, dest: str) -> None:
-    if dest.startswith("gs://"):
-        upload_to_gcs(src, dest)
-    else:
-        dest_path = Path(dest)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dest_path)
 
 
 def collect_cluster_facts(

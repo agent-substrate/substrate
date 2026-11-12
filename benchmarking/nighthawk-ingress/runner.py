@@ -39,6 +39,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, TextIO
 
+# Also find the shared module when running directly from the source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from result_store import upload
+
 import actors
 from nighthawk_common import output as output_mod
 import spec as spec_mod
@@ -62,12 +66,12 @@ def parse_duration_seconds(s: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--name", required=True, help="Test name (GCS path component)")
+    p.add_argument("--name", required=True, help="Test name (result path component)")
     p.add_argument("--tag", required=True, help="Tag for this run (commit sha)")
     p.add_argument(
         "--dest",
         required=True,
-        help="Root destination (gs://bucket/path or local path)",
+        help="Root destination (gs://bucket/path, s3://bucket/path, az://container/path, or local path)",
     )
     p.add_argument("--envoy-cpu", required=True, type=int, dest="envoy_cpu")
     p.add_argument("--actors", type=int, default=100)

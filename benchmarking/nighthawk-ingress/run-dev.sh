@@ -39,7 +39,7 @@ Usage: $0 [options]
   --actors N                actor fleet size; needs at least one worker Running (default: ${ACTORS})
   --tail-latency-slo-ms N   SLO bound; 0 disables (default: ${TAIL_LATENCY_SLO_MS})
   --atespace NAME           actor namespace (default: ${ATESPACE})
-  --dest gs://...           results root (default: gs://\$BUCKET_NAME/nighthawk-ingress-results)
+  --dest URL                results root (default: gs://\$BUCKET_NAME/nighthawk-ingress-results)
 EOF
   exit "${1:-1}"
 }
@@ -68,10 +68,13 @@ source hack/util/venv.sh
 }
 # shellcheck disable=SC1091
 source .ate-dev-env.sh
-for var in PROJECT_ID CLUSTER_NAME CLUSTER_LOCATION KO_DOCKER_REPO BUCKET_NAME; do
+for var in PROJECT_ID CLUSTER_NAME CLUSTER_LOCATION KO_DOCKER_REPO; do
   [[ -n "${!var:-}" ]] || { echo "ERROR: ${var} not set by .ate-dev-env.sh" >&2; exit 1; }
 done
-DEST="${DEST:-gs://${BUCKET_NAME}/nighthawk-ingress-results}"
+if [[ -z "${DEST}" ]]; then
+  : "${BUCKET_NAME:?Set BUCKET_NAME or pass --dest}"
+  DEST="gs://${BUCKET_NAME}/nighthawk-ingress-results"
+fi
 
 docker info >/dev/null 2>&1 || {
   echo "ERROR: docker daemon not running (the runner image is built locally)" >&2
@@ -110,6 +113,7 @@ if ! "${VENV}/bin/python" -c 'import yaml' 2>/dev/null; then
   "${VENV}/bin/pip" install --quiet pyyaml ||
     "${VENV}/bin/pip" install --quiet --index-url https://pypi.org/simple/ pyyaml
 fi
+venv_sync_requirements "${VENV}" "benchmarking/requirements.txt"
 PY="${VENV}/bin/python"
 
 # --- pin the router if its current cpu differs --------------------------------
@@ -194,10 +198,11 @@ kill "${LOGS_PID}" 2>/dev/null || true
 
 # --- verdict --------------------------------------------------------------------
 if [[ "${STATUS}" == "complete" ]]; then
-  CAPACITY="$(gcloud storage ls "${DEST}/runs/${NAME}/**/run_tag=${TAG}/capacity.json" 2>/dev/null | tail -1)"
+  CAPACITY="$("${PY}" benchmarking/result_store.py list "${DEST}/runs/${NAME}" \
+    --match "*/run_tag=${TAG}/capacity.json" | tail -1)"
   if [[ -n "${CAPACITY}" ]]; then
     echo ">>> ${CAPACITY}"
-    gcloud storage cat "${CAPACITY}"
+    "${PY}" benchmarking/result_store.py cat "${CAPACITY}"
   fi
   kubectl delete job "${JOB}" -n "${NAMESPACE}" >/dev/null
   echo ">>> ${NAME}: complete (tag ${TAG})"

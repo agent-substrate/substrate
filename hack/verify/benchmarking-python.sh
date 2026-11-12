@@ -29,6 +29,7 @@ source hack/util/venv.sh
 # <suite directory> <tests path relative to it>. A suite without a
 # requirements.txt gets pytest alone.
 SUITES=(
+  "benchmarking test_result_store.py"
   "benchmarking/analysis ."
   "benchmarking/automation ."
   "benchmarking/evaluate unit_tests"
