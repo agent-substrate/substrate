@@ -94,10 +94,16 @@ tuples:
     relation: api_server_sidecar
     object: global:root
 
-  # External volume class (nfs-gold linked to global:root)
+  # External volume classes (linked to global:root; space-1 allowed on nfs-gold only)
   - user: global:root
     relation: parent_global
     object: external_volume_class:nfs-gold
+  - user: atespace:space-1
+    relation: allowed_atespace
+    object: external_volume_class:nfs-gold
+  - user: global:root
+    relation: parent_global
+    object: external_volume_class:ssd-restricted
 
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
@@ -610,3 +616,11 @@ tests:
         assertions:
           can_get: false
           can_delete: false
+      - user: atespace:space-1
+        object: external_volume_class:nfs-gold
+        assertions:
+          allowed_atespace: true
+      - user: atespace:space-1
+        object: external_volume_class:ssd-restricted
+        assertions:
+          allowed_atespace: false
