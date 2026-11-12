@@ -227,6 +227,9 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapi.Tag)
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
+		if errors.Is(err, store.ErrFailedPrecondition) {
+			return nil, apierror.FailedPrecondition("Tag %s still owns ExternalVolumeSnapshots", tagRef)
+		}
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}
 	return tag, nil

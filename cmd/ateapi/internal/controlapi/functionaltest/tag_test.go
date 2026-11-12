@@ -417,6 +417,24 @@ func TestDeleteTag(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Tag "+tagRef.String()+" not found")
 }
 
+func TestDeleteTag_OwnsExternalVolumeSnapshots(t *testing.T) {
+	ns := namespaceForTest("ns-delete-tag-evs")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	createTemplate(t, tc, ns)
+
+	tag := seedTag(t, tc, "actor-1", "v1", pendingTag)
+	seedExternalVolumeSnapshot(t, tc, tag)
+	tagRef := resources.TagRefFromTag(tag)
+
+	_, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Tag "+tagRef.String()+" still owns ExternalVolumeSnapshots")
+	if _, err := tc.persistence.GetTag(ctx, tagRef); err != nil {
+		t.Errorf("GetTag after the refused delete = %v, want the tag kept", err)
+	}
+}
+
 func TestDeleteTag_NotFound(t *testing.T) {
 	ns := namespaceForTest("ns-delete-tag-missing")
 	tc := setupTest(t, ns)

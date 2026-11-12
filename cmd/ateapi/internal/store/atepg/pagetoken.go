@@ -31,12 +31,13 @@ const pageTokenVersion = 1
 type resourceKind string
 
 const (
-	kindAtespace      resourceKind = "atespace"
-	kindActor         resourceKind = "actor"
-	kindActorTemplate resourceKind = "actor-template"
-	kindTag           resourceKind = "tag"
-	kindWorker        resourceKind = "worker"
-	kindWorkerAssign  resourceKind = "worker-assignment"
+	kindAtespace               resourceKind = "atespace"
+	kindActor                  resourceKind = "actor"
+	kindActorTemplate          resourceKind = "actor-template"
+	kindTag                    resourceKind = "tag"
+	kindExternalVolumeSnapshot resourceKind = "external-volume-snapshot"
+	kindWorker                 resourceKind = "worker"
+	kindWorkerAssign           resourceKind = "worker-assignment"
 )
 
 // pageToken is PostgreSQL's opaque keyset page token. It carries no database
