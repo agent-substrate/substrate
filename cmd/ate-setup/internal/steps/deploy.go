@@ -174,12 +174,20 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.EnsureEgressMITMCAPoolSecret(ctx); err != nil {
 		return err
 	}
-	// After the podcertificate controller: the provider serves with a
-	// projected pod certificate.
+	// After the podcertificate controller: the provider and OpenAPPA serve
+	// with projected pod certificates.
 	if config.HasKubernetesProvider(providers) {
 		err = e.deployK8sCredentialProvider(ctx)
 	} else {
 		err = e.removeK8sCredentialProvider(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if e.Cfg.OpenAPPA {
+		err = e.deployOpenAPPA(ctx)
+	} else {
+		err = e.removeOpenAPPA(ctx)
 	}
 	if err != nil {
 		return err
@@ -206,6 +214,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	)
 	if config.HasKubernetesProvider(providers) {
 		waits = append(waits, rollout{kube.KindDeployment, k8sCredentialProviderDeployment})
+	}
+	if e.Cfg.OpenAPPA {
+		waits = append(waits, rollout{kube.KindDeployment, openAPPADeployment})
 	}
 	for _, w := range waits {
 		if err := e.Kube.RolloutStatus(ctx, w.kind, e.Namespace(), w.name, e.Cfg.RolloutTimeout); err != nil {
@@ -587,6 +598,14 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if e.Cfg.OpenAPPA {
+		err = e.deployOpenAPPA(ctx)
+	} else {
+		err = e.removeOpenAPPA(ctx)
+	}
+	if err != nil {
+		return err
+	}
 	if err := e.applyAtenetEgress(ctx, providers); err != nil {
 		return err
 	}
@@ -594,6 +613,9 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	deployments := []string{"atenet-router", "atenet-egress"}
 	if config.HasKubernetesProvider(providers) {
 		deployments = append(deployments, k8sCredentialProviderDeployment)
+	}
+	if e.Cfg.OpenAPPA {
+		deployments = append(deployments, openAPPADeployment)
 	}
 	for _, name := range deployments {
 		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {

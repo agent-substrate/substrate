@@ -15,9 +15,13 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"testing"
+
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // notFromASetting are Config fields no setting feeds: derived values, the
@@ -58,6 +62,12 @@ func TestEveryConfigFieldIsFedBySomeSetting(t *testing.T) {
 		}
 	}
 
+	policy := filepath.Join(t.TempDir(), "appa.toml")
+	if err := os.WriteFile(policy, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env["ATE_OPENAPPA_POLICY"] = policy
+
 	r, err := Resolve(nil, ResolveOptions{Env: env})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
@@ -95,7 +105,13 @@ func valueFor(key string) string {
 	case "ateapi.postgres.cloudsql.ipType":
 		return CloudSQLIPTypePSC
 	case "atenet.egress.additionalExtprocService":
-		return "ns/svc:8080"
+		// openappa.enabled is set too, and refuses any other service.
+		return OpenAPPAExtprocService
+	case "openappa.mcpServers":
+		return "mcp.example.com=example"
+	case "namespace":
+		// openappa.enabled is set too, and its manifest names this namespace.
+		return installdefaults.SystemNamespace
 	case "atenet.egress.credentialProvider":
 		return `{"name":"k8s.io"}`
 	case "actorJWT.algorithm":

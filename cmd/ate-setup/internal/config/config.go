@@ -246,6 +246,17 @@ type Config struct {
 	// timeout.
 	AdditionalEgressExtprocTimeout time.Duration
 
+	// OpenAPPA deploys OpenAPPA as the additional ext_proc filter
+	// (ATE_OPENAPPA). It implies the three settings above.
+	OpenAPPA bool
+	// OpenAPPAPolicy is a local appa.toml. Empty means the bundled policy,
+	// applied only where the cluster has none.
+	OpenAPPAPolicy string
+	// OpenAPPAMCPServers are the HOST=NAME pairs OpenAPPA checks tool calls to.
+	OpenAPPAMCPServers   []string
+	OpenAPPARuntimeImage string
+	OpenAPPAExtprocImage string
+
 	// CredentialProviderJSON is the --credential-provider value; see
 	// CredentialProviders for its schema.
 	CredentialProviderJSON string
@@ -542,6 +553,10 @@ func (c *Config) ScriptEnv() []string {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT"] = c.AdditionalEgressExtprocTimeout.String()
 	}
+	delete(merged, "ATE_OPENAPPA")
+	if c.OpenAPPA {
+		merged["ATE_OPENAPPA"] = "true"
+	}
 	delete(merged, "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE")
 	if c.AdditionalEgressExtprocAllowModeOverride {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE"] = "true"
@@ -587,6 +602,18 @@ func environ() map[string]string {
 const (
 	K8sCredentialProviderName    = "k8s.io"
 	K8sCredentialProviderAddress = "k8s-credential-provider." + installdefaults.SystemNamespace + ".svc:50051"
+)
+
+// OpenAPPA's Service in manifests/openappa, which the egress gateway reaches
+// as its additional ext_proc filter, and its default images.
+const (
+	OpenAPPAExtprocService = installdefaults.SystemNamespace + "/openappa:9443"
+	OpenAPPARuntimeImage   = "ghcr.io/archestra-ai/appa-runtime:v0.42.0@sha256:4cc8f3f685a725106aba5ea05f022447799d11a70a34a0123c96bd73ff27b5ca"
+	OpenAPPAExtprocImage   = "ghcr.io/archestra-ai/appa-extproc:v0.43.0"
+
+	// openAPPAExtprocTimeout leaves room for the policy's external calls,
+	// such as the GitHub battery's.
+	openAPPAExtprocTimeout = "60s"
 )
 
 // credentialProviderKey is the setting the provider JSON arrives on.

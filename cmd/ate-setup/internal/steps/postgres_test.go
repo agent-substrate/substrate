@@ -48,15 +48,6 @@ func postgresObjects(t *testing.T, kind bool) []*unstructured.Unstructured {
 	return objs
 }
 
-func findObject(objs []*unstructured.Unstructured, kind, name string) *unstructured.Unstructured {
-	for _, obj := range objs {
-		if obj.GetKind() == kind && obj.GetName() == name {
-			return obj
-		}
-	}
-	return nil
-}
-
 // The kind overlay has to be what a kind install applies: the base file asks
 // for more CPU than a laptop cluster schedules.
 func TestPostgresManifestPathSelectsKindOverlay(t *testing.T) {

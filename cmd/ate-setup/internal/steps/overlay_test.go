@@ -620,6 +620,11 @@ func TestRenderCordonSystemInfraComponents(t *testing.T) {
 			path: func(e *Env) string { return e.k8sCredentialProviderPath(k8sCredentialProviderManifest) },
 			want: []string{k8sCredentialProviderDeployment},
 		},
+		{
+			name: "OpenAPPA file",
+			path: func(e *Env) string { return e.openAPPAPath(openAPPAManifest) },
+			want: []string{openAPPADeployment},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
@@ -1876,14 +1881,18 @@ func TestRequireInstalledDataPlane(t *testing.T) {
 }
 
 // fakeDeleteKube is fakeKube with a dynamic client and discovery for the
-// built-in kinds in fake-workersync's manifest, so DeletePath runs. typed
+// built-in kinds in fake-workersync's and OpenAPPA's manifests, so DeletePath
+// runs. typed
 // seeds the typed client, which the Deployment checks read; dyn seeds the
 // dynamic client, which DeletePath deletes through.
 func fakeDeleteKube(t *testing.T, typed []runtime.Object, dyn []runtime.Object) (*kube.Client, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	cs := fake.NewClientset(typed...)
 	cs.Fake.Resources = []*metav1.APIResourceList{
-		{GroupVersion: "v1", APIResources: []metav1.APIResource{{Name: "serviceaccounts", Kind: "ServiceAccount", Namespaced: true}}},
+		{GroupVersion: "v1", APIResources: []metav1.APIResource{
+			{Name: "serviceaccounts", Kind: "ServiceAccount", Namespaced: true},
+			{Name: "services", Kind: "Service", Namespaced: true},
+		}},
 		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{{Name: "deployments", Kind: "Deployment", Namespaced: true}}},
 		{GroupVersion: "networking.k8s.io/v1", APIResources: []metav1.APIResource{{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true}}},
 		{GroupVersion: "rbac.authorization.k8s.io/v1", APIResources: []metav1.APIResource{

@@ -169,6 +169,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	if r.Bool(kindEnabledKey) {
 		applyKindDefaults(r)
 	}
+	if r.Bool("openappa.enabled") {
+		if err := applyOpenAPPADefaults(r); err != nil {
+			return nil, err
+		}
+	}
 
 	rolloutTimeout := r.Duration("rolloutTimeout")
 	if r.Supplied("rolloutTimeout") && rolloutTimeout <= 0 {
@@ -275,6 +280,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		AdditionalEgressExtprocService:           r.String("atenet.egress.additionalExtprocService"),
 		AdditionalEgressExtprocAllowModeOverride: r.Bool("atenet.egress.additionalExtprocAllowModeOverride"),
 		AdditionalEgressExtprocTimeout:           r.Duration("atenet.egress.additionalExtprocTimeout"),
+		OpenAPPA:                                 r.Bool("openappa.enabled"),
+		OpenAPPAPolicy:                           r.String("openappa.policy"),
+		OpenAPPAMCPServers:                       splitList(r.String("openappa.mcpServers")),
+		OpenAPPARuntimeImage:                     r.String("openappa.runtimeImage"),
+		OpenAPPAExtprocImage:                     r.String("openappa.extprocImage"),
 		CredentialProviderJSON:                   r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                          r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                             r.String("otlpEndpoint"),
@@ -366,6 +376,35 @@ func applyKindDefaults(r *Resolved) {
 	}
 }
 
+// applyOpenAPPADefaults points the additional ext_proc filter at OpenAPPA.
+// Like applyKindDefaults it writes into the resolved set, so the report and
+// the record show what the install uses. A conflicting value a channel
+// supplied is refused rather than overridden.
+func applyOpenAPPADefaults(r *Resolved) error {
+	enabled, _ := r.Value("openappa.enabled")
+	service, _ := r.Value("atenet.egress.additionalExtprocService")
+	switch {
+	case !service.Supplied:
+		r.set(service.Setting.Key, OpenAPPAExtprocService, OriginOpenAPPA)
+	case service.Raw != OpenAPPAExtprocService:
+		return &ConflictError{A: service, B: enabled,
+			Why: "OpenAPPA is the additional ext_proc filter, served by " + OpenAPPAExtprocService}
+	}
+	// OpenAPPA reads tools/call bodies, which needs the mode override.
+	override, _ := r.Value("atenet.egress.additionalExtprocAllowModeOverride")
+	switch {
+	case !override.Supplied:
+		r.set(override.Setting.Key, "true", OriginOpenAPPA)
+	case !r.Bool(override.Setting.Key):
+		return &ConflictError{A: override, B: enabled,
+			Why: "OpenAPPA needs mode overrides to read tools/call bodies"}
+	}
+	if !r.Supplied("atenet.egress.additionalExtprocTimeout") {
+		r.set("atenet.egress.additionalExtprocTimeout", openAPPAExtprocTimeout, OriginOpenAPPA)
+	}
+	return nil
+}
+
 // namedExplicitly reports whether a flag or configuration file supplied the
 // setting, as opposed to it arriving from the ambient environment or a default.
 func namedExplicitly(r *Resolved, key string) bool {
@@ -442,6 +481,9 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		issuer, _ := r.Value("actorJWT.issuer")
 		return fmt.Errorf("%s: %w (from %s)", issuer.Setting.Key, err, issuer.From.Describe(issuer.Setting))
 	}
+	if err := validateOpenAPPA(cfg, r); err != nil {
+		return err
+	}
 	extproc, _ := r.Value("atenet.egress.additionalExtprocService")
 	if cfg.AdditionalEgressExtprocService != "" {
 		if err := validateExtprocService(extproc); err != nil {
@@ -493,3 +535,50 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	}
 	return nil
 }
+
+// validateOpenAPPA checks the openappa.* settings. They are refused without
+// --openappa, as the extproc settings are without a service.
+func validateOpenAPPA(cfg *Config, r *Resolved) error {
+	enabled, _ := r.Value("openappa.enabled")
+	if !cfg.OpenAPPA {
+		for _, key := range []string{"openappa.policy", "openappa.mcpServers", "openappa.runtimeImage", "openappa.extprocImage"} {
+			if v, _ := r.Value(key); v.Supplied {
+				return &ConflictError{A: v, B: enabled, Why: "only OpenAPPA uses it"}
+			}
+		}
+		return nil
+	}
+	if cfg.Router != RouterEnvoy {
+		dataplane, _ := r.Value("atenet.dataplane")
+		return &ConflictError{A: enabled, B: dataplane, Why: "OpenAPPA requires dataplane " + RouterEnvoy}
+	}
+	if cfg.Namespace != installdefaults.SystemNamespace {
+		namespace, _ := r.Value("namespace")
+		return &ConflictError{A: enabled, B: namespace,
+			Why: "manifests/openappa names " + installdefaults.SystemNamespace + " literally"}
+	}
+	if cfg.OpenAPPAPolicy != "" {
+		policy, _ := r.Value("openappa.policy")
+		if info, err := os.Stat(cfg.OpenAPPAPolicy); err != nil || !info.Mode().IsRegular() {
+			return &InvalidError{Value: policy, Want: "a readable appa.toml file"}
+		}
+	}
+	servers, _ := r.Value("openappa.mcpServers")
+	if len(cfg.OpenAPPAMCPServers) == 0 {
+		return &InvalidError{Value: servers, Want: openAPPAMCPServersForm}
+	}
+	for _, server := range cfg.OpenAPPAMCPServers {
+		host, name, ok := strings.Cut(server, "=")
+		if !ok || host == "" || name == "" || strings.ContainsAny(host, "/=") || strings.Contains(name, "=") {
+			return &InvalidError{Value: servers, Want: openAPPAMCPServersForm}
+		}
+	}
+	for _, key := range []string{"openappa.runtimeImage", "openappa.extprocImage"} {
+		if v, _ := r.Value(key); v.Raw == "" {
+			return &InvalidError{Value: v, Want: "an image reference"}
+		}
+	}
+	return nil
+}
+
+const openAPPAMCPServersForm = "comma-separated HOST=NAME pairs, such as api.githubcopilot.com=github"

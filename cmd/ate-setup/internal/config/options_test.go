@@ -44,6 +44,9 @@ type Options struct {
 	AdditionalEgressExtprocService           string
 	AdditionalEgressExtprocTimeout           string
 	AdditionalEgressExtprocAllowModeOverride bool
+	OpenAPPA                                 bool
+	OpenAPPAPolicy                           string
+	OpenAPPAMCPServers                       string
 	CredentialProvider                       string
 	OtlpEndpoint                             string
 
@@ -93,6 +96,8 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"cluster-size", opts.ClusterSize},
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
 		{"experimental-additional-egress-extproc-timeout", opts.AdditionalEgressExtprocTimeout},
+		{"openappa-policy", opts.OpenAPPAPolicy},
+		{"openappa-mcp-servers", opts.OpenAPPAMCPServers},
 		{"credential-provider", opts.CredentialProvider},
 		{"otlp-endpoint", opts.OtlpEndpoint},
 		{"image-repo", opts.ImageRepo},
@@ -111,6 +116,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"fake-data-plane", opts.FakeDataPlane},
 		{"e2e-tuning", opts.E2ETuning},
 		{"experimental-additional-egress-extproc-allow-mode-override", opts.AdditionalEgressExtprocAllowModeOverride},
+		{"openappa", opts.OpenAPPA},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {

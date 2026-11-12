@@ -320,6 +320,11 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `ko.dockerRepo`                              | `KO_DOCKER_REPO`                                | `--ko-docker-repo`                                 | —                     | (global)                                 |
 | `kubeconfig`                                 | `KUBECONFIG`                                    | `--kubeconfig`                                     | —                     | (global)                                 |
 | `namespace`                                  | `ATE_NAMESPACE`                                 | `--namespace`                                      | `ate-system`          | (global)                                 |
+| `openappa.enabled` | `ATE_OPENAPPA` | `--openappa` | `false` | (global) |
+| `openappa.extprocImage` | `ATE_OPENAPPA_EXTPROC_IMAGE` | `--openappa-extproc-image` | `ghcr.io/archestra-ai/appa-extproc:v0.43.0` | (global) |
+| `openappa.mcpServers` | `ATE_OPENAPPA_MCP_SERVERS` | `--openappa-mcp-servers` | `api.githubcopilot.com=github` | (global) |
+| `openappa.policy` | `ATE_OPENAPPA_POLICY` | `--openappa-policy` | — (bundled policy) | (global) |
+| `openappa.runtimeImage` | `ATE_OPENAPPA_RUNTIME_IMAGE` | `--openappa-runtime-image` | `ghcr.io/archestra-ai/appa-runtime:v0.42.0@sha256:…` | (global) |
 | `otlpEndpoint`                               | `ATE_OTLP_ENDPOINT`                             | `--otlp-endpoint`                                  | —                     | (global)                                 |
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
 | `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
