@@ -21,6 +21,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -54,6 +55,11 @@ func New(kubeconfig, kubeContext string) (*Client, error) {
 	restCfg, err := ateclient.LoadKubeConfig(kubeconfig, kubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("while reading kubeconfig: %w", err)
+	}
+	restCfg.QPS = 100
+	restCfg.Burst = 200
+	if restCfg.Timeout == 0 {
+		restCfg.Timeout = 60 * time.Second
 	}
 
 	typed, err := kubernetes.NewForConfig(restCfg)
