@@ -353,11 +353,12 @@ func newBenchAuthorizer(b *testing.B) (*Authorizer, context.Context, context.Con
 	}
 
 	auth := &Authorizer{
-		fgaServer:        fgaSrv,
-		storeID:          storeID,
-		modelID:          modelID,
-		bootstrapOwners:  owners,
-		systemPrincipals: sysPrincipals,
+		fgaServer:          fgaSrv,
+		storeID:            storeID,
+		modelID:            modelID,
+		pureGoShortCircuit: true,
+		bootstrapOwners:    owners,
+		systemPrincipals:   sysPrincipals,
 	}
 
 	ownerCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{

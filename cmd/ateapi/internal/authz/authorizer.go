@@ -22,6 +22,7 @@ import (
 	"github.com/openfga/openfga/pkg/server"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // Authorizer is the read-only policy decision point that evaluates runtime
@@ -30,6 +31,8 @@ type Authorizer struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
+
+	pureGoShortCircuit bool
 
 	// bootstrapOwners holds the OpenFGA user strings of the server-configured
 	// global owners. They hold owner on global:root through a contextual tuple
@@ -51,6 +54,17 @@ type Authorizer struct {
 	systemPrincipals map[string][]string
 }
 
+// Option configures Authorizer behavior.
+type Option func(*Authorizer)
+
+// WithPureGoShortCircuit enables or disables the pure-Go immutable contextual-tuple
+// fast-path for bootstrap owners and mTLS system roles.
+func WithPureGoShortCircuit(enabled bool) Option {
+	return func(a *Authorizer) {
+		a.pureGoShortCircuit = enabled
+	}
+}
+
 // Check verifies that the principal in ctx has relation on object.
 // Structural hierarchy links (global:root as parent_global of every atespace
 // and worker, and each atespace as parent_atespace of its actors, actor
@@ -69,6 +83,9 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 		return apierror.Unauthenticated("unauthenticated: missing principal in context")
 	}
 	user := formatUser(p.ID)
+	if a.canShortCircuitInGo(p.Kind, user, relation, object) {
+		return nil
+	}
 	var grants []*openfgav1.TupleKey
 	if p.Kind == principal.KindMTLS {
 		for _, role := range a.systemPrincipals[user] {
@@ -157,6 +174,132 @@ func contextualTuples(object string) []*openfgav1.TupleKey {
 		}
 	}
 	return nil
+}
+
+var bootstrapOwnerAllowedRelations = map[string]map[string]bool{
+	"global": {
+		"can_create_atespace":      true,
+		"can_list_atespaces":       true,
+		"can_create_worker":        true,
+		"can_list_workers":         true,
+		"can_list_actors":          true,
+		"can_list_actor_templates": true,
+		"can_list_tags":            true,
+		"can_create_access_policy": true,
+		"can_get_access_policy":    true,
+		"can_update_access_policy": true,
+	},
+	"atespace": {
+		"can_create_access_policy":  true,
+		"can_get_access_policy":     true,
+		"can_update_access_policy":  true,
+		"can_delete_access_policy":  true,
+		"can_create_actor":          true,
+		"can_create_actor_template": true,
+		"can_list_actors":           true,
+		"can_list_actor_templates":  true,
+		"can_create_tag":            true,
+		"can_list_tags":             true,
+		"can_get":                   true,
+		"can_delete":                true,
+	},
+	"worker": {
+		"can_get":                    true,
+		"can_list_actor_assignments": true,
+		"can_update":                 true,
+		"can_delete":                 true,
+		"can_drain":                  true,
+	},
+	"actor_template": {
+		"can_get":          true,
+		"can_use_template": true,
+		"can_delete":       true,
+	},
+	"tag": {
+		"can_get":     true,
+		"can_update":  true,
+		"can_delete":  true,
+		"can_use_tag": true,
+	},
+	"actor": {
+		"can_get":                  true,
+		"can_update":               true,
+		"can_delete":               true,
+		"can_get_egress_policy":    true,
+		"can_create_egress_policy": true,
+		"can_update_egress_policy": true,
+		"can_delete_egress_policy": true,
+		"can_resume":               true,
+		"can_suspend":              true,
+		"can_revert":               true,
+	},
+}
+
+var systemRoleAllowedRelations = map[string]map[string]map[string]bool{
+	RoleIngressRouter: {
+		"actor": {
+			RelationCanResume: true,
+		},
+		"global": {
+			RelationCanListActors: true,
+		},
+	},
+}
+
+func validateStructuralObject(object string) (string, bool) {
+	objectType, id, ok := strings.Cut(object, ":")
+	if !ok || id == "" {
+		return "", false
+	}
+	switch objectType {
+	case "global":
+		if id == "root" {
+			return objectType, true
+		}
+		return "", false
+	case "atespace", "worker":
+		if resources.IsValidResourceName(id) {
+			return objectType, true
+		}
+		return "", false
+	case "actor", "actor_template", "tag":
+		atespace, name, ok := strings.Cut(id, "/")
+		if !ok || !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(name) {
+			return "", false
+		}
+		return objectType, true
+	default:
+		return "", false
+	}
+}
+
+// canShortCircuitInGo evaluates immutable in-memory contextual-tuple grants
+// (bootstrap global owners on non-mint relations, and mTLS ingress routers on
+// actor can_resume) directly in Go without querying OpenFGA/PostgreSQL and
+// without any cache or TTL staleness.
+func (a *Authorizer) canShortCircuitInGo(kind, user, relation, object string) bool {
+	if !a.pureGoShortCircuit {
+		return false
+	}
+	objectType, ok := validateStructuralObject(object)
+	if !ok {
+		return false
+	}
+	if _, isBootstrapOwner := a.bootstrapOwners[user]; isBootstrapOwner {
+		if allowed := bootstrapOwnerAllowedRelations[objectType]; allowed != nil && allowed[relation] {
+			return true
+		}
+	}
+	if kind == principal.KindMTLS {
+		for _, role := range a.systemPrincipals[user] {
+			if allowedTypes, ok := systemRoleAllowedRelations[role]; ok {
+				if allowedRel, ok := allowedTypes[objectType]; ok && allowedRel[relation] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // parentGlobalTuple links a global-scoped object (an atespace or a worker) to
