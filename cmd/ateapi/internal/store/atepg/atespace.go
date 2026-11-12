@@ -147,6 +147,9 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
 		return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 	}
+	if err := p.policyManager.RemoveAtespaceFromExternalVolumeClasses(ctx, tx, name); err != nil {
+		return nil, fmt.Errorf("removing atespace %q from external volume class policies: %w", name, err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
 	}
