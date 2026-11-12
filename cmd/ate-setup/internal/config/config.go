@@ -238,6 +238,14 @@ type Config struct {
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
 
+	// AdditionalEgressExtprocAllowModeOverride lets that processor switch a
+	// request to buffered body processing with a mode_override.
+	AdditionalEgressExtprocAllowModeOverride bool
+
+	// AdditionalEgressExtprocTimeout is that filter's message_timeout and gRPC
+	// timeout.
+	AdditionalEgressExtprocTimeout time.Duration
+
 	// CredentialProviderJSON is the --credential-provider value; see
 	// CredentialProviders for its schema.
 	CredentialProviderJSON string
@@ -532,6 +540,11 @@ func (c *Config) ScriptEnv() []string {
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService
+		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT"] = c.AdditionalEgressExtprocTimeout.String()
+	}
+	delete(merged, "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE")
+	if c.AdditionalEgressExtprocAllowModeOverride {
+		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE"] = "true"
 	}
 	if c.CredentialProviderJSON != "" {
 		merged["ATE_CREDENTIAL_PROVIDER"] = c.CredentialProviderJSON

@@ -19,7 +19,9 @@ Substrate ships with built-in sandboxing, actor identity, and ingress and egress
 
 You can add your own [`ext_proc`](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) service. Substrate gateways call it on every request.
 
-- **Egress:** set `--experimental-additional-egress-extproc-service` (see [Operator install](../guides/operator-install.md#settings)). This may be converted to an API in the future. Your service runs after Substrate has authenticated the actor and applied its `EgressPolicy`. It currently receives the request headers and the actor's identity, and it can deny the request or add headers; this can be changed if necessary. Today it sees headers only, not bodies.
+- **Egress:** set `--experimental-additional-egress-extproc-service` (see [Operator install](../guides/operator-install.md#settings)). This may be converted to an API in the future. Your service runs after Substrate has authenticated the actor and applied its `EgressPolicy`. It receives the request headers and the actor's identity, and it can deny the request or add headers. Envoy waits 2s for each response from it; `--experimental-additional-egress-extproc-timeout` changes that.
+  - **Bodies:** with `--experimental-additional-egress-extproc-allow-mode-override`, your service can read the request and response bodies of the requests it picks. To pick one, return a `mode_override` in the `request_headers` response with `response_header_mode: SEND`, `request_body_mode: BUFFERED` and `response_body_mode: BUFFERED`. Envoy ignores any other override. It then sends the response headers, the whole request body and the whole response body, and your service can change them too.
+  - Envoy holds a buffered body until it ends, and fails the request if the body outgrows its buffer limit. Pick only requests whose bodies end, such as an MCP `tools/call` POST. A long-lived stream such as an SSE `GET` never finishes, so leave those in the default mode.
 - **Ingress:** planned.
 
 ## Replace: bring your own gateway

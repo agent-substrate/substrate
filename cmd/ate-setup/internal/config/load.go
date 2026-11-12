@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -262,25 +263,27 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 			IAMAuth:     r.String("ateapi.postgres.cloudsql.iamAuth"),
 			IPType:      r.String("ateapi.postgres.cloudsql.ipType"),
 		},
-		RolloutTimeout:                 rolloutTimeout,
-		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
-		PodcertWorkersPerSigner:        podcertWorkers,
-		EnvoyConcurrency:               envoyConcurrency,
-		ClusterSize:                    r.String("clusterSize"),
-		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
-		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
-		E2ETuning:                      r.Bool("e2e.tuning"),
-		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
-		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
-		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
-		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
-		OtlpEndpoint:                   r.String("otlpEndpoint"),
-		APILogLevel:                    r.String("ateapi.logLevel"),
-		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
-		PreviewGates:                   splitList(r.String("preview")),
-		kubeconfigEnv:                  kubeconfigEnv,
-		shellEnv:                       env,
-		resolved:                       r,
+		RolloutTimeout:                           rolloutTimeout,
+		rolloutTimeoutSet:                        r.Supplied("rolloutTimeout"),
+		PodcertWorkersPerSigner:                  podcertWorkers,
+		EnvoyConcurrency:                         envoyConcurrency,
+		ClusterSize:                              r.String("clusterSize"),
+		CordonSystemInfraComponents:              r.Bool("cordonSystemInfraComponents"),
+		FakeDataPlane:                            r.Bool("fakeDataPlane.enabled"),
+		E2ETuning:                                r.Bool("e2e.tuning"),
+		IngressAllowedSPIFFEIDs:                  splitList(r.String("ingressAllowedSPIFFEIDs")),
+		AdditionalEgressExtprocService:           r.String("atenet.egress.additionalExtprocService"),
+		AdditionalEgressExtprocAllowModeOverride: r.Bool("atenet.egress.additionalExtprocAllowModeOverride"),
+		AdditionalEgressExtprocTimeout:           r.Duration("atenet.egress.additionalExtprocTimeout"),
+		CredentialProviderJSON:                   r.String("atenet.egress.credentialProvider"),
+		AnthropicAPIKey:                          r.String("demo.anthropicAPIKey"),
+		OtlpEndpoint:                             r.String("otlpEndpoint"),
+		APILogLevel:                              r.String("ateapi.logLevel"),
+		BenchmarkActorMemory:                     r.String("benchmark.actorMemory"),
+		PreviewGates:                             splitList(r.String("preview")),
+		kubeconfigEnv:                            kubeconfigEnv,
+		shellEnv:                                 env,
+		resolved:                                 r,
 	}
 
 	if err := validateResolved(cfg, r); err != nil {
@@ -439,8 +442,8 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		issuer, _ := r.Value("actorJWT.issuer")
 		return fmt.Errorf("%s: %w (from %s)", issuer.Setting.Key, err, issuer.From.Describe(issuer.Setting))
 	}
+	extproc, _ := r.Value("atenet.egress.additionalExtprocService")
 	if cfg.AdditionalEgressExtprocService != "" {
-		extproc, _ := r.Value("atenet.egress.additionalExtprocService")
 		if err := validateExtprocService(extproc); err != nil {
 			return err
 		}
@@ -448,6 +451,21 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			return &ConflictError{A: extproc, B: dataplane,
 				Why: "an additional ext_proc filter requires dataplane " + RouterEnvoy}
 		}
+	}
+	allowModeOverride, _ := r.Value("atenet.egress.additionalExtprocAllowModeOverride")
+	if cfg.AdditionalEgressExtprocAllowModeOverride && cfg.AdditionalEgressExtprocService == "" {
+		return &ConflictError{A: allowModeOverride, B: extproc,
+			Why: "only the additional ext_proc filter uses it"}
+	}
+	extprocTimeout, _ := r.Value("atenet.egress.additionalExtprocTimeout")
+	if extprocTimeout.Supplied && cfg.AdditionalEgressExtprocService == "" {
+		return &ConflictError{A: extprocTimeout, B: extproc,
+			Why: "only the additional ext_proc filter uses it"}
+	}
+	// Envoy rejects a message_timeout above an hour. Zero would time out
+	// every request at once.
+	if cfg.AdditionalEgressExtprocTimeout <= 0 || cfg.AdditionalEgressExtprocTimeout > time.Hour {
+		return &InvalidError{Value: extprocTimeout, Want: "a positive duration of at most 1h"}
 	}
 	// A gate the components do not know makes each of them refuse to start, so
 	// catch it here rather than as a failed rollout.

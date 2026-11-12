@@ -441,7 +441,7 @@ func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
 	address := fmt.Sprintf("%s.%s.svc.cluster.local", service, namespace)
 	serverName := fmt.Sprintf("%s.%s.svc", service, namespace)
 
-	filterBlock := emitAdditionalEgressExtprocFilter()
+	filterBlock := emitAdditionalEgressExtprocFilter(e.Cfg.AdditionalEgressExtprocTimeout, e.Cfg.AdditionalEgressExtprocAllowModeOverride)
 	clusterBlock := emitAdditionalEgressExtprocCluster(address, port, serverName)
 
 	lines := strings.Split(string(raw), "\n")
@@ -488,16 +488,36 @@ func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
 
 const additionalEgressExtprocCluster = "additional_egress_ext_proc"
 
-func emitAdditionalEgressExtprocFilter() string {
-	return `- name: envoy.filters.http.ext_proc
+// emitAdditionalEgressExtprocFilter renders the filter. The processor sees
+// request headers only, unless allowModeOverride lets it switch a request to
+// buffered bodies and response headers with a mode_override.
+func emitAdditionalEgressExtprocFilter(timeout time.Duration, allowModeOverride bool) string {
+	// A protobuf Duration in YAML is seconds with an "s" suffix; Envoy rejects
+	// Go's "1m30s" or "500ms".
+	t := strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64) + "s"
+	modeOverride := ""
+	if allowModeOverride {
+		// Envoy compares the effective mode, the override laid over
+		// processing_mode, against each entry. It ignores request_header_mode.
+		modeOverride = `
+    allow_mode_override: true
+    allowed_override_modes:
+    - request_header_mode: SEND
+      response_header_mode: SEND
+      request_body_mode: BUFFERED
+      response_body_mode: BUFFERED
+      request_trailer_mode: SKIP
+      response_trailer_mode: SKIP`
+	}
+	return fmt.Sprintf(`- name: envoy.filters.http.ext_proc
   typed_config:
     "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
     grpc_service:
       envoy_grpc:
         cluster_name: additional_egress_ext_proc
-      timeout: 2s
+      timeout: %s
     failure_mode_allow: false
-    message_timeout: 2s
+    message_timeout: %s
     request_attributes:
     - filter_state['dev.ate.actor.identity']
     processing_mode:
@@ -506,10 +526,10 @@ func emitAdditionalEgressExtprocFilter() string {
       request_body_mode: NONE
       response_body_mode: NONE
       request_trailer_mode: SKIP
-      response_trailer_mode: SKIP
+      response_trailer_mode: SKIP%s
     mutation_rules:
       disallow_system: true
-      disallow_is_error: true`
+      disallow_is_error: true`, t, t, modeOverride)
 }
 
 func emitAdditionalEgressExtprocCluster(address, port, serverName string) string {

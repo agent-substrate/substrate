@@ -16,7 +16,9 @@ package steps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -24,6 +26,9 @@ import (
 	"testing"
 	"time"
 
+	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -193,6 +198,111 @@ func TestEmitAdditionalEgressExtprocCluster(t *testing.T) {
 	}
 }
 
+// The defaults render the filter as it was before the timeout and the mode
+// override were configurable. Every case must parse as the vendored
+// ExternalProcessor, since CI never deploys an additional processor.
+func TestEmitAdditionalEgressExtprocFilter(t *testing.T) {
+	const headersOnly = `- name: envoy.filters.http.ext_proc
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+    grpc_service:
+      envoy_grpc:
+        cluster_name: additional_egress_ext_proc
+      timeout: 2s
+    failure_mode_allow: false
+    message_timeout: 2s
+    request_attributes:
+    - filter_state['dev.ate.actor.identity']
+    processing_mode:
+      request_header_mode: SEND
+      response_header_mode: SKIP
+      request_body_mode: NONE
+      response_body_mode: NONE
+      request_trailer_mode: SKIP
+      response_trailer_mode: SKIP
+    mutation_rules:
+      disallow_system: true
+      disallow_is_error: true`
+	buffered := &extprocv3.ProcessingMode{
+		RequestHeaderMode:   extprocv3.ProcessingMode_SEND,
+		ResponseHeaderMode:  extprocv3.ProcessingMode_SEND,
+		RequestBodyMode:     extprocv3.ProcessingMode_BUFFERED,
+		ResponseBodyMode:    extprocv3.ProcessingMode_BUFFERED,
+		RequestTrailerMode:  extprocv3.ProcessingMode_SKIP,
+		ResponseTrailerMode: extprocv3.ProcessingMode_SKIP,
+	}
+	for _, tc := range []struct {
+		name              string
+		timeout           time.Duration
+		allowModeOverride bool
+		wantYAML          string
+		wantTimeout       time.Duration
+		wantOverrides     []*extprocv3.ProcessingMode
+	}{
+		{name: "defaults", timeout: 2 * time.Second, wantYAML: headersOnly, wantTimeout: 2 * time.Second},
+		{name: "fractional timeout", timeout: 1500 * time.Millisecond, wantTimeout: 1500 * time.Millisecond},
+		{name: "timeout over a minute", timeout: 90 * time.Second, wantTimeout: 90 * time.Second},
+		{
+			name: "mode override", timeout: 2 * time.Second, allowModeOverride: true,
+			wantTimeout: 2 * time.Second, wantOverrides: []*extprocv3.ProcessingMode{buffered},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := emitAdditionalEgressExtprocFilter(tc.timeout, tc.allowModeOverride)
+			if tc.wantYAML != "" && out != tc.wantYAML {
+				t.Errorf("filter changed:\n%s\nwant:\n%s", out, tc.wantYAML)
+			}
+
+			var filters []map[string]any
+			if err := yaml.Unmarshal([]byte(out), &filters); err != nil {
+				t.Fatalf("emitted filter is not valid YAML: %v\n%s", err, out)
+			}
+			if len(filters) != 1 {
+				t.Fatalf("expected 1 filter, got %d", len(filters))
+			}
+			got := externalProcessor(t, filters[0])
+			if d := got.GetMessageTimeout().AsDuration(); d != tc.wantTimeout {
+				t.Errorf("message_timeout = %v, want %v", d, tc.wantTimeout)
+			}
+			if d := got.GetGrpcService().GetTimeout().AsDuration(); d != tc.wantTimeout {
+				t.Errorf("grpc_service.timeout = %v, want %v", d, tc.wantTimeout)
+			}
+			if got.GetAllowModeOverride() != tc.allowModeOverride {
+				t.Errorf("allow_mode_override = %v, want %v", got.GetAllowModeOverride(), tc.allowModeOverride)
+			}
+			if !slices.EqualFunc(got.GetAllowedOverrideModes(), tc.wantOverrides, func(a, b *extprocv3.ProcessingMode) bool {
+				return proto.Equal(a, b)
+			}) {
+				t.Errorf("allowed_override_modes = %v, want %v", got.GetAllowedOverrideModes(), tc.wantOverrides)
+			}
+		})
+	}
+}
+
+// externalProcessor parses an ext_proc filter's typed_config as the vendored
+// ExternalProcessor proto and runs its validation rules.
+func externalProcessor(t *testing.T, filter map[string]any) *extprocv3.ExternalProcessor {
+	t.Helper()
+	typedConfig, _ := filter["typed_config"].(map[string]any)
+	if typedConfig == nil {
+		t.Fatal("filter has no typed_config")
+	}
+	fields := maps.Clone(typedConfig)
+	delete(fields, "@type")
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("marshaling typed_config: %v", err)
+	}
+	var ep extprocv3.ExternalProcessor
+	if err := protojson.Unmarshal(raw, &ep); err != nil {
+		t.Fatalf("typed_config is not an ExternalProcessor: %v\n%s", err, raw)
+	}
+	if err := ep.ValidateAll(); err != nil {
+		t.Fatalf("ExternalProcessor fails validation: %v", err)
+	}
+	return &ep
+}
+
 // Splices the real egress manifest and re-parses the result. CI never deploys
 // with the extproc flag, so this is the only automated check on the injected
 // cluster.
@@ -202,8 +312,10 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 		t.Fatalf("resolving repo root: %v", err)
 	}
 	env := &Env{Cfg: &config.Config{
-		Root:                           root,
-		AdditionalEgressExtprocService: "ate-system/foo:50051",
+		Root:                                     root,
+		AdditionalEgressExtprocService:           "ate-system/foo:50051",
+		AdditionalEgressExtprocTimeout:           2 * time.Second,
+		AdditionalEgressExtprocAllowModeOverride: true,
 	}}
 
 	patched, err := env.patchAtenetEgressManifest()
@@ -292,6 +404,10 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 				policyAt = i
 			case additionalEgressExtprocCluster:
 				additionalAt = i
+				// The splice indents the block; it must still parse.
+				if !externalProcessor(t, f).GetAllowModeOverride() {
+					t.Error("spliced additional ext_proc lost allow_mode_override")
+				}
 			}
 		}
 		if additionalAt < 0 {
@@ -546,6 +662,7 @@ func TestRenderBytesCordonSystemInfraComponents(t *testing.T) {
 		Root:                           repoRoot(t),
 		CordonSystemInfraComponents:    true,
 		AdditionalEgressExtprocService: "ate-system/foo:50051",
+		AdditionalEgressExtprocTimeout: 2 * time.Second,
 	}}
 	patched, err := e.patchAtenetEgressManifest()
 	if err != nil {

@@ -210,6 +210,24 @@ func TestValidationErrorsNameTheSupplyingChannel(t *testing.T) {
 			wantIn: []string{"atenet.egress.additionalExtprocService", "1-65535", "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"},
 		},
 		{
+			name:   "extproc mode override without a service",
+			env:    map[string]string{"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE": "true"},
+			wantIn: []string{"atenet.egress.additionalExtprocAllowModeOverride", "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE", "atenet.egress.additionalExtprocService"},
+		},
+		{
+			name:   "extproc timeout without a service",
+			env:    map[string]string{"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT": "5s"},
+			wantIn: []string{"atenet.egress.additionalExtprocTimeout", "ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT", "atenet.egress.additionalExtprocService"},
+		},
+		{
+			name: "extproc timeout is zero",
+			env: map[string]string{
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE": "ns/svc:50051",
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT": "0s",
+			},
+			wantIn: []string{"atenet.egress.additionalExtprocTimeout", "at most 1h", "ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT"},
+		},
+		{
 			name:   "image tag without a repository",
 			env:    map[string]string{"ATE_IMAGE_TAG": "v1"},
 			wantIn: []string{"images.tag", "ATE_IMAGE_TAG", "images.repo", "the tag names nothing"},

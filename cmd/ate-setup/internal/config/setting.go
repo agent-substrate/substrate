@@ -169,6 +169,19 @@ var Registry = []Setting{
 		Usage: "Run an additional ext_proc authorization filter served by NS/SVC:PORT " +
 			"(requires --atenet-dataplane=envoy)",
 	},
+	{
+		Key: "atenet.egress.additionalExtprocAllowModeOverride", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE",
+		Flag: "experimental-additional-egress-extproc-allow-mode-override", Kind: KindBool, Default: "false",
+		Usage: "Let the additional ext_proc processor buffer the request and response bodies of a request " +
+			"by returning a mode_override from its request_headers response " +
+			"(requires --experimental-additional-egress-extproc-service)",
+	},
+	{
+		Key: "atenet.egress.additionalExtprocTimeout", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT",
+		Flag: "experimental-additional-egress-extproc-timeout", Kind: KindDuration, Default: "2s",
+		Usage: "How long Envoy waits for each additional ext_proc response, at most 1h " +
+			"(requires --experimental-additional-egress-extproc-service)",
+	},
 
 	{
 		// No default: an unset level keeps the one an existing install has,

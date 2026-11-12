@@ -30,20 +30,22 @@ import (
 // Options carries the raw flag values the root command collects, before
 // defaulting and validation.
 type Options struct {
-	Kind                           bool
-	Kubeconfig                     string
-	Context                        string
-	Router                         string
-	RolloutTimeout                 string
-	PodcertWorkersPerSigner        int
-	EnvoyConcurrency               int
-	ClusterSize                    string
-	CordonSystemInfraComponents    bool
-	FakeDataPlane                  bool
-	E2ETuning                      bool
-	AdditionalEgressExtprocService string
-	CredentialProvider             string
-	OtlpEndpoint                   string
+	Kind                                     bool
+	Kubeconfig                               string
+	Context                                  string
+	Router                                   string
+	RolloutTimeout                           string
+	PodcertWorkersPerSigner                  int
+	EnvoyConcurrency                         int
+	ClusterSize                              string
+	CordonSystemInfraComponents              bool
+	FakeDataPlane                            bool
+	E2ETuning                                bool
+	AdditionalEgressExtprocService           string
+	AdditionalEgressExtprocTimeout           string
+	AdditionalEgressExtprocAllowModeOverride bool
+	CredentialProvider                       string
+	OtlpEndpoint                             string
 
 	// Image source selection.
 	ImageRepo string
@@ -90,6 +92,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"rollout-timeout", opts.RolloutTimeout},
 		{"cluster-size", opts.ClusterSize},
 		{"experimental-additional-egress-extproc-service", opts.AdditionalEgressExtprocService},
+		{"experimental-additional-egress-extproc-timeout", opts.AdditionalEgressExtprocTimeout},
 		{"credential-provider", opts.CredentialProvider},
 		{"otlp-endpoint", opts.OtlpEndpoint},
 		{"image-repo", opts.ImageRepo},
@@ -107,6 +110,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		{"cordon-system-infra-components", opts.CordonSystemInfraComponents},
 		{"fake-data-plane", opts.FakeDataPlane},
 		{"e2e-tuning", opts.E2ETuning},
+		{"experimental-additional-egress-extproc-allow-mode-override", opts.AdditionalEgressExtprocAllowModeOverride},
 	} {
 		if kv.val {
 			if err := fs.Set(kv.flag, "true"); err != nil {

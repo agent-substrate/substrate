@@ -46,7 +46,9 @@ func loadEnv(t *testing.T) {
 		"ACTOR_JWT_ALGORITHM",
 		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
+		"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT",
 		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
 		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -273,6 +275,57 @@ func TestLoadE2ETuning(t *testing.T) {
 			}
 			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_E2E_TUNING"]; exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_E2E_TUNING = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAdditionalEgressExtproc(t *testing.T) {
+	const service = "ate-system/extproc:50051"
+	for _, tc := range []struct {
+		name         string
+		opts         Options
+		env          map[string]string
+		wantOverride bool
+		wantTimeout  time.Duration
+	}{
+		{name: "defaults", opts: Options{AdditionalEgressExtprocService: service}, wantTimeout: 2 * time.Second},
+		{
+			name: "flags",
+			opts: Options{
+				AdditionalEgressExtprocService:           service,
+				AdditionalEgressExtprocAllowModeOverride: true,
+				AdditionalEgressExtprocTimeout:           "10s",
+			},
+			wantOverride: true, wantTimeout: 10 * time.Second,
+		},
+		{
+			name: "environment",
+			opts: Options{AdditionalEgressExtprocService: service},
+			env: map[string]string{
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE": "true",
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT":             "500ms",
+			},
+			wantOverride: true, wantTimeout: 500 * time.Millisecond,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.AdditionalEgressExtprocAllowModeOverride != tc.wantOverride {
+				t.Errorf("AdditionalEgressExtprocAllowModeOverride = %v, want %v", cfg.AdditionalEgressExtprocAllowModeOverride, tc.wantOverride)
+			}
+			if cfg.AdditionalEgressExtprocTimeout != tc.wantTimeout {
+				t.Errorf("AdditionalEgressExtprocTimeout = %v, want %v", cfg.AdditionalEgressExtprocTimeout, tc.wantTimeout)
+			}
+			if _, exported := scriptEnvMap(t, cfg)["ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE"]; exported != tc.wantOverride {
+				t.Errorf("ScriptEnv() exports ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE = %v, want %v", exported, tc.wantOverride)
 			}
 		})
 	}
@@ -1042,6 +1095,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"cluster size", Options{ClusterSize: "size5"}},
 		{"extproc invalid format", Options{AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"extproc mode override without a service", Options{AdditionalEgressExtprocAllowModeOverride: true}},
+		{"extproc timeout without a service", Options{AdditionalEgressExtprocTimeout: "5s"}},
+		{"extproc timeout zero", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocTimeout: "0s"}},
+		{"extproc timeout negative", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocTimeout: "-1s"}},
+		{"extproc timeout over an hour", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocTimeout: "61m"}},
 		{"provider not JSON", Options{CredentialProvider: "k8s.io"}},
 		{"provider as a JSON string", Options{CredentialProvider: `"off"`}},
 		{"provider null", Options{CredentialProvider: `null`}},
