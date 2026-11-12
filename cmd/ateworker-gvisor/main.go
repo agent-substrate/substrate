@@ -48,6 +48,7 @@ import (
 	"go.ate.dev/substrate/internal/ateworker/phaselog"
 	"go.ate.dev/substrate/internal/ateworker/pid1"
 	"go.ate.dev/substrate/internal/ateworker/register"
+	"go.ate.dev/substrate/internal/ateworker/shutdown"
 	"go.ate.dev/substrate/internal/ateworkervalidation"
 	"go.ate.dev/substrate/internal/atunnel"
 	"go.ate.dev/substrate/internal/bootid"
@@ -555,7 +556,9 @@ func killContainer(ctx context.Context, rcmd containerRuntime, name string, dead
 	// Propagate SIGTERM to the application container so it can save state and close connections.
 	// If the actor installed no SIGTERM handler it terminates immediately.
 	slog.InfoContext(ctx, "Sending SIGTERM to container", slog.String("container", name))
-	if err := rcmd.cmdKill(ctx, name, "SIGTERM"); err != nil {
+	termSignalCtx, termSignalCancel := context.WithTimeout(ctx, shutdown.SignalDeliveryTimeout)
+	defer termSignalCancel()
+	if err := rcmd.cmdKill(termSignalCtx, name, "SIGTERM"); err != nil {
 		slog.ErrorContext(ctx, "Failed to propagate SIGTERM to container", slog.String("container", name), slog.Any("err", err))
 		return fmt.Errorf("failed to propagate SIGTERM to container %q: %w", name, err)
 	}
@@ -588,7 +591,9 @@ func killContainer(ctx context.Context, rcmd containerRuntime, name string, dead
 
 	// sigTermCtx hit the drain deadline. Send SIGKILL.
 	slog.WarnContext(ctx, "Grace period expired; killing container", slog.String("container", name))
-	if err := rcmd.cmdKill(ctx, name, "SIGKILL"); err != nil {
+	killSignalCtx, killSignalCancel := context.WithTimeout(ctx, shutdown.SignalDeliveryTimeout)
+	defer killSignalCancel()
+	if err := rcmd.cmdKill(killSignalCtx, name, "SIGKILL"); err != nil {
 		slog.WarnContext(ctx, "Failed to send SIGKILL to container (it might have already exited)", slog.String("container", name), slog.Any("err", err))
 	}
 
