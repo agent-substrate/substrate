@@ -22,9 +22,10 @@ On the node side, `node` mode on GCS dials that exchange, at
 shared HTTP/2 transport pool. The token and the client are cached under the JWT
 they were obtained for, never under a claim read out of it, while at least
 twenty minutes remain. A client that leaves the cache is not closed, so an
-in-flight transfer finishes on the shared pool. A request GCS refuses with a
-cached token is retried once with a token the exchange re-derives, and a second
-refusal is `PERMISSION_DENIED`. A transfer without `actor_jwt` is
+in-flight transfer finishes on the shared pool. Closing the credential source
+closes connections in the pool that are idle at the time. A request GCS refuses
+with a cached token is retried once with a token the exchange re-derives, and a
+second refusal is `PERMISSION_DENIED`. A transfer without `actor_jwt` is
 `INVALID_ARGUMENT` on GCS. S3 ignores the field and transfers with the pod's
 own credentials.
 

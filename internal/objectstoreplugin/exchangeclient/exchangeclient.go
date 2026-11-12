@@ -53,8 +53,9 @@ import (
 const defaultCacheSize = 1_000
 
 // transportPoolSize is how many HTTP/2 transports Source shares across actor
-// clients, matching pkg/objectstorage's upload pool width.
-const transportPoolSize = 8
+// clients on a node, sized so concurrent ranged restores across several actors
+// do not bottleneck on a single transfer's 8-stream width.
+const transportPoolSize = 32
 
 // Config is how the exchange is reached.
 type Config struct {

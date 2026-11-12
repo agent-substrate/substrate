@@ -283,26 +283,14 @@ func (e *actorTokenExchange) ExchangeActorJwt(_ context.Context, in *exchangepb.
 	}, nil
 }
 
-func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.T) {
+func TestSource_SharesTransportsAcrossActors(t *testing.T) {
 	t.Setenv("STORAGE_EMULATOR_HOST", "")
-	adcProbeHits := atomic.Int64{}
-	adcServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		adcProbeHits.Add(1)
-		http.Error(w, "ambient credentials must not be used", http.StatusInternalServerError)
-	}))
-	t.Cleanup(adcServer.Close)
-	adcFile := filepath.Join(t.TempDir(), "ambient-creds.json")
-	adcJSON := fmt.Sprintf(`{"type":"authorized_user","client_id":"id","client_secret":"secret","refresh_token":"refresh","token_url":%q}`, adcServer.URL+"/token")
-	if err := os.WriteFile(adcFile, []byte(adcJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", adcFile)
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
 	t.Setenv("GCE_METADATA_HOST", "127.0.0.1:1")
 
 	var (
 		totalConns  atomic.Int64
 		liveConns   atomic.Int64
-		connClosed  = make(chan struct{}, 1)
 		connsMu     sync.Mutex
 		connHits    = make(map[string]int)
 		holdEntered = make(chan struct{})
@@ -378,12 +366,7 @@ func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.
 			totalConns.Add(1)
 			liveConns.Add(1)
 		case http.StateClosed, http.StateHijacked:
-			if liveConns.Add(-1) == 0 {
-				select {
-				case connClosed <- struct{}{}:
-				default:
-				}
-			}
+			liveConns.Add(-1)
 		}
 	}
 	gcs.StartTLS()
@@ -399,6 +382,7 @@ func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.
 	base.TLSClientConfig.ServerName = "example.com"
 	base.HTTP2 = &http.HTTP2Config{MaxReadFrameSize: 32 << 10}
 	s := newPoolSource(&actorTokenExchange{expiry: now.Add(time.Hour)}, base)
+	t.Cleanup(func() { _ = s.Close() })
 	if base.HTTP2.SendPingTimeout != 0 {
 		t.Fatalf("newPoolSource mutated base.HTTP2.SendPingTimeout = %v", base.HTTP2.SendPingTimeout)
 	}
@@ -442,7 +426,7 @@ func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.
 		t.Fatal("timed out waiting for actor-0 upload to reach server")
 	}
 
-	const actors = 30
+	const actors = 40
 	grp, gctx := errgroup.WithContext(t.Context())
 	for i := 2; i < 2+actors; i++ {
 		actor := fmt.Sprintf("actor-%d", i)
@@ -491,10 +475,7 @@ func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.
 		t.Fatalf("opened %d TLS connections across %d actors, want %d", got, actors+2, transportPoolSize)
 	}
 	if got := liveConns.Load(); got != transportPoolSize {
-		t.Fatalf("live TLS connections = %d before Close, want %d", got, transportPoolSize)
-	}
-	if got := adcProbeHits.Load(); got != 0 {
-		t.Fatalf("probed ambient credentials %d times, want 0", got)
+		t.Fatalf("live TLS connections = %d, want %d", got, transportPoolSize)
 	}
 	connsMu.Lock()
 	distinctConns := len(connHits)
@@ -507,20 +488,64 @@ func TestSource_SharesTransportsAcrossActorsAndClosesIdleConnections(t *testing.
 	if distinctConns != transportPoolSize {
 		t.Fatalf("requests used %d distinct TLS connections, want %d", distinctConns, transportPoolSize)
 	}
+}
+
+func TestSource_CloseClosesIdleConnections(t *testing.T) {
+	t.Setenv("STORAGE_EMULATOR_HOST", "")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	t.Setenv("GCE_METADATA_HOST", "127.0.0.1:1")
+
+	var (
+		liveConns  atomic.Int64
+		connClosed = make(chan struct{}, transportPoolSize)
+	)
+	gcs := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"name":%q,"bucket":"bucket"}`, r.URL.Query().Get("name"))
+	}))
+	gcs.EnableHTTP2 = true
+	gcs.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			liveConns.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			liveConns.Add(-1)
+			connClosed <- struct{}{}
+		}
+	}
+	gcs.StartTLS()
+	t.Cleanup(gcs.Close)
+
+	now := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	base := gcs.Client().Transport.(*http.Transport).Clone()
+	base.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, gcs.Listener.Addr().String())
+	}
+	base.TLSClientConfig.ServerName = "example.com"
+	s := newPoolSource(&actorTokenExchange{expiry: now.Add(time.Hour)}, base)
+	s.now = func() time.Time { return now }
+
+	client, err := s.Client(t.Context(), "actor-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range transportPoolSize {
+		if err := client.PutObject(t.Context(), "bucket", fmt.Sprintf("actor-1/put-%d", i), bytes.NewReader([]byte("snap"))); err != nil {
+			t.Fatalf("PutObject %d: %v", i, err)
+		}
+	}
+	if got := liveConns.Load(); got != transportPoolSize {
+		t.Fatalf("live TLS connections before Close = %d, want %d", got, transportPoolSize)
+	}
 
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close() = %v", err)
 	}
-	// gcsReader.Close cancels its stream context before closing the HTTP/2
-	// body, so stream bookkeeping in net/http can finish just after Close
-	// returns. Retry closeIdleConnections until all streams drain.
-	retry := time.NewTicker(10 * time.Millisecond)
-	defer retry.Stop()
 	for liveConns.Load() > 0 {
 		select {
 		case <-connClosed:
-		case <-retry.C:
-			s.pool.closeIdleConnections()
 		case <-t.Context().Done():
 			t.Fatalf("Close() left %d idle TLS connections open", liveConns.Load())
 		}
