@@ -1,0 +1,33 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+metadata:
+  atespace: prod
+  name: substrate-snap-2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e-9f86d08188
+  uid: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+  version: "2"
+  createTime: "2026-08-13T10:00:05Z"
+  updateTime: "2026-08-13T10:00:40Z"
+volumeType: pd.csi.storage.gke.io
+origin:
+  tag:
+    tag:
+      atespace: prod
+      name: e2f4a6b8-1c3d-4e5f-8a7b-9c0d1e2f3a4b
+    tagUid: 2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e
+    sourceVolumeName: data
+    sourceVolumeId: projects/my-project/zones/us-central1-a/disks/pvc-3f2a1b0c
+status:
+  storageSnapshotId: projects/my-project/global/snapshots/substrate-snap-2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e-9f86d08188
+  readyToUse: true
+  sizeBytes: "10737418240"

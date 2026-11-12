@@ -131,8 +131,9 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 // Why contextual tuples are used instead of storing parent links in the database:
 //  1. Deterministic structure: Every `atespace:<name>` and `worker:<name>`
 //     unconditionally has `global:root` as its `parent_global`, and every
-//     `actor:<atespace>/<name>`, `actor_template:<atespace>/<name>` and
-//     `tag:<atespace>/<name>` has `atespace:<atespace>` as its
+//     `actor:<atespace>/<name>`, `actor_template:<atespace>/<name>`,
+//     `tag:<atespace>/<name>` and
+//     `external_volume_snapshot:<atespace>/<name>` has `atespace:<atespace>` as its
 //     `parent_atespace`. Because these
 //     relationships are derived purely from the object type/ID, storing a row
 //     per resource in the OpenFGA `tuple` table would be redundant.
@@ -144,7 +145,7 @@ func contextualTuples(object string) []*openfgav1.TupleKey {
 	switch objectType {
 	case "atespace", "worker":
 		return []*openfgav1.TupleKey{parentGlobalTuple(object)}
-	case "actor", "actor_template", "tag":
+	case "actor", "actor_template", "tag", "external_volume_snapshot":
 		atespace, _, ok := strings.Cut(id, "/")
 		if !ok {
 			return nil

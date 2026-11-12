@@ -44,7 +44,8 @@ Global
 │   ├── ActorTemplate
 │   ├── Actor
 │   │   └── EgressPolicy "default" subresource (singleton)
-│   └── Tag
+│   ├── Tag
+│   └── ExternalVolumeSnapshot
 └── Worker
     └── ActorAssignment            subresource (one per hosted Actor, managed by Substrate)
 ```
@@ -57,6 +58,7 @@ Global
 | `ActorTemplate` | Atespace | 0..N | Clients |
 | `Actor` | Atespace | 0..N | Clients |
 | `Tag` | Atespace | 0..N | Clients |
+| `ExternalVolumeSnapshot` | Atespace | 0..N | Substrate (owned by the tag in `origin.tag`) |
 | `Worker` | Global | 0..N | Substrate |
 
 ## Subresources
@@ -97,6 +99,7 @@ classDiagram
         class Actor
         class EgressPolicy
         class Tag
+        class ExternalVolumeSnapshot
         class Worker
         class ActorAssignment
     }
@@ -105,11 +108,13 @@ classDiagram
     Atespace "1" o-- "*" ActorTemplate
     Atespace "1" o-- "*" Actor
     Atespace "1" o-- "*" Tag
+    Atespace "1" o-- "*" ExternalVolumeSnapshot
     Actor "1" *-- "0..1" EgressPolicy
     Worker "1" *-- "*" ActorAssignment
     Actor "*" --> "1" ActorTemplate : actor_template
     Actor "*" --> "0..1" Tag : source_tag
     Tag "*" --> "1" Actor : source_actor
+    ExternalVolumeSnapshot "*" --> "1" Tag : origin.tag
     ActorAssignment "0..1" --> "1" Actor : actor
     ActorTemplate ..> WorkerPool : worker_selector
     WorkerPool ..> SandboxConfig : sandboxClasses
