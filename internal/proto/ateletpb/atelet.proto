@@ -345,7 +345,7 @@ message ReportActorCrashedRequest {
   // +k8s:maxLength=4096
   string message = 4;
 
-  // The execution that exited, as returned by RunWorkload or RestoreWorkload.
+  // The API server-assigned identity of the execution that exited.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
@@ -606,6 +606,13 @@ message RunRequest {
   //
   // +k8s:required
   ActorSandboxRuntime sandbox_runtime = 12;
+
+  // The API server assigns a new UUID for each Run call.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -924,9 +931,6 @@ message RunResponse {
   // The epoch of the worker process that started the workload, as it
   // registered with the control plane.
   int64 worker_epoch = 1;
-
-  // The worker-generated identity of this execution.
-  string execution_uid = 2;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -1232,15 +1236,19 @@ message RestoreRequest {
   //
   // +k8s:required
   ActorSandboxRuntime sandbox_runtime = 12;
+
+  // The API server assigns a new UUID for each Restore call.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 13;
 }
 
 message RestoreResponse {
   // The epoch of the worker process that restored the workload, as it
   // registered with the control plane.
   int64 worker_epoch = 1;
-
-  // The worker-generated identity of this execution.
-  string execution_uid = 2;
 }
 
 message PromoteSnapshotRequest {

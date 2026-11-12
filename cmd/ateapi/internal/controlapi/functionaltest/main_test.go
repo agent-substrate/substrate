@@ -122,9 +122,6 @@ type FakeAteletServer struct {
 	RunRequest *ateletpb.RunRequest
 	FailRun    error
 
-	// ExecutionUID is the execution Run and Restore return. An empty value
-	// models a worker predating execution tracking.
-	ExecutionUID string
 	// FailExecutionResponse loses the reply after the fake accepts a start.
 	FailExecutionResponse error
 
@@ -189,7 +186,6 @@ func (f *FakeAteletServer) Reset() {
 	f.RunCalled = false
 	f.RunRequest = nil
 	f.FailRun = nil
-	f.ExecutionUID = ""
 	f.FailExecutionResponse = nil
 
 	f.CheckpointCalled = false
@@ -276,7 +272,7 @@ func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*
 	if f.FailExecutionResponse != nil {
 		return nil, f.FailExecutionResponse
 	}
-	return &ateletpb.RunResponse{WorkerEpoch: reportedEpoch, ExecutionUid: f.ExecutionUID}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: reportedEpoch}, nil
 }
 
 func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
@@ -324,12 +320,12 @@ func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreReq
 		return nil, f.FailRestore
 	}
 	if f.RestoreWorkerEpoch != nil {
-		return &ateletpb.RestoreResponse{WorkerEpoch: f.RestoreWorkerEpoch(), ExecutionUid: f.ExecutionUID}, nil
+		return &ateletpb.RestoreResponse{WorkerEpoch: f.RestoreWorkerEpoch()}, nil
 	}
 	if f.FailExecutionResponse != nil {
 		return nil, f.FailExecutionResponse
 	}
-	return &ateletpb.RestoreResponse{WorkerEpoch: reportedEpoch, ExecutionUid: f.ExecutionUID}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: reportedEpoch}, nil
 }
 
 func (f *FakeAteletServer) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

@@ -24,8 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateworker/actornet"
 	"go.ate.dev/substrate/internal/ateworker/cgroup"
@@ -66,7 +64,7 @@ type hostedActor struct {
 
 // admitActor reserves capacity before network setup. An actor that is already
 // hosted keeps its slot; its old network is returned for the caller to close.
-func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, memoryBytes int64) (*hostedActor, *actornet.SandboxSession, error) {
+func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, executionUID string, memoryBytes int64) (*hostedActor, *actornet.SandboxSession, error) {
 	s.actorsMu.Lock()
 	defer s.actorsMu.Unlock()
 	var stale *actornet.SandboxSession
@@ -85,17 +83,17 @@ func (s *AteWorkerService) admitActor(attribution resources.ActorAttribution, me
 	// The sandbox cgroup is new with every activation, so its counters start
 	// at zero.
 	ctx, cancel := context.WithCancel(context.Background())
-	hosted := &hostedActor{attribution: attribution, executionUID: uuid.NewString(), usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes}
+	hosted := &hostedActor{attribution: attribution, executionUID: executionUID, usage: workerstats.NewActivation(time.Now(), false), ctx: ctx, cancel: cancel, memoryBytes: memoryBytes}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
 
 // hostActor sets up the actor's network, replacing any stale one. memoryBytes
 // is what the actor books.
-func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateworkerpb.ActorDirs, memoryBytes int64) (*hostedActor, error) {
+func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.ActorAttribution, executionUID string, actorDirs *ateworkerpb.ActorDirs, memoryBytes int64) (*hostedActor, error) {
 	uid := attribution.UID
 
-	hosted, stale, err := s.admitActor(attribution, memoryBytes)
+	hosted, stale, err := s.admitActor(attribution, executionUID, memoryBytes)
 	if err != nil {
 		return nil, err
 	}

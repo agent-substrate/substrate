@@ -502,7 +502,13 @@ type RunWorkloadRequest struct {
 	// +k8s:optional
 	Resources *ResourceRequirements `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:required
-	ActorDirs     *ActorDirs `protobuf:"bytes,12,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	ActorDirs *ActorDirs `protobuf:"bytes,12,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	// The API server-assigned identity of this Run call, bound to its runtime.
+	// Empty when called by an older API server.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,13,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -612,6 +618,13 @@ func (x *RunWorkloadRequest) GetActorDirs() *ActorDirs {
 		return x.ActorDirs
 	}
 	return nil
+}
+
+func (x *RunWorkloadRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
+	}
+	return ""
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1314,9 +1327,7 @@ func (x *HttpGetAction) GetPort() int32 {
 type RunWorkloadResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The epoch this worker process registered with.
-	WorkerEpoch int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
-	// A new UUID for this execution, including a retry that starts it again.
-	ExecutionUid  string `protobuf:"bytes,2,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	WorkerEpoch   int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1356,13 +1367,6 @@ func (x *RunWorkloadResponse) GetWorkerEpoch() int64 {
 		return x.WorkerEpoch
 	}
 	return 0
-}
-
-func (x *RunWorkloadResponse) GetExecutionUid() string {
-	if x != nil {
-		return x.ExecutionUid
-	}
-	return ""
 }
 
 type CheckpointWorkloadRequest struct {
@@ -1608,8 +1612,14 @@ type RestoreWorkloadRequest struct {
 	//
 	// +k8s:optional
 	PreserveRestoreDir bool `protobuf:"varint,14,opt,name=preserve_restore_dir,json=preserveRestoreDir,proto3" json:"preserve_restore_dir,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The API server-assigned identity of this Restore call, bound to its runtime.
+	// Empty when called by an older API server.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	ExecutionUid  string `protobuf:"bytes,15,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestoreWorkloadRequest) Reset() {
@@ -1733,12 +1743,17 @@ func (x *RestoreWorkloadRequest) GetPreserveRestoreDir() bool {
 	return false
 }
 
+func (x *RestoreWorkloadRequest) GetExecutionUid() string {
+	if x != nil {
+		return x.ExecutionUid
+	}
+	return ""
+}
+
 type RestoreWorkloadResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The epoch this worker process registered with.
-	WorkerEpoch int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
-	// A new UUID for this execution, including a retry that restores it again.
-	ExecutionUid  string `protobuf:"bytes,2,opt,name=execution_uid,json=executionUid,proto3" json:"execution_uid,omitempty"`
+	WorkerEpoch   int64 `protobuf:"varint,1,opt,name=worker_epoch,json=workerEpoch,proto3" json:"worker_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1778,13 +1793,6 @@ func (x *RestoreWorkloadResponse) GetWorkerEpoch() int64 {
 		return x.WorkerEpoch
 	}
 	return 0
-}
-
-func (x *RestoreWorkloadResponse) GetExecutionUid() string {
-	if x != nil {
-		return x.ExecutionUid
-	}
-	return ""
 }
 
 type GetWorkloadStatsRequest struct {
@@ -2171,7 +2179,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x17.ateworker.WorkloadSpecR\x04spec\x123\n" +
 	"\n" +
 	"actor_dirs\x18\b \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"\x1b\n" +
-	"\x19TerminateWorkloadResponse\"\x99\x05\n" +
+	"\x19TerminateWorkloadResponse\"\xbe\x05\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2187,7 +2195,8 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\tresources\x18\n" +
 	" \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
-	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x1aD\n" +
+	"actor_dirs\x18\f \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x12#\n" +
+	"\rexecution_uid\x18\r \x01(\tR\fexecutionUid\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
@@ -2231,10 +2240,9 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"]\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"8\n" +
 	"\x13RunWorkloadResponse\x12!\n" +
-	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\x12#\n" +
-	"\rexecution_uid\x18\x02 \x01(\tR\fexecutionUid\"\x95\x03\n" +
+	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"\x95\x03\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2250,7 +2258,7 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"actor_dirs\x18\t \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x8c\x06\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xb1\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2268,14 +2276,14 @@ const file_internal_proto_ateworkerpb_ateworker_proto_rawDesc = "" +
 	"\tresources\x18\v \x01(\v2\x1f.ateworker.ResourceRequirementsR\tresources\x123\n" +
 	"\n" +
 	"actor_dirs\x18\r \x01(\v2\x14.ateworker.ActorDirsR\tactorDirs\x120\n" +
-	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x1aD\n" +
+	"\x14preserve_restore_dir\x18\x0e \x01(\bR\x12preserveRestoreDir\x12#\n" +
+	"\rexecution_uid\x18\x0f \x01(\tR\fexecutionUid\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
-	"\x0f_egress_gateway\"a\n" +
+	"\x0f_egress_gateway\"<\n" +
 	"\x17RestoreWorkloadResponse\x12!\n" +
-	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\x12#\n" +
-	"\rexecution_uid\x18\x02 \x01(\tR\fexecutionUid\"6\n" +
+	"\fworker_epoch\x18\x01 \x01(\x03R\vworkerEpoch\"6\n" +
 	"\x17GetWorkloadStatsRequest\x12\x1b\n" +
 	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\xc2\x04\n" +
 	"\x13WorkloadStatsSample\x12\x1a\n" +
