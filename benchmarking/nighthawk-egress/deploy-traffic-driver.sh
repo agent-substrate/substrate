@@ -99,12 +99,14 @@ if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# bash 3.2 treats an empty array as unset under nounset, so args expands
+# only when it has elements.
 run_kubectl() {
   local args=()
   if [[ -n "${CONTEXT}" ]]; then
     args+=(--context "${CONTEXT}")
   fi
-  kubectl "${args[@]}" "$@"
+  kubectl ${args[@]+"${args[@]}"} "$@"
 }
 
 run_kubectl_ate() {
@@ -112,7 +114,7 @@ run_kubectl_ate() {
   if [[ -n "${CONTEXT}" ]]; then
     args+=(--context "${CONTEXT}")
   fi
-  "${KUBECTL_ATE_BIN}" "${args[@]}" "$@"
+  "${KUBECTL_ATE_BIN}" ${args[@]+"${args[@]}"} "$@"
 }
 
 wait_template_ready() {
