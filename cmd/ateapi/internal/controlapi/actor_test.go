@@ -201,29 +201,29 @@ func TestUpdateActor(t *testing.T) {
 		},
 		{
 			name:   "unchanged labels are kept",
-			stored: &ateapi.Actor{Labels: map[string]string{"app": "billing"}},
+			stored: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"app": "billing"}}},
 			req: &ateapi.Actor{
 				ActorTemplate:  &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
-				Labels:         map[string]string{"app": "billing"},
+				Metadata:       &ateapi.ResourceMetadata{Labels: map[string]string{"app": "billing"}},
 				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 			},
 			want: &ateapi.Actor{
-				Labels:         map[string]string{"app": "billing"},
+				Metadata:       &ateapi.ResourceMetadata{Labels: map[string]string{"app": "billing"}},
 				WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 			},
 		},
 		{
 			name:   "changed labels are rejected",
-			stored: &ateapi.Actor{Labels: map[string]string{"app": "billing"}},
+			stored: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"app": "billing"}}},
 			req: &ateapi.Actor{
 				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
-				Labels:        map[string]string{"app": "checkout"},
+				Metadata:      &ateapi.ResourceMetadata{Labels: map[string]string{"app": "checkout"}},
 			},
 			wantCode: codes.InvalidArgument,
 		},
 		{
 			name:   "omitted labels are rejected",
-			stored: &ateapi.Actor{Labels: map[string]string{"app": "billing"}},
+			stored: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"app": "billing"}}},
 			req: &ateapi.Actor{
 				ActorTemplate: &ateapi.ObjectRef{Atespace: templateNS, Name: templateName},
 			},
@@ -242,7 +242,7 @@ func TestUpdateActor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.stored.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			tt.stored.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Labels: tt.stored.GetMetadata().GetLabels()}
 			tt.stored.ActorTemplate = &ateapi.ObjectRef{Atespace: templateNS, Name: templateName}
 			tt.stored.Status = &ateapi.ActorStatus{
 				State: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
@@ -259,7 +259,9 @@ func TestUpdateActor(t *testing.T) {
 				defer lease.Close()
 			}
 
-			tt.req.Metadata = created.GetMetadata()
+			labels := tt.req.GetMetadata().GetLabels()
+			tt.req.Metadata = proto.CloneOf(created.GetMetadata())
+			tt.req.Metadata.Labels = labels
 			updated, err := svc.UpdateActor(context.Background(), &ateapi.UpdateActorRequest{Actor: tt.req})
 
 			if tt.wantCode != codes.OK {
@@ -279,7 +281,7 @@ func TestUpdateActor(t *testing.T) {
 				t.Fatalf("UpdateActor failed: %v", err)
 			}
 
-			tt.want.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2}
+			tt.want.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2, Labels: tt.want.GetMetadata().GetLabels()}
 			tt.want.ActorTemplate = &ateapi.ObjectRef{Atespace: templateNS, Name: templateName}
 			tt.want.Status = &ateapi.ActorStatus{
 				State: ateapi.ActorState_ACTOR_STATE_SUSPENDED,
@@ -1011,12 +1013,21 @@ func TestCreateActor_Labels(t *testing.T) {
 		return labels
 	}
 	for _, tt := range []struct {
-		name           string
-		templateLabels map[string]string
-		actorLabels    map[string]string
-		want           map[string]string
-		wantCode       codes.Code
+		name              string
+		templateLabels    map[string]string
+		templateOwnLabels map[string]string
+		actorLabels       map[string]string
+		want              map[string]string
+		wantCode          codes.Code
 	}{{
+		name: "no labels",
+	}, {
+		name:        "empty labels without template defaults",
+		actorLabels: map[string]string{},
+	}, {
+		name:              "template metadata labels do not become actor defaults",
+		templateOwnLabels: map[string]string{"app": "template"},
+	}, {
 		name:        "actor labels without template defaults",
 		actorLabels: map[string]string{"app": "billing"},
 		want:        map[string]string{"app": "billing"},
@@ -1030,15 +1041,14 @@ func TestCreateActor_Labels(t *testing.T) {
 		actorLabels:    map[string]string{"app": "billing"},
 		want:           map[string]string{"team": "payments", "app": "billing"},
 	}, {
-		// 20 labels of 126 bytes each fit alone; the 40 merged do not.
 		name:           "merged labels over the size cap are rejected",
-		templateLabels: labelsOf("t", 20, 62, 63),
-		actorLabels:    labelsOf("a", 20, 62, 63),
+		templateLabels: labelsOf("t", 8, 62, 63),
+		actorLabels:    labelsOf("a", 8, 62, 63),
 		wantCode:       codes.InvalidArgument,
 	}, {
 		name:           "merged labels over the count cap are rejected",
 		templateLabels: labelsOf("t", 3, 1, 1),
-		actorLabels:    labelsOf("a", 62, 2, 1),
+		actorLabels:    labelsOf("a", 14, 2, 1),
 		wantCode:       codes.InvalidArgument,
 	}} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1046,7 +1056,7 @@ func TestCreateActor_Labels(t *testing.T) {
 			persistence := newTestPersistence(t)
 			svc := &RPCService{impl: newServiceImpl(persistence, nil)}
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
-				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"}
+				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Labels: tt.templateOwnLabels}
 				tmpl.SnapshotConfig.StorageLocation = "gs://my-bucket/snapshots"
 				tmpl.ActorLabels = tt.templateLabels
 			})})
@@ -1054,9 +1064,8 @@ func TestCreateActor_Labels(t *testing.T) {
 				t.Fatal(err)
 			}
 			actor, err := svc.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
-				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "alpha"},
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "alpha", Labels: tt.actorLabels},
 				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
-				Labels:        tt.actorLabels,
 			}})
 			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("CreateActor error = %v (code %v), want code %v", err, code, tt.wantCode)
@@ -1068,7 +1077,7 @@ func TestCreateActor_Labels(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(tt.want, got.GetLabels()); diff != "" {
+			if diff := cmp.Diff(tt.want, got.GetMetadata().GetLabels()); diff != "" {
 				t.Errorf("stored labels mismatch (-want +got):\n%s", diff)
 			}
 		})

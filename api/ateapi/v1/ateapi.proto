@@ -474,6 +474,19 @@ message ResourceMetadata {
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
   google.protobuf.Timestamp delete_time = 7;
+
+  // `labels` identify the resource for its creator. They are immutable after
+  // creation. An update that changes or omits them returns `INVALID_ARGUMENT`.
+  // Keys in `ate.dev` and its subdomains are reserved. Keys and values together
+  // may not exceed 1024 bytes.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=16
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
+  // +k8s:customValidation # reserved keys and total size
+  // +k8s:immutable
+  map<string, string> labels = 8;
 }
 
 // ExternalVolumes is the external volume state recorded on an actor, wrapped
@@ -580,23 +593,6 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 5;
-
-  // labels identify the Actor for its creator, for example the object of
-  // the creating platform it belongs to. At creation they are merged over
-  // the actor_labels of the ActorTemplate, the Actor's own value winning on
-  // a key conflict; a later change of actor_template does not touch them.
-  // Immutable after creation: an UpdateActor that changes them, including by
-  // omitting them, returns INVALID_ARGUMENT. Keys in ate.dev and its
-  // subdomains are reserved, and keys and values together may not exceed
-  // 4096 bytes.
-  //
-  // +k8s:optional
-  // +k8s:maxProperties=64
-  // +k8s:eachKey=+k8s:format=k8s-label-key
-  // +k8s:eachVal=+k8s:format=k8s-label-value
-  // +k8s:customValidation # reserved keys and total size
-  // +k8s:immutable
-  map<string, string> labels = 6;
 }
 
 // EgressPolicy is an egress policy resource nested under an Actor. An Actor has
@@ -1232,13 +1228,14 @@ message ActorTemplate {
   // +k8s:optional
   ActorTemplateStatus status = 7;
 
-  // actor_labels are the default labels of Actors created from this
-  // template. An Actor's own labels win on a key conflict. Keys in ate.dev
-  // and its subdomains are reserved, and keys and values together may not
-  // exceed 4096 bytes.
+  // `actor_labels` are defaults for the `metadata.labels` of Actors created
+  // from this template. An Actor's own value wins on a key conflict. Changing
+  // an Actor's `actor_template` does not change its labels. These are separate
+  // from the template's own `metadata.labels`. Keys in `ate.dev` and its
+  // subdomains are reserved. Keys and values together may not exceed 1024 bytes.
   //
   // +k8s:optional
-  // +k8s:maxProperties=64
+  // +k8s:maxProperties=16
   // +k8s:eachKey=+k8s:format=k8s-label-key
   // +k8s:eachVal=+k8s:format=k8s-label-value
   // +k8s:customValidation # reserved keys and total size
@@ -2073,9 +2070,9 @@ message ListTagsResponse {
 //
 // +k8s:customValidation # metadata.atespace must match source_actor.atespace
 message CreateTagRequest {
-  // The tag to create. metadata.atespace, metadata.name, scope and source_actor
-  // are honored; metadata.atespace must match source_actor's, and status is
-  // ignored on write.
+  // The tag to create. `metadata.atespace`, `metadata.name`, `metadata.labels`,
+  // `scope` and `source_actor` are honored. `metadata.atespace` must match
+  // `source_actor`'s, and `status` is ignored on write.
   //
   // +k8s:required
   Tag tag = 1;

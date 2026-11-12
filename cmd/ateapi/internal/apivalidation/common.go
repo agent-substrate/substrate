@@ -37,6 +37,10 @@ func ateDeepEqual[T any](a, b T) bool {
 	return resources.DeepEqual(a, b)
 }
 
+func ValidateCustom_ResourceMetadata_Labels(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return validateLabels(fldPath, value)
+}
+
 // validateSingletonName requires the name of a singleton subresource to be
 // resources.SingletonName. An empty name is left to the required tag.
 func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
@@ -121,7 +125,7 @@ func validateDualStackIPs(fldPath *field.Path, ips []string) field.ErrorList {
 // maxLabelsSizeBytes bounds the keys and values of one label set together.
 // Labels travel with every Get and List of their resource, so the per-entry
 // formats alone would allow a set far larger than identification needs.
-const maxLabelsSizeBytes = 4096
+const maxLabelsSizeBytes = 1024
 
 // validateLabels checks what the label tags cannot express: keys in ate.dev
 // and its subdomains are reserved, and the set fits maxLabelsSizeBytes.

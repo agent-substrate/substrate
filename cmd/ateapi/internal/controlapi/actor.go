@@ -83,13 +83,11 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 		return nil, err
 	}
 
-	// The template's actor_labels are defaults; the Actor's own value wins.
-	// The request was validated before the merge, and each set alone can fit
-	// the label limits while their union does not.
+	// A merged label set can exceed the limits even when each input fits.
 	if defaults := template.GetActorLabels(); len(defaults) > 0 {
 		labels := maps.Clone(defaults)
-		maps.Copy(labels, inActor.GetLabels())
-		inActor.Labels = labels
+		maps.Copy(labels, inActor.GetMetadata().GetLabels())
+		inActor.Metadata.Labels = labels
 		if errs := apivalidation.ValidateCreateActorRequest(ctx, &ateapi.CreateActorRequest{Actor: inActor}); len(errs) > 0 {
 			return nil, resources.ToAPIError(errs)
 		}
@@ -277,8 +275,9 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 		if toUpdate.GetMetadata().GetDeleteTime() != nil {
 			return apierror.FailedPrecondition("Actor %s is being deleted", actorRef)
 		}
-		// Status and Metadata are server-owned fields.
+		// Status and metadata timestamps are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
+		metadata.Labels = maps.Clone(inActor.GetMetadata().GetLabels())
 		// Whole-object replace: clear first, so a field the client left unset is
 		// cleared rather than kept from the stored actor.
 		// Merge cannot smuggle in unknown fields because validation already rejected them.

@@ -42,9 +42,10 @@ func TestActorTemplateCRUD(t *testing.T) {
 
 	created, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
-			Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
-			Resources:  &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
+			Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Labels: map[string]string{"app": "template"}},
+			ActorLabels: map[string]string{"app": "actor"},
+			Containers:  []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+			Resources:   &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 			// Server-owned status on the request is ignored.
 			Status: &ateapi.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{
@@ -57,8 +58,9 @@ func TestActorTemplateCRUD(t *testing.T) {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 	want := &ateapi.ActorTemplate{
-		Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
-		Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
+		Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1, Labels: map[string]string{"app": "template"}},
+		ActorLabels: map[string]string{"app": "actor"},
+		Containers:  []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapi.SnapshotConfig{
 			PreferredFidelity:    ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},

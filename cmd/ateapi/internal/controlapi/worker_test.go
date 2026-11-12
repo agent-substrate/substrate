@@ -313,7 +313,9 @@ func TestCreateWorker_InvalidArgument(t *testing.T) {
 func TestUpdateWorker(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
-	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	worker := validWorker(apiWorkerName)
+	worker.Metadata.Labels = map[string]string{"team": "payments"}
+	seeded := seedAPIWorker(t, ctx, persistence, worker)
 
 	got, err := svc.UpdateWorker(ctx, &ateapi.UpdateWorkerRequest{
 		Worker: updateFrom(seeded, func(w *ateapi.Worker) {
@@ -332,6 +334,9 @@ func TestUpdateWorker(t *testing.T) {
 	}
 	if got.GetMetadata().GetVersion() != 2 {
 		t.Errorf("updated worker version = %d, want 2", got.GetMetadata().GetVersion())
+	}
+	if got.GetMetadata().GetLabels()["team"] != "payments" {
+		t.Errorf("metadata labels changed: %v", got.GetMetadata().GetLabels())
 	}
 }
 
@@ -438,7 +443,9 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 func TestUpdateWorker_Errors(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
-	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	worker := validWorker(apiWorkerName)
+	worker.Metadata.Labels = map[string]string{"team": "payments"}
+	seeded := seedAPIWorker(t, ctx, persistence, worker)
 
 	// Every case below carries the guards an update requires and the worker as
 	// stored, so the rule it is named for is the one that rejects it.
@@ -449,6 +456,8 @@ func TestUpdateWorker_Errors(t *testing.T) {
 	}{
 		{"no worker", nil, codes.InvalidArgument},
 		{"atespace set", func(w *ateapi.Worker) { w.Metadata.Atespace = "team-a" }, codes.InvalidArgument},
+		{"metadata labels changed", func(w *ateapi.Worker) { w.Metadata.Labels["team"] = "other" }, codes.InvalidArgument},
+		{"metadata labels omitted", func(w *ateapi.Worker) { w.Metadata.Labels = nil }, codes.InvalidArgument},
 		{"absent", func(w *ateapi.Worker) {
 			w.Metadata.Name = "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63"
 		}, codes.NotFound},

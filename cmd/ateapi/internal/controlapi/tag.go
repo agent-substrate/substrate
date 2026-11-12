@@ -133,8 +133,9 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapi.UpdateTagRequest
 		if tagDurableSnapshotURI(toUpdate, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) == "" {
 			return errTagPending
 		}
-		// Metadata and status are server-owned fields.
+		// Metadata timestamps and status are server-owned fields.
 		metadata, tagStatus := toUpdate.GetMetadata(), toUpdate.GetStatus()
+		metadata.Labels = in.GetMetadata().GetLabels()
 		// Whole-object replace: clear first, so a field the client left unset is
 		// cleared rather than kept from the stored tag. Merge cannot smuggle in
 		// unknown fields because validation already rejected them, and a source

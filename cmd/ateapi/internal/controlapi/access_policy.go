@@ -160,6 +160,7 @@ func (s *ServiceImpl) DeleteAtespaceAccessPolicy(ctx context.Context, name strin
 func replaceAccessPolicy(policy *ateapi.AccessPolicy) func(*ateapi.AccessPolicy) error {
 	return func(toUpdate *ateapi.AccessPolicy) error {
 		metadata := toUpdate.GetMetadata()
+		metadata.Labels = policy.GetMetadata().GetLabels()
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, policy)
 		toUpdate.Metadata = metadata
