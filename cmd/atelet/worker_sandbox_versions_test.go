@@ -230,9 +230,9 @@ func TestWorkerSandboxResolverResolve(t *testing.T) {
 }
 
 // wantRuntime is the runtime buildFile builds from multiVersionConfig's
-// version with the given name when runsc reports testCPUFeatures() ("3").
+// version with the given name when the probe reports testCPUFeaturesMask.
 func wantRuntime(name string) sandboxruntimes.Attributes {
-	return wantRuntimeWithFeatures(name, "3")
+	return wantRuntimeWithFeatures(name, testCPUFeaturesMask)
 }
 
 func wantRuntimeWithFeatures(name, cpuFeatures string) sandboxruntimes.Attributes {
@@ -616,8 +616,6 @@ func TestSyncPodMicroVMAssetCacheAndEviction(t *testing.T) {
 }
 
 func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
-	feats := testCPUFeatures()
-
 	t.Run("a version with an earlier version's binaries in another bucket is neither fetched nor probed", func(t *testing.T) {
 		// bundleHash leaves URLs out, so v3 is v1's runtime. The syncer must
 		// see that from the spec alone, before touching v3's bucket.
@@ -662,12 +660,12 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			},
 		}
 		execCalls := make(map[string]int)
-		s.runCPUFeatures = func(_ context.Context, runscPath string) ([]string, error) {
+		s.runCPUFeatures = func(_ context.Context, runscPath string) (string, error) {
 			execCalls[runscPath]++
 			if runscPath == "/cache/sha-v2/runsc" {
-				return feats, nil // bits 0 and 1 -> "3"
+				return testCPUFeaturesMask, nil // bits 0 and 1
 			}
-			return feats[:1], nil // bit 0 only -> "1"
+			return "1", nil // bit 0 only
 		}
 
 		got, err := planAndBuild(s, workerPod("pod-a", "pool"))
@@ -676,7 +674,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		}
 		v3Rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{gvisorAssetName: {SHA256: "sha-v1"}, "extra": {SHA256: "sha-extra"}}}
 		want := gvisorFile(
-			wantRuntimeWithFeatures("v2", "3"),
+			wantRuntimeWithFeatures("v2", testCPUFeaturesMask),
 			wantRuntimeWithFeatures("v1", "1"),
 			sandboxruntimes.Attributes{
 				hardware.AttrArchitecture:      runtime.GOARCH,
@@ -718,8 +716,8 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		}
 
 		s = newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-		s.runCPUFeatures = func(context.Context, string) ([]string, error) {
-			return nil, errors.New("runsc failed")
+		s.runCPUFeatures = func(context.Context, string) (string, error) {
+			return "", errors.New("runsc failed")
 		}
 		if _, err := planAndBuild(s, workerPod("pod-a", "pool")); err == nil || errors.Is(err, errPermanent) {
 			t.Errorf("planAndBuild() on runCPUFeatures error = %v, want non-permanent error", err)
@@ -737,7 +735,7 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 				return map[string]string{gvisorAssetName: "sha-v2"}, nil
 			},
 		}
-		s.runCPUFeatures = func(context.Context, string) ([]string, error) { return feats, nil }
+		s.runCPUFeatures = func(context.Context, string) (string, error) { return testCPUFeaturesMask, nil }
 		got, err := planAndBuild(s, workerPod("pod-a", "pool"))
 		if !errors.Is(err, errIncomplete) || errors.Is(err, errPermanent) {
 			t.Errorf("planAndBuild() on a restorable version's fetch error = %v, want errIncomplete and not errPermanent", err)
@@ -748,13 +746,14 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown CPU feature on default version is permanent, on non-default is skipped", func(t *testing.T) {
+	t.Run("permanent probe failure on default version fails the build, on non-default is skipped", func(t *testing.T) {
+		// What runRunscCPUFeatures returns for a runsc that prints what does
+		// not encode.
+		probeErr := fmt.Errorf("%w: runsc cpu-features --bitmask: not a bitmask", errPermanent)
 		s := newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
-		s.runCPUFeatures = func(context.Context, string) ([]string, error) {
-			return []string{"not_a_known_feature"}, nil
-		}
+		s.runCPUFeatures = func(context.Context, string) (string, error) { return "", probeErr }
 		if _, err := planAndBuild(s, workerPod("pod-a", "pool")); !errors.Is(err, errPermanent) {
-			t.Errorf("planAndBuild() with unknown feature on default = %v, want errPermanent", err)
+			t.Errorf("planAndBuild() with the default's probe failing permanently = %v, want errPermanent", err)
 		}
 
 		s = newTestSyncer(t, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
@@ -763,15 +762,15 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 				return map[string]string{gvisorAssetName: rec.Assets[gvisorAssetName].SHA256}, nil
 			},
 		}
-		s.runCPUFeatures = func(_ context.Context, runscPath string) ([]string, error) {
+		s.runCPUFeatures = func(_ context.Context, runscPath string) (string, error) {
 			if runscPath == "sha-v2" {
-				return feats, nil
+				return testCPUFeaturesMask, nil
 			}
-			return []string{"future_unknown_feature"}, nil
+			return "", probeErr
 		}
 		got, err := planAndBuild(s, workerPod("pod-a", "pool"))
 		if err != nil {
-			t.Fatalf("planAndBuild() with unknown feature on non-default error = %v", err)
+			t.Fatalf("planAndBuild() with a restorable version's probe failing permanently error = %v", err)
 		}
 		want := gvisorFile(wantRuntime("v2"))
 		if diff := cmp.Diff(want, got); diff != "" {
@@ -791,23 +790,23 @@ func TestRunRunscCPUFeatures(t *testing.T) {
 		}
 		return p
 	}
-
-	got, err := runRunscCPUFeatures(ctx, script("ok", "echo pni,avx2\n"))
-	if err != nil {
-		t.Fatalf("runRunscCPUFeatures() error = %v", err)
-	}
-	if diff := cmp.Diff([]string{"pni", "avx2"}, got); diff != "" {
-		t.Errorf("runRunscCPUFeatures() mismatch (-want +got):\n%s", diff)
+	got, err := runRunscCPUFeatures(ctx, script("bitmask", "echo "+testCPUFeaturesBlock+"\n"))
+	if err != nil || got != testCPUFeaturesMask {
+		t.Errorf("runRunscCPUFeatures() = (%q, %v), want (%q, nil)", got, err, testCPUFeaturesMask)
 	}
 
-	// A binary that runs and fails, or prints nothing, will do so again:
-	// permanent, with its stderr in the error.
-	_, err = runRunscCPUFeatures(ctx, script("fail", "echo boom >&2\nexit 1\n"))
-	if !errors.Is(err, errPermanent) || !strings.Contains(err.Error(), "boom") {
-		t.Errorf("runRunscCPUFeatures() on a failing binary = %v, want permanent error quoting boom", err)
+	// A binary that runs and fails, prints nothing, or prints what does not
+	// encode will do so again: permanent, with its stderr in the error. A
+	// runsc from before --bitmask is the first kind.
+	_, err = runRunscCPUFeatures(ctx, script("old", "echo 'flag provided but not defined: -bitmask' >&2\nexit 128\n"))
+	if !errors.Is(err, errPermanent) || !strings.Contains(err.Error(), "not defined: -bitmask") {
+		t.Errorf("runRunscCPUFeatures() on a runsc without --bitmask = %v, want permanent error quoting its stderr", err)
 	}
 	if _, err := runRunscCPUFeatures(ctx, script("empty", "exit 0\n")); !errors.Is(err, errPermanent) {
 		t.Errorf("runRunscCPUFeatures() on empty output = %v, want permanent error", err)
+	}
+	if _, err := runRunscCPUFeatures(ctx, script("names", "echo fpu,sse2\n")); !errors.Is(err, errPermanent) {
+		t.Errorf("runRunscCPUFeatures() on names instead of blocks = %v, want permanent error", err)
 	}
 
 	// A binary that cannot be started, or is cut off, is retried.
@@ -859,7 +858,9 @@ func TestSyncPodAdvertisesWhatItWrote(t *testing.T) {
 		s.mu.Lock()
 		s.cpuFeatures = map[string]string{}
 		s.mu.Unlock()
-		s.runCPUFeatures = func(context.Context, string) ([]string, error) { return []string{"not_a_known_feature"}, nil }
+		s.runCPUFeatures = func(context.Context, string) (string, error) {
+			return "", fmt.Errorf("%w: runsc cpu-features --bitmask: not a bitmask", errPermanent)
+		}
 		if _, err := s.syncPod(ctx, pod); !errors.Is(err, errPermanent) {
 			t.Fatalf("syncPod with the default's probe failing = %v, want errPermanent", err)
 		}

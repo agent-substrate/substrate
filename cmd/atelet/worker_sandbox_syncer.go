@@ -143,7 +143,7 @@ type workerSandboxSyncer struct {
 	// probeCPUIdentity is hardware.ProbeCPUIdentity. Overridable in tests.
 	probeCPUIdentity func() (vendor, model string, err error)
 	// runCPUFeatures is runRunscCPUFeatures. Overridable in tests.
-	runCPUFeatures func(ctx context.Context, runscPath string) ([]string, error)
+	runCPUFeatures func(ctx context.Context, runscPath string) (string, error)
 	// mu guards hostCPU, cpuFeatures and microvmAssets across the syncWorkers
 	// in run: hostCPU is the probed host CPU identity, nil until a probe
 	// succeeds; cpuFeatures is the encoded cpu_features of each runsc binary

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -51,16 +50,12 @@ const (
 	testCPUModel  = "6:143"
 )
 
-// testCPUFeatures are the first two CPU feature names for runtime.GOARCH,
-// which encode to bit 0 | bit 1 = "3" on both amd64 and arm64.
-func testCPUFeatures() []string {
-	switch runtime.GOARCH {
-	case "arm64":
-		return []string{"fp", "asimd"}
-	default:
-		return []string{"pni", "pclmulqdq"}
-	}
-}
+// testCPUFeaturesBlock is what the faked runsc prints for `cpu-features
+// --bitmask`: bits 0 and 1, which encode to testCPUFeaturesMask.
+const (
+	testCPUFeaturesBlock = "0x00000003"
+	testCPUFeaturesMask  = "3"
+)
 
 // fakeAssetFetcher answers ensureSandboxAssets from fn. The paths it returns
 // are not under dstDir: the syncer only runs what it is handed, so where the
@@ -92,12 +87,12 @@ func newTestAssetFetcher() sandboxAssetFetcher {
 }
 
 // newScriptAssetFetcher returns a sandboxAssetFetcher that backs every asset
-// with an executable script printing testCPUFeatures(), for a syncer that
+// with an executable script printing testCPUFeaturesBlock, for a syncer that
 // runs the real runsc probe.
 func newScriptAssetFetcher(t *testing.T) sandboxAssetFetcher {
 	t.Helper()
 	script := filepath.Join(t.TempDir(), "runsc")
-	body := "#!/bin/sh\necho " + strings.Join(testCPUFeatures(), ",") + "\n"
+	body := "#!/bin/sh\necho " + testCPUFeaturesBlock + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +138,7 @@ func resolvedPoolOf(class atev1.SandboxClass, name, config string) *atev1.Worker
 
 // newTestSyncer serves objs from synced caches and keeps worker directories
 // under a temp dir. Its probes are faked: the host CPU is
-// testCPUVendor/testCPUModel and every runsc reports testCPUFeatures();
+// testCPUVendor/testCPUModel and every runsc reports testCPUFeaturesMask;
 // TestRunRunscCPUFeatures covers the real probe.
 func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	t.Helper()
@@ -179,7 +174,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	t.Cleanup(s.queue.ShutDown)
 	s.scratchDir = t.TempDir() // buildFile stages assets there
 	s.probeCPUIdentity = func() (string, string, error) { return testCPUVendor, testCPUModel, nil }
-	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return testCPUFeatures(), nil }
+	s.runCPUFeatures = func(context.Context, string) (string, error) { return testCPUFeaturesMask, nil }
 	// Tests that check the jitter set it.
 	s.maxJitter = 0
 	return s

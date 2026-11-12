@@ -381,7 +381,7 @@ func (s *workerSandboxSyncer) ensureMicroVMAssets(ctx context.Context, rec *sand
 
 // gvisorCPUFeatures returns the encoded cpu_features of rec's runsc binary.
 // The first time this atelet sees the binary's digest it fetches the binary
-// into the local asset cache and runs `<runsc> cpu-features`.
+// into the local asset cache and probes it with runRunscCPUFeatures.
 func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
 	digest := rec.Assets[gvisorAssetName].SHA256
 	if digest == "" {
@@ -407,13 +407,9 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, rec *sandbo
 	if err != nil {
 		return "", err
 	}
-	names, err := s.runCPUFeatures(ctx, runscPathFor(paths))
+	mask, err = s.runCPUFeatures(ctx, runscPathFor(paths))
 	if err != nil {
 		return "", err
-	}
-	mask, err = hardware.EncodeCPUFeatures(runtime.GOARCH, names)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", errPermanent, err)
 	}
 	s.mu.Lock()
 	s.cpuFeatures[digest] = mask
@@ -440,14 +436,18 @@ const probeFetchTimeout = 10 * time.Minute
 // can shorten it.
 var cpuFeaturesTimeout = 30 * time.Second
 
-// runRunscCPUFeatures executes `<runscPath> cpu-features` and returns the
-// comma-separated feature names it prints. The binary is content-addressed,
-// so one that runs and fails, or prints nothing, would do so again and fails
-// permanently; one that cannot be started, or is cut off by ctx, is retried.
-func runRunscCPUFeatures(ctx context.Context, runscPath string) ([]string, error) {
+// runRunscCPUFeatures executes `<runscPath> cpu-features --bitmask` and
+// returns the cpu_features value its output encodes to. The binary is
+// content-addressed, so one that runs and fails, or prints nothing or what
+// does not encode, would do so again and fails permanently; one that cannot
+// be started, or is cut off by ctx, is retried. runsc has the flag from
+// gVisor release 20261026.0, which ateworker-gvisor needs anyway (see
+// manifests/ate-install/sandboxconfig-gvisor.yaml), so an older runsc fails
+// here with "flag provided but not defined".
+func runRunscCPUFeatures(ctx context.Context, runscPath string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cpuFeaturesTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runscPath, "cpu-features")
+	cmd := exec.CommandContext(ctx, runscPath, "cpu-features", "--bitmask")
 	cmd.Env = []string{} // the probe needs nothing from atelet's environment
 	out, err := cmd.Output()
 	var exitErr *exec.ExitError
@@ -456,20 +456,24 @@ func runRunscCPUFeatures(ctx context.Context, runscPath string) ([]string, error
 	case ctx.Err() != nil:
 		// Before the ExitError case: a process killed at the deadline exits
 		// with one too.
-		return nil, fmt.Errorf("while running %s cpu-features: %w", runscPath, ctx.Err())
+		return "", fmt.Errorf("while running %s cpu-features --bitmask: %w", runscPath, ctx.Err())
 	case errors.As(err, &exitErr):
 		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
-			return nil, fmt.Errorf("%w: %s cpu-features: %w (%s)", errPermanent, runscPath, err, stderr)
+			return "", fmt.Errorf("%w: %s cpu-features --bitmask: %w (%s)", errPermanent, runscPath, err, stderr)
 		}
-		return nil, fmt.Errorf("%w: %s cpu-features: %w", errPermanent, runscPath, err)
+		return "", fmt.Errorf("%w: %s cpu-features --bitmask: %w", errPermanent, runscPath, err)
 	default:
-		return nil, fmt.Errorf("while starting %s cpu-features: %w", runscPath, err)
+		return "", fmt.Errorf("while starting %s cpu-features --bitmask: %w", runscPath, err)
 	}
 	printed := strings.TrimSpace(string(out))
 	if printed == "" {
-		return nil, fmt.Errorf("%w: %s cpu-features printed no features", errPermanent, runscPath)
+		return "", fmt.Errorf("%w: %s cpu-features --bitmask printed nothing", errPermanent, runscPath)
 	}
-	return strings.Split(printed, ","), nil
+	mask, err := hardware.EncodeCPUFeatureMask(printed)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s cpu-features --bitmask: %w", errPermanent, runscPath, err)
+	}
+	return mask, nil
 }
 
 // bundleHash is the sandbox_bundle_hash of a version: a sha256 over one
