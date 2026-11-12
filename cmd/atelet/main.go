@@ -25,7 +25,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -725,10 +727,20 @@ func (g *directCSIDriverConfigGetter) Get(ctx context.Context, name string) (*at
 		if listErr != nil {
 			return nil, listErr
 		}
+		var matched *atev1.CSIDriverConfig
+		var matchedNames []string
 		for i := range list.Items {
 			if list.Items[i].Spec.DriverName == name {
-				return csi.FromK8sCSIDriverConfig(&list.Items[i]), nil
+				matched = &list.Items[i]
+				matchedNames = append(matchedNames, list.Items[i].Name)
 			}
+		}
+		if len(matchedNames) > 1 {
+			slices.Sort(matchedNames)
+			return nil, fmt.Errorf("multiple CSIDriverConfigs match driver %q: %s", name, strings.Join(matchedNames, ", "))
+		}
+		if matched != nil {
+			return csi.FromK8sCSIDriverConfig(matched), nil
 		}
 	}
 	if err != nil {

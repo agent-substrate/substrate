@@ -72,8 +72,7 @@ func TestFromK8sCSIDriverConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := FromK8sCSIDriverConfig(tc.in)
-			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tc.want, FromK8sCSIDriverConfig(tc.in), protocmp.Transform()); diff != "" {
 				t.Fatalf("FromK8sCSIDriverConfig() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -102,71 +101,32 @@ var _ atelisters.CSIDriverConfigLister = (*fakeK8sCSIDriverConfigLister)(nil)
 
 func TestNewK8sCSIDriverConfigGetter(t *testing.T) {
 	t.Parallel()
-
-	sameNameCRD := &atev1.CSIDriverConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "nfs.csi.k8s.io", UID: types.UID("u-same")},
-		Spec:       atev1.CSIDriverConfigSpec{DriverName: "nfs.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9001"},
+	crd := func(name, uid, driver, ep string) *atev1.CSIDriverConfig {
+		return &atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(uid)},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: driver, ControllerEndpoint: ep},
+		}
 	}
-	diffNameCRD := &atev1.CSIDriverConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "pd-custom", UID: types.UID("u-diff")},
-		Spec:       atev1.CSIDriverConfigSpec{DriverName: "pd.csi.storage.gke.io", ControllerEndpoint: "tcp://127.0.0.1:9002"},
-	}
-	mismatchedSameNameCRD := &atev1.CSIDriverConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "pd.csi.storage.gke.io", UID: types.UID("u-wrong")},
-		Spec:       atev1.CSIDriverConfigSpec{DriverName: "other.csi.io", ControllerEndpoint: "tcp://127.0.0.1:9999"},
-	}
+	sameName := crd("nfs.csi.k8s.io", "u-same", "nfs.csi.k8s.io", "tcp://127.0.0.1:9001")
+	diffName := crd("pd-custom", "u-diff", "pd.csi.storage.gke.io", "tcp://127.0.0.1:9002")
+	dupDiffName := crd("pd-alpha", "u-dup", "pd.csi.storage.gke.io", "tcp://127.0.0.1:9003")
+	mismatched := crd("pd.csi.storage.gke.io", "u-wrong", "other.csi.io", "tcp://127.0.0.1:9999")
 	listBoom := errors.New("lister failed")
 
 	for _, tc := range []struct {
-		name       string
-		lister     atelisters.CSIDriverConfigLister
-		driverName string
-		want       *ateapi.CsiDriverConfig
-		wantErr    string
+		name, driverName, wantErr string
+		lister                    atelisters.CSIDriverConfigLister
+		want                      *ateapi.CsiDriverConfig
 	}{
-		{name: "nil lister", lister: nil, driverName: "nfs.csi.k8s.io", wantErr: "missing csiDriverConfigLister"},
-		{
-			name:       "metadata.name matches driverName",
-			lister:     &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{sameNameCRD}},
-			driverName: "nfs.csi.k8s.io",
-			want:       FromK8sCSIDriverConfig(sameNameCRD),
-		},
-		{
-			name:       "metadata.name differs from spec.driverName",
-			lister:     &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{diffNameCRD}},
-			driverName: "pd.csi.storage.gke.io",
-			want:       FromK8sCSIDriverConfig(diffNameCRD),
-		},
-		{
-			name:       "metadata.name collision with mismatched spec.driverName skips to matching spec.driverName",
-			lister:     &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{mismatchedSameNameCRD, diffNameCRD}},
-			driverName: "pd.csi.storage.gke.io",
-			want:       FromK8sCSIDriverConfig(diffNameCRD),
-		},
-		{
-			name:       "metadata.name collision with no matching spec.driverName returns not found",
-			lister:     &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{mismatchedSameNameCRD}},
-			driverName: "pd.csi.storage.gke.io",
-			wantErr:    `CSIDriverConfig for driver "pd.csi.storage.gke.io" not found`,
-		},
-		{
-			name:       "list error after Get miss joins both errors",
-			lister:     &fakeK8sCSIDriverConfigLister{listErr: listBoom},
-			driverName: "missing.csi.io",
-			wantErr:    "lister failed",
-		},
-		{
-			name:       "list error after mismatched Get returns listErr",
-			lister:     &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{mismatchedSameNameCRD}, listErr: listBoom},
-			driverName: "pd.csi.storage.gke.io",
-			wantErr:    "lister failed",
-		},
-		{
-			name:       "not found returns lister Get error",
-			lister:     &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{sameNameCRD}},
-			driverName: "missing.csi.io",
-			wantErr:    `csidriverconfig.ate.dev "missing.csi.io" not found`,
-		},
+		{name: "nil lister", driverName: "nfs.csi.k8s.io", wantErr: "missing csiDriverConfigLister"},
+		{name: "metadata.name matches driverName", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{sameName}}, driverName: "nfs.csi.k8s.io", want: FromK8sCSIDriverConfig(sameName)},
+		{name: "metadata.name differs from spec.driverName", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{diffName}}, driverName: "pd.csi.storage.gke.io", want: FromK8sCSIDriverConfig(diffName)},
+		{name: "duplicate spec.driverName fails deterministically", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{diffName, dupDiffName}}, driverName: "pd.csi.storage.gke.io", wantErr: `multiple CSIDriverConfigs match driver "pd.csi.storage.gke.io": pd-alpha, pd-custom`},
+		{name: "metadata.name collision skips mismatched spec.driverName", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{mismatched, diffName}}, driverName: "pd.csi.storage.gke.io", want: FromK8sCSIDriverConfig(diffName)},
+		{name: "metadata.name collision with no match returns not found", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{mismatched}}, driverName: "pd.csi.storage.gke.io", wantErr: `CSIDriverConfig for driver "pd.csi.storage.gke.io" not found`},
+		{name: "list error after Get miss joins errors", lister: &fakeK8sCSIDriverConfigLister{listErr: listBoom}, driverName: "missing.csi.io", wantErr: "lister failed"},
+		{name: "list error after mismatched Get returns listErr", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{mismatched}, listErr: listBoom}, driverName: "pd.csi.storage.gke.io", wantErr: "lister failed"},
+		{name: "not found returns lister Get error", lister: &fakeK8sCSIDriverConfigLister{items: []*atev1.CSIDriverConfig{sameName}}, driverName: "missing.csi.io", wantErr: `csidriverconfig.ate.dev "missing.csi.io" not found`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
@@ -79,10 +81,20 @@ func (g *k8sCSIDriverConfigGetter) Get(_ context.Context, driverName string) (*a
 		}
 		return nil, listErr
 	}
+	var matched *atev1.CSIDriverConfig
+	var matchedNames []string
 	for _, item := range crds {
 		if item != nil && item.Spec.DriverName == driverName {
-			return FromK8sCSIDriverConfig(item), nil
+			matched = item
+			matchedNames = append(matchedNames, item.Name)
 		}
+	}
+	if len(matchedNames) > 1 {
+		slices.Sort(matchedNames)
+		return nil, fmt.Errorf("multiple CSIDriverConfigs match driver %q: %s", driverName, strings.Join(matchedNames, ", "))
+	}
+	if matched != nil {
+		return FromK8sCSIDriverConfig(matched), nil
 	}
 	if err != nil {
 		return nil, err

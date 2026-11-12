@@ -525,6 +525,14 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "custom-nfs-config"},
 			Spec:       atev1.CSIDriverConfigSpec{DriverName: "nfs.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9001", NodeSocketOverride: "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock"},
 		},
+		&atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "dup-b"},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: "dup.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9002"},
+		},
+		&atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "dup-a"},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: "dup.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9003"},
+		},
 	)
 	getter := &directCSIDriverConfigGetter{client: fakeClient}
 	ctx := t.Context()
@@ -540,6 +548,10 @@ func TestDirectCSIDriverConfigGetter(t *testing.T) {
 	}
 	if nfsCfg.GetNodeSocketOverride() != "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock" {
 		t.Errorf("got NodeSocketOverride %q", nfsCfg.GetNodeSocketOverride())
+	}
+
+	if _, err := getter.Get(ctx, "dup.csi.k8s.io"); err == nil || !strings.Contains(err.Error(), `multiple CSIDriverConfigs match driver "dup.csi.k8s.io": dup-a, dup-b`) {
+		t.Fatalf("Get(dup.csi.k8s.io) error = %v, want deterministic duplicate error", err)
 	}
 
 	if _, err := getter.Get(ctx, "missing.csi.k8s.io"); err == nil {
