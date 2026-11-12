@@ -15,8 +15,8 @@
 """AdaptiveLoadSessionSpec builder for the ingress router capacity benchmark.
 
 Specs are plain dicts, validated and rendered to textproto through the
-FileDescriptorSet built by protogen/generate_descriptor.sh — field names
-are checked against the real Nighthawk protos at spec-build time.
+FileDescriptorSet built by nighthawk_common/protogen/generate_descriptor.sh —
+field names are checked against the real Nighthawk protos at spec-build time.
 """
 
 from nighthawk_common.spec import (
