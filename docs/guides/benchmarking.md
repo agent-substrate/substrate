@@ -251,9 +251,11 @@ a run does not show up as a burst of failures.
 
 #### Sweperf Log Lines
 
-The boomer log also carries per-task facts for post-processing such as the goodput script in
-`tools/goodput`, which decides from them whether a task was good. The benchmark judges
-nothing. Durations are in milliseconds.
+The boomer log also carries per-task facts for post-processing, which run
+evaluations can read with the `cel` source's `json_lines` reader
+(`benchmarking/evaluate/README.md`), where a test entry's config decides
+whether a task was good. The benchmark judges nothing. Durations are in
+milliseconds.
 
 * `Completed sweperf cycle`: `actor`, `cycle`, `cel_ms` (0 when the execute failed),
   `wall_ms` (resume start to cycle end), `ok` (the execute succeeded, and so did the suspend
@@ -273,6 +275,8 @@ nothing. Durations are in milliseconds.
   the no-op resume got an asynchronous ack, so always for a one-cycle task), `retries`
   (failed resumes), `failed`, and the first failure's `fail_step` (`resume`, `execute` or
   `suspend`) and `fail_cycle`.
+* `SuspendActorAsync failed` (`SuspendActor failed` in the sync lifecycle mode): `actor` and
+  `err`. Like the other failure lines, it ties a task that never logged a record to its actor.
 * `sweperf on_start failed`: also carries `user`, to tie a failed start to its user.
 * `sweperf shutdown started`: the worker began tearing down. Startups and cycles in flight
   are canceled: interrupted tasks log no task record, and startup failures logged after it
@@ -846,6 +850,12 @@ them are checked into the repository.
   [analysis/README.md](../../benchmarking/analysis/README.md#automated-runs)).
 * `server_summary.json`: server-side telemetry harvested from Prometheus,
   including the per-sample bin-packing timeseries.
+* `evaluation.json`: for a test entry with `evaluations`, the run judged
+  against them: a summary verdict, and per evaluation each condition with its
+  CEL expression and verdict and every value its sources read. `stats.jsonl`
+  then also has one `evaluation_<name>` row per evaluation and an
+  `evaluations` row for the summary. Evaluations never change `status.json` or
+  the exit code. See [evaluate/README.md](../../benchmarking/evaluate/README.md).
 
 ### Density frontiers
 
