@@ -60,6 +60,12 @@ data:
         # the envoy_metrics listener below.
         socket_address: { address: 127.0.0.1, port_value: 15000 }
 
+    # /runtime_modify writes to the admin layer.
+    layered_runtime:
+      layers:
+      - name: admin
+        admin_layer: {}
+
     # Required by the mitm_listener below. An internal listener has no socket,
     # so it is reachable only through a cluster with an envoy_internal_address;
     # without this extension registered, that listener silently fails to load.
@@ -418,7 +424,10 @@ data:
                 # wrong, including gRPC errors sent with HTTP 200, and a sample
                 # of the rest. The runtime keys let an operator turn full
                 # logging back on at the admin port:
-                # /runtime_modify?access_log.min_status=0.
+                # POST /runtime_modify?access_log.min_status=0.
+                # An empty value removes the override:
+                # POST /runtime_modify?access_log.min_status=.
+                # GET /runtime shows the active values.
                 filter:
                   or_filter:
                     filters:
@@ -646,7 +655,10 @@ data:
                 # wrong, including gRPC errors sent with HTTP 200, and a sample
                 # of the rest. The runtime keys let an operator turn full
                 # logging back on at the admin port:
-                # /runtime_modify?access_log.min_status=0.
+                # POST /runtime_modify?access_log.min_status=0.
+                # An empty value removes the override:
+                # POST /runtime_modify?access_log.min_status=.
+                # GET /runtime shows the active values.
                 filter:
                   or_filter:
                     filters:
