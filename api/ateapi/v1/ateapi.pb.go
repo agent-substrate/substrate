@@ -1117,9 +1117,9 @@ type ExternalVolumeStatus struct {
 	// +k8s:update=NoUnset
 	// +k8s:customValidation # no control characters
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
-	// Internal volume plugin name or CSI driver name, from the StorageClass
-	// provisioner. Must be a DNS subdomain, optionally prefixed with
-	// "substrate.io/" (per the CSI spec's driver-name syntax).
+	// Internal volume plugin name or CSI driver name, from the
+	// ExternalVolumeClass driver_name. Must be a DNS subdomain, optionally
+	// prefixed with "substrate.io/" (per the CSI spec's driver-name syntax).
 	//
 	// +k8s:required
 	// +k8s:maxLength=253
@@ -4009,20 +4009,16 @@ type ExternalVolumeTemplate struct {
 	// +k8s:required
 	// +k8s:minimum=1
 	CapacityBytes int64 `protobuf:"varint,1,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
-	// storage_class_name names the cluster-scoped Kubernetes StorageClass to
-	// create the volume from. Prefer external_volume_class.
+	// Deprecated: unsupported; use external_volume_class.
 	//
-	// Exactly one of storage_class_name and external_volume_class must be set.
+	// +k8s:beta(since: "0.0")=+k8s:forbidden # TODO: get rid of beta prefix
 	//
-	// +k8s:optional
-	// +k8s:unionMember
-	// +k8s:format=k8s-long-name
+	// Deprecated: Marked as deprecated in api/ateapi/v1/ateapi.proto.
 	StorageClassName string `protobuf:"bytes,2,opt,name=storage_class_name,json=storageClassName,proto3" json:"storage_class_name,omitempty"`
 	// external_volume_class names the ExternalVolumeClass to create the volume
 	// from. atespace must be empty.
 	//
-	// +k8s:optional
-	// +k8s:unionMember
+	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	ExternalVolumeClass *ObjectRef `protobuf:"bytes,3,opt,name=external_volume_class,json=externalVolumeClass,proto3" json:"external_volume_class,omitempty"`
 	unknownFields       protoimpl.UnknownFields
@@ -4066,6 +4062,7 @@ func (x *ExternalVolumeTemplate) GetCapacityBytes() int64 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in api/ateapi/v1/ateapi.proto.
 func (x *ExternalVolumeTemplate) GetStorageClassName() string {
 	if x != nil {
 		return x.StorageClassName
@@ -10588,10 +10585,10 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\btemplate\x18\x01 \x01(\v2+.substrate.ateapi.v1.ExternalVolumeTemplateR\btemplate\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
 	"\treference\x18\x01 \x01(\tR\treference\"\x18\n" +
-	"\x16DurableDirVolumeSource\"\xc1\x01\n" +
+	"\x16DurableDirVolumeSource\"\xc5\x01\n" +
 	"\x16ExternalVolumeTemplate\x12%\n" +
-	"\x0ecapacity_bytes\x18\x01 \x01(\x03R\rcapacityBytes\x12,\n" +
-	"\x12storage_class_name\x18\x02 \x01(\tR\x10storageClassName\x12R\n" +
+	"\x0ecapacity_bytes\x18\x01 \x01(\x03R\rcapacityBytes\x120\n" +
+	"\x12storage_class_name\x18\x02 \x01(\tB\x02\x18\x01R\x10storageClassName\x12R\n" +
 	"\x15external_volume_class\x18\x03 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x13externalVolumeClass\"\xd6\x02\n" +
 	"\x13ExternalVolumeClass\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata\x12\x1f\n" +

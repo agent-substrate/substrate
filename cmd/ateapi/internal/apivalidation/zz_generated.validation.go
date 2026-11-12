@@ -4475,30 +4475,11 @@ func Validate_ExternalVolumeStatus(
 	return errs
 }
 
-var unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ExternalVolumeTemplate_ = validate.NewUnionMembership(validate.NewUnionMember("storage_class_name"), validate.NewUnionMember("external_volume_class"))
-
 // Validate_ExternalVolumeTemplate validates an instance of ExternalVolumeTemplate according
 // to declarative validation rules in the API schema.
 func Validate_ExternalVolumeTemplate(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *v1.ExternalVolumeTemplate) (errs field.ErrorList) {
-
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_api_ateapi_v1_ExternalVolumeTemplate_,
-		func(obj *v1.ExternalVolumeTemplate) bool {
-			if obj == nil {
-				return false
-			}
-			var z string
-			return obj.StorageClassName != z
-		},
-		func(obj *v1.ExternalVolumeTemplate) bool {
-			if obj == nil {
-				return false
-			}
-			return obj.ExternalVolumeClass != nil
-		}); len(e) != 0 {
-		errs = append(errs, e...)
-	}
 
 	{ // field v1.ExternalVolumeTemplate.CapacityBytes
 		fn := func(
@@ -4545,14 +4526,15 @@ func Validate_ExternalVolumeTemplate(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.ForbiddenValue(ctx, op, fldPath, obj, oldObj).MarkBeta().MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkBeta().MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
-			}
-			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
 			}
 			return
 		}
@@ -4576,7 +4558,8 @@ func Validate_ExternalVolumeTemplate(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
