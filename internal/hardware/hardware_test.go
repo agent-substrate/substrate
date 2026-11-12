@@ -106,19 +106,22 @@ func TestMatchesCompat(t *testing.T) {
 		return &ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: val}
 	}
 
-	// Build >64-bit masks so the subset check spans mask words.
-	highSnap, err := EncodeCPUFeatures("amd64", []string{"pni", "avx2", "avx512_bf16"})
-	if err != nil {
-		t.Fatal(err)
+	// Build >64-bit masks so the subset check spans mask words, from gVisor's
+	// blocks: 0 is CPUID.1:ECX (pni bit 0), 1 CPUID.1:EDX (sse2 bit 26), 2
+	// CPUID.7:EBX (avx2 bit 5), 8 CPUID.7.1:EAX (avx_vnni bit 4, avx512_bf16
+	// bit 5).
+	mask := func(blocks string) string {
+		t.Helper()
+		m, err := EncodeCPUFeatureMask(blocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
 	}
-	highWorkerSuperset, err := EncodeCPUFeatures("amd64", []string{"pni", "sse2", "avx2", "avx_vnni", "avx512_bf16"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	highWorkerMissingOne, err := EncodeCPUFeatures("amd64", []string{"pni", "sse2", "avx2", "avx_vnni"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	const blocks3to7 = ",0x00000000,0x00000000,0x00000000,0x00000000,0x00000000"
+	highSnap := mask("0x00000001,0x00000000,0x00000020" + blocks3to7 + ",0x00000020")             // pni, avx2, avx512_bf16
+	highWorkerSuperset := mask("0x00000001,0x04000000,0x00000020" + blocks3to7 + ",0x00000030")   // and sse2, avx_vnni
+	highWorkerMissingOne := mask("0x00000001,0x04000000,0x00000020" + blocks3to7 + ",0x00000010") // without avx512_bf16
 
 	tests := []struct {
 		name         string
