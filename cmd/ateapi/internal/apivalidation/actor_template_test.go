@@ -240,6 +240,12 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		nil,
 	}, {
+		"actor_labels at both limits",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(template *ateapi.ActorTemplate) {
+			template.ActorLabels = labelsOfBytes(0)
+		})},
+		nil,
+	}, {
 		"invalid actor_labels key",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.ActorLabels = map[string]string{"bad key!": "1"}
@@ -248,9 +254,9 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}, {
 		"too many actor_labels",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
-			tmpl.ActorLabels = selectorLabelsOfSize(65)
+			tmpl.ActorLabels = selectorLabelsOfSize(17)
 		})},
-		field.ErrorList{field.TooMany(field.NewPath("actor_template", "actor_labels"), 65, 64).WithOrigin("maxProperties")},
+		field.ErrorList{field.TooMany(field.NewPath("actor_template", "actor_labels"), 17, 16).WithOrigin("maxProperties")},
 	}, {
 		"reserved actor_labels key",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
@@ -262,7 +268,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.ActorLabels = labelsOfBytes(1)
 		})},
-		field.ErrorList{field.TooLong(field.NewPath("actor_template", "actor_labels"), 4097, 4096)},
+		field.ErrorList{field.TooLong(field.NewPath("actor_template", "actor_labels"), 1025, 1024)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

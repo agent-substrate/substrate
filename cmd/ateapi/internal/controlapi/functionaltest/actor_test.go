@@ -70,6 +70,7 @@ func TestCreateActor_Success(t *testing.T) {
 		Metadata: &ateapi.ResourceMetadata{
 			Atespace: testAtespace,
 			Name:     "id1",
+			Labels:   map[string]string{"team": "payments"},
 		},
 		ActorTemplate:  &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
@@ -80,7 +81,7 @@ func TestCreateActor_Success(t *testing.T) {
 	}
 
 	want := &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 1},
+		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 1, Labels: map[string]string{"team": "payments"}},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
@@ -803,7 +804,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	tmpl := createTemplate(t, tc, ns)
 
 	toUpdate, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1", Labels: map[string]string{"team": "payments"}},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		WorkerSelector: &ateapi.Selector{
 			MatchLabels: map[string]string{"tier": "free"},
@@ -811,6 +812,13 @@ func TestUpdateActor_Success(t *testing.T) {
 	}})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
+	}
+	for _, labels := range []map[string]string{nil, {"team": "other"}} {
+		changed := proto.CloneOf(toUpdate)
+		changed.Metadata.Labels = labels
+		if _, err := tc.client.UpdateActor(t.Context(), &ateapi.UpdateActorRequest{Actor: changed}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("changed metadata labels: %v, want InvalidArgument", err)
+		}
 	}
 	toUpdate.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 
@@ -822,7 +830,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 
 	wantActor := &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
+		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2, Labels: map[string]string{"team": "payments"}},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,

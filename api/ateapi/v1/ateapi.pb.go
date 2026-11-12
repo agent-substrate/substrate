@@ -956,7 +956,19 @@ type ResourceMetadata struct {
 	// +k8s:optional
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset
-	DeleteTime    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
+	DeleteTime *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=delete_time,json=deleteTime,proto3" json:"delete_time,omitempty"`
+	// `labels` identify the resource for its creator. They are immutable after
+	// creation. An update that changes or omits them returns `INVALID_ARGUMENT`.
+	// Keys in `ate.dev` and its subdomains are reserved. Keys and values together
+	// may not exceed 1024 bytes.
+	//
+	// +k8s:optional
+	// +k8s:maxProperties=16
+	// +k8s:eachKey=+k8s:format=k8s-label-key
+	// +k8s:eachVal=+k8s:format=k8s-label-value
+	// +k8s:customValidation # reserved keys and total size
+	// +k8s:immutable
+	Labels        map[string]string `protobuf:"bytes,8,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1036,6 +1048,13 @@ func (x *ResourceMetadata) GetUpdateTime() *timestamppb.Timestamp {
 func (x *ResourceMetadata) GetDeleteTime() *timestamppb.Timestamp {
 	if x != nil {
 		return x.DeleteTime
+	}
+	return nil
+}
+
+func (x *ResourceMetadata) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
 	}
 	return nil
 }
@@ -1233,23 +1252,7 @@ type Actor struct {
 	// server and ignored on input. It is always present in output.
 	//
 	// +k8s:optional
-	Status *ActorStatus `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
-	// labels identify the Actor for its creator, for example the object of
-	// the creating platform it belongs to. At creation they are merged over
-	// the actor_labels of the ActorTemplate, the Actor's own value winning on
-	// a key conflict; a later change of actor_template does not touch them.
-	// Immutable after creation: an UpdateActor that changes them, including by
-	// omitting them, returns INVALID_ARGUMENT. Keys in ate.dev and its
-	// subdomains are reserved, and keys and values together may not exceed
-	// 4096 bytes.
-	//
-	// +k8s:optional
-	// +k8s:maxProperties=64
-	// +k8s:eachKey=+k8s:format=k8s-label-key
-	// +k8s:eachVal=+k8s:format=k8s-label-value
-	// +k8s:customValidation # reserved keys and total size
-	// +k8s:immutable
-	Labels        map[string]string `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Status        *ActorStatus `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1315,13 +1318,6 @@ func (x *Actor) GetSourceTag() *ObjectRef {
 func (x *Actor) GetStatus() *ActorStatus {
 	if x != nil {
 		return x.Status
-	}
-	return nil
-}
-
-func (x *Actor) GetLabels() map[string]string {
-	if x != nil {
-		return x.Labels
 	}
 	return nil
 }
@@ -2836,13 +2832,14 @@ type ActorTemplate struct {
 	GoldenEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,9,opt,name=golden_egress_policy,json=goldenEgressPolicy,proto3" json:"golden_egress_policy,omitempty"`
 	// +k8s:optional
 	Status *ActorTemplateStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
-	// actor_labels are the default labels of Actors created from this
-	// template. An Actor's own labels win on a key conflict. Keys in ate.dev
-	// and its subdomains are reserved, and keys and values together may not
-	// exceed 4096 bytes.
+	// `actor_labels` are defaults for the `metadata.labels` of Actors created
+	// from this template. An Actor's own value wins on a key conflict. Changing
+	// an Actor's `actor_template` does not change its labels. These are separate
+	// from the template's own `metadata.labels`. Keys in `ate.dev` and its
+	// subdomains are reserved. Keys and values together may not exceed 1024 bytes.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=64
+	// +k8s:maxProperties=16
 	// +k8s:eachKey=+k8s:format=k8s-label-key
 	// +k8s:eachVal=+k8s:format=k8s-label-value
 	// +k8s:customValidation # reserved keys and total size
@@ -6119,9 +6116,9 @@ func (x *ListTagsResponse) GetNextPageToken() string {
 // +k8s:customValidation # metadata.atespace must match source_actor.atespace
 type CreateTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The tag to create. metadata.atespace, metadata.name, scope and source_actor
-	// are honored; metadata.atespace must match source_actor's, and status is
-	// ignored on write.
+	// The tag to create. `metadata.atespace`, `metadata.name`, `metadata.labels`,
+	// `scope` and `source_actor` are honored. `metadata.atespace` must match
+	// `source_actor`'s, and `status` is ignored on write.
 	//
 	// +k8s:required
 	Tag           *Tag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
@@ -10062,7 +10059,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fmatch_labels\x18\x01 \x03(\v2..substrate.ateapi.v1.Selector.MatchLabelsEntryR\vmatchLabels\x1a>\n" +
 	"\x10MatchLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa5\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\x03\n" +
 	"\x10ResourceMetadata\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
@@ -10073,7 +10070,11 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"updateTime\x12;\n" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"deleteTime\"V\n" +
+	"deleteTime\x12I\n" +
+	"\x06labels\x18\b \x03(\v21.substrate.ateapi.v1.ResourceMetadata.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"V\n" +
 	"\x0fExternalVolumes\x12C\n" +
 	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\x9e\x02\n" +
 	"\x14ExternalVolumeStatus\x12\x12\n" +
@@ -10084,18 +10085,14 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdd\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x02\n" +
 	"\x05Actor\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata\x12E\n" +
 	"\x0eactor_template\x18\x02 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\ractorTemplate\x12F\n" +
 	"\x0fworker_selector\x18\x03 \x01(\v2\x1d.substrate.ateapi.v1.SelectorR\x0eworkerSelector\x12=\n" +
 	"\n" +
 	"source_tag\x18\x04 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\tsourceTag\x128\n" +
-	"\x06status\x18\x05 \x01(\v2 .substrate.ateapi.v1.ActorStatusR\x06status\x12>\n" +
-	"\x06labels\x18\x06 \x03(\v2&.substrate.ateapi.v1.Actor.LabelsEntryR\x06labels\x1a9\n" +
-	"\vLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01:\x0e\x82\xb5\x18\n" +
+	"\x06status\x18\x05 \x01(\v2 .substrate.ateapi.v1.ActorStatusR\x06status:\x0e\x82\xb5\x18\n" +
 	"\x18\x01\"\x06Actors\"\xa7\x01\n" +
 	"\fEgressPolicy\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata\x125\n" +
@@ -10865,8 +10862,8 @@ var file_api_ateapi_v1_ateapi_proto_goTypes = []any{
 	(*ResourceAnnotation)(nil),                 // 148: substrate.ateapi.v1.ResourceAnnotation
 	(*MethodAnnotation)(nil),                   // 149: substrate.ateapi.v1.MethodAnnotation
 	nil,                                        // 150: substrate.ateapi.v1.Selector.MatchLabelsEntry
-	nil,                                        // 151: substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
-	nil,                                        // 152: substrate.ateapi.v1.Actor.LabelsEntry
+	nil,                                        // 151: substrate.ateapi.v1.ResourceMetadata.LabelsEntry
+	nil,                                        // 152: substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
 	nil,                                        // 153: substrate.ateapi.v1.ActorTemplate.ActorLabelsEntry
 	nil,                                        // 154: substrate.ateapi.v1.Worker.LabelsEntry
 	(*timestamppb.Timestamp)(nil),              // 155: google.protobuf.Timestamp
@@ -10884,14 +10881,14 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	155, // 7: substrate.ateapi.v1.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
 	155, // 8: substrate.ateapi.v1.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
 	155, // 9: substrate.ateapi.v1.ResourceMetadata.delete_time:type_name -> google.protobuf.Timestamp
-	16,  // 10: substrate.ateapi.v1.ExternalVolumes.volumes:type_name -> substrate.ateapi.v1.ExternalVolumeStatus
-	151, // 11: substrate.ateapi.v1.ExternalVolumeStatus.volume_context:type_name -> substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
-	14,  // 12: substrate.ateapi.v1.Actor.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
-	35,  // 13: substrate.ateapi.v1.Actor.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
-	13,  // 14: substrate.ateapi.v1.Actor.worker_selector:type_name -> substrate.ateapi.v1.Selector
-	35,  // 15: substrate.ateapi.v1.Actor.source_tag:type_name -> substrate.ateapi.v1.ObjectRef
-	29,  // 16: substrate.ateapi.v1.Actor.status:type_name -> substrate.ateapi.v1.ActorStatus
-	152, // 17: substrate.ateapi.v1.Actor.labels:type_name -> substrate.ateapi.v1.Actor.LabelsEntry
+	151, // 10: substrate.ateapi.v1.ResourceMetadata.labels:type_name -> substrate.ateapi.v1.ResourceMetadata.LabelsEntry
+	16,  // 11: substrate.ateapi.v1.ExternalVolumes.volumes:type_name -> substrate.ateapi.v1.ExternalVolumeStatus
+	152, // 12: substrate.ateapi.v1.ExternalVolumeStatus.volume_context:type_name -> substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntry
+	14,  // 13: substrate.ateapi.v1.Actor.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
+	35,  // 14: substrate.ateapi.v1.Actor.actor_template:type_name -> substrate.ateapi.v1.ObjectRef
+	13,  // 15: substrate.ateapi.v1.Actor.worker_selector:type_name -> substrate.ateapi.v1.Selector
+	35,  // 16: substrate.ateapi.v1.Actor.source_tag:type_name -> substrate.ateapi.v1.ObjectRef
+	29,  // 17: substrate.ateapi.v1.Actor.status:type_name -> substrate.ateapi.v1.ActorStatus
 	14,  // 18: substrate.ateapi.v1.EgressPolicy.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
 	20,  // 19: substrate.ateapi.v1.EgressPolicy.rules:type_name -> substrate.ateapi.v1.EgressRule
 	20,  // 20: substrate.ateapi.v1.EgressPolicyTemplate.rules:type_name -> substrate.ateapi.v1.EgressRule

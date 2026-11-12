@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"go.ate.dev/substrate/internal/preview"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -77,19 +78,18 @@ func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) 
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
 }
 
-// labelsOfBytes returns 64 labels whose keys and values add up to 4096+extra
-// bytes: 4-byte keys and 60-byte values, with extra bytes on one value.
+// labelsOfBytes returns 16 valid labels totaling 1024+extra key and value bytes.
 func labelsOfBytes(extra int) map[string]string {
-	labels := make(map[string]string, 64)
-	for i := range 64 {
+	labels := make(map[string]string, 16)
+	for i := range 16 {
 		labels[fmt.Sprintf("k%03d", i)] = strings.Repeat("v", 60)
 	}
 	labels["k000"] = strings.Repeat("v", 60+extra)
 	return labels
 }
 
-func TestValidateLabels(t *testing.T) {
-	fldPath := field.NewPath("labels")
+func TestValidateCustom_ResourceMetadata_Labels(t *testing.T) {
+	fldPath := field.NewPath("metadata", "labels")
 	tests := []struct {
 		name   string
 		labels map[string]string
@@ -116,11 +116,11 @@ func TestValidateLabels(t *testing.T) {
 	}, {
 		name:   "over the size cap",
 		labels: labelsOfBytes(1),
-		want:   field.ErrorList{field.TooLong(fldPath, 4097, 4096)},
+		want:   field.ErrorList{field.TooLong(fldPath, 1025, 1024)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateLabels(fldPath, tt.labels), tt.want)
+			assertValidateErr(t, ValidateCustom_ResourceMetadata_Labels(t.Context(), operation.Operation{Type: operation.Create}, fldPath, tt.labels, nil), tt.want)
 		})
 	}
 }

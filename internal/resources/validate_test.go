@@ -91,6 +91,15 @@ func TestDeepEqual(t *testing.T) {
 		{name: "different protos", got: DeepEqual(a, &ateapi.ObjectRef{Atespace: "a", Name: "y"}), want: false},
 		{name: "nil protos", got: DeepEqual[*ateapi.ObjectRef](nil, nil), want: true},
 		{name: "equal non-protos", got: DeepEqual([]string{"a"}, []string{"a"}), want: true},
+		{name: "nil and empty maps", got: DeepEqual(map[string]string(nil), map[string]string{}), want: true},
+		{name: "empty and nil maps", got: DeepEqual(map[string]string{}, map[string]string(nil)), want: true},
+		{name: "nil and nonempty maps", got: DeepEqual(map[string]string(nil), map[string]string{"app": "billing"}), want: false},
+		{name: "different maps", got: DeepEqual(map[string]string{"app": "billing"}, map[string]string{"app": "checkout"}), want: false},
+		{name: "nil and empty slices", got: DeepEqual([]string(nil), []string{}), want: true},
+		{name: "empty and nil slices", got: DeepEqual([]string{}, []string(nil)), want: true},
+		{name: "nil and nonempty slices", got: DeepEqual([]string(nil), []string{"a"}), want: false},
+		{name: "nil interfaces", got: DeepEqual[any](nil, nil), want: true},
+		{name: "different collection types", got: DeepEqual[any]([]string{}, map[string]string{}), want: false},
 		{name: "different non-protos", got: DeepEqual(1, 2), want: false},
 	}
 	for _, tt := range tests {

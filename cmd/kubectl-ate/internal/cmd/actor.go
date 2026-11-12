@@ -327,7 +327,7 @@ func buildCreateActorRequest(actorName, atespace, template, tag, labels string) 
 		actor.SourceTag = ref
 	}
 	if labels != "" {
-		actor.Labels, err = parseLabelPairs("labels", labels)
+		actor.Metadata.Labels, err = parseLabelPairs("labels", labels)
 		if err != nil {
 			return nil, err
 		}

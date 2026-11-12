@@ -95,9 +95,8 @@ func TestBuildCreateActorRequest(t *testing.T) {
 			templateRef: "counter",
 			labels:      "app=billing,example.com/team=payments",
 			want: &ateapi.Actor{
-				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "demo", Name: "my-counter", Labels: map[string]string{"app": "billing", "example.com/team": "payments"}},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
-				Labels:        map[string]string{"app": "billing", "example.com/team": "payments"},
 			},
 		},
 		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
