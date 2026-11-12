@@ -228,7 +228,11 @@ class RunnerNamespaceTest(unittest.TestCase):
 
     def test_namespace_has_api_access_label(self):
         want = self.api_client_labels()
-        for name in ("runner-job.yaml.tmpl", "nighthawk-ingress-runner-job.yaml.tmpl"):
+        for name in (
+            "runner-job.yaml.tmpl",
+            "nighthawk-ingress-runner-job.yaml.tmpl",
+            "nighthawk-egress-runner-job.yaml.tmpl",
+        ):
             with self.subTest(template=name):
                 text = open(os.path.join(self.HERE, "manifests", name)).read()
                 ns = next(

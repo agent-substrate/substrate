@@ -12,8 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Template rendered per test by orchestrator.py for `type: nighthawk-egress`
+# entries. Shares the `benchmarking` namespace + `benchmark-runner`
+# ServiceAccount with runner-job.yaml.tmpl so the same GKE Workload Identity
+# binding grants GCS write access.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmarking
+  labels:
+    ate.dev/api-access: "true"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+---
+# Config of the `invoker` sidecar in the Job below, which runs as benchmark-runner:
 # In-cluster Envoy proxy that listens for plaintext HTTP/1.1 and HTTP/2
-# (h2c/gRPC) on :19980, injects `ate-target-actor: nighthawk/tester` on every
+# (h2c/gRPC) on 127.0.0.1:19980, injects `ate-target-actor: nighthawk/tester` on every
 # request, and forwards upstream over mTLS to
 # atenet-router.ate-system.svc.cluster.local:443 using a SPIFFE client
 # certificate issued by podidentity.podcert.ate.dev/identity.
@@ -25,7 +43,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: traffic-driver-invoker
-  namespace: nighthawk
+  namespace: benchmarking
 data:
   envoy.yaml: |
     # SDS requires a node id and cluster.
@@ -38,8 +56,7 @@ data:
       - name: listener_http_19980
         address:
           socket_address:
-            address: "::"
-            ipv4_compat: true
+            address: 127.0.0.1
             port_value: 19980
         listener_filters:
         - name: envoy.filters.listener.http_inspector
@@ -129,35 +146,44 @@ data:
     - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
       name: servicedns_validation_context
       validation_context:
-        trusted_ca: { filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem }
-        watched_directory: { path: /run/servicedns.podcert.ate.dev }
+        trusted_ca: { filename: /run/servicedns-ca/ca.crt }
+        watched_directory: { path: /run/servicedns-ca }
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: traffic-driver-invoker
-  namespace: nighthawk
-  labels:
-    app: traffic-driver-invoker
+  name: ${JOB_NAME}
+  namespace: benchmarking
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: traffic-driver-invoker
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
-        app: traffic-driver-invoker
+        app: substrate-benchmark-runner
+        benchmark: nighthawk-egress
+        test-name: "${NAME}"
+        tag: "${TAG}"
     spec:
+      serviceAccountName: benchmark-runner
+      restartPolicy: Never
+      tolerations:
+      - key: ate.dev/benchmarking
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       securityContext:
         runAsUser: 65532
         runAsGroup: 65532
         runAsNonRoot: true
         fsGroup: 65532
-      containers:
-      - name: envoy
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: invoker
         # Same envoyproxy/envoy digest as cmd/dataplane/envoy/Dockerfile.
         image: envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
+        restartPolicy: Always
         command:
         - /usr/local/bin/envoy
         args:
@@ -171,26 +197,54 @@ spec:
           capabilities:
             drop:
             - ALL
-        ports:
-        - name: http
-          containerPort: 19980
-          protocol: TCP
-        readinessProbe:
-          tcpSocket:
-            port: http
-          periodSeconds: 5
+        # No probe: the kubelet cannot reach the loopback listener. runner.py
+        # waits for the port.
         volumeMounts:
-        - name: config
+        - name: invoker-config
           mountPath: /etc/envoy
           readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
         - name: servicedns-ca
-          mountPath: /run/servicedns.podcert.ate.dev
+          mountPath: /run/servicedns-ca
           readOnly: true
+      containers:
+      - name: runner
+        image: ${IMAGE}
+        imagePullPolicy: IfNotPresent
+        command:
+        - "python3"
+        - "/app/runner.py"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        args:
+        - "--name"
+        - "${NAME}"
+        - "--tag"
+        - "${TAG}"
+        - "--dest"
+        - "${DEST}"
+        - "--envoy-cpu"
+        - "${ENVOY_CPU}"
+        - "--mode"
+        - "${MODE}"
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
       volumes:
-      - name: config
+      - name: invoker-config
         configMap:
           name: traffic-driver-invoker
       - name: podidentity
@@ -208,20 +262,4 @@ spec:
               labelSelector:
                 matchLabels:
                   podcert.ate.dev/canarying: live
-              path: trust-bundle.pem
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: traffic-driver-invoker
-  namespace: nighthawk
-spec:
-  type: ClusterIP
-  ipFamilyPolicy: PreferDualStack
-  selector:
-    app: traffic-driver-invoker
-  ports:
-  - name: http
-    port: 19980
-    targetPort: http
-    protocol: TCP
+              path: ca.crt
