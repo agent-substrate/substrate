@@ -25,6 +25,7 @@ Measurement keys come in three tiers: metric_nighthawk.builtin_* (verbatim
 builtin metrics), plain counters / *_ms conversions, and derived verdicts
 (slo_max_rps, failed_thresholds, binding_threshold — the last two use
 short native metric names, identifying thresholds).
+achieved_rps and send_rate are recomputed from the exact stage duration.
 """
 
 import json
@@ -165,11 +166,14 @@ def _stage_row(stage: str, benchmark_result: dict) -> dict:
     attempted_key = _builtin_key("attempted-rps")
     achieved_key = _builtin_key("achieved-rps")
     row.setdefault(attempted_key, per_worker_rps * concurrency)
-    row.setdefault(achieved_key, (sent / duration_s) if duration_s else 0.0)
-    row.setdefault(
-        _builtin_key("send-rate"),
-        (row[achieved_key] / row[attempted_key]) if row[attempted_key] else 0.0,
-    )
+    # Nighthawk (metrics_plugin_impl.cc, DurationToSeconds) divides achieved-rps
+    # and send-rate by execution_duration truncated to whole seconds. Replace
+    # both with the values for the exact duration.
+    attempted_rps = row[attempted_key]
+    achieved_rps = sent / duration_s if duration_s else 0.0
+    send_rate = achieved_rps / attempted_rps if attempted_rps else 0.0
+    row[achieved_key] = achieved_rps
+    row[_builtin_key("send-rate")] = send_rate
     row.setdefault(
         _builtin_key("success-rate"), (http_2xx / sent) if sent else 0.0
     )
