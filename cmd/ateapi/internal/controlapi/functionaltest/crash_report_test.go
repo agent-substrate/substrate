@@ -156,7 +156,10 @@ func TestReportActorCrashedAfterResumeRetry(t *testing.T) {
 			ns := namespaceForTest("crash-retry")
 			tc := setupTest(t, ns)
 			defer tc.cleanup()
-			createTemplate(t, tc, ns)
+			createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+			createTemplateWithSelector(t, tc, "tmpl1", &ateapi.Selector{
+				MatchLabels: map[string]string{poolLabelKey: ns},
+			})
 			worker := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 			ctx := context.Background()
 			ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: "id1"}
