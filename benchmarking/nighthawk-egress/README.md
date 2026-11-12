@@ -28,6 +28,17 @@ flowchart LR
     egress ==> server
 ```
 
+## Tuning
+
+### Configuration knobs (the `nighthawk-egress:` block)
+
+A `type: nighthawk-egress` entry in [`benchmarking/automation/tests.yaml`](../automation/tests.yaml) sets both knobs in its `nighthawk-egress:` block:
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `envoyCpu` | required | CPU request and limit of `envoy` and `ext-proc` in `deployment/atenet-egress`, and the Envoy `--concurrency`. |
+| `mode` | required | `http`, `mitm`, or `passthrough`. |
+
 ## Prerequisites
 
 To measure single CPU performance characteristics of Envoy dataplane set E2E_ATE_ENVOY_CONCURRENCY=1 environment
