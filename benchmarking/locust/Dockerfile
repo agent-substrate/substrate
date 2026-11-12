@@ -18,8 +18,9 @@
 # Stage 1: Python dependency builder
 FROM python:3.11-slim AS pydeps
 WORKDIR /app
-COPY benchmarking/locust/requirements.txt .
-RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
+COPY benchmarking/requirements.txt /requirements/requirements.txt
+COPY benchmarking/locust/requirements.txt /requirements/locust/requirements.txt
+RUN pip install --no-cache-dir --target=/app/deps -r /requirements/locust/requirements.txt
 
 # Stage 2: Python gRPC clients, generated from the protos rather than checked
 # in. See codegen/generate.sh.
@@ -63,6 +64,8 @@ COPY benchmarking/locust/phase_breakdown.py /app/phase_breakdown.py
 COPY benchmarking/locust/ladder_steps.py /app/ladder_steps.py
 COPY benchmarking/locust/turnover_window.py /app/turnover_window.py
 COPY benchmarking/analysis/phase_report.py /app/phase_report.py
+
+COPY benchmarking/result_store.py /app/result_store.py
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1
