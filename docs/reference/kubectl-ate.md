@@ -263,6 +263,28 @@ kubectl ate create actor <actor-name> -a <atespace> --template <template-name> -
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
 
+#### External volume snapshots
+
+An `ExternalVolumeSnapshot` is owned by the tag named in its `origin.tag`, and
+the tag cannot be deleted while it has snapshots. Listing them needs the
+`ExternalVolumes` preview gate on the server, and `--preview`.
+
+```bash
+# List an Atespace's snapshots, all Atespaces' snapshots, or one tag's snapshots.
+# --tag needs -a, since a tag name is unique only within an atespace.
+kubectl ate --preview get externalvolumesnapshots -a <atespace>
+kubectl ate --preview get externalvolumesnapshots -A
+kubectl ate --preview get externalvolumesnapshots -a <atespace> --tag <tag-name>
+kubectl ate --preview get externalvolumesnapshot <snapshot-name> -a <atespace> -o yaml
+```
+
+| Column | Meaning |
+|---|---|
+| `TAG` | The tag that owns the snapshot. |
+| `VOLUME` | The volume of the tag's source actor the snapshot was taken from. |
+| `STATE` | `Pending` until the storage system returns a snapshot handle, `Failed` if taking the snapshot failed, `Captured` once it has a handle, and `Ready` once it can seed new volumes. |
+| `SIZE` | The minimum size of a volume restored from the snapshot; `<unknown>` until the driver reports it. |
+
 ### Egress Policies
 
 An actor has at most one egress policy. See [Egress Traffic](../guides/egress-traffic.md), [Network Egress](../guides/network-egress.md), [MITM Trust Bundle](../guides/egress-trust-bundle.md), and [Egress Credential Injection](../guides/egress-credential-injection.md) for how outbound traffic is mediated and how rules are evaluated.
