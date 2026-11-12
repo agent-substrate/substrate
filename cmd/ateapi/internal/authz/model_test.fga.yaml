@@ -45,6 +45,9 @@ tuples:
   - user: atespace:space-1
     relation: parent_atespace
     object: tag:v1
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: external_volume_snapshot:snap-1
 
   # Physical Topology & Scheduling (Node -> Worker -> Actor)
   - user: node:node-1
@@ -557,6 +560,37 @@ tests:
         assertions:
           can_create_tag: false
           can_list_tags: false
+
+  - name: 8a. External Volume Snapshots (Read-Only, Inherited from Atespace)
+    check:
+      - user: user:dave # Viewer reads snapshots
+        object: atespace:space-1
+        assertions:
+          can_list_external_volume_snapshots: true
+      - user: user:dave
+        object: external_volume_snapshot:snap-1
+        assertions:
+          can_get: true
+      - user: user:frank # Global viewer reads snapshots in every atespace
+        object: global:root
+        assertions:
+          can_list_external_volume_snapshots: true
+      - user: user:frank
+        object: external_volume_snapshot:snap-1
+        assertions:
+          can_get: true
+      - user: user:alice # Atespace owner cannot list across all atespaces
+        object: global:root
+        assertions:
+          can_list_external_volume_snapshots: false
+      - user: user:eve # External
+        object: external_volume_snapshot:snap-1
+        assertions:
+          can_get: false
+      - user: user:sys-egress # System roles hold no snapshot permissions
+        object: atespace:space-1
+        assertions:
+          can_list_external_volume_snapshots: false
 
   - name: 9. Actor Credentials (Egress Gateway Only)
     check:
