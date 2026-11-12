@@ -22,6 +22,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -40,6 +41,18 @@ func createExternalVolumeClass(t *testing.T, tc *testContext, name string) *atea
 		t.Fatalf("CreateExternalVolumeClass(%s) failed: %v", name, err)
 	}
 	return created
+}
+
+func seedMockExternalVolumeClass(t *testing.T, tc *testContext, name string) {
+	t.Helper()
+	if _, err := tc.client.CreateExternalVolumeClass(context.Background(), &ateapi.CreateExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ExternalVolumeClass{
+			Metadata:   &ateapi.ResourceMetadata{Name: name},
+			DriverName: "substrate.io/mock",
+		},
+	}); err != nil && status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("CreateExternalVolumeClass(%s) failed: %v", name, err)
+	}
 }
 
 func TestCreateExternalVolumeClass(t *testing.T) {
