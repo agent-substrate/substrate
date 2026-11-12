@@ -2155,8 +2155,14 @@ type ActorStatus struct {
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
 	LastAssignedGeneration int32 `protobuf:"varint,7,opt,name=last_assigned_generation,json=lastAssignedGeneration,proto3" json:"last_assigned_generation,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// This actor was created by the server to build a template's golden snapshot.
+	// Actors created before this field was introduced may leave it unset.
+	//
+	// +k8s:optional
+	// +k8s:update=NoUnset
+	GoldenSnapshotActor bool `protobuf:"varint,8,opt,name=golden_snapshot_actor,json=goldenSnapshotActor,proto3" json:"golden_snapshot_actor,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ActorStatus) Reset() {
@@ -2236,6 +2242,13 @@ func (x *ActorStatus) GetLastAssignedGeneration() int32 {
 		return x.LastAssignedGeneration
 	}
 	return 0
+}
+
+func (x *ActorStatus) GetGoldenSnapshotActor() bool {
+	if x != nil {
+		return x.GoldenSnapshotActor
+	}
+	return false
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -7092,9 +7105,19 @@ type ListActorsRequest struct {
 	// Pagination controls.
 	//
 	// +k8s:optional
-	Options       *ListOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Options *ListOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	// Exclude the temporary actors used to build golden snapshots. Defaults to
+	// false, which includes them for debugging. Only actors with
+	// `status.golden_snapshot_actor` set are excluded; older unmarked actors
+	// remain visible.
+	//
+	// Filtering may leave a page empty with a nonempty `next_page_token`.
+	// Keep this value unchanged while following pagination tokens.
+	//
+	// +k8s:optional
+	ExcludeGoldenActors bool `protobuf:"varint,3,opt,name=exclude_golden_actors,json=excludeGoldenActors,proto3" json:"exclude_golden_actors,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ListActorsRequest) Reset() {
@@ -7139,6 +7162,13 @@ func (x *ListActorsRequest) GetOptions() *ListOptions {
 		return x.Options
 	}
 	return nil
+}
+
+func (x *ListActorsRequest) GetExcludeGoldenActors() bool {
+	if x != nil {
+		return x.ExcludeGoldenActors
+	}
+	return false
 }
 
 type ListActorsResponse struct {
@@ -10088,7 +10118,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\tactor_jwt\x18\x04 \x01(\v2#.substrate.ateapi.v1.ActorJwtSourceR\bactorJwt\"]\n" +
 	"\x0eActorJwtSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
-	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xbc\x03\n" +
+	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xf0\x03\n" +
 	"\vActorStatus\x125\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1f.substrate.ateapi.v1.ActorStateR\x05state\x12R\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2%.substrate.ateapi.v1.WorkerAssignmentR\x10workerAssignment\x12O\n" +
@@ -10096,7 +10126,8 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x05crash\x18\x04 \x01(\v2\x1f.substrate.ateapi.v1.ActorCrashR\x05crash\x12#\n" +
 	"\rassigned_node\x18\x05 \x01(\tR\fassignedNode\x12;\n" +
 	"\tsnapshots\x18\x06 \x03(\v2\x1d.substrate.ateapi.v1.SnapshotR\tsnapshots\x128\n" +
-	"\x18last_assigned_generation\x18\a \x01(\x05R\x16lastAssignedGeneration\"a\n" +
+	"\x18last_assigned_generation\x18\a \x01(\x05R\x16lastAssignedGeneration\x122\n" +
+	"\x15golden_snapshot_actor\x18\b \x01(\bR\x13goldenSnapshotActor\"a\n" +
 	"\n" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +
@@ -10339,10 +10370,11 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x1cMarkWorkerUnavailableRequest\x126\n" +
 	"\x06worker\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x06worker\"T\n" +
 	"\x1dMarkWorkerUnavailableResponse\x123\n" +
-	"\x06worker\x18\x01 \x01(\v2\x1b.substrate.ateapi.v1.WorkerR\x06worker\"k\n" +
+	"\x06worker\x18\x01 \x01(\v2\x1b.substrate.ateapi.v1.WorkerR\x06worker\"\x9f\x01\n" +
 	"\x11ListActorsRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12:\n" +
-	"\aoptions\x18\x02 \x01(\v2 .substrate.ateapi.v1.ListOptionsR\aoptions\"p\n" +
+	"\aoptions\x18\x02 \x01(\v2 .substrate.ateapi.v1.ListOptionsR\aoptions\x122\n" +
+	"\x15exclude_golden_actors\x18\x03 \x01(\bR\x13excludeGoldenActors\"p\n" +
 	"\x12ListActorsResponse\x122\n" +
 	"\x06actors\x18\x01 \x03(\v2\x1a.substrate.ateapi.v1.ActorR\x06actors\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xeb\x03\n" +

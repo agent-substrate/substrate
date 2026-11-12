@@ -1063,3 +1063,142 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestListActorsExcludeGoldenActors(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	for _, space := range []string{"team-a", "team-b"} {
+		storetest.MustCreateAtespace(t, ctx, persistence, space)
+	}
+	template, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "template"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTemplate, err := persistence.CreateActorTemplate(ctx, &ateapi.ActorTemplate{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "other-template"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateRef := resources.ActorTemplateRefFromActorTemplate(template).ToObjectRef()
+	goldenName := template.GetMetadata().GetUid()
+	actors := []*ateapi.Actor{
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: goldenName}, ActorTemplate: templateRef, Status: &ateapi.ActorStatus{GoldenSnapshotActor: true}},
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "ordinary"}, ActorTemplate: templateRef},
+		// A UUID name alone is not enough; only marked actors are hidden.
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: otherTemplate.GetMetadata().GetUid()}, ActorTemplate: templateRef},
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "missing-template"}, ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "deleted"}},
+		// Golden actors live in the template's own atespace.
+		{Metadata: &ateapi.ResourceMetadata{Atespace: "team-b", Name: goldenName}, ActorTemplate: templateRef},
+	}
+	for _, actor := range actors {
+		if _, err := persistence.CreateActor(ctx, actor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rpc := &RPCService{impl: &ServiceImpl{store: persistence}}
+	for _, scope := range []string{"", "team-a", "team-b"} {
+		for _, exclude := range []bool{false, true} {
+			t.Run(fmt.Sprintf("scope=%s/exclude=%t", scope, exclude), func(t *testing.T) {
+				want := map[string]bool{}
+				for _, actor := range actors {
+					meta := actor.GetMetadata()
+					if scope != "" && meta.GetAtespace() != scope {
+						continue
+					}
+					if exclude && meta.GetAtespace() == "team-a" && meta.GetName() == goldenName {
+						continue
+					}
+					want[meta.GetAtespace()+"/"+meta.GetName()] = true
+				}
+				got := map[string]bool{}
+				token := ""
+				emptyPage := false
+				for pages := 0; ; pages++ {
+					if pages > len(actors) {
+						t.Fatal("pagination did not terminate")
+					}
+					page, err := rpc.ListActors(ctx, &ateapi.ListActorsRequest{
+						Atespace:            scope,
+						Options:             &ateapi.ListOptions{PageSize: 1, PageToken: token},
+						ExcludeGoldenActors: exclude,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(page.GetActors()) == 0 && page.GetNextPageToken() != "" {
+						emptyPage = true
+					}
+					for _, actor := range page.GetActors() {
+						key := actor.GetMetadata().GetAtespace() + "/" + actor.GetMetadata().GetName()
+						if got[key] {
+							t.Fatalf("duplicate actor %s", key)
+						}
+						got[key] = true
+					}
+					token = page.GetNextPageToken()
+					if token == "" {
+						break
+					}
+				}
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("actors (-want +got): %s", diff)
+				}
+				if exclude && scope != "team-b" && !emptyPage {
+					t.Error("expected an empty page with a continuation token")
+				}
+			})
+		}
+	}
+}
+
+func TestGoldenActorMarkerIsServerManaged(t *testing.T) {
+	ctx := t.Context()
+	persistence := newTestPersistence(t)
+	impl := newServiceImpl(persistence, nil)
+	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
+	svc := &RPCService{impl: impl}
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns1")
+	tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
+	for _, golden := range []bool{false, true} {
+		t.Run(fmt.Sprintf("golden=%t", golden), func(t *testing.T) {
+			name := tmpl.GetMetadata().GetUid()
+			if golden {
+				name = "golden"
+			}
+			req := &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: "ns1", Name: name},
+				ActorTemplate: ref,
+				// Public callers cannot set the marker, even under the template UID.
+				Status: &ateapi.ActorStatus{GoldenSnapshotActor: true},
+			}}
+			create := svc.CreateActor
+			if golden {
+				create = svc.createGoldenActor
+			}
+			actor, err := create(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := actor.GetStatus().GetGoldenSnapshotActor(); got != golden {
+				t.Fatalf("marker = %t, want %t", got, golden)
+			}
+			// Updates cannot set or clear a server-owned marker.
+			actor.Status.GoldenSnapshotActor = !golden
+			updated, err := svc.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: actor})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := updated.GetStatus().GetGoldenSnapshotActor(); got != golden {
+				t.Fatalf("updated marker = %t, want %t", got, golden)
+			}
+		})
+	}
+}

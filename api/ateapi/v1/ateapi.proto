@@ -946,6 +946,13 @@ message ActorStatus {
   // +k8s:minimum=0
   // +k8s:update=NoUnset
   int32 last_assigned_generation = 7;
+
+  // This actor was created by the server to build a template's golden snapshot.
+  // Actors created before this field was introduced may leave it unset.
+  //
+  // +k8s:optional
+  // +k8s:update=NoUnset
+  bool golden_snapshot_actor = 8;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -2258,6 +2265,17 @@ message ListActorsRequest {
   //
   // +k8s:optional
   ListOptions options = 2;
+
+  // Exclude the temporary actors used to build golden snapshots. Defaults to
+  // false, which includes them for debugging. Only actors with
+  // `status.golden_snapshot_actor` set are excluded; older unmarked actors
+  // remain visible.
+  //
+  // Filtering may leave a page empty with a nonempty `next_page_token`.
+  // Keep this value unchanged while following pagination tokens.
+  //
+  // +k8s:optional
+  bool exclude_golden_actors = 3;
 }
 
 message ListActorsResponse {
