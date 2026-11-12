@@ -930,6 +930,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
 	workerResp, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
+		ExecutionUid:          req.GetExecutionUid(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -946,7 +947,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		return nil, workerCallError("RunWorkload", err)
 	}
 
-	return &ateletpb.RunResponse{WorkerEpoch: workerResp.GetWorkerEpoch(), ExecutionUid: workerResp.GetExecutionUid()}, nil
+	return &ateletpb.RunResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
 }
 
 var snapshotSizeBytes metric.Int64Histogram
@@ -1873,6 +1874,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
 	workerResp, err := client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
+		ExecutionUid:          req.GetExecutionUid(),
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -1892,7 +1894,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, s.boundRetryableRestoreError(actorUID, req.GetSnapshot().GetSnapshotUuid(), workerRestoreError(ctx, err))
 	}
 
-	return &ateletpb.RestoreResponse{WorkerEpoch: workerResp.GetWorkerEpoch(), ExecutionUid: workerResp.GetExecutionUid()}, nil
+	return &ateletpb.RestoreResponse{WorkerEpoch: workerResp.GetWorkerEpoch()}, nil
 }
 
 // workerCallError is atelet's error for a failed call to the worker's rpc. A

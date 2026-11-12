@@ -46,9 +46,9 @@ func TestCrashActorReportedByWorker(t *testing.T) {
 		{name: "stale incarnation", uid: "not-the-uid", wantCode: codes.NotFound},
 		{name: "hosted by another worker", worker: "other-worker", wantCode: codes.NotFound},
 		{name: "current execution", activeExecution: currentExecution, reportedExecution: currentExecution, wantCode: codes.OK},
-		{name: "previous execution on the same worker", activeExecution: currentExecution, reportedExecution: previousExecution, wantCode: codes.NotFound},
+		{name: "previous execution accepted during preparation", activeExecution: currentExecution, reportedExecution: previousExecution, wantCode: codes.OK},
 		{name: "missing execution identity", activeExecution: currentExecution, wantCode: codes.OK},
-		{name: "report for an untracked execution", reportedExecution: previousExecution, wantCode: codes.NotFound},
+		{name: "report for an untracked execution", reportedExecution: previousExecution, wantCode: codes.OK},
 		{
 			name:     "operation in flight",
 			mutate:   func(a *ateapi.Actor) { a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING },

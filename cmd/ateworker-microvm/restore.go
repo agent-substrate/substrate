@@ -150,6 +150,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	p := actorBootParams{
+		executionUID:     req.GetExecutionUid(),
 		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:         req.GetActorUid(),
 		actorDirs:        req.GetActorDirs(),
@@ -237,7 +238,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: s.runningVM(p.actorUID).executionUID}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // restoreMemoryFidelity restores a whole-guest snapshot: relaunch cloud-hypervisor
@@ -522,17 +523,17 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 			{Name: phaseTotal, D: dTotal},
 		})
 
-	ra := newRunningActor(chProc, vfsdProc)
-	ra.apiSocket = apiSocket
-	ra.memoryBytes = p.size.MemoryBytes
-	ra.baseID = srcID
-	ra.restoreSourceDir = restoreDir
-	ra.preserveRestoreSource = preserveRestoreDir
-	ra.snapshotIsSelfContained = memMode == ch.MemRestoreEager
-	// Signaling an id the agent does not know fails the whole graceful
-	// shutdown with InvalidContainerId, so these must be what the guest runs.
-	ra.workloadIDs = workloadIDs(ctrs)
-	ra.guestAgent = guestAC
+	ra := &runningActor{
+		executionUID: p.executionUID,
+		chProc:       chProc, vfsdProc: vfsdProc,
+		apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: srcID, restoreSourceDir: restoreDir,
+		preserveRestoreSource:   preserveRestoreDir,
+		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
+		// Signaling an id the agent does not know fails the whole graceful
+		// shutdown with InvalidContainerId, so these must be what the guest runs.
+		workloadIDs: workloadIDs(ctrs),
+		guestAgent:  guestAC,
+	}
 
 	// Re-attach stdout/stderr forwarding for each container over the agent
 	// connection dialed after resume: the restored guest's containers are alive, so

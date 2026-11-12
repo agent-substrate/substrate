@@ -701,7 +701,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
+	hosted, err := s.hostActor(ctx, attribution, req.GetExecutionUid(), req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -801,7 +801,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
 
-	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: hosted.executionUID}, nil
+	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
@@ -1179,7 +1179,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
+	hosted, err := s.hostActor(ctx, attribution, req.GetExecutionUid(), req.GetActorDirs(), sizing.FromLimits(req.GetResources().GetLimits()).MemoryBytes)
 	timing.netSetup = lap(&tLast)
 	if err != nil {
 		return nil, err
@@ -1338,7 +1338,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.recordInitial(ctx, hosted)
 	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
 
-	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch, ExecutionUid: hosted.executionUID}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
 }
 
 func (s *AteWorkerService) TerminateWorkload(ctx context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
