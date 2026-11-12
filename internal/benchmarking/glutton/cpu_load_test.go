@@ -238,3 +238,49 @@ func processUserCPUTime(t *testing.T) time.Duration {
 	}
 	return time.Duration(ru.Utime.Sec)*time.Second + time.Duration(ru.Utime.Usec)*time.Microsecond
 }
+
+func TestDefaultCPULoadCycle(t *testing.T) {
+	if cpuLoadDefaultCycle != 200*time.Millisecond {
+		t.Fatalf("cpuLoadDefaultCycle = %v, want 200ms", cpuLoadDefaultCycle)
+	}
+}
+
+func TestCPULoadStop_PromptMidCycle(t *testing.T) {
+	var c cpuLoad
+	if got := c.Set(1, 1.0, 10*time.Second, false); got != 1 {
+		t.Fatalf("Set = %d, want 1", got)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	start := time.Now()
+	c.Stop()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Stop() during 10s workBudget took %v, want prompt cancellation (<1s)", elapsed)
+	}
+}
+
+func BenchmarkCPUBurnBatch(b *testing.B) {
+	const legacyBatchIterations = 4096
+
+	b.Run("batch=65536", func(b *testing.B) {
+		b.ReportAllocs()
+		var x uint64 = 1
+		b.ResetTimer()
+		for range b.N {
+			x, _ = burnCPUBatch(x, cpuBurnBatchIterations)
+		}
+		cpuBurnSink.Store(x)
+	})
+
+	b.Run("batch=4096", func(b *testing.B) {
+		b.ReportAllocs()
+		var x uint64 = 1
+		b.ResetTimer()
+		for range b.N {
+			for range cpuBurnBatchIterations / legacyBatchIterations {
+				x, _ = burnCPUBatch(x, legacyBatchIterations)
+			}
+		}
+		cpuBurnSink.Store(x)
+	})
+}
