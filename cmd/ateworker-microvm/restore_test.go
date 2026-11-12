@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -586,6 +588,84 @@ func TestRestoreGuestReadyError(t *testing.T) {
 			t.Errorf("err = %v, want it to wrap errGuestStopped", err)
 		}
 	})
+}
+
+// restoreErrFrom issues vm.restore to a socket served by serve, or to one
+// nobody serves when serve is nil, and returns its error.
+func restoreErrFrom(t *testing.T, serve func(net.Listener)) error {
+	t.Helper()
+	sock := shortSocketPath(t)
+	if serve != nil {
+		lis, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { lis.Close() })
+		go serve(lis)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	return ch.NewClient(sock).RestoreWithNetFDs(ctx, t.TempDir(), nil, "")
+}
+
+func TestRestoreVMMError(t *testing.T) {
+	closesConn := func(lis net.Listener) {
+		for {
+			c, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}
+	refuses := func(lis net.Listener) {
+		_ = http.Serve(lis, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "Error restoring VM: corrupt snapshot", http.StatusInternalServerError)
+		}))
+	}
+	for _, tc := range []struct {
+		name      string
+		step      string
+		err       func(*testing.T) error
+		retryable bool
+	}{
+		{"VMM api-socket not ready after launch", "launching VMM for restore",
+			func(t *testing.T) error { return fmt.Errorf("while waiting for VMM api-socket: %w", notReadyErr(t)) }, true},
+		{"nobody on the socket", "restoring VM with net FDs",
+			func(t *testing.T) error { return restoreErrFrom(t, nil) }, true},
+		{"VMM closes the connection", "restoring VM with net FDs",
+			func(t *testing.T) error { return restoreErrFrom(t, closesConn) }, true},
+		{"CH refuses the snapshot", "restoring VM with net FDs",
+			func(t *testing.T) error { return restoreErrFrom(t, refuses) }, false},
+		{"cloud-hypervisor fails to start", "launching VMM for restore",
+			func(*testing.T) error {
+				return fmt.Errorf("while starting cloud-hypervisor: %w", &os.PathError{Op: "fork/exec", Path: "/nope", Err: os.ErrNotExist})
+			}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cause := tc.err(t)
+			if cause == nil {
+				t.Fatal("scenario produced no error")
+			}
+			want := codes.Internal
+			if tc.retryable {
+				want = codes.Unavailable
+			}
+			err := restoreVMMError(t.Context(), tc.step, cause)
+			if got := apierror.Code(err); got != want {
+				t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, want, err)
+			}
+			if !errors.Is(err, cause) {
+				t.Errorf("err = %v, want it to wrap %v", err, cause)
+			}
+
+			ended, cancel := context.WithCancel(t.Context())
+			cancel()
+			if got := apierror.Code(restoreVMMError(ended, tc.step, cause)); tc.retryable && got != codes.Canceled {
+				t.Errorf("caller gone: apierror.Code(err) = %v, want %v", got, codes.Canceled)
+			}
+		})
+	}
 }
 
 func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {

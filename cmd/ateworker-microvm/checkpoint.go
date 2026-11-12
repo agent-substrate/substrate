@@ -114,10 +114,6 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 			})
 	}()
 
-	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
-		return nil, err
-	}
-
 	actorUID := req.GetActorUid()
 	actorDirs := req.GetActorDirs()
 
@@ -157,8 +153,13 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		chSocket = ra.apiSocket
 	}
 	client := ch.NewClient(chSocket)
+	// Reach the VMM before deactivating the actor's networking, so a failed
+	// wait leaves the actor serving and the checkpoint can be retried.
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
-		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
+		return nil, checkpointWaitReadyError(ctx, ra, err)
+	}
+	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
+		return nil, err
 	}
 	// Read before the pause: a paused guest cannot answer.
 	if hosted != nil {
@@ -267,6 +268,31 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", actorUID), slog.Any("err", err))
 	}
 	return resp, nil
+}
+
+// checkpointWaitReadyError reports CheckpointWorkload's failure to reach the
+// CH api-socket. A live VMM that is slow to answer is Unavailable: nothing has
+// been touched yet, so a retry is safe. A VMM that exited stays an internal
+// error, since watchVM reports that crash, and so does the caller's context
+// ending.
+func checkpointWaitReadyError(ctx context.Context, ra *runningActor, err error) error {
+	if ctx.Err() == nil && errors.Is(err, ch.ErrNotReady) && vmmRunning(ra) {
+		return apierror.Unavailable("while waiting for CH api-socket: %w", err)
+	}
+	return fmt.Errorf("while waiting for CH api-socket: %w", err)
+}
+
+// vmmRunning reports whether ra's cloud-hypervisor process is still running.
+func vmmRunning(ra *runningActor) bool {
+	if ra == nil || ra.chProc == nil {
+		return false
+	}
+	select {
+	case <-ra.chProc.Done():
+		return false
+	default:
+		return true
+	}
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
