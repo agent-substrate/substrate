@@ -392,7 +392,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 			{
 				Name: "vol-1",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "pd-standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "pd-standard"},
 				}},
 			},
 			{
@@ -402,7 +402,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 			{
 				Name: "unmounted-vol",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "pd-standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "pd-standard"},
 				}},
 			},
 		},
