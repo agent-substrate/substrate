@@ -38,14 +38,16 @@ type systemPod struct {
 	workload string // kind/name, for messages
 	labels   map[string]string
 	ports    []corev1.ContainerPort
+	spec     corev1.PodSpec
 }
 
 // systemInstall is everything an install of one configuration puts in
 // ate-system: the system overlay plus the manifests the installer applies on
 // their own (postgres, the egress gateway, the bundled credential provider).
 type systemInstall struct {
-	pods     []systemPod
-	policies []networkingv1.NetworkPolicy
+	pods            []systemPod
+	policies        []networkingv1.NetworkPolicy
+	serviceAccounts map[string]corev1.ServiceAccount
 }
 
 // unadmittedPorts are the container ports no NetworkPolicy may admit, keyed
@@ -134,7 +136,7 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 	}
 	objs = append(objs, provider...)
 
-	var install systemInstall
+	install := systemInstall{serviceAccounts: map[string]corev1.ServiceAccount{}}
 	for _, obj := range objs {
 		if obj.GetNamespace() != NamespaceAteSystem {
 			continue
@@ -146,6 +148,12 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 				t.Fatalf("converting networkpolicy/%s: %v", obj.GetName(), err)
 			}
 			install.policies = append(install.policies, np)
+		case "ServiceAccount":
+			var sa corev1.ServiceAccount
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &sa); err != nil {
+				t.Fatalf("converting serviceaccount/%s: %v", obj.GetName(), err)
+			}
+			install.serviceAccounts[sa.Name] = sa
 		case "Deployment", "DaemonSet", "StatefulSet", "Job":
 			raw, ok, _ := unstructured.NestedMap(obj.Object, "spec", "template")
 			if !ok {
@@ -155,7 +163,7 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &tmpl); err != nil {
 				t.Fatalf("converting the pod template of %s/%s: %v", obj.GetKind(), obj.GetName(), err)
 			}
-			pod := systemPod{workload: obj.GetKind() + "/" + obj.GetName(), labels: tmpl.Labels}
+			pod := systemPod{workload: obj.GetKind() + "/" + obj.GetName(), labels: tmpl.Labels, spec: tmpl.Spec}
 			if obj.GetKind() == "Job" {
 				// The Job controller adds this label to its pods.
 				pod.labels = map[string]string{"batch.kubernetes.io/job-name": obj.GetName()}

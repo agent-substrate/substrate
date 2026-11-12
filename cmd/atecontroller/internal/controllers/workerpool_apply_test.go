@@ -981,6 +981,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 	}
 	podSpecAC.WithPriorityClassName("")
 	podSpecAC.WithServiceAccountName("ateworker")
+	podSpecAC.WithAutomountServiceAccountToken(false)
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {
