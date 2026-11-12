@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="38 208 994 353" width="994" height="353" role="img" aria-labelledby="title" font-family="Ubuntu, Geist, system-ui, -apple-system, 'Segoe UI', sans-serif">
+<title id="title">User to actor: Alice signs in via SSO, the app frontend calls ingress, ingress routes to Actor A</title>
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#64d86b"/></marker></defs>
+<rect x="38" y="208" width="994" height="353" rx="12" fill="#0a0e0b"/>
+<!-- Edit coordinates directly. Arrows point from the caller to the callee. -->
+<rect x="552" y="236" width="452" height="212" fill="none" stroke="#64d86b" stroke-width="2.5" stroke-dasharray="9 7"/>
+<text x="990" y="434" font-size="22" font-weight="700" fill="#64d86b" text-anchor="end">Substrate</text>
+<rect x="66" y="277" width="179" height="90" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="155.5" y="314" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">Alice</text>
+<text x="155.5" y="340" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">user</text>
+<rect x="66" y="443" width="179" height="90" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="155.5" y="470" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">SSO / IdP</text>
+<text x="155.5" y="496" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">your identity</text>
+<text x="155.5" y="517" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">provider</text>
+<rect x="288" y="266" width="224" height="112" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="400" y="314" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">App frontend</text>
+<text x="400" y="340" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">your app</text>
+<rect x="582" y="266" width="161" height="112" rx="4" fill="#111612" stroke="#9aa89f" stroke-width="2.5"/>
+<text x="662.5" y="304" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">Ingress</text>
+<text x="662.5" y="330" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">trusted</text>
+<text x="662.5" y="351" font-size="17" font-weight="400" fill="#9aa89f" text-anchor="middle">frontends</text>
+<rect x="782" y="266" width="192" height="112" rx="4" fill="#111612" stroke="#64d86b" stroke-width="2.5"/>
+<text x="878" y="314" font-size="21" font-weight="700" fill="#e4ebe6" text-anchor="middle">Actor A</text>
+<text x="878" y="340" font-size="17" font-weight="400" fill="#64d86b" text-anchor="middle">sandbox • no creds</text>
+<path d="M245 322 L284 322" fill="none" stroke="#64d86b" stroke-width="3.5" marker-end="url(#head)" stroke-linejoin="round"/>
+<path d="M155 367 L155 439" fill="none" stroke="#64d86b" stroke-width="3.5" stroke-dasharray="3 7" marker-end="url(#head)" stroke-linejoin="round"/>
+<circle cx="183" cy="405" r="16" fill="#0a0e0b" stroke="#64d86b" stroke-width="2.5"/>
+<text x="183" y="411.5" font-size="18" font-weight="700" fill="#64d86b" text-anchor="middle">1</text>
+<path d="M512 322 L578 322" fill="none" stroke="#64d86b" stroke-width="3.5" marker-end="url(#head)" stroke-linejoin="round"/>
+<circle cx="547" cy="294" r="16" fill="#0a0e0b" stroke="#64d86b" stroke-width="2.5"/>
+<text x="547" y="300.5" font-size="18" font-weight="700" fill="#64d86b" text-anchor="middle">2</text>
+<path d="M743 322 L778 322" fill="none" stroke="#64d86b" stroke-width="3.5" marker-end="url(#head)" stroke-linejoin="round"/>
+<circle cx="763" cy="294" r="16" fill="#0a0e0b" stroke="#64d86b" stroke-width="2.5"/>
+<text x="763" y="300.5" font-size="18" font-weight="700" fill="#64d86b" text-anchor="middle">3</text>
+</svg>
