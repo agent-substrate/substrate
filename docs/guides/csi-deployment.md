@@ -185,11 +185,14 @@ data:
 
 #### 2. Envoy Sidecar in `csi-nfs-controller` Deployment
 
-The controller mounts the NFS share when creating and deleting volume directories.
-This example uses privileged mode for the `nfs` container, following the
-[vendored controller manifest](../../hack/third_party/csi-driver-nfs/deploy/csi-nfs-controller.yaml).
-Adding `SYS_ADMIN` alone does not bypass security profiles that deny mounts.
-Envoy keeps its restricted security context.
+The `envoy-proxy` sidecar shares `socket-dir` (`/csi`) with the CSI driver
+container and mounts the Envoy configuration (`envoy-config`), the Service DNS
+serving certificate (`servicedns-certs`), and the Pod Identity trust bundle
+(`podidentity-ca`). Even when the CSI driver container itself requires elevated
+privileges (such as [the upstream `csi-nfs-controller` manifest](../../hack/third_party/csi-driver-nfs/deploy/csi-nfs-controller.yaml)),
+the Envoy sidecar runs with a restricted `securityContext`
+(`allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, and all
+capabilities dropped).
 
 ```yaml
 apiVersion: apps/v1
