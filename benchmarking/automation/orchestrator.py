@@ -26,13 +26,14 @@ contract). The flow, with the type hooks marked:
         the runner image build [hook: build_image] are cached per
         target cluster.
      b. Sweep leftovers, deploy substrate, let the type shape the
-        cluster [hook: pre_test], deploy workloads (+ microvm deps when
-        the sandbox class needs them).
+        cluster [hook: pre_test], deploy the shared workloads when the
+        type uses them [USES_SHARED_WORKLOADS] (+ microvm deps when the
+        sandbox class needs them).
      c. Render the type's Job template [hooks: job_tmpl, job_subs],
         submit it, wait, tail logs, delete the Job.
-     d. Tear substrate + workloads down again so tests don't pollute
-        each other, then drop the env file so the next test can't
-        inherit this one's cluster.
+     d. Tear substrate + workloads down again [hook:
+        teardown_workloads] so tests don't pollute each other, then drop
+        the env file so the next test can't inherit this one's cluster.
   4. Exit non-zero if any test didn't complete.
 """
 
@@ -486,8 +487,12 @@ def deploy_workloads(
     run(cmd)
 
 
-def teardown_workloads() -> None:
-    run_no_check(["benchmarking/workloads/deploy.sh", "--delete"])
+def teardown_test_workloads(test_types: Iterable[str]) -> None:
+    types = list(test_types)
+    if any(TYPES[t].USES_SHARED_WORKLOADS for t in types):
+        run_no_check(["benchmarking/workloads/deploy.sh", "--delete"])
+    for t in types:
+        TYPES[t].teardown_workloads()
 
 
 def run_test(
@@ -644,7 +649,7 @@ def main() -> None:
             # state behind) would otherwise leak its substrate + workloads
             # into this run. All teardowns use --ignore-not-found, so
             # this is cheap on a clean cluster.
-            teardown_workloads()
+            teardown_test_workloads(TYPES)
             teardown_substrate()
 
             sandbox_class = test.get("sandboxClass", "gvisor")
@@ -654,15 +659,16 @@ def main() -> None:
             try:
                 deploy_substrate(substrate_args(test))
                 TYPES[ttype].pre_test(test)
-                deploy_workloads(
-                    test.get("workerCount", 1),
-                    sandbox_class,
-                    test.get("actorMemory", ""),
-                    test.get("workerWaitTimeout", ""),
-                    test.get("workerMemory", ""),
-                    isolate_workload_args(test),
-                    test.get("actorCPU", ""),
-                )
+                if TYPES[ttype].USES_SHARED_WORKLOADS:
+                    deploy_workloads(
+                        test.get("workerCount", 1),
+                        sandbox_class,
+                        test.get("actorMemory", ""),
+                        test.get("workerWaitTimeout", ""),
+                        test.get("workerMemory", ""),
+                        isolate_workload_args(test),
+                        test.get("actorCPU", ""),
+                    )
                 try:
                     status = run_test(
                         test,
@@ -682,7 +688,7 @@ def main() -> None:
             finally:
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
-                teardown_workloads()
+                teardown_test_workloads([ttype])
                 teardown_substrate()
             duration = time.time() - start_time
             results.append((test["name"], status, duration, failure_msg))
