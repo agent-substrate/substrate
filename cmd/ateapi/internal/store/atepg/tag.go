@@ -312,6 +312,9 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM tags WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
 		return nil, mapDeleteError(err, uid, version, precondition)
 	}
+	if isForeignKeyViolation(err) {
+		return nil, store.ErrFailedPrecondition
+	}
 	if err != nil {
 		return nil, fmt.Errorf("deleting tag %s/%s: %w", atespace, name, err)
 	}

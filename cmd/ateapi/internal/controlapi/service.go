@@ -122,6 +122,8 @@ type serviceStore interface {
 	ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.Tag], error)
 	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapi.Tag, error)
+	GetExternalVolumeSnapshot(ctx context.Context, ref resources.ExternalVolumeSnapshotRef) (*ateapi.ExternalVolumeSnapshot, error)
+	ListExternalVolumeSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapi.ExternalVolumeSnapshot], error)
 	CreateAtespace(ctx context.Context, atespace *ateapi.Atespace) (*ateapi.Atespace, error)
 	GetAtespace(ctx context.Context, name string) (*ateapi.Atespace, error)
 	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapi.Atespace], error)

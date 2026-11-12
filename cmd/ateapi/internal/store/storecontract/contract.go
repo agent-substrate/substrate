@@ -338,6 +338,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
+	runExternalVolumeSnapshotContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
@@ -529,6 +530,10 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
+			{"external volume snapshots", func(opts store.ListOptions) error {
+				_, err := s.ListExternalVolumeSnapshots(ctx, "", opts)
+				return err
+			}},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
 		}
 		for _, call := range calls {
@@ -554,6 +559,10 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
+			{"external volume snapshots", func(opts store.ListOptions) error {
+				_, err := s.ListExternalVolumeSnapshots(ctx, "", opts)
+				return err
+			}},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
 		}
 		for _, call := range calls {
@@ -1806,6 +1815,449 @@ func storeTag(t *testing.T, s store.Interface, tag *ateapi.Tag) *ateapi.Tag {
 		t.Fatalf("finalizing tag %q failed: %v", tag.GetMetadata().GetName(), err)
 	}
 	return stored
+}
+
+// newTestExternalVolumeSnapshot builds a snapshot of volume owned by tag.
+func newTestExternalVolumeSnapshot(tag *ateapi.Tag, volume string) *ateapi.ExternalVolumeSnapshot {
+	md := tag.GetMetadata()
+	return &ateapi.ExternalVolumeSnapshot{
+		Metadata:   &ateapi.ResourceMetadata{Atespace: md.GetAtespace(), Name: "substrate-snap-" + md.GetUid() + "-" + volume},
+		VolumeType: "pd.csi.storage.gke.io",
+		Origin: &ateapi.ExternalVolumeSnapshotOrigin{Tag: &ateapi.TagVolumeSnapshotOrigin{
+			Tag:              &ateapi.ObjectRef{Atespace: md.GetAtespace(), Name: md.GetName()},
+			TagUid:           md.GetUid(),
+			SourceVolumeName: volume,
+			SourceVolumeId:   "projects/p/zones/z/disks/" + volume,
+		}},
+	}
+}
+
+func runExternalVolumeSnapshotContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	// seedTag stores an atespace, an actor, and a tag of it that is still
+	// being created, the only state in which a tag takes new snapshots.
+	seedTag := func(t *testing.T, s store.Interface, atespace string) *ateapi.Tag {
+		t.Helper()
+		mustCreateAtespace(t, s, atespace)
+		actor, err := s.CreateActor(context.Background(), newTestSuspendedActor(atespace, "actor-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		tag, err := s.CreateTag(context.Background(), newTestInProgressTag("production", actor))
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		return tag
+	}
+
+	t.Run("ExternalVolumeSnapshot_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedTag(t, s, testAtespace)
+
+		input := newTestExternalVolumeSnapshot(tag, "data")
+		created, err := s.CreateExternalVolumeSnapshot(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
+		}
+		if md := created.GetMetadata(); md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil {
+			t.Errorf("created metadata = %v, want server-assigned uid, version 1 and create_time", md)
+		}
+		if input.GetMetadata().GetUid() != "" {
+			t.Errorf("CreateExternalVolumeSnapshot mutated its input metadata: %v", input.GetMetadata())
+		}
+		if _, err := s.CreateExternalVolumeSnapshot(ctx, input); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("duplicate CreateExternalVolumeSnapshot = %v, want ErrAlreadyExists", err)
+		}
+
+		ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(created)
+		got, err := s.GetExternalVolumeSnapshot(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetExternalVolumeSnapshot failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("stored snapshot mismatch (-created +got):\n%s", diff)
+		}
+		if _, err := s.GetExternalVolumeSnapshot(ctx, resources.ExternalVolumeSnapshotRef{Atespace: testAtespace, Name: "missing"}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("missing GetExternalVolumeSnapshot = %v, want ErrNotFound", err)
+		}
+
+		if _, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.Precondition{UID: got.GetMetadata().GetUid()}, func(*ateapi.ExternalVolumeSnapshot) error {
+			t.Fatal("mutate ran for a blind write")
+			return nil
+		}); !errors.Is(err, store.ErrPreconditionRequired) {
+			t.Errorf("unguarded UpdateExternalVolumeSnapshot = %v, want ErrPreconditionRequired", err)
+		}
+		// The handle can arrive before the copy finishes, and readiness later.
+		captured, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(got), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+			toUpdate.Status = &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap-handle", SizeBytes: 10 << 30}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("recording the handle failed: %v", err)
+		}
+		ready, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(captured), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+			toUpdate.Status.ReadyToUse = true
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("marking the snapshot ready failed: %v", err)
+		}
+		if ready.GetMetadata().GetVersion() != 3 || !ready.GetStatus().GetReadyToUse() || ready.GetStatus().GetStorageSnapshotId() != "snap-handle" {
+			t.Errorf("updated snapshot = %v, want version 3, ready, with the handle", ready)
+		}
+		if _, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(captured), func(*ateapi.ExternalVolumeSnapshot) error { return nil }); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale UpdateExternalVolumeSnapshot = %v, want ErrVersionConflict", err)
+		}
+
+		// The tag owns the snapshot, so neither it nor its atespace can go.
+		if _, err := s.DeleteTag(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteTag with a snapshot = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, testAtespace, store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteAtespace with a snapshot = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
+	t.Run("CreateExternalVolumeSnapshot_Rejected", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedTag(t, s, testAtespace)
+		mustCreateAtespace(t, s, "team-b")
+		actor, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "actor-1"})
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		finalized := storeTag(t, s, newTestInProgressTag("finalized", actor))
+		deleting, err := s.CreateTag(ctx, newTestInProgressTag("deleting", actor))
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		if deleting, err = s.MarkTagForDeletion(ctx, resources.TagRefFromTag(deleting), store.DeletePreconditions{}, nil); err != nil {
+			t.Fatalf("MarkTagForDeletion failed: %v", err)
+		}
+		reservedInput := newTestInProgressTag("reserved", actor)
+		reservedInput.Status.Snapshot = nil
+		reserved, err := s.CreateTag(ctx, reservedInput)
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		ownedBy := func(tag *ateapi.Tag) func(*ateapi.ExternalVolumeSnapshot) {
+			return func(s *ateapi.ExternalVolumeSnapshot) {
+				s.Origin.Tag.Tag.Name = tag.GetMetadata().GetName()
+				s.Origin.Tag.TagUid = tag.GetMetadata().GetUid()
+			}
+		}
+
+		tests := []struct {
+			name   string
+			mutate func(*ateapi.ExternalVolumeSnapshot)
+			// want is the error the create must match, or nil for any error.
+			want error
+		}{
+			{
+				name:   "unknown tag",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Origin.Tag.Tag.Name = "missing" },
+				want:   store.ErrFailedPrecondition,
+			},
+			{
+				name:   "tag uid of an earlier tag with the name",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Origin.Tag.TagUid = foreignUID },
+				want:   store.ErrFailedPrecondition,
+			},
+			{
+				name:   "finalized tag",
+				mutate: ownedBy(finalized),
+				want:   store.ErrFailedPrecondition,
+			},
+			{
+				name:   "tag marked for deletion",
+				mutate: ownedBy(deleting),
+				want:   store.ErrFailedPrecondition,
+			},
+			{
+				name:   "tag without a durable snapshot",
+				mutate: ownedBy(reserved),
+				want:   store.ErrFailedPrecondition,
+			},
+			{
+				name:   "tag in another atespace",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Metadata.Atespace = "team-b" },
+			},
+			{
+				name:   "no origin",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Origin = nil },
+			},
+			{
+				name:   "control character in source_volume_id",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Origin.Tag.SourceVolumeId = "disk\x00" },
+			},
+			{
+				name: "handle and error together",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) {
+					s.Status = &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap-handle", ErrorMessage: "quota exceeded"}
+				},
+			},
+			{
+				name: "ready without a handle",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) {
+					s.Status = &ateapi.ExternalVolumeSnapshotStatus{ReadyToUse: true}
+				},
+			},
+			{
+				name:   "size without a handle",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status = &ateapi.ExternalVolumeSnapshotStatus{SizeBytes: 1} },
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				snap := newTestExternalVolumeSnapshot(tag, "data")
+				tt.mutate(snap)
+				_, err := s.CreateExternalVolumeSnapshot(ctx, snap)
+				if err == nil || (tt.want != nil && !errors.Is(err, tt.want)) {
+					t.Errorf("CreateExternalVolumeSnapshot = %v, want an error matching %v (nil matches any)", err, tt.want)
+				}
+			})
+		}
+		list, err := s.ListExternalVolumeSnapshots(ctx, "", store.ListOptions{})
+		if err != nil || len(list.Items) != 0 {
+			t.Errorf("ListExternalVolumeSnapshots after rejected creates = %d items, %v; want none", len(list.Items), err)
+		}
+	})
+
+	t.Run("UpdateExternalVolumeSnapshot_StatusTransitions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedTag(t, s, testAtespace)
+		captured := &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap-handle", ReadyToUse: true, SizeBytes: 10 << 30}
+		failed := &ateapi.ExternalVolumeSnapshotStatus{ErrorMessage: "quota exceeded"}
+
+		tests := []struct {
+			name   string
+			status *ateapi.ExternalVolumeSnapshotStatus
+			mutate func(*ateapi.ExternalVolumeSnapshot)
+			// ok is whether the update succeeds. Otherwise want is the error
+			// it must match, or nil for any error.
+			ok   bool
+			want error
+		}{
+			{
+				name:   "volume_type",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.VolumeType = "other.csi.example.com" },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "origin",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Origin.Tag.SourceVolumeName = "other" },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "changing the handle",
+				status: captured,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.StorageSnapshotId = "other-handle" },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "clearing the handle",
+				status: captured,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.StorageSnapshotId = "" },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "ready back to false",
+				status: captured,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ReadyToUse = false },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "size after the handle",
+				status: &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap-handle"},
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SizeBytes = 10 << 30 },
+				ok:     true,
+			},
+			{
+				name:   "changing a known size",
+				status: captured,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SizeBytes = 1 },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "an error while the handle is set",
+				status: captured,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "quota exceeded" },
+			},
+			{
+				name:   "a later error replaces the error",
+				status: failed,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "other" },
+				ok:     true,
+			},
+			{
+				name:   "clearing the error without a handle",
+				status: failed,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "" },
+				want:   store.ErrImmutableField,
+			},
+			{
+				name:   "a handle that keeps the error",
+				status: failed,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.StorageSnapshotId = "snap-handle" },
+			},
+			{
+				name:   "a handle that clears the error",
+				status: failed,
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) {
+					s.Status.StorageSnapshotId = "snap-handle"
+					s.Status.ErrorMessage = ""
+				},
+				ok: true,
+			},
+			{
+				name: "ready without a handle",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) {
+					s.Status = &ateapi.ExternalVolumeSnapshotStatus{ReadyToUse: true}
+				},
+			},
+			{
+				name:   "size without a handle",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status = &ateapi.ExternalVolumeSnapshotStatus{SizeBytes: 1} },
+			},
+			{
+				name: "a handle with readiness and size",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) {
+					s.Status = &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap-handle", ReadyToUse: true, SizeBytes: 1}
+				},
+				ok: true,
+			},
+			{
+				name: "control character in the handle",
+				mutate: func(s *ateapi.ExternalVolumeSnapshot) {
+					s.Status = &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap\x7f"}
+				},
+			},
+		}
+		for i, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				input := newTestExternalVolumeSnapshot(tag, fmt.Sprintf("vol-%d", i))
+				input.Status = proto.CloneOf(tt.status)
+				created, err := s.CreateExternalVolumeSnapshot(ctx, input)
+				if err != nil {
+					t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
+				}
+				ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(created)
+				want := proto.CloneOf(created)
+				tt.mutate(want)
+				updated, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(created), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+					tt.mutate(toUpdate)
+					return nil
+				})
+				if tt.ok {
+					if err != nil {
+						t.Fatalf("UpdateExternalVolumeSnapshot failed: %v", err)
+					}
+					if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
+						t.Errorf("updated snapshot mismatch (-want +got):\n%s", diff)
+					}
+					return
+				}
+				if err == nil || (tt.want != nil && !errors.Is(err, tt.want)) {
+					t.Errorf("UpdateExternalVolumeSnapshot = %v, want an error matching %v (nil matches any)", err, tt.want)
+				}
+				stored, err := s.GetExternalVolumeSnapshot(ctx, ref)
+				if err != nil || stored.GetMetadata().GetVersion() != 1 {
+					t.Errorf("a rejected update wrote: GetExternalVolumeSnapshot = %v, %v; want version 1", stored, err)
+				}
+			})
+		}
+	})
+
+	t.Run("ListExternalVolumeSnapshots_PageTokenScope", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedTag(t, s, "team-a")
+		mustCreateAtespace(t, s, "team-b")
+		for i := range 2 {
+			if _, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag, fmt.Sprintf("vol-%d", i))); err != nil {
+				t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
+			}
+		}
+		actor, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		storeTag(t, s, newTestInProgressTag("staging", actor))
+		token := func(list func(store.ListOptions) (string, error)) string {
+			t.Helper()
+			next, err := list(store.ListOptions{PageSize: 1})
+			if err != nil || next == "" {
+				t.Fatalf("first page = %q, %v; want a next page token", next, err)
+			}
+			return next
+		}
+		globalToken := token(func(o store.ListOptions) (string, error) {
+			page, err := s.ListExternalVolumeSnapshots(ctx, "", o)
+			return page.NextPageToken, err
+		})
+		scopedToken := token(func(o store.ListOptions) (string, error) {
+			page, err := s.ListExternalVolumeSnapshots(ctx, "team-a", o)
+			return page.NextPageToken, err
+		})
+		tagToken := token(func(o store.ListOptions) (string, error) {
+			page, err := s.ListTags(ctx, "", o)
+			return page.NextPageToken, err
+		})
+
+		tests := []struct {
+			name     string
+			atespace string
+			token    string
+		}{
+			{name: "global token on a scoped list", atespace: "team-a", token: globalToken},
+			{name: "scoped token on the global list", token: scopedToken},
+			{name: "token of another atespace", atespace: "team-b", token: scopedToken},
+			{name: "ListTags token", token: tagToken},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if _, err := s.ListExternalVolumeSnapshots(ctx, tt.atespace, store.ListOptions{PageSize: 1, PageToken: tt.token}); !errors.Is(err, store.ErrInvalidPageToken) {
+					t.Errorf("ListExternalVolumeSnapshots(%q) = %v, want ErrInvalidPageToken", tt.atespace, err)
+				}
+			})
+		}
+	})
+
+	t.Run("ListExternalVolumeSnapshots_PaginationAndScope", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		for _, atespace := range []string{"team-a", "team-b"} {
+			tag := seedTag(t, s, atespace)
+			for i := range 3 {
+				if _, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag, fmt.Sprintf("vol-%d", i))); err != nil {
+					t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
+				}
+			}
+		}
+		listAll := func(atespace string) []*ateapi.ExternalVolumeSnapshot {
+			var all []*ateapi.ExternalVolumeSnapshot
+			for token := ""; ; {
+				page, err := s.ListExternalVolumeSnapshots(ctx, atespace, store.ListOptions{PageSize: 2, PageToken: token})
+				if err != nil {
+					t.Fatalf("ListExternalVolumeSnapshots(%q) failed: %v", atespace, err)
+				}
+				all = append(all, page.Items...)
+				if token = page.NextPageToken; token == "" {
+					return all
+				}
+			}
+		}
+		if got := listAll("team-a"); len(got) != 3 {
+			t.Errorf("scoped ListExternalVolumeSnapshots returned %d snapshots, want 3", len(got))
+		}
+		if got := listAll(""); len(got) != 6 {
+			t.Errorf("global ListExternalVolumeSnapshots returned %d snapshots, want 6", len(got))
+		}
+	})
 }
 
 func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
