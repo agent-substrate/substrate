@@ -49,8 +49,14 @@ func TestAteletServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
 		t.Fatalf("GetConfigForClient() first call error = %v", err)
 	}
 
-	if err := os.WriteFile(path, testCertPEM(t), 0o600); err != nil {
+	// Projected trust bundles rotate by replacing the file, so the loader can
+	// detect a new inode even when the size and modification time match.
+	replacement := filepath.Join(filepath.Dir(path), "rotated-bundle.pem")
+	if err := os.WriteFile(replacement, testCertPEM(t), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatalf("Rename() error = %v", err)
 	}
 
 	after, err := cfg.GetConfigForClient(nil)
