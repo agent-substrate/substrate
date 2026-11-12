@@ -23,8 +23,8 @@ import (
 // TestWaitIdleWaitsForEveryActor verifies all RPCs finish before the wait returns.
 func TestWaitIdleWaitsForEveryActor(t *testing.T) {
 	f := NewInFlight()
-	releaseA := f.Add("actor-a", "RunWorkload", func() {})
-	releaseB := f.Add("actor-b", "CheckpointWorkload", nil)
+	releaseA := f.Add("actor-a", "RunWorkload")
+	releaseB := f.Add("actor-b", "CheckpointWorkload")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -44,24 +44,5 @@ func TestWaitIdleWaitsForEveryActor(t *testing.T) {
 	defer cancel3()
 	if !f.WaitIdle(ctx3) {
 		t.Error("WaitIdle did not return once nothing was in flight")
-	}
-}
-
-// TestCancelStartupsCancelsEveryCancelableActor verifies checkpoints are left running.
-func TestCancelStartupsCancelsEveryCancelableActor(t *testing.T) {
-	f := NewInFlight()
-	canceled := map[string]bool{}
-	f.Add("actor-a", "RunWorkload", func() { canceled["actor-a"] = true })
-	f.Add("actor-b", "RestoreWorkload", func() { canceled["actor-b"] = true })
-	f.Add("actor-c", "CheckpointWorkload", nil)
-
-	// actor-c is a checkpoint, which must be allowed to finish saving.
-	if got := len(f.CancelStartups()); got != 2 {
-		t.Errorf("canceled %d RPCs, want 2", got)
-	}
-	for _, uid := range []string{"actor-a", "actor-b"} {
-		if !canceled[uid] {
-			t.Errorf("%s's startup was not canceled", uid)
-		}
 	}
 }

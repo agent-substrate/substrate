@@ -136,10 +136,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	// Register for startup cancellation before checking for shutdown.
-	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload)
 	if err != nil {
 		return nil, err
 	}

@@ -368,7 +368,7 @@ type AteWorkerService struct {
 
 	// Serializes lifecycle RPCs per actor.
 	locks *actorlock.Locks
-	// Tracks lifecycle RPCs for shutdown cancellation and draining.
+	// Tracks lifecycle RPCs so shutdown can wait for them.
 	inFlight *actorlock.InFlight
 	// crashReporter reports actors whose sandbox died. Nil if it could not be
 	// set up.
@@ -447,8 +447,8 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
-func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.CancelFunc) (func(), error) {
-	release := s.inFlight.Add(actorUID, name, cancel)
+func (s *AteWorkerService) beginRPC(actorUID, name string) (func(), error) {
+	release := s.inFlight.Add(actorUID, name)
 	if err := s.rejectIfDraining(); err != nil {
 		release()
 		return nil, err
@@ -465,22 +465,10 @@ func (s *AteWorkerService) rejectIfDraining() error {
 	return nil
 }
 
-// cancelStartups cancels all boots and restores, leaving checkpoints running.
-func cancelStartups(ctx context.Context, inFlight *actorlock.InFlight) {
-	for _, actorUID := range inFlight.CancelStartups() {
-		slog.InfoContext(ctx, "Cancelling in-progress workload startup RPC due to graceful shutdown",
-			slog.String("actorUID", actorUID))
-	}
-}
-
 // gracefulShutdown propagates SIGTERM into the sandbox and waits for the application's
 // containers to exit.
 func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	s.shuttingDown.Store(true)
-	// If there is an active run or restore RPC, try to cancel it. This is considered
-	// less disruptive than waiting for it to complete and then immediately sending
-	// a SIGTERM.
-	cancelStartups(ctx, s.inFlight)
 
 	// One deadline covers the whole drain. Waiting for the lock and waiting out
 	// SIGTERM below both run against it, so the two phases split a single grace
@@ -489,7 +477,9 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	// workloadGracePeriod however the time falls between them.
 	deadline := time.Now().Add(workloadGracePeriod)
 
-	// Let checkpoints finish saving state before stopping containers.
+	// Let in-flight boots, restores and checkpoints finish before stopping
+	// containers. Canceling a boot or restore would crash an actor that has
+	// not served yet.
 	waitCtx, waitCancel := context.WithDeadline(ctx, deadline)
 	defer waitCancel()
 	if !s.inFlight.WaitIdle(waitCtx) {
@@ -670,9 +660,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRunWorkload)
 	if err != nil {
 		return nil, err
 	}
@@ -833,7 +821,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	ctx, cancel := ateworker.CheckpointContext(ctx)
 	defer cancel()
 	// Not cancelable: a checkpoint is saving the actor's state.
-	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload, nil)()
+	defer s.inFlight.Add(req.GetActorUid(), rpcCheckpointWorkload)()
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed, and the failing step its elapsed time.
@@ -1129,8 +1117,6 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	// Per-phase timing, recorded on the way out so a failed restore still
 	// reports the phases it completed, and the failing step its elapsed time.
@@ -1148,7 +1134,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown", attrs...)
 	}()
 
-	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload, cancel)
+	release, err := s.beginRPC(req.GetActorUid(), rpcRestoreWorkload)
 	if err != nil {
 		return nil, err
 	}
