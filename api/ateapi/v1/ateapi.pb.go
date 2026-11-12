@@ -2381,9 +2381,9 @@ type WorkerAssignment struct {
 	// +k8s:customValidation # a SPIFFE ID
 	// +k8s:update=NoModify
 	WorkerSpiffeId string `protobuf:"bytes,10,opt,name=worker_spiffe_id,json=workerSpiffeId,proto3" json:"worker_spiffe_id,omitempty"`
-	// execution_uid identifies the execution returned by Run or Restore.
-	// A retry that starts a new execution replaces it, even on the same Worker.
-	// Empty until the Actor becomes RUNNING, or for an older worker.
+	// execution_uid identifies the API server's Run or Restore call.
+	// Stored when the Actor becomes RUNNING. Empty for executions started by
+	// an older API server.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
@@ -8904,9 +8904,9 @@ type ReportActorCrashedRequest struct {
 	// +k8s:required
 	// +k8s:maxLength=4096
 	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
-	// The execution that exited, as returned by the Worker's Run or Restore.
-	// It must match the Actor's current worker_assignment.execution_uid.
-	// Empty for a worker predating execution tracking.
+	// execution_uid identifies the runtime that exited.
+	// It must match the Actor's current `worker_assignment.execution_uid`.
+	// Empty for executions started by an older API server.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid

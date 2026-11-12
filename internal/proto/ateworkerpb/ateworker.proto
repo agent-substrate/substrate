@@ -245,6 +245,13 @@ message RunWorkloadRequest {
   ResourceRequirements resources = 10;
   // +k8s:required
   ActorDirs actor_dirs = 12;
+
+  // The API server-assigned identity of this Run call, bound to its runtime.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 13;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -440,9 +447,6 @@ message HttpGetAction {
 message RunWorkloadResponse {
   // The epoch this worker process registered with.
   int64 worker_epoch = 1;
-
-  // A new UUID for this execution, including a retry that starts it again.
-  string execution_uid = 2;
 }
 
 // SnapshotFidelity mirrors the public ateapi enum: the state layers a
@@ -572,14 +576,18 @@ message RestoreWorkloadRequest {
   //
   // +k8s:optional
   bool preserve_restore_dir = 14;
+
+  // The API server-assigned identity of this Restore call, bound to its runtime.
+  // Empty when called by an older API server.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string execution_uid = 15;
 }
 
 message RestoreWorkloadResponse {
   // The epoch this worker process registered with.
   int64 worker_epoch = 1;
-
-  // A new UUID for this execution, including a retry that restores it again.
-  string execution_uid = 2;
 }
 
 message GetWorkloadStatsRequest {

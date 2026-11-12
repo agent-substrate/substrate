@@ -107,6 +107,8 @@ func TestWatchSandboxIgnoresExpectedExits(t *testing.T) {
 }
 
 func TestWatchSandboxReportsItsExecutionAfterRestart(t *testing.T) {
+	const firstUID = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5"
+	const nextUID = "a6ba5a75-ad36-48fc-ad2e-e845527a25b1"
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	reporter := &fakeCrashReporter{
@@ -123,9 +125,9 @@ func TestWatchSandboxReportsItsExecutionAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := func() (*hostedActor, *ateworkerpb.ActorDirs) {
+	start := func(executionUID string) (*hostedActor, *ateworkerpb.ActorDirs) {
 		t.Helper()
-		hosted, _, err := s.admitActor(testActor, 0)
+		hosted, _, err := s.admitActor(testActor, executionUID, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,16 +137,16 @@ func TestWatchSandboxReportsItsExecutionAfterRestart(t *testing.T) {
 		return hosted, actorDirs
 	}
 
-	first, firstDirs := start()
+	first, firstDirs := start(firstUID)
 	s.watchSandbox(t.Context(), first, runscPath, firstDirs, nil)
 	select {
 	case <-reporter.started:
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for the watcher to report")
 	}
-	second, secondDirs := start()
-	if first.executionUID == "" || second.executionUID == "" || first.executionUID == second.executionUID {
-		t.Fatalf("execution UIDs = %q, %q, want distinct nonempty values", first.executionUID, second.executionUID)
+	second, secondDirs := start(nextUID)
+	if first.executionUID != firstUID || second.executionUID != nextUID {
+		t.Fatalf("execution UIDs = %q, %q, want %q, %q", first.executionUID, second.executionUID, firstUID, nextUID)
 	}
 	select {
 	case reporter.release <- struct{}{}:

@@ -22,6 +22,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -704,11 +706,8 @@ func checkVolumesAttachable(volumes []*ateapi.ExternalVolumeStatus) error {
 
 // ensureAteletRestored brings the workload up on the assigned worker:
 // restoring snapshotToResume, or cold-booting from the template spec when the
-// actor has no snapshot. This is the atelet reentrancy seam (#372): the
-// request is keyed by the actor UID and
-// the worker pod UID, so a re-entered workflow re-sends the same semantic
-// request; once atelet's Restore/Run are idempotent on those keys this step
-// becomes fully reentrant with no changes here.
+// actor has no snapshot. Each call starts a new execution, including when a
+// workflow re-enters after losing the previous call's response.
 func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, volumePublishContexts map[string]map[string]string) (tele restoreTelemetry, workerEpoch int64, executionUID string, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
@@ -740,6 +739,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// The assignment is what the next checkpoint is stamped from, so it is also
 	// what decides how this restore runs.
 	sandboxRuntime := toAteletSandboxRuntime(assignment.GetSandboxRuntime())
+	executionUID = uuid.NewString()
 
 	// New actor without any existing snapshots to restore from.
 	if snap == nil {
@@ -747,6 +747,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		req := &ateletpb.RunRequest{
+			ExecutionUid:          executionUID,
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
@@ -762,7 +763,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if err != nil {
 			return tele, 0, "", handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
 		}
-		return tele, resp.GetWorkerEpoch(), resp.GetExecutionUid(), nil
+		return tele, resp.GetWorkerEpoch(), executionUID, nil
 	}
 
 	slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot", slog.String("snapshot_uuid", snap.GetUuid()))
@@ -787,6 +788,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 	tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 	req := &ateletpb.RestoreRequest{
+		ExecutionUid:          executionUID,
 		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
@@ -823,7 +825,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, 0, "", handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 	}
-	return tele, resp.GetWorkerEpoch(), resp.GetExecutionUid(), nil
+	return tele, resp.GetWorkerEpoch(), executionUID, nil
 }
 
 // logRuntimeFallback records a resume that restores without memory state
@@ -845,7 +847,7 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// stamped with workerEpoch, the epoch of the worker process that ran it.
+// stamped with the worker process's epoch and the Run or Restore call's UUID.
 //
 // The worker process registered that epoch, with its pod IPs, before it took
 // the workload. If it is still the Worker's registered epoch, the Actor is

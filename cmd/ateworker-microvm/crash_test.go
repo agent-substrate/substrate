@@ -60,7 +60,7 @@ func (f *fakeCrashReporter) ReportCrashed(ctx context.Context, actor resources.A
 
 // fakeVM is a running actor whose VMM exits at once and whose virtiofsd runs
 // until the test ends.
-func fakeVM(t *testing.T) *runningActor {
+func fakeVM(t *testing.T, executionUID string) *runningActor {
 	t.Helper()
 	chProc, err := child.Start(exec.Command("sh", "-c", "exit 3"))
 	if err != nil {
@@ -71,7 +71,7 @@ func fakeVM(t *testing.T) *runningActor {
 		t.Fatal(err)
 	}
 	t.Cleanup(vfsdProc.Stop)
-	return newRunningActor(chProc, vfsdProc)
+	return &runningActor{executionUID: executionUID, chProc: chProc, vfsdProc: vfsdProc}
 }
 
 func TestWatchVMIgnoresExpectedExits(t *testing.T) {
@@ -85,7 +85,7 @@ func TestWatchVMIgnoresExpectedExits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reporter := &fakeCrashReporter{reports: make(chan crashReport, 1)}
 			s := &AteWorkerService{locks: actorlock.New(), actors: map[string]*hostedActor{}, crashReporter: reporter}
-			ra := fakeVM(t)
+			ra := fakeVM(t, "")
 			tc.setup(s, ra)
 			s.watchVM(resources.ActorAttribution{UID: "actor-a"}, nil, ra)
 			select {
@@ -108,7 +108,7 @@ func TestWatchVMIgnoresAReplacedVM(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		s.watchVM(attribution, nil, fakeVM(t))
+		s.watchVM(attribution, nil, fakeVM(t, ""))
 		close(done)
 	}()
 	select {
@@ -124,6 +124,8 @@ func TestWatchVMIgnoresAReplacedVM(t *testing.T) {
 }
 
 func TestWatchVMReportsItsExecutionAfterRestart(t *testing.T) {
+	const firstUID = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5"
+	const nextUID = "a6ba5a75-ad36-48fc-ad2e-e845527a25b1"
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	reporter := &fakeCrashReporter{
@@ -140,26 +142,26 @@ func TestWatchVMReportsItsExecutionAfterRestart(t *testing.T) {
 		crashReporter: reporter,
 		tunnel:        &atunnel.Tunnel{Ingress: &ingress.Server{}, Egress: &egress.Proxy{}},
 	}
-	start := func() (*runningActor, *ateworkerpb.ActorDirs) {
+	start := func(executionUID string) (*runningActor, *ateworkerpb.ActorDirs) {
 		t.Helper()
 		if _, _, err := s.admitActor(attribution, false, 0); err != nil {
 			t.Fatal(err)
 		}
-		ra := fakeVM(t)
+		ra := fakeVM(t, executionUID)
 		s.setRunningVM(attribution.UID, ra)
 		return ra, &ateworkerpb.ActorDirs{RootDir: t.TempDir(), OciBundleDir: t.TempDir()}
 	}
 
-	first, firstDirs := start()
+	first, firstDirs := start(firstUID)
 	go s.watchVM(attribution, firstDirs, first)
 	select {
 	case <-reporter.started:
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for the watcher to report")
 	}
-	second, secondDirs := start()
-	if first.executionUID == "" || second.executionUID == "" || first.executionUID == second.executionUID {
-		t.Fatalf("execution UIDs = %q, %q, want distinct nonempty values", first.executionUID, second.executionUID)
+	second, secondDirs := start(nextUID)
+	if first.executionUID != firstUID || second.executionUID != nextUID {
+		t.Fatalf("execution UIDs = %q, %q, want %q, %q", first.executionUID, second.executionUID, firstUID, nextUID)
 	}
 	select {
 	case reporter.release <- struct{}{}:

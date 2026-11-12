@@ -67,13 +67,15 @@ func TestReportActorCrashedAcrossRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitForWorkerAvailable(t, tc, worker)
-			executionUID := uuid.NewString()
-			tc.fakeAtelet.Lock.Lock()
-			tc.fakeAtelet.ExecutionUID = executionUID
-			tc.fakeAtelet.Lock.Unlock()
 			running, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
 			if err != nil {
 				t.Fatal(err)
+			}
+			tc.fakeAtelet.Lock.Lock()
+			executionUID := tc.fakeAtelet.RestoreRequest.GetExecutionUid()
+			tc.fakeAtelet.Lock.Unlock()
+			if _, err := uuid.Parse(executionUID); err != nil {
+				t.Fatalf("execution UID = %q: %v", executionUID, err)
 			}
 			report := &ateapi.ReportActorCrashedRequest{
 				Worker: &ateapi.ObjectRef{Name: worker}, Actor: ref,
@@ -81,7 +83,7 @@ func TestReportActorCrashedAcrossRecovery(t *testing.T) {
 				ExecutionUid: executionUID,
 			}
 			if got := running.GetActor().GetStatus().GetWorkerAssignment().GetExecutionUid(); got != executionUID {
-				t.Fatalf("execution UID = %q, want %q returned by the worker", got, executionUID)
+				t.Fatalf("execution UID = %q, want %q sent to the worker", got, executionUID)
 			}
 			server := workerservice.New(tc.persistence, tc.service,
 				installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), nil, "", nil)
@@ -98,9 +100,6 @@ func TestReportActorCrashedAcrossRecovery(t *testing.T) {
 				waitForWorkerAvailable(t, tc, worker)
 			}
 			if test.resume {
-				tc.fakeAtelet.Lock.Lock()
-				tc.fakeAtelet.ExecutionUID = uuid.NewString()
-				tc.fakeAtelet.Lock.Unlock()
 				resumed, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
 				if err != nil {
 					t.Fatalf("resume after revert: %v", err)
@@ -179,13 +178,20 @@ func TestReportActorCrashedAfterResumeRetry(t *testing.T) {
 				}
 				waitForWorkerAvailable(t, tc, worker)
 			}
-			oldExecution := uuid.NewString()
 			tc.fakeAtelet.Lock.Lock()
-			tc.fakeAtelet.ExecutionUID = oldExecution
 			tc.fakeAtelet.FailExecutionResponse = status.Error(codes.Unavailable, "start response lost")
 			tc.fakeAtelet.Lock.Unlock()
 			if _, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Unavailable {
 				t.Fatalf("first resume = %v, want Unavailable", err)
+			}
+			tc.fakeAtelet.Lock.Lock()
+			oldExecution := tc.fakeAtelet.RunRequest.GetExecutionUid()
+			if restore {
+				oldExecution = tc.fakeAtelet.RestoreRequest.GetExecutionUid()
+			}
+			tc.fakeAtelet.Lock.Unlock()
+			if _, err := uuid.Parse(oldExecution); err != nil {
+				t.Fatalf("failed call execution UID = %q: %v", oldExecution, err)
 			}
 			before, err := tc.client.GetActor(ctx, &ateapi.GetActorRequest{Actor: ref})
 			if err != nil {
@@ -198,14 +204,21 @@ func TestReportActorCrashedAfterResumeRetry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			newExecution := uuid.NewString()
 			tc.fakeAtelet.Lock.Lock()
-			tc.fakeAtelet.ExecutionUID = newExecution
 			tc.fakeAtelet.FailExecutionResponse = nil
 			tc.fakeAtelet.Lock.Unlock()
 			resumed, err := tc.client.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: ref})
 			if err != nil {
 				t.Fatal(err)
+			}
+			tc.fakeAtelet.Lock.Lock()
+			newExecution := tc.fakeAtelet.RunRequest.GetExecutionUid()
+			if restore {
+				newExecution = tc.fakeAtelet.RestoreRequest.GetExecutionUid()
+			}
+			tc.fakeAtelet.Lock.Unlock()
+			if _, err := uuid.Parse(newExecution); err != nil || newExecution == oldExecution {
+				t.Fatalf("retry execution UID = %q, previous = %q, parse error = %v", newExecution, oldExecution, err)
 			}
 			afterAssignment, err := tc.persistence.GetWorkerAssignment(ctx, worker, created.GetMetadata().GetUid())
 			if err != nil {
