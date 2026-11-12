@@ -27,7 +27,6 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
 	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
-	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
 // RPCService implements ateapi.ControlServer and provides the implementation of
@@ -77,7 +76,6 @@ func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
 	csiDriverConfigLister atelisters.CSIDriverConfigLister,
-	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
 	instruments *Instruments,
 	egressGatewayAddress string,
@@ -87,7 +85,7 @@ func NewRPCService(
 	actorIDJWTPool localjwtauthority.Pool,
 	snapshotLocation string,
 ) *RPCService {
-	impl := newServiceImpl(persistence, storageClassLister)
+	impl := newServiceImpl(persistence)
 	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
 		impl:                  impl,
@@ -101,7 +99,7 @@ func NewRPCService(
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
 	return s
@@ -179,8 +177,6 @@ type ServiceImpl struct {
 	// methods we need to trap.
 	store store.Interface
 
-	storageClassLister storagev1listers.StorageClassLister
-
 	// clusterSnapshotLocation is ate-api-server's --snapshot-location; see
 	// resolveSnapshotLocation.
 	clusterSnapshotLocation string
@@ -192,11 +188,9 @@ var _ store.Interface = (*ServiceImpl)(nil)
 // implementation layer.
 func newServiceImpl(
 	persistence store.Interface,
-	storageClassLister storagev1listers.StorageClassLister,
 ) *ServiceImpl {
 	s := &ServiceImpl{
-		store:              persistence,
-		storageClassLister: storageClassLister,
+		store: persistence,
 	}
 	return s
 }
