@@ -17,7 +17,9 @@
 import argparse
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import types
@@ -214,6 +216,7 @@ class ParseAndSweepTest(unittest.TestCase):
             locust_extra=["--spawn-rate", "64", "--agentsession-phase-in", "90"],
         )
         cmd = density_runner.build_step_cmd(args, 64, Path("/tmp/s64"))
+        self.assertIn("--allow-empty-stats", cmd)
         self.assertIn("--no-phase-breakdown", cmd)
         self.assertEqual(cmd[-4:], ["--spawn-rate", "64", "--agentsession-phase-in", "90"])
 
@@ -357,7 +360,6 @@ class WaitForIdleTest(unittest.TestCase):
             ObjectRef=types.SimpleNamespace,
         )
         fake_pb2_grpc = types.SimpleNamespace(ControlStub=FakeStub)
-        fake_atespace = types.SimpleNamespace(ATESPACE="benchmark")
         with (
             mock.patch("density_runner.ateapi_channel"),
             mock.patch.dict(
@@ -365,12 +367,46 @@ class WaitForIdleTest(unittest.TestCase):
                 {
                     "common.ateapi_pb2": fake_pb2,
                     "common.ateapi_pb2_grpc": fake_pb2_grpc,
-                    "common.atespace": fake_atespace,
                 },
             ),
         ):
             self.assertEqual(density_runner.cleanup_benchmark_actors(), 2)
         self.assertCountEqual(deleted, ["a1", "a2"])
+
+    def test_cleanup_does_not_import_locust_or_gevent(self):
+        locust_dir = str(Path(__file__).resolve().parent.parent)
+        code = """
+import contextlib, sys, types
+import urllib3.util.ssl_
+import runner, density_runner
+
+class FakeStub:
+    def __init__(self, _ch): pass
+    def ListActors(self, _req, timeout=None):
+        return types.SimpleNamespace(actors=[], next_page_token="")
+
+sys.modules["common.ateapi_pb2"] = types.SimpleNamespace(
+    ListActorsRequest=types.SimpleNamespace,
+    ListOptions=types.SimpleNamespace,
+    DeleteActorRequest=types.SimpleNamespace,
+    ObjectRef=types.SimpleNamespace,
+)
+sys.modules["common.ateapi_pb2_grpc"] = types.SimpleNamespace(ControlStub=FakeStub)
+density_runner.ateapi_channel = lambda _h: contextlib.nullcontext()
+assert density_runner.cleanup_benchmark_actors() == 0
+assert "locust" not in sys.modules, "runner imported locust"
+assert "gevent" not in sys.modules, "runner imported gevent"
+urllib3.util.ssl_.create_urllib3_context()
+"""
+        env = {**os.environ, "PYTHONPATH": locust_dir + os.pathsep + os.environ.get("PYTHONPATH", "")}
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_waits_for_actors_and_pods(self):
         logs = mock.Mock()

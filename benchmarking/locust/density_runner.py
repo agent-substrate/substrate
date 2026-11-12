@@ -51,6 +51,10 @@ MAX_FAILURE_RATIO = 0.01
 MIN_LIVE_ACTOR_RATIO = 0.9
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600}
 ATE_API_HOST = "api.ate-system.svc.cluster.local:443"
+# Matches ATESPACE in common/atespace.py; kept here because common/atespace.py
+# imports locust (gevent.monkey.patch_all()), which corrupts ssl.SSLContext
+# once runner.py has already imported urllib3 via kubernetes/gcs.
+BENCHMARK_ATESPACE = "benchmark"
 SETTLE_TIMEOUT_S = 300
 SETTLE_POLL_S = 10
 
@@ -339,6 +343,9 @@ def build_step_cmd(
         args.prometheus_url,
         "--atelet-lag-s",
         str(args.atelet_lag_s),
+        # Overloaded steps that complete zero wakes still get scored as failed
+        # ("no wake measurements recorded") and bisected rather than aborting.
+        "--allow-empty-stats",
         # Skip per-step pod log scraping; only the step metrics are needed.
         "--no-phase-breakdown",
         "--metadata",
@@ -369,7 +376,6 @@ def cleanup_benchmark_actors() -> int:
     # The stubs are generated into the image at build time and are not in the
     # repo, so importing them at module level would break the unit tests.
     from common import ateapi_pb2, ateapi_pb2_grpc
-    from common.atespace import ATESPACE
 
     # 30s per RPC and 32 threads bound cleanup latency outside Locust's window
     # so an unresponsive API server surfaces well inside SETTLE_TIMEOUT_S.
@@ -380,7 +386,7 @@ def cleanup_benchmark_actors() -> int:
         while True:
             resp = stub.ListActors(
                 ateapi_pb2.ListActorsRequest(
-                    atespace=ATESPACE,
+                    atespace=BENCHMARK_ATESPACE,
                     options=ateapi_pb2.ListOptions(page_size=1000, page_token=token),
                 ),
                 timeout=30,
@@ -394,7 +400,7 @@ def cleanup_benchmark_actors() -> int:
             try:
                 stub.DeleteActor(
                     ateapi_pb2.DeleteActorRequest(
-                        actor=ateapi_pb2.ObjectRef(atespace=ATESPACE, name=name)
+                        actor=ateapi_pb2.ObjectRef(atespace=BENCHMARK_ATESPACE, name=name)
                     ),
                     timeout=30,
                 )
