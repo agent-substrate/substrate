@@ -78,6 +78,7 @@ type global
 type external_volume_class
   relations
     define parent_global: [global]
+    define allowed_atespace: [atespace]
 
     define can_get: viewer from parent_global
     define can_delete: owner from parent_global
