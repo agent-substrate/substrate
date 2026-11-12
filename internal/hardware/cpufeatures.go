@@ -18,8 +18,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"maps"
-	"math/bits"
 	"os"
 	"runtime"
 	"slices"
@@ -27,59 +25,18 @@ import (
 	"strings"
 )
 
-// cpuFeatureTables maps each supported architecture to its CPU feature table
-// from cpufeatures_table.go, whose header says where the tables come from
-// and what a bit means.
-var cpuFeatureTables = map[string]featureTable{
-	"amd64": newFeatureTable(amd64CPUFeatures),
-	"arm64": newFeatureTable(arm64CPUFeatures),
-}
-
-// featureTable is one architecture's CPU feature names by bit, with the
-// reverse lookup EncodeCPUFeatures uses and the set of bits that have a
-// name, which DecodeCPUFeatures validates against.
-type featureTable struct {
-	names   map[int]string
-	bits    []int // the keys of names, ascending
-	index   map[string]int
-	defined featureMask
-}
-
-// newFeatureTable indexes a table. A bit outside featureMask is a table
-// error, so it is a panic rather than a dropped name.
-func newFeatureTable(names map[int]string) featureTable {
-	t := featureTable{
-		names: names,
-		bits:  slices.Sorted(maps.Keys(names)),
-		index: make(map[string]int, len(names)),
-	}
-	for bit, name := range names {
-		if bit < 0 || bit >= featureMaskWords*64 {
-			panic(fmt.Sprintf("hardware: CPU feature %q has bit %d outside a %d-bit featureMask", name, bit, featureMaskWords*64))
-		}
-		t.defined.set(bit)
-		t.index[name] = bit
-	}
-	return t
-}
-
 // featureMaskWords is the width of a cpu_features bitmask in 64-bit words.
 // gVisor's amd64 blocks 0-8 use bits up to 261, and 6 words leave room for
 // blocks through 11 within SchemaVersionV1.
 const featureMaskWords = 6
 
-// featureMask is a decoded cpu_features value: bit i set means the feature at
-// bit i of the architecture's table is present. It is a fixed-size array so
-// matching on the scheduler's hot path allocates nothing.
+// featureMask is a decoded cpu_features value: bit i set means gVisor's
+// Feature i is present. That number is fixed by the hardware on amd64, 32 *
+// CPUID block + the feature's bit in that block's register, and declared by
+// gVisor on arm64, so a bit never moves between gVisor versions and masks
+// from different runsc binaries compare. It is a fixed-size array so matching
+// on the scheduler's hot path allocates nothing.
 type featureMask [featureMaskWords]uint64
-
-func (m *featureMask) set(bit int) {
-	m[bit/64] |= 1 << (bit % 64)
-}
-
-func (m featureMask) has(bit int) bool {
-	return m[bit/64]&(1<<(bit%64)) != 0
-}
 
 // subsetOf reports whether every bit set in m is also set in w.
 func (m featureMask) subsetOf(w featureMask) bool {
@@ -89,17 +46,6 @@ func (m featureMask) subsetOf(w featureMask) bool {
 		}
 	}
 	return true
-}
-
-// firstNotIn is the lowest bit set in m but not in w, or -1 if m is a
-// subset of w.
-func (m featureMask) firstNotIn(w featureMask) int {
-	for i := range m {
-		if extra := m[i] &^ w[i]; extra != 0 {
-			return i*64 + bits.TrailingZeros64(extra)
-		}
-	}
-	return -1
 }
 
 // String is the canonical encoding: lowercase hex, no prefix, no leading
@@ -161,55 +107,6 @@ func EncodeCPUFeatureMask(blocks string) (string, error) {
 		m[i/2] |= v << (32 * (i % 2))
 	}
 	return m.String(), nil
-}
-
-// EncodeCPUFeatures encodes the feature names `runsc cpu-features` printed
-// for arch as a cpu_features value. Blank names are skipped; duplicates and
-// order do not matter. An unknown name is an error rather than a dropped
-// bit: a snapshot encoded without a feature its sandbox used would match
-// workers that lack it.
-func EncodeCPUFeatures(arch string, features []string) (string, error) {
-	table, ok := cpuFeatureTables[arch]
-	if !ok {
-		return "", fmt.Errorf("unsupported architecture %q for cpu_features", arch)
-	}
-	var m featureMask
-	for _, raw := range features {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			continue
-		}
-		bit, known := table.index[name]
-		if !known {
-			return "", fmt.Errorf("unknown %s CPU feature %q", arch, name)
-		}
-		m.set(bit)
-	}
-	return m.String(), nil
-}
-
-// DecodeCPUFeatures returns the feature names a cpu_features value encodes
-// for arch, in bit order. A set bit with no name is an error: the hardware
-// reserves it, so no encoder of this schema could have produced the value.
-func DecodeCPUFeatures(arch, value string) ([]string, error) {
-	table, ok := cpuFeatureTables[arch]
-	if !ok {
-		return nil, fmt.Errorf("unsupported architecture %q for cpu_features", arch)
-	}
-	m, ok := parseFeatureMask(value)
-	if !ok {
-		return nil, fmt.Errorf("invalid cpu_features value %q", value)
-	}
-	if bit := m.firstNotIn(table.defined); bit >= 0 {
-		return nil, fmt.Errorf("cpu_features value %q sets bit %d, which is not a known %s feature", value, bit, arch)
-	}
-	var out []string
-	for _, bit := range table.bits {
-		if m.has(bit) {
-			out = append(out, table.names[bit])
-		}
-	}
-	return out, nil
 }
 
 // ProbeCPUIdentity reads /proc/cpuinfo for the host CPU's vendor and model:
