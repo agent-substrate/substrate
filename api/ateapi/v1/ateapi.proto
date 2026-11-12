@@ -120,6 +120,16 @@ service Control {
     option (method).resource = "Tag";
   }
 
+  // Get an ExternalVolumeSnapshot.
+  rpc GetExternalVolumeSnapshot(GetExternalVolumeSnapshotRequest) returns (ExternalVolumeSnapshot) {
+    option (method).resource = "ExternalVolumeSnapshot";
+  }
+
+  // List ExternalVolumeSnapshots.
+  rpc ListExternalVolumeSnapshots(ListExternalVolumeSnapshotsRequest) returns (ListExternalVolumeSnapshotsResponse) {
+    option (method).resource = "ExternalVolumeSnapshot";
+  }
+
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
     option (method).resource = "Worker";
@@ -1116,6 +1126,145 @@ message Tag {
   ObjectRef source_actor = 4;
 }
 
+// ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
+// by the storage system.
+//
+// A snapshot is owned by the tag named in origin.tag, in the same atespace.
+// The tag cannot be deleted while it has snapshots. The API only reads
+// snapshots.
+//
+// +ate:preview=ExternalVolumes
+message ExternalVolumeSnapshot {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "ExternalVolumeSnapshots"
+  };
+
+  // Common resource metadata: atespace, name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ResourceMetadata metadata = 1;
+
+  // volume_type is the plugin or CSI driver that took the snapshot. The
+  // snapshot handle means something only to that driver. Must be a DNS
+  // subdomain, optionally prefixed with "substrate.io/" (per the CSI spec's
+  // driver-name syntax). Immutable.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:immutable
+  // +k8s:customValidation # CSI driver name syntax
+  string volume_type = 2;
+
+  // origin records how the snapshot was created, which also decides who owns
+  // it. Set by the server. Immutable.
+  //
+  // +k8s:required
+  // +k8s:immutable
+  ExternalVolumeSnapshotOrigin origin = 3;
+
+  // status is set by the control plane; it is ignored on write.
+  //
+  // +k8s:optional
+  ExternalVolumeSnapshotStatus status = 4;
+}
+
+// ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot was
+// created. Exactly one member is set.
+//
+// (-- An imported member, for snapshots a user registers, is planned. --)
+message ExternalVolumeSnapshotOrigin {
+  // tag is set when a tag owns the snapshot.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  TagVolumeSnapshotOrigin tag = 1;
+}
+
+// TagVolumeSnapshotOrigin identifies the tag that captured a snapshot and the
+// volume it was captured from.
+message TagVolumeSnapshotOrigin {
+  // tag is the Tag that owns the snapshot. Its atespace is the snapshot's
+  // atespace.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef tag = 1;
+
+  // tag_uid is the uid of the tag, so a snapshot is not attributed to a later
+  // tag that reuses the name.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string tag_uid = 2;
+
+  // source_volume_name is the template volume the snapshot was captured from,
+  // matching the ExternalVolumeStatus of the same name on the source Actor.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string source_volume_name = 3;
+
+  // source_volume_id is the CSI volume handle of the volume the snapshot was
+  // captured from. Its format is the storage system's own, so it is only
+  // bounded and checked for control characters, like
+  // ExternalVolumeStatus.storage_volume_id.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:customValidation # no control characters
+  string source_volume_id = 4;
+}
+
+// ExternalVolumeSnapshotStatus is the server-owned state of an
+// ExternalVolumeSnapshot.
+message ExternalVolumeSnapshotStatus {
+  // storage_snapshot_id is the snapshot handle returned by the storage
+  // system. Empty until the storage system returns it, then set once. A
+  // snapshot left without one and without error_message may have been taken
+  // with its handle never recorded. Its format is the storage system's own,
+  // so it is only bounded and checked for control characters, like
+  // ExternalVolumeStatus.storage_volume_id.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string storage_snapshot_id = 1;
+
+  // ready_to_use is whether the storage system has finished the snapshot, so
+  // it can seed new volumes. It is set only once storage_snapshot_id is
+  // recorded. Drivers may return a handle while the copy continues in the
+  // background, so it can start false. It never moves from true back to
+  // false.
+  //
+  // +k8s:optional
+  // +k8s:update=NoUnset
+  bool ready_to_use = 2;
+
+  // size_bytes is the minimum size of a volume restored from the snapshot, as
+  // the driver reports it in the CSI size_bytes field, or 0 if it is unknown.
+  // It is set only once storage_snapshot_id is recorded, and never
+  // overwritten once known.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  int64 size_bytes = 3;
+
+  // error_message is why CreateSnapshot last failed for this volume. Tag
+  // snapshots only. It may be replaced while storage_snapshot_id is empty,
+  // and is cleared by the write that records storage_snapshot_id. It is never
+  // set together with storage_snapshot_id.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096
+  string error_message = 4;
+}
+
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
@@ -2026,6 +2175,38 @@ message ListTagsRequest {
 
 message ListTagsResponse {
   repeated Tag tags = 1;
+  string next_page_token = 2;
+}
+
+// Request to get an ExternalVolumeSnapshot.
+message GetExternalVolumeSnapshotRequest {
+  // The snapshot to get.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef external_volume_snapshot = 1;
+}
+
+// Request to list ExternalVolumeSnapshots.
+message ListExternalVolumeSnapshotsRequest {
+  // The atespace to list snapshots from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  string atespace = 1;
+
+  // Pagination controls.
+  //
+  // +k8s:optional
+  ListOptions options = 2;
+}
+
+// A page of ExternalVolumeSnapshots.
+message ListExternalVolumeSnapshotsResponse {
+  // The snapshots on this page.
+  repeated ExternalVolumeSnapshot external_volume_snapshots = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
   string next_page_token = 2;
 }
 

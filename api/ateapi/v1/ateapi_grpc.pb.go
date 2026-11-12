@@ -33,48 +33,50 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName                   = "/substrate.ateapi.v1.Control/GetActor"
-	Control_CreateActor_FullMethodName                = "/substrate.ateapi.v1.Control/CreateActor"
-	Control_UpdateActor_FullMethodName                = "/substrate.ateapi.v1.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName               = "/substrate.ateapi.v1.Control/SuspendActor"
-	Control_ResumeActor_FullMethodName                = "/substrate.ateapi.v1.Control/ResumeActor"
-	Control_RevertActor_FullMethodName                = "/substrate.ateapi.v1.Control/RevertActor"
-	Control_DeleteActor_FullMethodName                = "/substrate.ateapi.v1.Control/DeleteActor"
-	Control_GetActorEgressPolicy_FullMethodName       = "/substrate.ateapi.v1.Control/GetActorEgressPolicy"
-	Control_CreateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/CreateActorEgressPolicy"
-	Control_UpdateActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
-	Control_DeleteActorEgressPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/DeleteActorEgressPolicy"
-	Control_MintActorJwt_FullMethodName               = "/substrate.ateapi.v1.Control/MintActorJwt"
-	Control_CreateTag_FullMethodName                  = "/substrate.ateapi.v1.Control/CreateTag"
-	Control_GetTag_FullMethodName                     = "/substrate.ateapi.v1.Control/GetTag"
-	Control_ListTags_FullMethodName                   = "/substrate.ateapi.v1.Control/ListTags"
-	Control_UpdateTag_FullMethodName                  = "/substrate.ateapi.v1.Control/UpdateTag"
-	Control_DeleteTag_FullMethodName                  = "/substrate.ateapi.v1.Control/DeleteTag"
-	Control_ListWorkers_FullMethodName                = "/substrate.ateapi.v1.Control/ListWorkers"
-	Control_GetWorker_FullMethodName                  = "/substrate.ateapi.v1.Control/GetWorker"
-	Control_CreateWorker_FullMethodName               = "/substrate.ateapi.v1.Control/CreateWorker"
-	Control_UpdateWorker_FullMethodName               = "/substrate.ateapi.v1.Control/UpdateWorker"
-	Control_DeleteWorker_FullMethodName               = "/substrate.ateapi.v1.Control/DeleteWorker"
-	Control_DrainWorker_FullMethodName                = "/substrate.ateapi.v1.Control/DrainWorker"
-	Control_MarkWorkerAvailable_FullMethodName        = "/substrate.ateapi.v1.Control/MarkWorkerAvailable"
-	Control_MarkWorkerUnavailable_FullMethodName      = "/substrate.ateapi.v1.Control/MarkWorkerUnavailable"
-	Control_ListWorkerActorAssignments_FullMethodName = "/substrate.ateapi.v1.Control/ListWorkerActorAssignments"
-	Control_ListActors_FullMethodName                 = "/substrate.ateapi.v1.Control/ListActors"
-	Control_CreateAtespace_FullMethodName             = "/substrate.ateapi.v1.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName                = "/substrate.ateapi.v1.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName              = "/substrate.ateapi.v1.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName             = "/substrate.ateapi.v1.Control/DeleteAtespace"
-	Control_CreateActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/CreateActorTemplate"
-	Control_GetActorTemplate_FullMethodName           = "/substrate.ateapi.v1.Control/GetActorTemplate"
-	Control_ListActorTemplates_FullMethodName         = "/substrate.ateapi.v1.Control/ListActorTemplates"
-	Control_DeleteActorTemplate_FullMethodName        = "/substrate.ateapi.v1.Control/DeleteActorTemplate"
-	Control_GetGlobalAccessPolicy_FullMethodName      = "/substrate.ateapi.v1.Control/GetGlobalAccessPolicy"
-	Control_CreateGlobalAccessPolicy_FullMethodName   = "/substrate.ateapi.v1.Control/CreateGlobalAccessPolicy"
-	Control_UpdateGlobalAccessPolicy_FullMethodName   = "/substrate.ateapi.v1.Control/UpdateGlobalAccessPolicy"
-	Control_GetAtespaceAccessPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/GetAtespaceAccessPolicy"
-	Control_CreateAtespaceAccessPolicy_FullMethodName = "/substrate.ateapi.v1.Control/CreateAtespaceAccessPolicy"
-	Control_UpdateAtespaceAccessPolicy_FullMethodName = "/substrate.ateapi.v1.Control/UpdateAtespaceAccessPolicy"
-	Control_DeleteAtespaceAccessPolicy_FullMethodName = "/substrate.ateapi.v1.Control/DeleteAtespaceAccessPolicy"
+	Control_GetActor_FullMethodName                    = "/substrate.ateapi.v1.Control/GetActor"
+	Control_CreateActor_FullMethodName                 = "/substrate.ateapi.v1.Control/CreateActor"
+	Control_UpdateActor_FullMethodName                 = "/substrate.ateapi.v1.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName                = "/substrate.ateapi.v1.Control/SuspendActor"
+	Control_ResumeActor_FullMethodName                 = "/substrate.ateapi.v1.Control/ResumeActor"
+	Control_RevertActor_FullMethodName                 = "/substrate.ateapi.v1.Control/RevertActor"
+	Control_DeleteActor_FullMethodName                 = "/substrate.ateapi.v1.Control/DeleteActor"
+	Control_GetActorEgressPolicy_FullMethodName        = "/substrate.ateapi.v1.Control/GetActorEgressPolicy"
+	Control_CreateActorEgressPolicy_FullMethodName     = "/substrate.ateapi.v1.Control/CreateActorEgressPolicy"
+	Control_UpdateActorEgressPolicy_FullMethodName     = "/substrate.ateapi.v1.Control/UpdateActorEgressPolicy"
+	Control_DeleteActorEgressPolicy_FullMethodName     = "/substrate.ateapi.v1.Control/DeleteActorEgressPolicy"
+	Control_MintActorJwt_FullMethodName                = "/substrate.ateapi.v1.Control/MintActorJwt"
+	Control_CreateTag_FullMethodName                   = "/substrate.ateapi.v1.Control/CreateTag"
+	Control_GetTag_FullMethodName                      = "/substrate.ateapi.v1.Control/GetTag"
+	Control_ListTags_FullMethodName                    = "/substrate.ateapi.v1.Control/ListTags"
+	Control_UpdateTag_FullMethodName                   = "/substrate.ateapi.v1.Control/UpdateTag"
+	Control_DeleteTag_FullMethodName                   = "/substrate.ateapi.v1.Control/DeleteTag"
+	Control_GetExternalVolumeSnapshot_FullMethodName   = "/substrate.ateapi.v1.Control/GetExternalVolumeSnapshot"
+	Control_ListExternalVolumeSnapshots_FullMethodName = "/substrate.ateapi.v1.Control/ListExternalVolumeSnapshots"
+	Control_ListWorkers_FullMethodName                 = "/substrate.ateapi.v1.Control/ListWorkers"
+	Control_GetWorker_FullMethodName                   = "/substrate.ateapi.v1.Control/GetWorker"
+	Control_CreateWorker_FullMethodName                = "/substrate.ateapi.v1.Control/CreateWorker"
+	Control_UpdateWorker_FullMethodName                = "/substrate.ateapi.v1.Control/UpdateWorker"
+	Control_DeleteWorker_FullMethodName                = "/substrate.ateapi.v1.Control/DeleteWorker"
+	Control_DrainWorker_FullMethodName                 = "/substrate.ateapi.v1.Control/DrainWorker"
+	Control_MarkWorkerAvailable_FullMethodName         = "/substrate.ateapi.v1.Control/MarkWorkerAvailable"
+	Control_MarkWorkerUnavailable_FullMethodName       = "/substrate.ateapi.v1.Control/MarkWorkerUnavailable"
+	Control_ListWorkerActorAssignments_FullMethodName  = "/substrate.ateapi.v1.Control/ListWorkerActorAssignments"
+	Control_ListActors_FullMethodName                  = "/substrate.ateapi.v1.Control/ListActors"
+	Control_CreateAtespace_FullMethodName              = "/substrate.ateapi.v1.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName                 = "/substrate.ateapi.v1.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName               = "/substrate.ateapi.v1.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName              = "/substrate.ateapi.v1.Control/DeleteAtespace"
+	Control_CreateActorTemplate_FullMethodName         = "/substrate.ateapi.v1.Control/CreateActorTemplate"
+	Control_GetActorTemplate_FullMethodName            = "/substrate.ateapi.v1.Control/GetActorTemplate"
+	Control_ListActorTemplates_FullMethodName          = "/substrate.ateapi.v1.Control/ListActorTemplates"
+	Control_DeleteActorTemplate_FullMethodName         = "/substrate.ateapi.v1.Control/DeleteActorTemplate"
+	Control_GetGlobalAccessPolicy_FullMethodName       = "/substrate.ateapi.v1.Control/GetGlobalAccessPolicy"
+	Control_CreateGlobalAccessPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/CreateGlobalAccessPolicy"
+	Control_UpdateGlobalAccessPolicy_FullMethodName    = "/substrate.ateapi.v1.Control/UpdateGlobalAccessPolicy"
+	Control_GetAtespaceAccessPolicy_FullMethodName     = "/substrate.ateapi.v1.Control/GetAtespaceAccessPolicy"
+	Control_CreateAtespaceAccessPolicy_FullMethodName  = "/substrate.ateapi.v1.Control/CreateAtespaceAccessPolicy"
+	Control_UpdateAtespaceAccessPolicy_FullMethodName  = "/substrate.ateapi.v1.Control/UpdateAtespaceAccessPolicy"
+	Control_DeleteAtespaceAccessPolicy_FullMethodName  = "/substrate.ateapi.v1.Control/DeleteAtespaceAccessPolicy"
 )
 
 // ControlClient is the client API for Control service.
@@ -129,6 +131,10 @@ type ControlClient interface {
 	// tag that have not yet been suspended still point at that external snapshot
 	// and become unrecoverable, so do not delete a tag while such Actors exist.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
+	// Get an ExternalVolumeSnapshot.
+	GetExternalVolumeSnapshot(ctx context.Context, in *GetExternalVolumeSnapshotRequest, opts ...grpc.CallOption) (*ExternalVolumeSnapshot, error)
+	// List ExternalVolumeSnapshots.
+	ListExternalVolumeSnapshots(ctx context.Context, in *ListExternalVolumeSnapshotsRequest, opts ...grpc.CallOption) (*ListExternalVolumeSnapshotsResponse, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	// Get a Worker.
@@ -369,6 +375,26 @@ func (c *controlClient) DeleteTag(ctx context.Context, in *DeleteTagRequest, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Tag)
 	err := c.cc.Invoke(ctx, Control_DeleteTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetExternalVolumeSnapshot(ctx context.Context, in *GetExternalVolumeSnapshotRequest, opts ...grpc.CallOption) (*ExternalVolumeSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExternalVolumeSnapshot)
+	err := c.cc.Invoke(ctx, Control_GetExternalVolumeSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListExternalVolumeSnapshots(ctx context.Context, in *ListExternalVolumeSnapshotsRequest, opts ...grpc.CallOption) (*ListExternalVolumeSnapshotsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListExternalVolumeSnapshotsResponse)
+	err := c.cc.Invoke(ctx, Control_ListExternalVolumeSnapshots_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -677,6 +703,10 @@ type ControlServer interface {
 	// tag that have not yet been suspended still point at that external snapshot
 	// and become unrecoverable, so do not delete a tag while such Actors exist.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
+	// Get an ExternalVolumeSnapshot.
+	GetExternalVolumeSnapshot(context.Context, *GetExternalVolumeSnapshotRequest) (*ExternalVolumeSnapshot, error)
+	// List ExternalVolumeSnapshots.
+	ListExternalVolumeSnapshots(context.Context, *ListExternalVolumeSnapshotsRequest) (*ListExternalVolumeSnapshotsResponse, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	// Get a Worker.
@@ -803,6 +833,12 @@ func (UnimplementedControlServer) UpdateTag(context.Context, *UpdateTagRequest) 
 }
 func (UnimplementedControlServer) DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTag not implemented")
+}
+func (UnimplementedControlServer) GetExternalVolumeSnapshot(context.Context, *GetExternalVolumeSnapshotRequest) (*ExternalVolumeSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetExternalVolumeSnapshot not implemented")
+}
+func (UnimplementedControlServer) ListExternalVolumeSnapshots(context.Context, *ListExternalVolumeSnapshotsRequest) (*ListExternalVolumeSnapshotsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListExternalVolumeSnapshots not implemented")
 }
 func (UnimplementedControlServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkers not implemented")
@@ -1202,6 +1238,42 @@ func _Control_DeleteTag_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).DeleteTag(ctx, req.(*DeleteTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetExternalVolumeSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetExternalVolumeSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetExternalVolumeSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetExternalVolumeSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetExternalVolumeSnapshot(ctx, req.(*GetExternalVolumeSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListExternalVolumeSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListExternalVolumeSnapshotsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListExternalVolumeSnapshots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListExternalVolumeSnapshots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListExternalVolumeSnapshots(ctx, req.(*ListExternalVolumeSnapshotsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1730,6 +1802,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteTag",
 			Handler:    _Control_DeleteTag_Handler,
+		},
+		{
+			MethodName: "GetExternalVolumeSnapshot",
+			Handler:    _Control_GetExternalVolumeSnapshot_Handler,
+		},
+		{
+			MethodName: "ListExternalVolumeSnapshots",
+			Handler:    _Control_ListExternalVolumeSnapshots_Handler,
 		},
 		{
 			MethodName: "ListWorkers",

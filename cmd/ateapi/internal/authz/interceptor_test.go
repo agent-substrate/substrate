@@ -484,6 +484,11 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 	}}}
 	deleteTag := rpcCall{ateapi.Control_DeleteTag_FullMethodName, &ateapi.DeleteTagRequest{Tag: tag}}
 	mintJWT := rpcCall{ateapi.Control_MintActorJwt_FullMethodName, &ateapi.MintActorJwtRequest{Actor: actor}}
+	getSnapshot := rpcCall{ateapi.Control_GetExternalVolumeSnapshot_FullMethodName, &ateapi.GetExternalVolumeSnapshotRequest{
+		ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: "team-a", Name: "snap"},
+	}}
+	listSnapshots := rpcCall{ateapi.Control_ListExternalVolumeSnapshots_FullMethodName, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: "team-a"}}
+	listAllSnapshots := rpcCall{ateapi.Control_ListExternalVolumeSnapshots_FullMethodName, &ateapi.ListExternalVolumeSnapshotsRequest{}}
 	// cloneTag creates an actor in atespace from team-a's tag v1, with a
 	// template in that same atespace so only the tag check can differ.
 	cloneTag := func(atespace string, sourceTag *ateapi.ObjectRef) rpcCall {
@@ -571,6 +576,14 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"viewer cannot delete tag", "viewer", deleteTag, codes.PermissionDenied},
 		{"outsider cannot delete tag", "outsider", deleteTag, codes.PermissionDenied},
 		{"bootstrap owner deletes tag", "bootstrap-owner", deleteTag, codes.OK},
+
+		// External volume snapshots: viewers of the atespace read them.
+		{"viewer gets snapshot", "viewer", getSnapshot, codes.OK},
+		{"outsider cannot get snapshot", "outsider", getSnapshot, codes.PermissionDenied},
+		{"viewer lists snapshots", "viewer", listSnapshots, codes.OK},
+		{"outsider cannot list snapshots", "outsider", listSnapshots, codes.PermissionDenied},
+		{"global viewer lists all snapshots", "global-viewer", listAllSnapshots, codes.OK},
+		{"atespace editor cannot list all snapshots", "editor", listAllSnapshots, codes.PermissionDenied},
 
 		// Cloning from a tag needs editor on the tag's atespace, whatever its
 		// scope. An actor created without an explicit tag only needs its template.
