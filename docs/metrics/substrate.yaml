@@ -223,9 +223,10 @@ blind_spots:
   - area: image cache cost and eviction
     code: internal/imagecache
     brief: >
-      The hit and miss counter exists. But the garbage collector (the 85% and
-      80% limits) and the time to prepare an image send nothing. Thus you cannot
-      see the disk pressure from the layer pool.
+      The hit and miss counter and the garbage collector's pass counter exist.
+      But the size of the layer pool and the time to prepare an image send
+      nothing. Thus you can see whether the collector keeps up, but not how
+      much of the disk the layer pool holds.
   - area: podcertcontroller
     code: cmd/podcertcontroller
     brief: This component has no metrics.

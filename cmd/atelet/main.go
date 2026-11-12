@@ -290,7 +290,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to open image cache", err)
 	}
 	if *imageCacheGCPeriod > 0 {
-		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
+		go newImageCacheGC(imageCache, *imageCacheDir, instruments).Run(ctx)
 	}
 
 	sandboxAssetCache, err := openSandboxAssetCache(ctx, *sandboxAssetCacheDir, *sandboxAssetCacheMinAge, *sandboxAssetFetchTimeout, nodepath.ActorsDir, nodepath.WorkersDir())

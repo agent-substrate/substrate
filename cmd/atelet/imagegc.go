@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/nodepath"
 	"golang.org/x/sys/unix"
@@ -141,18 +142,21 @@ type imageCacheGC struct {
 	maxBytes int64
 	dryRun   bool
 
+	instruments *Instruments
+
 	consecutiveShortfalls int
 }
 
-func newImageCacheGC(store *imagecache.Store, cacheDir string) *imageCacheGC {
+func newImageCacheGC(store *imagecache.Store, cacheDir string, instruments *Instruments) *imageCacheGC {
 	return &imageCacheGC{
-		store:    store,
-		cacheDir: cacheDir,
-		period:   *imageCacheGCPeriod,
-		highPct:  *imageCacheHighPct,
-		lowPct:   *imageCacheLowPct,
-		maxBytes: *imageCacheMaxBytes,
-		dryRun:   *imageCacheGCDryRun,
+		store:       store,
+		cacheDir:    cacheDir,
+		period:      *imageCacheGCPeriod,
+		highPct:     *imageCacheHighPct,
+		lowPct:      *imageCacheLowPct,
+		maxBytes:    *imageCacheMaxBytes,
+		dryRun:      *imageCacheGCDryRun,
+		instruments: instruments,
 	}
 }
 
@@ -196,6 +200,7 @@ func (g *imageCacheGC) runPass(ctx context.Context) {
 	var st unix.Statfs_t
 	if err := unix.Statfs(g.cacheDir, &st); err != nil {
 		slog.WarnContext(ctx, "Image cache GC: statfs failed", slog.String("dir", g.cacheDir), slog.Any("err", err))
+		g.instruments.recordImageCacheGCPass(ctx, gcPassSkipped)
 		return
 	}
 	capacity := st.Blocks * uint64(st.Bsize)
@@ -207,6 +212,7 @@ func (g *imageCacheGC) runPass(ctx context.Context) {
 	if err != nil {
 		slog.WarnContext(ctx, "Image cache GC: sizing the pool failed; skipping this pass",
 			slog.Any("err", err))
+		g.instruments.recordImageCacheGCPass(ctx, gcPassSkipped)
 		return
 	}
 
@@ -236,10 +242,11 @@ func (g *imageCacheGC) runPass(ctx context.Context) {
 	g.noteOutcome(ctx, classifyGCPass(err, target, stats.FreedBytes), err, attrs)
 }
 
-// noteOutcome logs one finished pass and advances the shortfall backoff.
-// The counter survives a gated pass (which says nothing about whether the
-// cache can meet a target) and resets when a target is met or absent.
+// noteOutcome records and logs one finished pass and advances the shortfall
+// backoff. The backoff survives a gated pass (which says nothing about whether
+// the cache can meet a target) and resets when a target is met or absent.
 func (g *imageCacheGC) noteOutcome(ctx context.Context, outcome gcPassOutcome, err error, attrs []any) {
+	g.instruments.recordImageCacheGCPass(ctx, outcome)
 	if outcome == gcPassSkipped {
 		slog.ErrorContext(ctx, "Image cache GC pass skipped", append(attrs, slog.Any("err", err))...)
 		return
@@ -280,6 +287,20 @@ const (
 	gcPassComplete                       // ran; target met
 	gcPassQuiet                          // no target
 )
+
+// String is the outcome's ate.imagecache.gc.outcome value.
+func (o gcPassOutcome) String() string {
+	switch o {
+	case gcPassSkipped:
+		return ateattr.ImageCacheGCOutcomeSkipped
+	case gcPassShortfall:
+		return ateattr.ImageCacheGCOutcomeShortfall
+	case gcPassComplete:
+		return ateattr.ImageCacheGCOutcomeComplete
+	default:
+		return ateattr.ImageCacheGCOutcomeQuiet
+	}
+}
 
 // classifyGCPass keeps the gate-vs-shortfall distinction testable and on
 // contract (the engine's sentinel), not inferred from stats: a gated pass

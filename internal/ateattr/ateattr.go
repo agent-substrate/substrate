@@ -161,6 +161,7 @@ const (
 	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
+	ImageCacheGCOutcomeKey = attribute.Key("ate.imagecache.gc.outcome")
 	FileCacheNameKey       = attribute.Key("ate.filecache.name")
 	FileCacheGCOutcomeKey  = attribute.Key("ate.filecache.gc.outcome")
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
@@ -237,6 +238,15 @@ const (
 	ImageCacheOutcomeError     = "error"
 	ImageCacheOutcomeCancelled = "cancelled"
 	ImageCacheOutcomeTimeout   = "timeout"
+)
+
+// Values for ImageCacheGCOutcomeKey. Unlike FileCacheGCOutcomeKey, quiet
+// passes are recorded too, so a count that stops rising means the GC stopped.
+const (
+	ImageCacheGCOutcomeComplete  = "complete"  // the pass freed what it targeted
+	ImageCacheGCOutcomeShortfall = "shortfall" // it freed less than it targeted
+	ImageCacheGCOutcomeSkipped   = "skipped"   // it could not run and removed nothing
+	ImageCacheGCOutcomeQuiet     = "quiet"     // nothing was over its limit
 )
 
 // Values for FileCacheNameKey.
