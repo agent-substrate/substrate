@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -199,15 +200,22 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	//     VOLUMES the workload cold-starts on restore, discarding rootfs state.
 	shipsRootfs := includesRootfs(scope)
 	var durableFiles []string
+	var snapshotRelease func()
+	defer func() {
+		if snapshotRelease != nil {
+			snapshotRelease()
+		}
+	}()
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		g.Go(func() error {
 			t := time.Now()
-			d, err := s.snapshotVMState(gctx, client, ra, actorUID, checkpointDir)
+			d, release, err := s.snapshotVMState(gctx, client, ra, actorUID, checkpointDir)
 			if err != nil {
 				d = time.Since(t)
 			}
 			dSnapshot = d
+			snapshotRelease = release
 			return err
 		})
 	}
@@ -242,7 +250,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
-	// already on disk for atelet to ship.
+	// already on disk for atelet to ship. Teardown removes the leaf, so there is
+	// no memory.high or memory watch to put back.
+	snapshotRelease = nil
 	tTeardown := time.Now()
 	if err := s.terminateWorkload(ctx, attribution, actorDirs); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
@@ -271,8 +281,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
 // (config.json + state.json + memory-ranges) plus the base-id the restore side
-// needs, and returns how long the snapshot itself took.
-func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (time.Duration, error) {
+// needs, and returns how long the snapshot itself took and writeSnapshot's
+// release func.
+func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (time.Duration, func(), error) {
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
 	// to, <baseID>/rootfs). For a cold-run actor this is its own id; for a restored
 	// actor it is the golden id propagated via ra.baseID (set from the snapshot we
@@ -285,14 +296,14 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 		baseID = ra.baseID
 	}
 	if err := os.WriteFile(filepath.Join(checkpointDir, baseIDFile), []byte(baseID), 0o600); err != nil {
-		return 0, fmt.Errorf("while writing %s: %w", baseIDFile, err)
+		return 0, nil, fmt.Errorf("while writing %s: %w", baseIDFile, err)
 	}
 
 	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", actorUID), slog.String("dir", checkpointDir))
 	tSnapshot := time.Now()
-	borrowed, err := s.writeSnapshot(ctx, client, ra, actorUID, checkpointDir)
+	borrowed, release, err := s.writeSnapshot(ctx, client, ra, actorUID, checkpointDir)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	dSnapshot := time.Since(tSnapshot)
 
@@ -312,7 +323,8 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 		tMerge := time.Now()
 		if err := mergeOnDemandDelta(ctx, ra.restoreSourceDir, checkpointDir, ra.preserveRestoreSource); err != nil {
 			s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
-			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
+			release()
+			return 0, nil, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
 			slog.String("id", actorUID), slog.Duration("merge", time.Since(tMerge)))
@@ -325,7 +337,7 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
-	return dSnapshot, nil
+	return dSnapshot, release, nil
 }
 
 // snapshotWriteHeadroom is how far the actor's cgroup may grow past the paused
@@ -346,20 +358,29 @@ const (
 // kernel throttles CH to the disk past that.
 //
 // It returns what it borrowed, for the caller to Return once the snapshot is on
-// disk. On error the loan comes back once whatever CH wrote is on disk or
-// removed.
-func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (int64, error) {
+// disk, and a func that puts the leaf's memory.high and memory watch back, for
+// when the guest keeps running. Putting memory.high back while the paused guest
+// still holds its memory makes the kernel reclaim the snapshot CH just wrote.
+// On error the loan comes back once whatever CH wrote is on disk or removed.
+func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (int64, func(), error) {
 	if s.snapshotWrites != nil {
 		select {
 		case s.snapshotWrites <- struct{}{}:
 			defer func() { <-s.snapshotWrites }()
 		case <-ctx.Done():
-			return 0, fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
+			return 0, nil, fmt.Errorf("while waiting to snapshot: %w", ctx.Err())
+		}
+	}
+	var releases []func()
+	releaseAll := func() {
+		for _, release := range slices.Backward(releases) {
+			release()
 		}
 	}
 	// the page cache the write adds isn't the actor running away
 	if ra != nil {
-		defer ra.memory.Resume(ra.memory.Pause())
+		limit := ra.memory.Pause()
+		releases = append(releases, func() { ra.memory.Resume(limit) })
 	}
 	var borrowed int64
 	// the write caches about as much as the guest has populated, which is
@@ -375,7 +396,7 @@ func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client,
 		if err != nil {
 			slog.WarnContext(ctx, "Snapshotting under the actor's memory limit", slog.String("id", actorUID), slog.Any("err", err))
 		} else {
-			defer release()
+			releases = append(releases, release)
 		}
 	}
 	if err != nil || borrowed < current {
@@ -387,14 +408,15 @@ func (s *AteWorkerService) writeSnapshot(ctx context.Context, client *ch.Client,
 		if err != nil {
 			slog.WarnContext(ctx, "Snapshotting without a page cache limit", slog.String("id", actorUID), slog.Any("err", err))
 		} else {
-			defer release()
+			releases = append(releases, release)
 		}
 	}
 	if err := client.Snapshot(ctx, checkpointDir); err != nil {
 		s.writeBackSnapshot(ctx, actorUID, checkpointDir, borrowed)
-		return 0, fmt.Errorf("while snapshotting guest: %w", err)
+		releaseAll()
+		return 0, nil, fmt.Errorf("while snapshotting guest: %w", err)
 	}
-	return borrowed, nil
+	return borrowed, releaseAll, nil
 }
 
 // writeBackSnapshot returns borrowed once the snapshot files in checkpointDir

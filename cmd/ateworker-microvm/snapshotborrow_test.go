@@ -17,10 +17,13 @@
 package main
 
 import (
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/internal/ateworker/memborrow"
 )
 
@@ -65,5 +68,67 @@ func TestArchiveDirReturnsTheLoanOnError(t *testing.T) {
 	}
 	if got := l.Take(1 << 30); got != 1<<30 {
 		t.Errorf("Take() after a failed archiveDir = %d, want all %d back", got, int64(1<<30))
+	}
+}
+
+func startTestSnapshotCH(t *testing.T, status int) *ch.Client {
+	t.Helper()
+	sockPath := filepath.Join(t.TempDir(), "ch.sock")
+	lis, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/vm.snapshot", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(lis)
+	t.Cleanup(func() { _ = srv.Close() })
+	return ch.NewClient(sockPath)
+}
+
+func TestWriteSnapshotDefersReleaseUntilCallerInvokesIt(t *testing.T) {
+	client := startTestSnapshotCH(t, http.StatusNoContent)
+	s := &AteWorkerService{}
+	ra := &runningActor{}
+	const limit = 1 << 30
+	ra.memory.Resume(limit)
+
+	_, release, err := s.writeSnapshot(t.Context(), client, ra, "actor-a", t.TempDir())
+	if err != nil {
+		t.Fatalf("writeSnapshot() unexpected error: %v", err)
+	}
+	if release == nil {
+		t.Fatal("writeSnapshot() returned nil release func")
+	}
+	// While the paused guest still exists alongside the newly written snapshot
+	// page cache, writeSnapshot must NOT have resumed the guard (or restored
+	// memory.high) yet.
+	if got := ra.memory.Pause(); got != 0 {
+		t.Fatalf("ra.memory limit before release() = %d, want 0 (still paused)", got)
+	}
+	release()
+	if got := ra.memory.Pause(); got != limit {
+		t.Errorf("ra.memory limit after release() = %d, want %d", got, uint64(limit))
+	}
+}
+
+func TestWriteSnapshotRestoresGuardOnSnapshotError(t *testing.T) {
+	client := startTestSnapshotCH(t, http.StatusInternalServerError)
+	s := &AteWorkerService{}
+	ra := &runningActor{}
+	const limit = 1 << 30
+	ra.memory.Resume(limit)
+
+	_, release, err := s.writeSnapshot(t.Context(), client, ra, "actor-a", t.TempDir())
+	if err == nil {
+		t.Fatal("writeSnapshot() succeeded on 500 response, want error")
+	}
+	if release != nil {
+		t.Errorf("writeSnapshot() returned non-nil release func on error")
+	}
+	if got := ra.memory.Pause(); got != limit {
+		t.Errorf("ra.memory limit after failed writeSnapshot() = %d, want %d", got, uint64(limit))
 	}
 }
