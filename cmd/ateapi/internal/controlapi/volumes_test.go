@@ -29,34 +29,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/volume"
-	storagev1 "k8s.io/api/storage/v1"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8slabels "k8s.io/apimachinery/pkg/labels"
-	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
-
-type fakeStorageClassLister struct {
-	storageClasses map[string]*storagev1.StorageClass
-	getErr         error
-}
-
-func (f *fakeStorageClassLister) List(selector k8slabels.Selector) (ret []*storagev1.StorageClass, err error) {
-	return nil, nil
-}
-
-func (f *fakeStorageClassLister) Get(name string) (*storagev1.StorageClass, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	sc, ok := f.storageClasses[name]
-	if !ok {
-		return nil, k8serrors.NewNotFound(storagev1.Resource("storageclass"), name)
-	}
-	return sc, nil
-}
-
-var _ storagev1listers.StorageClassLister = (*fakeStorageClassLister)(nil)
 
 // fakeExternalVolumeClassGetter serves classes from a map and reports a
 // missing name the way ServiceImpl does.
@@ -76,70 +49,13 @@ func (f *fakeExternalVolumeClassGetter) GetExternalVolumeClass(_ context.Context
 	return class, nil
 }
 
-func TestActorVolumesStorageClassErrors(t *testing.T) {
-	ctx := context.Background()
-	tmpl := &ateapi.ActorTemplate{
-		Volumes: []*ateapi.Volume{{
-			Name: "data-vol",
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-				StorageClassName: "standard",
-			}},
-		}},
-	}
-	volumes := []*ateapi.ExternalVolumeStatus{{
-		Name:       "data-vol",
-		VolumeType: "mock-standard",
-	}}
-
-	for _, tt := range []struct {
-		name     string
-		getErr   error
-		wantCode codes.Code
-	}{
-		{
-			name:     "missing StorageClass",
-			wantCode: codes.FailedPrecondition,
-		},
-		{
-			name:     "StorageClass lookup fails",
-			getErr:   errors.New("storage class cache unavailable"),
-			wantCode: codes.Internal,
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			lister := &fakeStorageClassLister{getErr: tt.getErr}
-			t.Run("initial", func(t *testing.T) {
-				_, err := initialExternalVolumes(ctx, nil, lister, tmpl)
-				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("initialExternalVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
-				}
-				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
-					t.Errorf("initialExternalVolumes() error does not name the StorageClass: %v", err)
-				}
-			})
-			t.Run("create", func(t *testing.T) {
-				res, err := createActorVolumes(ctx, &mockPluginRegistry{}, nil, lister, "actor-uid-123", tmpl, volumes)
-				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
-				}
-				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
-					t.Errorf("createActorVolumes() error does not name the StorageClass: %v", err)
-				}
-				if diff := cmp.Diff(volumes, res, protocmp.Transform()); diff != "" {
-					t.Errorf("createActorVolumes() did not preserve pending volumes (-want +got):\n%s", diff)
-				}
-			})
-		})
-	}
-}
-
 func TestInitialActorVolumes(t *testing.T) {
 	tmpl := &ateapi.ActorTemplate{
 		Volumes: []*ateapi.Volume{
 			{
 				Name: "data-vol-1",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
 				}},
 			},
 			{
@@ -152,7 +68,7 @@ func TestInitialActorVolumes(t *testing.T) {
 			{
 				Name: "data-vol-2",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "fast",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "fast"},
 				}},
 			},
 		},
@@ -170,20 +86,18 @@ func TestInitialActorVolumes(t *testing.T) {
 		},
 	}
 
-	scLister := &fakeStorageClassLister{
-		storageClasses: map[string]*storagev1.StorageClass{
+	classes := &fakeExternalVolumeClassGetter{
+		classes: map[string]*ateapi.ExternalVolumeClass{
 			"standard": {
-				ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
-				Provisioner: "mock-standard",
+				DriverName: "mock-standard",
 			},
 			"fast": {
-				ObjectMeta:   metav1.ObjectMeta{Name: "fast"},
-				Provisioner:  "mock-fast",
+				DriverName:   "mock-fast",
 				MountOptions: []string{"noatime"},
 			},
 		},
 	}
-	initVols, err := initialExternalVolumes(context.Background(), nil, scLister, tmpl)
+	initVols, err := initialExternalVolumes(context.Background(), classes, tmpl)
 	if err != nil {
 		t.Fatalf("initialExternalVolumes failed: %v", err)
 	}
@@ -200,7 +114,7 @@ func TestCreateActorVolumes(t *testing.T) {
 			{
 				Name: "data-vol",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
 				}},
 			},
 		},
@@ -211,38 +125,38 @@ func TestCreateActorVolumes(t *testing.T) {
 			{
 				Name: "vol1",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
 				}},
 			},
 			{
 				Name: "vol2",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
 				}},
 			},
 			{
 				Name: "vol3",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					StorageClassName: "standard",
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
 				}},
 			},
 		},
 	}
 
 	tests := []struct {
-		name           string
-		tmpl           *ateapi.ActorTemplate
-		inputVolumes   []*ateapi.ExternalVolumeStatus
-		storageClasses map[string]*storagev1.StorageClass
-		wantErr        bool
-		wantRes        []*ateapi.ExternalVolumeStatus
+		name         string
+		tmpl         *ateapi.ActorTemplate
+		inputVolumes []*ateapi.ExternalVolumeStatus
+		classes      map[string]*ateapi.ExternalVolumeClass
+		wantErr      bool
+		wantRes      []*ateapi.ExternalVolumeStatus
 	}{
 		{
 			name: "partial failure returns error and preserves succeeded, failed, and remaining volumes",
 			tmpl: multiVolTmpl,
 			inputVolumes: []*ateapi.ExternalVolumeStatus{
 				{Name: "vol1", VolumeType: "mock-standard"},
-				// Its type differs from its StorageClass's provisioner, so creating it fails.
+				// Its type differs from its ExternalVolumeClass's driver, so creating it fails.
 				{Name: "vol2", VolumeType: "mock-fast"},
 				{Name: "vol3", VolumeType: "mock-standard"},
 			},
@@ -286,7 +200,7 @@ func TestCreateActorVolumes(t *testing.T) {
 			},
 		},
 		{
-			name: "storage class parameters and mount options are propagated",
+			name: "class parameters and mount options are propagated",
 			tmpl: standardTmpl,
 			inputVolumes: []*ateapi.ExternalVolumeStatus{
 				{
@@ -294,10 +208,9 @@ func TestCreateActorVolumes(t *testing.T) {
 					VolumeType: "mock-standard",
 				},
 			},
-			storageClasses: map[string]*storagev1.StorageClass{
+			classes: map[string]*ateapi.ExternalVolumeClass{
 				"standard": {
-					ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
-					Provisioner: "mock-standard",
+					DriverName: "mock-standard",
 					Parameters: map[string]string{
 						"type":                      "pd-ssd",
 						"csi.storage.k8s.io/fstype": "ext4",
@@ -330,21 +243,15 @@ func TestCreateActorVolumes(t *testing.T) {
 					"mock-fast":     plugin,
 				},
 			}
-			scs := tt.storageClasses
-			if scs == nil {
-				scs = map[string]*storagev1.StorageClass{
-					"standard": {
-						ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
-						Provisioner: "mock-standard",
-					},
-					"fast": {
-						ObjectMeta:  metav1.ObjectMeta{Name: "fast"},
-						Provisioner: "mock-fast",
-					},
+			cls := tt.classes
+			if cls == nil {
+				cls = map[string]*ateapi.ExternalVolumeClass{
+					"standard": {DriverName: "mock-standard"},
+					"fast":     {DriverName: "mock-fast"},
 				}
 			}
-			scLister := &fakeStorageClassLister{storageClasses: scs}
-			res, err := createActorVolumes(ctx, registry, nil, scLister, "actor-uid-123", tt.tmpl, tt.inputVolumes)
+			getter := &fakeExternalVolumeClassGetter{classes: cls}
+			res, err := createActorVolumes(ctx, registry, getter, "actor-uid-123", tt.tmpl, tt.inputVolumes)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("createActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -355,8 +262,10 @@ func TestCreateActorVolumes(t *testing.T) {
 	}
 }
 
-func TestResolveExternalVolumeClass(t *testing.T) {
-	ref := &ateapi.ObjectRef{Name: "gold"}
+func TestResolveVolumeClass(t *testing.T) {
+	tmpl := &ateapi.ExternalVolumeTemplate{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: "gold"},
+	}
 	for _, tt := range []struct {
 		name             string
 		getter           *fakeExternalVolumeClassGetter
@@ -387,24 +296,27 @@ func TestResolveExternalVolumeClass(t *testing.T) {
 		wantCode: codes.Internal,
 	}} {
 		t.Run(tt.name, func(t *testing.T) {
-			driver, params, mountOptions, err := resolveExternalVolumeClass(context.Background(), tt.getter, ref)
-			if got := apierror.Code(err); got != tt.wantCode {
-				t.Fatalf("resolveExternalVolumeClass() code = %v, want %v; error = %v", got, tt.wantCode, err)
+			got, err := resolveVolumeClass(context.Background(), tt.getter, tmpl)
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("resolveVolumeClass() code = %v, want %v; error = %v", code, tt.wantCode, err)
 			}
 			if err != nil {
 				if !strings.Contains(err.Error(), `ExternalVolumeClass "gold"`) {
-					t.Errorf("resolveExternalVolumeClass() error does not name the class: %v", err)
+					t.Errorf("resolveVolumeClass() error does not name the class: %v", err)
 				}
 				return
 			}
-			if driver != tt.wantDriver {
-				t.Errorf("resolveExternalVolumeClass() driver = %q, want %q", driver, tt.wantDriver)
+			if got.name != "gold" {
+				t.Errorf("resolveVolumeClass() name = %q, want %q", got.name, "gold")
 			}
-			if diff := cmp.Diff(tt.wantParams, params); diff != "" {
-				t.Errorf("resolveExternalVolumeClass() params mismatch (-want +got):\n%s", diff)
+			if got.driver != tt.wantDriver {
+				t.Errorf("resolveVolumeClass() driver = %q, want %q", got.driver, tt.wantDriver)
 			}
-			if diff := cmp.Diff(tt.wantMountOptions, mountOptions); diff != "" {
-				t.Errorf("resolveExternalVolumeClass() mountOptions mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tt.wantParams, got.params); diff != "" {
+				t.Errorf("resolveVolumeClass() params mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tt.wantMountOptions, got.mountOptions); diff != "" {
+				t.Errorf("resolveVolumeClass() mountOptions mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -433,7 +345,7 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 	}}
 
 	t.Run("initial volume takes the class driver and mount options", func(t *testing.T) {
-		got, err := initialExternalVolumes(ctx, classes, nil, tmpl)
+		got, err := initialExternalVolumes(ctx, classes, tmpl)
 		if err != nil {
 			t.Fatalf("initialExternalVolumes() failed: %v", err)
 		}
@@ -449,7 +361,7 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 
 	t.Run("create passes the class parameters and mount options", func(t *testing.T) {
 		input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
-		got, err := createActorVolumes(ctx, registry, classes, nil, "actor-uid-123", tmpl, input)
+		got, err := createActorVolumes(ctx, registry, classes, "actor-uid-123", tmpl, input)
 		if err != nil {
 			t.Fatalf("createActorVolumes() failed: %v", err)
 		}
@@ -467,7 +379,7 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 
 	t.Run("create rejects a volume whose type differs from the class driver", func(t *testing.T) {
 		input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-fast"}}
-		got, err := createActorVolumes(ctx, registry, classes, nil, "actor-uid-123", tmpl, input)
+		got, err := createActorVolumes(ctx, registry, classes, "actor-uid-123", tmpl, input)
 		if code := apierror.Code(err); code != codes.FailedPrecondition {
 			t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", code, codes.FailedPrecondition, err)
 		}
@@ -481,11 +393,11 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 
 	t.Run("missing class is a failed precondition", func(t *testing.T) {
 		missing := &fakeExternalVolumeClassGetter{}
-		if _, err := initialExternalVolumes(ctx, missing, nil, tmpl); apierror.Code(err) != codes.FailedPrecondition {
+		if _, err := initialExternalVolumes(ctx, missing, tmpl); apierror.Code(err) != codes.FailedPrecondition {
 			t.Errorf("initialExternalVolumes() error = %v, want FailedPrecondition", err)
 		}
 		input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
-		got, err := createActorVolumes(ctx, registry, missing, nil, "actor-uid-123", tmpl, input)
+		got, err := createActorVolumes(ctx, registry, missing, "actor-uid-123", tmpl, input)
 		if code := apierror.Code(err); code != codes.FailedPrecondition {
 			t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", code, codes.FailedPrecondition, err)
 		}
@@ -499,8 +411,34 @@ func TestActorVolumesFromExternalVolumeClass(t *testing.T) {
 			Name:     "data-vol",
 			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{CapacityBytes: 1 << 30}},
 		}}}
-		if _, err := initialExternalVolumes(ctx, classes, nil, noClass); apierror.Code(err) != codes.FailedPrecondition {
+		if _, err := initialExternalVolumes(ctx, classes, noClass); apierror.Code(err) != codes.FailedPrecondition {
 			t.Errorf("initialExternalVolumes() error = %v, want FailedPrecondition", err)
+		}
+	})
+
+	t.Run("stored legacy template with storage_class_name is a failed precondition", func(t *testing.T) {
+		legacy := &ateapi.ActorTemplate{Volumes: []*ateapi.Volume{{
+			Name:     "data-vol",
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "legacy-sc", CapacityBytes: 1 << 30}}, //nolint:staticcheck // SA1019: stored 1.0 preview templates may still carry storage_class_name
+		}}}
+		_, err := initialExternalVolumes(ctx, classes, legacy)
+		if code := apierror.Code(err); code != codes.FailedPrecondition {
+			t.Fatalf("initialExternalVolumes() code = %v, want %v; error = %v", code, codes.FailedPrecondition, err)
+		}
+		if !strings.Contains(err.Error(), `"legacy-sc"`) || !strings.Contains(err.Error(), "external_volume_class") {
+			t.Errorf("initialExternalVolumes() error = %v, want mention of legacy-sc and external_volume_class", err)
+		}
+
+		input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
+		got, err := createActorVolumes(ctx, registry, classes, "actor-uid-123", legacy, input)
+		if code := apierror.Code(err); code != codes.FailedPrecondition {
+			t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", code, codes.FailedPrecondition, err)
+		}
+		if !strings.Contains(err.Error(), `"legacy-sc"`) || !strings.Contains(err.Error(), "external_volume_class") {
+			t.Errorf("createActorVolumes() error = %v, want mention of legacy-sc and external_volume_class", err)
+		}
+		if diff := cmp.Diff(input, got, protocmp.Transform()); diff != "" {
+			t.Errorf("createActorVolumes() did not preserve pending volumes (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -518,18 +456,18 @@ func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	tmpl := &ateapi.ActorTemplate{
 		Volumes: []*ateapi.Volume{{
 			Name:     "data-vol",
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard"}},
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"}}},
 		}},
 	}
 	registry := &mockPluginRegistry{
 		plugins: map[string]volume.VolumePluginControlPlane{"mock-standard": emptyIDVolumePlugin{}},
 	}
-	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
-		"standard": {ObjectMeta: metav1.ObjectMeta{Name: "standard"}, Provisioner: "mock-standard"},
+	classes := &fakeExternalVolumeClassGetter{classes: map[string]*ateapi.ExternalVolumeClass{
+		"standard": {DriverName: "mock-standard"},
 	}}
 	input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
 
-	res, err := createActorVolumes(context.Background(), registry, nil, scLister, "actor-uid-123", tmpl, input)
+	res, err := createActorVolumes(context.Background(), registry, classes, "actor-uid-123", tmpl, input)
 	if got := apierror.Code(err); got != codes.Internal {
 		t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, codes.Internal, err)
 	}
