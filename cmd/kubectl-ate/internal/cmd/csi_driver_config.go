@@ -29,7 +29,6 @@ import (
 var (
 	createCsiDriverConfigFilenameFlag string
 	updateCsiDriverConfigFilenameFlag string
-	updateCsiDriverConfigGuard        deleteGuardFlags
 	deleteCsiDriverConfigGuard        deleteGuardFlags
 )
 
@@ -81,15 +80,10 @@ var updateCsiDriverConfigCmd = &cobra.Command{
 	Use:     "csi-driver-config -f <manifest>",
 	Aliases: []string{"csi-driver-configs"},
 	Short:   "Replace a CSI driver config from a manifest",
-	Long:    `Replace a CSI driver config from a single YAML or JSON manifest holding one ateapi.CsiDriverConfig message in protojson form (as printed by "kubectl ate get csi-driver-config <name> -o yaml"). metadata.uid and metadata.version (or --uid and --version) are required preconditions.`,
+	Long:    `Replace a CSI driver config from a single YAML or JSON manifest holding one ateapi.CsiDriverConfig message in protojson form (as printed by "kubectl ate get csi-driver-config <name> -o yaml"). Its metadata.uid and metadata.version are required preconditions.`,
 	Args:    noArgs("the CSI driver config name comes from the manifest passed to -f/--filename", "filename"),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		config, err := prepareCsiDriverConfigUpdate(cmd.InOrStdin(), updateCsiDriverConfigFilenameFlag, deleteGuardFlags{
-			uidSet:     cmd.Flags().Changed("uid"),
-			uid:        updateCsiDriverConfigGuard.uid,
-			versionSet: cmd.Flags().Changed("version"),
-			version:    updateCsiDriverConfigGuard.version,
-		})
+		config, err := loadCsiDriverConfigForUpdate(cmd.InOrStdin(), updateCsiDriverConfigFilenameFlag)
 		if err != nil {
 			return err
 		}
@@ -202,23 +196,14 @@ func loadCsiDriverConfigManifest(in io.Reader, path string) (*ateapi.CsiDriverCo
 	return config, nil
 }
 
-func prepareCsiDriverConfigUpdate(in io.Reader, path string, guard deleteGuardFlags) (*ateapi.CsiDriverConfig, error) {
-	if _, err := deleteOptionsFromFlags(guard); err != nil {
-		return nil, wrapUsageError(err)
-	}
+func loadCsiDriverConfigForUpdate(in io.Reader, path string) (*ateapi.CsiDriverConfig, error) {
 	config, err := loadCsiDriverConfigManifest(in, path)
 	if err != nil {
 		return nil, err
 	}
-	if guard.uidSet {
-		config.Metadata.Uid = guard.uid
-	}
-	if guard.versionSet {
-		config.Metadata.Version = guard.version
-	}
 	if config.GetMetadata().GetUid() == "" || config.GetMetadata().GetVersion() < 1 {
 		name := config.GetMetadata().GetName()
-		return nil, fmt.Errorf(`manifest for csi driver config %q lacks the metadata.uid and metadata.version preconditions that "kubectl ate get csi-driver-config %s -o yaml" prints (or pass --uid and --version)`, name, name)
+		return nil, fmt.Errorf(`manifest for csi driver config %q lacks the metadata.uid and metadata.version preconditions that "kubectl ate get csi-driver-config %s -o yaml" prints`, name, name)
 	}
 	return config, nil
 }
@@ -230,8 +215,6 @@ func init() {
 	createCmd.AddCommand(createCsiDriverConfigCmd)
 
 	updateCsiDriverConfigCmd.Flags().StringVarP(&updateCsiDriverConfigFilenameFlag, "filename", "f", "", "manifest file holding a single JSON or YAML csi-driver-config document, or - for stdin")
-	updateCsiDriverConfigCmd.Flags().StringVar(&updateCsiDriverConfigGuard.uid, "uid", "", "require the CSI driver config to have this UID before updating (overrides metadata.uid)")
-	updateCsiDriverConfigCmd.Flags().Int64Var(&updateCsiDriverConfigGuard.version, "version", 0, "require the CSI driver config to be at this version before updating (overrides metadata.version)")
 	updateCmd.AddCommand(updateCsiDriverConfigCmd)
 
 	deleteCsiDriverConfigCmd.Flags().StringVar(&deleteCsiDriverConfigGuard.uid, "uid", "", "require the CSI driver config to have this UID before deleting")

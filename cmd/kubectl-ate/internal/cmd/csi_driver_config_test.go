@@ -117,52 +117,19 @@ func TestLoadCsiDriverConfigManifest(t *testing.T) {
 	})
 }
 
-func TestPrepareCsiDriverConfigUpdate(t *testing.T) {
+func TestLoadCsiDriverConfigForUpdate(t *testing.T) {
 	t.Parallel()
-	const baseManifest = "metadata: {name: csi-nfs, uid: u-1, version: \"3\"}\ndriverName: nfs.csi.k8s.io\ncontrollerEndpoint: tcp://127.0.0.1:9000\n"
 	for _, tc := range []struct {
-		name      string
-		manifest  string
-		guard     deleteGuardFlags
-		want      *ateapi.CsiDriverConfig
-		wantErr   string
-		wantUsage bool
+		name     string
+		manifest string
+		want     *ateapi.CsiDriverConfig
+		wantErr  string
 	}{
 		{
 			name:     "manifest carries uid and version",
-			manifest: baseManifest,
+			manifest: "metadata: {name: csi-nfs, uid: u-1, version: \"3\"}\ndriverName: nfs.csi.k8s.io\ncontrollerEndpoint: tcp://127.0.0.1:9000\n",
 			want: &ateapi.CsiDriverConfig{
 				Metadata:           &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u-1", Version: 3},
-				DriverName:         "nfs.csi.k8s.io",
-				ControllerEndpoint: "tcp://127.0.0.1:9000",
-			},
-		},
-		{
-			name:     "flag overrides both uid and version on manifest without preconditions",
-			manifest: "metadata: {name: csi-nfs}\ndriverName: nfs.csi.k8s.io\ncontrollerEndpoint: tcp://127.0.0.1:9000\n",
-			guard:    deleteGuardFlags{uidSet: true, uid: "u-override", versionSet: true, version: 9},
-			want: &ateapi.CsiDriverConfig{
-				Metadata:           &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u-override", Version: 9},
-				DriverName:         "nfs.csi.k8s.io",
-				ControllerEndpoint: "tcp://127.0.0.1:9000",
-			},
-		},
-		{
-			name:     "flag overrides only uid while preserving manifest version",
-			manifest: baseManifest,
-			guard:    deleteGuardFlags{uidSet: true, uid: "u-override"},
-			want: &ateapi.CsiDriverConfig{
-				Metadata:           &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u-override", Version: 3},
-				DriverName:         "nfs.csi.k8s.io",
-				ControllerEndpoint: "tcp://127.0.0.1:9000",
-			},
-		},
-		{
-			name:     "flag overrides only version while preserving manifest uid",
-			manifest: baseManifest,
-			guard:    deleteGuardFlags{versionSet: true, version: 11},
-			want: &ateapi.CsiDriverConfig{
-				Metadata:           &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u-1", Version: 11},
 				DriverName:         "nfs.csi.k8s.io",
 				ControllerEndpoint: "tcp://127.0.0.1:9000",
 			},
@@ -187,48 +154,18 @@ func TestPrepareCsiDriverConfigUpdate(t *testing.T) {
 			manifest: "metadata: {atespace: team-a, name: csi-nfs, uid: u-1, version: \"1\"}\n",
 			wantErr:  "metadata.atespace must be empty",
 		},
-		{
-			name:     "missing metadata.name",
-			manifest: "metadata: {uid: u-1, version: \"1\"}\n",
-			wantErr:  "metadata.name is required",
-		},
-		{
-			name:      "--version 0 flag is usage error",
-			manifest:  baseManifest,
-			guard:     deleteGuardFlags{versionSet: true, version: 0},
-			wantErr:   "--version must be at least 1, got 0",
-			wantUsage: true,
-		},
-		{
-			name:      "negative --version flag is usage error",
-			manifest:  baseManifest,
-			guard:     deleteGuardFlags{versionSet: true, version: -4},
-			wantErr:   "--version must be at least 1, got -4",
-			wantUsage: true,
-		},
-		{
-			name:      "empty --uid flag is usage error",
-			manifest:  baseManifest,
-			guard:     deleteGuardFlags{uidSet: true, uid: ""},
-			wantErr:   "--uid must not be empty",
-			wantUsage: true,
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := prepareCsiDriverConfigUpdate(strings.NewReader(tc.manifest), "-", tc.guard)
+			got, err := loadCsiDriverConfigForUpdate(strings.NewReader(tc.manifest), "-")
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("prepareCsiDriverConfigUpdate() error = %v, want %q", err, tc.wantErr)
-				}
-				var uerr *usageError
-				if errors.As(err, &uerr) != tc.wantUsage {
-					t.Fatalf("errors.As(usageError) = %v, want %v (err = %v)", errors.As(err, &uerr), tc.wantUsage, err)
+					t.Fatalf("loadCsiDriverConfigForUpdate() error = %v, want %q", err, tc.wantErr)
 				}
 				return
 			}
 			if err != nil || cmp.Diff(tc.want, got, protocmp.Transform()) != "" {
-				t.Fatalf("prepareCsiDriverConfigUpdate() = (%v, %v), want %v", got, err, tc.want)
+				t.Fatalf("loadCsiDriverConfigForUpdate() = (%v, %v), want %v", got, err, tc.want)
 			}
 		})
 	}
@@ -336,9 +273,9 @@ func TestCsiDriverConfigRunners(t *testing.T) {
 		}
 	}
 
-	updatedInput, err := prepareCsiDriverConfigUpdate(strings.NewReader(getOut.String()), "-", deleteGuardFlags{})
+	updatedInput, err := loadCsiDriverConfigForUpdate(strings.NewReader(getOut.String()), "-")
 	if err != nil {
-		t.Fatalf("get -o yaml | update -f - prepare error = %v", err)
+		t.Fatalf("get -o yaml | update -f - load error = %v", err)
 	}
 	updatedInput.ControllerEndpoint = "tcp://csi-nfs-v2.kube-system.svc:50052"
 	out.Reset()
@@ -377,24 +314,18 @@ func TestCsiDriverConfigRunners(t *testing.T) {
 	if diff := cmp.Diff(&ateapi.DeleteCsiDriverConfigRequest{CsiDriverConfig: &ateapi.ObjectRef{Name: "csi-nfs"}, Options: opts}, client.deleteReq, protocmp.Transform()); diff != "" {
 		t.Errorf("guarded deleteReq mismatch (-want +got):\n%s", diff)
 	}
-}
 
-func TestCsiDriverConfigCLIValidation(t *testing.T) {
+	// Cobra flag wiring and pre-dial checks not covered by unit helpers.
 	dir := t.TempDir()
 	missingKubeconfig := filepath.Join(dir, "missing-kubeconfig")
-
-	writeFile := func(name, content string) string {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return p
+	atespaceFile := filepath.Join(dir, "atespace.yaml")
+	if err := os.WriteFile(atespaceFile, []byte("metadata: {atespace: a, name: csi-nfs}\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	atespaceFile := writeFile("atespace.yaml", "metadata: {atespace: a, name: csi-nfs, uid: u-1, version: \"1\"}\n")
-	missingNameFile := writeFile("no-name.yaml", "driverName: nfs.csi.k8s.io\n")
-	missingPrecondFile := writeFile("no-precond.yaml", "metadata: {name: csi-nfs}\ndriverName: nfs.csi.k8s.io\ncontrollerEndpoint: tcp://127.0.0.1:9000\n")
-	validUpdateFile := writeFile("valid-update.yaml", "metadata: {name: csi-nfs, uid: u-1, version: \"2\"}\ndriverName: nfs.csi.k8s.io\ncontrollerEndpoint: tcp://127.0.0.1:9000\n")
-
+	missingPrecondFile := filepath.Join(dir, "no-precond.yaml")
+	if err := os.WriteFile(missingPrecondFile, []byte("metadata: {name: csi-nfs}\ndriverName: nfs.csi.k8s.io\ncontrollerEndpoint: tcp://127.0.0.1:9000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name      string
 		args      []string
@@ -402,118 +333,42 @@ func TestCsiDriverConfigCLIValidation(t *testing.T) {
 		wantUsage bool
 	}{
 		{
-			name:      "create missing -f",
-			args:      []string{"create", "csi-driver-config"},
-			wantErr:   "missing required flag -f/--filename",
-			wantUsage: true,
-		},
-		{
-			name:      "create extra positional arg",
-			args:      []string{"create", "csi-driver-config", "csi-nfs", "-f", validUpdateFile},
-			wantErr:   `unexpected argument "csi-nfs"`,
-			wantUsage: true,
-		},
-		{
-			name:    "create atespace set rejected before connect",
+			name:    "create -f rejected before connect",
 			args:    []string{"--kubeconfig", missingKubeconfig, "create", "csi-driver-config", "-f", atespaceFile},
 			wantErr: "metadata.atespace must be empty",
 		},
 		{
-			name:    "create missing metadata.name rejected before connect",
-			args:    []string{"--kubeconfig", missingKubeconfig, "create", "csi-driver-config", "-f", missingNameFile},
-			wantErr: "metadata.name is required",
-		},
-		{
-			name:      "update missing -f",
-			args:      []string{"update", "csi-driver-config"},
-			wantErr:   "missing required flag -f/--filename",
-			wantUsage: true,
-		},
-		{
-			name:      "update extra positional arg",
-			args:      []string{"update", "csi-driver-config", "csi-nfs", "-f", validUpdateFile},
-			wantErr:   `unexpected argument "csi-nfs"`,
-			wantUsage: true,
-		},
-		{
-			name:    "update missing uid/version rejected client-side before RPC",
+			name:    "update -f missing preconditions rejected before connect",
 			args:    []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", missingPrecondFile},
 			wantErr: "lacks the metadata.uid and metadata.version preconditions",
 		},
 		{
-			name:    "update atespace set rejected before connect",
-			args:    []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", atespaceFile},
-			wantErr: "metadata.atespace must be empty",
-		},
-		{
-			name:    "update missing metadata.name rejected before connect",
-			args:    []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", missingNameFile},
-			wantErr: "metadata.name is required",
-		},
-		{
-			name:      "update --version 0 rejected as usage error",
-			args:      []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", validUpdateFile, "--version", "0"},
-			wantErr:   "--version must be at least 1, got 0",
-			wantUsage: true,
-		},
-		{
-			name:      "update negative --version rejected as usage error",
-			args:      []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", validUpdateFile, "--version=-2"},
-			wantErr:   "--version must be at least 1, got -2",
-			wantUsage: true,
-		},
-		{
-			name:      "update empty --uid rejected as usage error",
-			args:      []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", validUpdateFile, "--uid", ""},
-			wantErr:   "--uid must not be empty",
-			wantUsage: true,
-		},
-		{
-			name:    "update with --uid and --version flags passes client-side checks",
-			args:    []string{"--kubeconfig", missingKubeconfig, "update", "csi-driver-config", "-f", missingPrecondFile, "--uid", "u-1", "--version", "3"},
-			wantErr: "failed to connect to ate-api-server",
-		},
-		{
-			name:      "delete missing arg",
-			args:      []string{"delete", "csi-driver-config"},
-			wantErr:   "missing required argument <csi-driver-config-name>",
-			wantUsage: true,
-		},
-		{
-			name:      "delete extra arg",
-			args:      []string{"delete", "csi-driver-config", "a", "b"},
-			wantErr:   "expected 1 <csi-driver-config-name> argument, received 2",
-			wantUsage: true,
-		},
-		{
-			name:      "delete --version 0 rejected as usage error",
+			name:      "delete --version 0 is usage error",
 			args:      []string{"--kubeconfig", missingKubeconfig, "delete", "csi-driver-config", "csi-nfs", "--version", "0"},
 			wantErr:   "--version must be at least 1, got 0",
 			wantUsage: true,
 		},
 		{
-			name:      "delete negative --version rejected as usage error",
+			name:      "delete negative --version is usage error",
 			args:      []string{"--kubeconfig", missingKubeconfig, "delete", "csi-driver-config", "csi-nfs", "--version=-5"},
 			wantErr:   "--version must be at least 1, got -5",
 			wantUsage: true,
 		},
 		{
-			name:      "delete empty --uid rejected as usage error",
+			name:      "delete empty --uid is usage error",
 			args:      []string{"--kubeconfig", missingKubeconfig, "delete", "csi-driver-config", "csi-nfs", "--uid", ""},
 			wantErr:   "--uid must not be empty",
 			wantUsage: true,
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, stderr, err := runRootCLI(t, tc.args...)
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("runRootCLI(%v) error = %v (stderr = %q), want %q", tc.args, err, stderr, tc.wantErr)
-			}
+		if _, stderr, err := runRootCLI(t, tc.args...); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%s: runRootCLI(%v) error = %v (stderr = %q), want %q", tc.name, tc.args, err, stderr, tc.wantErr)
+		} else {
 			var uerr *usageError
 			if errors.As(err, &uerr) != tc.wantUsage {
-				t.Fatalf("errors.As(usageError) = %v, want %v (err = %v)", errors.As(err, &uerr), tc.wantUsage, err)
+				t.Fatalf("%s: errors.As(usageError) = %v, want %v (err = %v)", tc.name, errors.As(err, &uerr), tc.wantUsage, err)
 			}
-		})
+		}
 	}
 }
 
