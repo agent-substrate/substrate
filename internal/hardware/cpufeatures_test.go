@@ -133,6 +133,48 @@ func TestEncodeDecodeCPUFeatures(t *testing.T) {
 	})
 }
 
+// TestEncodeCPUFeatureMask pins the cpu_features value of real `runsc
+// cpu-features --bitmask` output, which stored snapshots must keep matching,
+// and checks the edges of the block format.
+func TestEncodeCPUFeatureMask(t *testing.T) {
+	// runsc 20261102.0 on an Intel host: block 0 is CPUID.1:ECX (pni is bit
+	// 0), block 1 CPUID.1:EDX (fpu is bit 0, mask bit 32), and so on, with
+	// block 8 empty. Its names form, through the tables EncodeCPUFeatures
+	// maps them with, encodes to the same value.
+	const (
+		blocks = "0xfefa3203,0x1f8bfbff,0x001c2ffb,0x00000000,0x00000001,0x00000121,0x2c100800,0xac000400,0x00000000"
+		want   = "ac0004002c100800000001210000000100000000001c2ffb1f8bfbfffefa3203"
+	)
+	if got, err := EncodeCPUFeatureMask(blocks); err != nil || got != want {
+		t.Errorf("EncodeCPUFeatureMask(%q) = (%q, %v), want (%q, nil)", blocks, got, err, want)
+	}
+
+	for _, tc := range []struct{ blocks, want string }{
+		{"0x00000000", "0"},
+		{"0x00000003\n", "3"},
+		{"0x00000003,0x00000000,0x00000000", "3"}, // trailing zero blocks
+		{"0x00000001,0x00000000,0x00000020", "20" + strings.Repeat("0", 15) + "1"}, // bits 0 and 69: a word boundary crossed
+		{strings.Repeat("0x00000000,", featureMaskWords*2-1) + "0x80000000", "8" + strings.Repeat("0", featureMaskWords*16-1)},
+	} {
+		if got, err := EncodeCPUFeatureMask(tc.blocks); err != nil || got != tc.want {
+			t.Errorf("EncodeCPUFeatureMask(%q) = (%q, %v), want (%q, nil)", tc.blocks, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"3",
+		"0x",
+		"0xg",
+		"0x100000000",
+		"0x00000001,",
+		strings.Repeat("0x00000000,", featureMaskWords*2) + "0x00000001",
+	} {
+		if got, err := EncodeCPUFeatureMask(bad); err == nil {
+			t.Errorf("EncodeCPUFeatureMask(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
 // TestCPUFeatureTables checks structural invariants of each architecture's
 // feature table and pins anchor bits to the values of gVisor's Feature
 // constants (32*block + CPUID bit on amd64). A moved anchor means

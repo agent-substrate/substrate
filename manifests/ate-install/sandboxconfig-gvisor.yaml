@@ -38,7 +38,9 @@ spec:
   # needs google/gvisor@b79256080dec, first in tagged release 20261019.0.
   # ateworker-gvisor also runs the sandbox with no root container
   # (google/gvisor#15551). This release's restore picks each container's init
-  # process correctly in such a sandbox (google/gvisor@29b97c66d945).
+  # process correctly in such a sandbox (google/gvisor@29b97c66d945). atelet
+  # records a version's cpu_features with `runsc cpu-features --bitmask`, also
+  # first in this release (google/gvisor@3fdb673dc0a3).
   - name: v6
     state: Enabled
     assets:

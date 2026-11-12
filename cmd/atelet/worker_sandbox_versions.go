@@ -59,9 +59,9 @@ import (
 //   - the pod has no worker pool label
 //   - the config's default version is missing or has no assets for this
 //     node's architecture
-//   - the default version's runsc runs but fails, prints no features, or
-//     prints one this atelet does not know; the binary is content-addressed,
-//     so running it again gives the same answer
+//   - the default version's runsc runs but fails, prints nothing, or prints
+//     what does not encode; the binary is content-addressed, so running it
+//     again gives the same answer
 //
 // The same failures on a restorable version leave it out of the file instead.
 var errPermanent = errors.New("permanent failure")
@@ -414,11 +414,11 @@ func (s *workerSandboxSyncer) ensureMicroVMAssets(ctx context.Context, uid strin
 }
 
 // gvisorCPUFeatures returns the encoded cpu_features of v's runsc binary. It
-// stages the version like ensureMicroVMAssets, and runs `<runsc>
-// cpu-features` the first time this atelet process sees the binary's digest,
-// on a runsc linked into scratch for the probe alone, never on the one under
-// the worker's directory. The memo is per digest, so a bundle that adds an
-// asset beside a known runsc is staged for that asset without running runsc
+// stages the version like ensureMicroVMAssets, and probes it with
+// runRunscCPUFeatures the first time this atelet process sees the binary's
+// digest, on a runsc linked into scratch for the probe alone, never on the one
+// under the worker's directory. The memo is per digest, so a bundle that adds
+// an asset beside a known runsc is staged for that asset without running runsc
 // again.
 func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, uid string, v hashedVersion) (string, error) {
 	digest := v.rec.Assets[gvisorAssetName].SHA256
@@ -442,12 +442,9 @@ func (s *workerSandboxSyncer) gvisorCPUFeatures(ctx context.Context, uid string,
 		}
 		defer done()
 		if !probed {
-			names, err := s.runCPUFeatures(ctx, runscPathFor(paths))
+			mask, err = s.runCPUFeatures(ctx, runscPathFor(paths))
 			if err != nil {
 				return "", err
-			}
-			if mask, err = hardware.EncodeCPUFeatures(runtime.GOARCH, names); err != nil {
-				return "", fmt.Errorf("%w: %w", errPermanent, err)
 			}
 		}
 	}
@@ -477,14 +474,18 @@ const probeFetchTimeout = 10 * time.Minute
 // can shorten it.
 var cpuFeaturesTimeout = 30 * time.Second
 
-// runRunscCPUFeatures executes `<runscPath> cpu-features` and returns the
-// comma-separated feature names it prints. The binary is content-addressed,
-// so one that runs and fails, or prints nothing, would do so again and fails
-// permanently; one that cannot be started, or is cut off by ctx, is retried.
-func runRunscCPUFeatures(ctx context.Context, runscPath string) ([]string, error) {
+// runRunscCPUFeatures executes `<runscPath> cpu-features --bitmask` and
+// returns the cpu_features value its output encodes to. The binary is
+// content-addressed, so one that runs and fails, or prints nothing or what
+// does not encode, would do so again and fails permanently; one that cannot
+// be started, or is cut off by ctx, is retried. runsc has the flag from
+// gVisor release 20261026.0, which ateworker-gvisor needs anyway (see
+// manifests/ate-install/sandboxconfig-gvisor.yaml), so an older runsc fails
+// here with "flag provided but not defined".
+func runRunscCPUFeatures(ctx context.Context, runscPath string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cpuFeaturesTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, runscPath, "cpu-features")
+	cmd := exec.CommandContext(ctx, runscPath, "cpu-features", "--bitmask")
 	cmd.Env = []string{} // the probe needs nothing from atelet's environment
 	out, err := cmd.Output()
 	var exitErr *exec.ExitError
@@ -493,20 +494,24 @@ func runRunscCPUFeatures(ctx context.Context, runscPath string) ([]string, error
 	case ctx.Err() != nil:
 		// Before the ExitError case: a process killed at the deadline exits
 		// with one too.
-		return nil, fmt.Errorf("while running %s cpu-features: %w", runscPath, ctx.Err())
+		return "", fmt.Errorf("while running %s cpu-features --bitmask: %w", runscPath, ctx.Err())
 	case errors.As(err, &exitErr):
 		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
-			return nil, fmt.Errorf("%w: %s cpu-features: %w (%s)", errPermanent, runscPath, err, stderr)
+			return "", fmt.Errorf("%w: %s cpu-features --bitmask: %w (%s)", errPermanent, runscPath, err, stderr)
 		}
-		return nil, fmt.Errorf("%w: %s cpu-features: %w", errPermanent, runscPath, err)
+		return "", fmt.Errorf("%w: %s cpu-features --bitmask: %w", errPermanent, runscPath, err)
 	default:
-		return nil, fmt.Errorf("while starting %s cpu-features: %w", runscPath, err)
+		return "", fmt.Errorf("while starting %s cpu-features --bitmask: %w", runscPath, err)
 	}
 	printed := strings.TrimSpace(string(out))
 	if printed == "" {
-		return nil, fmt.Errorf("%w: %s cpu-features printed no features", errPermanent, runscPath)
+		return "", fmt.Errorf("%w: %s cpu-features --bitmask printed nothing", errPermanent, runscPath)
 	}
-	return strings.Split(printed, ","), nil
+	mask, err := hardware.EncodeCPUFeatureMask(printed)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s cpu-features --bitmask: %w", errPermanent, runscPath, err)
+	}
+	return mask, nil
 }
 
 // bundleHash is the sandbox_bundle_hash of a version: a sha256 over one
