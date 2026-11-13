@@ -621,7 +621,7 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 
 	slog.InfoContext(ctx, "Fetched discovery doc", slog.Any("doc", oidcConfig))
 
-	jwkSet, err := fetchJSON[jwkSetT](ctx, httpClient, oidcConfig.JWKSURI)
+	jwkSet, err := fetchJSON[jwkSetT](withDiscoveredJWKSURL(ctx, oidcConfig.JWKSURI), httpClient, oidcConfig.JWKSURI)
 	if err != nil {
 		return nil, fmt.Errorf("while fetching JWKS: %w", err)
 	}
