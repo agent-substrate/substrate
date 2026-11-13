@@ -34,7 +34,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -63,22 +62,6 @@ func TestMain(m *testing.M) {
 	}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Fatalf("create ate-system namespace: %v", err)
-	}
-
-	// Create StorageClasses for volume tests
-	_, err = k8sClient.StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{
-		ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
-		Provisioner: "substrate.io/mock",
-	}, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		log.Fatalf("create standard storage class: %v", err)
-	}
-	_, err = k8sClient.StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{
-		ObjectMeta:  metav1.ObjectMeta{Name: "fast"},
-		Provisioner: "substrate.io/mock",
-	}, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		log.Fatalf("create fast storage class: %v", err)
 	}
 
 	// Create shared Atelet Pod. Tests that place workers on another node add

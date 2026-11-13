@@ -185,9 +185,6 @@ func (e *Env) setupCSIHostpath(ctx context.Context) error {
 	if err := e.deleteService(ctx, "default", "csi-hostpath-controller"); err != nil {
 		return err
 	}
-	if err := e.deleteStorageClass(ctx, "csi-hostpath-sc"); err != nil {
-		return err
-	}
 	if err := e.Kube.WaitDeleted(ctx, schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "StatefulSet"}, "default", "csi-hostpathplugin", e.Cfg.RolloutTimeout); err != nil {
 		return err
 	}
@@ -250,11 +247,6 @@ spec:
 	if _, err := e.Kube.Typed.AppsV1().StatefulSets("default").Patch(
 		ctx, "csi-hostpathplugin", types.StrategicMergePatchType, patchJSON, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("while patching the csi-hostpathplugin StatefulSet: %w", err)
-	}
-
-	log.Infof("Creating the csi-hostpath-sc StorageClass...")
-	if err := e.Kube.ApplyPath(ctx, driverDir+"/examples/csi-storageclass.yaml"); err != nil {
-		return err
 	}
 
 	log.Infof("Waiting for the CSI hostpath and proxy pods to be ready...")
@@ -537,13 +529,6 @@ spec:
 		return fmt.Errorf("while patching the csi-nfs-controller Deployment: %w", err)
 	}
 
-	// The driver resolves the server's DNS name at provisioning time, so the
-	// StorageClass can be created before the NFS server has an address.
-	log.Infof("Creating the csi-nfs-sc StorageClass...")
-	if err := e.Kube.ApplyPath(ctx, deployDir+"/example/storageclass-nfs.yaml"); err != nil {
-		return err
-	}
-
 	log.Infof("Waiting for the NFS server and CSI driver to be ready...")
 	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, "default", "nfs-server", e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
@@ -588,14 +573,6 @@ func (e *Env) deleteService(ctx context.Context, namespace, name string) error {
 	err := e.Kube.Typed.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("while deleting service %s/%s: %w", namespace, name, err)
-	}
-	return nil
-}
-
-func (e *Env) deleteStorageClass(ctx context.Context, name string) error {
-	err := e.Kube.Typed.StorageV1().StorageClasses().Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("while deleting storageclass %s: %w", name, err)
 	}
 	return nil
 }
