@@ -27,6 +27,14 @@ const (
 	// "<atespace>/<actor>". HTTP field names are case-insensitive; this uses its
 	// HTTP/2 wire form so dataplane configuration and metadata are native.
 	TargetActorHeader = "ate-target-actor"
+
+	// ActorUIDHeader carries the actor's expected UID from the ingress router,
+	// fencing against ABA races where an actor was deleted and recreated under the same name.
+	ActorUIDHeader = "x-ate-actor-uid"
+
+	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
+	// 421 returned by the actor application itself.
+	StaleAssignmentHeader = "x-ate-assignment-stale"
 )
 
 // ParseTargetActor parses and validates a TargetActorHeader value.

@@ -80,6 +80,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 
 	fs.StringVar(&cfg.ActorIdentityCAFile, "actor-identity-ca-file", "", "PEM trust bundle for the actor-identity CA, used to verify the actor client certificates presented on egress CONNECTs. Required by the egress gateway's ext_proc sidecar; empty (the default) leaves egress authentication unconfigured and every egress CONNECT is denied.")
 
+	fs.DurationVar(&cfg.WarmRouteCacheTTL, "warm-route-cache-ttl", 0, "How long the ingress router caches a running actor's worker placement before re-checking ateapi. Placements are evicted when the worker answers 421 with X-Ate-Assignment-Stale or Envoy generates a local reply (connection failure, tunnel rejection, or timeout). Envoy dataplane only. 0 (the default) disables the cache")
 	fs.DurationVar(&cfg.EgressPolicyCacheTTL, "egress-policy-cache-ttl", egress.DefaultPolicyCacheTTL, "How long the egress gateway keeps acting on an actor's EgressPolicy before fetching it from ateapi again, which bounds the lag between a policy change and its effect on new requests. 0 disables the cache (concurrent callouts for one actor still share a fetch)")
 
 	// Egress credential injection (MITM leg). Only the egress gateway sets these,

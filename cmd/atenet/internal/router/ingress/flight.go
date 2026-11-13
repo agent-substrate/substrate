@@ -16,6 +16,7 @@ package ingress
 
 import (
 	"sync/atomic"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
@@ -32,6 +33,8 @@ import (
 //     enter the parking lot in this state.
 //   - done: closed when the flight is finished and result is set.
 type resumeActorFlight struct {
+	invalidated bool
+
 	retrying chan struct{}
 	// retryingSignaled guards the single close of retrying; only the flight
 	// goroutine touches it.
@@ -107,7 +110,36 @@ func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapi.Actor, ResumeOut
 func (r *ActorResumer) publish(f *resumeActorFlight, key string, result *resumeCallResult) {
 	f.result = result
 	r.mu.Lock()
-	delete(r.flights, key)
+	if !f.invalidated && r.warmCacheTTL > 0 && r.routeCache != nil && result != nil && result.err == nil && result.actor != nil {
+		actor := result.actor
+		if actor.GetStatus().GetState() == ateapi.ActorState_ACTOR_STATE_RUNNING {
+			assignment := actor.GetStatus().GetWorkerAssignment()
+			var workerIP string
+			if ips := assignment.GetWorkerPodIps(); len(ips) > 0 {
+				workerIP = ips[0]
+			}
+			workerSPIFFEID := assignment.GetWorkerSpiffeId()
+			actorUID := actorUIDOf(actor)
+			if workerIP != "" && workerSPIFFEID != "" && actorUID != "" {
+				var templateAtespace, templateName string
+				if tmpl := actor.GetActorTemplate(); tmpl != nil {
+					templateAtespace = tmpl.GetAtespace()
+					templateName = tmpl.GetName()
+				}
+				r.routeCache.Set(key, cachedActorRoute{
+					workerIP:         workerIP,
+					workerSPIFFEID:   workerSPIFFEID,
+					actorUID:         actorUID,
+					templateAtespace: templateAtespace,
+					templateName:     templateName,
+					expiresAt:        time.Now().Add(r.warmCacheTTL),
+				})
+			}
+		}
+	}
+	if r.flights[key] == f {
+		delete(r.flights, key)
+	}
 	r.mu.Unlock()
 	close(f.done)
 }
