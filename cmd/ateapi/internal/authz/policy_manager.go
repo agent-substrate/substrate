@@ -33,8 +33,8 @@ import (
 // PostgreSQL transaction.
 var ErrNilTransaction = errors.New("authz: policy tuple writes require a non-nil pgx.Tx")
 
-// PolicyManager writes OpenFGA tuples for access policy and atespace
-// mutations within the caller's PostgreSQL transaction.
+// PolicyManager writes OpenFGA tuples for access policy, atespace, and
+// external volume class mutations within the caller's PostgreSQL transaction.
 type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
