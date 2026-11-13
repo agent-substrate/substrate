@@ -15,7 +15,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,13 +23,11 @@ import (
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/internal/manifest"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
-	yamlv3 "gopkg.in/yaml.v3"
-	"sigs.k8s.io/yaml"
 )
 
 var egressPolicyFlags struct {
@@ -56,7 +53,7 @@ var createEgressPolicyCmd = &cobra.Command{
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
 "kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
-Its metadata may be omitted.`,
+Its metadata may be omitted. More than one record is an error.`,
 	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
 	RunE: runCreateEgressPolicy,
 }
@@ -68,6 +65,7 @@ var updateEgressPolicyCmd = &cobra.Command{
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
 "kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+More than one record is an error.
 Its metadata.uid and metadata.version are required preconditions; the server
 rejects the update when they no longer match those of the stored egress policy.`,
 	Args: exactlyOneArg("<actor-name>", "atespace", "filename"),
@@ -81,45 +79,15 @@ var deleteEgressPolicyCmd = &cobra.Command{
 	RunE:  runDeleteEgressPolicy,
 }
 
-// egressPolicyFromManifest parses a single protojson-shaped YAML or JSON
-// document into an EgressPolicy. Parsing is strict: unknown fields are an
-// error.
+// egressPolicyFromManifest parses a manifest holding a single protojson-shaped
+// EgressPolicy. An egress policy is a singleton under its actor, so more than
+// one record is an error.
 func egressPolicyFromManifest(data []byte) (*ateapi.EgressPolicy, error) {
-	jsonData, err := manifestToJSON(data)
+	policies, err := manifest.Parse[ateapi.EgressPolicy](data)
 	if err != nil {
 		return nil, err
 	}
-	policy := &ateapi.EgressPolicy{}
-	if err := protojson.Unmarshal(jsonData, policy); err != nil {
-		return nil, fmt.Errorf("invalid EgressPolicy: %w", err)
-	}
-	return policy, nil
-}
-
-// manifestToJSON converts a YAML or JSON manifest to JSON. YAML is a superset
-// of JSON, so one decoder parses both. The manifest must hold exactly one
-// document, counted the way the YAML spec counts them: an empty document, such
-// as the one a trailing "---" opens, is a document too, and is rejected.
-func manifestToJSON(data []byte) ([]byte, error) {
-	dec := yamlv3.NewDecoder(bytes.NewReader(data))
-	if err := dec.Decode(&yamlv3.Node{}); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, errors.New("manifest is empty")
-		}
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	// Decode again to check that the manifest holds no second document.
-	if err := dec.Decode(&yamlv3.Node{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("manifest holds more than one document, expected one")
-	}
-	j, err := yaml.YAMLToJSON(data)
-	if err != nil {
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	if string(j) == "null" {
-		return nil, errors.New("manifest is empty")
-	}
-	return j, nil
+	return manifest.One(policies)
 }
 
 // overrideEgressPolicyMetadata defaults each of metadata.atespace and
