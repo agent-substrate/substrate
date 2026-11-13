@@ -44,13 +44,13 @@ func shouldDetachFromNode(actor *ateapi.Actor, assignErr error) bool {
 // Unreachable nodes can be forgotten when the latest local snapshot is durable.
 // A deleted node is released even when that snapshot is not durable, so resume
 // tries its upload.
-func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, assignErr error) (_ *ateapi.Actor, err error) {
+func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, actorTemplate *ateapi.ActorTemplate, assignErr error, expected *ateapi.ExpectedSnapshot) (_ *ateapi.Actor, err error) {
 	ctx, done := stepSpan(ctx, "DetachFromFullNode")
 	defer func() { err = done(err) }()
 
 	node := actor.GetStatus().GetAssignedNode()
 	// Assignment may have retried on a newer version than actor.
-	if actor, err = w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node); err != nil {
+	if actor, err = w.loadPinnedActor(ctx, actorRef, actor, expected); err != nil {
 		return nil, err
 	}
 	constraints := schedulingConstraints(actor, actorTemplate)
@@ -80,7 +80,7 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 				return nil, apierror.Unavailable("while getting atelet conn for node %q: %w (and while checking the node: %w)", node, err, nodeErr)
 			}
 			if gone {
-				return w.recordGoneNode(ctx, actorRef, actor, node)
+				return w.recordGoneNode(ctx, actorRef, actor, node, expected)
 			}
 		}
 		return nil, apierror.Unavailable("while getting atelet conn for node %q: %w", node, err)
@@ -113,16 +113,22 @@ func (w *ActorWorkflow) detachFromFullNode(ctx context.Context, actorRef resourc
 	return stored, nil
 }
 
-// loadPinnedActor reads the actor, and fails with Aborted unless it is still
-// the SUSPENDED incarnation uid, pinned to node.
-func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.ActorRef, uid, node string) (*ateapi.Actor, error) {
+// loadPinnedActor revalidates a conditioned resume before detach and fails
+// with Aborted unless the actor is still SUSPENDED and pinned to the same node.
+func (w *ActorWorkflow) loadPinnedActor(ctx context.Context, actorRef resources.ActorRef, previous *ateapi.Actor, expected *ateapi.ExpectedSnapshot) (*ateapi.Actor, error) {
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, fmt.Errorf("while reading Actor %s: %w", actorRef, err)
 	}
-	if actor.GetMetadata().GetUid() != uid ||
+	if err := w.validateExpectedSnapshot(ctx, actor, expected); err != nil {
+		return nil, err
+	}
+	if expected != nil && !proto.Equal(actor.GetActorTemplate(), previous.GetActorTemplate()) {
+		return nil, apierror.Aborted("actor template changed during conditioned resume, please retry")
+	}
+	if actor.GetMetadata().GetUid() != previous.GetMetadata().GetUid() ||
 		actor.GetStatus().GetState() != ateapi.ActorState_ACTOR_STATE_SUSPENDED ||
-		actor.GetStatus().GetAssignedNode() != node {
+		actor.GetStatus().GetAssignedNode() != previous.GetStatus().GetAssignedNode() {
 		return nil, apierror.Aborted("Actor %s changed during the resume, please retry", actorRef)
 	}
 	return actor, nil
@@ -162,8 +168,8 @@ func (w *ActorWorkflow) recordDetach(ctx context.Context, actorRef resources.Act
 // reporting, so the snapshot keeps its locality and resume restores it from
 // the upload on another node. It reads the actor again first, so an upload
 // recorded during the node lookup detaches it instead.
-func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, node string) (*ateapi.Actor, error) {
-	actor, err := w.loadPinnedActor(ctx, actorRef, actor.GetMetadata().GetUid(), node)
+func (w *ActorWorkflow) recordGoneNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapi.Actor, node string, expected *ateapi.ExpectedSnapshot) (*ateapi.Actor, error) {
+	actor, err := w.loadPinnedActor(ctx, actorRef, actor, expected)
 	if err != nil {
 		return nil, err
 	}
