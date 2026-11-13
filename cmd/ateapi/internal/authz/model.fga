@@ -74,13 +74,19 @@ type global
     define can_get_access_policy: viewer
     define can_update_access_policy: owner
 
-# Global-scoped; inherits its roles from global.
+# Global-scoped; inherits its roles from global, and editors of allowed
+# atespaces may read the class.
 type external_volume_class
   relations
     define parent_global: [global]
     define allowed_atespace: [atespace]
 
-    define can_get: viewer from parent_global
+    define can_create_access_policy: owner from parent_global
+    define can_get_access_policy: viewer from parent_global
+    define can_update_access_policy: owner from parent_global
+    define can_delete_access_policy: owner from parent_global
+
+    define can_get: viewer from parent_global or editor from allowed_atespace
     define can_delete: owner from parent_global
 
 type atespace
