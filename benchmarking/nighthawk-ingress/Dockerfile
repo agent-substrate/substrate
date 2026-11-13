@@ -91,10 +91,10 @@ COPY --from=protogen /out/nighthawk.desc /app/nighthawk.desc
 COPY benchmarking/locust/common/__init__.py /app/common/__init__.py
 COPY benchmarking/locust/common/ateapi_channel.py /app/common/ateapi_channel.py
 COPY --from=ateprotos /out/ /app/common/
+COPY benchmarking/nighthawk_common /app/nighthawk_common
 
 COPY benchmarking/nighthawk-ingress/runner.py \
      benchmarking/nighthawk-ingress/spec.py \
-     benchmarking/nighthawk-ingress/output.py \
      benchmarking/nighthawk-ingress/actors.py \
      /app/
 COPY benchmarking/nighthawk-ingress/tests /app/tests
