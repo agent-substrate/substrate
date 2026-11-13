@@ -299,6 +299,30 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req:        &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
 			want:       []check{{RelationCanDelete, "external_volume_class:nfs-gold"}},
 		},
+		{
+			name:       "GetExternalVolumeClassAccessPolicy",
+			fullMethod: ateapi.Control_GetExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+			want:       []check{{RelationCanGetAccessPolicy, "external_volume_class:nfs-gold"}},
+		},
+		{
+			name:       "CreateExternalVolumeClassAccessPolicy",
+			fullMethod: ateapi.Control_CreateExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.CreateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+			want:       []check{{RelationCanCreateAccessPolicy, "external_volume_class:nfs-gold"}},
+		},
+		{
+			name:       "UpdateExternalVolumeClassAccessPolicy",
+			fullMethod: ateapi.Control_UpdateExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+			want:       []check{{RelationCanUpdateAccessPolicy, "external_volume_class:nfs-gold"}},
+		},
+		{
+			name:       "DeleteExternalVolumeClassAccessPolicy",
+			fullMethod: ateapi.Control_DeleteExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+			want:       []check{{RelationCanDeleteAccessPolicy, "external_volume_class:nfs-gold"}},
+		},
 
 		// Actor identity credentials.
 		{
@@ -627,6 +651,30 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			name:       "DeleteExternalVolumeClass with an invalid name",
 			fullMethod: ateapi.Control_DeleteExternalVolumeClass_FullMethodName,
 			req:        &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs/gold"}},
+			wantField:  "external_volume_class.name",
+		},
+		{
+			name:       "GetExternalVolumeClassAccessPolicy without a class",
+			fullMethod: ateapi.Control_GetExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.GetExternalVolumeClassAccessPolicyRequest{},
+			wantField:  "external_volume_class.name",
+		},
+		{
+			name:       "CreateExternalVolumeClassAccessPolicy without a name",
+			fullMethod: ateapi.Control_CreateExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.CreateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{}},
+			wantField:  "external_volume_class.name",
+		},
+		{
+			name:       "UpdateExternalVolumeClassAccessPolicy with an invalid name",
+			fullMethod: ateapi.Control_UpdateExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "Nfs-Gold"}},
+			wantField:  "external_volume_class.name",
+		},
+		{
+			name:       "DeleteExternalVolumeClassAccessPolicy with an invalid name",
+			fullMethod: ateapi.Control_DeleteExternalVolumeClassAccessPolicy_FullMethodName,
+			req:        &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs/gold"}},
 			wantField:  "external_volume_class.name",
 		},
 		{

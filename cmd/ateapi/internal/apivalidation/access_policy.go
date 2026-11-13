@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/internal/preview"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -28,8 +29,9 @@ import (
 const maxMembersPerPolicy = 1500
 
 var (
-	validGlobalRoles   = []string{authz.RoleOwner, authz.RoleViewer}
-	validAtespaceRoles = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer}
+	validGlobalRoles              = []string{authz.RoleOwner, authz.RoleViewer}
+	validAtespaceRoles            = []string{authz.RoleOwner, authz.RoleEditor, authz.RoleViewer}
+	validExternalVolumeClassRoles = []string{authz.RoleAllowedAtespace}
 
 	bindingsPath = field.NewPath("access_policy", "bindings")
 )
@@ -37,7 +39,7 @@ var (
 func ValidateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.CreateGlobalAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	errs := Validate_CreateGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
-	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
+	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles, authz.FormatMember)...)
 }
 
 func ValidateGetGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.GetGlobalAccessPolicyRequest) field.ErrorList {
@@ -50,7 +52,7 @@ func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.Up
 	// validated against the stored value by ValidateGlobalAccessPolicyUpdate.
 	op := MakeCreateOp(ctx)
 	errs := Validate_UpdateGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
-	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
+	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles, authz.FormatMember)...)
 }
 
 // ValidateGlobalAccessPolicyUpdate validates an updated global policy against
@@ -58,13 +60,13 @@ func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapi.Up
 func ValidateGlobalAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.AccessPolicy) field.ErrorList {
 	op := MakeUpdateOp(ctx)
 	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
-	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validGlobalRoles)...)
+	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validGlobalRoles, authz.FormatMember)...)
 }
 
 func ValidateCreateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.CreateAtespaceAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	errs := Validate_CreateAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
-	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles)...)
+	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles, authz.FormatMember)...)
 }
 
 func ValidateGetAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.GetAtespaceAccessPolicyRequest) field.ErrorList {
@@ -77,7 +79,7 @@ func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.
 	// validated against the stored value by ValidateAtespaceAccessPolicyUpdate.
 	op := MakeCreateOp(ctx)
 	errs := Validate_UpdateAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
-	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles)...)
+	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles, authz.FormatMember)...)
 }
 
 // ValidateAtespaceAccessPolicyUpdate validates an updated atespace policy
@@ -85,12 +87,50 @@ func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.
 func ValidateAtespaceAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.AccessPolicy) field.ErrorList {
 	op := MakeUpdateOp(ctx)
 	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
-	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validAtespaceRoles)...)
+	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validAtespaceRoles, authz.FormatMember)...)
 }
 
 func ValidateDeleteAtespaceAccessPolicyRequest(ctx context.Context, req *ateapi.DeleteAtespaceAccessPolicyRequest) field.ErrorList {
 	op := MakeCreateOp(ctx)
 	return Validate_DeleteAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateCreateExternalVolumeClassAccessPolicyRequest(ctx context.Context, req *ateapi.CreateExternalVolumeClassAccessPolicyRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	errs := Validate_CreateExternalVolumeClassAccessPolicyRequest(ctx, op, nil, req, nil)
+	if enabled, _ := op.HasOption(string(preview.GateExternalVolumes)); enabled {
+		errs = append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validExternalVolumeClassRoles, authz.FormatAtespaceMember)...)
+	}
+	return errs
+}
+
+func ValidateGetExternalVolumeClassAccessPolicyRequest(ctx context.Context, req *ateapi.GetExternalVolumeClassAccessPolicyRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_GetExternalVolumeClassAccessPolicyRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateUpdateExternalVolumeClassAccessPolicyRequest(ctx context.Context, req *ateapi.UpdateExternalVolumeClassAccessPolicyRequest) field.ErrorList {
+	// Modeled as a create: this validates the request itself. The result is
+	// validated against the stored value by ValidateExternalVolumeClassAccessPolicyUpdate.
+	op := MakeCreateOp(ctx)
+	errs := Validate_UpdateExternalVolumeClassAccessPolicyRequest(ctx, op, nil, req, nil)
+	if enabled, _ := op.HasOption(string(preview.GateExternalVolumes)); enabled {
+		errs = append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validExternalVolumeClassRoles, authz.FormatAtespaceMember)...)
+	}
+	return errs
+}
+
+// ValidateExternalVolumeClassAccessPolicyUpdate validates an updated external
+// volume class access policy against the stored one.
+func ValidateExternalVolumeClassAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.AccessPolicy) field.ErrorList {
+	op := MakeUpdateOp(ctx)
+	errs := Validate_AccessPolicy(ctx, op, fldPath, newVal, oldVal)
+	return append(errs, validateBindings(fldPath.Child("bindings"), newVal, validExternalVolumeClassRoles, authz.FormatAtespaceMember)...)
+}
+
+func ValidateDeleteExternalVolumeClassAccessPolicyRequest(ctx context.Context, req *ateapi.DeleteExternalVolumeClassAccessPolicyRequest) field.ErrorList {
+	op := MakeCreateOp(ctx)
+	return Validate_DeleteExternalVolumeClassAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
 // ValidateCustom_AccessPolicy_Metadata requires an access policy to be the
@@ -115,10 +155,18 @@ func ValidateCustom_DeleteAtespaceAccessPolicyRequest_Name(_ context.Context, _ 
 	return validateSingletonName(p, *name)
 }
 
+func ValidateCustom_GetExternalVolumeClassAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
+}
+
+func ValidateCustom_DeleteExternalVolumeClassAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
+}
+
 // validateBindings checks that each binding names an allowed role at most once,
-// that every member is a valid OpenFGA user, and that the policy stays within
+// that every member satisfies formatMember, and that the policy stays within
 // maxMembersPerPolicy.
-func validateBindings(fldPath *field.Path, policy *ateapi.AccessPolicy, allowedRoles []string) field.ErrorList {
+func validateBindings(fldPath *field.Path, policy *ateapi.AccessPolicy, allowedRoles []string, formatMember func(string) (string, error)) field.ErrorList {
 	if policy == nil {
 		return nil
 	}
@@ -142,7 +190,7 @@ func validateBindings(fldPath *field.Path, policy *ateapi.AccessPolicy, allowedR
 		membersPath := bp.Child("members")
 		totalMembers += len(b.GetMembers())
 		for j, member := range b.GetMembers() {
-			if _, err := authz.FormatMember(member); err != nil {
+			if _, err := formatMember(member); err != nil {
 				errs = append(errs, field.Invalid(membersPath.Index(j), member, err.Error()))
 			}
 		}
