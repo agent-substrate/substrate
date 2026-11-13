@@ -426,6 +426,29 @@ func TestCombinedVolumes(t *testing.T) {
 		requireSharedWrite(ctx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt")
 	})
 
+	// The provisioned volume is recorded as an ExternalVolume in the actor's
+	// atespace, under the name the actor's status carries.
+	t.Run("ExternalVolumeRecorded", func(t *testing.T) {
+		requireExternalVolume(t)
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapi.GetActorRequest{Actor: actorRef.ToObjectRef()})
+		if err != nil {
+			t.Fatalf("GetActor: %v", err)
+		}
+		volumes := actor.GetStatus().GetExternalVolumes().GetVolumes()
+		if len(volumes) != 1 || volumes[0].GetExternalVolumeName() == "" {
+			t.Fatalf("status.externalVolumes.volumes = %v, want one volume naming its ExternalVolume", volumes)
+		}
+		record, err := clients.SubstrateAPI.GetExternalVolume(ctx, &ateapi.GetExternalVolumeRequest{
+			ExternalVolume: &ateapi.ObjectRef{Atespace: actorRef.Atespace, Name: volumes[0].GetExternalVolumeName()},
+		})
+		if err != nil {
+			t.Fatalf("GetExternalVolume(%s): %v", volumes[0].GetExternalVolumeName(), err)
+		}
+		if record.GetVolumeId() != volumes[0].GetStorageVolumeId() || record.GetVolumeType() != volumes[0].GetVolumeType() {
+			t.Errorf("ExternalVolume names %q of %q, want the actor's %q of %q", record.GetVolumeId(), record.GetVolumeType(), volumes[0].GetStorageVolumeId(), volumes[0].GetVolumeType())
+		}
+	})
+
 	t.Run("SurvivesSuspendResume", func(t *testing.T) {
 		runningNode := requireAssignedToWorkerNode(ctx, t, clients, actorRef)
 		suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapi.SuspendActorRequest{Actor: actorRef.ToObjectRef(), Options: &ateapi.SuspendOptions{Mode: ateapi.DurabilityMode_DURABILITY_MODE_SYNCHRONOUS}})

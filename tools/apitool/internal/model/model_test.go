@@ -240,6 +240,7 @@ func TestBuild_Annotations(t *testing.T) {
 		"Actor":           {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Actors"},
 		"EgressPolicy":    {Parents: []string{"Actor"}, Singleton: true, Plural: "EgressPolicies"},
 		"Tag":             {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "Tags"},
+		"ExternalVolume":  {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "ExternalVolumes"},
 		"Atespace":        {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Atespaces"},
 		"ActorTemplate":   {Scope: ateapi.Scope_SCOPE_ATESPACE, Plural: "ActorTemplates"},
 		"Worker":          {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Workers"},

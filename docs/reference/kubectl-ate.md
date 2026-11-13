@@ -144,11 +144,11 @@ kubectl ate get atespaces
 # Get an atespace
 kubectl ate get atespace <atespace>
 
-# Delete an atespace (must be empty: fails if any actors, templates, or tags remain)
+# Delete an atespace (must be empty: fails if any actors, templates, tags, or external volumes remain)
 kubectl ate delete atespace <atespace>
 ```
 
-> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace. Delete its actors, actor templates, and tags first (cascade delete is not yet supported).
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace. Delete its actors, actor templates, tags, and external volumes first (cascade delete is not yet supported).
 
 #### `kubectl ate get atespace` output columns
 
@@ -262,6 +262,38 @@ kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
+
+### External Volumes
+
+An `ExternalVolume` is an atespace-scoped record of a CSI volume that already
+exists in the storage system, named by its CSI driver and the volume ID the
+driver reports. Its lifetime is independent of any actor. Registering one needs
+the `ExternalVolumes` preview gate and `--preview`; see
+[CSI Volumes](../guides/csi-volumes.md#5-registering-an-existing-volume).
+
+```bash
+# Register an existing volume; --volume-context takes the driver's mount metadata as key=value pairs.
+kubectl ate --preview create externalvolume <volume-name> -a <atespace> --volume-type nfs.csi.k8s.io \
+  --volume-id <csi-volume-id> [--volume-context server=nfs-server,share=/exports/ctx]
+
+# List an atespace's external volumes, all atespaces' external volumes, or resolve them by name.
+kubectl ate get externalvolumes -a <atespace>
+kubectl ate get externalvolumes -A
+kubectl ate get externalvolume <volume-name> [<volume-name> ...] -a <atespace>
+
+# Delete the record. The storage is left in place.
+kubectl ate delete externalvolume <volume-name> -a <atespace>
+```
+
+#### `kubectl ate get externalvolume` output columns
+
+| Column | Meaning |
+|---|---|
+| `ATESPACE` | The atespace the external volume belongs to. |
+| `NAME` | The external volume's name, unique within its atespace. |
+| `VOLUME TYPE` | The CSI driver name. |
+| `VOLUME ID` | The volume's ID in the storage system, as the driver reports it. |
+| `AGE` | Time elapsed since the external volume was registered. |
 
 ### Egress Policies
 

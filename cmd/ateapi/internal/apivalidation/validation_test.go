@@ -956,6 +956,13 @@ func TestValidateExternalVolume(t *testing.T) {
 			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 40*1024)}
 		}),
 		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 40*1024)},
+	}, {
+		name: "valid external volume name",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "my-vol-8ba9b6ee2e1a4c0f" }),
+	}, {
+		name: "invalid external volume name",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "NOT A NAME" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("external_volume_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1005,6 +1012,20 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		name:   "volume_context changed is valid",
 		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeContext = nil }),
 		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeContext = map[string]string{"foo": "bar"} }),
+	}, {
+		name:   "external_volume_name transition from empty to non-empty is valid",
+		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "my-vol-8ba9b6ee2e1a4c0f" }),
+	}, {
+		name:   "external_volume_name changed once set is invalid",
+		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "my-vol-8ba9b6ee2e1a4c0f" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "my-vol-0f1c3d552f0a4c0f" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("external_volume_name"), nil, "").WithOrigin("update")},
+	}, {
+		name:   "external_volume_name unset once set is invalid",
+		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "my-vol-8ba9b6ee2e1a4c0f" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.ExternalVolumeName = "" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("external_volume_name"), nil, "").WithOrigin("update")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
