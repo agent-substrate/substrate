@@ -56,6 +56,7 @@ from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
 from ladder_steps import append_ladder_steps
 from turnover_window import append_turnover_window, fill_done_ts
+from density_runner import run_density_sweep
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -203,6 +204,15 @@ def parse_args() -> argparse.Namespace:
             "suspend/resume phase percentiles to stats.jsonl (see "
             "benchmarking/analysis/README.md). Pass --no-phase-breakdown to "
             "skip reading pod logs"
+        ),
+    )
+    p.add_argument(
+        "--density-step-duration",
+        default=None,
+        help=(
+            "Run an actor density search (density_runner.py) up to -u users "
+            "with this duration per step (e.g. 5m); -t bounds when a new step "
+            "may start"
         ),
     )
     args, extra = p.parse_known_args()
@@ -551,6 +561,9 @@ def read_evictions(
 
 def main() -> None:
     args = parse_args()
+    if args.density_step_duration:
+        run_density_sweep(args, upload)
+        return
     now = datetime.now(timezone.utc)
     # Path-safe timestamp for the local work dir (no Hive semantics here).
     path_ts = now.strftime("%Y%m%dT%H%M%SZ")
