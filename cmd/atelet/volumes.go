@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/volume/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
@@ -93,6 +94,114 @@ func (s *Atelet) unmountExternalVolumes(ctx context.Context, actorUID string, vo
 	return errors.Join(errs...)
 }
 
+type csiNodePluginSlot struct {
+	gen                uint64
+	inflight           int
+	nodeSocketOverride string
+	plugin             *csi.Plugin
+}
+
+func (s *Atelet) evictNodeSlotLocked(driverName string, cur csiNodePluginSlot) (*csi.Plugin, uint64) {
+	evicted := cur.plugin
+	cur.plugin, cur.nodeSocketOverride = nil, ""
+	cur.gen++
+	s.csiPlugins[driverName] = cur
+	return evicted, cur.gen
+}
+
+func (s *Atelet) getPluginOnce(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	s.mu.Lock()
+	if s.csiPlugins == nil {
+		s.csiPlugins = make(map[string]csiNodePluginSlot)
+	}
+	slot := s.csiPlugins[driverName]
+	slot.inflight++
+	startGen := slot.gen
+	s.csiPlugins[driverName] = slot
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		cur := s.csiPlugins[driverName]
+		cur.inflight--
+		if cur.plugin == nil && cur.inflight == 0 {
+			delete(s.csiPlugins, driverName)
+		} else {
+			s.csiPlugins[driverName] = cur
+		}
+		s.mu.Unlock()
+	}()
+
+	cfg, err := s.csiDriverConfigGetter.Get(ctx, driverName)
+	if err != nil {
+		evictOnErr := apierrors.IsNotFound(err) || status.Code(err) == codes.NotFound
+		retErr := fmt.Errorf("failed to retrieve CsiDriverConfig for %q: %w", driverName, err)
+		if !evictOnErr {
+			return nil, false, retErr
+		}
+		s.mu.Lock()
+		cur := s.csiPlugins[driverName]
+		if cur.gen != startGen {
+			retry := cur.plugin != nil
+			s.mu.Unlock()
+			return nil, retry, retErr
+		}
+		evicted, _ := s.evictNodeSlotLocked(driverName, cur)
+		s.mu.Unlock()
+		_ = evicted.Close()
+		return nil, false, retErr
+	}
+	if cfg == nil {
+		return nil, false, fmt.Errorf("missing CsiDriverConfig for %q", driverName)
+	}
+
+	socketOverride := cfg.GetNodeSocketOverride()
+	s.mu.Lock()
+	cur := s.csiPlugins[driverName]
+	if cur.plugin != nil && cur.nodeSocketOverride == socketOverride {
+		s.mu.Unlock()
+		return cur.plugin, false, nil
+	}
+	if cur.gen != startGen {
+		s.mu.Unlock()
+		return nil, true, nil
+	}
+	var preEvicted *csi.Plugin
+	if cur.plugin != nil {
+		preEvicted, startGen = s.evictNodeSlotLocked(driverName, cur)
+	}
+	s.mu.Unlock()
+	_ = preEvicted.Close()
+
+	csiPlugin, err := csi.NewCSIPluginFromConfig(ctx, cfg, driverName, false /*isController*/)
+	if err != nil {
+		return nil, false, err
+	}
+
+	s.mu.Lock()
+	cur = s.csiPlugins[driverName]
+	if cur.plugin != nil && cur.nodeSocketOverride == socketOverride {
+		matched := cur.plugin
+		s.mu.Unlock()
+		_ = csiPlugin.Close()
+		return matched, false, nil
+	}
+	if cur.gen != startGen {
+		s.mu.Unlock()
+		_ = csiPlugin.Close()
+		return nil, true, nil
+	}
+	evicted := cur.plugin
+	cur.plugin, cur.nodeSocketOverride = csiPlugin, socketOverride
+	cur.gen++
+	s.csiPlugins[driverName] = cur
+	s.mu.Unlock()
+	_ = evicted.Close()
+	return csiPlugin, false, nil
+}
+
 func (s *Atelet) getPlugin(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, error) {
 	s.mu.RLock()
 	plugin, ok := s.volumePlugins[driverName]
@@ -100,14 +209,13 @@ func (s *Atelet) getPlugin(ctx context.Context, driverName string) (volume.Volum
 	if ok {
 		return plugin, nil
 	}
-
-	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigGetter, driverName, false /*isController*/)
-	if err != nil {
-		return nil, err
+	if s.csiDriverConfigGetter == nil {
+		return nil, errors.New("missing csiDriverConfigGetter")
 	}
-
-	s.mu.Lock()
-	s.volumePlugins[driverName] = csiPlugin
-	s.mu.Unlock()
-	return csiPlugin, nil
+	for {
+		plugin, retry, err := s.getPluginOnce(ctx, driverName)
+		if !retry {
+			return plugin, err
+		}
+	}
 }
