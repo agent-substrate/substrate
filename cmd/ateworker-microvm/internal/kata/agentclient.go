@@ -276,9 +276,9 @@ func (a *AgentClient) ReadStderr(ctx context.Context, containerID, execID string
 // alongside it are per-guest-interface rather than per-container and are not
 // what ateworker reports. A nil return with a nil error means the agent answered
 // without cgroup stats for this container — it has no accounting for it, which
-// is a normal state for one that has exited. What that means for the actor is
-// the caller's call: the summing in GetWorkloadStats folds it in as a zero
-// contribution, because a gone container consumes nothing from here on.
+// is a normal state for one that has exited. GetWorkloadStats folds that in as
+// a zero contribution, because a gone container consumes nothing from here on.
+// The crash watcher reports an actor whose workload containers have all exited.
 //
 // Safe to call while the stdout/stderr forwarding goroutines are reading over
 // the same client: ttrpc multiplexes concurrent calls over the one connection,

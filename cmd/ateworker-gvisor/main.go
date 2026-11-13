@@ -799,7 +799,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())})
 	s.recordInitial(ctx, hosted)
-	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), rcmd, req.GetActorDirs(), req.GetSpec().GetContainers())
 
 	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: epoch}, nil
 }
@@ -1336,7 +1336,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.setSession(req.GetActorUid(), &workloadSession{rcmd: rcmd, containers: containerNames(containers)})
 	s.recordInitial(ctx, hosted)
-	s.watchSandbox(ctx, hosted, req.GetRunscPath(), req.GetActorDirs(), containers)
+	s.watchSandbox(ctx, hosted, req.GetRunscPath(), rcmd, req.GetActorDirs(), containers)
 
 	return &ateworkerpb.RestoreWorkloadResponse{WorkerEpoch: epoch}, nil
 }

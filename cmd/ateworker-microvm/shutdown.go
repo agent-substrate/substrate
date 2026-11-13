@@ -136,19 +136,26 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 // down has no workload left for this path to stop.
 type drainTarget struct {
 	id          string
-	agent       *kata.AgentClient
+	agent       guestClient
 	workloadIDs []string
 	// hosted is the activation the drain ends, for its final record.
 	hosted *hostedActor
 }
 
-// guestAgent is the slice of *kata.AgentClient the drain needs: signal a guest
-// process and wait for it to exit. Narrowed to an interface so
+// guestAgent is the slice of the kata-agent client the drain needs: signal a
+// guest process and wait for it to exit. Narrowed to an interface so
 // stopGuestWorkload's SIGTERM-then-SIGKILL escalation can be exercised without a
 // running VM.
 type guestAgent interface {
 	SignalProcess(ctx context.Context, containerID, execID string, signal uint32) error
 	WaitProcess(ctx context.Context, containerID, execID string) (int32, error)
+}
+
+// guestClient is the kata-agent connection kept for one running VM. Shutdown
+// signals through it, the crash watcher waits on it, and teardown closes it.
+type guestClient interface {
+	guestAgent
+	Close() error
 }
 
 // gracefullyStopActor signals the actor's guest workloads with SIGTERM and waits
