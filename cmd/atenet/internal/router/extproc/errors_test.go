@@ -60,3 +60,17 @@ func TestImmediateResponseHeaderEncoding(t *testing.T) {
 		t.Errorf("header uses Value (%q); must use RawValue only", h.GetValue())
 	}
 }
+
+func TestReqErrorResponseReasonHeader(t *testing.T) {
+	t.Parallel()
+
+	e := &ReqError{StatusCode: int(envoy_type.StatusCode_ServiceUnavailable), Msg: "body", Reason: "NO_CAPACITY"}
+	set := e.Response().GetImmediateResponse().GetHeaders().GetSetHeaders()
+	if len(set) != 2 || set[1].GetHeader().GetKey() != ReasonHeader || string(set[1].GetHeader().GetRawValue()) != "NO_CAPACITY" {
+		t.Errorf("headers = %v, want content-type and %s: NO_CAPACITY", set, ReasonHeader)
+	}
+	e.Reason = ""
+	if set := e.Response().GetImmediateResponse().GetHeaders().GetSetHeaders(); len(set) != 1 {
+		t.Errorf("headers without a reason = %v, want content-type only", set)
+	}
+}
