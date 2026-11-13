@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -248,6 +249,9 @@ func TestBuildServerTLSConfigWithoutCACertsAllowsCertlessClients(t *testing.T) {
 	}
 	if cfg.GetConfigForClient != nil {
 		t.Fatalf("buildServerTLSConfig() with no CA path set GetConfigForClient, want nil (no client-cert verification configured)")
+	}
+	if cfg.ClientAuth != tls.NoClientCert {
+		t.Fatalf("buildServerTLSConfig() with no CA path ClientAuth = %v, want %v (system roots must not verify client certs)", cfg.ClientAuth, tls.NoClientCert)
 	}
 }
 
