@@ -15,6 +15,7 @@
 package printer
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -26,12 +27,12 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	yaml "go.yaml.in/yaml/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/duration"
-	"sigs.k8s.io/yaml"
 )
 
 // TimeNow returns the current time. It is a package variable, exported so
@@ -256,7 +257,7 @@ func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal json for yaml: %w", err)
 	}
-	yb, err := yaml.JSONToYAML(b)
+	yb, err := jsonToYAML(b)
 	if err != nil {
 		return err
 	}
@@ -425,20 +426,17 @@ func printProto(out io.Writer, msg proto.Message, format string) error {
 		return err
 	}
 
-	// Normalize JSON output to ensure consistency across environments.
-	// This works around non-deterministic spacing in protojson.
+	// Re-indent to drop the non-deterministic spacing in protojson output, and
+	// keep its fields in declaration order.
 	// See: https://github.com/golang/protobuf/issues/1121
-	var obj any
-	if err := json.Unmarshal(b, &obj); err != nil {
-		return fmt.Errorf("failed to unmarshal protojson: %w", err)
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, b, "", "  "); err != nil {
+		return fmt.Errorf("failed to indent protojson: %w", err)
 	}
-	b, err = json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal indent: %w", err)
-	}
+	b = indented.Bytes()
 
 	if format == "yaml" {
-		yb, err := yaml.JSONToYAML(b)
+		yb, err := jsonToYAML(b)
 		if err != nil {
 			return err
 		}
@@ -454,4 +452,14 @@ func printProto(out io.Writer, msg proto.Message, format string) error {
 	}
 	_, err = out.Write([]byte{'\n'})
 	return err
+}
+
+// jsonToYAML converts a JSON object to YAML. Unlike sigs.k8s.io/yaml's
+// JSONToYAML it keeps keys in their JSON order instead of sorting them.
+func jsonToYAML(j []byte) ([]byte, error) {
+	var obj yaml.MapSlice
+	if err := yaml.Unmarshal(j, &obj); err != nil {
+		return nil, err
+	}
+	return yaml.Marshal(obj)
 }
