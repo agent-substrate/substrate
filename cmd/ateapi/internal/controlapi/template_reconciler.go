@@ -36,9 +36,9 @@ import (
 const (
 	templateListPageSize = 100
 
-	// templateWorkerCount is the number of goroutines draining the work
-	// queue.
-	templateWorkerCount = 5
+	// DefaultTemplateReconcilerWorkers is the default number of goroutines
+	// draining the template work queue.
+	DefaultTemplateReconcilerWorkers = 5
 
 	// goldenSnapshotWarmup is the default wall-clock delay between resuming
 	// the golden actor and taking its snapshot, for templates without a
@@ -91,13 +91,18 @@ type ActorTemplateReconciler struct {
 	control        goldenActorControl
 	queue          workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
 	resyncInterval time.Duration
+	workers        int
 }
 
-func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration) *ActorTemplateReconciler {
+func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration, workers int) *ActorTemplateReconciler {
+	if workers < 1 {
+		panic(fmt.Sprintf("template reconciler workers must be at least 1, got %d", workers))
+	}
 	return &ActorTemplateReconciler{
 		persistence:    persistence,
 		control:        control,
 		resyncInterval: resyncInterval,
+		workers:        workers,
 		// Create rate-limiting queue with exponential backoff
 		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
 	}
@@ -106,9 +111,10 @@ func NewActorTemplateReconciler(persistence templateReconcilerStore, control gol
 // Start launches the queue workers and the resync producer; there is no event
 // source for stored templates, so the periodic list is the event source.
 func (r *ActorTemplateReconciler) Start(ctx context.Context) {
+	slog.InfoContext(ctx, "Starting ActorTemplateReconciler", slog.Int("workers", r.workers), slog.Duration("resyncInterval", r.resyncInterval))
 	go func() {
 		defer r.queue.ShutDown()
-		for range templateWorkerCount {
+		for range r.workers {
 			go wait.UntilWithContext(ctx, r.runWorker, time.Second)
 		}
 		wait.UntilWithContext(ctx, r.resync, r.resyncInterval)
