@@ -89,7 +89,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	actor, actorSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 		t.Fatalf("repointing actor %s: %v", actorRef, err)
 	}
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestTagActorSnapshot_LocationOutsideSegmentRules(t *testing.T) {
 	w, objects := newFinalizeWorkflow(persistence)
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json")
 
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), nil)
 	if code := apierror.Code(err); code != codes.FailedPrecondition {
 		t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, codes.FailedPrecondition)
 	}
@@ -247,7 +247,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				})
 			}
 
-			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
@@ -308,7 +308,7 @@ func TestTagActorSnapshot_TagsNewestExternalSnapshot(t *testing.T) {
 				s.Snapshots = []*ateapi.Snapshot{snap}
 			})
 
-			if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); err != nil {
+			if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil); err != nil {
 				t.Fatalf("TagActorSnapshot: %v", err)
 			}
 		})
@@ -535,7 +535,7 @@ func TestTagActorSnapshot_PromotesLocalSnapshot(t *testing.T) {
 			}
 			atelet.promoteErr = tt.promoteErr
 
-			tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+			tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
@@ -632,7 +632,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !isObjectStoreErr(err) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil); !isObjectStoreErr(err) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
@@ -652,7 +652,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 
 	// Creating under the same name again is refused, even for the actor the
 	// pending row was reserved for, and leaves that row exactly as it was.
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot over the pending tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -676,7 +676,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// The create now runs from scratch, into a prefix of its own.
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
@@ -692,7 +692,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// A create over the finished tag is refused the same way.
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -728,7 +728,7 @@ func TestTagActorSnapshot_RecreateAfterRecordFailure(t *testing.T) {
 	actorRef := resources.ActorRefFromActor(actor)
 	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
 
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, failing.err) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil); !errors.Is(err, failing.err) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, failing.err)
 	}
 	failing.err = nil
@@ -757,7 +757,7 @@ func TestTagActorSnapshot_RecreateAfterRecordFailure(t *testing.T) {
 		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
 	}
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot after the delete: %v", err)
 	}
@@ -796,7 +796,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 		return nil
 	}
 
-	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"), nil)
 	if pendingURI == "" {
 		t.Fatalf("the create never reserved a row to race with (TagActorSnapshot = %v)", createErr)
 	}
@@ -843,7 +843,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !isObjectStoreErr(err) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1"), nil); !isObjectStoreErr(err) {
 		t.Fatalf("TagActorSnapshot(actor-1) = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	pending, err := persistence.GetTag(ctx, tagRef)
@@ -855,7 +855,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	// The second actor asks for the same name, with object storage healthy: it
 	// must not inherit the first actor's prefix.
 	objects.OnCopy = nil
-	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"), nil)
 	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot(actor-2) = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -884,7 +884,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), nil)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -1009,7 +1009,7 @@ func TestDeleteTag_Preconditions(t *testing.T) {
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	w, objects := newFinalizeWorkflow(persistence)
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), nil)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}

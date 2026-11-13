@@ -255,6 +255,11 @@ kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 # Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
 # After an asynchronous suspend, create tag uploads the local snapshot first if needed.
 kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
+
+# Also snapshot the actor's external volumes: all of them, or only those named.
+# Names must be joined to the flag with =.
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes=data,cache
 kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 

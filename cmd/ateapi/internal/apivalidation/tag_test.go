@@ -183,10 +183,52 @@ func TestValidateCreateTagRequest(t *testing.T) {
 			},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "scope"), nil, "").WithOrigin("minimum")},
 		},
+		{
+			name: "valid volume_selection capturing all",
+			req: &ateapi.CreateTagRequest{
+				Tag:             validTag(),
+				VolumeSelection: &ateapi.ExternalVolumeSelection{},
+			},
+			wantError: nil,
+		},
+		{
+			name: "valid volume_selection.names",
+			req: &ateapi.CreateTagRequest{
+				Tag:             validTag(),
+				VolumeSelection: &ateapi.ExternalVolumeSelection{Names: []string{"data", "cache"}},
+			},
+			wantError: nil,
+		},
+		{
+			name: "invalid volume_selection.names entry",
+			req: &ateapi.CreateTagRequest{
+				Tag:             validTag(),
+				VolumeSelection: &ateapi.ExternalVolumeSelection{Names: []string{"Data"}},
+			},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("volume_selection", "names").Index(0), nil, "").WithOrigin("format=k8s-short-name")},
+		},
+		{
+			name: "duplicate volume_selection.names entry",
+			req: &ateapi.CreateTagRequest{
+				Tag:             validTag(),
+				VolumeSelection: &ateapi.ExternalVolumeSelection{Names: []string{"data", "data"}},
+			},
+			wantError: field.ErrorList{field.Duplicate(field.NewPath("volume_selection", "names").Index(1), nil)},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateCreateTagRequest(ctx, tt.req), tt.wantError)
+			want := tt.wantError
+			var wantWithPreview map[string]field.ErrorList
+			// Without the ExternalVolumes gate, the volume field is forbidden
+			// instead of checked.
+			if tt.req.GetVolumeSelection() != nil {
+				want = field.ErrorList{field.Forbidden(field.NewPath("volume_selection"), "")}
+				wantWithPreview = map[string]field.ErrorList{"ExternalVolumes": tt.wantError, "ALL": tt.wantError}
+			}
+			assertValidate(t, func() field.ErrorList {
+				return ValidateCreateTagRequest(ctx, tt.req)
+			}, want, wantWithPreview)
 		})
 	}
 }

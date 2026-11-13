@@ -364,6 +364,90 @@ message Snapshot {
   //
   // +k8s:optional
   ActorSandboxRuntime sandbox_runtime = 8;
+
+  // volume_snapshots holds one entry per external volume a tag captures.
+  // CreateTag sets it.
+  // Entries are added before the snapshots are taken and their
+  // storage_snapshot_id is filled in once the snapshot handles come back, so
+  // an entry with an empty storage_snapshot_id names a snapshot that did not
+  // finish or whose handle was never recorded.
+  // Each template volume appears at most once.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=source_volume_name
+  repeated ExternalVolumeSnapshot volume_snapshots = 9;
+}
+
+// ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
+// by the tag Snapshot that captured it.
+message ExternalVolumeSnapshot {
+  // source_volume_name is the template volume this was captured from,
+  // matching the ExternalVolumeStatus of the same name on the source Actor.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # set-once
+  string source_volume_name = 1;
+
+  // storage_snapshot_id is the snapshot handle returned by the storage system.
+  // Empty until the storage system returns the handle, and set once. An entry
+  // left without one names a snapshot that failed, or one that was cut but
+  // whose handle was never recorded; deleting the tag recovers the handle of
+  // the latter from source_volume_id. Its format is the storage system's own,
+  // so it is only bounded and checked for control characters, like
+  // ExternalVolumeStatus.storage_volume_id.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string storage_snapshot_id = 2;
+
+  // volume_type is the plugin or CSI driver that took the snapshot, copied
+  // from the source ExternalVolumeStatus. The snapshot handle is only
+  // meaningful to that driver.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation
+  string volume_type = 3;
+
+  // ready_to_use is whether the storage system has finished the snapshot.
+  // Drivers may return a handle with ready_to_use false while the copy
+  // continues in the background, and tag creation does not wait for it.
+  // ready_to_use may move from false to true once the snapshot is observed
+  // ready, even after the tag completes. It never moves back.
+  //
+  // +k8s:optional
+  bool ready_to_use = 4;
+
+  // size_bytes is the snapshot's size as reported by the storage system, or 0
+  // if it did not report one. Carried because CreateSnapshot returns it, so
+  // recording it costs nothing and saves a later round trip.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 size_bytes = 5;
+
+  // source_volume_id is the storage system's ID of the volume this was
+  // captured from, copied from the source ExternalVolumeStatus's storage_volume_id.
+  // CreateSnapshot is idempotent on the snapshot name and this ID, so deleting
+  // the tag can recover a handle that was never recorded without depending on
+  // the source Actor still existing.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
+  string source_volume_id = 6;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -2050,6 +2134,35 @@ message CreateTagRequest {
   //
   // +k8s:required
   Tag tag = 1;
+
+  // volume_selection opts the tag into capturing the source Actor's external
+  // volumes. Unset captures none: snapshotting volumes costs storage and time
+  // that a tag of the core session alone does not. Set but empty captures
+  // every external volume; names narrows the set.
+  //
+  // Capturing requires the driver of every captured volume to support
+  // snapshots, and fails the call if any does not. It also fails if the
+  // Actor has no external volumes.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:optional
+  ExternalVolumeSelection volume_selection = 2;
+}
+
+// ExternalVolumeSelection picks which of the source Actor's external volumes a
+// tag captures.
+message ExternalVolumeSelection {
+  // names limits the capture to these external volumes of the source Actor,
+  // named as in its ActorTemplate. Empty captures every external volume. A
+  // name the Actor has no external volume for fails the call. Volumes left
+  // out are not recorded on the tag.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  repeated string names = 1;
 }
 
 // Request to update mutable fields on an existing Tag.

@@ -118,8 +118,8 @@ type actor_template
 # CreateActor accepts it in, which the handler enforces; can_use_tag controls
 # who may clone it. Managing the tag stays with its owning atespace.
 #
-# TODO: A tag is a durable copy of an actor's memory and disk, including any
-# secrets it held, and it outlives the actor. Any atespace editor can tag any
+# TODO: A tag is a durable copy of an actor's memory and disk, and optionally
+# its external volumes, including any secrets they held. It outlives the actor. Any atespace editor can tag any
 # actor in the atespace, publish it, and clone it. Restrict who can create,
 # publish, and clone tags once the tag scoping design is settled.
 type tag

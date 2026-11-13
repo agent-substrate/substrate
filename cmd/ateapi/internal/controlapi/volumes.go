@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -205,6 +206,16 @@ func getMountedActorVolumes(ctx context.Context, ref *ateapi.ObjectRef, volumes 
 
 func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
+}
+
+// tagVolumeSnapshotID names the snapshot a tag takes of one volume. It uses the
+// tag's UID so that a second create under a reused tag name gets new snapshot
+// names. The volume name is hashed so the result stays at 62 characters for
+// any volume name. Some drivers, like the Compute Engine PD driver, use it as
+// a resource name limited to 63 characters.
+func tagVolumeSnapshotID(tagUID string, volumeName string) string {
+	sum := sha256.Sum256([]byte(volumeName))
+	return fmt.Sprintf("substrate-snap-%s-%x", tagUID, sum[:5])
 }
 
 // detachActorVolumes detaches all mounted external volumes for an actor from its assigned node.
