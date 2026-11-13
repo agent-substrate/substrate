@@ -25,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/protoredact"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -118,11 +119,13 @@ func warnSharedIdentity(errOut io.Writer, tokenFile string) {
 		ateclient.FallbackPrincipal())
 }
 
+// formatProtoCompact renders v on one line with debug_redact fields masked.
 func formatProtoCompact(v any) string {
 	msg, ok := v.(proto.Message)
 	if !ok || msg == nil {
 		return "<nil>"
 	}
+	msg, _ = protoredact.Redacted(msg)
 	b, err := (protojson.MarshalOptions{Multiline: false}).Marshal(msg)
 	if err != nil {
 		return fmt.Sprintf("<marshal error: %v>", err)

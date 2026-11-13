@@ -135,6 +135,45 @@ func TestLoggingUnaryInterceptor(t *testing.T) {
 			t.Errorf("vTrace stderr = %q, want request and response payloads", got)
 		}
 	})
+
+	t.Run("vTrace masks debug_redact fields without changing the messages", func(t *testing.T) {
+		setVerbosity(t, vTrace)
+		var errOut bytes.Buffer
+		ic := newLoggingUnaryInterceptor(&errOut)
+
+		newTemplate := func() *ateapi.ActorTemplate {
+			return &ateapi.ActorTemplate{Containers: []*ateapi.Container{{
+				Name: "main",
+				Env:  []*ateapi.EnvVar{{Name: "API_KEY", Value: "s3cret"}},
+			}}}
+		}
+		tmplReq := &ateapi.CreateActorTemplateRequest{ActorTemplate: newTemplate()}
+		invoker := func(_ context.Context, _ string, _, reply any, _ *grpc.ClientConn, _ ...grpc.CallOption) error {
+			proto.Merge(reply.(proto.Message), newTemplate())
+			return nil
+		}
+
+		reply := &ateapi.ActorTemplate{}
+		if err := ic(context.Background(), ateapi.Control_CreateActorTemplate_FullMethodName, tmplReq, reply, nil, invoker); err != nil {
+			t.Fatalf("interceptor unexpected error: %v", err)
+		}
+		got := errOut.String()
+		if strings.Contains(got, "s3cret") {
+			t.Errorf("vTrace stderr = %q, want no env value", got)
+		}
+		if n := strings.Count(got, "[REDACTED]"); n != 2 {
+			t.Errorf("vTrace stderr has %d [REDACTED], want 2 (request and response): %q", n, got)
+		}
+		if !strings.Contains(got, "API_KEY") {
+			t.Errorf("vTrace stderr = %q, want the env name kept", got)
+		}
+		if v := tmplReq.GetActorTemplate().GetContainers()[0].GetEnv()[0].GetValue(); v != "s3cret" {
+			t.Errorf("request env value = %q, want it unchanged", v)
+		}
+		if v := reply.GetContainers()[0].GetEnv()[0].GetValue(); v != "s3cret" {
+			t.Errorf("reply env value = %q, want it unchanged", v)
+		}
+	})
 }
 
 func TestLogsActorRunner_FollowVerboseSurfacesDelaysAndErrors(t *testing.T) {
