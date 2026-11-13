@@ -16,10 +16,13 @@ package csi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -220,7 +223,7 @@ func TestPlugin_CreateVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 
 	ctx := context.Background()
 	resp, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
@@ -247,7 +250,7 @@ func TestPlugin_DeleteVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 
 	ctx := context.Background()
 	err = plugin.DeleteVolume(ctx, "test-vol")
@@ -267,7 +270,7 @@ func TestPlugin_AttachVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
@@ -326,7 +329,7 @@ func TestPlugin_DetachVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
@@ -377,7 +380,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	tmpDir, err := os.MkdirTemp("", "csi-mount-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -399,7 +402,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	}
 
 	// Verify staging directory was created
-	stagingPath := filepath.Join(plugin.stagingDirPrefix, "test-vol")
+	stagingPath := plugin.stagingDir("test-vol")
 	if _, err := os.Stat(stagingPath); os.IsNotExist(err) {
 		t.Errorf("staging directory %q was not created", stagingPath)
 	}
@@ -418,6 +421,132 @@ func TestPlugin_MountVolume(t *testing.T) {
 	}
 }
 
+func TestPlugin_StagingDir(t *testing.T) {
+	// The layout is on-disk state shared across atelet builds, so pin it.
+	p := &Plugin{stagingDirPrefix: "/staging", driverName: "d.example.com"}
+	want := "/staging/d.example.com/d2e8363faaac7ae76def3b14091d8eb5755f6b92e9531627aeec833a8731cc49/mount"
+	if got := p.stagingDir("vol-1"); got != want {
+		t.Errorf("stagingDir(%q) = %q, want %q", "vol-1", got, want)
+	}
+
+	tests := []struct {
+		name     string
+		volumeID string
+	}{
+		{name: "plain", volumeID: "vol-1"},
+		{name: "slashes", volumeID: "projects/p/disks/d-1"},
+		{name: "parent", volumeID: "../x"},
+		{name: "absolute", volumeID: "/x"},
+		{name: "dot", volumeID: "."},
+		{name: "longest", volumeID: strings.Repeat("a", 256)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stagedAt, publishedFrom, unstagedAt string
+			driver := &mockCSIDriver{
+				nodeStageVolumeFunc: func(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+					stagedAt = req.GetStagingTargetPath()
+					return &csi.NodeStageVolumeResponse{}, nil
+				},
+				nodePublishVolumeFunc: func(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+					publishedFrom = req.GetStagingTargetPath()
+					return &csi.NodePublishVolumeResponse{}, nil
+				},
+				nodeUnstageVolumeFunc: func(_ context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+					unstagedAt = req.GetStagingTargetPath()
+					return &csi.NodeUnstageVolumeResponse{}, nil
+				},
+			}
+			endpoint, cleanup := startMockCSIDriver(t, driver)
+			defer cleanup()
+			client, err := NewCSIClient(endpoint, nil)
+			if err != nil {
+				t.Fatalf("failed to create CSI client: %v", err)
+			}
+			defer client.Close()
+
+			root := t.TempDir()
+			plugin := NewPlugin(client, mockDriverName)
+			plugin.stagingDirPrefix = filepath.Join(root, "staging")
+			ctx := context.Background()
+			plugin.InitNodeCapabilities(ctx)
+
+			sum := sha256.Sum256([]byte(tc.volumeID))
+			driverDir := filepath.Join(plugin.stagingDirPrefix, mockDriverName)
+			wantPath := filepath.Join(driverDir, hex.EncodeToString(sum[:]), "mount")
+
+			req := volume.MountVolumeRequest{VolumeID: tc.volumeID, TargetPath: filepath.Join(root, "target")}
+			if err := plugin.MountVolume(ctx, req); err != nil {
+				t.Fatalf("MountVolume() error = %v", err)
+			}
+			if stagedAt != wantPath || publishedFrom != wantPath {
+				t.Errorf("staged at %q, published from %q, want both %q", stagedAt, publishedFrom, wantPath)
+			}
+			if err := plugin.UnmountVolume(ctx, tc.volumeID, req.TargetPath); err != nil {
+				t.Fatalf("UnmountVolume() error = %v", err)
+			}
+			if unstagedAt != wantPath {
+				t.Errorf("unstaged at %q, want %q", unstagedAt, wantPath)
+			}
+			// Unmount removes the per-volume directory, keeps the driver directory,
+			// and creates nothing outside the prefix.
+			if _, err := os.Stat(filepath.Dir(wantPath)); !os.IsNotExist(err) {
+				t.Errorf("per-volume directory %q was not removed, err: %v", filepath.Dir(wantPath), err)
+			}
+			if _, err := os.Stat(driverDir); err != nil {
+				t.Errorf("driver directory %q was not kept: %v", driverDir, err)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != "staging" {
+				t.Errorf("unexpected entries under %q: %v", root, entries)
+			}
+		})
+	}
+
+	t.Run("non-empty mount directory is kept", func(t *testing.T) {
+		endpoint, cleanup := startMockCSIDriver(t, &mockCSIDriver{})
+		defer cleanup()
+		client, err := NewCSIClient(endpoint, nil)
+		if err != nil {
+			t.Fatalf("failed to create CSI client: %v", err)
+		}
+		defer client.Close()
+
+		plugin := NewPlugin(client, mockDriverName)
+		plugin.stagingDirPrefix = filepath.Join(t.TempDir(), "staging")
+		ctx := context.Background()
+		plugin.InitNodeCapabilities(ctx)
+
+		mount := plugin.stagingDir("vol-1")
+		if err := os.MkdirAll(mount, 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(mount, "data"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := plugin.unstageVolume(ctx, "vol-1"); err != nil {
+			t.Fatalf("unstageVolume() error = %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(mount, "data")); err != nil {
+			t.Errorf("non-empty mount directory was removed: %v", err)
+		}
+	})
+
+	t.Run("volume IDs map to distinct directories per driver", func(t *testing.T) {
+		a := &Plugin{stagingDirPrefix: "/s", driverName: "d1"}
+		b := &Plugin{stagingDirPrefix: "/s", driverName: "d2"}
+		if a.stagingDir("a/b") == a.stagingDir("a//b") || a.stagingDir("a") == a.stagingDir("a/b") {
+			t.Error("different volume IDs share a staging directory")
+		}
+		if a.stagingDir("v") == b.stagingDir("v") {
+			t.Error("different drivers share a staging directory")
+		}
+	})
+}
+
 func TestPlugin_UnmountVolume(t *testing.T) {
 	driver := &mockCSIDriver{}
 	endpoint, cleanup := startMockCSIDriver(t, driver)
@@ -429,7 +558,7 @@ func TestPlugin_UnmountVolume(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	tmpDir, err := os.MkdirTemp("", "csi-unmount-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -440,7 +569,7 @@ func TestPlugin_UnmountVolume(t *testing.T) {
 	targetPath := filepath.Join(tmpDir, "target")
 
 	// Pre-create staging directory to test cleanup
-	stagingPath := filepath.Join(plugin.stagingDirPrefix, "test-vol")
+	stagingPath := plugin.stagingDir("test-vol")
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
 		t.Fatalf("failed to create staging path: %v", err)
 	}
@@ -544,7 +673,7 @@ func TestPlugin_Capabilities_SkipAttachDetachWhenUnsupported(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	ctx := context.Background()
 
 	plugin.InitControllerCapabilities(ctx)
@@ -605,7 +734,7 @@ func TestPlugin_Capabilities_SkipStageUnstageWhenUnsupported(t *testing.T) {
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	ctx := context.Background()
 
 	plugin.InitNodeCapabilities(ctx)
@@ -671,7 +800,7 @@ func TestPlugin_Capabilities_AllEnabledWhenQueryFailsOrEmpty(t *testing.T) {
 			}
 			defer client.Close()
 
-			plugin := NewPlugin(client)
+			plugin := NewPlugin(client, mockDriverName)
 			ctx := context.Background()
 			plugin.InitControllerCapabilities(ctx)
 			plugin.InitNodeCapabilities(ctx)
@@ -707,7 +836,7 @@ func TestPlugin_Capabilities_DisableAttachDetachAfterUnimplemented(t *testing.T)
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
 
@@ -758,7 +887,7 @@ func TestPlugin_Capabilities_DisableStageUnstageAfterUnimplemented(t *testing.T)
 	}
 	defer client.Close()
 
-	plugin := NewPlugin(client)
+	plugin := NewPlugin(client, mockDriverName)
 	tmpDir := t.TempDir()
 	plugin.stagingDirPrefix = filepath.Join(tmpDir, "staging")
 	targetPath := filepath.Join(tmpDir, "target")
@@ -776,9 +905,11 @@ func TestPlugin_Capabilities_DisableStageUnstageAfterUnimplemented(t *testing.T)
 	if plugin.SupportsNodeCapability(csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME) {
 		t.Errorf("expected STAGE_UNSTAGE_VOLUME to be false after Unimplemented")
 	}
-	stagingPath := filepath.Join(plugin.stagingDirPrefix, "test-vol")
-	if _, err := os.Stat(stagingPath); !os.IsNotExist(err) {
-		t.Errorf("expected staging directory %q to be removed, got err: %v", stagingPath, err)
+	stagingPath := plugin.stagingDir("test-vol")
+	for _, dir := range []string{stagingPath, filepath.Dir(stagingPath)} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("expected staging directory %q to be removed, got err: %v", dir, err)
+		}
 	}
 
 	if err := plugin.UnmountVolume(ctx, "test-vol", targetPath); err != nil {
@@ -811,6 +942,9 @@ func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 			}
 			defer plugin.client.Close()
 
+			if plugin.driverName != mockDriverName {
+				t.Errorf("driverName = %q, want %q", plugin.driverName, mockDriverName)
+			}
 			if isController && !plugin.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME) {
 				t.Errorf("expected PUBLISH_UNPUBLISH_VOLUME to be true")
 			}
