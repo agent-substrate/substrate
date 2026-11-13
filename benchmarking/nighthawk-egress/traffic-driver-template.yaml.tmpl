@@ -61,7 +61,7 @@ volumes:
 # Sandbox size: headroom so the load generator is not the bottleneck.
 resources:
   limits:
-    cpuMillicores: 2000
-    memoryBytes: 1073741824 # 1Gi
+    cpuMillicores: 16000
+    memoryBytes: 8589934592 # 8Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
