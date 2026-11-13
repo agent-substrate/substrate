@@ -217,6 +217,9 @@ const (
 	// RouterResumeNone indicates the resume completed and found the actor already
 	// running (steady-state route).
 	RouterResumeNone = "none"
+	// RouterResumeCached indicates the router served the actor's worker placement
+	// from its warm route cache without calling ateapi.
+	RouterResumeCached = "cached"
 	// RouterResumeTriggered indicates this request won the singleflight lock and
 	// completed a cold activation.
 	RouterResumeTriggered = "triggered"

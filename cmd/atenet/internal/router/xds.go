@@ -231,10 +231,11 @@ const routeIdleTimeoutMargin = 30 * time.Second
 // it, so a tunnel only carries one actor and port. A second hashable value
 // would split the pool, since Envoy hashes them in map order.
 const (
-	tunnelKeyFilterStateKey    = "dev.ate.tunnel.key"
-	tunnelWorkerFilterStateKey = "dev.ate.tunnel.worker"
-	tunnelActorFilterStateKey  = "dev.ate.tunnel.actor"
-	tunnelPortFilterStateKey   = "dev.ate.tunnel.port"
+	tunnelKeyFilterStateKey      = "dev.ate.tunnel.key"
+	tunnelWorkerFilterStateKey   = "dev.ate.tunnel.worker"
+	tunnelActorFilterStateKey    = "dev.ate.tunnel.actor"
+	tunnelActorUIDFilterStateKey = "dev.ate.tunnel.actor_uid"
+	tunnelPortFilterStateKey     = "dev.ate.tunnel.port"
 )
 
 // connectPoolFilterStateKey is the only hashable value on the CONNECT chain.
@@ -318,6 +319,8 @@ type XdsServer struct {
 	// that hold a request open for a long turn — an LLM streaming a response,
 	// say — need this above the default or Envoy cuts the turn off with a 504.
 	routeTimeout time.Duration
+
+	warmRouteCacheEnabled bool
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -362,6 +365,16 @@ func (x *XdsServer) SetExtProcMessageTimeout(d time.Duration) {
 	if d > 0 {
 		x.extProcMessageTimeout = d
 	}
+}
+
+// SetWarmRouteCacheEnabled allows ext_proc to request response headers via
+// mode_override and attaches response.code_details, which is how the ingress
+// handler learns that a cached route went stale without paying a response
+// round trip on fresh resolves.
+func (x *XdsServer) SetWarmRouteCacheEnabled(v bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.warmRouteCacheEnabled = v
 }
 
 // SetExtProcMaxRequests sets the circuit-breaker max_requests on the ext_proc
@@ -1118,6 +1131,15 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 					},
 					AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 				},
+				{
+					Header: &corev3.HeaderValue{
+						Key: atenet.ActorUIDHeader,
+						Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
+							ingress.OriginalDstMetadataKey, ingress.ActorUIDMetadataKey),
+					},
+					AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+					KeepEmptyValue: true,
+				},
 			},
 		})
 	}
@@ -1318,12 +1340,14 @@ func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 func actorTunnelFilterStateFilter() *hcmv3.HttpFilter {
 	worker := "%DYNAMIC_METADATA(" + ingress.OriginalDstMetadataKey + ":" + ingress.OriginalDstAddressKey + ")%"
 	actor := "%REQ(" + atenet.TargetActorHeader + ")%"
+	uid := "%DYNAMIC_METADATA(" + ingress.OriginalDstMetadataKey + ":" + ingress.ActorUIDMetadataKey + ")%"
 	port := "%DYNAMIC_METADATA(" + ingress.OriginalDstMetadataKey + ":" + ingress.OriginalDstPortKey + ")%"
 	once := setfilterstatecommonv3.FilterStateValue_ONCE
 	return setFilterStateHTTPFilter(
-		filterStateValue(tunnelKeyFilterStateKey, "envoy.hashable_string", worker+"|"+actor+"|"+port, once),
+		filterStateValue(tunnelKeyFilterStateKey, "envoy.hashable_string", worker+"|"+actor+"|"+uid+"|"+port, once),
 		filterStateValue(tunnelWorkerFilterStateKey, "envoy.string", worker, once),
 		filterStateValue(tunnelActorFilterStateKey, "envoy.string", actor, once),
+		filterStateValue(tunnelActorUIDFilterStateKey, "envoy.string", uid, once),
 		filterStateValue(tunnelPortFilterStateKey, "envoy.string", port, once),
 	)
 }
@@ -1381,6 +1405,13 @@ func buildActorConnectListener(ingressCache bool) *listenerv3.Listener {
 											Header: &corev3.HeaderValue{
 												Key:   atenet.TargetActorHeader,
 												Value: "%FILTER_STATE(" + tunnelActorFilterStateKey + ":PLAIN)%",
+											},
+											AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+										},
+										{
+											Header: &corev3.HeaderValue{
+												Key:   atenet.ActorUIDHeader,
+												Value: "%FILTER_STATE(" + tunnelActorUIDFilterStateKey + ":PLAIN)%",
 											},
 											AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 										},
@@ -1505,7 +1536,7 @@ func buildConnectRoutes() *routev3.RouteConfiguration {
 // main_internal listeners. captureActorRouting preserves
 // the actor routing header across CONNECT re-entry.
 func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb.Any {
-	extProcConfig := newAny(&extprocv3filter.ExternalProcessor{
+	ep := &extprocv3filter.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
 				EnvoyGrpc: &corev3.GrpcService_EnvoyGrpc{
@@ -1541,7 +1572,15 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 				Untyped: []string{ingress.OriginalDstMetadataKey},
 			},
 		},
-	})
+	}
+	if x.warmRouteCacheEnabled {
+		// Response headers stay SKIP by default; the ext_proc handler uses
+		// mode_override to request them only on cache hits so fresh resolves
+		// avoid the extra round trip and close their ext_proc stream at once.
+		ep.AllowModeOverride = true
+		ep.ResponseAttributes = []string{ingress.ResponseCodeDetailsAttribute}
+	}
+	extProcConfig := newAny(ep)
 
 	routerAny := newAny(&routerv3.Router{})
 

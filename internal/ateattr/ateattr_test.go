@@ -415,6 +415,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{TemplateUnknown, "unknown"},
 
 		{RouterResumeNone, "none"},
+		{RouterResumeCached, "cached"},
 		{RouterResumeTriggered, "triggered"},
 		{RouterResumeJoined, "joined"},
 		{RouterResumeUnknown, "unknown"},

@@ -69,6 +69,11 @@ type Result struct {
 	// MetadataKey lookup) that reads dynamic metadata rather than headers. Nil
 	// for handlers that route by header mutation alone.
 	DynamicMetadata *structpb.Struct
+
+	// OnResponseHeaders, when set, is called with the response's headers and
+	// attributes if the dataplane sends them to ext_proc, and may answer in
+	// the response's place. A nil return lets the response through.
+	OnResponseHeaders func(resp *RequestMetadata) *extprocv3.ProcessingResponse
 }
 
 // resume returns the resume label for the route-duration metric, defaulting an

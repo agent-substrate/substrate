@@ -25,10 +25,12 @@ package ingress
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -56,20 +58,74 @@ const (
 	OriginalDstPortKey = "port"
 	// WorkerSPIFFEIDKey is the SPIFFE ID atunnel's certificate must carry.
 	WorkerSPIFFEIDKey = "worker_spiffe_id"
+	// ActorUIDMetadataKey is the UID of the actor the route was resolved for.
+	// atunnel refuses a request whose UID is not the actor it hosts, so a
+	// stale route cannot reach a later actor of the same name. It travels as
+	// metadata, not as a request header, so a client cannot set it.
+	ActorUIDMetadataKey = "actor_uid"
+
+	// ResponseCodeDetailsAttribute is the Envoy attribute that says where a
+	// response came from: "via_upstream" when the upstream sent it, anything
+	// else when Envoy replied itself.
+	ResponseCodeDetailsAttribute = "response.code_details"
 )
 
 // Handler routes ingress requests to the worker hosting their actor.
 type Handler struct {
 	resumer *ActorResumer
 	parking *parkingLot
+
+	upstreamConnect   bool
+	warmRouteCacheTTL time.Duration
 }
 
-func New(apiClient ateapi.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
+// Option configures a Handler.
+type Option func(*Handler)
+
+// WithUpstreamConnect says whether the dataplane reaches workers through a
+// CONNECT tunnel (the default) or sends them requests directly.
+func WithUpstreamConnect(connect bool) Option {
+	return func(h *Handler) { h.upstreamConnect = connect }
+}
+
+// WithWarmRouteCacheTTL caches a running actor's route for ttl, so requests
+// for it skip the ateapi ResumeActor call. The dataplane must send response
+// headers to ext_proc for stale routes to be dropped. 0 leaves the cache off.
+func WithWarmRouteCacheTTL(ttl time.Duration) Option {
+	return func(h *Handler) { h.warmRouteCacheTTL = ttl }
+}
+
+func New(apiClient ateapi.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics, opts ...Option) *Handler {
 	lot := newParkingLot(parkCfg, parkMetrics)
-	return &Handler{
-		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
-		parking: lot,
+	h := &Handler{parking: lot, upstreamConnect: true}
+	for _, opt := range opts {
+		opt(h)
 	}
+	h.resumer = NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot), withWarmRouteCache(h.warmRouteCacheTTL))
+	return h
+}
+
+// onResponseHeaders drops actorKey's cached route if it still matches routed
+// when the response shows that the worker no longer serves the actor.
+// Responses from the actor itself, whatever their status, leave the route alone.
+func (h *Handler) onResponseHeaders(actorKey string, routed routePlacement, resp *extproc.RequestMetadata) *extprocv3.ProcessingResponse {
+	// Envoy replied itself: it could not reach the worker, or atunnel refused
+	// the CONNECT tunnel. Envoy's reply goes out as it is.
+	if details := resp.Attribute(ResponseCodeDetailsAttribute); details != "" && details != "via_upstream" {
+		h.resumer.invalidateRoute(actorKey, routed)
+		return nil
+	}
+	// Without a tunnel, atunnel refuses in-band with a marked 421. It strips
+	// the marker from actor responses, so this one is its own and the actor
+	// never saw the request. Answer 503 (gRPC Unavailable) so clients retry.
+	// Inside a tunnel atunnel does not see responses, so the marker proves
+	// nothing there.
+	if !h.upstreamConnect && resp.Header(":status") == "421" && resp.Header(atenet.StaleAssignmentHeader) == "true" {
+		h.resumer.invalidateRoute(actorKey, routed)
+		return extproc.ImmediateResponse(envoy_type.StatusCode_ServiceUnavailable,
+			fmt.Sprintf("actor %s unavailable: stale assignment", actorKey))
+	}
+	return nil
 }
 
 func (h *Handler) Direction() extproc.Direction { return extproc.DirectionIngress }
@@ -120,6 +176,13 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		TemplateName:     actor.GetActorTemplate().GetName(),
 		Resume:           string(resumeOutcome),
 	}
+	if resumeOutcome == ResumeOutcomeCached {
+		actorKey := actorRef.String()
+		routed := placementOf(actor)
+		res.OnResponseHeaders = func(resp *extproc.RequestMetadata) *extprocv3.ProcessingResponse {
+			return h.onResponseHeaders(actorKey, routed, resp)
+		}
+	}
 
 	// The first IP is in the cluster's primary IP family.
 	// TODO: choose the IP family that matches the dataplane's own address.
@@ -149,12 +212,16 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 
 	// ext_proc clients may use regular HTTPS on :443 or choose to CONNECT to
 	// atunnel instead.
+	originalDst := map[string]any{
+		OriginalDstAddressKey: targetAddr,
+		OriginalDstPortKey:    strconv.Itoa(targetPort),
+		WorkerSPIFFEIDKey:     workerSPIFFEID,
+	}
+	if uid := actor.GetMetadata().GetUid(); uid != "" {
+		originalDst[ActorUIDMetadataKey] = uid
+	}
 	dynamicMetadata, err := structpb.NewStruct(map[string]any{
-		OriginalDstMetadataKey: map[string]any{
-			OriginalDstAddressKey: targetAddr,
-			OriginalDstPortKey:    strconv.Itoa(targetPort),
-			WorkerSPIFFEIDKey:     workerSPIFFEID,
-		},
+		OriginalDstMetadataKey: originalDst,
 	})
 	if err != nil {
 		return res, extproc.NewReqError(envoy_type.StatusCode_InternalServerError,

@@ -458,6 +458,12 @@ groups:
               brief: >
                 The actor was already in operation. The router only found its
                 location. This is the usual warm route.
+            - id: cached
+              stability: development
+              value: cached
+              brief: >
+                The router served the actor's worker placement from its warm
+                route cache without calling ateapi.
             - id: triggered
               stability: development
               value: triggered
