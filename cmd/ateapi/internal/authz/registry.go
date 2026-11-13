@@ -314,6 +314,18 @@ var defaultRPCPermissions = map[string]rpcRule{
 	ateapi.Control_DeleteExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeClassRequest) ([]check, field.ErrorList) {
 		return onExternalVolumeClass(RelationCanDelete, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
 	})),
+	ateapi.Control_GetExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanGetAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_CreateExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.CreateExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanCreateAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_UpdateExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.UpdateExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanUpdateAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_DeleteExternalVolumeClassAccessPolicy_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeClassAccessPolicyRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanDeleteAccessPolicy, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
 
 	// Actor identity credentials.
 	ateapi.Control_MintActorJwt_FullMethodName: rule(checksOf(func(r *ateapi.MintActorJwtRequest) ([]check, field.ErrorList) {
