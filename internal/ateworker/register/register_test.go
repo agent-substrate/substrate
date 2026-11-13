@@ -172,7 +172,8 @@ func TestEpochRequire(t *testing.T) {
 }
 
 // The readiness check holds the pod not Ready until the worker process has
-// registered, so a restarted one takes no placements before it can serve them.
+// reported its sandbox runtimes, so it takes no placements before it can serve
+// them.
 func TestEpochRegistered(t *testing.T) {
 	var e Epoch
 	if err := e.Registered(context.Background()); err == nil {
@@ -270,38 +271,55 @@ func TestRegisterOnce(t *testing.T) {
 	}
 }
 
-func TestRunStoresEpochBeforeReportingRuntimes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// run stores the epoch once the control plane has accepted the sandbox
+// runtimes, so a worker whose report has not landed stays not Ready and
+// refuses workloads.
+func TestRunStoresEpochAfterFirstReport(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		reportErr error
+		wantEpoch int64
+	}{
+		{name: "report accepted", wantEpoch: 1},
+		{name: "report failed", reportErr: status.Error(codes.Unavailable, "ateapi is down")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
-	path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
-	if _, err := sandboxruntimes.Write(path, gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})); err != nil {
-		t.Fatal(err)
-	}
-	var epoch Epoch
-	client := &runtimesRecorder{fakeSupport: &fakeSupport{}, onReport: func(req *ateletpb.SetWorkerSandboxRuntimesRequest) {
-		if got := epoch.Load(); got != req.GetEpoch() {
-			t.Errorf("epoch stored = %d when runtimes were reported with %d", got, req.GetEpoch())
-		}
-		cancel()
-	}}
-	err := run(ctx, ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, PodIPs: []string{"10.0.0.1"}}, &ateletpb.WorkerResources{Actors: testActors}, client, &epoch, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("run() = %v, want context.Canceled", err)
-	}
-	if epoch.Load() != 1 {
-		t.Errorf("epoch = %d, want 1", epoch.Load())
+			path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
+			if _, err := sandboxruntimes.Write(path, gvisorFile(sandboxruntimes.Attributes{hardware.AttrSandboxBundleHash: "sha256:v1"})); err != nil {
+				t.Fatal(err)
+			}
+			var epoch Epoch
+			client := &runtimesRecorder{fakeSupport: &fakeSupport{}, err: tc.reportErr, onReport: func(*ateletpb.SetWorkerSandboxRuntimesRequest) {
+				if got := epoch.Load(); got != 0 {
+					t.Errorf("epoch = %d while runtimes were being reported, want 0", got)
+				}
+				cancel()
+			}}
+			err := run(ctx, ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, PodIPs: []string{"10.0.0.1"}}, &ateletpb.WorkerResources{Actors: testActors}, client, &epoch, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("run() = %v, want context.Canceled", err)
+			}
+			if got := epoch.Load(); got != tc.wantEpoch {
+				t.Errorf("epoch = %d, want %d", got, tc.wantEpoch)
+			}
+		})
 	}
 }
 
+// runtimesRecorder is a fakeSupport that hands each sandbox runtimes report to
+// onReport and returns err.
 type runtimesRecorder struct {
 	*fakeSupport
 	onReport func(*ateletpb.SetWorkerSandboxRuntimesRequest)
+	err      error
 }
 
 func (r *runtimesRecorder) SetWorkerSandboxRuntimes(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
 	r.onReport(req)
-	return nil
+	return r.err
 }
 
 func TestReconcilerSync(t *testing.T) {
