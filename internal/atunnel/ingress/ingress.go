@@ -385,26 +385,33 @@ func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx co
 		return
 	}
 
-	relayWithHalfClose(ctx, log, upstream, rw, downstream, downstream)
+	relayWithHalfClose(ctx, log, upstream, rw, downstream, downstream, func() { _ = downstream.Close() })
 }
 
 func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context, log *slog.Logger) {
 	// A HTTP/2 CONNECT tunnel is a pair of streams, not a hijackable TCP
 	// socket. Send the response headers before copying so the peer can start
 	// sending DATA frames, then flush each upstream write promptly.
+	rc := http.NewResponseController(w)
 	w.WriteHeader(http.StatusOK)
-	if err := http.NewResponseController(w).Flush(); err != nil {
+	if err := rc.Flush(); err != nil {
 		return
 	}
 
-	relayWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
+	// A write deadline in the past resets the stream, so a copy blocked on
+	// the router's flow-control window returns and the relay can finish
+	// before this handler does.
+	abort := func() { _ = rc.SetWriteDeadline(time.Now()) }
+	relayWithHalfClose(ctx, log, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body, abort)
 }
 
 // relayWithHalfClose copies a CONNECT stream between the router
 // (downstream) and the actor (upstream). It half-closes the actor connection
 // when the router stops sending, and closes the downstream when the actor
-// does, so a router that reuses tunnels doesn't send into a dead one.
-func relayWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn, downstreamReader io.Reader, downstreamWriter io.Writer, downstreamCloser io.Closer) {
+// does, so a router that reuses tunnels doesn't send into a dead one. On
+// cancel it aborts the downstream and waits for the actor-to-router copy: an
+// HTTP/2 ResponseWriter must not be used once its handler returned.
+func relayWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn, downstreamReader io.Reader, downstreamWriter io.Writer, downstreamCloser io.Closer, abortDownstream func()) {
 	start := time.Now()
 	go func() {
 		n, err := io.Copy(upstream, downstreamReader)
@@ -421,6 +428,8 @@ func relayWithHalfClose(ctx context.Context, log *slog.Logger, upstream net.Conn
 	case <-ctx.Done():
 		log.DebugContext(ctx, "atunnel CONNECT canceled", slog.Any("cause", context.Cause(ctx)), slog.Duration("after", time.Since(start)))
 		_ = upstream.Close()
+		abortDownstream()
+		<-actorDone
 	case <-actorDone:
 	}
 	_ = downstreamCloser.Close()
