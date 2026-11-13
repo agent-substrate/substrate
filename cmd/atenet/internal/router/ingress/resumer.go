@@ -17,6 +17,7 @@ package ingress
 import (
 	"context"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -109,12 +110,29 @@ type ActorResumer struct {
 	// budget bounds the total time a single resume operation retries before the
 	// underlying error is returned.
 	budget time.Duration
+	// inProgressBudget, when greater than budget, extends the retry window for
+	// actors completing an in-progress lifecycle transition (Aborted or
+	// ACTOR_STATE_SUSPENDING) while keeping pool capacity errors bounded by budget.
+	inProgressBudget time.Duration
 	// backoff paces the retries within the budget.
 	backoff wait.Backoff
 	// nextID is a counter assigned to each incoming ResumeActor call.
 	// Used as a unique ID to identify requests (reqID) and disambiguate the
 	// leader vs joiners for flight outcome classification.
 	nextID uint64
+}
+
+const inProgressMaxRetryInterval = 2 * time.Second
+
+func isTransientInProgressErr(err error) bool {
+	switch status.Code(err) {
+	case codes.Aborted:
+		return true
+	case codes.FailedPrecondition:
+		return strings.Contains(strings.ToLower(statusDescription(err)), "actor_state_suspending")
+	default:
+		return false
+	}
 }
 
 // resumerOption configures an ActorResumer.
@@ -131,6 +149,7 @@ func withParking(cfg ParkedRequestConfig) resumerOption {
 		if r.parkEnabled {
 			r.budget = cfg.Budget
 		}
+		r.inProgressBudget = cfg.InProgressBudget
 		r.backoff = resumeBackoff(cfg.RetryInterval, cfg.RetryFactor, cfg.RetryJitter)
 	}
 }
@@ -163,14 +182,16 @@ func NewActorResumer(apiClient ateapi.ControlClient, opts ...resumerOption) *Act
 // ateapi rolling restart) are retried only when parking is enabled, turning a
 // momentary condition into a bounded wait instead of an immediate failure — a
 // parked request should ride out a blip, not fail on it with budget remaining.
-// FailedPrecondition is not retried: ateapi refuses the resume for the
-// actor's current state, and the router does not wait for that state to change.
+// FailedPrecondition is not retried except when inProgressBudget > 0 and ateapi
+// reports that the actor is still in ACTOR_STATE_SUSPENDING.
 // All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
 // returned to the caller so the HTTP boundary can map them with full fidelity.
 func (r *ActorResumer) retryable(err error) bool {
 	switch status.Code(err) {
 	case codes.Aborted:
 		return true
+	case codes.FailedPrecondition:
+		return r.inProgressBudget > 0 && isTransientInProgressErr(err)
 	case codes.ResourceExhausted, codes.Unavailable:
 		return r.parkEnabled
 	default:
@@ -214,7 +235,11 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 	// The budget is per flight, not per caller: it starts with the first caller
 	// and later joiners share what remains, so no caller's disconnect can abort
 	// the shared resume. Only cancellation is detached; the trace context is kept.
-	bgCtx, bgCancel := context.WithTimeout(trace.ContextWithSpanContext(context.Background(), callerSpanCtx), r.budget)
+	flightStart := time.Now()
+	outerBudget := max(r.budget, r.inProgressBudget)
+	var capacityDeadline time.Time
+
+	bgCtx, bgCancel := context.WithTimeout(trace.ContextWithSpanContext(context.Background(), callerSpanCtx), outerBudget)
 	defer bgCancel()
 	attemptCtx := context.WithoutCancel(bgCtx)
 
@@ -222,26 +247,70 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 
 	var resumeResp *ateapi.ResumeActorResponse
 	var lastRetryErr error
+	var err error
 
-	err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
-		var err error
+	for {
+		attemptStart := time.Now()
 		resumeResp, err = r.apiClient.ResumeActor(attemptCtx, &ateapi.ResumeActorRequest{
 			Actor: actorRef.ToObjectRef(),
 		})
 		if err == nil {
-			return true, nil
+			break
+		}
+		if !r.retryable(err) {
+			// Keep the final error even if the retry budget has expired.
+			lastRetryErr = nil
+			break
 		}
 
-		if r.retryable(err) {
-			// A caller that is shed reads err to pick its outcome.
-			f.signalRetrying(err)
-			lastRetryErr = err // remember it in case the budget elapses
-			return false, nil  // park: retry until the budget elapses
+		// A caller that is shed reads err to pick its outcome.
+		f.signalRetrying(err)
+		lastRetryErr = err
+
+		inProgress := isTransientInProgressErr(err)
+		if !inProgress && capacityDeadline.IsZero() {
+			capacityDeadline = attemptStart.Add(r.budget)
 		}
-		// Keep the final error even if the retry budget has expired.
-		lastRetryErr = nil
-		return false, err
-	})
+		if r.inProgressBudget > r.budget && !inProgress && !time.Now().Before(capacityDeadline) {
+			err = &budgetExhaustedError{lastErr: err}
+			break
+		}
+		if bgCtx.Err() != nil {
+			err = bgCtx.Err()
+			break
+		}
+
+		delay := backoff.Step()
+		if time.Since(flightStart) >= r.budget && delay > inProgressMaxRetryInterval {
+			delay = inProgressMaxRetryInterval
+		}
+		cappedByCapacity := false
+		if r.inProgressBudget > r.budget && !inProgress {
+			rem := time.Until(capacityDeadline)
+			if rem <= 0 {
+				err = &budgetExhaustedError{lastErr: err}
+				break
+			}
+			if rem < delay {
+				delay = rem
+				cappedByCapacity = true
+			}
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-bgCtx.Done():
+			timer.Stop()
+			err = bgCtx.Err()
+		case <-timer.C:
+			if cappedByCapacity {
+				err = &budgetExhaustedError{lastErr: lastRetryErr}
+			}
+		}
+		if err != nil && (bgCtx.Err() != nil || cappedByCapacity) {
+			break
+		}
+	}
 
 	r.publish(f, key, flightResult(bgCtx, resumeResp, err, lastRetryErr, reqID))
 }
