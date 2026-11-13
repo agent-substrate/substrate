@@ -88,6 +88,20 @@ func onWorker(relation, name string, fldPath *field.Path) ([]check, field.ErrorL
 	return []check{{relation: relation, object: WorkerObject(name)}}, nil
 }
 
+func onExternalVolumeClass(relation, name string, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateName(name, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: ExternalVolumeClassObject(name)}}, nil
+}
+
+func onCsiDriverConfig(relation, name string, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateName(name, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: CsiDriverConfigObject(name)}}, nil
+}
+
 // resourceRef identifies an atespaced resource. Both *ateapi.ObjectRef and
 // *ateapi.ResourceMetadata satisfy it, including as nil pointers.
 type resourceRef interface {
@@ -292,6 +306,37 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapi.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapi.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
 		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+
+	// External volume classes. Global-scoped like workers.
+	ateapi.Control_CreateExternalVolumeClass_FullMethodName: rule(checksOf(func(*ateapi.CreateExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanCreateExternalVolumeClass)
+	})),
+	ateapi.Control_ListExternalVolumeClasses_FullMethodName: rule(checksOf(func(*ateapi.ListExternalVolumeClassesRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanListExternalVolumeClasses)
+	})),
+	ateapi.Control_GetExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanGet, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+	ateapi.Control_DeleteExternalVolumeClass_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeClassRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeClass(RelationCanDelete, r.GetExternalVolumeClass().GetName(), field.NewPath("external_volume_class", "name"))
+	})),
+
+	// CSI driver configs. Global-scoped like workers.
+	ateapi.Control_CreateCsiDriverConfig_FullMethodName: rule(checksOf(func(*ateapi.CreateCsiDriverConfigRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanCreateCsiDriverConfig)
+	})),
+	ateapi.Control_ListCsiDriverConfigs_FullMethodName: rule(checksOf(func(*ateapi.ListCsiDriverConfigsRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanListCsiDriverConfigs)
+	})),
+	ateapi.Control_GetCsiDriverConfig_FullMethodName: rule(checksOf(func(r *ateapi.GetCsiDriverConfigRequest) ([]check, field.ErrorList) {
+		return onCsiDriverConfig(RelationCanGet, r.GetCsiDriverConfig().GetName(), field.NewPath("csi_driver_config", "name"))
+	})),
+	ateapi.Control_UpdateCsiDriverConfig_FullMethodName: rule(checksOf(func(r *ateapi.UpdateCsiDriverConfigRequest) ([]check, field.ErrorList) {
+		return onCsiDriverConfig(RelationCanUpdate, r.GetCsiDriverConfig().GetMetadata().GetName(), field.NewPath("csi_driver_config", "metadata", "name"))
+	})),
+	ateapi.Control_DeleteCsiDriverConfig_FullMethodName: rule(checksOf(func(r *ateapi.DeleteCsiDriverConfigRequest) ([]check, field.ErrorList) {
+		return onCsiDriverConfig(RelationCanDelete, r.GetCsiDriverConfig().GetName(), field.NewPath("csi_driver_config", "name"))
 	})),
 
 	// Actor identity credentials.

@@ -25,7 +25,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -85,6 +87,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -711,8 +714,39 @@ type directCSIDriverConfigGetter struct {
 	client versioned.Interface
 }
 
-func (g *directCSIDriverConfigGetter) Get(name string) (*atev1.CSIDriverConfig, error) {
-	return g.client.AteV1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+func (g *directCSIDriverConfigGetter) Get(ctx context.Context, name string) (*ateapi.CsiDriverConfig, error) {
+	crd, err := g.client.AteV1().CSIDriverConfigs().Get(ctx, name, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if err == nil && crd != nil && (crd.Spec.DriverName == "" || crd.Spec.DriverName == name) {
+		return csi.FromK8sCSIDriverConfig(crd), nil
+	}
+	if apierrors.IsNotFound(err) || (err == nil && crd != nil && crd.Spec.DriverName != "" && crd.Spec.DriverName != name) {
+		list, listErr := g.client.AteV1().CSIDriverConfigs().List(ctx, metav1.ListOptions{})
+		if listErr != nil {
+			return nil, listErr
+		}
+		var matched *atev1.CSIDriverConfig
+		var matchedNames []string
+		for i := range list.Items {
+			if list.Items[i].Spec.DriverName == name {
+				matched = &list.Items[i]
+				matchedNames = append(matchedNames, list.Items[i].Name)
+			}
+		}
+		if len(matchedNames) > 1 {
+			slices.Sort(matchedNames)
+			return nil, fmt.Errorf("multiple CSIDriverConfigs match driver %q: %s", name, strings.Join(matchedNames, ", "))
+		}
+		if matched != nil {
+			return csi.FromK8sCSIDriverConfig(matched), nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, apierrors.NewNotFound(atev1.Resource("csidriverconfigs"), name)
 }
 
 // Atelet is a service that allows controlling workloads on individual

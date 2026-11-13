@@ -31,6 +31,8 @@ import (
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 type mountCall struct {
@@ -514,30 +516,66 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 }
 
 func TestDirectCSIDriverConfigGetter(t *testing.T) {
-	fakeClient := fake.NewSimpleClientset(&atev1.CSIDriverConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test.csi.k8s.io",
+	fakeClient := fake.NewSimpleClientset(
+		&atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "test.csi.k8s.io"},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: "test.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9000"},
 		},
-		Spec: atev1.CSIDriverConfigSpec{
-			DriverName:         "test.csi.k8s.io",
-			ControllerEndpoint: "tcp://127.0.0.1:9000",
+		&atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "custom-nfs-config"},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: "nfs.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9001", NodeSocketOverride: "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock"},
 		},
-	})
-
+		&atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "dup-b"},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: "dup.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9002"},
+		},
+		&atev1.CSIDriverConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: "dup-a"},
+			Spec:       atev1.CSIDriverConfigSpec{DriverName: "dup.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9003"},
+		},
+	)
 	getter := &directCSIDriverConfigGetter{client: fakeClient}
+	ctx := t.Context()
 
-	// Existing config
-	cfg, err := getter.Get("test.csi.k8s.io")
-	if err != nil {
-		t.Fatalf("getter.Get failed: %v", err)
-	}
-	if cfg.Spec.DriverName != "test.csi.k8s.io" {
-		t.Errorf("expected driver name %q, got %q", "test.csi.k8s.io", cfg.Spec.DriverName)
+	cfg, err := getter.Get(ctx, "test.csi.k8s.io")
+	if err != nil || cfg.GetDriverName() != "test.csi.k8s.io" {
+		t.Fatalf("Get(test.csi.k8s.io) = (%v, %v)", cfg, err)
 	}
 
-	// Missing config
-	_, err = getter.Get("missing.csi.k8s.io")
-	if err == nil {
-		t.Fatalf("expected error for missing driver, got nil")
+	nfsCfg, err := getter.Get(ctx, "nfs.csi.k8s.io")
+	if err != nil || nfsCfg.GetMetadata().GetName() != "custom-nfs-config" || nfsCfg.GetDriverName() != "nfs.csi.k8s.io" {
+		t.Fatalf("Get(nfs.csi.k8s.io) = (%v, %v)", nfsCfg, err)
+	}
+	if nfsCfg.GetNodeSocketOverride() != "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock" {
+		t.Errorf("got NodeSocketOverride %q", nfsCfg.GetNodeSocketOverride())
+	}
+
+	if _, err := getter.Get(ctx, "dup.csi.k8s.io"); err == nil || !strings.Contains(err.Error(), `multiple CSIDriverConfigs match driver "dup.csi.k8s.io": dup-a, dup-b`) {
+		t.Fatalf("Get(dup.csi.k8s.io) error = %v, want deterministic duplicate error", err)
+	}
+
+	if _, err := getter.Get(ctx, "missing.csi.k8s.io"); err == nil {
+		t.Fatal("expected error for missing driver, got nil")
+	}
+
+	listBoom := errors.New("apiserver list unavailable")
+	fakeClient.PrependReactor("list", "csidriverconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, listBoom
+	})
+	if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); !errors.Is(err, listBoom) {
+		t.Fatalf("Get with failing List = %v, want %v", err, listBoom)
+	}
+
+	getBoom := errors.New("apiserver get forbidden")
+	listCalled := false
+	fakeClient.PrependReactor("list", "csidriverconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		listCalled = true
+		return true, nil, listBoom
+	})
+	fakeClient.PrependReactor("get", "csidriverconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, getBoom
+	})
+	if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); !errors.Is(err, getBoom) || listCalled {
+		t.Fatalf("Get with non-NotFound error = %v (listCalled=%t), want %v without List", err, listCalled, getBoom)
 	}
 }

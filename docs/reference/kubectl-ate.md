@@ -4,7 +4,7 @@ linkTitle: "CLI Reference"
 weight: 3
 card_icon: "fa-solid fa-terminal"
 description: >
-  Manage atespaces, actor templates, actors, snapshots, egress policies, and logs with the kubectl-ate plugin.
+  Manage atespaces, external volume classes, CSI driver configs, actor templates, actors, snapshots, egress policies, and logs with the kubectl-ate plugin.
 ---
 
 # `kubectl-ate`
@@ -102,7 +102,7 @@ kubectl ate top workers
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
-> **Note:** Actors, workers, and actor templates are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, and `kubectl get actortemplate` will not return anything; only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates)). `kubectl get workerpool` *does* work, because pools are CRDs.
+> **Note:** Actors, workers, actor templates, external volume classes, and CSI driver configs live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, `kubectl get actortemplate`, and `kubectl get externalvolumeclass` return nothing; only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates), [External Volume Classes](#external-volume-classes), and [CSI Driver Configs](#csi-driver-configs)). `kubectl get csidriverconfig` lists the `ate.dev/v1` `CSIDriverConfig` CRD objects, which are separate from the control-plane `CsiDriverConfig` that `kubectl ate get csi-driver-config` shows. `kubectl get workerpool` *does* work, because pools are CRDs.
 
 #### `kubectl ate get actor` output columns
 
@@ -156,6 +156,93 @@ kubectl ate delete atespace <atespace>
 |---|---|
 | `NAME` | The atespace name. Globally unique — atespaces are global-scoped. |
 | `AGE` | Time elapsed since the atespace was created. |
+
+### External Volume Classes
+
+An **external volume class** (`ExternalVolumeClass`) is a global-scoped resource that names the CSI driver (`driverName`) and driver-specific `parameters` used to provision external volumes for actors. External volume classes are immutable. To change one, delete and recreate it. Creating an external volume class requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI.
+
+Example `volume-class.yaml`:
+
+```yaml
+metadata:
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.default.svc.cluster.local
+  share: /
+```
+
+```bash
+# Create an external volume class from a manifest (protojson-shaped
+# ateapi.ExternalVolumeClass, a single YAML/JSON document; use -f - for stdin).
+kubectl ate create external-volume-class -f volume-class.yaml --preview
+
+# List all external volume classes, or get one (also: -o yaml prints the re-applyable manifest).
+kubectl ate get external-volume-classes
+kubectl ate get external-volume-class <name> -o yaml
+
+# Delete an external volume class (optionally guarded by --uid and/or --version).
+kubectl ate delete external-volume-class <name>
+kubectl ate delete external-volume-class <name> --uid <uid> --version <version>
+```
+
+#### `kubectl ate get external-volume-class` output columns
+
+| Column | Meaning |
+|---|---|
+| `NAME` | The external volume class name. Globally unique; external volume classes are global-scoped. |
+| `DRIVER` | The CSI driver name (`driverName`) that provisions volumes of this class. |
+| `PARAMETERS` | Comma-separated `key=value` driver parameters sorted by key, cut to 40 characters with `...`; `-o yaml` shows them all. `-` when the class defines no parameters. |
+| `AGE` | Time elapsed since the external volume class was created. |
+
+### CSI Driver Configs
+
+A **CSI driver config** (`CsiDriverConfig`) is a global-scoped resource that records connection settings for a CSI driver (`driverName`): its controller gRPC endpoint (`controllerEndpoint`), optional node plugin socket (`nodeSocketOverride`), and mTLS settings (`tls`). `ate-api-server` reads this resource first and falls back to the `ate.dev/v1` `CSIDriverConfig` CRD, while `atelet` still reads the CRD (see [CSI Volumes](../guides/csi-volumes.md)). `driverName` is immutable after creation, while `controllerEndpoint`, `nodeSocketOverride`, and `tls` can be replaced with `update`. Creating or updating a CSI driver config requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI, and deleting fails while an external volume class references its `driverName`.
+
+Example `csi-driver-config.yaml`:
+
+```yaml
+metadata:
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
+controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
+nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
+tls:
+  enabled: true
+  usePodIdentity: true
+  serverName: csi-nfs-controller.kube-system.svc
+```
+
+```bash
+# Create a CSI driver config from a manifest (protojson-shaped
+# ateapi.CsiDriverConfig, a single YAML/JSON document; use -f - for stdin).
+kubectl ate create csi-driver-config -f csi-driver-config.yaml --preview
+
+# List all CSI driver configs, or get one (also: -o yaml prints the re-applyable manifest).
+kubectl ate get csi-driver-configs
+kubectl ate get csi-driver-config <name> -o yaml
+
+# Replace a CSI driver config: dump it (with metadata.uid and metadata.version),
+# edit mutable fields, and send it back.
+kubectl ate get csi-driver-config <name> -o yaml > csi-driver-config.yaml
+$EDITOR csi-driver-config.yaml
+kubectl ate update csi-driver-config -f csi-driver-config.yaml --preview
+
+# Delete a CSI driver config (optionally guarded by --uid and/or --version).
+kubectl ate delete csi-driver-config <name>
+kubectl ate delete csi-driver-config <name> --uid <uid> --version <version>
+```
+
+#### `kubectl ate get csi-driver-config` output columns
+
+| Column | Meaning |
+|---|---|
+| `NAME` | The CSI driver config name. Globally unique; CSI driver configs are global-scoped. |
+| `DRIVER` | The unique CSI driver name (`driverName`) this config binds to. |
+| `CONTROLLER-ENDPOINT` | The CSI controller gRPC endpoint (`tcp://<host>:<port>` or `dns://[<authority>]/<host>:<port>`). |
+| `NODE-SOCKET-OVERRIDE` | Custom `unix://` node plugin socket path, or `-` when using the default kubelet plugin path. |
+| `TLS` | Controller connection TLS mode: `mtls (pod-identity)`, `enabled`, or `disabled`. |
+| `AGE` | Time elapsed since the CSI driver config was created. |
 
 ### Actor Templates
 
