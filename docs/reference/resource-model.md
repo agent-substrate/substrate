@@ -46,6 +46,7 @@ Global
 │   │   └── EgressPolicy "default" subresource (singleton)
 │   └── Tag
 ├── ExternalVolumeClass
+│   └── AccessPolicy "default"     subresource (singleton)
 └── Worker
     └── ActorAssignment            subresource (one per hosted Actor, managed by Substrate)
 ```
@@ -68,6 +69,7 @@ Global
 | `EgressPolicy` | `Actor` | 0..1, named `default` | Clients |
 | `AccessPolicy` | Global | 0..1, named `default` | Clients |
 | `AccessPolicy` | `Atespace` | 0..1, named `default` | Clients |
+| `AccessPolicy` | `ExternalVolumeClass` | 0..1, named `default` | Clients |
 | `ActorAssignment` | `Worker` | 0..N | Substrate |
 
 ## Kubernetes resources
@@ -102,9 +104,11 @@ classDiagram
         class Worker
         class ActorAssignment
         class ExternalVolumeClass
+        class ExternalVolumeClassAccessPolicy
     }
 
     Atespace "1" *-- "0..1" AtespaceAccessPolicy
+    ExternalVolumeClass "1" *-- "0..1" ExternalVolumeClassAccessPolicy
     Atespace "1" o-- "*" ActorTemplate
     Atespace "1" o-- "*" Actor
     Atespace "1" o-- "*" Tag
