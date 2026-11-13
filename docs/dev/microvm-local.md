@@ -16,15 +16,18 @@ guide builds on. For background on the runtime, see
 [architecture.md](../concepts/architecture.md).
 
 The `microvm` runtime (`cmd/ateworker-microvm`) fetches its guest toolchain at
-runtime rather than baking Kata into the worker image. Each actor container's
-rootfs is an overlay of a read-only lower (the OCI image, served into the guest
-over virtio-fs by `virtiofsd`) and a writable upper on a guest tmpfs, so the
-asset set is four files per architecture (`amd64` and `arm64`):
+runtime rather than baking Kata into the worker image. The guest mounts each
+container's rootfs as an overlay of the image's EROFS layers (read-only
+`virtio-pmem` devices with DAX) and a writable upper on the host, served by
+`virtiofsd`. The asset set is four files per architecture (`amd64` and `arm64`):
 
 - `cloud-hypervisor` — the VMM binary (from its release)
-- `virtiofsd` — the virtio-fs daemon serving the read-only lower (from `kata-static`)
+- `virtiofsd` — the virtio-fs daemon serving the writable upper and volumes (from `kata-static`)
 - `vmlinux` — the guest kernel (from `kata-static`)
 - `rootfs.img` — the guest rootfs image (from `kata-static`)
+
+The guest kernel needs `erofs`, `virtio_pmem`, and `FS_DAX`; Kata's default guest kernel
+config enables them. An actor whose containers use more than 155 distinct layers is refused.
 
 `go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
 assembles the guest assets into `bin/microvm-assets/<arch>/` (the host

@@ -52,8 +52,9 @@ type FsConfig struct {
 	PciSegment int32  `json:"pci_segment,omitempty"`
 }
 
-// PlatformConfig sets VM-wide platform options. NumPciSegments must be >1 when a
-// virtio-fs device sits on a non-zero PCI segment (kata puts fs on segment 1).
+// PlatformConfig sets VM-wide platform options. NumPciSegments must cover
+// every segment a device names (kata puts virtio-fs on segment 1; EROFS
+// layer images sit on segments from 2 up).
 type PlatformConfig struct {
 	NumPciSegments int32 `json:"num_pci_segments,omitempty"`
 }
@@ -86,6 +87,8 @@ type PmemConfig struct {
 	// If true, maps File with MAP_PRIVATE so guest writes land in a private
 	// in-memory copy.
 	DiscardWrites bool `json:"discard_writes,omitempty"`
+	// PciSegment is the PCI segment the device sits on; 0 when unset.
+	PciSegment int32 `json:"pci_segment,omitempty"`
 }
 
 // RngConfig sets the entropy source (kata uses /dev/urandom).
