@@ -112,7 +112,7 @@ type testCA struct {
 
 // testConfigAndCA is testConfig, also returning the certificate that both
 // authenticates the worker and is the trust bundle.
-func testConfigAndCA(t *testing.T) (Config, testCA) {
+func testConfigAndCA(t testing.TB) (Config, testCA) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -189,7 +189,7 @@ const (
 )
 
 // freeAddress returns a loopback address nothing is listening on.
-func freeAddress(t *testing.T) string {
+func freeAddress(t testing.TB) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -199,7 +199,7 @@ func freeAddress(t *testing.T) string {
 	return lis.Addr().String()
 }
 
-func startTunnel(t *testing.T, cfg Config) *Tunnel {
+func startTunnel(t testing.TB, cfg Config) *Tunnel {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
