@@ -54,23 +54,22 @@ keeps retrying with exponential backoff until either
 **The budget bounds retries, not a committed resume.** When the budget elapses
 the router stops starting new resume attempts, but an attempt already in
 flight is **never canceled**: by then the control plane has committed work to
-it, and canceling would discard an in-progress restore. Instead the router
-waits for that attempt's real result: a restore that overshoots the budget
-(routine under node contention) is **served late** rather than failed, and a
-late retryable error still surfaces as the capacity `503`. The attempt is
-bounded by the control plane's own server-side RPC deadline, and Envoy's
-ext_proc message timeout (`budget + 5s`) remains the ceiling on how long a
-client is held either way.
+it, and canceling would discard an in-progress restore. Instead a request keeps
+waiting for that attempt until 1s before Envoy's ext_proc message timeout
+(`budget + 5s`). A restore that overshoots the budget (routine under node
+contention) is **served late** if it finishes by then, and a late retryable
+error still surfaces as the capacity `503`. If the attempt is still running,
+the router ends the wait and answers `503 "actor <id> is still resuming,
+retry"`.
 
 **Worst-case occupancy.** A parked request's lot slot is held until its caller
-stops waiting; with the Envoy dataplane that is bounded by the ext_proc
-message timeout (`budget + 5s`). The resume attempt itself can outlive every
-caller: it carries no client-side deadline and runs until ateapi's
-server-side maximum RPC deadline, holding that actor's flight entry.
+stops waiting, which is at most `budget + 4s`. The resume attempt itself can
+outlive every caller: it carries no client-side deadline and runs until
+ateapi's server-side maximum RPC deadline, holding that actor's flight entry.
 New requests for the same actor during that window do not start another
-control-plane call — they join the in-flight attempt, and if it has not
-resolved by their own stream deadline they are ended by the dataplane's
-timeout rather than a router verdict.
+control-plane call. They join the in-flight attempt, wait up to the same
+`budget + 4s` from their own arrival, and get the same "still resuming" `503`
+if it has not finished.
 
 To bound resource use and provide backpressure, parked requests are admitted to
 a **parking lot** of fixed capacity (`--parked-request-max`, default `1024`). A
@@ -140,8 +139,9 @@ Envoy sidecar) alive until in-flight streams finish, and the ext_proc drain
 deadline (`--drain-timeout`) defaults to a value derived from
 `--parked-request-budget` and is validated at startup to be `>=` the budget —
 so a parked request always gets its full budget and a normal verdict (routed
-`200` or capacity `503`) even mid-termination. See the graceful-shutdown knobs
-(`--drain-delay`, `--drain-timeout`) in `manifests/ate-install/atenet-router.yaml`.
+`200` or the router's `503`) even mid-termination. See the graceful-shutdown
+knobs (`--drain-delay`, `--drain-timeout`) in
+`manifests/ate-install/atenet-router.yaml`.
 
 ## Configuration
 
@@ -174,7 +174,7 @@ bounds the wait.
   | `served`           | The resume succeeded and the request was routed to its worker.              |
   | `budget_exhausted` | The park budget elapsed while the resume was still blocked on a retryable condition (pool saturated, a concurrent operation holding the actor, or the control plane unavailable) — the signal that capacity, not a fault, is the bottleneck. |
   | `canceled`         | The client disconnected while parked (request context canceled).            |
-  | `timeout`          | The request's own deadline expired while parked (distinct from the park budget). |
+  | `timeout`          | The request's own deadline expired while parked, or the router stopped waiting because the resume was still running (the "still resuming" `503`). |
   | `error`            | The resume failed with a non-retryable error (`NotFound`, `PermissionDenied`, ...). |
 
 - `atenet.router.parking.rejected` — counter: requests shed because the lot was

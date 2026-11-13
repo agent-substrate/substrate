@@ -73,6 +73,13 @@ func parkingFullErr(actorID string, retryErr error) error {
 		"actor %q unavailable: router at capacity", actorID)
 }
 
+// stillResumingErr tells the client the actor is still resuming and to retry.
+// It wraps context.DeadlineExceeded so metrics count it as a timeout.
+func stillResumingErr(actorRef resources.ActorRef) error {
+	return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, context.DeadlineExceeded,
+		"actor %s is still resuming, retry", actorRef)
+}
+
 // mapResumeError translates an ActorResumer error into a client-facing
 // denial. It maps gRPC status codes to appropriate HTTP status codes and
 // short, human-readable bodies. The original error is preserved via Unwrap
