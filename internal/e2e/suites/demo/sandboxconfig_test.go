@@ -94,10 +94,16 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 	if _, err := f.clients.SubstrateK8s.AteV1().SandboxConfigs().Create(f.ctx, wrongClassSandboxConfig(wrongClassName, f.class), metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create wrong-class SandboxConfig %s: %v", wrongClassName, err)
 	}
-	// poolB copies poolA apart from its configRef.
+	// poolB copies poolA apart from its configRef, on poolA's node: the
+	// actor's node pin cannot exclude it in step 3, and both workers report
+	// the same host CPU in step 4.
 	poolA, err := f.clients.SubstrateK8s.AteV1().WorkerPools(f.namespace).Get(f.ctx, f.poolName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get WorkerPool %s/%s: %v", f.namespace, f.poolName, err)
+	}
+	poolAWorker, err := f.clients.SubstrateAPI.GetWorker(f.ctx, &ateapi.GetWorkerRequest{Worker: f.workerRef})
+	if err != nil {
+		t.Fatalf("failed to get Worker %s: %v", f.workerRef.GetName(), err)
 	}
 	sandboxClassesB := slices.Clone(poolA.Spec.SandboxClasses)
 	for i := range sandboxClassesB {
@@ -112,6 +118,7 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 		Spec: atev1.WorkerPoolSpec{
 			Replicas:       1,
 			WorkerImage:    poolA.Spec.WorkerImage,
+			Template:       &atev1.WorkerPoolPodTemplate{NodeSelector: map[string]string{"kubernetes.io/hostname": poolAWorker.GetNodeName()}},
 			SandboxClasses: sandboxClassesB,
 		},
 	}, metav1.CreateOptions{}); err != nil {
@@ -123,14 +130,7 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 		t.Fatalf("failed to delete SandboxConfig %s while in use: %v", f.configName, err)
 	}
 	f.waitForPoolCondition(t, f.configName, metav1.ConditionFalse, atev1.WorkerPoolReasonSandboxConfigDeleting)
-	terminating, err := f.clients.SubstrateK8s.AteV1().SandboxConfigs().Get(f.ctx, f.configName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("SandboxConfig %s must stay while the pool uses it: %v", f.configName, err)
-	}
-	if terminating.DeletionTimestamp.IsZero() || !slices.Contains(terminating.Finalizers, atev1.SandboxConfigWorkerPoolProtectionFinalizer) {
-		t.Fatalf("SandboxConfig %s in use: deletionTimestamp=%v, finalizers=%v; want Terminating under %s",
-			f.configName, terminating.DeletionTimestamp, terminating.Finalizers, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
-	}
+	f.requireConfigTerminating(t, f.configName)
 
 	// Then point configRef at a missing SandboxConfig and at one of the other
 	// class.
@@ -149,19 +149,20 @@ func TestWorkerPoolSwitchSandboxConfig(t *testing.T) {
 
 	// 3. Both pools are free; only poolA's worker can restore v1. Then switch
 	// poolA to configB while the actor runs on it.
-	f.waitForPoolWorker(t, poolBName)
+	v2Runtime := f.waitForPoolWorker(t, poolBName)
 	assignment := f.resume(t, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, f.v1Runtime).GetWorkerAssignment()
 	if got := assignment.GetWorker().GetName(); got != f.workerRef.GetName() {
 		t.Fatalf("assigned worker = %q (pool %q), want poolA's worker %q", got, assignment.GetWorkerPool(), f.workerRef.GetName())
 	}
+	// The refused changes moved spec off configA; only the switch may
+	// release it.
+	f.requireConfigTerminating(t, f.configName)
 	f.setPoolConfig(t, configBName)
 	f.waitForPoolCondition(t, configBName, metav1.ConditionTrue, atev1.WorkerPoolReasonResolved)
 	f.waitForConfigDeleted(t, f.configName)
-	status := f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
-		defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
-		return defHash != "" && defHash != f.v1Hash && !hardware.WorkerMatches(status, f.v1Runtime)
+	f.waitForWorker(t, func(status *ateapi.WorkerStatus) bool {
+		return cmp.Equal(hardware.ColdBootRuntime(status), v2Runtime, protocmp.Transform()) && !hardware.WorkerMatches(status, f.v1Runtime)
 	})
-	v2Runtime := hardware.ColdBootRuntime(status)
 	f.call(t, "running across the pool switch")
 
 	// 4. The snapshot carries the assignment's v1, and the next resume falls
@@ -216,8 +217,9 @@ func (f *sandboxRuntimeFixture) setPoolConfig(t *testing.T, configName string) {
 }
 
 // waitForPoolCondition polls the fixture pool until
-// status.sandboxClasses[0].configRef names wantConfig and its Resolved
-// condition has wantStatus and wantReason.
+// status.sandboxClasses[0].configRef names wantConfig with no switch pending,
+// and its Resolved condition, observed at the current spec generation, has
+// wantStatus and wantReason.
 func (f *sandboxRuntimeFixture) waitForPoolCondition(t *testing.T, wantConfig string, wantStatus metav1.ConditionStatus, wantReason string) {
 	t.Helper()
 	const timeout = time.Minute
@@ -225,17 +227,19 @@ func (f *sandboxRuntimeFixture) waitForPoolCondition(t *testing.T, wantConfig st
 	defer cancel()
 
 	var last []atev1.WorkerPoolSandboxClassStatus
+	var generation int64
 	for {
 		wp, err := f.clients.SubstrateK8s.AteV1().WorkerPools(f.namespace).Get(ctx, f.poolName, metav1.GetOptions{})
 		if err == nil && len(wp.Status.SandboxClasses) > 0 {
-			last = wp.Status.SandboxClasses
+			last, generation = wp.Status.SandboxClasses, wp.Generation
 			sc := wp.Status.SandboxClasses[0]
 			gotConfig := ""
 			if sc.ConfigRef != nil {
 				gotConfig = sc.ConfigRef.Name
 			}
 			for _, cond := range sc.Conditions {
-				if cond.Type == atev1.WorkerPoolSandboxClassConditionResolved && gotConfig == wantConfig && cond.Status == wantStatus && cond.Reason == wantReason {
+				if cond.Type == atev1.WorkerPoolSandboxClassConditionResolved && cond.ObservedGeneration == wp.Generation &&
+					gotConfig == wantConfig && sc.PendingConfigRef == nil && cond.Status == wantStatus && cond.Reason == wantReason {
 					return
 				}
 			}
@@ -243,10 +247,24 @@ func (f *sandboxRuntimeFixture) waitForPoolCondition(t *testing.T, wantConfig st
 		select {
 		case <-ctx.Done():
 			raw, _ := json.Marshal(last)
-			t.Fatalf("timed out after %v waiting for WorkerPool %s/%s status.sandboxClasses[0] configRef=%q Resolved=%s/%s (last=%s, err=%v)",
-				timeout, f.namespace, f.poolName, wantConfig, wantStatus, wantReason, raw, err)
+			t.Fatalf("timed out after %v waiting for WorkerPool %s/%s status.sandboxClasses[0] configRef=%q Resolved=%s/%s at generation %d (last=%s, err=%v)",
+				timeout, f.namespace, f.poolName, wantConfig, wantStatus, wantReason, generation, raw, err)
 		case <-time.After(500 * time.Millisecond):
 		}
+	}
+}
+
+// requireConfigTerminating checks that the SandboxConfig configName is still
+// there, marked for deletion and held by the workerpool-protection finalizer.
+func (f *sandboxRuntimeFixture) requireConfigTerminating(t *testing.T, configName string) {
+	t.Helper()
+	sc, err := f.clients.SubstrateK8s.AteV1().SandboxConfigs().Get(f.ctx, configName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("SandboxConfig %s must stay while the pool uses it: %v", configName, err)
+	}
+	if sc.DeletionTimestamp.IsZero() || !slices.Contains(sc.Finalizers, atev1.SandboxConfigWorkerPoolProtectionFinalizer) {
+		t.Fatalf("SandboxConfig %s in use: deletionTimestamp=%v, finalizers=%v; want Terminating under %s",
+			configName, sc.DeletionTimestamp, sc.Finalizers, atev1.SandboxConfigWorkerPoolProtectionFinalizer)
 	}
 }
 
@@ -276,8 +294,9 @@ func (f *sandboxRuntimeFixture) waitForConfigDeleted(t *testing.T, configName st
 }
 
 // waitForPoolWorker polls ListWorkers until poolName in the fixture's
-// namespace has an ACTIVE worker whose default_runtime is not v1.
-func (f *sandboxRuntimeFixture) waitForPoolWorker(t *testing.T, poolName string) {
+// namespace has an ACTIVE worker whose default_runtime is not v1, and returns
+// its default_runtime.
+func (f *sandboxRuntimeFixture) waitForPoolWorker(t *testing.T, poolName string) *ateapi.ActorSandboxRuntime {
 	t.Helper()
 	const timeout = 2 * time.Minute
 	ctx, cancel := context.WithTimeout(f.ctx, timeout)
@@ -293,9 +312,10 @@ func (f *sandboxRuntimeFixture) waitForPoolWorker(t *testing.T, poolName string)
 				}
 				last = w
 				status := w.GetStatus()
-				defHash := runtimeAttribute(hardware.ColdBootRuntime(status), hardware.AttrSandboxBundleHash)
+				cold := hardware.ColdBootRuntime(status)
+				defHash := runtimeAttribute(cold, hardware.AttrSandboxBundleHash)
 				if status.GetState() == ateapi.WorkerState_WORKER_STATE_ACTIVE && defHash != "" && defHash != f.v1Hash && !hardware.WorkerMatches(status, f.v1Runtime) {
-					return
+					return cold
 				}
 			}
 		}
