@@ -44,10 +44,10 @@ type resourcePage struct {
 
 // resourcePages lists one page per resource and parent, in api's message
 // order: a single page for a top-level resource, and one per parent for a
-// subresource. For example, AccessPolicy has a page under Global and one
-// under Atespace. It fails wherever model.Resources does, and on a custom
-// method of a resource with several parents, since its parent can't be read
-// from its name.
+// subresource. For example, AccessPolicy has a page under Global, Atespace,
+// and ExternalVolumeClass. It fails wherever model.Resources does, and on a
+// custom method of a resource with several parents, since its parent can't be
+// read from its name.
 func resourcePages(api *model.API) ([]resourcePage, error) {
 	resources, err := model.Resources(api)
 	if err != nil {

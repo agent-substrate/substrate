@@ -282,6 +282,26 @@ service Control {
   rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {
     option (method).resource = "AccessPolicy";
   }
+
+  // Get the access policy resource nested under an ExternalVolumeClass.
+  rpc GetExternalVolumeClassAccessPolicy(GetExternalVolumeClassAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
+
+  // Create the access policy resource nested under an ExternalVolumeClass.
+  rpc CreateExternalVolumeClassAccessPolicy(CreateExternalVolumeClassAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
+
+  // Replace the access policy resource nested under an ExternalVolumeClass.
+  rpc UpdateExternalVolumeClassAccessPolicy(UpdateExternalVolumeClassAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
+
+  // Delete the access policy resource nested under an ExternalVolumeClass.
+  rpc DeleteExternalVolumeClassAccessPolicy(DeleteExternalVolumeClassAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 }
 
 // ObjectSnapshot addresses a snapshot held in object storage.
@@ -3216,15 +3236,15 @@ message SnapshotReport {
 // access policy resource, named "default".
 message AccessPolicy {
   option (resource) = {
-    parents : [ "Global", "Atespace" ]
+    parents : [ "Global", "Atespace", "ExternalVolumeClass" ]
     singleton : true
     plural : "AccessPolicies"
   };
 
   // Standard resource metadata. Atespace must match the parent resource (empty
-  // for global-scoped parents like Global and Atespace) and name must be
-  // "default". Both are caller-specified on create and immutable. UID, version,
-  // create_time, and update_time are server-managed.
+  // for global-scoped parents like Global, Atespace, and ExternalVolumeClass)
+  // and name must be "default". Both are caller-specified on create and
+  // immutable. UID, version, create_time, and update_time are server-managed.
   //
   // +k8s:required
   // +k8s:customValidation # name must be "default"
@@ -3238,19 +3258,22 @@ message AccessPolicy {
   repeated Binding bindings = 2;
 }
 
-// Binding associates a list of principals (members) with a single role.
+// Binding associates a list of members with a single role.
 message Binding {
   // The role name for the parent resource type (e.g., "owner", "editor",
-  // "viewer").
+  // "viewer", "allowed_atespace").
   //
   // +k8s:required
   // +k8s:maxLength=64
   string role = 1;
 
-  // Principal identities granted this role.
+  // Subjects granted this role: `user:<id>` principals on Global ("owner",
+  // "viewer") and Atespace ("owner", "editor", "viewer") policies, or
+  // `atespace:<name>` on ExternalVolumeClass ("allowed_atespace") policies.
   // Examples:
   //   - "user:alice@example.com"
   //   - "user:sa-ci-runner"
+  //   - "atespace:team-a"
   //
   // +k8s:required
   // +k8s:listType=set
@@ -3340,6 +3363,77 @@ message DeleteAtespaceAccessPolicyRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
+
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 3;
+}
+
+// GetExternalVolumeClassAccessPolicyRequest identifies an ExternalVolumeClass's access policy.
+message GetExternalVolumeClassAccessPolicyRequest {
+  // The parent ExternalVolumeClass of the access policy resource to retrieve.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef external_volume_class = 1;
+
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
+}
+
+// CreateExternalVolumeClassAccessPolicyRequest creates an access policy for an ExternalVolumeClass.
+message CreateExternalVolumeClassAccessPolicyRequest {
+  // Parent ExternalVolumeClass under which to create the policy resource.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef external_volume_class = 1;
+
+  // The policy to create. metadata.name must be "default" and
+  // metadata.atespace must be empty.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:required
+  AccessPolicy access_policy = 2;
+}
+
+// UpdateExternalVolumeClassAccessPolicyRequest replaces an ExternalVolumeClass's access policy.
+message UpdateExternalVolumeClassAccessPolicyRequest {
+  // Parent ExternalVolumeClass under which to update the policy resource.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef external_volume_class = 1;
+
+  // Full replacement. Metadata UID and version are required preconditions;
+  // metadata.name must be "default" and metadata.atespace must be empty.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:required
+  AccessPolicy access_policy = 2;
+}
+
+// DeleteExternalVolumeClassAccessPolicyRequest identifies an ExternalVolumeClass's access policy.
+message DeleteExternalVolumeClassAccessPolicyRequest {
+  // The parent ExternalVolumeClass of the access policy resource to delete.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef external_volume_class = 1;
 
   // Name of the singleton access policy. Must be "default".
   //
