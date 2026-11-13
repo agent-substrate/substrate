@@ -788,8 +788,10 @@ what to set before the run:
   timeout. Three misses of the liveness probe (`pg_isready`) restart
   postgres mid-run; three misses of the readiness probe (`nc`) drop the pod
   from the Service, and ateapi loses its connections without a restart. Give
-  both `timeoutSeconds: 5` and `failureThreshold: 6`, and give the postgres
-  container CPU and memory requests sized for the run: on a saturated node
+  the readiness probe `timeoutSeconds: 5` and the liveness probe
+  `timeoutSeconds: 10`, so a slow database leaves the Service before it is
+  killed, both with `failureThreshold: 6`, and give the postgres container
+  CPU and memory requests sized for the run: on a saturated node
   the request is its share of the CPU, and a starved postgres is what misses
   the probes.
 * **Parking budget.** `--parked-request-budget` (default `5s`) has to cover a
