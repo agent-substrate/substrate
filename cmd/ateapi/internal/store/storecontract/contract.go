@@ -3851,6 +3851,47 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		}
 		assertPruned(t, "DeleteWorker", created, deleted)
 	})
+
+	t.Run("UnknownFields_WorkerAssignment", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		worker := withUnknownField(newTestWorker(testWorkerName, "pod-1"))
+		withUnknownField(worker.Metadata)
+		if _, err := s.CreateWorker(ctx, worker); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		actor, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, "actor-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		ref := resources.ActorRefFromActor(actor)
+
+		assignment := withUnknownField(&ateapi.ActorAssignment{
+			Actor:     withUnknownField(&ateapi.ObjectRef{Atespace: ref.Atespace, Name: ref.Name}),
+			ActorUid:  actor.GetMetadata().GetUid(),
+			Resources: withUnknownField(resources.CPUMemory(500, 1<<20)),
+		})
+		admit := func(toAdmit *ateapi.Worker) error {
+			requireNoUnknownFields(t, "BindActorToWorker admit input", toAdmit)
+			return nil
+		}
+		if _, err := s.BindActorToWorker(ctx, testWorkerName, assignment, admit, ref, store.PreconditionFrom(actor), nil); err != nil {
+			t.Fatalf("BindActorToWorker failed: %v", err)
+		}
+
+		got, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid())
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment failed: %v", err)
+		}
+		assertPruned(t, "GetWorkerAssignment", assignment, got)
+
+		list, err := s.ListWorkerAssignments(ctx, testWorkerName, store.ListOptions{})
+		if err != nil || len(list.Items) != 1 {
+			t.Fatalf("ListWorkerAssignments = %d items, %v; want 1", len(list.Items), err)
+		}
+		assertPruned(t, "ListWorkerAssignments", assignment, list.Items[0])
+	})
 }
 
 // sameAllocation compares two allocation totals by what they hold, so an
