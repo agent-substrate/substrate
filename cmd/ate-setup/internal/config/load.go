@@ -28,6 +28,7 @@ import (
 	"go.ate.dev/substrate/internal/actoridjwt"
 	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -207,9 +208,14 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 	// tokens minted from the client ServiceAccount, so making it the default
 	// bootstrap owner keeps them working. The deploy warns whenever it is a
 	// bootstrap owner.
-	bootstrapOwners := r.String("ateapi.authz.bootstrapOwners")
-	if bootstrapOwners == "" {
-		bootstrapOwners = installdefaults.ClientPrincipal(r.String("namespace"))
+	bootstrapOwners := []string{installdefaults.ClientPrincipal(r.String("namespace"))}
+	if raw := r.String("ateapi.authz.bootstrapOwners"); raw != "" {
+		owners, err := principal.ParseList(raw)
+		if err != nil {
+			v, _ := r.Value("ateapi.authz.bootstrapOwners")
+			return nil, fmt.Errorf("%s: %w (from %s)", v.Setting.Key, err, v.From.Describe(v.Setting))
+		}
+		bootstrapOwners = owners
 	}
 
 	cfg := &Config{
@@ -469,7 +475,7 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	}
 	// ate-api-server exits without a bootstrap owner, so catch it before
 	// deploying.
-	if strings.Trim(cfg.APIAuthzBootstrapOwners, " ,") == "" {
+	if len(cfg.APIAuthzBootstrapOwners) == 0 {
 		owners, _ := r.Value("ateapi.authz.bootstrapOwners")
 		return &InvalidError{Value: owners, Want: "a list of at least one bootstrap owner"}
 	}
