@@ -134,5 +134,6 @@ func newPlugin(cfg *kubeletconfigv1.CredentialProvider, binDir string) (*plugin,
 		matchImages:          cfg.MatchImages,
 		defaultCacheDuration: cfg.DefaultCacheDuration.Duration,
 		cache:                map[string]cacheEntry{},
+		flights:              map[string]*pluginFlight{},
 	}, nil
 }
