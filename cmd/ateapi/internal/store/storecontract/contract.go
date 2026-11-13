@@ -336,6 +336,8 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runWorkerContractTests(t, setup)
 	runWorkerAssignmentContractTests(t, setup)
 	runAtespaceContractTests(t, setup)
+	runExternalVolumeClassContractTests(t, setup)
+	runCsiDriverConfigContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
 	runLeaseContractTests(t, setup)
@@ -530,6 +532,7 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
+			{"csi driver configs", func(opts store.ListOptions) error { _, err := s.ListCsiDriverConfigs(ctx, opts); return err }},
 		}
 		for _, call := range calls {
 			t.Run(call.name, func(t *testing.T) {
@@ -555,6 +558,7 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
+			{"csi driver configs", func(opts store.ListOptions) error { _, err := s.ListCsiDriverConfigs(ctx, opts); return err }},
 		}
 		for _, call := range calls {
 			t.Run(call.name, func(t *testing.T) {
@@ -3513,6 +3517,396 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 	})
 }
 
+func newTestExternalVolumeClass(name string) *ateapi.ExternalVolumeClass {
+	return &ateapi.ExternalVolumeClass{
+		Metadata:   &ateapi.ResourceMetadata{Name: name},
+		DriverName: "nfs.csi.k8s.io",
+		Parameters: map[string]string{"server": "nfs.example.com", "share": "/exports"},
+	}
+}
+
+func runExternalVolumeClassContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("CreateExternalVolumeClass_Success", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		want := newTestExternalVolumeClass("nfs")
+		created, err := s.CreateExternalVolumeClass(ctx, want)
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		if created.GetMetadata().GetUid() == "" {
+			t.Errorf("CreateExternalVolumeClass returned empty uid; want server-assigned uid")
+		}
+		if created.GetMetadata().GetVersion() != 1 {
+			t.Errorf("CreateExternalVolumeClass returned version %d, want 1", created.GetMetadata().GetVersion())
+		}
+		if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps, ignoreVersion); diff != "" {
+			t.Errorf("CreateExternalVolumeClass returned unexpected class (-want +got):\n%s", diff)
+		}
+
+		got, err := s.GetExternalVolumeClass(ctx, "nfs")
+		if err != nil {
+			t.Fatalf("GetExternalVolumeClass failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("CreateExternalVolumeClass return does not match stored state (-created +got):\n%s", diff)
+		}
+	})
+
+	t.Run("CreateExternalVolumeClass_AlreadyExists", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs")); err != nil {
+			t.Fatalf("first CreateExternalVolumeClass failed: %v", err)
+		}
+		if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("second CreateExternalVolumeClass = %v, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("GetExternalVolumeClass_NotFound", func(t *testing.T) {
+		s := setup(t)
+
+		if _, err := s.GetExternalVolumeClass(context.Background(), "nope"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetExternalVolumeClass = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("ListExternalVolumeClasses_Pagination", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		empty, err := s.ListExternalVolumeClasses(ctx, store.ListOptions{PageSize: 1000})
+		if err != nil || len(empty.Items) != 0 || empty.NextPageToken != "" {
+			t.Fatalf("empty ListExternalVolumeClasses = (%v, %q, %v); want empty", empty.Items, empty.NextPageToken, err)
+		}
+
+		var want []string
+		for i := range 5 {
+			name := fmt.Sprintf("class-%d", i)
+			if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass(name)); err != nil {
+				t.Fatalf("CreateExternalVolumeClass(%s) failed: %v", name, err)
+			}
+			want = append(want, name)
+		}
+
+		var got []string
+		pageToken := ""
+		for {
+			page, err := s.ListExternalVolumeClasses(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
+			if err != nil {
+				t.Fatalf("ListExternalVolumeClasses failed: %v", err)
+			}
+			for _, c := range page.Items {
+				got = append(got, c.GetMetadata().GetName())
+			}
+			pageToken = page.NextPageToken
+			if pageToken == "" {
+				break
+			}
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("paged class names mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("DeleteExternalVolumeClass", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs"))
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+		}
+		if deleted.GetMetadata().GetDeleteTime() == nil {
+			t.Error("the deleted class carries no delete_time")
+		}
+		if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreTimestamps); diff != "" {
+			t.Errorf("DeleteExternalVolumeClass returned unexpected class (-created +deleted):\n%s", diff)
+		}
+		if _, err := s.GetExternalVolumeClass(ctx, "nfs"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("after delete, GetExternalVolumeClass = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeleteExternalVolumeClass_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteExternalVolumeClass(ctx, "nfs", precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing class = %v, want ErrNotFound", err)
+		}
+
+		created, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs"))
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetExternalVolumeClass(ctx, "nfs"); err != nil {
+			t.Fatalf("a refused delete removed the class: %v", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version}); err != nil {
+			t.Errorf("matching uid and version = %v, want nil", err)
+		}
+	})
+}
+
+func newTestCsiDriverConfig(name, driverName string) *ateapi.CsiDriverConfig {
+	return &ateapi.CsiDriverConfig{
+		Metadata:           &ateapi.ResourceMetadata{Name: name},
+		DriverName:         driverName,
+		ControllerEndpoint: "dns:///csi-nfs-controller.csi-nfs.svc:12345",
+		NodeSocketOverride: "unix:///var/lib/kubelet/plugins/nfs.csi.k8s.io/csi.sock",
+		Tls:                &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: true, ServerName: "csi-nfs-controller.csi-nfs.svc"},
+	}
+}
+
+func runCsiDriverConfigContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("CreateAndGetCsiDriverConfig", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		input := newTestCsiDriverConfig("csi-nfs", "nfs.csi.k8s.io")
+		input.Metadata = &ateapi.ResourceMetadata{
+			Name: "csi-nfs", Uid: "caller-uid", Version: 99,
+			CreateTime: timestamppb.New(time.Unix(1, 0)), UpdateTime: timestamppb.New(time.Unix(2, 0)), DeleteTime: timestamppb.New(time.Unix(3, 0)),
+		}
+		before := proto.CloneOf(input)
+		created, err := s.CreateCsiDriverConfig(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateCsiDriverConfig failed: %v", err)
+		}
+		if diff := cmp.Diff(before, input, protocmp.Transform()); diff != "" {
+			t.Errorf("CreateCsiDriverConfig mutated caller input (-before +after):\n%s", diff)
+		}
+		if md := created.GetMetadata(); md.GetUid() == "" || md.GetUid() == "caller-uid" || md.GetVersion() != 1 ||
+			md.GetCreateTime() == nil || md.GetCreateTime().AsTime().Unix() == 1 ||
+			md.GetUpdateTime() == nil || md.GetUpdateTime().AsTime().Unix() == 2 || md.GetDeleteTime() != nil {
+			t.Errorf("created metadata = %v; want fresh server-assigned metadata at version 1", md)
+		}
+		if diff := cmp.Diff(newTestCsiDriverConfig("csi-nfs", "nfs.csi.k8s.io"), created, protocmp.Transform(), ignoreUID, ignoreTimestamps, ignoreVersion); diff != "" {
+			t.Errorf("CreateCsiDriverConfig mismatch (-want +got):\n%s", diff)
+		}
+
+		got, err := s.GetCsiDriverConfig(ctx, "csi-nfs")
+		if err != nil || !proto.Equal(created, got) {
+			t.Fatalf("GetCsiDriverConfig = (%v, %v), want %v", got, err, created)
+		}
+		byDriver, err := s.GetCsiDriverConfigByDriverName(ctx, "nfs.csi.k8s.io")
+		if err != nil || !proto.Equal(created, byDriver) {
+			t.Fatalf("GetCsiDriverConfigByDriverName = (%v, %v), want %v", byDriver, err, created)
+		}
+		if _, err := s.GetCsiDriverConfig(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetCsiDriverConfig(missing) = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetCsiDriverConfigByDriverName(ctx, "nope.csi.k8s.io"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetCsiDriverConfigByDriverName(missing) = %v, want ErrNotFound", err)
+		}
+		if _, err := s.CreateCsiDriverConfig(ctx, newTestCsiDriverConfig("csi-nfs", "other.csi.k8s.io")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("duplicate name = %v, want ErrAlreadyExists", err)
+		}
+		if _, err := s.CreateCsiDriverConfig(ctx, newTestCsiDriverConfig("csi-nfs-2", "nfs.csi.k8s.io")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("duplicate driver_name = %v, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("ListCsiDriverConfigs_PaginationAndTokens", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if empty, err := s.ListCsiDriverConfigs(ctx, store.ListOptions{PageSize: 1000}); err != nil || len(empty.Items) != 0 || empty.NextPageToken != "" {
+			t.Fatalf("empty ListCsiDriverConfigs = (%v, %q, %v); want empty", empty.Items, empty.NextPageToken, err)
+		}
+		for _, idx := range []int{3, 1, 4, 0, 2} {
+			if _, err := s.CreateCsiDriverConfig(ctx, newTestCsiDriverConfig(fmt.Sprintf("cfg-%d", idx), fmt.Sprintf("d%d.csi.k8s.io", idx))); err != nil {
+				t.Fatalf("CreateCsiDriverConfig(cfg-%d) failed: %v", idx, err)
+			}
+		}
+
+		var got []string
+		for pageToken := ""; ; {
+			page, err := s.ListCsiDriverConfigs(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
+			if err != nil {
+				t.Fatalf("ListCsiDriverConfigs failed: %v", err)
+			}
+			for _, cfg := range page.Items {
+				got = append(got, cfg.GetMetadata().GetName())
+			}
+			if page.NextPageToken == "" {
+				break
+			}
+			pageToken = page.NextPageToken
+		}
+		if diff := cmp.Diff([]string{"cfg-0", "cfg-1", "cfg-2", "cfg-3", "cfg-4"}, got); diff != "" {
+			t.Errorf("paged config names mismatch (-want +got):\n%s", diff)
+		}
+
+		mustCreateAtespace(t, s, "team-a")
+		mustCreateAtespace(t, s, "team-b")
+		atespacePage, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1})
+		if err != nil || atespacePage.NextPageToken == "" {
+			t.Fatalf("ListAtespaces page 1 = (%q, %v); want next page token", atespacePage.NextPageToken, err)
+		}
+		if _, err := s.ListCsiDriverConfigs(ctx, store.ListOptions{PageSize: 1, PageToken: atespacePage.NextPageToken}); !errors.Is(err, store.ErrInvalidPageToken) {
+			t.Errorf("cross-resource page token = %v, want ErrInvalidPageToken", err)
+		}
+	})
+
+	t.Run("UpdateCsiDriverConfig", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		noop := func(*ateapi.CsiDriverConfig) error { return nil }
+
+		if _, err := s.UpdateCsiDriverConfig(ctx, "nope", store.Precondition{UID: foreignUID, Version: 1}, noop); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("UpdateCsiDriverConfig(missing) = %v, want ErrNotFound", err)
+		}
+		created, err := s.CreateCsiDriverConfig(ctx, newTestCsiDriverConfig("csi-nfs", "nfs.csi.k8s.io"))
+		if err != nil {
+			t.Fatalf("CreateCsiDriverConfig failed: %v", err)
+		}
+
+		for _, pre := range []store.Precondition{{}, {UID: created.GetMetadata().GetUid()}, {Version: created.GetMetadata().GetVersion()}} {
+			if _, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", pre, noop); !errors.Is(err, store.ErrPreconditionRequired) {
+				t.Errorf("UpdateCsiDriverConfig(%+v) = %v, want ErrPreconditionRequired", pre, err)
+			}
+		}
+		if _, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.Precondition{UID: foreignUID, Version: 1}, noop); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("wrong uid = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.Precondition{UID: created.GetMetadata().GetUid(), Version: 99}, noop); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("wrong version = %v, want ErrVersionConflict", err)
+		}
+
+		abortErr := errors.New("abort")
+		if _, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.PreconditionFrom(created), func(cfg *ateapi.CsiDriverConfig) error {
+			cfg.ControllerEndpoint = "tcp://10.0.0.9:9999"
+			return abortErr
+		}); !errors.Is(err, abortErr) {
+			t.Errorf("mutate error = %v, want %v", err, abortErr)
+		}
+
+		for _, fn := range []func(*ateapi.CsiDriverConfig){
+			func(cfg *ateapi.CsiDriverConfig) { cfg.DriverName = "other.csi.k8s.io" },
+			func(cfg *ateapi.CsiDriverConfig) { cfg.Metadata.Name = "other" },
+			func(cfg *ateapi.CsiDriverConfig) { cfg.Metadata.Atespace = "team-a" },
+		} {
+			if _, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.PreconditionFrom(created), func(cfg *ateapi.CsiDriverConfig) error {
+				fn(cfg)
+				return nil
+			}); !errors.Is(err, store.ErrImmutableField) {
+				t.Errorf("immutable field mutation = %v, want ErrImmutableField", err)
+			}
+		}
+
+		updated, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.PreconditionFrom(created), func(cfg *ateapi.CsiDriverConfig) error {
+			cfg.ControllerEndpoint = "tcp://10.0.0.2:9000"
+			cfg.NodeSocketOverride = "unix:///run/csi/nfs.sock"
+			cfg.Tls = &ateapi.CsiDriverTlsConfig{Enabled: false}
+			cfg.Metadata.UpdateTime = timestamppb.New(time.Unix(1, 0))
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateCsiDriverConfig failed: %v", err)
+		}
+		if updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() ||
+			!updated.GetMetadata().GetCreateTime().AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) ||
+			updated.GetMetadata().GetUpdateTime().AsTime().Before(created.GetMetadata().GetUpdateTime().AsTime()) {
+			t.Errorf("updated metadata = %v, created = %v", updated.GetMetadata(), created.GetMetadata())
+		}
+		got, err := s.GetCsiDriverConfig(ctx, "csi-nfs")
+		if err != nil {
+			t.Fatalf("GetCsiDriverConfig after update failed: %v", err)
+		}
+		if diff := cmp.Diff(updated, got, protocmp.Transform()); diff != "" {
+			t.Errorf("stored config after update mismatch (-updated +got):\n%s", diff)
+		}
+		if got.GetControllerEndpoint() != "tcp://10.0.0.2:9000" || got.GetNodeSocketOverride() != "unix:///run/csi/nfs.sock" || got.GetTls().GetEnabled() {
+			t.Errorf("updated fields did not persist: %v", got)
+		}
+	})
+
+	t.Run("DeleteCsiDriverConfig_PreconditionsAndInUse", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		for _, pre := range []store.DeletePreconditions{{}, {UID: foreignUID, Version: 1}} {
+			if _, err := s.DeleteCsiDriverConfig(ctx, "csi-nfs", pre); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("DeleteCsiDriverConfig(missing, %+v) = %v, want ErrNotFound", pre, err)
+			}
+		}
+
+		created, err := s.CreateCsiDriverConfig(ctx, newTestCsiDriverConfig("csi-nfs", "nfs.csi.k8s.io"))
+		if err != nil {
+			t.Fatalf("CreateCsiDriverConfig failed: %v", err)
+		}
+		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
+		if _, err := s.DeleteCsiDriverConfig(ctx, "csi-nfs", store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale version = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.DeleteCsiDriverConfig(ctx, "csi-nfs", store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid = %v, want ErrUIDConflict", err)
+		}
+
+		otherClass := newTestExternalVolumeClass("other")
+		otherClass.DriverName = "other.csi.k8s.io"
+		if _, err := s.CreateExternalVolumeClass(ctx, otherClass); err != nil {
+			t.Fatalf("CreateExternalVolumeClass(other) failed: %v", err)
+		}
+		if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs")); err != nil {
+			t.Fatalf("CreateExternalVolumeClass(nfs) failed: %v", err)
+		}
+		if _, err := s.DeleteCsiDriverConfig(ctx, "csi-nfs", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("DeleteCsiDriverConfig while in use = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.GetCsiDriverConfig(ctx, "csi-nfs"); err != nil {
+			t.Fatalf("refused delete removed config: %v", err)
+		}
+
+		if _, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+		}
+		deleted, err := s.DeleteCsiDriverConfig(ctx, "csi-nfs", store.DeletePreconditions{UID: uid, Version: version})
+		if err != nil {
+			t.Fatalf("DeleteCsiDriverConfig after class removal failed: %v", err)
+		}
+		if deleted.GetMetadata().GetDeleteTime() == nil {
+			t.Error("deleted config carries no delete_time")
+		}
+		if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreTimestamps); diff != "" {
+			t.Errorf("DeleteCsiDriverConfig mismatch (-created +deleted):\n%s", diff)
+		}
+		if _, err := s.GetCsiDriverConfig(ctx, "csi-nfs"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetCsiDriverConfig after delete = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetCsiDriverConfigByDriverName(ctx, "nfs.csi.k8s.io"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetCsiDriverConfigByDriverName after delete = %v, want ErrNotFound", err)
+		}
+		if _, err := s.CreateCsiDriverConfig(ctx, newTestCsiDriverConfig("csi-nfs-2", "nfs.csi.k8s.io")); err != nil {
+			t.Errorf("reusing driver_name after delete failed: %v", err)
+		}
+	})
+}
+
 func runLeaseContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
@@ -3758,6 +4152,75 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("DeleteAtespace failed: %v", err)
 		}
 		assertPruned(t, "DeleteAtespace", created, deleted)
+	})
+
+	t.Run("UnknownFields_ExternalVolumeClass", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		class := withUnknownField(newTestExternalVolumeClass("nfs"))
+		withUnknownField(class.Metadata)
+		created, err := s.CreateExternalVolumeClass(ctx, class)
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+
+		got, err := s.GetExternalVolumeClass(ctx, "nfs")
+		if err != nil {
+			t.Fatalf("GetExternalVolumeClass failed: %v", err)
+		}
+		assertPruned(t, "GetExternalVolumeClass", created, got)
+
+		list, err := s.ListExternalVolumeClasses(ctx, store.ListOptions{})
+		if err != nil || len(list.Items) != 1 {
+			t.Fatalf("ListExternalVolumeClasses = %d items, %v; want 1", len(list.Items), err)
+		}
+		assertPruned(t, "ListExternalVolumeClasses", created, list.Items[0])
+
+		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+		}
+		assertPruned(t, "DeleteExternalVolumeClass", created, deleted)
+	})
+
+	t.Run("UnknownFields_CsiDriverConfig", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		cfg := withUnknownField(newTestCsiDriverConfig("csi-nfs", "nfs.csi.k8s.io"))
+		withUnknownField(cfg.Metadata)
+		withUnknownField(cfg.Tls)
+		created, err := s.CreateCsiDriverConfig(ctx, cfg)
+		if err != nil {
+			t.Fatalf("CreateCsiDriverConfig failed: %v", err)
+		}
+		got, err := s.GetCsiDriverConfig(ctx, "csi-nfs")
+		if err != nil {
+			t.Fatalf("GetCsiDriverConfig failed: %v", err)
+		}
+		assertPruned(t, "GetCsiDriverConfig", created, got)
+		byDriver, err := s.GetCsiDriverConfigByDriverName(ctx, "nfs.csi.k8s.io")
+		if err != nil {
+			t.Fatalf("GetCsiDriverConfigByDriverName failed: %v", err)
+		}
+		assertPruned(t, "GetCsiDriverConfigByDriverName", created, byDriver)
+		list, err := s.ListCsiDriverConfigs(ctx, store.ListOptions{})
+		if err != nil || len(list.Items) != 1 {
+			t.Fatalf("ListCsiDriverConfigs = %d items, %v; want 1", len(list.Items), err)
+		}
+		assertPruned(t, "ListCsiDriverConfigs", created, list.Items[0])
+		updated, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.PreconditionFrom(got), func(toUpdate *ateapi.CsiDriverConfig) error {
+			requireNoUnknownFields(t, "UpdateCsiDriverConfig mutation input", toUpdate)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateCsiDriverConfig failed: %v", err)
+		}
+		assertPruned(t, "UpdateCsiDriverConfig", created, updated)
+		deleted, err := s.DeleteCsiDriverConfig(ctx, "csi-nfs", store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteCsiDriverConfig failed: %v", err)
+		}
+		assertPruned(t, "DeleteCsiDriverConfig", created, deleted)
 	})
 
 	t.Run("UnknownFields_ActorTemplate", func(t *testing.T) {
