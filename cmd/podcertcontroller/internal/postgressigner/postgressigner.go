@@ -116,15 +116,9 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		return err
 	}
 
-	lifetime := 24 * time.Hour
-	if pcr.Spec.MaxExpirationSeconds != nil {
-		requestedLifetime := time.Duration(*pcr.Spec.MaxExpirationSeconds) * time.Second
-		if requestedLifetime < time.Hour {
-			return fmt.Errorf("requested certificate lifetime must be at least one hour")
-		}
-		if requestedLifetime < lifetime {
-			lifetime = requestedLifetime
-		}
+	lifetime, err := podcertificate.Lifetime(pcr)
+	if err != nil {
+		return err
 	}
 
 	notBefore := time.Now().Add(-2 * time.Minute)
