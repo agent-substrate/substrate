@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -68,6 +71,55 @@ func (m *PolicyManager) ReconcileExternalVolumeClassAtespaces(ctx context.Contex
 // with tx.
 func (m *PolicyManager) DeleteExternalVolumeClassPolicies(ctx context.Context, tx pgx.Tx, name string) error {
 	return m.reconcileBindings(ctx, tx, ExternalVolumeClassObject(name), nil, FormatAtespaceMember)
+}
+
+// ExternalVolumeClassesForAtespace returns the sorted names of all external
+// volume classes that currently have an OpenFGA tuple referencing the named
+// atespace within tx, without acquiring tuple row locks. Callers that update
+// both external_volume_class_access_policies and OpenFGA tuples must lock the
+// policy rows in sorted name order before calling
+// RemoveAtespaceFromExternalVolumeClasses so their lock order matches
+// per-class policy updates.
+func (m *PolicyManager) ExternalVolumeClassesForAtespace(ctx context.Context, tx pgx.Tx, name string) ([]string, error) {
+	if tx == nil {
+		return nil, ErrNilTransaction
+	}
+	user, err := validateAtespaceName(name)
+	if err != nil {
+		return nil, err
+	}
+	ctx = ContextWithTx(ctx, tx)
+
+	tuples, err := m.readTuples(ctx, &openfgav1.ReadRequestTupleKey{
+		User:   user,
+		Object: externalVolumeClassObjectPrefix,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading external volume class tuples for %q: %w", user, err)
+	}
+	if len(tuples) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(tuples))
+	names := make([]string, 0, len(tuples))
+	for _, tk := range tuples {
+		rawID, ok := strings.CutPrefix(tk.GetObject(), externalVolumeClassObjectPrefix)
+		if !ok || rawID == "" {
+			return nil, fmt.Errorf("unexpected external volume class tuple object %q", tk.GetObject())
+		}
+		className, err := url.PathUnescape(rawID)
+		if err != nil {
+			return nil, fmt.Errorf("unescaping external volume class tuple object %q: %w", tk.GetObject(), err)
+		}
+		if _, dup := seen[className]; dup {
+			continue
+		}
+		seen[className] = struct{}{}
+		names = append(names, className)
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 // RemoveAtespaceFromExternalVolumeClasses deletes all OpenFGA tuples granting

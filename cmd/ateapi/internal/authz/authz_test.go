@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -611,6 +612,9 @@ func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
 	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, nil, "space-1"); !errors.Is(err, ErrNilTransaction) {
 		t.Fatalf("RemoveAtespaceFromExternalVolumeClasses(nil tx) = %v, want ErrNilTransaction", err)
 	}
+	if _, err := pm.ExternalVolumeClassesForAtespace(ctx, nil, "space-1"); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("ExternalVolumeClassesForAtespace(nil tx) = %v, want ErrNilTransaction", err)
+	}
 
 	// 2. Invalid member, disallowed role, and invalid atespace name checks.
 	for _, badMember := range []string{"user:alice", "atespace:*", "atespace:Bad", "atespace:space-1#editor"} {
@@ -645,9 +649,13 @@ func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
 			t.Fatalf("pool.Begin failed: %v", err)
 		}
 		err = pm.RemoveAtespaceFromExternalVolumeClasses(ctx, tx, badAtespace)
+		_, listErr := pm.ExternalVolumeClassesForAtespace(ctx, tx, badAtespace)
 		_ = tx.Rollback(ctx)
 		if err == nil {
 			t.Errorf("RemoveAtespaceFromExternalVolumeClasses(%q) succeeded, want error", badAtespace)
+		}
+		if listErr == nil {
+			t.Errorf("ExternalVolumeClassesForAtespace(%q) succeeded, want error", badAtespace)
 		}
 	}
 
@@ -785,6 +793,19 @@ func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool.Begin failed: %v", err)
 	}
+	gotClasses, err := pm.ExternalVolumeClassesForAtespace(ctx, txSweep, "ephemeral")
+	if err != nil {
+		_ = txSweep.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) failed: %v", err)
+	}
+	wantClasses := make([]string, totalClasses)
+	for i := range totalClasses {
+		wantClasses[i] = fmt.Sprintf("class-%03d", i)
+	}
+	if !slices.Equal(gotClasses, wantClasses) {
+		_ = txSweep.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) = %v, want %v", gotClasses, wantClasses)
+	}
 	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, txSweep, "ephemeral"); err != nil {
 		_ = txSweep.Rollback(ctx)
 		t.Fatalf("RemoveAtespaceFromExternalVolumeClasses(ephemeral) failed: %v", err)
@@ -802,10 +823,19 @@ func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
 		t.Errorf("expected survivor retained on class-000")
 	}
 
-	// Second sweep is a no-op.
+	// Second sweep is a no-op, and ExternalVolumeClassesForAtespace returns empty.
 	txNoop, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	afterSweep, err := pm.ExternalVolumeClassesForAtespace(ctx, txNoop, "ephemeral")
+	if err != nil {
+		_ = txNoop.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) after sweep failed: %v", err)
+	}
+	if len(afterSweep) != 0 {
+		_ = txNoop.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) after sweep = %v, want empty", afterSweep)
 	}
 	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, txNoop, "ephemeral"); err != nil {
 		_ = txNoop.Rollback(ctx)

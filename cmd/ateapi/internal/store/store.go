@@ -217,6 +217,23 @@ type Interface interface {
 	// precondition does not describe the policy the caller observed.
 	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.AccessPolicy, error)
 
+	// Creates the 1:1 access policy subresource for an existing
+	// ExternalVolumeClass. Returns ErrAlreadyExists if the policy already exists,
+	// or ErrFailedPrecondition if the parent class or any referenced member
+	// atespace does not exist.
+	CreateExternalVolumeClassAccessPolicy(ctx context.Context, name string, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error)
+	// Fetches an ExternalVolumeClass's access policy subresource. Returns
+	// ErrNotFound if missing.
+	GetExternalVolumeClassAccessPolicy(ctx context.Context, name string) (*ateapi.AccessPolicy, error)
+	// Transactionally updates an ExternalVolumeClass's access policy when its
+	// current UID and version match the precondition. Returns
+	// ErrFailedPrecondition if any referenced member atespace does not exist.
+	UpdateExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition Precondition, mutate func(*ateapi.AccessPolicy) error) (*ateapi.AccessPolicy, error)
+	// Deletes and returns an ExternalVolumeClass's access policy subresource.
+	// Returns ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if
+	// precondition does not describe the policy the caller observed.
+	DeleteExternalVolumeClassAccessPolicy(ctx context.Context, name string, precondition DeletePreconditions) (*ateapi.AccessPolicy, error)
+
 	// Stores a new ExternalVolumeClass and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
 	// mutated. Returns ErrAlreadyExists if the name is taken.
