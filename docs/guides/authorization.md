@@ -129,6 +129,8 @@ one **atespace**.
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
 | Workers: get, list, list assignments | ✅ | ✅ | | | |
 | Workers: create, update, delete, drain | ✅ | | | | |
+| External volume classes: get, list, get access policies | ✅ | ✅ | get only (allowed) | get only (allowed) | |
+| External volume classes: create, delete, manage access policies | ✅ | | | | |
 
 ### System roles
 
@@ -219,14 +221,17 @@ Workers have no atespace; their permissions come from the global scope.
 ### External volume classes
 
 External volume classes have no atespace; their permissions come from the
-global scope.
+global scope, and editors of atespaces granted `allowed_atespace` by a class's
+access policy may read that class.
 
 | RPC | Permission, on | Allowed for |
 |---|---|---|
 | `CreateExternalVolumeClass` | `can_create_external_volume_class`, global | Global owner |
 | `ListExternalVolumeClasses` | `can_list_external_volume_classes`, global | Global viewer |
-| `GetExternalVolumeClass` | `can_get`, the class | Global viewer |
+| `GetExternalVolumeClass` | `can_get`, the class | Global viewer; editor of an allowed atespace |
 | `DeleteExternalVolumeClass` | `can_delete`, the class | Global owner |
+| `GetExternalVolumeClassAccessPolicy` | `can_get_access_policy`, the class | Global viewer |
+| `CreateExternalVolumeClassAccessPolicy`, `UpdateExternalVolumeClassAccessPolicy`, `DeleteExternalVolumeClassAccessPolicy` | `can_create_access_policy` / `can_update_access_policy` / `can_delete_access_policy`, the class | Global owner |
 
 ### WorkerService
 
