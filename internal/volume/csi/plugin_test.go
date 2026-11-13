@@ -43,6 +43,9 @@ type mockCSIDriver struct {
 	nodeUnstageVolumeFunc         func(context.Context, *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error)
 	nodePublishVolumeFunc         func(context.Context, *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error)
 	nodeUnpublishVolumeFunc       func(context.Context, *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error)
+	createSnapshotFunc            func(context.Context, *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error)
+	listSnapshotsFunc             func(context.Context, *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error)
+	deleteSnapshotFunc            func(context.Context, *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error)
 
 	controllerGetCapabilitiesFunc func(context.Context, *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error)
 	nodeGetCapabilitiesFunc       func(context.Context, *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error)
@@ -174,6 +177,33 @@ func (m *mockCSIDriver) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUn
 		return m.nodeUnpublishVolumeFunc(ctx, req)
 	}
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+func (m *mockCSIDriver) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	if m.createSnapshotFunc != nil {
+		return m.createSnapshotFunc(ctx, req)
+	}
+	return &csi.CreateSnapshotResponse{Snapshot: &csi.Snapshot{
+		SnapshotId:     "snap-" + req.GetName(),
+		SourceVolumeId: req.GetSourceVolumeId(),
+		ReadyToUse:     true,
+	}}, nil
+}
+
+func (m *mockCSIDriver) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	if m.listSnapshotsFunc != nil {
+		return m.listSnapshotsFunc(ctx, req)
+	}
+	return &csi.ListSnapshotsResponse{Entries: []*csi.ListSnapshotsResponse_Entry{
+		{Snapshot: &csi.Snapshot{SnapshotId: req.GetSnapshotId(), ReadyToUse: true}},
+	}}, nil
+}
+
+func (m *mockCSIDriver) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	if m.deleteSnapshotFunc != nil {
+		return m.deleteSnapshotFunc(ctx, req)
+	}
+	return &csi.DeleteSnapshotResponse{}, nil
 }
 
 func startMockCSIDriver(t *testing.T, driver *mockCSIDriver) (string, func()) {

@@ -119,7 +119,8 @@ type ControlClient interface {
 	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
 	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag. Asks the storage system about each volume snapshot the tag
+	// records as not ready to use, and records the ones that are now ready.
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Tags.
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
@@ -667,7 +668,8 @@ type ControlServer interface {
 	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
 	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag. Asks the storage system about each volume snapshot the tag
+	// records as not ready to use, and records the ones that are now ready.
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
 	// List Tags.
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)

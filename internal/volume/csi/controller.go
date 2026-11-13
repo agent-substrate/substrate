@@ -44,3 +44,20 @@ func (c *Client) ControllerUnpublishVolume(ctx context.Context, req *csi.Control
 func (c *Client) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
 	return c.controller.ControllerGetCapabilities(ctx, req)
 }
+
+// CreateSnapshot captures a point-in-time copy of a volume.
+func (c *Client) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+	return c.controller.CreateSnapshot(ctx, req)
+}
+
+// DeleteSnapshot releases a snapshot.
+func (c *Client) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+	return c.controller.DeleteSnapshot(ctx, req)
+}
+
+// ListSnapshots lists snapshots, optionally filtered to one snapshot or source
+// volume. It is used to read a snapshot's state after CreateSnapshot returns
+// because far more drivers implement it than the newer GetSnapshot RPC.
+func (c *Client) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	return c.controller.ListSnapshots(ctx, req)
+}

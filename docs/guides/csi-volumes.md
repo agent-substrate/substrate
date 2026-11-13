@@ -212,3 +212,43 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+## 5. Snapshotting Volumes with a Tag
+
+A tag can also snapshot a suspended actor's external volumes. An actor created
+from that tag restores them on its first resume:
+
+```bash
+kubectl ate suspend actor <actor-name> -a <atespace>
+# All external volumes, or only the named ones.
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes=shared-storage
+kubectl ate --preview create actor <new-actor> -a <atespace> --template <template-name> --tag <tag-name>
+kubectl ate resume actor <new-actor> -a <atespace>
+```
+
+- Each restored volume is a new volume with its own copy of the data. Writes
+  to it don't reach the source actor or other actors created from the tag.
+- A volume the tag did not capture starts empty.
+- The driver of every captured volume must support CSI snapshots, or
+  `create tag` fails.
+- `create tag` does not wait for the storage system to finish the snapshots.
+  `create actor` fails with `FAILED_PRECONDITION` until they are ready to use.
+  `kubectl ate get tag <tag-name> -a <atespace> -o yaml` shows `readyToUse`
+  for each volume snapshot.
+- Deleting the tag deletes its volume snapshots. Actors that already resumed
+  keep their volumes. An actor created from the tag that never resumed can no
+  longer restore them.
+
+## 6. Known limitations
+
+- **Restoring volumes from a tag needs every ate API server on the same
+  release.** `kubectl ate --preview create tag --with-volumes` snapshots an
+  actor's external volumes, and an actor created from that tag restores them
+  on its first resume. An ate API server from a release without this feature
+  drops the tag's volume snapshots from the actor and provisions its volumes
+  empty, without an error. This can happen while ate API servers roll to a new
+  release, or after a rollback. Until every ate API server runs the new
+  release, don't resume actors created from a tag with volumes. A rollback
+  loses the volume contents of those actors that never resumed. Actors that
+  already resumed keep their volumes.
