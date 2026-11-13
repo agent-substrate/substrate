@@ -119,8 +119,14 @@ func (p *Persistence) ListExternalVolumeClasses(ctx context.Context, opts store.
 }
 
 func (p *Persistence) DeleteExternalVolumeClass(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.ExternalVolumeClass, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning external volume class delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
 	var protoBytes []byte
-	err := p.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		DELETE FROM external_volume_classes
 		WHERE name = $1
 		  AND ($2::text = '' OR uid = $2::text)
@@ -129,11 +135,17 @@ func (p *Persistence) DeleteExternalVolumeClass(ctx context.Context, name string
 	if errors.Is(err, pgx.ErrNoRows) {
 		var uid string
 		var version int64
-		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM external_volume_classes WHERE name = $1`, name).Scan(&uid, &version)
+		err := tx.QueryRow(ctx, `SELECT uid, version FROM external_volume_classes WHERE name = $1`, name).Scan(&uid, &version)
 		return nil, mapDeleteError(err, uid, version, precondition)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deleting external volume class %q: %w", name, err)
+	}
+	if err := p.policyManager.DeleteExternalVolumeClassPolicies(ctx, tx, name); err != nil {
+		return nil, fmt.Errorf("deleting authorization tuples for external volume class %q: %w", name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing external volume class delete %q: %w", name, err)
 	}
 	out := &ateapi.ExternalVolumeClass{}
 	if err := unmarshalStored(protoBytes, out); err != nil {
