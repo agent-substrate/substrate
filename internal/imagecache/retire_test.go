@@ -337,7 +337,7 @@ func TestPullPinsBeforeJoiningLayerFlight(t *testing.T) {
 		_, _, _ = store.layerSF.Do(layerFlightKey(diffID, blobDigest), func() (any, error) {
 			close(held)
 			<-release
-			return nil, store.unpackLayerToPool(context.Background(), diffID, layer)
+			return nil, store.unpackLayerToPool(context.Background(), diffID, layer, false)
 		})
 	}()
 	<-held
@@ -374,7 +374,7 @@ func TestRetireLayerPreflightSkipsPinLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ensureLayer(context.Background(), freshID, fresh); err != nil {
+	if _, err := store.ensureLayer(context.Background(), freshID, fresh, false); err != nil {
 		t.Fatal(err)
 	}
 	cutoff := time.Now().Add(-time.Hour)
