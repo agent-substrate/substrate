@@ -228,6 +228,13 @@ const actorConnectCircuitBreakerLimit = 1048576
 // tunnelIdleTimeout closes unused tunnels, which hold actor connections.
 const tunnelIdleTimeout = 60 * time.Second
 
+// HTTP/2 limits on the client-facing HCMs. Envoy's defaults allow 2^31-1
+// streams and 256 MiB windows per connection. These match atenet-egress.
+const (
+	downstreamMaxConcurrentStreams = 100
+	downstreamInitialWindowSize    = 1 << 20
+)
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -1316,12 +1323,20 @@ func (x *XdsServer) buildConnectTerminateHCM(statPrefix string) *anypb.Any {
 				},
 			},
 		},
-		Http2ProtocolOptions: &corev3.Http2ProtocolOptions{
-			AllowConnect: true,
-		},
+		Http2ProtocolOptions: downstreamHttp2Options(true),
 	})
 
 	return hcm
+}
+
+// downstreamHttp2Options returns the HTTP/2 limits for a client-facing HCM.
+func downstreamHttp2Options(allowConnect bool) *corev3.Http2ProtocolOptions {
+	return &corev3.Http2ProtocolOptions{
+		AllowConnect:                allowConnect,
+		MaxConcurrentStreams:        wrapperspb.UInt32(downstreamMaxConcurrentStreams),
+		InitialStreamWindowSize:     wrapperspb.UInt32(downstreamInitialWindowSize),
+		InitialConnectionWindowSize: wrapperspb.UInt32(downstreamInitialWindowSize),
+	}
 }
 
 func buildConnectRoutes() *routev3.RouteConfiguration {
@@ -1435,9 +1450,10 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		UpgradeConfigs: []*hcmv3.HttpConnectionManager_UpgradeConfig{
 			{UpgradeType: "websocket"},
 		},
-		Tracing:     x.buildTracing(),
-		AccessLog:   stdoutAccessLog(accessLogFormat),
-		HttpFilters: httpFilters,
+		Tracing:              x.buildTracing(),
+		AccessLog:            stdoutAccessLog(accessLogFormat),
+		HttpFilters:          httpFilters,
+		Http2ProtocolOptions: downstreamHttp2Options(false),
 		RouteSpecifier: &hcmv3.HttpConnectionManager_Rds{
 			Rds: &hcmv3.Rds{
 				RouteConfigName: RouteName,
