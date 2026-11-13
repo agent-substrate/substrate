@@ -336,6 +336,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runWorkerContractTests(t, setup)
 	runWorkerAssignmentContractTests(t, setup)
 	runAtespaceContractTests(t, setup)
+	runExternalVolumeClassContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
 	runLeaseContractTests(t, setup)
@@ -3513,6 +3514,158 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 	})
 }
 
+func newTestExternalVolumeClass(name string) *ateapi.ExternalVolumeClass {
+	return &ateapi.ExternalVolumeClass{
+		Metadata:   &ateapi.ResourceMetadata{Name: name},
+		DriverName: "nfs.csi.k8s.io",
+		Parameters: map[string]string{"server": "nfs.example.com", "share": "/exports"},
+	}
+}
+
+func runExternalVolumeClassContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("CreateExternalVolumeClass_Success", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		want := newTestExternalVolumeClass("nfs")
+		created, err := s.CreateExternalVolumeClass(ctx, want)
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		if created.GetMetadata().GetUid() == "" {
+			t.Errorf("CreateExternalVolumeClass returned empty uid; want server-assigned uid")
+		}
+		if created.GetMetadata().GetVersion() != 1 {
+			t.Errorf("CreateExternalVolumeClass returned version %d, want 1", created.GetMetadata().GetVersion())
+		}
+		if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps, ignoreVersion); diff != "" {
+			t.Errorf("CreateExternalVolumeClass returned unexpected class (-want +got):\n%s", diff)
+		}
+
+		got, err := s.GetExternalVolumeClass(ctx, "nfs")
+		if err != nil {
+			t.Fatalf("GetExternalVolumeClass failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("CreateExternalVolumeClass return does not match stored state (-created +got):\n%s", diff)
+		}
+	})
+
+	t.Run("CreateExternalVolumeClass_AlreadyExists", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs")); err != nil {
+			t.Fatalf("first CreateExternalVolumeClass failed: %v", err)
+		}
+		if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs")); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("second CreateExternalVolumeClass = %v, want ErrAlreadyExists", err)
+		}
+	})
+
+	t.Run("GetExternalVolumeClass_NotFound", func(t *testing.T) {
+		s := setup(t)
+
+		if _, err := s.GetExternalVolumeClass(context.Background(), "nope"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetExternalVolumeClass = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("ListExternalVolumeClasses_Pagination", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		empty, err := s.ListExternalVolumeClasses(ctx, store.ListOptions{PageSize: 1000})
+		if err != nil || len(empty.Items) != 0 || empty.NextPageToken != "" {
+			t.Fatalf("empty ListExternalVolumeClasses = (%v, %q, %v); want empty", empty.Items, empty.NextPageToken, err)
+		}
+
+		var want []string
+		for i := range 5 {
+			name := fmt.Sprintf("class-%d", i)
+			if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass(name)); err != nil {
+				t.Fatalf("CreateExternalVolumeClass(%s) failed: %v", name, err)
+			}
+			want = append(want, name)
+		}
+
+		var got []string
+		pageToken := ""
+		for {
+			page, err := s.ListExternalVolumeClasses(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
+			if err != nil {
+				t.Fatalf("ListExternalVolumeClasses failed: %v", err)
+			}
+			for _, c := range page.Items {
+				got = append(got, c.GetMetadata().GetName())
+			}
+			pageToken = page.NextPageToken
+			if pageToken == "" {
+				break
+			}
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("paged class names mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("DeleteExternalVolumeClass", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs"))
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+		}
+		if deleted.GetMetadata().GetDeleteTime() == nil {
+			t.Error("the deleted class carries no delete_time")
+		}
+		if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreTimestamps); diff != "" {
+			t.Errorf("DeleteExternalVolumeClass returned unexpected class (-created +deleted):\n%s", diff)
+		}
+		if _, err := s.GetExternalVolumeClass(ctx, "nfs"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("after delete, GetExternalVolumeClass = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeleteExternalVolumeClass_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		del := func(precondition store.DeletePreconditions) error {
+			_, err := s.DeleteExternalVolumeClass(ctx, "nfs", precondition)
+			return err
+		}
+
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: 1}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("guarded delete of a missing class = %v, want ErrNotFound", err)
+		}
+
+		created, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs"))
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
+		if err := del(store.DeletePreconditions{UID: uid, Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("matching uid, stale version = %v, want ErrVersionConflict", err)
+		}
+		if err := del(store.DeletePreconditions{UID: foreignUID, Version: version}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("foreign uid, matching version = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.GetExternalVolumeClass(ctx, "nfs"); err != nil {
+			t.Fatalf("a refused delete removed the class: %v", err)
+		}
+		if err := del(store.DeletePreconditions{UID: uid, Version: version}); err != nil {
+			t.Errorf("matching uid and version = %v, want nil", err)
+		}
+	})
+}
+
 func runLeaseContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
@@ -3758,6 +3911,35 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("DeleteAtespace failed: %v", err)
 		}
 		assertPruned(t, "DeleteAtespace", created, deleted)
+	})
+
+	t.Run("UnknownFields_ExternalVolumeClass", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		class := withUnknownField(newTestExternalVolumeClass("nfs"))
+		withUnknownField(class.Metadata)
+		created, err := s.CreateExternalVolumeClass(ctx, class)
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+
+		got, err := s.GetExternalVolumeClass(ctx, "nfs")
+		if err != nil {
+			t.Fatalf("GetExternalVolumeClass failed: %v", err)
+		}
+		assertPruned(t, "GetExternalVolumeClass", created, got)
+
+		list, err := s.ListExternalVolumeClasses(ctx, store.ListOptions{})
+		if err != nil || len(list.Items) != 1 {
+			t.Fatalf("ListExternalVolumeClasses = %d items, %v; want 1", len(list.Items), err)
+		}
+		assertPruned(t, "ListExternalVolumeClasses", created, list.Items[0])
+
+		deleted, err := s.DeleteExternalVolumeClass(ctx, "nfs", store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+		}
+		assertPruned(t, "DeleteExternalVolumeClass", created, deleted)
 	})
 
 	t.Run("UnknownFields_ActorTemplate", func(t *testing.T) {

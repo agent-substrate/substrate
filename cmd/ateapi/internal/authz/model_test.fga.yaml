@@ -94,6 +94,11 @@ tuples:
     relation: api_server_sidecar
     object: global:root
 
+  # External volume class (nfs-gold linked to global:root)
+  - user: global:root
+    relation: parent_global
+    object: external_volume_class:nfs-gold
+
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
     check:
@@ -572,3 +577,36 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
+
+  - name: 10. External Volume Classes (Inherited from Global)
+    check:
+      - user: user:carol # Global owner
+        object: global:root
+        assertions:
+          can_create_external_volume_class: true
+          can_list_external_volume_classes: true
+      - user: user:frank # Global viewer
+        object: global:root
+        assertions:
+          can_create_external_volume_class: false
+          can_list_external_volume_classes: true
+      - user: user:bob # Atespace editor
+        object: global:root
+        assertions:
+          can_create_external_volume_class: false
+          can_list_external_volume_classes: false
+      - user: user:carol
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: true
+          can_delete: true
+      - user: user:frank
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: true
+          can_delete: false
+      - user: user:bob
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: false
+          can_delete: false
