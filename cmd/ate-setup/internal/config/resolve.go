@@ -35,6 +35,9 @@ const (
 	// no channel supplied one. It is not a channel an operator writes to: the
 	// way to override it is any of the three above.
 	OriginKindProfile
+	// OriginOpenAPPA is an additional ext_proc setting that --openappa implied
+	// because no channel supplied one.
+	OriginOpenAPPA
 )
 
 // Describe names the origin the way the operator would refer to it, so an
@@ -49,6 +52,8 @@ func (o Origin) Describe(s Setting) string {
 		return "--" + s.Flag
 	case OriginKindProfile:
 		return "the --kind profile"
+	case OriginOpenAPPA:
+		return "--openappa"
 	default:
 		return "default"
 	}
@@ -64,6 +69,8 @@ func (o Origin) String() string {
 		return "flag"
 	case OriginKindProfile:
 		return "kind"
+	case OriginOpenAPPA:
+		return "openappa"
 	default:
 		return "default"
 	}

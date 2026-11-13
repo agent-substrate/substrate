@@ -169,6 +169,46 @@ var Registry = []Setting{
 		Usage: "Run an additional ext_proc authorization filter served by NS/SVC:PORT " +
 			"(requires --atenet-dataplane=envoy)",
 	},
+	{
+		Key: "atenet.egress.additionalExtprocAllowModeOverride", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE",
+		Flag: "experimental-additional-egress-extproc-allow-mode-override", Kind: KindBool, Default: "false",
+		Usage: "Let the additional ext_proc processor buffer the request and response bodies of a request " +
+			"by returning a mode_override from its request_headers response " +
+			"(requires --experimental-additional-egress-extproc-service)",
+	},
+	{
+		Key: "atenet.egress.additionalExtprocTimeout", Env: "ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT",
+		Flag: "experimental-additional-egress-extproc-timeout", Kind: KindDuration, Default: "2s",
+		Usage: "How long Envoy waits for each additional ext_proc response, at most 1h " +
+			"(requires --experimental-additional-egress-extproc-service)",
+	},
+
+	{
+		Key: "openappa.enabled", Env: "ATE_OPENAPPA", Flag: "openappa", Kind: KindBool, Default: "false",
+		Usage: "Deploy OpenAPPA as the egress gateway's additional ext_proc filter " +
+			"(requires --atenet-dataplane=envoy)",
+	},
+	{
+		Key: "openappa.policy", Env: "ATE_OPENAPPA_POLICY", Flag: "openappa-policy", Kind: KindString,
+		Usage: "Path to the OpenAPPA policy, an appa.toml, applied on every deploy " +
+			"(default: the bundled policy, applied only when the cluster has none)",
+	},
+	{
+		// Comma-separated; the registry has no list kind.
+		Key: "openappa.mcpServers", Env: "ATE_OPENAPPA_MCP_SERVERS", Flag: "openappa-mcp-servers",
+		Kind: KindString, Default: "api.githubcopilot.com=github",
+		Usage: "Comma-separated HOST=NAME pairs naming the MCP servers OpenAPPA checks tool calls to",
+	},
+	{
+		Key: "openappa.runtimeImage", Env: "ATE_OPENAPPA_RUNTIME_IMAGE", Flag: "openappa-runtime-image",
+		Kind: KindString, Default: OpenAPPARuntimeImage,
+		Usage: "OpenAPPA runtime image",
+	},
+	{
+		Key: "openappa.extprocImage", Env: "ATE_OPENAPPA_EXTPROC_IMAGE", Flag: "openappa-extproc-image",
+		Kind: KindString, Default: OpenAPPAExtprocImage,
+		Usage: "OpenAPPA ext_proc image",
+	},
 
 	{
 		// No default: an unset level keeps the one an existing install has,

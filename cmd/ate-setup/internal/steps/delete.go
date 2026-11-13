@@ -176,14 +176,17 @@ func (e *Env) DeleteTrustBundles(ctx context.Context) error {
 	return nil
 }
 
-// DeleteAtenet removes the atenet dataplane and the bundled credential
-// provider, deleting the provider first so that a later failure cannot leave
-// its ClusterRole and binding behind. The provider's policy ConfigMap stays:
-// it holds the operator's allow-list.
+// DeleteAtenet removes the atenet dataplane, the bundled credential provider
+// and OpenAPPA, deleting the provider first so that a later failure cannot
+// leave its ClusterRole and binding behind. The provider's and OpenAPPA's
+// policy ConfigMaps stay: they hold the operator's policy.
 func (e *Env) DeleteAtenet(ctx context.Context) error {
 	log.Step("delete_atenet")
 
 	if err := e.Kube.DeletePath(ctx, e.k8sCredentialProviderPath(k8sCredentialProviderManifest)); err != nil {
+		return err
+	}
+	if err := e.Kube.DeletePath(ctx, e.openAPPAPath(openAPPAManifest)); err != nil {
 		return err
 	}
 

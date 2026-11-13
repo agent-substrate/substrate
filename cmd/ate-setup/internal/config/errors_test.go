@@ -210,6 +210,50 @@ func TestValidationErrorsNameTheSupplyingChannel(t *testing.T) {
 			wantIn: []string{"atenet.egress.additionalExtprocService", "1-65535", "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"},
 		},
 		{
+			name:   "extproc mode override without a service",
+			env:    map[string]string{"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE": "true"},
+			wantIn: []string{"atenet.egress.additionalExtprocAllowModeOverride", "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE", "atenet.egress.additionalExtprocService"},
+		},
+		{
+			name:   "extproc timeout without a service",
+			env:    map[string]string{"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT": "5s"},
+			wantIn: []string{"atenet.egress.additionalExtprocTimeout", "ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT", "atenet.egress.additionalExtprocService"},
+		},
+		{
+			name: "extproc timeout is zero",
+			env: map[string]string{
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE": "ns/svc:50051",
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT": "0s",
+			},
+			wantIn: []string{"atenet.egress.additionalExtprocTimeout", "at most 1h", "ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT"},
+		},
+		{
+			name: "openappa with another extproc service",
+			env: map[string]string{
+				"ATE_OPENAPPA":                          "true",
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE": "ns/svc:50051",
+			},
+			wantIn: []string{"atenet.egress.additionalExtprocService", "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE", "openappa.enabled", "ATE_OPENAPPA", OpenAPPAExtprocService},
+		},
+		{
+			name: "openappa with mode overrides turned off",
+			env: map[string]string{
+				"ATE_OPENAPPA": "true",
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE": "false",
+			},
+			wantIn: []string{"atenet.egress.additionalExtprocAllowModeOverride", "ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE", "openappa.enabled"},
+		},
+		{
+			name:   "openappa in another namespace",
+			env:    map[string]string{"ATE_OPENAPPA": "true", "ATE_NAMESPACE": "elsewhere"},
+			wantIn: []string{"openappa.enabled", "namespace", "ATE_NAMESPACE", "manifests/openappa"},
+		},
+		{
+			name:   "openappa image without openappa",
+			env:    map[string]string{"ATE_OPENAPPA_RUNTIME_IMAGE": "example.com/runtime:v1"},
+			wantIn: []string{"openappa.runtimeImage", "ATE_OPENAPPA_RUNTIME_IMAGE", "openappa.enabled"},
+		},
+		{
 			name:   "image tag without a repository",
 			env:    map[string]string{"ATE_IMAGE_TAG": "v1"},
 			wantIn: []string{"images.tag", "ATE_IMAGE_TAG", "images.repo", "the tag names nothing"},

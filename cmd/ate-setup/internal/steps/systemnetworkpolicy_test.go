@@ -42,7 +42,8 @@ type systemPod struct {
 
 // systemInstall is everything an install of one configuration puts in
 // ate-system: the system overlay plus the manifests the installer applies on
-// their own (postgres, the egress gateway, the bundled credential provider).
+// their own (postgres, the egress gateway, the bundled credential provider,
+// OpenAPPA).
 type systemInstall struct {
 	pods     []systemPod
 	policies []networkingv1.NetworkPolicy
@@ -133,6 +134,11 @@ func loadSystemInstall(t *testing.T, cfg *config.Config) systemInstall {
 		t.Fatalf("loading the credential provider manifest: %v", err)
 	}
 	objs = append(objs, provider...)
+	openappa, err := kube.LoadPath(e.openAPPAPath(openAPPAManifest))
+	if err != nil {
+		t.Fatalf("loading the OpenAPPA manifest: %v", err)
+	}
+	objs = append(objs, openappa...)
 
 	var install systemInstall
 	for _, obj := range objs {
@@ -447,6 +453,9 @@ func TestSystemNetworkPoliciesLeastPrivilege(t *testing.T) {
 
 			atelet := in.pod(t, "atelet")
 			requireOnlyFromApps(t, in, atelet, namedPort(t, atelet, "grpc"), "ate-api-server")
+
+			openappa := in.pod(t, openAPPADeployment)
+			requireOnlyFromApps(t, in, openappa, namedPort(t, openappa, "grpc"), "atenet-egress")
 			if cfg.FakeDataPlane {
 				requireOnlyFromApps(t, in, atelet, namedPort(t, atelet, "relay"), "fake-workersync")
 			}

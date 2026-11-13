@@ -298,7 +298,9 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `ateapi.postgres.serverCAFile`               | `ATE_API_POSTGRES_SERVER_CA_FILE`               | `--ateapi-postgres-server-ca-file`                 | —                     | (global)                                 |
 | `ateapi.postgres.storageClass`               | `ATE_API_POSTGRES_STORAGE_CLASS`                | `--ateapi-postgres-storage-class`                  | —                     | (global)                                 |
 | `atenet.dataplane`                           | `ATE_ATENET_DATAPLANE`                          | `--atenet-dataplane`                               | `envoy`               | (global)                                 |
+| `atenet.egress.additionalExtprocAllowModeOverride` | `ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE` | `--experimental-additional-egress-extproc-allow-mode-override` | `false` | (global) |
 | `atenet.egress.additionalExtprocService`     | `ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE`         | `--experimental-additional-egress-extproc-service` | —                     | (global)                                 |
+| `atenet.egress.additionalExtprocTimeout`     | `ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT`         | `--experimental-additional-egress-extproc-timeout` | `2s`                  | (global)                                 |
 | `atenet.egress.credentialProvider`           | `ATE_CREDENTIAL_PROVIDER`                       | `--credential-provider`                            | —                     | (global)                                 |
 | `clusterSize`                                | `ATE_INSTALL_CLUSTER_SIZE`                      | `--cluster-size`                                   | `size0`               | (global)                                 |
 | `context`                                    | `KUBECTL_CONTEXT`                               | `--context`                                        | —                     | (global)                                 |
@@ -318,6 +320,11 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `ko.dockerRepo`                              | `KO_DOCKER_REPO`                                | `--ko-docker-repo`                                 | —                     | (global)                                 |
 | `kubeconfig`                                 | `KUBECONFIG`                                    | `--kubeconfig`                                     | —                     | (global)                                 |
 | `namespace`                                  | `ATE_NAMESPACE`                                 | `--namespace`                                      | `ate-system`          | (global)                                 |
+| `openappa.enabled` | `ATE_OPENAPPA` | `--openappa` | `false` | (global) |
+| `openappa.extprocImage` | `ATE_OPENAPPA_EXTPROC_IMAGE` | `--openappa-extproc-image` | `ghcr.io/archestra-ai/appa-extproc:v0.43.0` | (global) |
+| `openappa.mcpServers` | `ATE_OPENAPPA_MCP_SERVERS` | `--openappa-mcp-servers` | `api.githubcopilot.com=github` | (global) |
+| `openappa.policy` | `ATE_OPENAPPA_POLICY` | `--openappa-policy` | — (bundled policy) | (global) |
+| `openappa.runtimeImage` | `ATE_OPENAPPA_RUNTIME_IMAGE` | `--openappa-runtime-image` | `ghcr.io/archestra-ai/appa-runtime:v0.42.0@sha256:…` | (global) |
 | `otlpEndpoint`                               | `ATE_OTLP_ENDPOINT`                             | `--otlp-endpoint`                                  | —                     | (global)                                 |
 | `podcert.workersPerSigner`                   | `ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER`        | `--podcert-workers-per-signer`                     | `0`                   | (global)                                 |
 | `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |

@@ -46,7 +46,9 @@ func loadEnv(t *testing.T) {
 		"ACTOR_JWT_ALGORITHM",
 		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
+		"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT",
 		"ATE_API_AUTHZ_BOOTSTRAP_OWNERS",
 		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -72,6 +74,11 @@ func loadEnv(t *testing.T) {
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
+		"ATE_OPENAPPA",
+		"ATE_OPENAPPA_EXTPROC_IMAGE",
+		"ATE_OPENAPPA_MCP_SERVERS",
+		"ATE_OPENAPPA_POLICY",
+		"ATE_OPENAPPA_RUNTIME_IMAGE",
 		"ATE_OTLP_ENDPOINT",
 		"ATE_PREVIEW",
 		"BENCHMARK_ACTOR_MEMORY",
@@ -273,6 +280,101 @@ func TestLoadE2ETuning(t *testing.T) {
 			}
 			if _, exported := scriptEnvMap(t, cfg)["ATE_INSTALL_E2E_TUNING"]; exported != tc.want {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_E2E_TUNING = %v, want %v", exported, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAdditionalEgressExtproc(t *testing.T) {
+	const service = "ate-system/extproc:50051"
+	for _, tc := range []struct {
+		name         string
+		opts         Options
+		env          map[string]string
+		wantOverride bool
+		wantTimeout  time.Duration
+	}{
+		{name: "defaults", opts: Options{AdditionalEgressExtprocService: service}, wantTimeout: 2 * time.Second},
+		{
+			name: "flags",
+			opts: Options{
+				AdditionalEgressExtprocService:           service,
+				AdditionalEgressExtprocAllowModeOverride: true,
+				AdditionalEgressExtprocTimeout:           "10s",
+			},
+			wantOverride: true, wantTimeout: 10 * time.Second,
+		},
+		{
+			name: "environment",
+			opts: Options{AdditionalEgressExtprocService: service},
+			env: map[string]string{
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE": "true",
+				"ATE_ADDITIONAL_EGRESS_EXTPROC_TIMEOUT":             "500ms",
+			},
+			wantOverride: true, wantTimeout: 500 * time.Millisecond,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.AdditionalEgressExtprocAllowModeOverride != tc.wantOverride {
+				t.Errorf("AdditionalEgressExtprocAllowModeOverride = %v, want %v", cfg.AdditionalEgressExtprocAllowModeOverride, tc.wantOverride)
+			}
+			if cfg.AdditionalEgressExtprocTimeout != tc.wantTimeout {
+				t.Errorf("AdditionalEgressExtprocTimeout = %v, want %v", cfg.AdditionalEgressExtprocTimeout, tc.wantTimeout)
+			}
+			if _, exported := scriptEnvMap(t, cfg)["ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE"]; exported != tc.wantOverride {
+				t.Errorf("ScriptEnv() exports ATE_ADDITIONAL_EGRESS_EXTPROC_ALLOW_MODE_OVERRIDE = %v, want %v", exported, tc.wantOverride)
+			}
+		})
+	}
+}
+
+// --openappa points the additional ext_proc filter at OpenAPPA, keeping any
+// timeout a channel supplied.
+func TestLoadOpenAPPA(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		opts        Options
+		wantTimeout time.Duration
+	}{
+		{name: "implied", opts: Options{OpenAPPA: true}, wantTimeout: 60 * time.Second},
+		{name: "own timeout", opts: Options{OpenAPPA: true, AdditionalEgressExtprocTimeout: "5s"}, wantTimeout: 5 * time.Second},
+		{
+			name:        "same service named",
+			opts:        Options{OpenAPPA: true, AdditionalEgressExtprocService: OpenAPPAExtprocService},
+			wantTimeout: 60 * time.Second,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.AdditionalEgressExtprocService != OpenAPPAExtprocService {
+				t.Errorf("AdditionalEgressExtprocService = %q, want %q", cfg.AdditionalEgressExtprocService, OpenAPPAExtprocService)
+			}
+			if !cfg.AdditionalEgressExtprocAllowModeOverride {
+				t.Error("AdditionalEgressExtprocAllowModeOverride = false, want true")
+			}
+			if cfg.AdditionalEgressExtprocTimeout != tc.wantTimeout {
+				t.Errorf("AdditionalEgressExtprocTimeout = %v, want %v", cfg.AdditionalEgressExtprocTimeout, tc.wantTimeout)
+			}
+			if want := []string{"api.githubcopilot.com=github"}; !slices.Equal(cfg.OpenAPPAMCPServers, want) {
+				t.Errorf("OpenAPPAMCPServers = %v, want %v", cfg.OpenAPPAMCPServers, want)
+			}
+			if cfg.OpenAPPARuntimeImage != OpenAPPARuntimeImage || cfg.OpenAPPAExtprocImage != OpenAPPAExtprocImage {
+				t.Errorf("images = %q, %q, want the defaults", cfg.OpenAPPARuntimeImage, cfg.OpenAPPAExtprocImage)
+			}
+			if got := scriptEnvMap(t, cfg)["ATE_OPENAPPA"]; got != "true" {
+				t.Errorf("ScriptEnv() ATE_OPENAPPA = %q, want true", got)
 			}
 		})
 	}
@@ -1042,6 +1144,20 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"cluster size", Options{ClusterSize: "size5"}},
 		{"extproc invalid format", Options{AdditionalEgressExtprocService: "extproc:50051"}},
 		{"extproc agentgateway", Options{Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"extproc mode override without a service", Options{AdditionalEgressExtprocAllowModeOverride: true}},
+		{"extproc timeout without a service", Options{AdditionalEgressExtprocTimeout: "5s"}},
+		{"extproc timeout zero", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocTimeout: "0s"}},
+		{"extproc timeout negative", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocTimeout: "-1s"}},
+		{"extproc timeout over an hour", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051", AdditionalEgressExtprocTimeout: "61m"}},
+		{"openappa on agentgateway", Options{Router: RouterAgentgateway, OpenAPPA: true}},
+		{"openappa with another extproc service", Options{OpenAPPA: true, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"openappa policy that does not exist", Options{OpenAPPA: true, OpenAPPAPolicy: "/nonexistent/appa.toml"}},
+		{"openappa policy is a directory", Options{OpenAPPA: true, OpenAPPAPolicy: "."}},
+		{"openappa mcp server without a name", Options{OpenAPPA: true, OpenAPPAMCPServers: "api.githubcopilot.com"}},
+		{"openappa mcp server with an empty host", Options{OpenAPPA: true, OpenAPPAMCPServers: "=github"}},
+		{"openappa mcp server as a URL", Options{OpenAPPA: true, OpenAPPAMCPServers: "https://api.githubcopilot.com=github"}},
+		{"openappa policy without openappa", Options{OpenAPPAPolicy: "appa.toml"}},
+		{"openappa mcp servers without openappa", Options{OpenAPPAMCPServers: "a.example.com=a"}},
 		{"provider not JSON", Options{CredentialProvider: "k8s.io"}},
 		{"provider as a JSON string", Options{CredentialProvider: `"off"`}},
 		{"provider null", Options{CredentialProvider: `null`}},
