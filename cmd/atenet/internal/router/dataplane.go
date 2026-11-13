@@ -95,10 +95,10 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 
 	xdsSrv.SetRouteTimeout(s.cfg.RouteTimeout)
 	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
-	if parkCfg.Enabled() {
+	if extProcHold := parkCfg.ExtProcHold(); extProcHold > 0 {
 		// Envoy must keep a parked request open at least as long as the router
 		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
+		xdsSrv.SetExtProcMessageTimeout(extProcHold + 5*time.Second)
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)

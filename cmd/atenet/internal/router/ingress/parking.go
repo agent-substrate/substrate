@@ -77,12 +77,18 @@ const (
 // at once so the router sheds load rather than queueing without bound; a
 // non-positive Max disables parking entirely.
 //
+// InProgressBudget, when positive, also retries a resume that ateapi refuses
+// because the actor is still SUSPENDING, and lets a flight that is waiting on
+// such an in-progress operation run for up to the larger of it and Budget.
+// Worker-pool saturation still gets only Budget.
+//
 // RetryInterval/RetryFactor/RetryJitter shape the backoff between resume
 // attempts while a request is parked. The backoff deliberately has no cap and
 // no step limit: the budget alone bounds the wait.
 type ParkedRequestConfig struct {
-	Budget time.Duration
-	Max    int
+	Budget           time.Duration
+	InProgressBudget time.Duration
+	Max              int
 
 	RetryInterval time.Duration
 	RetryFactor   float64
@@ -110,10 +116,25 @@ func (c ParkedRequestConfig) Normalized() ParkedRequestConfig {
 	return c
 }
 
+// ExtProcHold returns the maximum duration ActorResumer may hold an ext_proc
+// stream open under c, or 0 when neither parking nor InProgressBudget is active.
+func (c ParkedRequestConfig) ExtProcHold() time.Duration {
+	if c.Enabled() {
+		return max(c.Budget, c.InProgressBudget)
+	}
+	if c.InProgressBudget > 0 {
+		return max(failFastResumeBudget, c.InProgressBudget)
+	}
+	return 0
+}
+
 // Validate rejects retry parameters that would make parking misbehave rather
 // than merely differ: a factor below 1 shrinks delays toward zero and turns
 // the parked retry loop into a hot loop against the control plane.
 func (c ParkedRequestConfig) Validate() error {
+	if c.InProgressBudget < 0 {
+		return fmt.Errorf("in-progress resume budget must not be negative, got %s", c.InProgressBudget)
+	}
 	if c.RetryFactor != 0 && c.RetryFactor < 1.0 {
 		return fmt.Errorf("parked-request retry factor must be >= 1.0, got %v", c.RetryFactor)
 	}

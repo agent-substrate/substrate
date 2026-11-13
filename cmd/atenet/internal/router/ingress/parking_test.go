@@ -159,3 +159,23 @@ type simpleErr string
 func (e simpleErr) Error() string { return string(e) }
 
 const errOther simpleErr = "boom"
+
+func TestParkedRequestConfig_ExtProcHold(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ParkedRequestConfig
+		want time.Duration
+	}{
+		{"parking only", ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}, 5 * time.Second},
+		{"larger in-progress budget", ParkedRequestConfig{Max: 1, Budget: 5 * time.Second, InProgressBudget: 30 * time.Second}, 30 * time.Second},
+		{"parking disabled", ParkedRequestConfig{Budget: 5 * time.Second}, 0},
+		{"parking disabled with an in-progress budget", ParkedRequestConfig{InProgressBudget: 8 * time.Second}, failFastResumeBudget},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.ExtProcHold(); got != tc.want {
+				t.Errorf("ExtProcHold() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
