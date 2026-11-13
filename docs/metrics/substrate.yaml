@@ -132,9 +132,13 @@ bridged_metric_families:
 cardinality_rules:
   - id: no-actor-identity
     brief: >
-      The name, the UID and the atespace of an actor are never metric labels.
+      The name, the UID and the atespace of an actor are never labels on
+      metrics in the standard telemetry pipeline.
       They have too many values at the target of 1 billion actors. Put them on
       spans and logs. The trace_id field connects a log to a metric.
+      The opt-in ate_debug_actor_guest_* Prometheus series may use actor_uid,
+      actor_name and actor_atespace for an explicit operator allowlist of at
+      most 16 UIDs per atelet. These series are excluded from OTLP export.
     enforced: false
     could_be_enforced_by: >
       A Weaver Rego policy can refuse a forbidden attribute in this registry. It
@@ -189,7 +193,7 @@ cardinality_rules:
 lint_exceptions:
   - attribute: outcome
     metric: atenet.router.parking.wait.duration
-    rule: A metric label of Substrate must start with ate.
+    rule: A Substrate OTLP metric label must start with ate.
     brief: >
       This label is older than the naming convention of the router. A change to
       ate.router.park.outcome needs a change to the dashboards at the same time.
