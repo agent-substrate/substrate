@@ -147,7 +147,11 @@ An actor's **own** lines carry trace context only if the actor emits these field
 
 ### Actor-Attributed Component Logs
 
-A component's own `slog` output can also be about a specific actor. Those records take the identity keys from [`internal/ateattr`](../../internal/ateattr) too, flat at the top level rather than inside a label group: a component writes no envelope, so a collector lifts the keys straight onto the log record's attributes. `ateattr.ActorLogAttrs` and `ateattr.ActorLogLabels` return the same five keys for this reason, and a test holds them together. Filtering on `ate.actor.uid` therefore finds a component record and an actor's own output alike.
+A component's own `slog` output can also be about a specific actor. Those records take the identity keys from [`internal/ateattr`](../../internal/ateattr) too, flat at the top level rather than inside a label group: a component writes no envelope, so a collector lifts the keys straight onto the log record's attributes. `ateattr.ActorLogAttrs` and `ateattr.ActorLogLabels` return the same five keys for this reason, and a test holds them together. On Cloud Logging, an actor's own output matches `labels."ate.actor.uid"` and a component record matches `jsonPayload."ate.actor.uid"`. To see both for one actor, use:
+
+```text
+labels."ate.actor.uid"="8f2a…" OR jsonPayload."ate.actor.uid"="8f2a…"
+```
 
 atelet's `Restore timing breakdown` and `Checkpoint timing breakdown` are the unsampled per-actor latency records Substrate produces. Each is emitted once per operation, whether it succeeded or failed; a failed one also carries `error.type` (the gRPC code, `DeadlineExceeded` and `Canceled` for context errors), so a reader can leave it out of a latency distribution:
 
