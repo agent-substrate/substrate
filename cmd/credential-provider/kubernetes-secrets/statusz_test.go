@@ -69,7 +69,7 @@ func statuszServer(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatalf("newNamespaceAuthorizer: %v", err)
 	}
-	srv := NewServer(fake.NewSimpleClientset(secret), authz)
+	srv := NewServer(fake.NewSimpleClientset(secret), authz, 0)
 
 	if _, err := srv.FetchSecret(context.Background(), &credprovider.FetchSecretRequest{
 		Uri:           "ate-secret://k8s.io/default/ns1/example-api/token",

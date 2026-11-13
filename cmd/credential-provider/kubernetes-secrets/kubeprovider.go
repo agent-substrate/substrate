@@ -14,8 +14,8 @@
 
 // This file implements the CredentialProvider plugin API backed by Kubernetes
 // Secrets. It resolves ate-secret:// URIs of the provider "k8s.io" to a Secret
-// value read straight from the Kubernetes API — so Substrate never stores the
-// secret, it only brokers a read the provider is authorized to perform.
+// value read from the Kubernetes API. Substrate never stores the secret at
+// rest, and the provider reuses each Secret it reads for --secret-cache-ttl.
 package main
 
 import (
@@ -24,9 +24,12 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"time"
 
+	"golang.org/x/sync/singleflight"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/client-go/kubernetes"
 
 	"google.golang.org/grpc/codes"
@@ -41,6 +44,11 @@ const ProviderName = "k8s.io"
 
 // uriScheme is the only scheme a credential URI may carry.
 const uriScheme = "ate-secret"
+
+// secretFetchTimeout caps one Secret read. The read runs detached from the
+// caller's context, so it needs a deadline of its own. It matches
+// injectionTimeout in atenet-egress, which caps the whole fetch.
+const secretFetchTimeout = 4 * time.Second
 
 // LocalLocator is the reserved leading path segment naming the local Kubernetes
 // API server the provider runs in — the only cluster served today.
@@ -121,12 +129,26 @@ type Server struct {
 	// Nil disables authorization; this only happens in tests, since main
 	// always requires --namespace-policy-file and loads one.
 	nsAuth *NamespaceAuthorizer
+
+	// ttl is how long a Secret read is reused. 0 disables caching.
+	ttl time.Duration
+	// secrets maps "namespace/name" to a cachedSecret until ttl passes.
+	secrets *cache.Expiring
+	// flight collapses concurrent reads of one Secret into a single Get.
+	flight singleflight.Group
+}
+
+// cachedSecret is the part of a Secret that FetchSecret uses.
+type cachedSecret struct {
+	labels map[string]string
+	data   map[string][]byte
 }
 
 // NewServer builds a Kubernetes-backed credential provider. nsAuth enforces the
 // atespace→namespace policy; pass nil to disable authorization (tests only).
-func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server {
-	return &Server{client: client, nsAuth: nsAuth}
+// Each Secret read is reused for ttl; 0 reads on every call.
+func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer, ttl time.Duration) *Server {
+	return &Server{client: client, nsAuth: nsAuth, ttl: ttl, secrets: cache.NewExpiring()}
 }
 
 // Grants exposes the enforced atespace→namespace policy for /statusz. Nil
@@ -152,7 +174,7 @@ func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretR
 		slog.String("actor", req.GetActorSpiffeId()),
 	)
 
-	secret, err := s.client.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	secret, err := s.getSecret(ctx, ref.Namespace, ref.Name)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			if s.nsAuth == nil {
@@ -172,7 +194,7 @@ func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretR
 	// Step 3: the Secret is in hand, so a grant narrowed by label can finally
 	// be settled. This refusal and the NotFound above give the same code and
 	// message, so a caller learns nothing from the difference.
-	if s.nsAuth != nil && !s.nsAuth.AllowedSecret(atespace, ref.Namespace, secret.GetLabels()) {
+	if s.nsAuth != nil && !s.nsAuth.AllowedSecret(atespace, ref.Namespace, secret.labels) {
 		slog.WarnContext(ctx, "credential request denied: secret does not match the grant",
 			slog.String("atespace", atespace),
 			slog.String("namespace", ref.Namespace),
@@ -181,11 +203,56 @@ func (s *Server) FetchSecret(ctx context.Context, req *credprovider.FetchSecretR
 		return nil, status.Errorf(codes.PermissionDenied, "atespace %q is not permitted to resolve secret %s/%s", atespace, ref.Namespace, ref.Name)
 	}
 
-	value, err := selectKey(secret.Data, ref.Key)
+	value, err := selectKey(secret.data, ref.Key)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "secret %s/%s: %v", ref.Namespace, ref.Name, err)
 	}
 	return &credprovider.FetchSecretResponse{OpaqueBytes: value}, nil
+}
+
+// getSecret returns the Secret namespace/name, reading it from Kubernetes when
+// there is no live cache entry.
+func (s *Server) getSecret(ctx context.Context, namespace, name string) (cachedSecret, error) {
+	key := namespace + "/" + name
+	if secret, ok := s.cached(key); ok {
+		return secret, nil
+	}
+
+	// The read outlives the caller: the leader of a flight going away must
+	// not fail the callers that joined it.
+	ch := s.flight.DoChan(key, func() (any, error) {
+		// A flight that finished between the miss above and DoChan has
+		// already stored a fresh entry.
+		if secret, ok := s.cached(key); ok {
+			return secret, nil
+		}
+		getCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), secretFetchTimeout)
+		defer cancel()
+		secret, err := s.client.CoreV1().Secrets(namespace).Get(getCtx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+		entry := cachedSecret{labels: secret.GetLabels(), data: secret.Data}
+		if s.ttl > 0 {
+			s.secrets.Set(key, entry, s.ttl)
+		}
+		return entry, nil
+	})
+	select {
+	case <-ctx.Done():
+		return cachedSecret{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return cachedSecret{}, res.Err
+		}
+		return res.Val.(cachedSecret), nil
+	}
+}
+
+func (s *Server) cached(key string) (cachedSecret, bool) {
+	v, ok := s.secrets.Get(key)
+	secret, _ := v.(cachedSecret)
+	return secret, ok
 }
 
 // authorize covers the first two of three authorization steps, before
