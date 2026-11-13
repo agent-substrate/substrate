@@ -172,6 +172,17 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	if pauseErr != nil {
 		return nil, fmt.Errorf("while pausing guest: %w", pauseErr)
 	}
+	// The paused guest runs none of the actor's work, so cloud-hypervisor writes
+	// the snapshot at the lifecycle CPU limit. A failed checkpoint gets the
+	// actor's own limit back.
+	if ra != nil {
+		raiseActorCPU(ctx, actorUID, ra.milliCPU)
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, capActorCPU(actorUID, ra.milliCPU))
+			}
+		}()
+	}
 
 	checkpointDir := actorDirs.GetCheckpointDir()
 	// Start from a clean dir so CH's snapshot files are the only contents.
@@ -468,6 +479,7 @@ func (s *AteWorkerService) teardownActor(ctx context.Context, id string, actorDi
 
 		// Kill the CH process ateworker launched.
 		if ra.chProc != nil {
+			raiseActorCPU(ctx, id, ra.milliCPU)
 			ra.chProc.Stop()
 		}
 		// Kill the virtiofsd (after CH, its only client).

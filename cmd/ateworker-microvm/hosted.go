@@ -119,6 +119,32 @@ func (s *AteWorkerService) cleanupSandboxState(ctx context.Context, actorUID str
 	kata.CleanupSandboxState(ctx, actorUID)
 }
 
+// openActorLeaf opens the leaf the actor's virtiofsd and cloud-hypervisor run
+// in, at the actor's lifecycle CPU limit (see cgroup.LifecycleMilliCPU) until
+// capActorCPU.
+func (s *AteWorkerService) openActorLeaf(p actorBootParams) (*cgroup.ActorLeaf, error) {
+	return cgroup.OpenActorLeaf(p.actorUID, cgroup.LifecycleMilliCPU(p.size.MilliCPU), s.leafMemoryHigh(p.size.MemoryBytes))
+}
+
+// capActorCPU puts the actor's own CPU limit on its leaf. The worker does this
+// before the wakeup probe: from then on the guest runs the actor's own work, and
+// the actor decides when its probe passes.
+func capActorCPU(actorUID string, milliCPU int64) error {
+	if err := cgroup.SetActorLeafCPU(actorUID, milliCPU); err != nil {
+		return fmt.Errorf("while applying the actor's CPU limit: %w", err)
+	}
+	return nil
+}
+
+// raiseActorCPU puts the lifecycle CPU limit back on the actor's leaf, before
+// the worker snapshots or stops a guest that runs none of the actor's work.
+// cloud-hypervisor frees guest RAM on its way out, charged to the leaf.
+func raiseActorCPU(ctx context.Context, actorUID string, milliCPU int64) {
+	if err := cgroup.SetActorLeafCPU(actorUID, cgroup.LifecycleMilliCPU(milliCPU)); err != nil {
+		slog.WarnContext(ctx, "Working under the actor's CPU limit", slog.String("id", actorUID), slog.Any("err", err))
+	}
+}
+
 // unhostActor removes an actor, its network, and its cgroup. Repeated calls are
 // safe. The caller must stop the VM first.
 func (s *AteWorkerService) unhostActor(ctx context.Context, actorUID string) error {

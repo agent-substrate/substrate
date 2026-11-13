@@ -75,6 +75,8 @@ type runningActor struct {
 	stopping atomic.Bool
 	// memoryBytes is the actor's memory limit, what it books on the worker.
 	memoryBytes int64
+	// milliCPU is the actor's CPU limit.
+	milliCPU int64
 	// memory kills the actor's cgroup once it is stuck at its memory.high.
 	memory cgroup.MemoryGuard
 
@@ -495,7 +497,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
 	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
 	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := cgroup.OpenActorLeaf(actorUID, p.size.MilliCPU, s.leafMemoryHigh(p.size.MemoryBytes))
+	leaf, err := s.openActorLeaf(p)
 	if err != nil {
 		return err
 	}
@@ -524,6 +526,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	}
 	defer func() {
 		if retErr != nil {
+			raiseActorCPU(ctx, actorUID, p.size.MilliCPU)
 			chProc.Stop()
 		}
 	}()
@@ -596,6 +599,9 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	}
 	tContainers := time.Now()
 
+	if err := capActorCPU(actorUID, p.size.MilliCPU); err != nil {
+		return err
+	}
 	// Block until every wakeup-probe-enabled container reports 200.
 	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
@@ -610,7 +616,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, milliCPU: p.size.MilliCPU, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
