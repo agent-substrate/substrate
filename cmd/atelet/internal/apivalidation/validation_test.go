@@ -17,6 +17,7 @@ package apivalidation
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1485,6 +1486,29 @@ func TestValidateVolume(t *testing.T) {
 				e.PublishContext = map[string]string{"a": strings.Repeat("v", 20*1024), "b": strings.Repeat("v", 20*1024)}
 			}),
 			want: field.ErrorList{field.TooLong(extPath.Child("publish_context"), nil, 40*1024)},
+		}, {
+			name: "external: valid mount_options",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{"nfsvers=4.1", "noatime"}
+			}),
+		}, {
+			name: "external: empty mount_options item",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{""}
+			}),
+			want: field.ErrorList{field.TooShort(extPath.Child("mount_options").Index(0), "", 1).WithOrigin("minLength")},
+		}, {
+			name: "external: too-long mount_options item",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = []string{strings.Repeat("a", 257)}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("mount_options").Index(0), "", 256).WithOrigin("maxLength")},
+		}, {
+			name: "external: too many mount_options",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.MountOptions = slices.Repeat([]string{"ro"}, 33)
+			}),
+			want: field.ErrorList{field.TooMany(extPath.Child("mount_options"), 33, 32).WithOrigin("maxItems")},
 		},
 
 		// ImageVolumeSource.

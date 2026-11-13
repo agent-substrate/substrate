@@ -389,6 +389,17 @@ func TestPlugin_MountVolume(t *testing.T) {
 
 	ctx := context.Background()
 	plugin.InitNodeCapabilities(ctx)
+
+	var gotStageFlags, gotPublishFlags []string
+	driver.nodeStageVolumeFunc = func(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+		gotStageFlags = req.GetVolumeCapability().GetMount().GetMountFlags()
+		return &csi.NodeStageVolumeResponse{}, nil
+	}
+	driver.nodePublishVolumeFunc = func(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+		gotPublishFlags = req.GetVolumeCapability().GetMount().GetMountFlags()
+		return &csi.NodePublishVolumeResponse{}, nil
+	}
+
 	err = plugin.MountVolume(ctx, volume.MountVolumeRequest{
 		VolumeID:       "test-vol",
 		TargetPath:     targetPath,
@@ -396,6 +407,28 @@ func TestPlugin_MountVolume(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("MountVolume failed: %v", err)
+	}
+	if len(gotStageFlags) != 0 {
+		t.Errorf("NodeStageVolume MountFlags = %v, want empty", gotStageFlags)
+	}
+	if len(gotPublishFlags) != 0 {
+		t.Errorf("NodePublishVolume MountFlags = %v, want empty", gotPublishFlags)
+	}
+
+	wantMountOptions := []string{"nfsvers=4.1", "noatime"}
+	err = plugin.MountVolume(ctx, volume.MountVolumeRequest{
+		VolumeID:     "test-vol",
+		TargetPath:   targetPath,
+		MountOptions: wantMountOptions,
+	})
+	if err != nil {
+		t.Fatalf("MountVolume with MountOptions failed: %v", err)
+	}
+	if diff := cmp.Diff(wantMountOptions, gotStageFlags); diff != "" {
+		t.Errorf("NodeStageVolume MountFlags mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantMountOptions, gotPublishFlags); diff != "" {
+		t.Errorf("NodePublishVolume MountFlags mismatch (-want +got):\n%s", diff)
 	}
 
 	// Verify staging directory was created

@@ -17,15 +17,20 @@ package steps
 import (
 	"context"
 	"fmt"
+	"maps"
+	"os"
+	"slices"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/preview"
@@ -56,23 +61,141 @@ func EnsureAtespace(ctx context.Context, client *ateclient.Client, atespace stri
 	return err
 }
 
+// unmarshalProtoManifest parses a single protojson-shaped YAML or JSON
+// document into dst. Parsing is strict so typos fail instead of being dropped.
+func unmarshalProtoManifest(manifest []byte, dst proto.Message) error {
+	jsonData, err := yaml.YAMLToJSON(manifest)
+	if err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+	if string(jsonData) == "null" {
+		return fmt.Errorf("manifest is empty")
+	}
+	return protojson.Unmarshal(jsonData, dst)
+}
+
 // ActorTemplateFromManifest parses a single protojson-shaped YAML or JSON
 // document into an ActorTemplate, as `kubectl ate create actor-template`
 // does. Parsing is strict: unknown fields are an error, so typos don't
 // silently drop configuration.
 func ActorTemplateFromManifest(manifest []byte) (*ateapi.ActorTemplate, error) {
-	jsonData, err := yaml.YAMLToJSON(manifest)
-	if err != nil {
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	if string(jsonData) == "null" {
-		return nil, fmt.Errorf("manifest is empty")
-	}
 	template := &ateapi.ActorTemplate{}
-	if err := protojson.Unmarshal(jsonData, template); err != nil {
+	if err := unmarshalProtoManifest(manifest, template); err != nil {
 		return nil, err
 	}
 	return template, nil
+}
+
+// ExternalVolumeClassFromManifest parses a single protojson-shaped YAML or
+// JSON document into an ExternalVolumeClass, as `kubectl ate create
+// external-volume-class` does.
+func ExternalVolumeClassFromManifest(manifest []byte) (*ateapi.ExternalVolumeClass, error) {
+	class := &ateapi.ExternalVolumeClass{}
+	if err := unmarshalProtoManifest(manifest, class); err != nil {
+		return nil, err
+	}
+	return class, nil
+}
+
+type externalVolumeClassClient interface {
+	CreateExternalVolumeClass(ctx context.Context, in *ateapi.CreateExternalVolumeClassRequest, opts ...grpc.CallOption) (*ateapi.ExternalVolumeClass, error)
+	GetExternalVolumeClass(ctx context.Context, in *ateapi.GetExternalVolumeClassRequest, opts ...grpc.CallOption) (*ateapi.ExternalVolumeClass, error)
+}
+
+// RegisterExternalVolumeClasses creates the canonical ExternalVolumeClass
+// resources for the selected CSI driver when the ExternalVolumes preview gate
+// is enabled and ate-api-server is deployed. Existing classes with the same
+// spec are kept; differing specs return an error.
+func (e *Env) RegisterExternalVolumeClasses(ctx context.Context, driver string) error {
+	if err := ValidateCSIDriver(driver); err != nil {
+		return err
+	}
+	spec := csiDrivers[driver]
+	if spec.installsNothing() {
+		return nil
+	}
+	if !previewGateEnabled(e.Cfg.PreviewGates, preview.GateExternalVolumes) {
+		log.Infof("Skipping ExternalVolumeClass registration: %s preview gate is disabled.", preview.GateExternalVolumes)
+		return nil
+	}
+	classes, err := externalVolumeClassesForDriver(e.Cfg, spec)
+	if err != nil {
+		return err
+	}
+	present, err := e.Kube.DeploymentExists(ctx, e.Namespace(), "ate-api-server")
+	if err != nil {
+		return err
+	}
+	if !present {
+		log.Step("ate-api-server not found; skipping ExternalVolumeClass registration")
+		return nil
+	}
+
+	client, err := e.AteClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	return registerExternalVolumeClasses(ctx, client, classes)
+}
+
+func externalVolumeClassesForDriver(cfg *config.Config, spec csiDriverSpec) ([]*ateapi.ExternalVolumeClass, error) {
+	var paths []string
+	if spec.hostpath {
+		paths = append(paths, cfg.Path("hack", "csi", "external-volume-class-hostpath.yaml"))
+	}
+	if spec.nfs {
+		paths = append(paths, cfg.Path("hack", "csi", "external-volume-class-nfs.yaml"))
+	}
+	classes := make([]*ateapi.ExternalVolumeClass, 0, len(paths))
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("reading external volume class manifest %s: %w", p, err)
+		}
+		class, err := ExternalVolumeClassFromManifest(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing external volume class manifest %s: %w", p, err)
+		}
+		classes = append(classes, class)
+	}
+	return classes, nil
+}
+
+func registerExternalVolumeClasses(ctx context.Context, client externalVolumeClassClient, classes []*ateapi.ExternalVolumeClass) error {
+	for _, class := range classes {
+		name := class.GetMetadata().GetName()
+		_, err := client.CreateExternalVolumeClass(ctx, &ateapi.CreateExternalVolumeClassRequest{ExternalVolumeClass: class})
+		if err == nil {
+			log.Stepf("registered external volume class %q", name)
+			continue
+		}
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("creating external volume class %q: %w", name, err)
+		}
+		existing, getErr := client.GetExternalVolumeClass(ctx, &ateapi.GetExternalVolumeClassRequest{
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: name},
+		})
+		if getErr != nil {
+			return fmt.Errorf("getting existing external volume class %q: %w", name, getErr)
+		}
+		if !externalVolumeClassEqual(class, existing) {
+			return fmt.Errorf("external volume class %q already exists with a different spec (got driver=%q parameters=%v mountOptions=%v, want driver=%q parameters=%v mountOptions=%v); delete and recreate it",
+				name,
+				existing.GetDriverName(), existing.GetParameters(), existing.GetMountOptions(),
+				class.GetDriverName(), class.GetParameters(), class.GetMountOptions())
+		}
+		log.Stepf("external volume class %q already exists; keeping it", name)
+	}
+	return nil
+}
+
+func externalVolumeClassEqual(want, got *ateapi.ExternalVolumeClass) bool {
+	return want.GetMetadata().GetName() == got.GetMetadata().GetName() &&
+		want.GetDriverName() == got.GetDriverName() &&
+		maps.Equal(want.GetParameters(), got.GetParameters()) &&
+		slices.Equal(want.GetMountOptions(), got.GetMountOptions())
 }
 
 // CreateActorTemplate creates the template through the ate API. Actor

@@ -26,10 +26,10 @@ import (
 )
 
 var (
-	RunE2E       bool
-	KubeConfig   string
-	KubeContext  string
-	StorageClass string
+	RunE2E              bool
+	KubeConfig          string
+	KubeContext         string
+	ExternalVolumeClass string
 )
 
 var (
@@ -59,7 +59,7 @@ func bindFlags() {
 	pflag.BoolVar(&NoColor, "no-color", false, "disable colors in output")
 	pflag.StringVar(&KubeConfig, "kube-config", "", "Location of the kubeconfig")
 	pflag.StringVar(&KubeContext, "kube-context", "", "Kubernetes context to use")
-	pflag.StringVar(&StorageClass, "storage-class", "csi-nfs-sc", "StorageClass to use for external volume tests")
+	pflag.StringVar(&ExternalVolumeClass, "external-volume-class", "csi-nfs", "ExternalVolumeClass to use for external volume tests")
 	pflag.StringVar(&previewFlag, "preview", "", `Preview gates the install under test enabled, as in ATE_PREVIEW ("ALL" for all, "" for none); required in CI`)
 }
 
