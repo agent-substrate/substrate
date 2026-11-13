@@ -1433,9 +1433,15 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 				Name:      "atenet-egress",
 			},
 		}
+		provider := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: NamespaceAteSystem,
+				Name:      k8sCredentialProviderDeployment,
+			},
+		}
 		e := &Env{
 			Cfg:  &config.Config{OtlpEndpoint: endpoint},
-			Kube: fakeKube(t, otelConfig("http://default:4317"), apiServerDeployment(), egress, atelet),
+			Kube: fakeKube(t, otelConfig("http://default:4317"), apiServerDeployment(), egress, atelet, provider),
 		}
 
 		if err := e.applyOtelEndpointOverride(t.Context()); err != nil {
@@ -1453,6 +1459,9 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		}
 		if !restartedAt(t, e, "deployment", "atenet-egress") {
 			t.Error("atenet-egress was not restarted")
+		}
+		if !restartedAt(t, e, "deployment", k8sCredentialProviderDeployment) {
+			t.Error("k8s-credential-provider was not restarted")
 		}
 		if !restartedAt(t, e, "daemonset", "atelet") {
 			t.Error("the atelet DaemonSet was not restarted")
