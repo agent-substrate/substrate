@@ -21,22 +21,24 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 type workerAssignmentReader interface {
 	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapi.ActorAssignment, error)
 }
 
-// workerHostsActor reports whether a Worker holds an assignment for actorUID.
-// It asks the store: the Worker record does not carry its assignments, and the
-// watch-fed cache cannot see a binding committed moments ago.
+// workerHostsActor reports whether a Worker holds a running assignment for
+// actorUID. It asks the store: the Worker record does not carry its
+// assignments, and the watch-fed cache cannot see a binding committed moments
+// ago.
 func workerHostsActor(ctx context.Context, st workerAssignmentReader, workerName, actorUID string) (bool, error) {
-	_, err := st.GetWorkerAssignment(ctx, workerName, actorUID)
+	assignment, err := st.GetWorkerAssignment(ctx, workerName, actorUID)
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("while checking whether worker %q hosts actor %q: %w", workerName, actorUID, err)
 	}
-	return true, nil
+	return resources.AssignmentRunning(assignment), nil
 }

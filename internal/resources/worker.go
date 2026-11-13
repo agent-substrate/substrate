@@ -33,15 +33,26 @@ func AddToAllocated(total *ateapi.WorkerResources, assignment *ateapi.ActorAssig
 	return out
 }
 
+// AssignmentRunning reports whether an assignment's resources count towards its
+// Worker's allocation. An unset state is running.
+func AssignmentRunning(assignment *ateapi.ActorAssignment) bool {
+	return assignment.GetState() != ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED
+}
+
 // SumAllocated is what a set of assignments takes from a Worker, or nil for
-// none. Rebuilds the total rather than adjusting it, which is what the checks
-// holding AddToAllocated to the assignments it counts compare against.
+// none. Only running assignments count. Rebuilds the total rather than
+// adjusting it, which is what the checks holding AddToAllocated to the
+// assignments it counts compare against.
 func SumAllocated(assignments []*ateapi.ActorAssignment) *ateapi.WorkerResources {
-	if len(assignments) == 0 {
-		return nil
-	}
-	total := &ateapi.WorkerResources{Actors: int32(len(assignments))}
+	var total *ateapi.WorkerResources
 	for _, assignment := range assignments {
+		if !AssignmentRunning(assignment) {
+			continue
+		}
+		if total == nil {
+			total = &ateapi.WorkerResources{}
+		}
+		total.Actors++
 		total.CpuMillicores += assignment.GetResources().GetCpuMillicores()
 		total.MemoryBytes += assignment.GetResources().GetMemoryBytes()
 	}

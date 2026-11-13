@@ -71,9 +71,14 @@ func TestSumAllocated(t *testing.T) {
 		t.Errorf("SumAllocated(nil) = %v, want nil", got)
 	}
 
-	got := SumAllocated([]*ateapi.ActorAssignment{assignment("a", 1000, 1<<30), assignment("b", 500, 0)})
+	suspended := assignment("c", 250, 1<<20)
+	suspended.State = ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED
+	got := SumAllocated([]*ateapi.ActorAssignment{assignment("a", 1000, 1<<30), assignment("b", 500, 0), suspended})
 	want := &ateapi.WorkerResources{Actors: 2, CpuMillicores: 1500, MemoryBytes: 1 << 30}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("SumAllocated() mismatch (-want +got):\n%s", diff)
+	}
+	if got := SumAllocated([]*ateapi.ActorAssignment{suspended}); got != nil {
+		t.Errorf("SumAllocated() of a suspended assignment = %v, want nil", got)
 	}
 }

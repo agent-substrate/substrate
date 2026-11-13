@@ -3093,6 +3093,335 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 	// Deleting a Worker or an Actor while an assignment joins them would leave
 	// the Actor naming a Worker that is gone, or the Worker booking an Actor
 	// that is gone.
+	// newNodeWorker stores a Worker on node.
+	newNodeWorker := func(t *testing.T, s store.Interface, name, node string) {
+		t.Helper()
+		w := newTestWorker(name, "pod-"+name)
+		w.NodeName = node
+		if _, err := s.CreateWorker(context.Background(), w); err != nil {
+			t.Fatalf("CreateWorker(%s) failed: %v", name, err)
+		}
+	}
+
+	// resumeOn binds assignment's Actor to workerName on node as a resume does.
+	resumeOn := func(t *testing.T, s store.Interface, workerName, node string, assignment *ateapi.ActorAssignment) {
+		t.Helper()
+		ctx := context.Background()
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor(%s) failed: %v", ref, err)
+		}
+		if _, err := s.BindActorToWorker(ctx, workerName, assignment, nil, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+			a.Status.WorkerAssignment = &ateapi.WorkerAssignment{Worker: &ateapi.ObjectRef{Name: workerName}, NodeName: node}
+			a.Status.AssignedNode = node
+			return nil
+		}); err != nil {
+			t.Fatalf("BindActorToWorker(%s, %s) failed: %v", ref, workerName, err)
+		}
+	}
+
+	// suspendOn releases assignment's Actor as a suspend does that keeps its
+	// snapshot on node, or keeps none there when node is "".
+	suspendOn := func(t *testing.T, s store.Interface, assignment *ateapi.ActorAssignment, node string) {
+		t.Helper()
+		ctx := context.Background()
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor(%s) failed: %v", ref, err)
+		}
+		if _, err := s.UpdateActorAndRelease(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			a.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+			a.Status.WorkerAssignment = nil
+			a.Status.AssignedNode = node
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateActorAndRelease(%s) failed: %v", ref, err)
+		}
+	}
+
+	// counts returns a Worker's assignment total and allocated Actors.
+	counts := func(t *testing.T, s store.Interface, workerName string) (int64, int32) {
+		t.Helper()
+		w, err := s.GetWorker(context.Background(), workerName)
+		if err != nil {
+			t.Fatalf("GetWorker(%s) failed: %v", workerName, err)
+		}
+		return w.GetStatus().GetAssignments().GetTotal(), w.GetStatus().GetAllocated().GetActors()
+	}
+
+	wantCounts := func(t *testing.T, s store.Interface, workerName string, total int64, actors int32) {
+		t.Helper()
+		if gotTotal, gotActors := counts(t, s, workerName); gotTotal != total || gotActors != actors {
+			t.Errorf("worker %s has %d assignments, %d allocated actors, want %d, %d", workerName, gotTotal, gotActors, total, actors)
+		}
+	}
+
+	wantState := func(t *testing.T, s store.Interface, workerName string, assignment *ateapi.ActorAssignment, want ateapi.ActorAssignmentState) {
+		t.Helper()
+		got, err := s.GetWorkerAssignment(context.Background(), workerName, assignment.GetActorUid())
+		if err != nil {
+			t.Fatalf("GetWorkerAssignment(%s) failed: %v", workerName, err)
+		}
+		if got.GetState() != want {
+			t.Errorf("assignment on worker %s is %v, want %v", workerName, got.GetState(), want)
+		}
+	}
+
+	t.Run("AssignmentState_SuspendKeepsAndResumeRestores", func(t *testing.T) {
+		s := setup(t)
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+
+		resumeOn(t, s, testWorkerName, "node-1", assignment)
+		wantCounts(t, s, testWorkerName, 1, 1)
+		wantState(t, s, testWorkerName, assignment, ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING)
+
+		suspendOn(t, s, assignment, "node-1")
+		wantCounts(t, s, testWorkerName, 1, 0)
+		wantState(t, s, testWorkerName, assignment, ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED)
+		w, err := s.GetWorker(context.Background(), testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if got := w.GetStatus().GetAllocated(); got != nil {
+			t.Errorf("allocated = %v with only a suspended assignment, want nil", got)
+		}
+
+		resumeOn(t, s, testWorkerName, "node-1", assignment)
+		wantCounts(t, s, testWorkerName, 1, 1)
+		wantState(t, s, testWorkerName, assignment, ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING)
+	})
+
+	t.Run("AssignmentState_UnsetTotalIsCounted", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		first := newTestAssignment(t, s, "1", 500, 1<<20)
+		second := newTestAssignment(t, s, "2", 500, 1<<20)
+		third := newTestAssignment(t, s, "3", 500, 1<<20)
+		resumeOn(t, s, testWorkerName, "node-1", first)
+		resumeOn(t, s, testWorkerName, "node-1", second)
+		// a Worker last written by a version that didn't count
+		w, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if _, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(w), func(toUpdate *ateapi.Worker) error {
+			toUpdate.Status.Assignments = nil
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateWorker failed: %v", err)
+		}
+
+		resumeOn(t, s, testWorkerName, "node-1", third)
+		wantCounts(t, s, testWorkerName, 3, 3)
+		suspendOn(t, s, first, "")
+		wantCounts(t, s, testWorkerName, 2, 2)
+	})
+
+	t.Run("AssignmentState_SuspendOffTheNodeReleases", func(t *testing.T) {
+		s := setup(t)
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+
+		resumeOn(t, s, testWorkerName, "node-1", assignment)
+		suspendOn(t, s, assignment, "")
+		wantCounts(t, s, testWorkerName, 0, 0)
+		if _, err := s.GetWorkerAssignment(context.Background(), testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after a suspend off the node = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("AssignmentState_ResumeOnAnotherWorkerMoves", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		newNodeWorker(t, s, otherTestWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		resumeOn(t, s, testWorkerName, "node-1", assignment)
+		suspendOn(t, s, assignment, "node-1")
+
+		watch, err := s.WatchWorkers(ctx)
+		if err != nil {
+			t.Fatalf("WatchWorkers failed: %v", err)
+		}
+		defer watch.Close()
+		resumeOn(t, s, otherTestWorkerName, "node-1", assignment)
+		wantCounts(t, s, testWorkerName, 0, 0)
+		wantCounts(t, s, otherTestWorkerName, 1, 1)
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment on the worker it left = %v, want ErrNotFound", err)
+		}
+		wantState(t, s, otherTestWorkerName, assignment, ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_RUNNING)
+
+		// Both Workers' new counts reach the watch.
+		seen := map[string]int64{}
+		for len(seen) < 2 {
+			event := receiveEvent(t, watch.Events)
+			seen[event.Worker.GetMetadata().GetName()] = event.Worker.GetStatus().GetAssignments().GetTotal()
+		}
+		if seen[testWorkerName] != 0 || seen[otherTestWorkerName] != 1 {
+			t.Errorf("watched assignment totals = %v, want %s: 0 and %s: 1", seen, testWorkerName, otherTestWorkerName)
+		}
+	})
+
+	t.Run("GetActorAssignment_NamesTheHolder", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		newNodeWorker(t, s, otherTestWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		if _, _, err := s.GetActorAssignment(ctx, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorAssignment before binding = %v, want ErrNotFound", err)
+		}
+
+		resumeOn(t, s, otherTestWorkerName, "node-1", assignment)
+		suspendOn(t, s, assignment, "node-1")
+		got, holder, err := s.GetActorAssignment(ctx, assignment.GetActorUid())
+		if err != nil {
+			t.Fatalf("GetActorAssignment failed: %v", err)
+		}
+		if holder != otherTestWorkerName || got.GetState() != ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED {
+			t.Errorf("GetActorAssignment = %v on %q, want suspended on %q", got.GetState(), holder, otherTestWorkerName)
+		}
+	})
+
+	t.Run("AssignmentState_UnbindingDropsTheSuspendedAssignment", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			write func(ctx context.Context, s store.Interface, ref resources.ActorRef, actor *ateapi.Actor) error
+		}{{
+			name: "detach",
+			write: func(ctx context.Context, s store.Interface, ref resources.ActorRef, actor *ateapi.Actor) error {
+				_, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+					a.Status.AssignedNode = ""
+					return nil
+				})
+				return err
+			},
+		}, {
+			name: "revert",
+			write: func(ctx context.Context, s store.Interface, ref resources.ActorRef, actor *ateapi.Actor) error {
+				_, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+					a.Status.State = ateapi.ActorState_ACTOR_STATE_REVERTING
+					return nil
+				})
+				return err
+			},
+		}, {
+			name: "mark for deletion",
+			write: func(ctx context.Context, s store.Interface, ref resources.ActorRef, actor *ateapi.Actor) error {
+				_, err := s.MarkActorForDeletion(ctx, ref, store.DeletePreconditions(store.PreconditionFrom(actor)), func(a *ateapi.Actor) error {
+					a.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
+					return nil
+				})
+				return err
+			},
+		}, {
+			name: "delete",
+			write: func(ctx context.Context, s store.Interface, ref resources.ActorRef, actor *ateapi.Actor) error {
+				_, err := s.DeleteActor(ctx, ref, store.DeletePreconditions(store.PreconditionFrom(actor)))
+				return err
+			},
+		}} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+				newNodeWorker(t, s, testWorkerName, "node-1")
+				assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+				resumeOn(t, s, testWorkerName, "node-1", assignment)
+				suspendOn(t, s, assignment, "node-1")
+				ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+				actor, err := s.GetActor(ctx, ref)
+				if err != nil {
+					t.Fatalf("GetActor failed: %v", err)
+				}
+				if err := tc.write(ctx, s, ref, actor); err != nil {
+					t.Fatalf("%s failed: %v", tc.name, err)
+				}
+				wantCounts(t, s, testWorkerName, 0, 0)
+				if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("GetWorkerAssignment after %s = %v, want ErrNotFound", tc.name, err)
+				}
+			})
+		}
+	})
+
+	t.Run("AssignmentState_OtherWritesKeepTheSuspendedAssignment", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		resumeOn(t, s, testWorkerName, "node-1", assignment)
+		suspendOn(t, s, assignment, "node-1")
+		ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+		actor, err := s.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if _, err := s.UpdateActor(ctx, ref, store.PreconditionFrom(actor), func(a *ateapi.Actor) error {
+			a.Status.LastAssignedGeneration++
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateActor failed: %v", err)
+		}
+		wantCounts(t, s, testWorkerName, 1, 0)
+		wantState(t, s, testWorkerName, assignment, ateapi.ActorAssignmentState_ACTOR_ASSIGNMENT_STATE_SUSPENDED)
+	})
+
+	t.Run("AssignmentState_DeleteWorkerTakesSuspendedAssignments", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		assignment := newTestAssignment(t, s, "1", 500, 1<<20)
+		resumeOn(t, s, testWorkerName, "node-1", assignment)
+		suspendOn(t, s, assignment, "node-1")
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteWorker with only a suspended assignment failed: %v", err)
+		}
+		if _, err := s.GetWorkerAssignment(ctx, testWorkerName, assignment.GetActorUid()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetWorkerAssignment after the worker was deleted = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("AssignmentState_ConcurrentCyclesReturnToZero", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		newNodeWorker(t, s, testWorkerName, "node-1")
+		const actors, cycles = 8, 5
+		assignments := make([]*ateapi.ActorAssignment, actors)
+		for i := range assignments {
+			assignments[i] = newTestAssignment(t, s, fmt.Sprint(i), 100, 1<<20)
+		}
+		var wg sync.WaitGroup
+		for _, assignment := range assignments {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for range cycles {
+					resumeOn(t, s, testWorkerName, "node-1", proto.CloneOf(assignment))
+					suspendOn(t, s, assignment, "node-1")
+				}
+			}()
+		}
+		wg.Wait()
+		wantCounts(t, s, testWorkerName, actors, 0)
+		for _, assignment := range assignments {
+			ref := resources.ActorRefFromObjectRef(assignment.GetActor())
+			actor, err := s.GetActor(ctx, ref)
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if _, err := s.DeleteActor(ctx, ref, store.DeletePreconditions(store.PreconditionFrom(actor))); err != nil {
+				t.Fatalf("DeleteActor(%s) failed: %v", ref, err)
+			}
+		}
+		wantCounts(t, s, testWorkerName, 0, 0)
+	})
+
 	t.Run("DeleteWorker_RefusesWhileAssigned", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

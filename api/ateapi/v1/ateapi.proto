@@ -2431,6 +2431,23 @@ message WorkerStatus {
   // +k8s:optional
   // +k8s:minimum=0
   int64 registered_epoch = 8;
+
+  // assignments counts the Worker's ActorAssignments, running and suspended.
+  // Unset is the same as no assignments.
+  //
+  // +k8s:optional
+  ActorAssignmentsStatus assignments = 9;
+}
+
+// ActorAssignmentsStatus is the status of a Worker's ActorAssignments.
+message ActorAssignmentsStatus {
+  // total is the number of the Worker's ActorAssignments in any state. The
+  // running ones are also counted in `allocated.actors`, so the difference is
+  // the suspended Actors still bound to the Worker's node.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 total = 1;
 }
 
 // WorkerSandboxClass is one sandbox class a Worker runs, with the runtimes
@@ -2575,7 +2592,8 @@ message AttributeEntry {
 // WorkerResources represents a set of resources.
 message WorkerResources {
   // cpu_millicores is CPU in millicores (1000 = one core). Compared against
-  // the Actor's resource limits for placement.
+  // the Actor's resource limits for placement. A Worker with no CPU capacity
+  // is not scheduled.
   //
   // +k8s:optional
   // +k8s:minimum=0
@@ -2629,9 +2647,33 @@ message ActorAssignment {
 
   // The resources allocated to the Actor when it was assigned: its limits,
   // plus the actor_overhead of the runtime it runs under on the Worker.
+  // They count towards the Worker's `allocated` only while the assignment is
+  // `ACTOR_ASSIGNMENT_STATE_RUNNING`.
   //
   // +k8s:optional
   Resources resources = 4;
+
+  // state is whether the Actor is running on the Worker, or suspended with its
+  // local snapshot still on the Worker's node. Defaults to
+  // `ACTOR_ASSIGNMENT_STATE_RUNNING` when unset.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ActorAssignmentState enum
+  ActorAssignmentState state = 5;
+}
+
+// ActorAssignmentState is the state of an ActorAssignment.
+enum ActorAssignmentState {
+  // Not set. Read as `ACTOR_ASSIGNMENT_STATE_RUNNING`.
+  ACTOR_ASSIGNMENT_STATE_UNSPECIFIED = 0;
+  // The Actor runs on the Worker and its resources count towards the Worker's
+  // `allocated`.
+  ACTOR_ASSIGNMENT_STATE_RUNNING = 1;
+  // The Actor is suspended and still bound to the Worker's node, where its
+  // local snapshot is kept. Its resources do not count towards `allocated`.
+  ACTOR_ASSIGNMENT_STATE_SUSPENDED = 2;
+  // Keep this in sync with ActorAssignment.state's maximum.
 }
 
 // WorkerService is how a Worker tells the control plane what it observes. It is

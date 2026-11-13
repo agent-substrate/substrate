@@ -1215,7 +1215,7 @@ func TestSuspendAndPause_CharacteristicMatrix(t *testing.T) {
 						atelet:       describeAteletCall(atelet),
 						state:        stored.GetStatus().GetState(),
 						assignedNode: stored.GetStatus().GetAssignedNode(),
-						workerHeld:   firstAssignment(t, persistence, wireTestAssignment().GetWorker().GetName()) != nil,
+						workerHeld:   workerRunsAssignment(firstAssignment(t, persistence, wireTestAssignment().GetWorker().GetName())),
 						generation:   stored.GetStatus().GetLastAssignedGeneration(),
 						snapshots:    describeSnapshots(stored.GetStatus()),
 					}
