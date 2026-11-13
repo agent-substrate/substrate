@@ -3942,6 +3942,46 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 		assertPruned(t, "DeleteExternalVolumeClass", created, deleted)
 	})
 
+	t.Run("UnknownFields_ExternalVolumeClassAccessPolicy", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		if _, err := s.CreateExternalVolumeClass(ctx, newTestExternalVolumeClass("nfs")); err != nil {
+			t.Fatalf("CreateExternalVolumeClass failed: %v", err)
+		}
+		created, err := s.CreateExternalVolumeClassAccessPolicy(ctx, "nfs", withUnknownField(&ateapi.AccessPolicy{
+			Metadata: withUnknownField(&ateapi.ResourceMetadata{Name: "default"}),
+			Bindings: []*ateapi.Binding{withUnknownField(&ateapi.Binding{
+				Role:    "allowed_atespace",
+				Members: []string{"atespace:" + testAtespace},
+			})},
+		}))
+		if err != nil {
+			t.Fatalf("CreateExternalVolumeClassAccessPolicy failed: %v", err)
+		}
+
+		got, err := s.GetExternalVolumeClassAccessPolicy(ctx, "nfs")
+		if err != nil {
+			t.Fatalf("GetExternalVolumeClassAccessPolicy failed: %v", err)
+		}
+		assertPruned(t, "GetExternalVolumeClassAccessPolicy", created, got)
+
+		updated, err := s.UpdateExternalVolumeClassAccessPolicy(ctx, "nfs", store.PreconditionFrom(got), func(toUpdate *ateapi.AccessPolicy) error {
+			requireNoUnknownFields(t, "UpdateExternalVolumeClassAccessPolicy mutation input", toUpdate)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateExternalVolumeClassAccessPolicy failed: %v", err)
+		}
+		assertPruned(t, "UpdateExternalVolumeClassAccessPolicy", created, updated)
+
+		deleted, err := s.DeleteExternalVolumeClassAccessPolicy(ctx, "nfs", store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolumeClassAccessPolicy failed: %v", err)
+		}
+		assertPruned(t, "DeleteExternalVolumeClassAccessPolicy", created, deleted)
+	})
+
 	t.Run("UnknownFields_ActorTemplate", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
