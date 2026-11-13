@@ -17,7 +17,8 @@
 #
 # Fields shared by every entry:
 #
-#   type           Required. Selects the runner: "locust" | "nighthawk-ingress".
+#   type           Required. Selects the runner: "locust" | "nighthawk-ingress" |
+#                  "nighthawk-egress".
 #                  Each type's own fields are described in its section.
 #   targetCluster  Required. Names a config file under
 #                  /etc/orchestrator/target-clusters/ (e.g. `targetCluster:
@@ -139,6 +140,16 @@
 # the "Configuration knobs" table in benchmarking/nighthawk-ingress/README.md.
 # `workerCount` is required: the benchmark warms one actor per worker, so
 # it is also the actor fleet size.
+#
+# ---- type: nighthawk-egress ---------------------------------------------------------
+#
+# Runs the Nighthawk adaptive egress-gateway capacity benchmark. `duration` is
+# the job-wait budget only; the test knobs live in a `nighthawk-egress:` block.
+# Deploys its own gVisor rig (`USES_SHARED_WORKLOADS = False`), so `sandboxClass`
+# must be `gvisor` and shared-workload fields (`workerCount`, `actorMemory`,
+# `actorCPU`, `workerMemory`, `workerWaitTimeout`, `isolate`) are rejected.
+# The block takes `envoyCpu` and `mode` (`http`, `mitm` or `passthrough`).
+# Both are required. See benchmarking/nighthawk-egress/README.md.
 
 tests:
   - name: glutton_baseline_1_user

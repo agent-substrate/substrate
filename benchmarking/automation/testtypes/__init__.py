@@ -30,8 +30,15 @@ Each module implements the TestType hooks, called in lifecycle order:
                         orchestrator renders the template, submits the
                         Job, waits, tails logs, deletes it.
 
-No post_test hook: teardown is type-independent today. Name it here when
-a type needs one.
+  teardown_workloads()  cleans up type-specific workloads. The sweep
+                        before each test calls it for every type.
+
+  USES_SHARED_WORKLOADS
+                        True when the type uses benchmarking/workloads
+                        (deploy_workloads runs and the shared delete runs
+                        at teardown). A type with False deploys its own
+                        workloads in pre_test and deletes them in
+                        teardown_workloads().
 
 Adding a test type = one new module here + one entry in TYPES.
 """
@@ -39,21 +46,25 @@ Adding a test type = one new module here + one entry in TYPES.
 from typing import Any, Protocol
 
 from testtypes import locust
+from testtypes import nighthawk_egress
 from testtypes import nighthawk_ingress
 
 
 class TestType(Protocol):
     TEST_TYPE: str
+    USES_SHARED_WORKLOADS: bool
 
     def validate(self, test: dict[str, Any]) -> None: ...
     def build_image(self, commit: str) -> str: ...
     def pre_test(self, test: dict[str, Any]) -> None: ...
     def job_tmpl(self, manifests_dir: str) -> str: ...
     def job_subs(self, test: dict[str, Any]) -> dict[str, Any]: ...
+    def teardown_workloads(self) -> None: ...
 
 
 TYPES: dict[str, TestType] = {
     locust.TEST_TYPE: locust,
+    nighthawk_egress.TEST_TYPE: nighthawk_egress,
     nighthawk_ingress.TEST_TYPE: nighthawk_ingress,
 }
 
@@ -62,5 +73,13 @@ TYPES: dict[str, TestType] = {
 # (orchestrator, run-dev.sh, the unit tests) fails at import instead of
 # mid-benchmark.
 for _name, _mod in TYPES.items():
-    for _hook in ("validate", "build_image", "pre_test", "job_tmpl", "job_subs"):
+    for _hook in (
+        "validate",
+        "build_image",
+        "pre_test",
+        "job_tmpl",
+        "job_subs",
+        "teardown_workloads",
+        "USES_SHARED_WORKLOADS",
+    ):
         assert hasattr(_mod, _hook), f"test type {_name!r} missing hook {_hook!r}"
