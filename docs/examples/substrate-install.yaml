@@ -19,14 +19,14 @@
 #   ATE_CONFIG=substrate-install.yaml ate-setup deploy ate-system
 #
 # Every setting here can equally be an environment variable or a flag; see
-# docs/operator-install.md for the full list and the precedence between them.
+# docs/guides/operator-install.md for the full list and the precedence between them.
 # Keys not named below keep their declared default, which `ate-setup --help`
 # prints. A key named with an empty value is set to empty, not left at its
 # default -- that is how a setting is cleared.
 apiVersion: install.ate.dev/v1alpha1
 kind: SubstrateInstall
 
-# Where the control plane goes.
+# The checked-in manifests require ate-system.
 namespace: ate-system
 context: my-cluster
 
@@ -39,6 +39,9 @@ rolloutTimeout: 1m0s
 # Ingress and egress dataplane: envoy or agentgateway.
 atenet:
   dataplane: envoy
+  egress:
+    # Required: select a provider, or use '{"enabled":false}' to disable injection.
+    credentialProvider: '{"name":"k8s.io"}'
 
 # Prebuilt images. Both halves are required together: a tag with no repository
 # would be dropped, leaving a build from source that looks like the release the
