@@ -16,20 +16,27 @@ package exchangeclient
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/pem"
 	"errors"
 	"io"
+	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/utils/lru"
 
+	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/internal/objectstoreplugin/credential"
 	exchangepb "go.ate.dev/substrate/internal/proto/objectstoreexchangepb"
+	"go.ate.dev/substrate/internal/testcert"
 	"go.ate.dev/substrate/pkg/objectstorage"
 )
 
@@ -252,3 +259,142 @@ func TestNew_ChecksItsConfig(t *testing.T) {
 }
 
 var _ io.Closer = (*Source)(nil)
+
+// stubExchange answers every exchange with one token.
+type stubExchange struct {
+	exchangepb.UnimplementedCredentialExchangeServer
+}
+
+func (stubExchange) ExchangeActorJwt(context.Context, *exchangepb.ExchangeActorJwtRequest) (*exchangepb.ExchangeActorJwtResponse, error) {
+	return &exchangepb.ExchangeActorJwtResponse{AccessToken: "tok", ExpireTime: timestamppb.New(time.Now().Add(time.Hour))}, nil
+}
+
+// waitForReady makes exchange calls wait for the connection to redial.
+type waitForReady struct {
+	exchangepb.CredentialExchangeClient
+}
+
+func (w waitForReady) ExchangeActorJwt(ctx context.Context, in *exchangepb.ExchangeActorJwtRequest, opts ...grpc.CallOption) (*exchangepb.ExchangeActorJwtResponse, error) {
+	return w.CredentialExchangeClient.ExchangeActorJwt(ctx, in, append(opts, grpc.WaitForReady(true))...)
+}
+
+const exchangeName = "exchange.test"
+
+func newTestCA(t *testing.T) *localca.CA {
+	t.Helper()
+	ca, err := localca.GenerateCA("exchange-ca", localca.KeyTypeECDSAP256, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ca
+}
+
+func caPEM(cas ...*localca.CA) []byte {
+	var out []byte
+	for _, ca := range cas {
+		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw})...)
+	}
+	return out
+}
+
+func writeCAFile(t *testing.T, path string, cas ...*localca.CA) {
+	t.Helper()
+	if err := os.WriteFile(path, caPEM(cas...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// serveExchange serves a stub exchange over TLS with a certificate from ca for
+// exchangeName and returns its address.
+func serveExchange(t *testing.T, ca *localca.CA) string {
+	t.Helper()
+	material := testcert.ServerTLSWithCA(t, ca, net.ParseIP("10.0.0.7"), exchangeName)
+	cert, err := tls.X509KeyPair(material.Certificate, material.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})))
+	exchangepb.RegisterCredentialExchangeServer(srv, stubExchange{})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(lis)
+	t.Cleanup(srv.Stop)
+	return lis.Addr().String()
+}
+
+func newTLSSource(t *testing.T, addr, caFile, serverName string) *Source {
+	t.Helper()
+	s, err := New(Config{Address: addr, CAFile: caFile, ServerName: serverName})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	s.newClient = func(context.Context, credential.Token) (objectstorage.ObjectStorage, error) {
+		return &fakeClient{}, nil
+	}
+	return s
+}
+
+func TestNew_VerifiesTheExchangeCertificate(t *testing.T) {
+	ca, otherCA := newTestCA(t), newTestCA(t)
+	addr := serveExchange(t, ca)
+	for _, tc := range []struct {
+		name       string
+		trust      *localca.CA
+		serverName string
+		wantOK     bool
+	}{
+		{"trusted CA and matching name", ca, exchangeName, true},
+		{"untrusted CA", otherCA, exchangeName, false},
+		{"wrong server name", ca, "other.test", false},
+		// The dial host, 127.0.0.1, is not on the certificate.
+		{"empty server name falls back to the dial host", ca, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caFile := filepath.Join(t.TempDir(), "ca.pem")
+			writeCAFile(t, caFile, tc.trust)
+			s := newTLSSource(t, addr, caFile, tc.serverName)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			_, err := s.Client(ctx, "jwt", false)
+			if tc.wantOK && err != nil {
+				t.Fatalf("Client() error = %v, want success", err)
+			}
+			if !tc.wantOK && status.Code(err) != codes.Unavailable {
+				t.Fatalf("Client() error = %v, want a handshake failure", err)
+			}
+		})
+	}
+}
+
+func TestNew_RequiresAServerNameWithoutAnAddressHost(t *testing.T) {
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	writeCAFile(t, caFile, newTestCA(t))
+	if _, err := New(Config{Address: ":443", CAFile: caFile}); err == nil {
+		t.Fatal("New() accepted an empty ServerName and an Address without a host")
+	}
+}
+
+// TestNew_ReloadsTheCAFile verifies that a rotation of the exchange CA bundle
+// on disk is picked up by the next handshake, without rebuilding the Source.
+func TestNew_ReloadsTheCAFile(t *testing.T) {
+	ca, rotatedCA := newTestCA(t), newTestCA(t)
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	writeCAFile(t, caFile, ca)
+	s := newTLSSource(t, serveExchange(t, rotatedCA), caFile, exchangeName)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if _, err := s.Client(ctx, "jwt", false); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Client() before trusting the rotated CA: error = %v, want a handshake failure", err)
+	}
+
+	// Step 1 of the rotation: the bundle carries the old and the new root.
+	writeCAFile(t, caFile, ca, rotatedCA)
+	s.exchange = waitForReady{s.exchange}
+	if _, err := s.Client(ctx, "jwt", false); err != nil {
+		t.Fatalf("Client() after the CA rotation: error = %v", err)
+	}
+}
