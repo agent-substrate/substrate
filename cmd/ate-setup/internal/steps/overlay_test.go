@@ -970,6 +970,84 @@ func TestRenderRouterAllowedSPIFFEIDs(t *testing.T) {
 	}
 }
 
+// Both paths that deliver the Envoy router pass it the atenet.router.*
+// settings, and a parked request budget above the manifest's grows the pod's
+// grace period by the difference. Unset, the manifest comes out as checked in,
+// so it must not set the flags itself; that case also pins
+// routerManifestGracePeriodSeconds to the manifest.
+func TestRenderRouterSettings(t *testing.T) {
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	resolver := images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+		return "sha256:" + strings.Repeat("2", 64), nil
+	})
+	flags := []string{"--route-timeout=", "--parked-request-budget=", "--extproc-max-requests="}
+	for _, tc := range []struct {
+		name      string
+		cfg       config.Config
+		wantArgs  []string
+		wantGrace int64
+	}{
+		{name: "unset", wantGrace: routerManifestGracePeriodSeconds},
+		{
+			name:      "all set",
+			cfg:       config.Config{RouterRouteTimeout: 30 * time.Minute, RouterParkedRequestBudget: 2 * time.Minute, RouterExtProcMaxRequests: 4096},
+			wantArgs:  []string{"--route-timeout=30m0s", "--parked-request-budget=2m0s", "--extproc-max-requests=4096"},
+			wantGrace: routerManifestGracePeriodSeconds + 115,
+		},
+		{
+			name:      "budget at the router default",
+			cfg:       config.Config{RouterParkedRequestBudget: 5 * time.Second},
+			wantArgs:  []string{"--parked-request-budget=5s"},
+			wantGrace: routerManifestGracePeriodSeconds,
+		},
+		{
+			name:      "breaker alone",
+			cfg:       config.Config{RouterExtProcMaxRequests: 4096},
+			wantArgs:  []string{"--extproc-max-requests=4096"},
+			wantGrace: routerManifestGracePeriodSeconds,
+		},
+	} {
+		for _, path := range []struct {
+			name   string
+			kind   bool
+			render func(e *Env) ([]byte, error)
+		}{
+			{name: "base bundle", render: func(e *Env) ([]byte, error) { return e.renderSystemManifests(t.Context()) }},
+			{name: "kind bundle", kind: true, render: func(e *Env) ([]byte, error) { return e.renderSystemManifests(t.Context()) }},
+			{name: "router file", render: func(e *Env) ([]byte, error) { return e.renderAtenetRouterManifest(t.Context()) }},
+		} {
+			t.Run(tc.name+"/"+path.name, func(t *testing.T) {
+				cfg := tc.cfg
+				cfg.Root = repoRoot(t)
+				cfg.Router = config.RouterEnvoy
+				cfg.Kind = path.kind
+				cfg.Images = src
+				rendered, err := path.render(&Env{Cfg: &cfg, resolver: resolver})
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				var got []string
+				for _, arg := range routerArgs(t, rendered) {
+					if slices.ContainsFunc(flags, func(flag string) bool { return strings.HasPrefix(arg, flag) }) {
+						got = append(got, arg)
+					}
+				}
+				if !slices.Equal(got, tc.wantArgs) {
+					t.Errorf("atenet-router settings args = %q, want %q", got, tc.wantArgs)
+				}
+				_, deployments := dataPlaneWorkloads(t, rendered)
+				grace := deployments["atenet-router"].Spec.Template.Spec.TerminationGracePeriodSeconds
+				if grace == nil {
+					t.Fatal("the atenet-router pod spec has no terminationGracePeriodSeconds")
+				}
+				if *grace != tc.wantGrace {
+					t.Errorf("atenet-router terminationGracePeriodSeconds = %d, want %d", *grace, tc.wantGrace)
+				}
+			})
+		}
+	}
+}
+
 func TestRenderAgentgatewayStaticMTLS(t *testing.T) {
 	const (
 		idA = "spiffe://cluster.local/ns/a/sa/a"
