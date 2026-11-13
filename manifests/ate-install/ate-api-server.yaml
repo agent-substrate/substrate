@@ -175,6 +175,12 @@ spec:
       containers:
       - name: ate-api-server
         image: ko://go.ate.dev/substrate/cmd/ateapi
+        # Requests, no limits: a node packed with sandboxes gives a BestEffort
+        # pod almost no CPU and its probes time out.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
@@ -289,7 +295,8 @@ spec:
             port: health
           initialDelaySeconds: 5
           periodSeconds: 2
-          failureThreshold: 3
+          timeoutSeconds: 5
+          failureThreshold: 6
         # :9091 is bound near the end of boot, after the store connect and
         # the schema migrations, so nothing answers here until both finish.
         # The store connect alone budgets 60s (30 attempts, 2s apart) and the
@@ -316,6 +323,8 @@ spec:
             port: health
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
       volumes:
       - name: objectstore-plugin
         emptyDir: {}
