@@ -192,6 +192,15 @@ data:
 
 #### 2. Envoy Sidecar in `csi-nfs-controller` Deployment
 
+The `envoy-proxy` sidecar shares `socket-dir` (`/csi`) with the CSI driver
+container and mounts the Envoy configuration (`envoy-config`), the Service DNS
+serving certificate (`servicedns-certs`), and the Pod Identity trust bundle
+(`podidentity-ca`). Even when the CSI driver container itself requires elevated
+privileges (such as [the upstream `csi-nfs-controller` manifest](../../hack/third_party/csi-driver-nfs/deploy/csi-nfs-controller.yaml)),
+the Envoy sidecar runs with a restricted `securityContext`
+(`allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, and all
+capabilities dropped).
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -212,9 +221,16 @@ spec:
       # Upstream CSI NFS driver container listening on local Unix socket
       - name: nfs
         image: registry.k8s.io/sig-storage/nfsplugin:v4.13.4
+        securityContext:
+          privileged: true
         args:
         - "--nodeid=$(NODE_ID)"
         - "--endpoint=unix:///csi/csi.sock"
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         volumeMounts:
         - name: socket-dir
           mountPath: /csi
