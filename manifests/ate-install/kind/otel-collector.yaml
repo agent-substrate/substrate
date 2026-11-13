@@ -95,6 +95,9 @@ data:
           insecure: true
       prometheus:
         endpoint: 0.0.0.0:8889
+      # The log store of the kind cluster (loki.yaml); /v1/logs is appended.
+      otlphttp/loki:
+        endpoint: http://loki.otel-system.svc.cluster.local:3100/otlp
       debug:
         verbosity: detailed
     service:
@@ -108,15 +111,15 @@ data:
           processors: [batch]
           exporters: [prometheus, debug]
 
-        # Every ate event, plus any workload that sends OTLP logs. debug is the
-        # only exporter: kind has no log store, and the e2e read-back goes
-        # through the count connector below. Never put a sampler or a filter
-        # here. A consumer takes the last event for an actor, thus a dropped
-        # record reports a stale state with no sign that anything is missing.
+        # Every ate event, plus any workload that sends OTLP logs, to Loki and
+        # to the collector's own log. The e2e read-back goes through the count
+        # connector below. Never put a sampler or a filter here. A consumer
+        # takes the last event for an actor, thus a dropped record reports a
+        # stale state with no sign that anything is missing.
         logs:
           receivers: [otlp]
           processors: [batch]
-          exporters: [debug]
+          exporters: [otlphttp/loki, debug]
 
         # The count pipelines read the same receiver as the pipelines above,
         # and they only count. The connector declares MutatesData false, thus

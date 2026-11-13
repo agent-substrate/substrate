@@ -276,6 +276,29 @@ Control plane and node component logs mask proto fields marked `debug_redact`, s
 
 ---
 
+### Local Logs with Loki (Kind Cluster)
+
+For local development inside a `kind` cluster, Agent Substrate provisions a single-binary [Loki](https://grafana.com/docs/loki/latest/) in the `otel-system` namespace, and the collector's logs pipeline sends every record to it next to the `debug` exporter, so the lifecycle events outlive kubelet's 10 MiB stdout rotation. The kind overlay is what `ate-setup --kind` installs, so every kind cluster runs Loki, the CI e2e jobs included.
+
+Loki indexes `service_name`, `service_instance_id`, `k8s_namespace_name` and `k8s_pod_name` as stream labels and keeps the other attributes, the `ate.*` keys among them, as structured metadata with dots replaced by underscores. Actor identity never becomes an index label.
+
+To read the lifecycle of one actor:
+
+1. **Expose the Loki API** via port forwarding:
+   ```bash
+   kubectl port-forward -n otel-system svc/loki 3100:3100
+   ```
+
+2. **Query by actor name**, oldest first. The range defaults to the last hour.
+   ```bash
+   curl -sG http://localhost:3100/loki/api/v1/query_range \
+     --data-urlencode 'query={service_name="ateapi"} | ate_actor_name="counter-1"' \
+     --data-urlencode 'direction=forward' | jq -c '.data.result[] | .stream | {ate_actor_operation_name, ate_actor_state, ate_actor_uid}'
+   ```
+   One line per state change comes back, each with the `trace_id` of the operation that caused it. Add `| ate_actor_state="crashed"` to keep one state, or query by `ate_template_name` to follow every actor of a template.
+
+> **Note:** Storage is ephemeral (`emptyDir`), so logs are lost when the Loki pod restarts.
+
 ## 2. Metrics
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
@@ -484,7 +507,7 @@ To visualize traces locally:
 
 Telemetry is emitted over OTLP to your configured OpenTelemetry Collector.
 
-> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, and `atenet-egress` are pointed at the in-cluster `opentelemetry-collector` in `otel-system`, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally (Prometheus exporter on `:8889`, Jaeger UI for traces, and the collector's `debug` exporter for OTLP logs). The Kubernetes credential provider is the exception: it does not read the endpoint (see the [note on the Kind Prometheus](#2-metrics)).
+> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, and `atenet-egress` are pointed at the in-cluster `opentelemetry-collector` in `otel-system`, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally (Prometheus exporter on `:8889`, Jaeger UI for traces, and Loki for OTLP logs, beside the collector's `debug` exporter). The Kubernetes credential provider is the exception: it does not read the endpoint (see the [note on the Kind Prometheus](#2-metrics)).
 >
 > Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
