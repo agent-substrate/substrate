@@ -389,3 +389,30 @@ func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 		t.Errorf("OpenFGA table owner = %q, want stable owner role %q", owner, ddlRole)
 	}
 }
+
+// The flag's limit wins over the DSN's; unset keeps the DSN's or pgxpool's.
+func TestReadWritePoolConfigMaxConns(t *testing.T) {
+	for _, tc := range []struct {
+		name, dsn string
+		max, want int32
+	}{
+		{"dsn sets it", "postgres://u@h/db?pool_max_conns=64", 0, 64},
+		{"flag replaces it", "postgres://u@h/db?pool_max_conns=64", 20, 20},
+		{"flag sets it", "postgres://u@h/db", 20, 20},
+	} {
+		cfg, err := readWritePoolConfig(tc.dsn, "r", tc.max)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if cfg.MaxConns != tc.want {
+			t.Errorf("%s: MaxConns = %d, want %d", tc.name, cfg.MaxConns, tc.want)
+		}
+	}
+	cfg, err := readWritePoolConfig("postgres://u@h/db", "r", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxConns < 4 {
+		t.Errorf("neither set: MaxConns = %d, want pgxpool's default of at least 4", cfg.MaxConns)
+	}
+}

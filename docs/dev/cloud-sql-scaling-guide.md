@@ -36,7 +36,8 @@ Set with `--storage-size` at create time; it only grows afterwards.
 ## Connection sizing for a target throughput
 
 Set the shared read/write pool limit with `ATE_API_POSTGRES_POOL_MAX_CONNS` at
-deploy time. Substrate and the embedded OpenFGA server use the same pool.
+deploy time; the installer's default is 20 per replica. Substrate and the
+embedded OpenFGA server use the same pool.
 Target active connections equal throughput multiplied by average query
 latency:
 
