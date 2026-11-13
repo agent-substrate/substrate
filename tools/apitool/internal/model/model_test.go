@@ -245,19 +245,20 @@ func TestBuild_Annotations(t *testing.T) {
 		"ExternalVolumeClass": {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "ExternalVolumeClasses"},
 		"Worker":              {Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Workers"},
 		"ActorAssignment":     {Parents: []string{"Worker"}, Plural: "ActorAssignments"},
-		"AccessPolicy":        {Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"},
+		"AccessPolicy":        {Parents: []string{"Global", "Atespace", "ExternalVolumeClass"}, Singleton: true, Plural: "AccessPolicies"},
 	}
 	if diff := cmp.Diff(wantResources, gotResources); diff != "" {
 		t.Errorf("resource annotations mismatch (-want +got):\n%s", diff)
 	}
 
 	wantMethods := map[protoreflect.Name]string{
-		"GetActor":                   "Actor",
-		"SuspendActor":               "Actor",
-		"GetActorEgressPolicy":       "EgressPolicy",
-		"GetGlobalAccessPolicy":      "AccessPolicy",
-		"GetAtespaceAccessPolicy":    "AccessPolicy",
-		"ListWorkerActorAssignments": "ActorAssignment",
+		"GetActor":                           "Actor",
+		"SuspendActor":                       "Actor",
+		"GetActorEgressPolicy":               "EgressPolicy",
+		"GetGlobalAccessPolicy":              "AccessPolicy",
+		"GetAtespaceAccessPolicy":            "AccessPolicy",
+		"GetExternalVolumeClassAccessPolicy": "AccessPolicy",
+		"ListWorkerActorAssignments":         "ActorAssignment",
 	}
 	gotMethods := map[protoreflect.Name]string{}
 	for _, svc := range api.Services {

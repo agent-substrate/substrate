@@ -234,6 +234,25 @@ func TestRender_Definitions(t *testing.T) {
 	}
 }
 
+func TestRender_PerParentExampleOverride(t *testing.T) {
+	ex := map[string]string{
+		"Widget":        "# License.\n\nwidget: 1\n",
+		"Gadget":        "gadget: 2\n",
+		"Widget.Gadget": "# License.\n\ngadget: widget-override\n",
+	}
+	out, err := docsite.Render(fixtureAPI(t), ex, fixtureK8sAPI, fixtureK8sExamples)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	html := regexp.MustCompile(`</?(span|a)( [^>]*)?>`).ReplaceAllString(string(out.Body), "")
+	if got := strings.Count(html, "<pre>gadget: 2</pre>"); got != 1 {
+		t.Errorf("default Gadget example rendered %d times, want 1 (Global page only)", got)
+	}
+	if got := strings.Count(html, "<pre>gadget: widget-override</pre>"); got != 1 {
+		t.Errorf("Widget.Gadget override rendered %d times, want 1", got)
+	}
+}
+
 func TestRender_MissingExample(t *testing.T) {
 	out, err := docsite.Render(fixtureAPI(t), map[string]string{"Widget": `{}`}, fixtureK8sAPI, map[string]string{})
 	if err != nil {
@@ -360,7 +379,7 @@ func TestRender_RealAPISmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	for _, want := range []string{"substrate.ateapi.v1.Actor", `id="resource-ate.dev.v1.WorkerPool"`} {
+	for _, want := range []string{"substrate.ateapi.v1.Actor", `id="resource-ate.dev.v1.WorkerPool"`, "atespace:team-b"} {
 		if !strings.Contains(string(out.Body), want) {
 			t.Errorf("output does not mention %s", want)
 		}
