@@ -25,6 +25,9 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/imagecache"
 )
 
@@ -241,6 +244,49 @@ func TestRunTicks(t *testing.T) {
 func TestRunPassRecoversPanic(t *testing.T) {
 	g := &imageCacheGC{store: &fakeGCStore{panicOnEvict: true}, cacheDir: t.TempDir(), highPct: 100, lowPct: 0}
 	g.runPass(context.Background()) // must not propagate the panic
+}
+
+// TestRunPassRecordsOutcome checks that every pass counts once in
+// ate.imagecache.gc.passes, including quiet passes and the early skips, so the
+// count is a liveness signal. high=100 sidelines the watermark, so maxBytes
+// alone sets the target.
+func TestRunPassRecordsOutcome(t *testing.T) {
+	gated := fmt.Errorf("%w: unreadable spec", imagecache.ErrIncompleteEnumeration)
+	tests := []struct {
+		name     string
+		store    *fakeGCStore
+		missing  bool // cacheDir does not exist, so statfs fails
+		maxBytes int64
+		want     string
+	}{
+		{name: "statfs fails", store: &fakeGCStore{}, missing: true, want: ateattr.ImageCacheGCOutcomeSkipped},
+		{name: "sizing fails", store: &fakeGCStore{sizeErr: errors.New("unreadable size file")}, want: ateattr.ImageCacheGCOutcomeSkipped},
+		{name: "gated", store: &fakeGCStore{evictErr: gated}, want: ateattr.ImageCacheGCOutcomeSkipped},
+		{name: "nothing to free", store: &fakeGCStore{size: 100}, want: ateattr.ImageCacheGCOutcomeQuiet},
+		{name: "target met", store: &fakeGCStore{size: 100, stats: imagecache.EvictStats{FreedBytes: 100}}, maxBytes: 1, want: ateattr.ImageCacheGCOutcomeComplete},
+		{name: "target not met", store: &fakeGCStore{size: 100}, maxBytes: 1, want: ateattr.ImageCacheGCOutcomeShortfall},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			inst, reader := newTestInstruments(t)
+			dir := t.TempDir()
+			if tc.missing {
+				dir = filepath.Join(dir, "missing")
+			}
+			g := &imageCacheGC{store: tc.store, cacheDir: dir, highPct: 100, lowPct: 0, maxBytes: tc.maxBytes, instruments: inst}
+			g.runPass(context.Background())
+
+			sum, ok := collectHistogram(t, reader, imageCacheGCPassesMetric).Data.(metricdata.Sum[int64])
+			if !ok || len(sum.DataPoints) != 1 {
+				t.Fatalf("got %+v, want one data point", sum)
+			}
+			dp := sum.DataPoints[0]
+			got, _ := dp.Attributes.Value(ateattr.ImageCacheGCOutcomeKey)
+			if dp.Value != 1 || got.AsString() != tc.want {
+				t.Errorf("recorded %d pass with outcome %q, want 1 with %q", dp.Value, got.AsString(), tc.want)
+			}
+		})
+	}
 }
 
 // TestNoteOutcomeShortfallBackoff drives the shortfall cadence end to end:

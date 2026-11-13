@@ -582,6 +582,38 @@ groups:
               stability: development
               value: timeout
               brief: The time limit of the caller ended.
+      - id: ate.imagecache.gc.outcome
+        stability: development
+        brief: >
+          The result of one pass of the image cache garbage collector. Every
+          pass is counted, including a pass with nothing to free.
+        type:
+          members:
+            - id: complete
+              stability: development
+              value: complete
+              brief: The pass freed what it targeted.
+            - id: shortfall
+              stability: development
+              value: shortfall
+              brief: >
+                The pass freed less than it targeted. What remains is rooted
+                by an actor's bundle, younger than the min age, or pinned by a
+                pull. Or the volume is full of data that is not the image
+                cache's.
+            - id: skipped
+              stability: development
+              value: skipped
+              brief: >
+                The pass could not run and removed nothing. atelet could not
+                measure the volume or the cache, or could not read every image
+                record and bundle spec. It retries on the next tick.
+            - id: quiet
+              stability: development
+              value: quiet
+              brief: >
+                The volume was under its high watermark and the cache was
+                under its cap, so the pass had nothing to free.
 
   - id: registry.ate.filecache
     type: attribute_group
@@ -1375,6 +1407,30 @@ groups:
             The outcome is error. The key holds the HTTP status of the registry.
             The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
             Each other status, and each failure with no status, reports _OTHER.
+
+  - id: metric.ate.imagecache.gc.passes
+    type: metric
+    metric_name: ate.imagecache.gc.passes
+    instrument: counter
+    unit: "{pass}"
+    stability: development
+    brief: The number of image cache garbage collector passes on the node, by outcome.
+    note: >
+      Every pass is counted, including quiet ones, so a count that stops
+      growing means that the collector stopped. The collector runs every
+      --image-cache-gc-period, and not at all when that is 0. Complete means
+      that the passes keep up. Shortfall means that what remains is not the
+      cache's to free. Skipped means that a pass could not run, and the atelet
+      log names why. Quiet means that there was nothing to free.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation, errors]
+        code_anchor: cmd/atelet/imagegc.go
+        cuj: A node's disk fills. Does the image cache garbage collector run, and can it free enough?
+    attributes:
+      - ref: ate.imagecache.gc.outcome
+        requirement_level: required
 
   - id: metric.ate.filecache.size
     type: metric

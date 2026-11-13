@@ -29,6 +29,7 @@ import (
 const (
 	restoreDurationMetric    = "ate.actor.restore.duration"
 	checkpointDurationMetric = "ate.actor.checkpoint.duration"
+	imageCacheGCPassesMetric = "ate.imagecache.gc.passes"
 )
 
 // snapshotPhaseBuckets have to cover both ends of a phase breakdown: a warm OCI
@@ -36,11 +37,12 @@ const (
 // fetching a multi-GiB snapshot runs for tens of seconds.
 var snapshotPhaseBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
 
-// Instruments holds atelet's cold-start histograms. A nil *Instruments is a
-// valid no-op, so call sites need no guard.
+// Instruments holds atelet's cold-start histograms and its image cache GC pass
+// counter. A nil *Instruments is a valid no-op, so call sites need no guard.
 type Instruments struct {
 	restoreDuration    metric.Float64Histogram
 	checkpointDuration metric.Float64Histogram
+	imageCacheGCPasses metric.Int64Counter
 }
 
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
@@ -64,10 +66,28 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("create %s histogram: %w", checkpointDurationMetric, err)
 	}
 
+	imageCacheGCPasses, err := meter.Int64Counter(
+		imageCacheGCPassesMetric,
+		metric.WithUnit("{pass}"),
+		metric.WithDescription("Number of image cache GC passes on the node, by outcome."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s counter: %w", imageCacheGCPassesMetric, err)
+	}
+
 	return &Instruments{
 		restoreDuration:    restoreDuration,
 		checkpointDuration: checkpointDuration,
+		imageCacheGCPasses: imageCacheGCPasses,
 	}, nil
+}
+
+// recordImageCacheGCPass counts one image cache GC pass by how it ended.
+func (i *Instruments) recordImageCacheGCPass(ctx context.Context, outcome gcPassOutcome) {
+	if i == nil || i.imageCacheGCPasses == nil {
+		return
+	}
+	i.imageCacheGCPasses.Add(ctx, 1, metric.WithAttributes(ateattr.ImageCacheGCOutcomeKey.String(outcome.String())))
 }
 
 // snapshotOp is the dimension set shared by every phase of one restore or
