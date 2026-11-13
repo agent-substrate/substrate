@@ -88,6 +88,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	var finalAttrs []attribute.KeyValue
 
 	defer func() {
+		err = actorOpError(err, actorRef)
 		attrs := finalAttrs
 		if attrs == nil {
 			attrs = lifecycleOpAttrs(actor, "", wireFidelity)

@@ -64,6 +64,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	// request, and recording those would sample at router QPS and bury
 	// cold-resume latency.
 	defer func() {
+		err = actorOpError(err, actorRef)
 		if err == nil && wasRunning {
 			return
 		}
