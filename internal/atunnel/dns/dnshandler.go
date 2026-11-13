@@ -50,6 +50,7 @@ type action struct {
 	upstreamID  uint16
 	clientAddr  net.Addr
 	upstreamIdx int
+	conn        net.PacketConn
 }
 
 // queryPolicy decides whether a parsed DNS question is permitted.
@@ -158,7 +159,7 @@ func (h *dnsHandler) onUDPRequest(raw []byte, clientAddr net.Addr, upstreams []s
 
 	// Set to true before calling record, which takes ownership of the in-flight slot.
 	forwarded = true
-	upstreamID, ok := h.pending.record(raw, hdr.ID, cq, clientAddr, upstreams)
+	upstreamID, conn, ok := h.pending.record(raw, hdr.ID, cq, clientAddr, upstreams)
 	if !ok {
 		return action{kind: actionDrop}
 	}
@@ -167,13 +168,14 @@ func (h *dnsHandler) onUDPRequest(raw []byte, clientAddr net.Addr, upstreams []s
 		kind:       actionForward,
 		payload:    raw,
 		upstreamID: upstreamID,
+		conn:       conn,
 	}
 }
 
 // onUDPResponse validates an incoming UDP DNS response packet from an upstream
 // resolver against pendingRequests and returns whether to drop it, fail over to
 // the next upstream, or deliver it to the actor.
-func (h *dnsHandler) onUDPResponse(raw []byte, from net.Addr) action {
+func (h *dnsHandler) onUDPResponse(raw []byte, from net.Addr, conn net.PacketConn) action {
 	if !protocol.ResponseSanityCheck(raw) {
 		return action{kind: actionDrop}
 	}
@@ -196,7 +198,7 @@ func (h *dnsHandler) onUDPResponse(raw []byte, from net.Addr) action {
 	entry, ok := h.pending.entries[hdr.ID]
 	cq := canonicalizeQuestion(q)
 
-	if !ok || normalizeAddrString(entry.upstreams[entry.upstreamIdx]) != normalizeAddr(from) || entry.question != cq {
+	if !ok || entry.conn != conn || normalizeAddrString(entry.upstreams[entry.upstreamIdx]) != normalizeAddr(from) || entry.question != cq {
 		// Response does not match any pending request.
 		return action{kind: actionDrop}
 	}
@@ -212,6 +214,7 @@ func (h *dnsHandler) onUDPResponse(raw []byte, from net.Addr) action {
 			kind:        actionFailover,
 			payload:     bytes.Clone(entry.rawQuery),
 			upstreamIdx: entry.upstreamIdx,
+			conn:        entry.conn,
 		}
 	}
 
