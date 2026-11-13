@@ -872,13 +872,16 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		_ = os.RemoveAll(staging)
 		return nil, err
 	}
-	committed := false
+	committed, workerCalled := false, false
 	defer func() {
 		if err == nil {
 			return
 		}
 		_ = os.RemoveAll(staging)
-		if committed {
+		// A failed RunWorkload can return before the worker has deleted the
+		// containers it started with these binaries, so they stay until
+		// Terminate or the next Run or Restore.
+		if committed && !workerCalled {
 			_ = os.RemoveAll(ateletpath.SandboxAssetsDir(actorUID))
 		}
 	}()
@@ -929,6 +932,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
+	workerCalled = true
 	workerResp, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
@@ -1707,15 +1711,18 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	if err := resetSandboxAssetsDir(actorUID); err != nil {
 		return nil, err
 	}
-	// The record below is written before RestoreWorkload, so until then it
-	// describes the previous activation; a failed restore must not leave this
-	// one's asset links behind for a later Terminate to take for that record's.
-	// Nor its snapshot files: staged ones are links into the snapshot cache
-	// or copies, and either would hold the cache's entries, or disk, until
-	// the next lifecycle call resets the directory.
+	// The record below is written just before RestoreWorkload. Until then it
+	// describes the previous activation, so a failed restore removes this
+	// one's asset links. Once RestoreWorkload is issued, the assets stay: the
+	// call can fail before the worker has deleted the containers it started
+	// with them. Staged snapshot files are always removed, so their links or
+	// copies do not hold the snapshot cache's entries, or disk.
+	workerCalled := false
 	defer func() {
 		if err != nil {
-			_ = os.RemoveAll(ateletpath.SandboxAssetsDir(actorUID))
+			if !workerCalled {
+				_ = os.RemoveAll(ateletpath.SandboxAssetsDir(actorUID))
+			}
 			_ = os.RemoveAll(ateletpath.RestoreStateDir(actorUID))
 		}
 	}()
@@ -1872,6 +1879,7 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	// The worker_restore phase is opaque from here; worker logs its own breakdown of
 	// this call as "Actor restore phases".
 	tWorker := time.Now()
+	workerCalled = true
 	workerResp, err := client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,

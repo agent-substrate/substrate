@@ -83,6 +83,8 @@ type fakeWorker struct {
 	// restored holds the file contents staged into the restore dir by the
 	// most recent RestoreWorkload.
 	restored map[string]string
+	// runErr, if set, fails every RunWorkload after it recorded the request.
+	runErr error
 	// restoreErr, if set, fails every RestoreWorkload after it recorded the
 	// request, as a worker that could not start the sandbox would.
 	restoreErr error
@@ -156,6 +158,9 @@ func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDir
 
 func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
+	if f.runErr != nil {
+		return nil, f.runErr
+	}
 	f.setStoppedBy(nil)
 	return &ateworkerpb.RunWorkloadResponse{WorkerEpoch: f.workerEpoch}, nil
 }
@@ -570,13 +575,17 @@ func TestRestoreUsesRequestSandboxRuntime(t *testing.T) {
 
 	// Restore writes the sandbox record before calling RestoreWorkload, so a
 	// Restore that fails or times out after reaching the worker still leaves
-	// the record for a subsequent Terminate to tear the sandbox down.
+	// the record, and the assets it names, for the worker's own cleanup and a
+	// subsequent Terminate to tear the sandbox down.
 	if err := os.Remove(ateletpath.ActorSandboxAssetsFile(actorUID)); err != nil {
 		t.Fatalf("removing sandbox record: %v", err)
 	}
 	worker.restoreErr = status.Error(codes.DeadlineExceeded, "restore timed out")
 	if _, err := s.Restore(ctx, restoreReq); err == nil {
 		t.Fatal("Restore succeeded when RestoreWorkload failed")
+	}
+	if _, err := os.Stat(stagedRunsc(actorUID)); err != nil {
+		t.Errorf("runsc after failed RestoreWorkload: %v, want it kept", err)
 	}
 	got, err := readSandboxRecord(actorUID)
 	if err != nil {
@@ -812,6 +821,42 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 	if got := refresher.actors[actorUID]; got != nil {
 		t.Fatalf("failed Run left its registration live: %p", got)
+	}
+}
+
+// A Run whose RunWorkload fails, here as a canceled caller, keeps the staged
+// runsc: the worker may still be deleting the containers it started with it.
+func TestRunFailureAtWorkerKeepsSandboxAssets(t *testing.T) {
+	useTempNodeDirs(t)
+	const actorUID = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a64"
+	worker := &fakeWorker{runErr: status.Error(codes.Canceled, "context canceled")}
+	serveFakeWorker(t, worker)
+	host := imageVolumeTestRegistry(t)
+	pinnedImage := pushTestImage(t, host+"/actor:v1", singleFileLayer(t, "bin/app", "app"))
+	release := newGVisorTestRelease(t)
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
+		anonGCSClient:     fakeObjectStorage{data: release.tarball},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
+	}
+	rec := testSandboxRecord(release)
+	advertiseRuntime(t, s, rec)
+	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
+		Atespace:       "team-a",
+		ActorName:      "actor-run",
+		ActorUid:       actorUID,
+		WorkerPodUid:   "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+		SandboxRuntime: runtimeFor(t, rec),
+		Spec:           &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}}},
+	})
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("Run = %v, want the worker's Canceled", err)
+	}
+	if _, err := os.Stat(stagedRunsc(actorUID)); err != nil {
+		t.Errorf("runsc after failed RunWorkload: %v, want it kept", err)
 	}
 }
 
