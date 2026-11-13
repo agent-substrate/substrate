@@ -224,19 +224,13 @@ spec:
               path: trust-bundle.pem
 '
 
-# 6. Create NFS StorageClass (pointing to the in-cluster NFS server)
-# We wait for the NFS server service to get an IP first, but we can use its DNS name
-# since kube-dns should resolve it. The CSI driver will resolve it when provisioning.
-echo "Creating csi-nfs-sc StorageClass..."
-kubectl apply -f "${ROOT}/hack/third_party/csi-driver-nfs/deploy/example/storageclass-nfs.yaml"
-
-# 7. Wait for deployments to be ready
+# 6. Wait for deployments to be ready
 echo "Waiting for NFS server and CSI driver to be ready..."
 kubectl rollout status deployment/nfs-server -n default --timeout=120s
 kubectl rollout status deployment/csi-nfs-controller -n kube-system --timeout=120s
 kubectl rollout status daemonset/csi-nfs-node -n kube-system --timeout=120s
 
-# 8. Create the CSIDriverConfig for Substrate
+# 7. Create the CSIDriverConfig for Substrate
 echo "Creating nfs.csi.k8s.io CSIDriverConfig..."
 cat <<EOF | kubectl apply -f -
 apiVersion: ate.dev/v1
@@ -253,6 +247,32 @@ spec:
     # The one DNS name servicednssigner puts in the proxy's certificate.
     serverName: csi-nfs-controller.kube-system.svc
 EOF
+
+# 8. Register the canonical ExternalVolumeClass when ExternalVolumes preview is enabled.
+preview_gates="${ATE_PREVIEW:-}"
+case ",${preview_gates//[[:space:]]/}," in
+  *,ALL,*|*,ExternalVolumes,*)
+    if kubectl get deployment/ate-api-server -n "${ATE_NAMESPACE}" >/dev/null 2>&1; then
+      kubectl rollout status deployment/ate-api-server -n "${ATE_NAMESPACE}" --timeout=120s
+      echo "Registering csi-nfs ExternalVolumeClass..."
+      if create_out="$(go -C "${ROOT}" run ./cmd/kubectl-ate --preview create external-volume-class -f "${ROOT}/hack/csi/external-volume-class-nfs.yaml" 2>&1)"; then
+        printf '%s\n' "${create_out}"
+      elif [[ "${create_out}" == *"AlreadyExists"* ]]; then
+        # Keep an existing csi-nfs for idempotence without duplicating manifest fields here;
+        # ate-setup setup csi compares specs via proto unmarshaling.
+        echo "ExternalVolumeClass csi-nfs already exists; keeping it."
+      else
+        printf '%s\n' "${create_out}" >&2
+        exit 1
+      fi
+    else
+      echo "ate-api-server not found; skipping csi-nfs ExternalVolumeClass registration."
+    fi
+    ;;
+  *)
+    echo "Skipping csi-nfs ExternalVolumeClass registration: ExternalVolumes preview gate is disabled (set ATE_PREVIEW=ExternalVolumes)."
+    ;;
+esac
 
 # 9. Restart atelet to ensure it reconnects to the new CSI socket.
 echo "Restarting atelet DaemonSet (if present)..."

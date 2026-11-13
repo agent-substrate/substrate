@@ -306,7 +306,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
 		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	svc := &RPCService{impl: newServiceImpl(persistence)}
 
 	// Repointing at a template that does not exist is rejected.
 	_, err := svc.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
@@ -595,7 +595,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			if tt.gateOff {
 				preview.InitForTest(t)
 			}
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence)
 			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
 			svc := &RPCService{impl: impl}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
@@ -787,7 +787,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{impl: newServiceImpl(racing)}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -848,7 +848,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{impl: newServiceImpl(racing)}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -904,7 +904,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapi.Actor) (*RPCService, *ateap
 	t.Cleanup(cleanup)
 
 	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
-	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
+	return &RPCService{impl: newServiceImpl(persistence)}, created
 }
 
 func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
@@ -922,7 +922,7 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
 			svc := &RPCService{impl: impl}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")

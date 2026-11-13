@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -128,42 +129,56 @@ func TestTheHostpathControllerServiceIsCreatedBeforeTheDriver(t *testing.T) {
 	}
 }
 
-// The e2e tests, the demos and the benchmarks all provision from csi-nfs-sc, so
-// both NFS setups apply the one manifest that defines it rather than each
-// carrying a copy that can drift. The step wants a cluster, so which file it
-// applies is pinned in the source.
-func TestTheNFSSetupsApplyTheSharedStorageClass(t *testing.T) {
-	const manifest = "hack/third_party/csi-driver-nfs/deploy/example/storageclass-nfs.yaml"
+// The e2e tests, the demos and the benchmarks all provision from csi-nfs, so
+// both NFS setups register the one manifest that defines it rather than each
+// carrying a copy that can drift.
+func TestTheNFSSetupsRegisterTheSharedExternalVolumeClass(t *testing.T) {
+	const manifest = "hack/csi/external-volume-class-nfs.yaml"
 	root := repoRoot(t)
 
-	objs, err := kube.LoadPath(filepath.Join(root, manifest))
+	raw, err := os.ReadFile(filepath.Join(root, manifest))
 	if err != nil {
-		t.Fatalf("loading %s: %v", manifest, err)
+		t.Fatalf("reading %s: %v", manifest, err)
 	}
-	if len(objs) != 1 || objs[0].GetKind() != "StorageClass" || objs[0].GetName() != "csi-nfs-sc" {
-		t.Fatalf("%s holds %d object(s), want only the csi-nfs-sc StorageClass", manifest, len(objs))
+	class, err := ExternalVolumeClassFromManifest(raw)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", manifest, err)
 	}
-	if p, _, _ := unstructured.NestedString(objs[0].Object, "provisioner"); p != "nfs.csi.k8s.io" {
-		t.Errorf("csi-nfs-sc provisioner = %q, want nfs.csi.k8s.io", p)
+	if class.GetMetadata().GetName() != "csi-nfs" {
+		t.Errorf("csi-nfs metadata.name = %q, want csi-nfs", class.GetMetadata().GetName())
+	}
+	if class.GetDriverName() != "nfs.csi.k8s.io" {
+		t.Errorf("csi-nfs driverName = %q, want nfs.csi.k8s.io", class.GetDriverName())
+	}
+	if !slices.Equal(class.GetMountOptions(), []string{"nfsvers=4.1"}) {
+		t.Errorf("csi-nfs mountOptions = %v, want [nfsvers=4.1]", class.GetMountOptions())
 	}
 
-	goSetup := functionBody(t, "csi.go", "func (e *Env) setupCSINFS(")
-	if !strings.Contains(goSetup, `deployDir+"/example/storageclass-nfs.yaml"`) {
-		t.Errorf("setupCSINFS no longer applies %s", manifest)
+	goRegister := functionBody(t, "substrate.go", "func externalVolumeClassesForDriver(")
+	if !strings.Contains(goRegister, `"external-volume-class-nfs.yaml"`) {
+		t.Errorf("externalVolumeClassesForDriver no longer loads %s", manifest)
+	}
+	for fn, sig := range map[string]string{
+		"setupCSINFS":      "func (e *Env) setupCSINFS(",
+		"setupCSIHostpath": "func (e *Env) setupCSIHostpath(",
+	} {
+		if strings.Contains(functionBody(t, "csi.go", sig), "StorageClass") {
+			t.Errorf("%s still references a Kubernetes StorageClass", fn)
+		}
 	}
 	script, err := os.ReadFile(filepath.Join(root, "hack", "setup-csi-nfs-kind.sh"))
 	if err != nil {
 		t.Fatalf("reading the shell setup: %v", err)
 	}
 	if !strings.Contains(string(script), manifest) {
-		t.Errorf("hack/setup-csi-nfs-kind.sh no longer applies %s", manifest)
+		t.Errorf("hack/setup-csi-nfs-kind.sh no longer registers %s", manifest)
 	}
 	for name, src := range map[string]string{
-		"setupCSINFS":                goSetup,
-		"hack/setup-csi-nfs-kind.sh": string(script),
+		"externalVolumeClassesForDriver": goRegister,
+		"hack/setup-csi-nfs-kind.sh":     string(script),
 	} {
-		if strings.Contains(src, "kind: StorageClass") {
-			t.Errorf("%s defines a StorageClass inline; apply %s instead", name, manifest)
+		if strings.Contains(src, "\ndriverName:") {
+			t.Errorf("%s defines an ExternalVolumeClass inline; register %s instead", name, manifest)
 		}
 	}
 }
@@ -237,7 +252,7 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 	}
 	src := string(script)
 
-	for _, forbidden := range []string{"socat:", "privileged: true"} {
+	for _, forbidden := range []string{"socat:", "privileged: true", "StorageClass"} {
 		if strings.Contains(src, forbidden) {
 			t.Errorf("hack/setup-csi-nfs-kind.sh still contains %q", forbidden)
 		}
@@ -247,6 +262,8 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 		"serverName: csi-nfs-controller.kube-system.svc\n",
 		"usePodIdentity: true",
 		"/sa/ate-api-server",
+		"ExternalVolumes",
+		"--preview create external-volume-class -f",
 	} {
 		if !strings.Contains(src, required) {
 			t.Errorf("hack/setup-csi-nfs-kind.sh no longer contains %q", required)
@@ -254,6 +271,9 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 	}
 	if service, driver := strings.Index(src, "name: csi-nfs-controller\n  namespace: kube-system"), strings.Index(src, "csi-nfs-controller.yaml"); service < 0 || driver < 0 || service > driver {
 		t.Error("hack/setup-csi-nfs-kind.sh deploys the NFS driver before creating the csi-nfs-controller Service")
+	}
+	if cdc, evc := strings.Index(src, "kind: CSIDriverConfig"), strings.Index(src, "external-volume-class-nfs.yaml"); cdc < 0 || evc < 0 || cdc > evc {
+		t.Error("hack/setup-csi-nfs-kind.sh registers the csi-nfs ExternalVolumeClass before creating the CSIDriverConfig")
 	}
 }
 

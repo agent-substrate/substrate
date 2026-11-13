@@ -212,6 +212,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 			return err
 		}
 	}
+	if err := e.RegisterExternalVolumeClasses(ctx, opts.SetupCSI); err != nil {
+		return err
+	}
 	if err := e.waitFakeWorkersync(ctx); err != nil {
 		return err
 	}

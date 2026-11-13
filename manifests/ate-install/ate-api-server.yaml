@@ -30,6 +30,8 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["workerpools", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
+# TODO(v1.2): Remove after v1.1; kept so v1.0 ate-api-server pods retain RBAC
+# for scInformerFactory.WaitForCacheSync while Deployment/ate-api-server rolls.
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["get", "watch", "list"]
