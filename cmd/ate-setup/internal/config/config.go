@@ -242,6 +242,10 @@ type Config struct {
 	// CredentialProviders for its schema.
 	CredentialProviderJSON string
 
+	// TokenExchangeCAConfigMap names the admin-owned ConfigMap whose ca.crt
+	// the egress gateway trusts for token exchange endpoints.
+	TokenExchangeCAConfigMap string
+
 	// AnthropicAPIKey is required only by the claude-code-multiplex demo.
 	AnthropicAPIKey string
 
