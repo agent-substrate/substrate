@@ -62,6 +62,11 @@ bounded by the control plane's own server-side RPC deadline, and Envoy's
 ext_proc message timeout (`budget + 5s`) remains the ceiling on how long a
 client is held either way.
 
+ateapi does the same: a lifecycle workflow that holds the actor's lease runs
+to its end whatever its caller does, so a cancelled or timed-out client gets
+its error and the actor still reaches its next state. A retry meanwhile gets
+`Aborted` until the lease is released.
+
 **Worst-case occupancy.** A parked request's lot slot is held until its caller
 stops waiting; with the Envoy dataplane that is bounded by the ext_proc
 message timeout (`budget + 5s`). The resume attempt itself can outlive every

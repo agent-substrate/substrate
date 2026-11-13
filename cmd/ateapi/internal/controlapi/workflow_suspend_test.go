@@ -48,7 +48,8 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 	}{
 		{"snapshot conflict", apierror.Aborted("checkpoint rejected"), false, codes.Aborted, ateapi.ActorState_ACTOR_STATE_SUSPENDING},
 		{"failed precondition", apierror.FailedPrecondition("checkpoint rejected"), false, codes.Internal, ateapi.ActorState_ACTOR_STATE_CRASHED},
-		{"caller cancellation", apierror.Aborted("checkpoint rejected"), true, codes.Canceled, ateapi.ActorState_ACTOR_STATE_SUSPENDING},
+		// The workflow outlives its caller: the atelet outcome comes back, not the cancellation.
+		{"caller cancellation", apierror.Aborted("checkpoint rejected"), true, codes.Aborted, ateapi.ActorState_ACTOR_STATE_SUSPENDING},
 	}
 	for _, tt := range tests {
 		for _, mode := range suspendModes {
@@ -80,8 +81,8 @@ func TestSuspendActor_CheckpointError(t *testing.T) {
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("SuspendActor error = %v (code %v), want %v", err, got, tt.wantCode)
 				}
-				if tt.cancel && !errors.Is(err, context.Canceled) {
-					t.Errorf("SuspendActor error does not wrap context.Canceled: %v", err)
+				if tt.cancel && errors.Is(err, context.Canceled) {
+					t.Errorf("SuspendActor followed the caller's cancellation: %v", err)
 				}
 				if checkpoints, _ := atelet.calls(); checkpoints != 1 {
 					t.Fatalf("Checkpoint calls = %d, want 1", checkpoints)
