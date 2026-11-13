@@ -210,6 +210,11 @@ func TestValidationErrorsNameTheSupplyingChannel(t *testing.T) {
 			wantIn: []string{"atenet.egress.additionalExtprocService", "1-65535", "ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"},
 		},
 		{
+			name:   "token exchange CA is not a ConfigMap name",
+			env:    map[string]string{"ATE_TOKEN_EXCHANGE_CA_CONFIGMAP": "Corp_CA"},
+			wantIn: []string{"atenet.egress.tokenExchangeCAConfigMap", "a ConfigMap name", `"Corp_CA"`, "ATE_TOKEN_EXCHANGE_CA_CONFIGMAP"},
+		},
+		{
 			name:   "image tag without a repository",
 			env:    map[string]string{"ATE_IMAGE_TAG": "v1"},
 			wantIn: []string{"images.tag", "ATE_IMAGE_TAG", "images.repo", "the tag names nothing"},

@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -405,6 +406,29 @@ func NormalizeHostname(raw string) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// TokenURLDestination is the hostname and port a token exchange's token_url
+// names, the port defaulting to 443. The URL must be https with a DNS
+// hostname and no userinfo, query, or fragment.
+func TokenURLDestination(raw string) (Destination, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return Destination{}, false
+	}
+	name, ok := NormalizeHostname(u.Hostname())
+	if !ok {
+		return Destination{}, false
+	}
+	port := defaultHTTPSPort
+	if p := u.Port(); p != "" {
+		n, err := strconv.ParseUint(p, 10, 16)
+		if err != nil || n == 0 {
+			return Destination{}, false
+		}
+		port = uint16(n)
+	}
+	return Destination{Hostname: name, Port: port}, true
 }
 
 // isHostname reports whether name is a lowercase DNS-1123 subdomain whose last
