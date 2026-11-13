@@ -214,6 +214,36 @@ func TestNormalizeHostname(t *testing.T) {
 	}
 }
 
+func TestTokenURLDestination(t *testing.T) {
+	tests := []struct {
+		raw    string
+		want   Destination
+		wantOK bool
+	}{
+		{raw: "https://sts.googleapis.com/v1/token", want: Destination{Hostname: "sts.googleapis.com", Port: 443}, wantOK: true},
+		{raw: "https://STS.Example.com./token", want: Destination{Hostname: "sts.example.com", Port: 443}, wantOK: true},
+		{raw: "https://sts.example.com:8443/token", want: Destination{Hostname: "sts.example.com", Port: 8443}, wantOK: true},
+		{raw: "https://sts.example.com", want: Destination{Hostname: "sts.example.com", Port: 443}, wantOK: true},
+		{raw: "http://sts.example.com/token"},
+		{raw: "https://user:pass@sts.example.com/token"},
+		{raw: "https://sts.example.com/token?audience=x"},
+		{raw: "https://sts.example.com/token#frag"},
+		{raw: "https://192.0.2.1/token"},
+		{raw: "https://[2001:db8::1]/token"},
+		{raw: "https://sts.example.com:0/token"},
+		{raw: "https://sts.example.com:99999/token"},
+		{raw: "https:///token"},
+		{raw: "sts.example.com/token"},
+		{raw: ""},
+	}
+	for _, tc := range tests {
+		got, ok := TokenURLDestination(tc.raw)
+		if ok != tc.wantOK || got != tc.want {
+			t.Errorf("TokenURLDestination(%q) = (%+v, %v), want (%+v, %v)", tc.raw, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
 func TestCompileReportsAndDropsInvalidEntries(t *testing.T) {
 	compiled, errs := Compile(policy(
 		httpRule("good.example.com", "BAD.example.com"),
