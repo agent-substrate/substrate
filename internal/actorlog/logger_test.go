@@ -18,9 +18,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -339,6 +343,118 @@ func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 		t.Errorf("got message = %v, want %q", m["message"], line)
 	}
 	assertLabels(t, labelGroup(t, al, m), identityLabels())
+}
+
+func TestWrapContainerLogs_LongLines(t *testing.T) {
+	long := func(n int) string { return strings.Repeat("a", n) }
+	longJSON := `{"msg":"` + long(maxLineBytes) + `"}`
+	cappedMessage := long(maxLineBytes - len(`{"msg":""}`))
+	cappedJSON := `{"msg":"` + cappedMessage + `"}`
+
+	type testCase struct {
+		name  string
+		input string
+		// slow feeds the reader one byte at a time.
+		slow  bool
+		want  []string
+		field string
+	}
+	tests := []testCase{
+		{
+			name:  "exactly the cap with a newline is one record",
+			input: long(maxLineBytes) + "\n",
+			want:  []string{long(maxLineBytes)},
+		},
+		{
+			name:  "JSON at the cap with a newline stays structured",
+			input: cappedJSON + "\n",
+			want:  []string{cappedMessage},
+			field: "msg",
+		},
+		{
+			name:  "JSON at the cap ending at EOF stays structured",
+			input: cappedJSON,
+			want:  []string{cappedMessage},
+			field: "msg",
+		},
+		{
+			name:  "one byte over the cap splits",
+			input: long(maxLineBytes+1) + "\n",
+			want:  []string{long(maxLineBytes), "a"},
+		},
+		{
+			name:  "newline-free stream ending at EOF",
+			input: long(2*maxLineBytes + 10),
+			want:  []string{long(maxLineBytes), long(maxLineBytes), long(10)},
+		},
+		{
+			name:  "short lines around a long one are untouched",
+			input: "before\n" + long(maxLineBytes+5) + "\nafter\n",
+			want:  []string{"before", long(maxLineBytes), long(5), "after"},
+		},
+		{
+			name:  "small reads accumulate up to the cap",
+			input: long(maxLineBytes+5) + "\nafter\n",
+			slow:  true,
+			want:  []string{long(maxLineBytes), long(5), "after"},
+		},
+		{
+			name:  "oversized JSON is logged as text chunks",
+			input: longJSON + "\n",
+			want:  []string{longJSON[:maxLineBytes], longJSON[maxLineBytes:]},
+		},
+	}
+	for _, text := range []string{"é", "界", "😀"} {
+		for offset := 1; offset < len(text); offset++ {
+			prefix := long(maxLineBytes - offset)
+			tests = append(tests, testCase{
+				name:  fmt.Sprintf("UTF-8 boundary %s byte %d", text, offset),
+				input: prefix + text + "\nafter\n",
+				slow:  true,
+				want:  []string{prefix, text, "after"},
+			})
+		}
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.field == "" {
+				tt.field = "message"
+			}
+			var buf bytes.Buffer
+			al := NewActorLogger(&buf, false)
+			var r io.Reader = strings.NewReader(tt.input)
+			if tt.slow {
+				r = iotest.OneByteReader(r)
+			}
+			al.WrapContainerLogs(r, testAttribution, testContainer)
+
+			var got []string
+			for _, rec := range bytes.Split(bytes.TrimSuffix(buf.Bytes(), []byte("\n")), []byte("\n")) {
+				var m map[string]any
+				if err := json.Unmarshal(rec, &m); err != nil {
+					t.Fatalf("record is not JSON: %v", err)
+				}
+				msg, ok := m[tt.field].(string)
+				if !ok {
+					t.Fatalf("record has no %s: %.100s", tt.field, rec)
+				}
+				assertLabels(t, labelGroup(t, al, m), identityLabels())
+				got = append(got, msg)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("got %d messages with lengths %v, want %d with lengths %v",
+					len(got), lengths(got), len(tt.want), lengths(tt.want))
+			}
+		})
+	}
+}
+
+func lengths(ss []string) []int {
+	n := make([]int, len(ss))
+	for i, s := range ss {
+		n[i] = len(s)
+	}
+	return n
 }
 
 func TestEmitLifecycleLog(t *testing.T) {
