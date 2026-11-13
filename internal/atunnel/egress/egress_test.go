@@ -461,6 +461,56 @@ func TestEgressEndToEnd(t *testing.T) {
 	}
 }
 
+func TestEgressSetsUpAcceptedConnectionsFirst(t *testing.T) {
+	var setUp atomic.Bool
+	resolved := make(chan bool, 1)
+	egress, err := New(func(net.Conn) (string, error) {
+		resolved <- setUp.Load()
+		return "", errors.New("stop here")
+	}, WithConfigureAcceptedSock(func(net.Conn) error {
+		setUp.Store(true)
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := egress.Activate(testActorUID, tunnelDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, errors.New("not dialed")
+	}), fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	actor, proxy := net.Pipe()
+	defer actor.Close()
+	egress.handle(proxy, egress.active[testActorUID])
+	if !receiveWithin(t, resolved, "destination lookup") {
+		t.Error("destination was resolved before the connection was set up")
+	}
+}
+
+func TestEgressClosesConnectionsThatFailSetup(t *testing.T) {
+	egress, err := New(func(net.Conn) (string, error) {
+		t.Error("resolved the destination of a connection that failed setup")
+		return "", nil
+	}, WithConfigureAcceptedSock(func(net.Conn) error { return errors.New("setsockopt failed") }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := egress.Activate(testActorUID, tunnelDialerFunc(func(context.Context, string) (net.Conn, error) {
+		return nil, errors.New("not dialed")
+	}), fakeActorCertificateSource{expiresAt: time.Now().Add(time.Hour)}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	actor, proxy := net.Pipe()
+	defer actor.Close()
+	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	egress.handle(proxy, egress.active[testActorUID])
+	if _, err := actor.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("read after failed setup = %v, want EOF", err)
+	}
+}
+
 func TestEgressRejectsInactiveConnection(t *testing.T) {
 	egress, err := New(func(net.Conn) (string, error) {
 		t.Fatal("inactive egress resolved destination")
