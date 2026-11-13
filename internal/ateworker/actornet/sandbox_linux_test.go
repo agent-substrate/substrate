@@ -93,24 +93,19 @@ func TestSetupSandboxNetwork(t *testing.T) {
 	ctx := context.Background()
 
 	type actor struct {
-		net  *SandboxNetwork
+		net  *testSandboxNetwork
 		body string
 	}
 	actors := map[string]*actor{}
 	for _, uid := range []string{"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"} {
-		n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: uid, Veth: true, EgressPort: testEgressPort})
+		n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{ActorUID: uid, Veth: true, EgressPort: testEgressPort})
 		if err != nil {
 			t.Fatalf("SetupSandboxNetwork(%s): %v", uid, err)
 		}
-		t.Cleanup(func() {
-			if err := CleanupSandboxNetwork(n); err != nil {
-				t.Errorf("cleanup %s: %v", uid, err)
-			}
-		})
 
 		// The actor's app, bound where a real one binds, inside its namespace.
 		var lis net.Listener
-		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 			l, err := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
 			lis = l
 			return err
@@ -127,7 +122,7 @@ func TestSetupSandboxNetwork(t *testing.T) {
 
 	// Reaching each actor is a matter of which namespace the dial is made from.
 	for uid, a := range actors {
-		client := &http.Client{Transport: &http.Transport{DialContext: netns.Dialer(a.net.RuntimeNetNS)}, Timeout: 5 * time.Second}
+		client := &http.Client{Transport: &http.Transport{DialContext: netns.Dialer(a.net.actorNS)}, Timeout: 5 * time.Second}
 		resp, err := client.Get((&url.URL{Scheme: "http", Host: net.JoinHostPort(ActorVethIP, "80")}).String())
 		if err != nil {
 			t.Fatalf("reaching actor %s: %v", uid, err)
@@ -150,16 +145,15 @@ func TestActorEgressIsFailClosedWithoutAtunnel(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
 
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{
 		ActorUID: "33333333-3333-3333-3333-333333333333", Veth: true, EgressPort: testEgressPort,
 	})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	for _, destination := range []string{"93.184.216.34:443", "93.184.216.34:8080"} {
-		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 			c, err := net.DialTimeout("tcp", destination, 3*time.Second)
 			if err != nil {
 				return err
@@ -176,14 +170,13 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
 
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: "44444444-4444-4444-4444-444444444444", Veth: true, EgressPort: testEgressPort})
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{ActorUID: "44444444-4444-4444-4444-444444444444", Veth: true, EgressPort: testEgressPort})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	var app net.Listener
-	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 		l, e := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
 		app = l
 		return e
@@ -202,7 +195,7 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 		}
 	}()
 
-	dial := netns.Dialer(n.GatewayNetNS)
+	dial := netns.Dialer(n.NetNS)
 	c, err := dial(ctx, "tcp", net.JoinHostPort(ActorVethIP, "80"))
 	if err != nil {
 		t.Fatalf("ingress dial: %v", err)
@@ -227,21 +220,20 @@ func TestSetupSandboxNetworkWithoutVeth(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
 
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{
 		ActorUID:   "77777777-7777-7777-7777-777777777777",
 		EgressPort: testEgressPort,
 	})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
-	if n.GatewayNetNS != n.RuntimeNetNS {
-		t.Errorf("got a second namespace (%v vs %v); this shape needs one", n.GatewayNetNS, n.RuntimeNetNS)
+	if n.NetNS != n.actorNS {
+		t.Errorf("got a second namespace (%v vs %v); this shape needs one", n.NetNS, n.actorNS)
 	}
 
 	// No veth was built, so nothing but lo is here until the tap arrives.
-	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 		links, err := netlink.LinkList()
 		if err != nil {
 			return err
@@ -268,14 +260,9 @@ func TestSetupSucceedsOverALeftoverNamespace(t *testing.T) {
 		t.Fatalf("first SetupSandboxNetwork: %v", err)
 	}
 	// Simulate interrupted teardown by leaving the namespace names mounted.
-	first.RuntimeNetNS.Close()
-	if first.GatewayNetNS != first.RuntimeNetNS {
-		first.GatewayNetNS.Close()
-	}
-	for _, name := range []string{nodepath.ActorNetNSName(uid), SandboxGatewayNetNSName(uid)} {
-		if _, err := os.Stat("/var/run/netns/" + name); err != nil {
-			t.Fatalf("expected leftover netns %s: %v", name, err)
-		}
+	first.NetNS.Close()
+	if _, err := os.Stat("/var/run/netns/" + nodepath.ActorNetNSName(uid)); err != nil {
+		t.Fatalf("expected leftover netns: %v", err)
 	}
 
 	second, err := SetupSandboxNetwork(ctx, cfg)
@@ -284,7 +271,7 @@ func TestSetupSucceedsOverALeftoverNamespace(t *testing.T) {
 	}
 	t.Cleanup(func() { CleanupSandboxNetwork(second) })
 
-	if err := netns.Do(ctx, second.RuntimeNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, second.NetNS, func(context.Context) error {
 		if _, err := netlink.LinkByName(ActorVethName); err != nil {
 			return fmt.Errorf("actor interface missing after reuse: %w", err)
 		}
@@ -299,16 +286,15 @@ func TestActorUDPHasNowhereToGoBeyondTheNamespacePair(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
 
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{
 		ActorUID: "bbbbbbbb-0000-0000-0000-00000000000b", Veth: true, EgressPort: testEgressPort,
 	})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	for _, destination := range []string{"93.184.216.34:443", "93.184.216.34:53"} {
-		if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
 			c, err := net.Dial("udp", destination)
 			if err != nil {
 				return err
@@ -330,9 +316,6 @@ func TestCleanupClosesEachDescriptorOnce(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if network.RuntimeNetNS != network.GatewayNetNS {
-		t.Fatalf("expected one namespace without a veth, got %d and %d", network.RuntimeNetNS, network.GatewayNetNS)
 	}
 
 	// A second close of the same descriptor reports EBADF.
@@ -429,27 +412,25 @@ func TestSandboxNamespacesDoNotForward(t *testing.T) {
 			}
 			t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
-			for _, ns := range []netns.Handle{n.RuntimeNetNS, n.GatewayNetNS} {
-				if err := netns.Do(ctx, ns, func(context.Context) error {
-					for _, key := range []string{
-						"net/ipv4/conf/all/forwarding",
-						"net/ipv4/conf/default/forwarding",
-					} {
-						b, err := os.ReadFile("/proc/sys/" + key)
-						if err != nil {
-							return err
-						}
-						if got := strings.TrimSpace(string(b)); got != "0" {
-							t.Errorf("%s = %s in the sandbox namespace, want 0", key, got)
-						}
+			if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
+				for _, key := range []string{
+					"net/ipv4/conf/all/forwarding",
+					"net/ipv4/conf/default/forwarding",
+				} {
+					b, err := os.ReadFile("/proc/sys/" + key)
+					if err != nil {
+						return err
 					}
-					return nil
-				}); err != nil {
-					t.Fatalf("reading forwarding sysctls: %v", err)
+					if got := strings.TrimSpace(string(b)); got != "0" {
+						t.Errorf("%s = %s in the sandbox namespace, want 0", key, got)
+					}
 				}
+				return nil
+			}); err != nil {
+				t.Fatalf("reading forwarding sysctls: %v", err)
 			}
 
-			c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+			c, err := nftables.New(nftables.WithNetNSFd(int(n.NetNS)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -526,7 +507,7 @@ func TestSandboxNamespacesDoNotInheritNodeSettings(t *testing.T) {
 			t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 			// A link added after setup, as the microVM tap is.
-			if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+			if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
 				if err := netlink.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "late0"}, PeerName: "late1"}); err != nil {
 					return err
 				}
@@ -540,45 +521,43 @@ func TestSandboxNamespacesDoNotInheritNodeSettings(t *testing.T) {
 				t.Fatalf("adding a late link: %v", err)
 			}
 
-			for _, ns := range []netns.Handle{n.RuntimeNetNS, n.GatewayNetNS} {
-				if err := netns.Do(ctx, ns, func(context.Context) error {
-					want := map[string]string{}
-					for _, s := range sandboxSysctls {
-						want[s.Key] = s.Value
+			if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
+				want := map[string]string{}
+				for _, s := range sandboxSysctls {
+					want[s.Key] = s.Value
+				}
+				links, err := netlink.LinkList()
+				if err != nil {
+					return err
+				}
+				for _, l := range links {
+					name := l.Attrs().Name
+					// lo predates the sysctls.
+					if l.Attrs().Flags&net.FlagLoopback != 0 {
+						continue
 					}
-					links, err := netlink.LinkList()
+					for key, value := range perLink {
+						want["net/ipv4/conf/"+name+"/"+key] = value
+					}
+					for key, value := range perLinkV6 {
+						want["net/ipv6/conf/"+name+"/"+key] = value
+					}
+				}
+				for key, value := range want {
+					b, err := os.ReadFile("/proc/sys/" + key)
+					if errors.Is(err, fs.ErrNotExist) && strings.HasPrefix(key, "net/ipv6/") {
+						continue
+					}
 					if err != nil {
 						return err
 					}
-					for _, l := range links {
-						name := l.Attrs().Name
-						// lo predates the sysctls.
-						if l.Attrs().Flags&net.FlagLoopback != 0 {
-							continue
-						}
-						for key, value := range perLink {
-							want["net/ipv4/conf/"+name+"/"+key] = value
-						}
-						for key, value := range perLinkV6 {
-							want["net/ipv6/conf/"+name+"/"+key] = value
-						}
+					if got := strings.TrimSpace(string(b)); got != value {
+						t.Errorf("%s = %s, want %s", key, got, value)
 					}
-					for key, value := range want {
-						b, err := os.ReadFile("/proc/sys/" + key)
-						if errors.Is(err, fs.ErrNotExist) && strings.HasPrefix(key, "net/ipv6/") {
-							continue
-						}
-						if err != nil {
-							return err
-						}
-						if got := strings.TrimSpace(string(b)); got != value {
-							t.Errorf("%s = %s, want %s", key, got, value)
-						}
-					}
-					return nil
-				}); err != nil {
-					t.Fatalf("reading sysctls: %v", err)
 				}
+				return nil
+			}); err != nil {
+				t.Fatalf("reading sysctls: %v", err)
 			}
 		})
 	}
@@ -591,18 +570,17 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
 
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n, err := setupTestSandboxNetwork(t, ctx, SandboxNetworkConfig{
 		ActorUID: "eeeeeeee-0000-0000-0000-00000000000e", Veth: true, EgressPort: testEgressPort,
 	})
 	if err != nil {
 		t.Fatalf("SetupSandboxNetwork: %v", err)
 	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	// Delete disallowed-egress so its prerouting reject does not shadow the
 	// forwarding sysctl and forward chain checks below.
 	table := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"}
-	c, err := nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	c, err := nftables.New(nftables.WithNetNSFd(int(n.NetNS)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +604,7 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 	})
 
 	gwAddr, probeAddr := MustParseAddr("10.99.0.1/30"), MustParseAddr("10.99.0.2/30")
-	if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
 		if err := netlink.LinkAdd(&netlink.Veth{
 			LinkAttrs: netlink.LinkAttrs{Name: "stray0"}, PeerName: "stray1",
 			PeerNamespace: netlink.NsFd(int(probeNS)),
@@ -672,7 +650,7 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 
 	arrives := func(wait time.Duration) bool {
 		t.Helper()
-		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+		if err := netns.Do(ctx, n.actorNS, func(context.Context) error {
 			c, err := net.Dial("udp4", "10.99.0.2:9999")
 			if err != nil {
 				return err
@@ -693,7 +671,7 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 		t.Fatal("the gateway namespace routed actor traffic as set up")
 	}
 
-	if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
+	if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
 		return os.WriteFile("/proc/sys/net/ipv4/conf/all/forwarding", []byte("1\n"), 0o644)
 	}); err != nil {
 		t.Fatalf("re-enabling forwarding: %v", err)
@@ -702,7 +680,7 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 		t.Fatal("the gateway namespace routed actor traffic once forwarding was re-enabled; the forward chain is not dropping")
 	}
 
-	c, err = nftables.New(nftables.WithNetNSFd(int(n.GatewayNetNS)))
+	c, err = nftables.New(nftables.WithNetNSFd(int(n.NetNS)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,5 +691,141 @@ func TestGatewayDoesNotRouteActorTrafficOverAStrayLink(t *testing.T) {
 	}
 	if !arrives(5 * time.Second) {
 		t.Fatal("the probe saw nothing even with forwarding on and no forward chain; this test cannot detect routing")
+	}
+}
+
+type testSandboxNetwork struct {
+	*SandboxNetwork
+	actorNS netns.Handle
+}
+
+// setupTestSandboxNetwork uses a Linux namespace in place of gVisor's netstack.
+func setupTestSandboxNetwork(t *testing.T, ctx context.Context, cfg SandboxNetworkConfig) (*testSandboxNetwork, error) {
+	t.Helper()
+	n, err := SetupSandboxNetwork(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() {
+		if err := CleanupSandboxNetwork(n); err != nil {
+			t.Error(err)
+		}
+	})
+	if !cfg.Veth {
+		return &testSandboxNetwork{SandboxNetwork: n, actorNS: n.NetNS}, nil
+	}
+	guestName := nodepath.ActorNetNSName(cfg.ActorUID) + "-guest"
+	guest, err := netns.CreateNamed(guestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		guest.Close()
+		_ = netns.RemoveNamed(guestName)
+	})
+	if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
+		eth0, err := netlink.LinkByName(ActorVethName)
+		if err != nil {
+			return err
+		}
+		addrs, err := netlink.AddrList(eth0, netlink.FAMILY_V4)
+		if err != nil {
+			return err
+		}
+		for _, addr := range addrs {
+			if err := netlink.AddrDel(eth0, &addr); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.ActivateGateway(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
+		eth0, err := netlink.LinkByName(ActorVethName)
+		if err != nil {
+			return err
+		}
+		return netlink.LinkSetNsFd(eth0, int(guest))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := netns.Do(ctx, guest, func(ctx context.Context) error {
+		if err := prepareNamespace(ctx); err != nil {
+			return err
+		}
+		eth0, err := netlink.LinkByName(ActorVethName)
+		if err != nil {
+			return err
+		}
+		if err := netlink.AddrReplace(eth0, ActorVethAddr); err != nil {
+			return err
+		}
+		if err := netlink.LinkSetUp(eth0); err != nil {
+			return err
+		}
+		return netlink.RouteReplace(&netlink.Route{LinkIndex: eth0.Attrs().Index, Gw: ActorVethGwIP})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return &testSandboxNetwork{SandboxNetwork: n, actorNS: guest}, nil
+}
+
+func TestVethSharesNamespaceWithGateway(t *testing.T) {
+	roottest.Require(t, "creates network namespaces")
+	ctx := context.Background()
+	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: "single-netns", Veth: true, EgressPort: testEgressPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := CleanupSandboxNetwork(n); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := n.ActivateGateway(ctx); err == nil {
+		t.Fatal("activated gateway before runsc imported eth0")
+	}
+	if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
+		gateway, err := netlink.LinkByName(gatewayVethName)
+		if err != nil {
+			return err
+		}
+		addrs, err := netlink.AddrList(gateway, netlink.FAMILY_ALL)
+		if err != nil {
+			return err
+		}
+		if len(addrs) != 0 {
+			return fmt.Errorf("atside has addresses before runsc: %v", addrs)
+		}
+		eth0, err := netlink.LinkByName(ActorVethName)
+		if err != nil {
+			return err
+		}
+		return netlink.AddrDel(eth0, ActorVethAddr)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.ActivateGateway(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := netns.Do(ctx, n.NetNS, func(context.Context) error {
+		gateway, err := netlink.LinkByName(gatewayVethName)
+		if err != nil {
+			return err
+		}
+		addrs, err := netlink.AddrList(gateway, netlink.FAMILY_V4)
+		if err != nil {
+			return err
+		}
+		if len(addrs) != 1 || !addrs[0].IP.Equal(HostVethAddr.IP) {
+			return fmt.Errorf("gateway addresses: %v", addrs)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
