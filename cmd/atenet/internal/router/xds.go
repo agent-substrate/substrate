@@ -339,12 +339,13 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 
 // SetRouteTimeout sets Envoy's end-to-end timeout on the workload route.
 // Lower it to cap how long a single turn may hold a request open, or raise it
-// past the default for workloads whose turns run longer still. A non-positive
-// value leaves the default unchanged.
+// past the default for workloads whose turns run longer still. Zero disables
+// the route timeout; negative values leave the current value unchanged and
+// callers reject them during configuration validation.
 func (x *XdsServer) SetRouteTimeout(d time.Duration) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if d > 0 {
+	if d >= 0 {
 		x.routeTimeout = d
 	}
 }
@@ -1055,7 +1056,8 @@ func (x *XdsServer) workloadRouteAction(cluster string) *routev3.RouteAction {
 		// Two separate limits: Timeout bounds the upstream response,
 		// IdleTimeout bounds a stream with no activity on it, and
 		// routeIdleTimeout keeps the second from firing before the
-		// first. This route also serves CONNECT-tunneled traffic
+		// first, or at Envoy's default when Timeout is disabled with
+		// --route-timeout=0. This route also serves CONNECT-tunneled traffic
 		// re-injected via main_internal, where Envoy applies Timeout to
 		// the whole tunnel lifetime, so a long-lived tunnel needs
 		// --route-timeout raised like a long LLM turn does.

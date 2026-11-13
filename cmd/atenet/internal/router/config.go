@@ -206,9 +206,9 @@ type routerConfig struct {
 	// RouteTimeout is Envoy's end-to-end timeout on the workload route: the
 	// ceiling on one request from the ingress listener to the actor's response.
 	// It bounds the actor's own handling time, not the resume that precedes it
-	// — parking and the ext_proc timeout cover that. A non-positive value
-	// leaves Envoy on defaultRouteTimeout. It does not size shutdown; see
-	// drainRouteBudget.
+	// — parking and the ext_proc timeout cover that. 0 disables the route
+	// timeout while leaving Envoy's route idle timeout in place. Negative values
+	// are invalid. It does not size shutdown; see drainRouteBudget.
 	RouteTimeout time.Duration
 
 	// ParkedRequest configures request parking: hold and retry requests whose
@@ -308,6 +308,9 @@ func (c routerConfig) validate() error {
 		return err
 	}
 
+	if c.RouteTimeout < 0 {
+		return fmt.Errorf("--route-timeout must not be negative, got %s (0 disables the route timeout)", c.RouteTimeout)
+	}
 	if c.ExtProcMaxRequests < 0 {
 		return fmt.Errorf("--extproc-max-requests must not be negative, got %d (0 derives it from --parked-request-max)", c.ExtProcMaxRequests)
 	}
