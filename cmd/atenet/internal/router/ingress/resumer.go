@@ -16,6 +16,7 @@ package ingress
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,7 @@ import (
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -69,10 +71,12 @@ func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 type ResumeOutcome string
 
 const (
-	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
-	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
-	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
-	ResumeOutcomeUnknown   ResumeOutcome = ateattr.RouterResumeUnknown
+	ResumeOutcomeNone            ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered       ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined          ResumeOutcome = ateattr.RouterResumeJoined
+	ResumeOutcomeBudgetExhausted ResumeOutcome = ateattr.RouterResumeBudgetExhausted
+	ResumeOutcomeParkedRejected  ResumeOutcome = ateattr.RouterResumeParkedRejected
+	ResumeOutcomeUnknown         ResumeOutcome = ateattr.RouterResumeUnknown
 )
 
 type resumeCallResult struct {
@@ -115,6 +119,8 @@ type ActorResumer struct {
 	// Used as a unique ID to identify requests (reqID) and disambiguate the
 	// leader vs joiners for flight outcome classification.
 	nextID uint64
+	// tracer starts the ResumeActor spans.
+	tracer trace.Tracer
 }
 
 // resumerOption configures an ActorResumer.
@@ -142,11 +148,18 @@ func withParkingLot(lot *parkingLot) resumerOption {
 	return func(r *ActorResumer) { r.lot = lot }
 }
 
+// withTracerProvider starts the ResumeActor spans from tp instead of the
+// global provider.
+func withTracerProvider(tp trace.TracerProvider) resumerOption {
+	return func(r *ActorResumer) { r.tracer = tp.Tracer(serviceName) }
+}
+
 func NewActorResumer(apiClient ateapi.ControlClient, opts ...resumerOption) *ActorResumer {
 	r := &ActorResumer{
 		apiClient: apiClient,
 		flights:   make(map[string]*resumeActorFlight),
 		budget:    failFastResumeBudget,
+		tracer:    otel.Tracer(serviceName),
 		backoff: resumeBackoff(DefaultParkedRequestRetryInterval,
 			DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter),
 	}
@@ -181,7 +194,7 @@ func (r *ActorResumer) retryable(err error) bool {
 // ResumeActor ensures the actor is running.
 // This method will block until the actor is resumed or error.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapi.Actor, ResumeOutcome, error) {
-	ctx, span := otel.Tracer(serviceName).Start(ctx, "ResumeActor",
+	ctx, span := r.tracer.Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 
@@ -205,7 +218,20 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	}
 	r.mu.Unlock()
 
-	return r.awaitFlight(ctx, f, actorRef, reqID)
+	actor, outcome, err := r.awaitFlight(ctx, f, actorRef, reqID)
+	// The span carries what the route metric carries, so a budget_exhausted
+	// spike can be followed to its flights.
+	span.SetAttributes(ateattr.RouterResumeKey.String(string(outcome)))
+	if err != nil {
+		span.SetAttributes(ateattr.ErrorTypeKey.String(resumeErrorType(err)))
+		// A disconnected caller is not a router failure, so Canceled leaves
+		// the status unset, as gRPC server spans do.
+		if !errors.Is(err, context.Canceled) {
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+		}
+	}
+	return actor, outcome, err
 }
 
 // runFlight runs one shared resume for actorRef and publishes its outcome to
@@ -280,7 +306,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	case <-f.done:
 		// Fast path: the flight finished without ever retrying, or before this
 		// caller saw retrying. The lot is never touched.
-		return f.callerResult(reqID)
+		return f.callerResult(reqID, r.parkEnabled)
 	case <-f.retrying:
 		// A closed channel is always ready, so a caller attaching after the
 		// flight began retrying lands here immediately.
@@ -290,14 +316,14 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	// though done was ready too: serve a published result without charging the lot.
 	select {
 	case <-f.done:
-		return f.callerResult(reqID)
+		return f.callerResult(reqID, r.parkEnabled)
 	default:
 	}
 
 	retryErr := f.retryErr()
 	release, ok := r.enterLot(ctx, shedOutcome(retryErr))
 	if !ok {
-		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String(), retryErr)
+		return nil, ResumeOutcomeParkedRejected, parkingFullErr(actorRef.String(), retryErr)
 	}
 	var finalErr error
 	defer func() { release(parkOutcomeFor(finalErr)) }()
@@ -307,7 +333,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 		finalErr = ctx.Err()
 		return nil, ResumeOutcomeUnknown, finalErr
 	case <-f.done:
-		actor, outcome, err := f.callerResult(reqID)
+		actor, outcome, err := f.callerResult(reqID, r.parkEnabled)
 		finalErr = err
 		return actor, outcome, err
 	}
