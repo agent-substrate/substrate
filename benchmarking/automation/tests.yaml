@@ -25,7 +25,8 @@
 #                  orchestrator copies that file into the cloned repo as
 #                  .ate-dev-env.sh before the test runs and deletes it
 #                  after, so different tests can target different clusters
-#                  / projects from one CronJob run.
+#                  / projects from one CronJob run. --env-file overrides
+#                  this: every test sources that file instead.
 #   sandboxClass   Optional (default "gvisor"). Sandbox runtime for the
 #                  benchmark WorkerPool: "gvisor" | "microvm".
 #   workerCount    Optional (default 1). WorkerPool replica count for the

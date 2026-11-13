@@ -1,0 +1,7 @@
+# The benchmarking runner images build with the repo root as context.
+# Keep the clone metadata, local environments and cluster secrets out of it.
+.git
+.ate-dev-env.sh
+**/venv
+**/.venv
+**/__pycache__
