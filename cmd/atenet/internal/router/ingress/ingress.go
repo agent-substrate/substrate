@@ -25,15 +25,19 @@ package ingress
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -60,15 +64,130 @@ const (
 
 // Handler routes ingress requests to the worker hosting their actor.
 type Handler struct {
-	resumer *ActorResumer
-	parking *parkingLot
+	resumer           *ActorResumer
+	parking           *parkingLot
+	upstreamConnect   bool
+	warmRouteCacheTTL time.Duration
 }
 
-func New(apiClient ateapi.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
+type Option func(*Handler)
+
+func WithUpstreamConnect(connect bool) Option {
+	return func(h *Handler) {
+		h.upstreamConnect = connect
+	}
+}
+
+func WithWarmRouteCacheTTL(ttl time.Duration) Option {
+	return func(h *Handler) {
+		h.warmRouteCacheTTL = ttl
+	}
+}
+
+func New(apiClient ateapi.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics, opts ...Option) *Handler {
 	lot := newParkingLot(parkCfg, parkMetrics)
-	return &Handler{
-		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
-		parking: lot,
+	h := &Handler{
+		parking:         lot,
+		upstreamConnect: true,
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	h.resumer = NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot), withWarmRouteCacheTTL(h.warmRouteCacheTTL))
+	return h
+}
+
+func getAttribute(attrs map[string]*structpb.Struct, name string) (string, bool) {
+	for _, s := range attrs {
+		if v, ok := s.GetFields()[name]; ok {
+			if n, isNumber := v.GetKind().(*structpb.Value_NumberValue); isNumber {
+				return strconv.FormatFloat(n.NumberValue, 'f', -1, 64), true
+			}
+			return v.GetStringValue(), true
+		}
+	}
+	return "", false
+}
+
+// OnUpstreamHeaders implements extproc.UpstreamResponseObserver.
+// It inspects response headers from upstream to evict cached routes when atunnel
+// signals a stale assignment (HTTP 421 + X-Ate-Assignment-Stale: true) or when
+// Envoy fails to establish an upstream CONNECT tunnel or direct connection.
+// Application-level 404/5xx responses from inside the guest (which lack
+// X-Ate-Assignment-Stale) do NOT evict the route cache.
+func (h *Handler) OnUpstreamHeaders(actorKey string, isGRPC bool, headers []*corev3.HeaderValue, attrs map[string]*structpb.Struct) *extprocv3.ProcessingResponse {
+	var (
+		statusStr     string
+		isStaleAssign bool
+	)
+	for _, hdr := range headers {
+		key := strings.ToLower(hdr.GetKey())
+		val := hdr.GetValue()
+		if val == "" {
+			val = string(hdr.GetRawValue())
+		}
+		switch key {
+		case ":status":
+			statusStr = val
+		case strings.ToLower(atenet.StaleAssignmentHeader):
+			if strings.EqualFold(strings.TrimSpace(val), "true") || val == "1" {
+				isStaleAssign = true
+			}
+		}
+	}
+
+	codeDetails, _ := getAttribute(attrs, "response.code_details")
+
+	// Case A: direct H2 (upstreamConnect=false) + atunnel 421 + X-Ate-Assignment-Stale: true.
+	// Worker atunnel strips X-Ate-Assignment-Stale from actor responses, so this
+	// proves zero bytes reached the actor and the worker no longer hosts it.
+	// Evict the route cache and rewrite 421 into 503 Service Unavailable
+	// (codes.Unavailable for gRPC callers instead of codes.Unknown).
+	if !h.upstreamConnect && statusStr == "421" && isStaleAssign && (codeDetails == "" || codeDetails == "via_upstream") {
+		h.resumer.InvalidateRouteKey(actorKey)
+		return buildStaleImmediateResponse(actorKey, isGRPC, "stale assignment")
+	}
+
+	// Case B: Any Envoy local reply (including upstreamConnect=true CONNECT tunnel
+	// rejections and upstream connection failures). Evict the cached route while
+	// letting Envoy's own 5xx / gRPC UNAVAILABLE reply pass through.
+	if codeDetails != "" && codeDetails != "via_upstream" {
+		h.resumer.InvalidateRouteKey(actorKey)
+		return nil
+	}
+
+	// Case C: Normal application responses from inside the actor (via_upstream,
+	// including 404 or 5xx) do NOT evict the route cache.
+	return nil
+}
+
+func buildStaleImmediateResponse(actorKey string, isGRPC bool, reason string) *extprocv3.ProcessingResponse {
+	bodyMsg := fmt.Sprintf("actor %s unavailable: %s", actorKey, reason)
+
+	resp := &extprocv3.ImmediateResponse{
+		Status: &envoy_type.HttpStatus{
+			Code: envoy_type.StatusCode_ServiceUnavailable,
+		},
+		Body: []byte(bodyMsg),
+	}
+	if isGRPC {
+		resp.GrpcStatus = &extprocv3.GrpcStatus{
+			Status: uint32(codes.Unavailable),
+		}
+	} else {
+		resp.Headers = &extprocv3.HeaderMutation{
+			SetHeaders: []*corev3.HeaderValueOption{
+				{
+					Header:       &corev3.HeaderValue{Key: "content-type", RawValue: []byte("text/plain")},
+					AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+				},
+			},
+		}
+	}
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+			ImmediateResponse: resp,
+		},
 	}
 }
 
@@ -119,6 +238,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		TemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		TemplateName:     actor.GetActorTemplate().GetName(),
 		Resume:           string(resumeOutcome),
+		ActorKey:         actorRef.String(),
 	}
 
 	// The first IP is in the cluster's primary IP family.
@@ -171,6 +291,19 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		},
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 	})
+	if actorUID := actorUIDOf(actor); actorUID != "" {
+		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:      atenet.ActorUIDHeader,
+				RawValue: []byte(actorUID),
+			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		})
+	} else {
+		mutation.RemoveHeaders = append(mutation.RemoveHeaders, atenet.ActorUIDHeader)
+	}
+	// Strip untrusted client-provided stale-assignment headers before forwarding upstream.
+	mutation.RemoveHeaders = append(mutation.RemoveHeaders, atenet.StaleAssignmentHeader)
 
 	res.Target = targetAddr
 	res.Response = &extprocv3.HeadersResponse{

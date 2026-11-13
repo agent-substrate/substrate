@@ -115,10 +115,41 @@ type ActorResumer struct {
 	// Used as a unique ID to identify requests (reqID) and disambiguate the
 	// leader vs joiners for flight outcome classification.
 	nextID uint64
+
+	// warmCacheTTL, when positive, caches resolved RUNNING actor placements for a
+	// bounded TTL so warm traffic avoids per-request ateapi ResumeActor calls.
+	warmCacheTTL time.Duration
+	routeCache   *boundedRouteCache
+}
+
+// InvalidateRouteKey drops any cached RUNNING placement by string key ("atespace/name")
+// and invalidates any in-flight resume for that key under r.mu.
+func (r *ActorResumer) InvalidateRouteKey(key string) {
+	if key == "" {
+		return
+	}
+	r.mu.Lock()
+	if f, ok := r.flights[key]; ok {
+		f.invalidated = true
+		delete(r.flights, key)
+	}
+	if r.routeCache != nil {
+		r.routeCache.Delete(key)
+	}
+	r.mu.Unlock()
 }
 
 // resumerOption configures an ActorResumer.
 type resumerOption func(*ActorResumer)
+
+func withWarmRouteCacheTTL(ttl time.Duration) resumerOption {
+	return func(r *ActorResumer) {
+		if ttl > 0 {
+			r.warmCacheTTL = ttl
+			r.routeCache = newBoundedRouteCache(defaultRouteCacheCapacity)
+		}
+	}
+}
 
 // withParking configures parking behavior from cfg. When parking is enabled,
 // ResourceExhausted (no worker has room) becomes retryable and the
@@ -163,10 +194,9 @@ func NewActorResumer(apiClient ateapi.ControlClient, opts ...resumerOption) *Act
 // ateapi rolling restart) are retried only when parking is enabled, turning a
 // momentary condition into a bounded wait instead of an immediate failure — a
 // parked request should ride out a blip, not fail on it with budget remaining.
-// FailedPrecondition is not retried: ateapi refuses the resume for the
-// actor's current state, and the router does not wait for that state to change.
-// All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
-// returned to the caller so the HTTP boundary can map them with full fidelity.
+// All other codes (NotFound, FailedPrecondition, DeadlineExceeded,
+// PermissionDenied, ...) are returned to the caller so the HTTP boundary can
+// map them with full fidelity.
 func (r *ActorResumer) retryable(err error) bool {
 	switch status.Code(err) {
 	case codes.Aborted:
@@ -196,6 +226,12 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	callerSpanCtx := trace.SpanContextFromContext(ctx)
 
 	key := actorRef.String()
+	if r.warmCacheTTL > 0 && r.routeCache != nil {
+		if route, ok := r.routeCache.Get(key); ok {
+			return route.toActor(), ResumeOutcomeNone, nil
+		}
+	}
+
 	r.mu.Lock()
 	f, ok := r.flights[key]
 	if !ok {
@@ -205,7 +241,8 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	}
 	r.mu.Unlock()
 
-	return r.awaitFlight(ctx, f, actorRef, reqID)
+	actor, outcome, err := r.awaitFlight(ctx, f, actorRef, reqID)
+	return actor, outcome, err
 }
 
 // runFlight runs one shared resume for actorRef and publishes its outcome to

@@ -17,11 +17,19 @@ package extproc
 import (
 	"context"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"go.ate.dev/substrate/internal/ateattr"
 )
+
+// UpstreamResponseObserver is an optional extension implemented by handlers
+// that maintain a warm route cache and inspect upstream response headers to
+// evict stale entries (on 421 + X-Ate-Assignment-Stale or Envoy local failure).
+type UpstreamResponseObserver interface {
+	OnUpstreamHeaders(actorKey string, isGRPC bool, headers []*corev3.HeaderValue, attrs map[string]*structpb.Struct) *extprocv3.ProcessingResponse
+}
 
 // Handler applies one direction's policy to a request. Implementations live in
 // the ingress and egress packages; the mux never inspects what they do, only
@@ -69,6 +77,10 @@ type Result struct {
 	// MetadataKey lookup) that reads dynamic metadata rather than headers. Nil
 	// for handlers that route by header mutation alone.
 	DynamicMetadata *structpb.Struct
+
+	// ActorKey identifies the resolved actor ("atespace/name") for optional
+	// upstream response-header cache invalidation.
+	ActorKey string
 }
 
 // resume returns the resume label for the route-duration metric, defaulting an

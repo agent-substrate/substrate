@@ -100,6 +100,9 @@ func (s *RouterServer) newEnvoyXdsServer(ctx context.Context, parkCfg ingress.Pa
 		// will hold it; add a margin so the router surfaces its own 503 first.
 		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
 	}
+	if s.cfg.WarmRouteCacheTTL > 0 {
+		xdsSrv.SetWarmRouteCacheEnabled(true)
+	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
 	// Envoy is what reads the bundle, but it would only surface a bad one as

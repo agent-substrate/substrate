@@ -220,13 +220,15 @@ func TestActorTunnelFilterStateFilter(t *testing.T) {
 	const (
 		worker = "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:local)%"
 		actor  = "%REQ(ate-target-actor)%"
+		uid    = "%CEL(request.headers['x-ate-actor-uid'])%"
 		port   = "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:port)%"
 	)
 	want := map[string]struct{ factory, format string }{
-		tunnelKeyFilterStateKey:    {"envoy.hashable_string", worker + "|" + actor + "|" + port},
-		tunnelWorkerFilterStateKey: {"envoy.string", worker},
-		tunnelActorFilterStateKey:  {"envoy.string", actor},
-		tunnelPortFilterStateKey:   {"envoy.string", port},
+		tunnelKeyFilterStateKey:      {"envoy.hashable_string", worker + "|" + actor + "|" + uid + "|" + port},
+		tunnelWorkerFilterStateKey:   {"envoy.string", worker},
+		tunnelActorFilterStateKey:    {"envoy.string", actor},
+		tunnelActorUIDFilterStateKey: {"envoy.string", uid},
+		tunnelPortFilterStateKey:     {"envoy.string", port},
 	}
 	values := config.GetOnRequestHeaders()
 	if len(values) != len(want) {
@@ -298,9 +300,13 @@ func TestXdsServer_ActorTunnelRoutes(t *testing.T) {
 		}
 	}
 
+	wantRemoved := []string{
+		atenet.TargetActorHeader,
+		atenet.ActorUIDHeader,
+	}
 	for _, r := range routes {
-		if got := r.GetRequestHeadersToRemove(); len(got) != 1 || got[0] != atenet.TargetActorHeader {
-			t.Errorf("route to %s removes %v, want [%s]: nothing else strips it before the actor", r.GetRoute().GetCluster(), got, atenet.TargetActorHeader)
+		if got := r.GetRequestHeadersToRemove(); !slices.Equal(wantRemoved, got) {
+			t.Errorf("route to %s request headers to remove = %v, want %v", r.GetRoute().GetCluster(), got, wantRemoved)
 		}
 		if got := r.GetRequestHeadersToAdd(); len(got) != 0 {
 			t.Errorf("route to %s adds headers %v, want none: the CONNECT authority carries the port", r.GetRoute().GetCluster(), got)
@@ -347,9 +353,11 @@ func TestBuildActorConnectListener(t *testing.T) {
 		t.Errorf("CONNECT authority = %q, want %q", got, want)
 	}
 	headers := tunnel.GetHeadersToAdd()
-	if len(headers) != 1 || headers[0].GetHeader().GetKey() != atenet.TargetActorHeader ||
-		headers[0].GetHeader().GetValue() != "%FILTER_STATE(dev.ate.tunnel.actor:PLAIN)%" {
-		t.Errorf("CONNECT headers = %v, want only %s from dev.ate.tunnel.actor", headers, atenet.TargetActorHeader)
+	if len(headers) != 2 || headers[0].GetHeader().GetKey() != atenet.TargetActorHeader ||
+		headers[0].GetHeader().GetValue() != "%FILTER_STATE(dev.ate.tunnel.actor:PLAIN)%" ||
+		headers[1].GetHeader().GetKey() != atenet.ActorUIDHeader ||
+		headers[1].GetHeader().GetValue() != "%FILTER_STATE(dev.ate.tunnel.actor_uid:PLAIN)%" {
+		t.Errorf("CONNECT headers = %v, want %s from dev.ate.tunnel.actor and %s from dev.ate.tunnel.actor_uid", headers, atenet.TargetActorHeader, atenet.ActorUIDHeader)
 	}
 	if idle := proxy.GetIdleTimeout(); idle == nil || idle.AsDuration() != 0 {
 		t.Errorf("tcp_proxy idle timeout = %v, want 0 (off) so the HTTP side's timeouts fire first", idle)

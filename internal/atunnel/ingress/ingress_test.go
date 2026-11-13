@@ -1383,3 +1383,39 @@ func TestIngressReincarnationSurvivesStaleDeactivate(t *testing.T) {
 		t.Error("Deactivate left the actor active")
 	}
 }
+
+func TestServer_RejectsMismatchedActorUID(t *testing.T) {
+	upstreamURL, err := url.Parse("http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	s := newTestServer(t, upstreamURL)
+	ref := resources.ActorRef{Atespace: "demo", Name: "actor-1"}
+	if err := s.Activate(ref.Atespace, ref.Name, "uid-correct", testDial); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+
+	// 1. Matching UID passes authorization.
+	req1 := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req1.Header.Set(atenet.TargetActorHeader, ref.String())
+	req1.Header.Set(atenet.ActorUIDHeader, "uid-correct")
+	active, _, release, ok := s.authorize(req1)
+	if !ok {
+		t.Fatalf("expected authorization to succeed with matching UID")
+	}
+	release()
+	_ = active
+
+	// 2. Mismatched UID (ABA) fails authorization and returns 421 + X-Ate-Assignment-Stale: true.
+	req2 := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req2.Header.Set(atenet.TargetActorHeader, ref.String())
+	req2.Header.Set(atenet.ActorUIDHeader, "uid-stale-incarnation")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req2)
+	if w.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("status = %d, want 421 Misdirected Request", w.Code)
+	}
+	if w.Header().Get(atenet.StaleAssignmentHeader) != "true" {
+		t.Fatalf("header %s = %q, want true", atenet.StaleAssignmentHeader, w.Header().Get(atenet.StaleAssignmentHeader))
+	}
+}

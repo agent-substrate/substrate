@@ -44,7 +44,10 @@ const (
 
 	// staleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
-	staleAssignmentHeader = "X-Ate-Assignment-Stale"
+	staleAssignmentHeader = atenet.StaleAssignmentHeader
+	// ActorUIDHeader carries the actor's expected UID from the ingress router,
+	// fencing against ABA races where an actor was deleted and recreated under the same name.
+	ActorUIDHeader = atenet.ActorUIDHeader
 	// TargetPortHeader carries the port to reach on the actor: the CONNECT
 	// :authority's port for arbitrary-port ingress, or the default 80
 	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
@@ -186,6 +189,8 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 			port := pr.In.Header.Get(TargetPortHeader)
 			pr.Out.Header.Del(TargetPortHeader)
 			pr.Out.Header.Del(atenet.TargetActorHeader)
+			pr.Out.Header.Del(ActorUIDHeader)
+			pr.Out.Header.Del(staleAssignmentHeader)
 			if p, ok := ParsePort(port); ok {
 				pr.Out.URL.Host = net.JoinHostPort(upstream.Hostname(), strconv.Itoa(p))
 			}
@@ -556,9 +561,15 @@ func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(
 		return nil, nil, nil, false
 	}
 
+	headerUID := r.Header.Get(ActorUIDHeader)
+
 	s.mu.Lock()
 	active, ok := s.active[ref]
 	if !ok {
+		s.mu.Unlock()
+		return nil, nil, nil, false
+	}
+	if headerUID != "" && headerUID != "-" && headerUID != active.uid {
 		s.mu.Unlock()
 		return nil, nil, nil, false
 	}

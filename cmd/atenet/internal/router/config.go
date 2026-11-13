@@ -174,6 +174,9 @@ type routerConfig struct {
 	// every egress CONNECT fail closed and is correct for an ingress-only
 	// router (it never sees the egress listener).
 	ActorIdentityCAFile string
+	// WarmRouteCacheTTL is how long the ingress router caches a running actor's
+	// worker placement before re-checking ateapi. 0 disables the cache.
+	WarmRouteCacheTTL time.Duration
 	// EgressPolicyCacheTTL is how long the egress handler reuses a fetched
 	// EgressPolicy, and so how long a policy change takes to bite. 0 disables
 	// the cache.
@@ -318,6 +321,12 @@ func (c routerConfig) validate() error {
 	// Only the Envoy ingress router uses this flag; agentgateway always uses CONNECT.
 	if c.UpstreamConnect && c.UpstreamCredentialBundlePath == "" && c.Mode.ServesIngress() && c.atenetRouter() == atenetRouterEnvoy {
 		return fmt.Errorf("--upstream-connect (on by default) requires --upstream-credential-bundle: atunnel's CONNECT listener accepts only mTLS. Set --upstream-connect=false to dial atunnel without it")
+	}
+	if c.WarmRouteCacheTTL < 0 {
+		return fmt.Errorf("--warm-route-cache-ttl must not be negative, got %s (0 disables the cache)", c.WarmRouteCacheTTL)
+	}
+	if c.WarmRouteCacheTTL > 0 && c.atenetRouter() != atenetRouterEnvoy {
+		return fmt.Errorf("--warm-route-cache-ttl is only supported with --atenet-dataplane=%s (got %q): stale-route response eviction requires Envoy ext_proc response headers", atenetRouterEnvoy, c.atenetRouter())
 	}
 	if c.EgressPolicyCacheTTL < 0 {
 		return fmt.Errorf("--egress-policy-cache-ttl must not be negative, got %s (0 disables the cache)", c.EgressPolicyCacheTTL)

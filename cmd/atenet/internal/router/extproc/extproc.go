@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -86,6 +87,11 @@ func (s *Server) NewGRPCServer() *grpc.Server {
 }
 
 func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
+	var (
+		lastDir    Direction
+		lastActor  string
+		lastIsGRPC bool
+	)
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -99,7 +105,25 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
-			resp = s.processRequestHeaders(stream.Context(), req, reqType.RequestHeaders)
+			resp, lastDir, lastActor, lastIsGRPC = s.processRequestHeadersWithMeta(stream.Context(), req, reqType.RequestHeaders)
+
+		case *extprocv3.ProcessingRequest_ResponseHeaders:
+			if lastActor != "" {
+				if handler, ok := s.handlers[lastDir]; ok {
+					if obs, ok := handler.(UpstreamResponseObserver); ok {
+						resp = obs.OnUpstreamHeaders(lastActor, lastIsGRPC, reqType.ResponseHeaders.GetHeaders().GetHeaders(), req.GetAttributes())
+					}
+				}
+			}
+			if resp == nil {
+				resp = &extprocv3.ProcessingResponse{
+					Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+						ResponseHeaders: &extprocv3.HeadersResponse{
+							Response: &extprocv3.CommonResponse{},
+						},
+					},
+				}
+			}
 
 		default:
 			// No modification for other processing states, but log because this should
@@ -127,8 +151,18 @@ func (s *Server) processRequestHeaders(
 	req *extprocv3.ProcessingRequest,
 	reqHeaders *extprocv3.HttpHeaders,
 ) *extprocv3.ProcessingResponse {
+	resp, _, _, _ := s.processRequestHeadersWithMeta(ctx, req, reqHeaders)
+	return resp
+}
+
+func (s *Server) processRequestHeadersWithMeta(
+	ctx context.Context,
+	req *extprocv3.ProcessingRequest,
+	reqHeaders *extprocv3.HttpHeaders,
+) (*extprocv3.ProcessingResponse, Direction, string, bool) {
 	start := time.Now()
 	md := NewRequestMetadata(reqHeaders.GetHeaders().GetHeaders(), req.GetAttributes())
+	isGRPC := strings.HasPrefix(md.Header("content-type"), "application/grpc")
 
 	// Both ingress and egress are built into one binary, but it will only
 	// handle one traffic direction (egress or ingress) per instance.
@@ -162,14 +196,14 @@ func (s *Server) processRequestHeaders(
 
 		var reqErr *ReqError
 		if errors.As(err, &reqErr) {
-			return ImmediateResponse(envoy_type.StatusCode(reqErr.StatusCode), reqErr.Error())
+			return ImmediateResponse(envoy_type.StatusCode(reqErr.StatusCode), reqErr.Error()), dir, "", isGRPC
 		}
-		return ImmediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
+		return ImmediateResponse(envoy_type.StatusCode_InternalServerError, err.Error()), dir, "", isGRPC
 	}
 
 	s.recorder.AddRouterRequest(start, elapsed, "Route ok", res.Target, md)
 	return &extprocv3.ProcessingResponse{
 		Response:        &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: res.Response},
 		DynamicMetadata: res.DynamicMetadata,
-	}
+	}, dir, res.ActorKey, isGRPC
 }

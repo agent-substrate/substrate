@@ -160,6 +160,15 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
 		},
+		{
+			name:    "negative warm-route-cache-ttl rejected",
+			cfg:     routerConfig{Mode: ModeIngress, WarmRouteCacheTTL: -time.Second},
+			wantErr: "--warm-route-cache-ttl must not be negative",
+		},
+		{
+			name: "positive warm-route-cache-ttl accepted",
+			cfg:  routerConfig{Mode: ModeIngress, WarmRouteCacheTTL: 30 * time.Second},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -526,5 +535,26 @@ func TestSetOtlpCollectorClearsPreviousCollector(t *testing.T) {
 	}
 	if tr := x.buildTracing(); tr != nil {
 		t.Errorf("buildTracing() = %v, want nil after a rejected address", tr)
+	}
+}
+
+func TestValidateWarmRouteCacheTTL(t *testing.T) {
+	cfg := validIngressConfig()
+	cfg.WarmRouteCacheTTL = 30 * time.Second
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("Envoy ingress with positive WarmRouteCacheTTL rejected: %v", err)
+	}
+
+	negCfg := validIngressConfig()
+	negCfg.WarmRouteCacheTTL = -1 * time.Second
+	if err := negCfg.validate(); err == nil || !strings.Contains(err.Error(), "--warm-route-cache-ttl must not be negative") {
+		t.Fatalf("expected negative WarmRouteCacheTTL error, got %v", err)
+	}
+
+	agCfg := validIngressConfig()
+	agCfg.AtenetRouter = string(atenetRouterAgentgateway)
+	agCfg.WarmRouteCacheTTL = 30 * time.Second
+	if err := agCfg.validate(); err == nil || !strings.Contains(err.Error(), "--warm-route-cache-ttl is only supported with --atenet-dataplane=envoy") {
+		t.Fatalf("expected agentgateway WarmRouteCacheTTL rejection, got %v", err)
 	}
 }
