@@ -1022,8 +1022,7 @@ func (s *Atelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 		if !committed {
 			s.instruments.recordCheckpoint(ctx, op, phases...)
 		}
-		slog.LogAttrs(ctx, slog.LevelInfo, "Checkpoint timing breakdown",
-			snapshotLogAttrs(attribution, op, checkpointDurationMetric, err, phases)...)
+		logCheckpointTiming(ctx, attribution, op, err, phases)
 	}()
 
 	unlockActor, err := s.lockActor(ctx, actorUID)
@@ -1445,9 +1444,17 @@ func (s *Atelet) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnaps
 		fidelity: ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 	}
 	defer func() {
-		s.instruments.recordCheckpoint(ctx, op,
-			phase{ateattr.SnapshotPhasePersist, dPersist},
-			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
+		phases := []phase{
+			{ateattr.SnapshotPhasePersist, dPersist},
+			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
+		}
+		s.instruments.recordCheckpoint(ctx, op, phases...)
+		logCheckpointTiming(ctx, resources.ActorAttribution{
+			Ref:              resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+			UID:              req.GetActorUid(),
+			TemplateAtespace: req.GetActorTemplateAtespace(),
+			TemplateName:     req.GetActorTemplateName(),
+		}, op, err, phases)
 	}()
 
 	uri, err := resources.ParseSnapshotURI(req.GetSnapshot().GetObject().GetSnapshotUri())

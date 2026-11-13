@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -280,5 +281,36 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			}
 			wantAbsent(t, rec, tt.wantAbsent...)
 		})
+	}
+}
+
+func TestPromoteSnapshotLogsTimingBreakdown(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	a := runPluginActor(t)
+	snap := a.snapshot("pause-snap-1", 1)
+	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	buf.Reset()
+	a.promote(t, snap)
+
+	var rec map[string]any
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		var r map[string]any
+		if json.Unmarshal(line, &r) == nil && r["msg"] == "Checkpoint timing breakdown" {
+			rec = r
+		}
+	}
+	if rec == nil {
+		t.Fatalf("no Checkpoint timing breakdown record in %q", buf.String())
+	}
+	wantString(t, rec, "ate.actor.uid", pluginActorUID)
+	wantString(t, rec, "ate.snapshot.kind", ateattr.SnapshotKindLatest)
+	if _, ok := rec["ate.actor.checkpoint.duration.total"]; !ok {
+		t.Errorf("record %v has no ate.actor.checkpoint.duration.total", rec)
 	}
 }

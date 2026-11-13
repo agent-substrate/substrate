@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 
 	"go.ate.dev/substrate/internal/apierror"
@@ -78,4 +79,11 @@ func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey s
 		attrs = append(attrs, slog.Float64(durationKey+"."+p.name, p.d.Seconds()))
 	}
 	return attrs
+}
+
+// logCheckpointTiming logs the per-actor phase breakdown of a checkpoint or a
+// promote, the counterpart of the ate.actor.checkpoint.duration histogram.
+func logCheckpointTiming(ctx context.Context, a resources.ActorAttribution, op snapshotOp, err error, phases []phase) {
+	slog.LogAttrs(ctx, slog.LevelInfo, "Checkpoint timing breakdown",
+		snapshotLogAttrs(a, op, checkpointDurationMetric, err, phases)...)
 }
