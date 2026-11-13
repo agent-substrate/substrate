@@ -1436,7 +1436,7 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		provider := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: NamespaceAteSystem,
-				Name:      "k8s-credential-provider",
+				Name:      k8sCredentialProviderDeployment,
 			},
 		}
 		e := &Env{
@@ -1460,7 +1460,7 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 		if !restartedAt(t, e, "deployment", "atenet-egress") {
 			t.Error("atenet-egress was not restarted")
 		}
-		if !restartedAt(t, e, "deployment", "k8s-credential-provider") {
+		if !restartedAt(t, e, "deployment", k8sCredentialProviderDeployment) {
 			t.Error("k8s-credential-provider was not restarted")
 		}
 		if !restartedAt(t, e, "daemonset", "atelet") {

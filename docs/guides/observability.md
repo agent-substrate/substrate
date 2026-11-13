@@ -484,7 +484,7 @@ To visualize traces locally:
 
 Telemetry is emitted over OTLP to your configured OpenTelemetry Collector.
 
-> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, `atenet-egress`, and `k8s-credential-provider` are pointed at the in-cluster `opentelemetry-collector` in `otel-system`, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally (Prometheus exporter on `:8889`, Jaeger UI for traces, and the collector's `debug` exporter for OTLP logs). The credential provider's metrics are not in the Kind Prometheus UI (see the [note on the Kind Prometheus](#2-metrics)).
+> In Kind, `ateapi`, `atelet`, `ate-controller`, `atenet-router`, `atenet-egress`, and `k8s-credential-provider` are pointed at the in-cluster `opentelemetry-collector` in `otel-system`, and the controller propagates the endpoint to the worker pods it creates, so the telemetry of these components and of the workers lands locally (Prometheus exporter on `:8889`, Jaeger UI for traces, and the collector's `debug` exporter for OTLP logs). The credential provider sends only metrics, so it is not among the sources of traces and OTLP logs. Its metrics are not in the Kind Prometheus UI (see the [note on the Kind Prometheus](#2-metrics)).
 >
 > Each of these components reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
