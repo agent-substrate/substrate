@@ -418,10 +418,17 @@ var workerMicroVMCapabilities = []corev1.Capability{
 	"FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "SETPCAP",
 }
 
+// workerSELinuxType is the SELinux type every worker container runs as. On
+// nodes that enforce SELinux, the runtime's default container_t may not use
+// the /var/lib/ate hostPath (labeled container_var_lib_t) or atelet's socket
+// in it. Nodes without SELinux ignore it.
+const workerSELinuxType = "spc_t"
+
 // workerSecurityContext returns the worker container security context for a sandbox
 // class. Neither class runs privileged; they differ in their capability set.
 // Both declare seccomp Unconfined because their sandbox child pivot_root()s,
-// which the default profile denies. An empty class defaults to gVisor.
+// which the default profile denies, and both run as workerSELinuxType. An
+// empty class defaults to gVisor.
 func workerSecurityContext(class atev1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
 	// Both runtimes mount inside the worker — runsc pivots root and the worker
 	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
@@ -436,7 +443,9 @@ func workerSecurityContext(class atev1.SandboxClass) *corev1ac.SecurityContextAp
 		WithPrivileged(false).
 		WithAllowPrivilegeEscalation(false).
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
-			WithType(corev1.AppArmorProfileTypeUnconfined))
+			WithType(corev1.AppArmorProfileTypeUnconfined)).
+		WithSELinuxOptions(corev1ac.SELinuxOptions().
+			WithType(workerSELinuxType))
 
 	if class == atev1.SandboxClassMicroVM {
 		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
