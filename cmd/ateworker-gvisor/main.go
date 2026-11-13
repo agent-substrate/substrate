@@ -726,13 +726,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			if err := s.tunnel.Deactivate(cleanupCtx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
 			}
-			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
-			// Detach any bundle rootfs overlays a partially-completed setup
-			// mounted, mirroring the post-checkpoint cleanup — otherwise they
-			// linger in this namespace until atelet wipes the bundle dirs.
-			// Run before the network cleanup.
-			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
+			if err := s.teardownContainers(cleanupCtx, req.GetActorUid(), req.GetActorDirs(), containerNames(req.GetSpec().GetContainers()), func() error {
+				return deleteContainers(cleanupCtx, rcmd, containersToDelete)
+			}); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up runsc containers after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
 			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
@@ -1205,10 +1202,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			if err := s.tunnel.Deactivate(cleanupCtx, attribution); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", err))
 			}
-			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore")
-			// Same overlay detach as the Run-failure path above.
-			if err := imagecache.UnmountAllUnder(req.GetActorDirs().GetOciBundleDir()); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
+			if err := s.teardownContainers(cleanupCtx, req.GetActorUid(), req.GetActorDirs(), containerNames(containers), func() error {
+				return deleteContainers(cleanupCtx, rcmd, containersToDelete)
+			}); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up runsc containers after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
 			if err := s.unhostActor(cleanupCtx, req.GetActorUid()); err != nil {
@@ -1395,24 +1392,10 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	// with no bundle on disk. Best-effort: if they are already stopped, the
 	// delete succeeds anyway.
 	stopContainers(cleanupCtx, rcmd, containers)
-	// Keep this as best-effort cleanup: atelet resets the bundle and checkpoint
-	// directories after uploading the snapshot.
-	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
+	if err := s.teardownContainers(cleanupCtx, actorUID, actorDirs, containerNames(containers), func() error {
+		return cleanupContainers(cleanupCtx, rcmd, containers)
+	}); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
-	}
-
-	// The actor may resume on another worker, so this one may never see another
-	// Run or Restore for it. Reset files here to close the loop.
-	if err := resetRunscStateAndPidFileDirs(actorDirs); err != nil {
-		errs = append(errs, fmt.Errorf("while resetting runsc state and pid file dirs: %w", err))
-	}
-
-	// Detach the overlay rootfs mounts before atelet wipes the bundle dirs
-	// (deleting a bundle out from under a live mount in this namespace would
-	// leave the mount orphaned until the pod restarts). Best-effort, same as
-	// the container cleanup above.
-	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
-		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
 	}
 
 	if err := s.unhostActor(ctx, actorUID); err != nil {
@@ -1422,11 +1405,66 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 	return errors.Join(errs...)
 }
 
-func deleteContainers(ctx context.Context, rcmd *runsc, containers []string, operation string) {
+// deleteContainers deletes the given runsc containers, last first, and
+// returns every failure.
+func deleteContainers(ctx context.Context, rcmd containerRuntime, containers []string) error {
+	var errs []error
 	for _, container := range slices.Backward(containers) {
 		if err := rcmd.cmdDelete(ctx, container); err != nil {
-			slog.WarnContext(ctx, "Failed to delete runsc container after failure",
-				"operation", operation, "container", container, "err", err)
+			errs = append(errs, fmt.Errorf("while deleting %q container: %w", container, err))
 		}
 	}
+	return errors.Join(errs...)
+}
+
+// teardownContainers deletes the actor's runsc containers with del. If that
+// fails, it kills the sandbox instead. It then releases the containers,
+// unless the kill failed too: the sentry may still run, so runsc's records
+// and the overlays stay for a retry.
+func (s *AteWorkerService) teardownContainers(ctx context.Context, actorUID string, actorDirs *ateworkerpb.ActorDirs, containers []string, del func() error) error {
+	if err := del(); err != nil {
+		slog.WarnContext(ctx, "Failed to delete runsc containers, killing the sandbox",
+			slog.String("actorUID", actorUID), slog.Any("err", err))
+		if killErr := s.killSandbox(ctx, actorUID, containers); killErr != nil {
+			return errors.Join(err, killErr)
+		}
+	}
+	return releaseContainers(actorDirs)
+}
+
+// killSandbox kills the sentry and removes the cgroup leaves runsc delete
+// would have removed: the sandbox's and those of containers, the application
+// containers.
+func (s *AteWorkerService) killSandbox(ctx context.Context, actorUID string, containers []string) error {
+	// A hung delete can use up ctx, and the kills still need to run.
+	ctx = context.WithoutCancel(ctx)
+	// During a checkpoint the sentry sits in the checkpoint cgroup.
+	// checkpointIsolated removes that cgroup once it is empty.
+	ckptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := cgroup.KillLeafUnder(ckptCtx, s.cgroupRoot, actorUID+checkpointCgroupSuffix); err != nil {
+		return err
+	}
+	for _, name := range slices.Concat([]string{sandboxCgroupContainer}, containers) {
+		if err := s.removeContainerLeaf(ctx, actorUID, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// releaseContainers resets runsc's state and pid file dirs, since the actor
+// may resume on another worker and this one may never see another Run or
+// Restore for it. It detaches the rootfs overlays, since a bundle deleted
+// from under a live mount leaves the mount orphaned in this namespace until
+// the pod restarts.
+func releaseContainers(actorDirs *ateworkerpb.ActorDirs) error {
+	var errs []error
+	if err := resetRunscStateAndPidFileDirs(actorDirs); err != nil {
+		errs = append(errs, fmt.Errorf("while resetting runsc state and pid file dirs: %w", err))
+	}
+	if err := imagecache.UnmountAllUnder(actorDirs.GetOciBundleDir()); err != nil {
+		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
+	}
+	return errors.Join(errs...)
 }
