@@ -25,14 +25,14 @@ import (
 
 const queriesMetric = "ate.dns.queries"
 
-// instruments holds the DNS relay's instruments. A nil *instruments is a valid
+// metrics holds the DNS relay's metric instruments. A nil *metrics is a valid
 // no-op, so call sites need no guard.
-type instruments struct {
+type metrics struct {
 	queries metric.Int64Counter
 }
 
-// newInstruments creates the DNS relay's instruments against meter.
-func newInstruments(meter metric.Meter) (*instruments, error) {
+// newMetrics creates the DNS relay's metric instruments against meter.
+func newMetrics(meter metric.Meter) (*metrics, error) {
 	queries, err := meter.Int64Counter(
 		queriesMetric,
 		metric.WithUnit("{query}"),
@@ -41,17 +41,17 @@ func newInstruments(meter metric.Meter) (*instruments, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create %s counter: %w", queriesMetric, err)
 	}
-	return &instruments{queries: queries}, nil
+	return &metrics{queries: queries}, nil
 }
 
 // recordQuery counts one query the egress policy allowed or denied.
-func (i *instruments) recordQuery(allowed bool) {
-	if i == nil {
+func (m *metrics) recordQuery(allowed bool) {
+	if m == nil {
 		return
 	}
 	decision := ateattr.DNSDecisionDenied
 	if allowed {
 		decision = ateattr.DNSDecisionAllowed
 	}
-	i.queries.Add(context.Background(), 1, metric.WithAttributes(ateattr.DNSDecisionKey.String(decision)))
+	m.queries.Add(context.Background(), 1, metric.WithAttributes(ateattr.DNSDecisionKey.String(decision)))
 }

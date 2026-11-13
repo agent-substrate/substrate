@@ -68,13 +68,13 @@ func collectQueries(t *testing.T, reader *sdkmetric.ManualReader) map[string]int
 // policy and is not counted.
 func TestQueriesCountsPolicyDecisions(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
-	inst, err := newInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("ateworker-gvisor"))
+	m, err := newMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("ateworker-gvisor"))
 	if err != nil {
-		t.Fatalf("newInstruments: %v", err)
+		t.Fatalf("newMetrics: %v", err)
 	}
 	lim := newLimiter()
 	allow := func(q dnsmessage.Question) bool { return q.Name.String() != "blocked.example.com." }
-	h := newDNSHandler(newPendingRequests(lim), lim, allow, inst)
+	h := newDNSHandler(newPendingRequests(lim), lim, allow, m)
 	upstreams := []string{"10.96.0.10:53"}
 
 	allowed, _ := dnsQueryForName(t, 1, "example.com.")

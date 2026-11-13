@@ -58,21 +58,21 @@ type queryPolicy func(q dnsmessage.Question) bool
 // dnsHandler inspects DNS requests and responses and returns transport-agnostic
 // routing decisions.
 type dnsHandler struct {
-	pending     *pendingRequests
-	limiter     *limiter
-	allow       queryPolicy
-	instruments *instruments
+	pending *pendingRequests
+	limiter *limiter
+	allow   queryPolicy
+	metrics *metrics
 }
 
-func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, instruments *instruments) *dnsHandler {
+func newDNSHandler(pending *pendingRequests, lim *limiter, allow queryPolicy, metrics *metrics) *dnsHandler {
 	if allow == nil {
 		allow = func(dnsmessage.Question) bool { return true }
 	}
 	return &dnsHandler{
-		pending:     pending,
-		limiter:     lim,
-		allow:       allow,
-		instruments: instruments,
+		pending: pending,
+		limiter: lim,
+		allow:   allow,
+		metrics: metrics,
 	}
 }
 
@@ -125,7 +125,7 @@ func (h *dnsHandler) onRequestCommon(raw []byte) (dnsmessage.Header, dnsmessage.
 	// error codes such as REFUSED.
 	cq := canonicalizeQuestion(q)
 	allowed := h.allow(cq)
-	h.instruments.recordQuery(allowed)
+	h.metrics.recordQuery(allowed)
 	if !allowed {
 		return hdr, dnsmessage.Question{}, action{
 			kind:    actionReply,

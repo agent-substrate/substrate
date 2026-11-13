@@ -42,7 +42,7 @@ type Relay struct {
 	// dialer reaches upstream resolvers from the worker namespace.
 	dialer *net.Dialer
 
-	instruments *instruments
+	metrics *metrics
 }
 
 // NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
@@ -56,7 +56,7 @@ func NewRelay(resolvConfPath string, meter metric.Meter) (*Relay, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.instruments, err = newInstruments(meter); err != nil {
+	if r.metrics, err = newMetrics(meter); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -110,5 +110,5 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
 // and dials upstreams with netC's dialer.
 func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
-	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy, instruments: r.instruments}, netC)
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy, metrics: r.metrics}, netC)
 }
