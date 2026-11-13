@@ -385,6 +385,65 @@ func PrintTagTo(out io.Writer, tag *ateapi.Tag, format string) error {
 	return PrintTagsTo(out, []*ateapi.Tag{tag}, format)
 }
 
+// PrintExternalVolumeSnapshotsTo prints a slice of external volume snapshots
+// to the provided writer.
+func PrintExternalVolumeSnapshotsTo(out io.Writer, snapshots []*ateapi.ExternalVolumeSnapshot, format string) error {
+	slices.SortFunc(snapshots, func(a, b *ateapi.ExternalVolumeSnapshot) int {
+		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
+	})
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapi.ListExternalVolumeSnapshotsResponse{ExternalVolumeSnapshots: snapshots}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ATESPACE\tNAME\tTAG\tVOLUME\tSTATE\tSIZE\tAGE")
+		for _, s := range snapshots {
+			origin := s.GetOrigin().GetTag()
+			size := "<unknown>"
+			if n := s.GetStatus().GetSizeBytes(); n > 0 {
+				size = formatBytes(n)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				s.GetMetadata().GetAtespace(), s.GetMetadata().GetName(),
+				origin.GetTag().GetName(), origin.GetSourceVolumeName(),
+				externalVolumeSnapshotState(s), size,
+				formatAge(s.GetMetadata().GetCreateTime()))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+// externalVolumeSnapshotState derives a state from the status: Failed if
+// CreateSnapshot failed, Pending until the storage system returns a handle,
+// Captured until the snapshot can seed volumes, and Ready after that.
+func externalVolumeSnapshotState(s *ateapi.ExternalVolumeSnapshot) string {
+	st := s.GetStatus()
+	switch {
+	case st.GetErrorMessage() != "":
+		return "Failed"
+	case st.GetStorageSnapshotId() == "":
+		return "Pending"
+	case !st.GetReadyToUse():
+		return "Captured"
+	default:
+		return "Ready"
+	}
+}
+
+// PrintExternalVolumeSnapshotTo prints a single external volume snapshot to
+// the provided writer.
+func PrintExternalVolumeSnapshotTo(out io.Writer, snapshot *ateapi.ExternalVolumeSnapshot, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(out, snapshot, format)
+	}
+	return PrintExternalVolumeSnapshotsTo(out, []*ateapi.ExternalVolumeSnapshot{snapshot}, format)
+}
+
 func sortAtespaces(atespaces []*ateapi.Atespace) {
 	slices.SortFunc(atespaces, func(a, b *ateapi.Atespace) int {
 		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())

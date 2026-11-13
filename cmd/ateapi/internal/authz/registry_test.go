@@ -324,6 +324,26 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req:        &ateapi.DeleteTagRequest{Tag: tagRef},
 			want:       []check{{RelationCanDelete, "tag:team-a/v1"}},
 		},
+
+		// External volume snapshots.
+		{
+			name:       "GetExternalVolumeSnapshot",
+			fullMethod: ateapi.Control_GetExternalVolumeSnapshot_FullMethodName,
+			req:        &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: "team-a", Name: "snap"}},
+			want:       []check{{RelationCanGet, "external_volume_snapshot:team-a/snap"}},
+		},
+		{
+			name:       "ListExternalVolumeSnapshots in an atespace",
+			fullMethod: ateapi.Control_ListExternalVolumeSnapshots_FullMethodName,
+			req:        &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: "team-a"},
+			want:       []check{{RelationCanListExternalVolumeSnapshots, "atespace:team-a"}},
+		},
+		{
+			name:       "ListExternalVolumeSnapshots across all atespaces",
+			fullMethod: ateapi.Control_ListExternalVolumeSnapshots_FullMethodName,
+			req:        &ateapi.ListExternalVolumeSnapshotsRequest{},
+			want:       []check{{RelationCanListExternalVolumeSnapshots, GlobalRootObject}},
+		},
 	}
 
 	for _, tc := range tests {
@@ -637,6 +657,18 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			fullMethod: ateapi.Control_DeleteTag_FullMethodName,
 			req:        &ateapi.DeleteTagRequest{Tag: &ateapi.ObjectRef{Atespace: "team-a"}},
 			wantField:  "tag.name",
+		},
+		{
+			name:       "GetExternalVolumeSnapshot without an atespace",
+			fullMethod: ateapi.Control_GetExternalVolumeSnapshot_FullMethodName,
+			req:        &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: &ateapi.ObjectRef{Name: "snap"}},
+			wantField:  "external_volume_snapshot.atespace",
+		},
+		{
+			name:       "ListExternalVolumeSnapshots with an invalid atespace",
+			fullMethod: ateapi.Control_ListExternalVolumeSnapshots_FullMethodName,
+			req:        &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: "Team-A"},
+			wantField:  "atespace",
 		},
 	}
 

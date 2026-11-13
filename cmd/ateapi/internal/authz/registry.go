@@ -123,6 +123,13 @@ func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, fiel
 	return []check{{relation: relation, object: TagObject(ref.GetAtespace(), ref.GetName())}}, nil
 }
 
+func onExternalVolumeSnapshot(relation string, ref resourceRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateRef(ref, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: ExternalVolumeSnapshotObject(ref.GetAtespace(), ref.GetName())}}, nil
+}
+
 // onSourceTag checks can_use_tag on the tag an actor is created from, if the
 // request names one.
 func onSourceTag(ref *ateapi.ObjectRef, fldPath *field.Path) ([]check, field.ErrorList) {
@@ -319,6 +326,14 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapi.Control_DeleteTag_FullMethodName: rule(checksOf(func(r *ateapi.DeleteTagRequest) ([]check, field.ErrorList) {
 		return onTag(RelationCanDelete, r.GetTag(), field.NewPath("tag"))
+	})),
+
+	// External volume snapshots. The API only reads them.
+	ateapi.Control_GetExternalVolumeSnapshot_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeSnapshotRequest) ([]check, field.ErrorList) {
+		return onExternalVolumeSnapshot(RelationCanGet, r.GetExternalVolumeSnapshot(), field.NewPath("external_volume_snapshot"))
+	})),
+	ateapi.Control_ListExternalVolumeSnapshots_FullMethodName: rule(checksOf(func(r *ateapi.ListExternalVolumeSnapshotsRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListExternalVolumeSnapshots, r.GetAtespace(), field.NewPath("atespace"))
 	})),
 
 	// WorkerService is served only to atelet, which each handler
