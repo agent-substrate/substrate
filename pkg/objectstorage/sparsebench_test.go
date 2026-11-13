@@ -108,7 +108,7 @@ func snapshotParts(tb testing.TB, src *os.File, logical int64) (groups [][]exten
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return planSparseParts(exts, populated, sparsePartCount(populated)), populated
+	return planSparseParts(exts, populated, sparsePartCount(populated, len(exts))), populated
 }
 
 func rangesBytes(ranges []extentRange) (n int64) {

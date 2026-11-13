@@ -133,7 +133,7 @@ func (u *Uploader) planStream(content io.Reader) (uploadPlan, int64, io.Reader, 
 		}
 		// Holes never enter the compressor or range uploads.
 		workers = min(workers, populated/parZstdChunk+1)
-		parts = min(sparsePartCount(populated), int(u.budget.capacity/sparseUploadMemory))
+		parts = min(sparsePartCount(populated, len(exts)), int(u.budget.capacity/sparseUploadMemory))
 		if _, ok := u.client.(sparseFilePutter); ok && parts >= 2 {
 			// PutSparseFile splits a file into parts whenever it has two or
 			// more (see errSparseTooSmall), so the streaming fallback never
