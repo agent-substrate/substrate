@@ -129,6 +129,10 @@ one **atespace**.
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
 | Workers: get, list, list assignments | ✅ | ✅ | | | |
 | Workers: create, update, delete, drain | ✅ | | | | |
+| External volume classes: get, list | ✅ | ✅ | | | |
+| External volume classes: create, delete | ✅ | | | | |
+| CSI driver configs: get, list | ✅ | ✅ | | | |
+| CSI driver configs: create, update, delete | ✅ | | | | |
 
 ### System roles
 
@@ -143,7 +147,7 @@ through their pod certificates. `ate-api-server`'s `--controller-spiffe-id`,
 | `controller` | `ate-controller` | Create, get, list, update, delete and drain workers |
 | `egress_gateway` | `atenet-egress`, and any other SPIFFE IDs passed with `--egress-gateway-spiffe-id`, which ate-setup sets from `ATE_EGRESS_GATEWAY_EXTRA_SPIFFE_IDS` | Get actors and their egress policies; list actors across all atespaces; mint actor JWTs |
 | `ingress_router` | `atenet-router` | Resume actors; list actors across all atespaces |
-| `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them |
+| `atelet` | `atelet` | Get actors' egress policies, for the worker that enforces them; get and list CSI driver configs |
 | `api_server_sidecar` | the `ate-api-server` pod identity, which its sidecars share, today the objectstore control plugin | Get actors, to derive the snapshot prefixes a per-actor storage credential may cover |
 
 Only `egress_gateway` can mint actor credentials: not even a global owner can,
@@ -215,6 +219,31 @@ Workers have no atespace; their permissions come from the global scope.
 | `DeleteWorker` | `can_delete`, the worker | Global owner; `ate-controller` |
 | `DrainWorker` | `can_drain`, the worker | Global owner; `ate-controller` |
 | `ListWorkerActorAssignments` | `can_list_actor_assignments`, the worker | Global viewer |
+
+### External volume classes
+
+External volume classes have no atespace; their permissions come from the
+global scope.
+
+| RPC | Permission, on | Allowed for |
+|---|---|---|
+| `CreateExternalVolumeClass` | `can_create_external_volume_class`, global | Global owner |
+| `ListExternalVolumeClasses` | `can_list_external_volume_classes`, global | Global viewer |
+| `GetExternalVolumeClass` | `can_get`, the class | Global viewer |
+| `DeleteExternalVolumeClass` | `can_delete`, the class | Global owner |
+
+### CSI driver configs
+
+CSI driver configs have no atespace; their permissions come from the global
+scope.
+
+| RPC | Permission, on | Allowed for |
+|---|---|---|
+| `CreateCsiDriverConfig` | `can_create_csi_driver_config`, global | Global owner |
+| `ListCsiDriverConfigs` | `can_list_csi_driver_configs`, global | Global viewer; `atelet` |
+| `GetCsiDriverConfig` | `can_get`, the config | Global viewer; `atelet` |
+| `UpdateCsiDriverConfig` | `can_update`, the config | Global owner |
+| `DeleteCsiDriverConfig` | `can_delete`, the config | Global owner |
 
 ### WorkerService
 
