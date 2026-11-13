@@ -92,13 +92,16 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 	actorFirstSnapshotURI := suspendActorForTest(t, tc, workerName, "actor-a")
 	first, err := tc.client.CreateTag(context.Background(), &ateapi.CreateTagRequest{
 		Tag: &ateapi.Tag{
-			Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Metadata:    &ateapi.ResourceMetadata{Atespace: testAtespace, Name: tagName, Labels: map[string]string{"team": "payments"}},
 			Scope:       ateapi.TagScope_TAG_SCOPE_ATESPACE,
 			SourceActor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
 		},
 	})
 	if err != nil {
 		t.Fatalf("CreateTag(actor-a) failed: %v", err)
+	}
+	if first.GetMetadata().GetLabels()["team"] != "payments" {
+		t.Fatalf("CreateTag labels = %v, want team=payments", first.GetMetadata().GetLabels())
 	}
 	tagSnapshotURI := tagSnapshotURI(first)
 	// Tag owns a snapshot. So it must not be empty.

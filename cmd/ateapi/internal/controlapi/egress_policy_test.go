@@ -64,6 +64,7 @@ func TestActorEgressPolicy(t *testing.T) {
 				Name:     "default",
 				Uid:      "ignored",
 				Version:  99,
+				Labels:   map[string]string{"team": "payments"},
 			}, Rules: []*ateapi.EgressRule{{
 				Http: &ateapi.HttpRule{
 					Hostnames: []string{"api.example.com"},
@@ -107,6 +108,15 @@ func TestActorEgressPolicy(t *testing.T) {
 	}
 	replacement := proto.Clone(created).(*ateapi.EgressPolicy)
 	replacement.Rules = nil
+	for _, labels := range []map[string]string{nil, {"team": "other"}} {
+		changed := proto.CloneOf(replacement)
+		changed.Metadata.Labels = labels
+		if _, err := service.UpdateActorEgressPolicy(t.Context(), &ateapi.UpdateActorEgressPolicyRequest{
+			Actor: actorRef, EgressPolicy: changed,
+		}); apierror.Code(err) != codes.InvalidArgument {
+			t.Fatalf("changed metadata labels status = %v, want InvalidArgument", apierror.Code(err))
+		}
+	}
 	missingPreconditions := proto.Clone(replacement).(*ateapi.EgressPolicy)
 	missingPreconditions.Metadata.Uid = ""
 	missingPreconditions.Metadata.Version = 0
@@ -131,6 +141,9 @@ func TestActorEgressPolicy(t *testing.T) {
 	})
 	if err != nil || updated.GetMetadata().GetVersion() != 2 || len(updated.GetRules()) != 0 {
 		t.Fatalf("replacement = %v, %v; want empty version 2", updated, err)
+	}
+	if updated.GetMetadata().GetLabels()["team"] != "payments" {
+		t.Fatalf("metadata labels changed: %v", updated.GetMetadata().GetLabels())
 	}
 	if _, err := service.UpdateActorEgressPolicy(t.Context(), &ateapi.UpdateActorEgressPolicyRequest{
 		Actor:        actorRef,

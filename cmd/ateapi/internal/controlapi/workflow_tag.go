@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -416,7 +417,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	defer func() { err = done(err) }()
 
 	tagToCreate := &ateapi.Tag{
-		Metadata:    &ateapi.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
+		Metadata:    &ateapi.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name, Labels: maps.Clone(tag.GetMetadata().GetLabels())},
 		Scope:       tag.GetScope(),
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapi.TagStatus{

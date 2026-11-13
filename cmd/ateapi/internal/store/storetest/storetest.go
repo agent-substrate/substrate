@@ -63,7 +63,7 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 }
 
 // SetupPostgresPersistence returns an isolated atepg persistence instance.
-func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
+func SetupPostgresPersistence(t testing.TB) *atepg.Persistence {
 	t.Helper()
 	ctx := context.Background()
 	admin := requireAdminPool(t)
@@ -248,7 +248,7 @@ func Shutdown() {
 	}
 }
 
-func requireAdminPool(t *testing.T) *pgxpool.Pool {
+func requireAdminPool(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()

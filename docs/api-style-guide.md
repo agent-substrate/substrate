@@ -440,6 +440,9 @@ message ResourceMetadata {
 
   // delete_time is the time the resource started its deletion.
   google.protobuf.Timestamp delete_time = 7;
+
+  // labels identify the resource for its creator. Immutable after creation.
+  map<string, string> labels = 8;
 }
 ```
 
@@ -490,6 +493,14 @@ on resource updates. Also establishes a total order on "snapshots" of a given re
 
 - Type: `google.protobuf.Timestamp`.
 - Records when the resource started its deletion.
+
+### 6.8 `labels`
+
+- Type: `map<string, string>`.
+- Caller-specified at creation; immutable thereafter. Updates must echo the stored labels.
+- Keys and values use Kubernetes label format. Keys in `ate.dev` and its subdomains are reserved.
+- At most 16 entries and 1024 bytes of keys and values together.
+- ActorTemplate's `actor_labels` provide defaults for new Actors. The template's own `metadata.labels` identify the template and are not inherited.
 
 ---
 
@@ -621,7 +632,7 @@ Rules:
 - Output-only fields **must not** appear as top-level fields on the resource. They **must** be grouped under a single `status` field of type `{Resource}Status`.
 - A resource with no output-only fields needs no `status` field.
 - Fields inside `status` follow the same naming rules as any other field (section #5).
-- `ResourceMetadata` (section #6) is exempt from this split. It mixes caller-specified identity (`atespace`, `name`) with server-managed fields (`uid`, `version`, timestamps).
+- `ResourceMetadata` (section #6) is exempt from this split. It mixes caller-specified identity and labels with server-managed fields (`uid`, `version`, timestamps).
 
 ## 9. Union Types
 

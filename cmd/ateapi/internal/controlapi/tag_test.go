@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -122,6 +123,24 @@ func TestUpdateTag(t *testing.T) {
 			want:   &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},
 		},
 		{
+			name:   "unchanged metadata labels are kept",
+			stored: &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE, Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"team": "payments"}}},
+			req:    &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED, Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"team": "payments"}}},
+			want:   &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED, Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"team": "payments"}}},
+		},
+		{
+			name:     "changed metadata labels are rejected",
+			stored:   &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE, Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"team": "payments"}}},
+			req:      &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED, Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"team": "other"}}},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "omitted metadata labels are rejected",
+			stored:   &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE, Metadata: &ateapi.ResourceMetadata{Labels: map[string]string{"team": "payments"}}},
+			req:      &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},
+			wantCode: codes.InvalidArgument,
+		},
+		{
 			name:   "unpublishes a published tag",
 			stored: &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_PUBLISHED},
 			req:    &ateapi.Tag{Scope: ateapi.TagScope_TAG_SCOPE_ATESPACE},
@@ -155,10 +174,12 @@ func TestUpdateTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.stored.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tag1"}
+			tt.stored.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tag1", Labels: tt.stored.GetMetadata().GetLabels()}
 			svc, stored := rpcServiceWithTag(t, tt.stored)
 
-			tt.req.Metadata = stored.GetMetadata()
+			labels := tt.req.GetMetadata().GetLabels()
+			tt.req.Metadata = proto.CloneOf(stored.GetMetadata())
+			tt.req.Metadata.Labels = labels
 			// source_actor is immutable, so an ordinary update echoes back the
 			// one it read; only the case that repoints it names its own.
 			if tt.req.GetSourceActor() == nil {
@@ -177,7 +198,7 @@ func TestUpdateTag(t *testing.T) {
 				t.Fatalf("UpdateTag failed: %v", err)
 			}
 
-			tt.want.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tag1", Version: 2}
+			tt.want.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tag1", Version: 2, Labels: tt.want.GetMetadata().GetLabels()}
 			tt.want.Status, tt.want.SourceActor = stored.GetStatus(), stored.GetSourceActor()
 			if diff := cmp.Diff(tt.want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 				t.Errorf("UpdateTag response mismatch (-want +got):\n%s", diff)
@@ -300,6 +321,7 @@ func rpcServiceWithTag(t *testing.T, tag *ateapi.Tag) (*RPCService, *ateapi.Tag)
 	actor := newTestSuspendedActor(t, ctx, persistence, atespace, "actor-"+name)
 	seeded := newTestTag(t, name, actor)
 	seeded.Scope = tag.GetScope()
+	seeded.Metadata.Labels = tag.GetMetadata().GetLabels()
 	created := storetest.MustCreateTag(t, ctx, persistence, seeded)
 	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
 }

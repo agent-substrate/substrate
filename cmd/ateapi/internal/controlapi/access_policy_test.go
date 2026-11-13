@@ -27,7 +27,56 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
+
+func TestAccessPolicy_MetadataLabels(t *testing.T) {
+	for _, scope := range []string{"global", "atespace"} {
+		t.Run(scope, func(t *testing.T) {
+			persistence := storetest.SetupPostgresPersistence(t)
+			service := &RPCService{impl: newServiceImpl(persistence, nil)}
+			ctx := t.Context()
+			policy := &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{
+				Name: resources.SingletonName, Labels: map[string]string{"team": "payments"},
+			}}
+			var created *ateapi.AccessPolicy
+			var err error
+			update := func(policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+				return service.UpdateGlobalAccessPolicy(ctx, &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: policy})
+			}
+			if scope == "global" {
+				created, err = service.CreateGlobalAccessPolicy(ctx, &ateapi.CreateGlobalAccessPolicyRequest{AccessPolicy: policy})
+			} else {
+				storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
+				created, err = service.CreateAtespaceAccessPolicy(ctx, &ateapi.CreateAtespaceAccessPolicyRequest{
+					Atespace: &ateapi.ObjectRef{Name: "team-a"}, AccessPolicy: policy,
+				})
+				update = func(policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
+					return service.UpdateAtespaceAccessPolicy(ctx, &ateapi.UpdateAtespaceAccessPolicyRequest{
+						Atespace: &ateapi.ObjectRef{Name: "team-a"}, AccessPolicy: policy,
+					})
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, labels := range []map[string]string{nil, {"team": "other"}} {
+				replacement := proto.CloneOf(created)
+				replacement.Metadata.Labels = labels
+				if _, err := update(replacement); apierror.Code(err) != codes.InvalidArgument {
+					t.Fatalf("changed metadata labels: %v, want InvalidArgument", err)
+				}
+			}
+			updated, err := update(proto.CloneOf(created))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.GetMetadata().GetLabels()["team"] != "payments" || updated.GetMetadata().GetVersion() != 2 {
+				t.Fatalf("updated metadata = %v, want original labels and version 2", updated.GetMetadata())
+			}
+		})
+	}
+}
 
 func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	persistence := storetest.SetupPostgresPersistence(t)

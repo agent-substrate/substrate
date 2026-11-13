@@ -89,9 +89,14 @@ func TestTagActorSnapshot(t *testing.T) {
 	actor, actorSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
 
-	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	input := tagToCreate(actorRef, "v1")
+	input.Metadata.Labels = map[string]string{"team": "payments"}
+	tag, err := w.TagActorSnapshot(ctx, input)
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	if tag.GetMetadata().GetLabels()["team"] != "payments" {
+		t.Fatalf("tag labels = %v, want team=payments", tag.GetMetadata().GetLabels())
 	}
 
 	tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
