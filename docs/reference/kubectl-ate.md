@@ -220,7 +220,9 @@ kubectl ate suspend actor my-actor -a <atespace> --mode=sync
 # A suspended actor without a node-local snapshot is already at its external snapshot, so it cannot be reverted
 kubectl ate revert actor my-actor -a <atespace>
 
-# Delete an actor, terminating workloads and detaching volumes.
+# Delete an actor, terminating workloads and detaching volumes. This also
+# deletes its snapshots. A RUNNING actor or one with snapshots prints a
+# warning on stderr first.
 kubectl ate delete actor my-actor -a <atespace>
 ```
 
