@@ -75,6 +75,7 @@ type envoyAdminBootstrap struct {
 		} `json:"listeners"`
 		Clusters []struct {
 			Name           string `json:"name"`
+			Type           string `json:"type"`
 			LoadAssignment struct {
 				Endpoints []struct {
 					LbEndpoints []struct {
