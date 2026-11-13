@@ -439,10 +439,11 @@ func TestResolveActorTemplate_NotFound(t *testing.T) {
 		name         string
 		actor        *ateapi.Actor
 		wantNotFound bool
+		wantMsg      string
 	}{
-		{"ref resolves", &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}, false},
-		{"ref to deleted template", &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}}, true},
-		{"no template named at all", &ateapi.Actor{}, true},
+		{"ref resolves", &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}, false, ""},
+		{"ref to deleted template", &ateapi.Actor{ActorTemplate: &ateapi.ObjectRef{Atespace: "team-a", Name: "gone"}}, true, "actor template team-a/gone not found"},
+		{"no template named at all", &ateapi.Actor{}, true, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -450,6 +451,9 @@ func TestResolveActorTemplate_NotFound(t *testing.T) {
 			if tc.wantNotFound {
 				if !errors.Is(err, errActorTemplateNotFound) {
 					t.Fatalf("resolveActorTemplate err = %v, want errActorTemplateNotFound", err)
+				}
+				if st, _ := apierror.FromError(err); tc.wantMsg != "" && st.Message() != tc.wantMsg {
+					t.Errorf("client message = %q, want %q", st.Message(), tc.wantMsg)
 				}
 				return
 			}
