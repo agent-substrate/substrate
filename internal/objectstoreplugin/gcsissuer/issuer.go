@@ -29,12 +29,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google/downscope"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -59,6 +65,14 @@ const (
 	// stsTimeout bounds one exchange. The downscope package does not take a
 	// per-call context, so the client's timeout is the only bound.
 	stsTimeout = 30 * time.Second
+	// mintFlightTimeout bounds one detached shared mint flight. It is shorter
+	// than the worst-case retry chain (stsMaxAttempts x stsTimeout plus
+	// backoff), so it also caps how long a flight keeps retrying.
+	mintFlightTimeout = 2 * time.Minute
+
+	stsMaxAttempts   = 6
+	stsRetryBaseWait = 400 * time.Millisecond
+	stsRetryMaxWait  = 6 * time.Second
 )
 
 // Issuer exchanges the transfer account's token for per-actor downscoped
@@ -68,7 +82,11 @@ type Issuer struct {
 	iamOptions []option.ClientOption
 	client     *http.Client
 	now        func() time.Time
-	cache      *lru.Cache
+
+	// mu coordinates flights and compound grant-coverage cache updates.
+	mu      sync.Mutex
+	cache   *lru.Cache
+	flights map[string]*issueFlight
 }
 
 // entry is a cached token with the grants it was minted for, so a request can
@@ -76,6 +94,32 @@ type Issuer struct {
 type entry struct {
 	token  credential.Token
 	grants []actorscope.Grant
+}
+
+type issueFlight struct {
+	waiters  int
+	finished bool
+	cancel   context.CancelFunc
+	done     chan struct{}
+	grants   []actorscope.Grant
+	token    credential.Token
+	err      error
+}
+
+func (i *Issuer) releaseWaiter(actorUID string, f *issueFlight) {
+	var cancel context.CancelFunc
+	i.mu.Lock()
+	f.waiters--
+	if f.waiters == 0 && !f.finished {
+		if i.flights[actorUID] == f {
+			delete(i.flights, actorUID)
+		}
+		cancel = f.cancel
+	}
+	i.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // Option configures an Issuer.
@@ -107,9 +151,10 @@ func WithCacheSize(n int) Option {
 // the Issuer's whole life, so ctx is detached from cancellation.
 func New(ctx context.Context, account string, opts ...Option) (*Issuer, error) {
 	i := &Issuer{
-		client: &http.Client{Timeout: stsTimeout},
-		now:    time.Now,
-		cache:  lru.New(defaultCacheSize),
+		client:  &http.Client{Timeout: stsTimeout},
+		now:     time.Now,
+		cache:   lru.New(defaultCacheSize),
+		flights: make(map[string]*issueFlight),
 	}
 	for _, o := range opts {
 		o(i)
@@ -149,21 +194,125 @@ func (i *Issuer) Issue(ctx context.Context, actorUID string, grants []actorscope
 		// token, but an actor with no grants must get nothing.
 		return credential.Token{}, status.Error(codes.Internal, "actor has no storage grants")
 	}
-	if !force {
-		if v, ok := i.cache.Get(actorUID); ok {
-			if e := v.(entry); covers(e.grants, grants) && e.token.Expiry.Sub(i.now()) >= minServeLifetime {
-				return e.token, nil
-			}
+	if err := ctx.Err(); err != nil {
+		return credential.Token{}, err
+	}
+	if force {
+		return i.mintAndStore(ctx, actorUID, grants, true)
+	}
+
+	i.mu.Lock()
+	if tok, ok := i.lookupLocked(actorUID, grants); ok {
+		i.mu.Unlock()
+		return tok, nil
+	}
+	f, ok := i.flights[actorUID]
+	if ok && covers(f.grants, grants) {
+		f.waiters++
+		i.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.token, f.err
+		case <-ctx.Done():
+			i.releaseWaiter(actorUID, f)
+			return credential.Token{}, ctx.Err()
 		}
 	}
+	if ok {
+		// An in-flight mint has narrower grants than this caller needs; mint
+		// directly for the wider grant set without blocking or overwriting the
+		// flight slot.
+		i.mu.Unlock()
+		return i.mintAndStore(ctx, actorUID, grants, false)
+	}
+
+	mintCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mintFlightTimeout)
+	clonedGrants := slices.Clone(grants)
+	f = &issueFlight{
+		waiters: 1,
+		cancel:  cancel,
+		done:    make(chan struct{}),
+		grants:  clonedGrants,
+	}
+	i.flights[actorUID] = f
+	i.mu.Unlock()
+
+	go i.runFlight(mintCtx, actorUID, f)
+
+	select {
+	case <-f.done:
+		return f.token, f.err
+	case <-ctx.Done():
+		i.releaseWaiter(actorUID, f)
+		return credential.Token{}, ctx.Err()
+	}
+}
+
+func (i *Issuer) lookupLocked(actorUID string, grants []actorscope.Grant) (credential.Token, bool) {
+	v, ok := i.cache.Get(actorUID)
+	if !ok {
+		return credential.Token{}, false
+	}
+	e := v.(entry)
+	if covers(e.grants, grants) && e.token.Expiry.Sub(i.now()) >= minServeLifetime {
+		return e.token, true
+	}
+	return credential.Token{}, false
+}
+
+func (i *Issuer) storeLocked(actorUID string, tok credential.Token, grants []actorscope.Grant) {
+	if tok.Expiry.Sub(i.now()) < minServeLifetime {
+		return
+	}
+	if v, ok := i.cache.Get(actorUID); ok {
+		// Keep an existing entry that strictly covers the new grants with a
+		// longer or equal lifetime so a narrower concurrent mint cannot
+		// downgrade a wider cached entry.
+		prev := v.(entry)
+		if covers(prev.grants, grants) && !covers(grants, prev.grants) &&
+			prev.token.Expiry.Sub(i.now()) >= minServeLifetime &&
+			!prev.token.Expiry.Before(tok.Expiry) {
+			return
+		}
+	}
+	i.cache.Add(actorUID, entry{token: tok, grants: slices.Clone(grants)})
+}
+
+func (i *Issuer) mintAndStore(ctx context.Context, actorUID string, grants []actorscope.Grant, force bool) (credential.Token, error) {
 	tok, err := i.mint(ctx, grants)
 	if err != nil {
 		return credential.Token{}, err
 	}
-	if tok.Expiry.Sub(i.now()) >= minServeLifetime {
-		i.cache.Add(actorUID, entry{token: tok, grants: slices.Clone(grants)})
+	i.mu.Lock()
+	if force {
+		if tok.Expiry.Sub(i.now()) >= minServeLifetime {
+			i.cache.Add(actorUID, entry{token: tok, grants: slices.Clone(grants)})
+		}
+	} else {
+		i.storeLocked(actorUID, tok, grants)
 	}
+	i.mu.Unlock()
 	return tok, nil
+}
+
+func (i *Issuer) runFlight(ctx context.Context, actorUID string, f *issueFlight) {
+	tok, err := i.mint(ctx, f.grants)
+	f.token = tok
+	f.err = err
+
+	i.mu.Lock()
+	if err == nil {
+		i.storeLocked(actorUID, tok, f.grants)
+	}
+	if i.flights[actorUID] == f {
+		delete(i.flights, actorUID)
+	}
+	f.finished = true
+	cancel := f.cancel
+	i.mu.Unlock()
+
+	cancel()
+	close(f.done)
 }
 
 // covers reports whether a token minted with the cached grants can serve a
@@ -186,20 +335,40 @@ func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (credentia
 	if err != nil {
 		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
 	}
-	// The downscope package reads its HTTP client from the context but sends
-	// the STS request without one, so the caller's deadline is attached by the
-	// transport instead.
-	ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{
-		Transport: contextTransport{ctx: ctx, base: i.client.Transport},
-		Timeout:   i.client.Timeout,
-	})
-	ts, err := downscope.NewTokenSource(ctx, downscope.DownscopingConfig{RootSource: i.source, Rules: rules})
-	if err != nil {
-		return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", err)
-	}
-	tok, err := ts.Token()
-	if err != nil {
-		return credential.Token{}, fmt.Errorf("while exchanging at STS: %w", err)
+
+	var tok *oauth2.Token
+	for attempt := range stsMaxAttempts {
+		transport := &attemptTransport{ctx: ctx, base: i.client.Transport}
+		rootSrc := &attemptTokenSource{base: i.source}
+		// The downscope package reads its HTTP client from the context but sends
+		// the STS request without one, so the caller's deadline is attached by the
+		// transport instead.
+		httpCtx := context.WithValue(ctx, oauth2.HTTPClient, &http.Client{
+			Transport: transport,
+			Timeout:   i.client.Timeout,
+		})
+		ts, buildErr := downscope.NewTokenSource(httpCtx, downscope.DownscopingConfig{RootSource: rootSrc, Rules: rules})
+		if buildErr != nil {
+			return credential.Token{}, status.Errorf(codes.Internal, "while building the access boundary: %v", buildErr)
+		}
+		tok, err = ts.Token()
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil || attempt == stsMaxAttempts-1 || !isRetryableMintAttempt(err, rootSrc.err, transport) {
+			return credential.Token{}, fmt.Errorf("while exchanging at STS: %w", err)
+		}
+		base := min(stsRetryBaseWait<<attempt, stsRetryMaxWait)
+		wait := base + time.Duration(rand.Int64N(int64(base/2)+1))
+		slog.WarnContext(ctx, "Retrying transient STS token exchange error",
+			slog.Int("attempt", attempt+1), slog.Duration("backoff", wait), slog.Any("err", err))
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return credential.Token{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	if tok.AccessToken == "" {
 		return credential.Token{}, errors.New("STS returned no access token")
@@ -212,17 +381,97 @@ func (i *Issuer) mint(ctx context.Context, grants []actorscope.Grant) (credentia
 	return credential.Token{AccessToken: tok.AccessToken, Expiry: tok.Expiry}, nil
 }
 
-// contextTransport sends every request with ctx, so a cancelled or expired
-// caller stops an STS exchange in flight instead of waiting out the timeout.
-type contextTransport struct {
-	ctx  context.Context
-	base http.RoundTripper
+func isRetryableMintAttempt(err, rootErr error, t *attemptTransport) bool {
+	if t.bodyReadErr != nil {
+		return !errors.Is(t.bodyReadErr, context.Canceled) && !errors.Is(t.bodyReadErr, context.DeadlineExceeded)
+	}
+	// If the STS HTTP round-trip ran, rely on the exact HTTP status or
+	// transport error captured before downscope formatted the error string.
+	if t.lastStatus != 0 {
+		return t.lastStatus == http.StatusTooManyRequests || t.lastStatus >= http.StatusInternalServerError
+	}
+	if t.transportErr != nil {
+		return !errors.Is(t.transportErr, context.Canceled) && !errors.Is(t.transportErr, context.DeadlineExceeded)
+	}
+
+	// Otherwise RootSource.Token() failed before STS was dialed (downscope
+	// formats RootSource errors with %v rather than %w, so inspect rootErr).
+	checkErr := err
+	if rootErr != nil {
+		checkErr = rootErr
+	}
+	if errors.Is(checkErr, context.Canceled) || errors.Is(checkErr, context.DeadlineExceeded) {
+		return false
+	}
+	var ge *googleapi.Error
+	if errors.As(checkErr, &ge) {
+		return ge.Code == http.StatusTooManyRequests || ge.Code >= http.StatusInternalServerError
+	}
+	var re *oauth2.RetrieveError
+	if errors.As(checkErr, &re) && re.Response != nil {
+		return re.Response.StatusCode == http.StatusTooManyRequests || re.Response.StatusCode >= http.StatusInternalServerError
+	}
+	switch status.Code(checkErr) {
+	case codes.ResourceExhausted, codes.Unavailable:
+		return true
+	}
+	msg := strings.ToLower(checkErr.Error())
+	return strings.Contains(msg, "resource_exhausted") ||
+		strings.Contains(msg, "quota_exceeded") ||
+		strings.Contains(msg, "quota exceeded") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "service unavailable")
 }
 
-func (t contextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+type attemptTokenSource struct {
+	base oauth2.TokenSource
+	err  error
+}
+
+func (s *attemptTokenSource) Token() (*oauth2.Token, error) {
+	tok, err := s.base.Token()
+	s.err = err
+	return tok, err
+}
+
+// attemptTransport sends every request with ctx and records the HTTP status,
+// transport error, or response-body read error observed on the STS leg.
+type attemptTransport struct {
+	ctx          context.Context
+	base         http.RoundTripper
+	lastStatus   int
+	transportErr error
+	bodyReadErr  error
+}
+
+func (t *attemptTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := t.base
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return base.RoundTrip(req.WithContext(t.ctx))
+	resp, err := base.RoundTrip(req.WithContext(t.ctx))
+	if err != nil {
+		t.transportErr = err
+		return nil, err
+	}
+	t.lastStatus = resp.StatusCode
+	if resp.Body != nil {
+		resp.Body = &trackingReadCloser{rc: resp.Body, onErr: func(rerr error) { t.bodyReadErr = rerr }}
+	}
+	return resp, nil
 }
+
+type trackingReadCloser struct {
+	rc    io.ReadCloser
+	onErr func(error)
+}
+
+func (r *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.onErr(err)
+	}
+	return n, err
+}
+
+func (r *trackingReadCloser) Close() error { return r.rc.Close() }
