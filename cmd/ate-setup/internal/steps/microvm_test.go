@@ -133,7 +133,7 @@ func TestVerifyMicroVMAssetDigests(t *testing.T) {
 
 func TestMicroVMAssetsNeedAssemble(t *testing.T) {
 	stamp := microvmAssetStamp("amd64", defaultKataVersion, defaultCloudHypervisorVersion)
-	const wantStamp = "arch=amd64\nkata=4.3.1\ncloud-hypervisor=v53.0\n"
+	const wantStamp = "arch=amd64\nkata=4.3.1\ncloud-hypervisor=v53.1\n"
 	if stamp != wantStamp {
 		t.Fatalf("microvmAssetStamp() =\n%q\nwant\n%q", stamp, wantStamp)
 	}
@@ -303,7 +303,7 @@ func serveFakeReleases(t *testing.T, archive []byte, chBody string, failCH bool)
 		switch r.URL.Path {
 		case "/kata-containers/kata-containers/releases/download/4.3.1/kata-static-4.3.1-amd64.tar.zst":
 			_, _ = w.Write(archive)
-		case "/cloud-hypervisor/cloud-hypervisor/releases/download/v53.0/cloud-hypervisor-static":
+		case "/cloud-hypervisor/cloud-hypervisor/releases/download/v53.1/cloud-hypervisor-static":
 			if failCH {
 				w.Header().Set("Content-Length", "100")
 				_, _ = w.Write([]byte("partial"))
@@ -336,7 +336,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 	baseURL := serveFakeReleases(t, validKataArchive(t, virtiofsdBody), chBody, false)
 
 	outDir := t.TempDir()
-	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", digests); err != nil {
+	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.1", digests); err != nil {
 		t.Fatalf("assembleMicroVMAssets() = %v", err)
 	}
 
@@ -369,7 +369,7 @@ func TestAssembleMicroVMAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading %s: %v", assetStampFile, err)
 	}
-	if want := microvmAssetStamp("amd64", "4.3.1", "v53.0"); string(stamp) != want {
+	if want := microvmAssetStamp("amd64", "4.3.1", "v53.1"); string(stamp) != want {
 		t.Errorf("stamp = %q, want %q", stamp, want)
 	}
 }
@@ -385,7 +385,7 @@ func TestAssembleMicroVMAssetsClearsStampOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", testAssetDigests()); err == nil {
+	if err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.1", testAssetDigests()); err == nil {
 		t.Fatal("assembleMicroVMAssets() succeeded when cloud-hypervisor download aborted mid-stream")
 	}
 	if _, err := os.Stat(stampPath); !errors.Is(err, os.ErrNotExist) {
@@ -402,7 +402,7 @@ func TestAssembleMicroVMAssetsRejectsDigestMismatchBeforeStamping(t *testing.T) 
 	baseURL := serveFakeReleases(t, validKataArchive(t, "bad-virtiofsd-bytes"), "ch", false)
 
 	outDir := t.TempDir()
-	err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.0", testAssetDigests())
+	err := assembleMicroVMAssets(t.Context(), baseURL, outDir, "amd64", "4.3.1", "v53.1", testAssetDigests())
 	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 		t.Fatalf("assembleMicroVMAssets() = %v, want sha256 mismatch error", err)
 	}

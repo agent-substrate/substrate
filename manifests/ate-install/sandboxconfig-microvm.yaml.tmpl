@@ -42,15 +42,15 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: microvm
-  defaultVersion: v2
+  defaultVersion: v3
   versions:
-  - name: v2
+  - name: v3
     state: Enabled
     assets:
       arm64:
         cloud-hypervisor:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
-          sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/2ce78f5cb82ff88c7244be050495fa6b61711ce4787d5d248e7dcd7af3672fca"
+          sha256: "2ce78f5cb82ff88c7244be050495fa6b61711ce4787d5d248e7dcd7af3672fca"
         # virtiofsd serves the overlay RO lower (virtio-fs).
         virtiofsd:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/arm64/4b43f4f6de6500203b01214a790314eea4182f5f110594ddb28ae2805622f06f"
@@ -63,8 +63,8 @@ spec:
           sha256: "69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97"
       amd64:
         cloud-hypervisor:
-          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
-          sha256: "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
+          url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/417d50ed34c1b7b7ec064c16f0dacb5e14124237ee235dee4d6e08e95fbd6e22"
+          sha256: "417d50ed34c1b7b7ec064c16f0dacb5e14124237ee235dee4d6e08e95fbd6e22"
         virtiofsd:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/microvm-assets/amd64/15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
           sha256: "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
