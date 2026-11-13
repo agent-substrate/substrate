@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -751,5 +752,39 @@ func TestDetachFromFullNode_ReentryRecordsAfterConflict(t *testing.T) {
 	if got := stored.GetStatus().GetSnapshots(); len(got) != 1 || got[0].GetLocality() != "" ||
 		got[0].GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
 		t.Errorf("snapshots = %v, want pause-snap-1 durable only and COMPLETED", got)
+	}
+}
+
+func TestDetachActorError(t *testing.T) { testAteletCallError(t, detachActorError) }
+
+// TestCanDetachWithoutAtelet checks the guard for an actor whose local copy is
+// durable, where only the caller's context decides.
+func TestCanDetachWithoutAtelet(t *testing.T) {
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
+	snap.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+	actor := &ateapi.Actor{Status: &ateapi.ActorStatus{
+		State:        ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+		AssignedNode: "node-1",
+		Snapshots:    []*ateapi.Snapshot{snap},
+	}}
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{"atelet unreachable with a live caller", context.Background(), apierror.Unavailable("connection refused"), true},
+		{"cancelled caller", ended, apierror.Unavailable("connection refused"), false},
+		{"caller deadline passed by the clock before its timer fired", deadlinePassedContext{context.Background()}, status.Error(codes.DeadlineExceeded, "context deadline exceeded"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := canDetachWithoutAtelet(tt.ctx, actor, tt.err); got != tt.want {
+				t.Errorf("canDetachWithoutAtelet() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
