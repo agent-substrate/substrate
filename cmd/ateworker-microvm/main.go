@@ -81,7 +81,7 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
-	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
+	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples actor resource usage. Each accepted sample writes an ate.actor.usage_sampled record, adds its CPU increase to ate.actor.stats.cpu.time, and is served by GetActiveWorkloadStats.")
 )
 
 // minUsageSampleInterval is the floor of --usage-sample-interval, the same as
@@ -246,11 +246,15 @@ func do(ctx context.Context) error {
 	// The controller sets both from the downward API.
 	pool := workerstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
-		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
+		slog.WarnContext(ctx, "Worker pool unknown; usage telemetry will name no pool", slog.Any("pool", pool))
 	}
 	usageStdout := workerstats.NewStdoutHandler(logWriter)
 	defer usageStdout.Close()
 	ateworkerService.usage = workerstats.NewUsageEmitter(lp, usageStdout, pool)
+	ateworkerService.cpu, err = workerstats.NewCPUCounter(mp.Meter("ateworker-microvm"), pool)
+	if err != nil {
+		return fmt.Errorf("initialize actor CPU metric: %w", err)
+	}
 	defer workerstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateworkerService.sweepUsage(ctx) })()
 	if ateworkerService.throttleMemory {
 		go ateworkerService.watchMemory(ctx)
@@ -404,6 +408,8 @@ type AteWorkerService struct {
 	tunnel      *atunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
 	usage *workerstats.UsageEmitter
+	// cpu records accepted activation CPU increases through the OTLP relay.
+	cpu *workerstats.CPUCounter
 
 	// Guards actors, draining, and mutable hostedActor fields.
 	actorsMu sync.RWMutex
