@@ -10,7 +10,7 @@ description: >
 
 Substrate delivers zero trust for agents. Every agent has an identity, but no credentials, no open network, and no escape from the sandbox.
 
-Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls operate within Substrate's cold-start and resume latency budget. This document defines the high-level security principles. For identity and credential configuration, see the [Authentication Guide](../guides/authentication.md). Detailed threat scenarios and mitigating invariants are documented [in the threat model](threat-model.md).
+Agent Substrate executes untrusted actors at scale in a multi-tenant environment where workloads are dynamic and memory states migrate continuously across physical infrastructure. All security controls operate within Substrate's cold-start and resume latency budget. This document defines the high-level security principles. For human and actor identities, see the [Identity Overview](identity.md). To configure access to `ate-api-server`, see the [Authentication Guide](../guides/authentication.md). Detailed threat scenarios and mitigating invariants are documented [in the threat model](threat-model.md).
 
 ## Security Boundaries
 
@@ -30,7 +30,7 @@ Your application is outside these boundaries: it authenticates end users and dec
 Substrate provides the foundational base for agent security:
 
 - Sandboxing: built-in compute, storage, and networking separation.
-- Identity: identity issuance is built-in and designed to federate with other identity systems. See the [Substrate Identity Critical User Journeys](https://docs.google.com/document/d/1seJNYQmsQYLCrYYzB9AmuxpSGSPCC3-u3tPNFsK2edc/edit?resourcekey=0-D6q8_0vqF6LPEk0BxWMTaA&tab=t.0#heading=h.6qjmtncwtihi).
+- Identity: identity issuance is built-in and designed to federate with other identity systems. See the [Identity Overview](identity.md).
 - Gateway: built-in ingress and egress filtering that can do destination filtering and credential injection.
 
 We expect the application layer creating actors using substrate to be responsible for:
