@@ -29,8 +29,12 @@ import (
 // fakeRunsc stands in for *runsc. containers is the set runsc has a record of;
 // calls logs every command.
 type fakeRunsc struct {
-	containers map[string]bool
-	calls      []string
+	containers          map[string]bool
+	calls               []string
+	stateErrors         map[string]error
+	deleteErrors        map[string]error
+	listError           error
+	removeOnDeleteError bool
 }
 
 func newFakeRunsc(containers ...string) *fakeRunsc {
@@ -43,6 +47,9 @@ func newFakeRunsc(containers ...string) *fakeRunsc {
 
 func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
 	f.calls = append(f.calls, "state "+name)
+	if err := f.stateErrors[name]; err != nil {
+		return err
+	}
 	if !f.containers[name] {
 		return errors.New("exit status 128")
 	}
@@ -51,6 +58,12 @@ func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
 
 func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
 	f.calls = append(f.calls, "delete "+name)
+	if err := f.deleteErrors[name]; err != nil {
+		if f.removeOnDeleteError {
+			delete(f.containers, name)
+		}
+		return err
+	}
 	if !f.containers[name] {
 		return errors.New("exit status 128")
 	}
@@ -70,7 +83,7 @@ func (f *fakeRunsc) cmdWait(_ context.Context, name string) error {
 
 func (f *fakeRunsc) cmdList(context.Context) ([]string, error) {
 	f.calls = append(f.calls, "list")
-	return slices.Sorted(maps.Keys(f.containers)), nil
+	return slices.Sorted(maps.Keys(f.containers)), f.listError
 }
 
 func assertCalls(t *testing.T, f *fakeRunsc, want ...string) {
@@ -117,6 +130,52 @@ func TestCleanupContainers_SucceedsWhenEverythingIsAlreadyGone(t *testing.T) {
 	}
 
 	assertCalls(t, f, "state app", "list", "state _sandbox", "list")
+}
+
+func TestCleanupContainers_ContinuesAfterApplicationErrors(t *testing.T) {
+	stateErr := errors.New("state failed")
+	listErr := errors.New("list failed")
+	deleteErr := errors.New("delete failed")
+	containers := []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}
+	for _, tc := range []struct {
+		name                string
+		stateError          error
+		listError           error
+		deleteError         error
+		removeOnDeleteError bool
+	}{
+		{name: "state error", stateError: stateErr},
+		{name: "state and list errors", stateError: stateErr, listError: listErr},
+		{name: "delete error", deleteError: deleteErr},
+		{name: "record removed before delete error", deleteError: deleteErr, removeOnDeleteError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRunsc("app", "sidecar", "_sandbox")
+			f.stateErrors = map[string]error{"app": tc.stateError}
+			f.deleteErrors = map[string]error{"app": tc.deleteError}
+			f.listError = tc.listError
+			f.removeOnDeleteError = tc.removeOnDeleteError
+			err := cleanupContainers(context.Background(), f, containers)
+			for _, want := range []error{tc.stateError, tc.listError, tc.deleteError} {
+				if want != nil && !errors.Is(err, want) {
+					t.Errorf("cleanupContainers = %v, want %v", err, want)
+				}
+			}
+			for _, name := range []string{"sidecar", "_sandbox"} {
+				if f.containers[name] {
+					t.Errorf("%s survived application cleanup error; calls: %v", name, f.calls)
+				}
+			}
+			if got := f.calls[len(f.calls)-1]; got != "delete _sandbox" {
+				t.Errorf("last call = %q, want sandbox deletion", got)
+			}
+			if tc.removeOnDeleteError {
+				if err := cleanupContainers(context.Background(), f, containers); err != nil {
+					t.Errorf("retry after records were removed: %v", err)
+				}
+			}
+		})
+	}
 }
 
 // The sandbox must outlive the deletes of the
