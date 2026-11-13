@@ -114,6 +114,15 @@ rules:
 			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"tls_passthrough": {"hostnames": ["*.example.com"], "ports": {"numbers": [443]}}}]}`,
 			want:     &ateapi.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
+		{
+			name: "json error preserves source location",
+			manifest: `{
+  "metadata": {"name": "default"},
+  "rulez": []
+}`,
+			wantErr:         true,
+			wantErrContains: `(line 3:3): unknown field "rulez"`,
+		},
 		{name: "empty", manifest: "", wantErr: true, wantErrContains: "manifest is empty"},
 		{name: "unknown field", manifest: "rulez: []", wantErr: true, wantErrContains: "invalid EgressPolicy"},
 		{name: "rules not a list", manifest: "rules: {http: {}}", wantErr: true},
