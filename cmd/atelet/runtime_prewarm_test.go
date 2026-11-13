@@ -366,7 +366,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	s = newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
 	rec = &recordingPrewarm{}
 	s.prewarm = rec
-	s.runCPUFeatures = func(context.Context, string) ([]string, error) { return nil, errors.New("runsc failed") }
+	s.runCPUFeatures = func(context.Context, string) (string, error) { return "", errors.New("runsc failed") }
 	previous := s.defaultRuntimeDir("pod-a", "sha256:previous")
 	if err := os.MkdirAll(previous, 0o700); err != nil {
 		t.Fatal(err)
