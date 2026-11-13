@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -319,11 +320,36 @@ func (r *runsc) runWait(ctx context.Context, containerName string, extraArgs ...
 	return nil
 }
 
+type waitResult struct {
+	ID         string `json:"id"`
+	ExitStatus int    `json:"exitStatus"`
+}
+
+// cmdWaitExit runs `runsc wait <container>` and returns the container's exit status.
+func (r *runsc) cmdWaitExit(ctx context.Context, containerName string) (int, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName)...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return -1, fmt.Errorf("while running `runsc wait`: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	var res waitResult
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		return -1, fmt.Errorf("parsing wait output %q: %w", stdout.String(), err)
+	}
+	return res.ExitStatus, nil
+}
+
 // cmdWait blocks until the given container's process exits. Used during
 // graceful shutdown to confirm the actor has stopped before ateworker exits.
 func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
-	return r.runWait(ctx, containerName)
+	_, err := r.cmdWaitExit(ctx, containerName)
+	return err
 }
 
 // cmdWaitRestore blocks until background page loading from `runsc restore -background` completes.
