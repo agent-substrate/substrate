@@ -50,14 +50,18 @@ func TestBadVersionSHA(t *testing.T) {
 	t.Parallel()
 	f := setupSuspendedV1Actor(t, "bad-sha")
 
-	// 2. Add v2 with a wrong SHA256 as a restorable version.
+	// 2. Add v2 with a wrong SHA256 as a restorable version. Only assets
+	// that differ from v1 get a wrong SHA256, so any assets shared with v1
+	// stay cache hits.
 	v2Bad := *f.v2.DeepCopy()
 	for arch, files := range v2Bad.Assets {
 		for name, entry := range files {
+			if entry == f.v1.Assets[arch][name] {
+				continue
+			}
 			entry.SHA256 = strings.Repeat("0", 64)
 			files[name] = entry
 		}
-		v2Bad.Assets[arch] = files
 	}
 	f.updateVersions(t, f.v1.Name, []atev1.SandboxVersionConfig{f.v1, v2Bad})
 	versionNote := fmt.Sprintf("SandboxConfig %q, version %q:", f.configName, v2Bad.Name)
