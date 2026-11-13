@@ -3,6 +3,7 @@ package pgx
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -51,32 +52,58 @@ type TxOptions struct {
 	CommitQuery string
 }
 
-var emptyTxOptions TxOptions
+// The standard values of each transaction option, unset first. beginSQLs is indexed by the position of a value in
+// these lists.
+var (
+	txIsoLevels       = [...]TxIsoLevel{"", Serializable, RepeatableRead, ReadCommitted, ReadUncommitted}
+	txAccessModes     = [...]TxAccessMode{"", ReadWrite, ReadOnly}
+	txDeferrableModes = [...]TxDeferrableMode{"", Deferrable, NotDeferrable}
+)
+
+// beginSQLs holds the begin statement for every combination of the standard transaction option values, so that
+// beginning a transaction with them does not allocate.
+var beginSQLs = func() (sqls [len(txIsoLevels)][len(txAccessModes)][len(txDeferrableModes)]string) {
+	for i, isoLevel := range txIsoLevels {
+		for a, accessMode := range txAccessModes {
+			for d, deferrableMode := range txDeferrableModes {
+				sqls[i][a][d] = renderBeginSQL(isoLevel, accessMode, deferrableMode)
+			}
+		}
+	}
+	return sqls
+}()
 
 func (txOptions TxOptions) beginSQL() string {
-	if txOptions == emptyTxOptions {
-		return "begin"
-	}
-
 	if txOptions.BeginQuery != "" {
 		return txOptions.BeginQuery
 	}
 
+	i := slices.Index(txIsoLevels[:], txOptions.IsoLevel)
+	a := slices.Index(txAccessModes[:], txOptions.AccessMode)
+	d := slices.Index(txDeferrableModes[:], txOptions.DeferrableMode)
+	if i < 0 || a < 0 || d < 0 {
+		return renderBeginSQL(txOptions.IsoLevel, txOptions.AccessMode, txOptions.DeferrableMode)
+	}
+
+	return beginSQLs[i][a][d]
+}
+
+func renderBeginSQL(isoLevel TxIsoLevel, accessMode TxAccessMode, deferrableMode TxDeferrableMode) string {
 	var buf strings.Builder
 	buf.Grow(64) // 64 - maximum length of string with available options
 	buf.WriteString("begin")
 
-	if txOptions.IsoLevel != "" {
+	if isoLevel != "" {
 		buf.WriteString(" isolation level ")
-		buf.WriteString(string(txOptions.IsoLevel))
+		buf.WriteString(string(isoLevel))
 	}
-	if txOptions.AccessMode != "" {
+	if accessMode != "" {
 		buf.WriteByte(' ')
-		buf.WriteString(string(txOptions.AccessMode))
+		buf.WriteString(string(accessMode))
 	}
-	if txOptions.DeferrableMode != "" {
+	if deferrableMode != "" {
 		buf.WriteByte(' ')
-		buf.WriteString(string(txOptions.DeferrableMode))
+		buf.WriteString(string(deferrableMode))
 	}
 
 	return buf.String()
@@ -100,9 +127,12 @@ func (c *Conn) Begin(ctx context.Context) (Tx, error) {
 func (c *Conn) BeginTx(ctx context.Context, txOptions TxOptions) (Tx, error) {
 	_, err := c.Exec(ctx, txOptions.beginSQL())
 	if err != nil {
-		// begin should never fail unless there is an underlying connection issue or
-		// a context timeout. In either case, the connection is possibly broken.
-		c.die()
+		// begin kills the connection upon receiving fatal, panic or non PGError errors,
+		// but does not otherwise as the connection should be reusable.
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || isConnectionFatal(pgErr) {
+			c.die()
+		}
 		return nil, err
 	}
 
@@ -110,6 +140,14 @@ func (c *Conn) BeginTx(ctx context.Context, txOptions TxOptions) (Tx, error) {
 		conn:        c,
 		commitQuery: txOptions.CommitQuery,
 	}, nil
+}
+
+func isConnectionFatal(pgErr *pgconn.PgError) bool {
+	severity := pgErr.SeverityUnlocalized
+	if severity == "" {
+		severity = pgErr.Severity
+	}
+	return severity == "FATAL" || severity == "PANIC"
 }
 
 // Tx represents a database transaction.
@@ -269,7 +307,10 @@ func (tx *dbTx) CopyFrom(ctx context.Context, tableName Identifier, columnNames 
 // SendBatch delegates to the underlying *Conn
 func (tx *dbTx) SendBatch(ctx context.Context, b *Batch) BatchResults {
 	if tx.closed {
-		return &batchResults{err: ErrTxClosed}
+		return FailedBatchResults(b, ErrTxClosed)
+	}
+	if b.txOptions != nil {
+		return FailedBatchResults(b, errors.New("Batch.BeginTx cannot be used within a transaction"))
 	}
 
 	return tx.conn.SendBatch(ctx, b)
@@ -371,7 +412,7 @@ func (sp *dbSimulatedNestedTx) CopyFrom(ctx context.Context, tableName Identifie
 // SendBatch delegates to the underlying *Conn
 func (sp *dbSimulatedNestedTx) SendBatch(ctx context.Context, b *Batch) BatchResults {
 	if sp.closed {
-		return &batchResults{err: ErrTxClosed}
+		return FailedBatchResults(b, ErrTxClosed)
 	}
 
 	return sp.tx.SendBatch(ctx, b)
