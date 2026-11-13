@@ -158,6 +158,7 @@ func do(ctx context.Context) error {
 	}
 
 	slog.InfoContext(ctx, "ateworker booting", slog.String("version", version.Version))
+	warnLowMaxMapCount(ctx, maxMapCountPath)
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
 	}
