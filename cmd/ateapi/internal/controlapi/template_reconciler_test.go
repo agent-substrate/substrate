@@ -392,7 +392,7 @@ func withFailed(reason string) func(*ateapi.ActorTemplate) {
 }
 
 func newTestTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
-	return NewActorTemplateReconciler(persistence, control, 7*time.Second)
+	return NewActorTemplateReconciler(persistence, control, 7*time.Second, DefaultTemplateReconcilerWorkers)
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
@@ -1258,4 +1258,65 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 			}
 		})
 	}
+}
+
+type barrierGoldenControl struct {
+	*fakeGoldenControl
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *barrierGoldenControl) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*ateapi.Tag, error) {
+	select {
+	case c.entered <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return nil, apierror.NotFound("no tag")
+}
+
+func TestActorTemplateReconciler_RunsConfiguredWorkersConcurrently(t *testing.T) {
+	t.Parallel()
+	const workers = 12
+	templates := make([]*ateapi.ActorTemplate, workers)
+	for i := range workers {
+		name := "tmpl-" + strconv.Itoa(i)
+		uid := "uid-" + strconv.Itoa(i)
+		templates[i] = testTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Name = name
+			tmpl.Metadata.Uid = uid
+		})
+	}
+
+	st := newFakeTemplateStore(templates...)
+	ctrl := &barrierGoldenControl{
+		fakeGoldenControl: &fakeGoldenControl{
+			exists:         true,
+			goldenState:    ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+			goldenSnapshot: "gs://bucket/root/atespaces/ns/actors/" + someActorUID + "/snapshots/snap-1",
+		},
+		entered: make(chan struct{}, workers),
+		release: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	r := NewActorTemplateReconciler(st, ctrl, time.Hour, workers)
+	r.Start(ctx)
+
+	// All 12 workers must enter GetTag concurrently before any worker finishes.
+	for range workers {
+		select {
+		case <-ctrl.entered:
+		case <-ctx.Done():
+			t.Fatal("context cancelled waiting for concurrent reconciler workers")
+		}
+	}
+	close(ctrl.release)
 }
