@@ -15,9 +15,9 @@
 // The provider's /statusz page, mirroring the atenet router's: one handler
 // serving an HTML dashboard by default and JSON under ?format=json (or
 // Accept: application/json). It shows the provider's configuration as the
-// running process holds it — notably the authorization policy loaded at
-// startup, which the ConfigMap on disk may have since drifted from. Names
-// and configuration only, never secret values.
+// running process holds it — notably the authorization policy in force, which
+// stays at the last version that loaded while the file on disk fails to parse.
+// Names and configuration only, never secret values.
 package main
 
 import (
@@ -41,6 +41,7 @@ type statusContext struct {
 	Flags        map[string]string   `json:"flags"`
 	InjectorSAN  string              `json:"injector_san"`
 	PolicyGrants map[string][]string `json:"policy_grants"`
+	PolicyError  string              `json:"policy_error,omitempty"`
 }
 
 // newStatuszHandler serves /statusz over the provider's state.
@@ -56,6 +57,9 @@ func newStatuszHandler(srv *Server) http.HandlerFunc {
 			Flags:        flags,
 			InjectorSAN:  *injectorIdentity,
 			PolicyGrants: srv.Grants(),
+		}
+		if err := srv.PolicyError(); err != nil {
+			data.PolicyError = err.Error()
 		}
 
 		if strings.Contains(req.Header.Get("Accept"), "application/json") || req.URL.Query().Get("format") == "json" {
@@ -88,7 +92,8 @@ provider: {{.ProviderName}}<br>
 required caller SAN: {{.InjectorSAN}}<br>
 args: {{.Args}}</p>
 
-<h2>Namespace policy (as loaded at startup)</h2>
+<h2>Namespace policy</h2>
+{{if .PolicyError}}<p><b>policy file failed to load, previous policy in force:</b> {{.PolicyError}}</p>{{end}}
 {{if .PolicyGrants}}
 <table>
 <tr><th>atespace</th><th>allowed namespaces</th></tr>
