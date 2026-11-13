@@ -472,7 +472,7 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 	}
 }
 
-// TestSyncPodMicroVMAssetCacheAndEviction runs syncPod for a microVM pool
+// TestSyncPodAssetCacheAndEviction runs syncPod for microVM and gVisor pools
 // against the real sandboxAssetCache and runtimePrewarmer:
 //   - buildFile stages each version's assets into scratchDir and cleans up;
 //   - the prewarmer links only the default version under the worker's directory,
@@ -482,136 +482,203 @@ func TestPlanAndBuildMicroVM(t *testing.T) {
 //     restorable version in sandbox-runtimes.json;
 //   - promoting the evicted restorable version to default while the bucket is
 //     failing fails the sync and leaves the file and the old default's
-//     directory as they were.
-func TestSyncPodMicroVMAssetCacheAndEviction(t *testing.T) {
-	ctx := context.Background()
-	v1Bytes, v2Bytes := []byte("kernel v1"), []byte("kernel v2")
-	v1SHA := fmt.Sprintf("%x", sha256.Sum256(v1Bytes))
-	v2SHA := fmt.Sprintf("%x", sha256.Sum256(v2Bytes))
-
-	pool := resolvedPoolOf(atev1.SandboxClassMicroVM, "microvm-pool", "microvm-release")
-	version := func(name, sha string) atev1.SandboxVersionConfig {
-		return atev1.SandboxVersionConfig{
-			Name: name,
-			Assets: map[string]map[string]atev1.AssetFile{
-				runtime.GOARCH: {"kernel": {URL: "gs://assets/kernel-" + name, SHA256: sha}},
-			},
-		}
-	}
-	cfg := &atev1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "microvm-release"},
-		Spec: atev1.SandboxConfigSpec{
-			SandboxClass:   atev1.SandboxClassMicroVM,
-			DefaultVersion: "v2",
-			Versions: []atev1.SandboxVersionConfig{
-				version("v1", v1SHA),
-				version("v2", v2SHA),
+//     directory as they were;
+//   - once the bucket serves the version again, syncPod re-stages it into the
+//     cache without re-running the CPU probe.
+func TestSyncPodAssetCacheAndEviction(t *testing.T) {
+	for _, tc := range []struct {
+		class     atev1.SandboxClass
+		assetName string
+		urlSuffix string
+		v1Bytes   []byte
+		v2Bytes   []byte
+		wantAttrs func(rec *sandboxAssetsRecord) sandboxruntimes.Attributes
+	}{
+		{
+			class:     atev1.SandboxClassMicroVM,
+			assetName: "kernel",
+			v1Bytes:   []byte("kernel v1"),
+			v2Bytes:   []byte("kernel v2"),
+			wantAttrs: func(rec *sandboxAssetsRecord) sandboxruntimes.Attributes {
+				return sandboxruntimes.Attributes{
+					hardware.AttrArchitecture:      runtime.GOARCH,
+					hardware.AttrCPUVendor:         testCPUVendor,
+					hardware.AttrCPUModel:          testCPUModel,
+					hardware.AttrSandboxBundleHash: bundleHash(rec),
+				}
 			},
 		},
-	}
-	wantMicroVM := func(sha string) sandboxruntimes.Attributes {
-		rec := &sandboxAssetsRecord{Assets: map[string]assetEntry{"kernel": {SHA256: sha}}}
-		return sandboxruntimes.Attributes{
-			hardware.AttrArchitecture:      runtime.GOARCH,
-			hardware.AttrCPUVendor:         testCPUVendor,
-			hardware.AttrCPUModel:          testCPUModel,
-			hardware.AttrSandboxBundleHash: bundleHash(rec),
-		}
-	}
-	want := classFile(atev1.SandboxClassMicroVM, wantMicroVM(v2SHA), wantMicroVM(v1SHA))
-
-	root := t.TempDir()
-	storage := &bucketStorage{
-		objects: map[string][]byte{
-			"assets/kernel-v1": v1Bytes,
-			"assets/kernel-v2": v2Bytes,
+		{
+			class:     atev1.SandboxClassGvisor,
+			assetName: gvisorAssetName,
+			urlSuffix: ".tar",
+			v1Bytes:   gvisorReleaseTarballWith(t, "runsc v1"),
+			v2Bytes:   gvisorReleaseTarballWith(t, "runsc v2"),
+			wantAttrs: func(rec *sandboxAssetsRecord) sandboxruntimes.Attributes {
+				return sandboxruntimes.Attributes{
+					hardware.AttrArchitecture:      runtime.GOARCH,
+					hardware.AttrCPUFeatures:       "3",
+					hardware.AttrSandboxBundleHash: bundleHash(rec),
+				}
+			},
 		},
-	}
-	herder := &Atelet{
-		sandboxAssetCache: newTestAssetCacheAt(t, root, filecache.WithMinAge(0)),
-		anonGCSClient:     storage,
-	}
-	s := newTestSyncer(t, pool, cfg)
-	s.assets = herder
-	s.workersDir = filepath.Join(root, "workers")
-	s.scratchDir = filepath.Join(root, "scratch")
-	if err := os.MkdirAll(s.scratchDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	recPrewarm := &recordingPrewarm{}
-	s.prewarm = recPrewarm
+	} {
+		t.Run(string(tc.class), func(t *testing.T) {
+			ctx := context.Background()
+			v1SHA := fmt.Sprintf("%x", sha256.Sum256(tc.v1Bytes))
+			v2SHA := fmt.Sprintf("%x", sha256.Sum256(tc.v2Bytes))
 
-	if _, err := s.syncPod(ctx, workerPod("pod-a", "microvm-pool")); err != nil {
-		t.Fatalf("syncPod(pod-a): %v", err)
-	}
-	if left, err := os.ReadDir(s.scratchDir); err != nil || len(left) != 0 {
-		t.Errorf("scratchDir entries after syncPod = %v, %v; want empty", left, err)
-	}
-	if got := storage.gets.Load(); got != 2 {
-		t.Fatalf("bucket gets after first sync = %d, want 2", got)
-	}
-	if n := cachedAssets(t, root); n != 2 {
-		t.Fatalf("cached assets after first sync = %d, want 2", n)
-	}
+			poolName := string(tc.class) + "-pool"
+			cfgName := string(tc.class) + "-release"
+			pool := resolvedPoolOf(tc.class, poolName, cfgName)
+			objKey := func(name string) string {
+				return "assets/" + tc.assetName + "-" + name + tc.urlSuffix
+			}
+			version := func(name, sha string) atev1.SandboxVersionConfig {
+				return atev1.SandboxVersionConfig{
+					Name: name,
+					Assets: map[string]map[string]atev1.AssetFile{
+						runtime.GOARCH: {tc.assetName: {URL: "gs://" + objKey(name), SHA256: sha}},
+					},
+				}
+			}
+			cfg := &atev1.SandboxConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: cfgName},
+				Spec: atev1.SandboxConfigSpec{
+					SandboxClass:   tc.class,
+					DefaultVersion: "v2",
+					Versions: []atev1.SandboxVersionConfig{
+						version("v1", v1SHA),
+						version("v2", v2SHA),
+					},
+				},
+			}
+			wantVersion := func(sha string) sandboxruntimes.Attributes {
+				return tc.wantAttrs(&sandboxAssetsRecord{Assets: map[string]assetEntry{tc.assetName: {SHA256: sha}}})
+			}
+			want := classFile(tc.class, wantVersion(v2SHA), wantVersion(v1SHA))
 
-	// Link the default version (v2) into pod-a's default-runtime directory via
-	// the prewarmer, leaving the restorable version (v1) unlinked.
-	p := newRuntimePrewarmer(s.index, herder)
-	for _, item := range recPrewarm.items() {
-		p.process(ctx, item)
-	}
-	stats, err := herder.sandboxAssetCache.EvictUnused(ctx, 1<<40, false)
-	if err != nil {
-		t.Fatalf("EvictUnused: %v", err)
-	}
-	if stats.Retired != 1 || stats.SkippedLinked != 1 || cachedAssets(t, root) != 1 {
-		t.Fatalf("after EvictUnused: stats=%+v, cached=%d; want 1 retired (v1) and 1 linked kept (v2)", stats, cachedAssets(t, root))
-	}
+			root := t.TempDir()
+			storage := &bucketStorage{
+				objects: map[string][]byte{
+					objKey("v1"): tc.v1Bytes,
+					objKey("v2"): tc.v2Bytes,
+				},
+			}
+			herder := &Atelet{
+				sandboxAssetCache: newTestAssetCacheAt(t, root, filecache.WithMinAge(0)),
+				anonGCSClient:     storage,
+			}
+			s := newTestSyncer(t, pool, cfg)
+			s.assets = herder
+			s.workersDir = filepath.Join(root, "workers")
+			s.scratchDir = filepath.Join(root, "scratch")
+			if err := os.MkdirAll(s.scratchDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			recPrewarm := &recordingPrewarm{}
+			s.prewarm = recPrewarm
 
-	// Take the bucket offline and verify that syncing a new pod (pod-b) and
-	// re-syncing pod-a neither re-download v1 nor drop it from the written file.
-	storage.mu.Lock()
-	clear(storage.objects)
-	storage.mu.Unlock()
+			if _, err := s.syncPod(ctx, workerPod("pod-a", poolName)); err != nil {
+				t.Fatalf("syncPod(pod-a): %v", err)
+			}
+			if left, err := os.ReadDir(s.scratchDir); err != nil || len(left) != 0 {
+				t.Errorf("scratchDir entries after syncPod = %v, %v; want empty", left, err)
+			}
+			if got := storage.gets.Load(); got != 2 {
+				t.Fatalf("bucket gets after first sync = %d, want 2", got)
+			}
+			if n := cachedAssets(t, root); n != 2 {
+				t.Fatalf("cached assets after first sync = %d, want 2", n)
+			}
 
-	for _, uid := range []string{"pod-b", "pod-a"} {
-		if _, err := s.syncPod(ctx, workerPod(uid, "microvm-pool")); err != nil {
-			t.Fatalf("syncPod(%s) after eviction with bucket offline: %v", uid, err)
-		}
-		got, err := sandboxruntimes.Read(s.runtimesFile(uid))
-		if err != nil {
-			t.Fatalf("sandboxruntimes.Read(%s): %v", uid, err)
-		}
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("sandbox-runtimes.json for %s mismatch (-want +got):\n%s", uid, diff)
-		}
-	}
-	if got := storage.gets.Load(); got != 2 {
-		t.Errorf("bucket gets after syncing pod-b and re-syncing pod-a = %d, want 2 (no re-downloads)", got)
-	}
+			// Link the default version (v2) into pod-a's default-runtime directory via
+			// the prewarmer, leaving the restorable version (v1) unlinked.
+			p := newRuntimePrewarmer(s.index, herder)
+			for _, item := range recPrewarm.items() {
+				p.process(ctx, item)
+			}
+			stats, err := herder.sandboxAssetCache.EvictUnused(ctx, 1<<40, false)
+			if err != nil {
+				t.Fatalf("EvictUnused: %v", err)
+			}
+			if stats.Retired != 1 || stats.SkippedLinked != 1 || cachedAssets(t, root) != 1 {
+				t.Fatalf("after EvictUnused: stats=%+v, cached=%d; want 1 retired (v1) and 1 linked kept (v2)", stats, cachedAssets(t, root))
+			}
 
-	// Promoting the evicted v1 to default while the bucket is offline must fail
-	// the sync and keep pod-a's previous file and default-runtime pin in place.
-	cfg.Spec.DefaultVersion = "v1"
-	if _, err := s.syncPod(ctx, workerPod("pod-a", "microvm-pool")); err == nil {
-		t.Fatal("syncPod(pod-a) after promoting evicted v1 to default with bucket offline = nil, want error")
-	}
-	got, err := sandboxruntimes.Read(s.runtimesFile("pod-a"))
-	if err != nil {
-		t.Fatalf("sandboxruntimes.Read(pod-a): %v", err)
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("sandbox-runtimes.json for pod-a after failed default promotion (-want +got):\n%s", diff)
-	}
-	v2Hash := want.SandboxClasses[0].DefaultRuntime.Version[hardware.AttrSandboxBundleHash]
-	if !exists(s.defaultRuntimeDir("pod-a", v2Hash)) {
-		t.Error("a failed sync removed pod-a's default-runtime directory for v2")
-	}
-	if n := cachedAssets(t, root); n != 1 {
-		t.Errorf("cached assets after failed default promotion = %d, want 1 (v2 still linked)", n)
-	}
-	if got := storage.gets.Load(); got != 3 {
-		t.Errorf("bucket gets after promoting evicted v1 to default = %d, want 3 (the default is checked, not memoized)", got)
+			// Take the bucket offline and verify that syncing a new pod (pod-b) and
+			// re-syncing pod-a neither re-download v1 nor drop it from the written file.
+			storage.mu.Lock()
+			clear(storage.objects)
+			storage.mu.Unlock()
+
+			for _, uid := range []string{"pod-b", "pod-a"} {
+				if _, err := s.syncPod(ctx, workerPod(uid, poolName)); err != nil {
+					t.Fatalf("syncPod(%s) after eviction with bucket offline: %v", uid, err)
+				}
+				got, err := sandboxruntimes.Read(s.runtimesFile(uid))
+				if err != nil {
+					t.Fatalf("sandboxruntimes.Read(%s): %v", uid, err)
+				}
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("sandbox-runtimes.json for %s mismatch (-want +got):\n%s", uid, diff)
+				}
+			}
+			if got := storage.gets.Load(); got != 2 {
+				t.Errorf("bucket gets after syncing pod-b and re-syncing pod-a = %d, want 2 (no re-downloads)", got)
+			}
+
+			// Promoting the evicted v1 to default while the bucket is offline must fail
+			// the sync and keep pod-a's previous file and default-runtime pin in place.
+			cfg.Spec.DefaultVersion = "v1"
+			if _, err := s.syncPod(ctx, workerPod("pod-a", poolName)); err == nil {
+				t.Fatal("syncPod(pod-a) after promoting evicted v1 to default with bucket offline = nil, want error")
+			}
+			got, err := sandboxruntimes.Read(s.runtimesFile("pod-a"))
+			if err != nil {
+				t.Fatalf("sandboxruntimes.Read(pod-a): %v", err)
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("sandbox-runtimes.json for pod-a after failed default promotion (-want +got):\n%s", diff)
+			}
+			v2Hash := want.SandboxClasses[0].DefaultRuntime.Version[hardware.AttrSandboxBundleHash]
+			if !exists(s.defaultRuntimeDir("pod-a", v2Hash)) {
+				t.Error("a failed sync removed pod-a's default-runtime directory for v2")
+			}
+			if n := cachedAssets(t, root); n != 1 {
+				t.Errorf("cached assets after failed default promotion = %d, want 1 (v2 still linked)", n)
+			}
+			if got := storage.gets.Load(); got != 3 {
+				t.Errorf("bucket gets after promoting evicted v1 to default = %d, want 3 (the default is checked, not memoized)", got)
+			}
+
+			// Once the bucket serves v1 again, syncPod re-stages v1 into the cache
+			// before switching the file and default-runtime directory, without
+			// re-running the CPU probe.
+			storage.mu.Lock()
+			storage.objects[objKey("v1")] = tc.v1Bytes
+			storage.mu.Unlock()
+			s.probeCPUIdentity = func() (string, string, error) {
+				return "", "", errors.New("re-probed memoized host CPU identity")
+			}
+			s.runCPUFeatures = func(context.Context, string) ([]string, error) {
+				return nil, errors.New("re-ran runsc cpu-features for a memoized digest")
+			}
+			if _, err := s.syncPod(ctx, workerPod("pod-a", poolName)); err != nil {
+				t.Fatalf("syncPod(pod-a) after bucket recovery: %v", err)
+			}
+			if n := cachedAssets(t, root); n != 2 {
+				t.Errorf("cached assets right after syncPod = %d, want 2 (v1 staged during build)", n)
+			}
+			wantPromoted := classFile(tc.class, wantVersion(v1SHA), wantVersion(v2SHA))
+			got, err = sandboxruntimes.Read(s.runtimesFile("pod-a"))
+			if err != nil {
+				t.Fatalf("sandboxruntimes.Read(pod-a): %v", err)
+			}
+			if diff := cmp.Diff(wantPromoted, got); diff != "" {
+				t.Errorf("sandbox-runtimes.json for pod-a after default promotion (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -688,14 +755,24 @@ func TestGVisorCPUFeaturesMemoizationAndErrors(t *testing.T) {
 			t.Errorf("planAndBuild() mismatch (-want +got):\n%s", diff)
 		}
 
-		// Syncing again must answer from the memo alone: no fetch, no runsc.
+		// Syncing again stages the default version (sha-v2) in the cache without
+		// re-running runsc, and answers restorable versions from the memo alone.
+		var defaultStaged int
 		s.assets = &fakeAssetFetcher{
-			fn: func(context.Context, *sandboxAssetsRecord) (map[string]string, error) {
-				return nil, errors.New("fetched a runsc whose cpu_features are memoized")
+			fn: func(_ context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+				sha := rec.Assets[gvisorAssetName].SHA256
+				if sha != "sha-v2" {
+					return nil, fmt.Errorf("fetched restorable %s whose cpu_features are memoized", sha)
+				}
+				defaultStaged++
+				return map[string]string{gvisorAssetName: "/cache/sha-v2/runsc"}, nil
 			},
 		}
 		if _, err := planAndBuild(s, workerPod("pod-b", "pool")); err != nil {
 			t.Fatalf("second planAndBuild() error = %v", err)
+		}
+		if defaultStaged != 1 {
+			t.Errorf("defaultStaged = %d, want 1", defaultStaged)
 		}
 		wantCalls := map[string]int{
 			"/cache/sha-v2/runsc": 1,

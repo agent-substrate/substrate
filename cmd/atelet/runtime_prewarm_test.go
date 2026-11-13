@@ -302,9 +302,10 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	s := newTestSyncer(t, pod, resolvedPool("pool", "gvisor-release"), multiVersionConfig())
 	rec := &recordingPrewarm{}
 	s.prewarm = rec
+	wantPrewarmsBeforeBuild := 0
 	s.assets = &fakeAssetFetcher{
 		fn: func(ctx context.Context, r *sandboxAssetsRecord) (map[string]string, error) {
-			if rec.count() != 0 {
+			if rec.count() != wantPrewarmsBeforeBuild {
 				t.Error("the default runtime was handed to the prewarmer before the build finished")
 			}
 			return newTestAssetFetcher().ensureSandboxAssets(ctx, r, "")
@@ -345,6 +346,7 @@ func TestSyncPodPrewarmsDefaultRuntime(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	wantPrewarmsBeforeBuild = 1
 	if _, err := s.syncPod(context.Background(), pod); err != nil {
 		t.Fatalf("syncPod again: %v", err)
 	}
