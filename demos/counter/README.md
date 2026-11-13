@@ -201,18 +201,18 @@ go run ./cmd/ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
-# 2. Install a bundled CSI driver and its CSIDriverConfig:
-#    - NFS (creates StorageClass csi-nfs-sc, requires the nfsd kernel module on nodes):
-go run ./cmd/ate-setup setup csi nfs
-#    - Or hostpath on kind clusters (creates StorageClass csi-hostpath-sc):
-# go run ./cmd/ate-setup setup csi hostpath
+# 2. Install a bundled CSI driver, its CSIDriverConfig, and its ExternalVolumeClass:
+#    - NFS (registers ExternalVolumeClass csi-nfs, requires the nfsd kernel module on nodes):
+go run ./cmd/ate-setup setup csi nfs --preview=ExternalVolumes
+#    - Or hostpath on kind clusters (registers ExternalVolumeClass csi-hostpath):
+# go run ./cmd/ate-setup setup csi hostpath --preview=ExternalVolumes
 
 # 3. Delete any existing counter demo (templates are immutable), then deploy with the external volume
 go run ./cmd/ate-setup delete demo counter
 kubectl wait --for=delete namespace/ate-demo-counter --timeout=60s
 go run ./cmd/ate-setup deploy demo counter \
   --with-external-volume \
-  --storage-class=csi-nfs-sc \
+  --external-volume-class=csi-nfs \
   --preview=ExternalVolumes
 
 # 4. Create the actor with --preview enabled on kubectl ate
@@ -223,10 +223,10 @@ kubectl ate --preview create actor my-counter-1 -a ate-demo-counter --template c
 
 The installer reads these settings in addition to those in [docs/guides/operator-install.md](../../docs/guides/operator-install.md#settings), through the same flag, environment variable, and configuration document channels.
 
-| Key                               | Environment variable                    | Flag                     | Default    | Applies to            |
-|-----------------------------------|-----------------------------------------|--------------------------|------------|-----------------------|
-| `demo.counter.storageClass`       | `STORAGE_CLASS`                         | `--storage-class`        | `standard` | `deploy demo counter` |
-| `demo.counter.withExternalVolume` | `ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME` | `--with-external-volume` | `false`    | `deploy demo counter` |
+| Key                                | Environment variable                    | Flag                      | Default   | Applies to            |
+|------------------------------------|-----------------------------------------|---------------------------|-----------|-----------------------|
+| `demo.counter.externalVolumeClass` | `EXTERNAL_VOLUME_CLASS`                 | `--external-volume-class` | `csi-nfs` | `deploy demo counter` |
+| `demo.counter.withExternalVolume`  | `ATE_DEMO_COUNTER_WITH_EXTERNAL_VOLUME` | `--with-external-volume`  | `false`   | `deploy demo counter` |
 
 ## How to Uninstall
 

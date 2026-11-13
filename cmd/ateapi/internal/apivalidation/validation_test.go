@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -956,6 +957,21 @@ func TestValidateExternalVolume(t *testing.T) {
 			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 40*1024)}
 		}),
 		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 40*1024)},
+	}, {
+		name: "valid mount_options",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{"nfsvers=4.1", "noatime"} }),
+	}, {
+		name: "empty mount_options item",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{""} }),
+		want: field.ErrorList{field.TooShort(field.NewPath("mount_options").Index(0), "", 1).WithOrigin("minLength")},
+	}, {
+		name: "too-long mount_options item",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = []string{strings.Repeat("a", 257)} }),
+		want: field.ErrorList{field.TooLong(field.NewPath("mount_options").Index(0), "", 256).WithOrigin("maxLength")},
+	}, {
+		name: "too many mount_options",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.MountOptions = slices.Repeat([]string{"ro"}, 33) }),
+		want: field.ErrorList{field.TooMany(field.NewPath("mount_options"), 33, 32).WithOrigin("maxItems")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

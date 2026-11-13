@@ -71,6 +71,52 @@ func TestFormatMember(t *testing.T) {
 	}
 }
 
+func TestFormatAtespaceMember(t *testing.T) {
+	maxLabel := strings.Repeat("a", 63)
+	tests := []struct {
+		name    string
+		member  string
+		want    string
+		wantErr bool
+	}{
+		{name: "plain", member: "atespace:space-1", want: "atespace:space-1"},
+		{name: "single character", member: "atespace:a", want: "atespace:a"},
+		{name: "max DNS-1123 label length", member: "atespace:" + maxLabel, want: "atespace:" + maxLabel},
+		{name: "missing prefix", member: "space-1", wantErr: true},
+		{name: "user prefix rejected", member: "user:alice@example.com", wantErr: true},
+		{name: "empty name", member: "atespace:", wantErr: true},
+		{name: "whitespace name", member: "atespace:   ", wantErr: true},
+		{name: "wildcard", member: "atespace:*", wantErr: true},
+		{name: "userset relation rejected", member: "atespace:space-1#editor", wantErr: true},
+		{name: "uppercase rejected", member: "atespace:Space-1", wantErr: true},
+		{name: "slash rejected", member: "atespace:a/b", wantErr: true},
+		{name: "colon rejected", member: "atespace:a:b", wantErr: true},
+		{name: "percent rejected", member: "atespace:a%20b", wantErr: true},
+		{name: "leading hyphen rejected", member: "atespace:-bad", wantErr: true},
+		{name: "trailing hyphen rejected", member: "atespace:bad-", wantErr: true},
+		{name: "too long rejected", member: "atespace:" + maxLabel + "a", wantErr: true},
+		{name: "newline rejected", member: "atespace:a\nb", wantErr: true},
+		{name: "NUL rejected", member: "atespace:a\x00b", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FormatAtespaceMember(tc.member)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("FormatAtespaceMember(%q) = %q, want error", tc.member, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("FormatAtespaceMember(%q) failed: %v", tc.member, err)
+			}
+			if got != tc.want {
+				t.Errorf("FormatAtespaceMember(%q) = %q, want %q", tc.member, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseBootstrapOwners(t *testing.T) {
 	got, err := parseBootstrapOwners([]string{"alice@example.com", " user:bob ", "alice@example.com", "a:b"})
 	if err != nil {

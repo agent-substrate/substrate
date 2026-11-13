@@ -261,3 +261,76 @@ func TestGlobalAccessPolicy_UpdateIsAtomic(t *testing.T) {
 		}
 	})
 }
+
+func externalVolumeClassTuples(t *testing.T, p *Persistence, className string) []string {
+	t.Helper()
+	rows, err := p.pool.Query(t.Context(),
+		`SELECT relation, _user FROM tuple WHERE object_type = 'external_volume_class' AND object_id = $1`,
+		className)
+	if err != nil {
+		t.Fatalf("reading external volume class tuples: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var relation, user string
+		if err := rows.Scan(&relation, &user); err != nil {
+			t.Fatalf("scanning tuple: %v", err)
+		}
+		out = append(out, relation+" "+user)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading external volume class tuples: %v", err)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestDeleteAtespace_SweepsExternalVolumeClassTuples(t *testing.T) {
+	p := setupPostgresPersistence(t)
+	ctx := t.Context()
+
+	for _, space := range []string{"team-a", "team-b"} {
+		if _, err := p.CreateAtespace(ctx, newTestAtespace(space)); err != nil {
+			t.Fatalf("CreateAtespace(%s) failed: %v", space, err)
+		}
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+	if err := p.policyManager.ReconcileExternalVolumeClassAtespaces(ctx, tx, "nfs-gold", []*ateapi.Binding{
+		{Role: authz.RoleAllowedAtespace, Members: []string{"atespace:team-a", "atespace:team-b"}},
+	}); err != nil {
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces(nfs-gold) failed: %v", err)
+	}
+	if err := p.policyManager.ReconcileExternalVolumeClassAtespaces(ctx, tx, "ssd-fast", []*ateapi.Binding{
+		{Role: authz.RoleAllowedAtespace, Members: []string{"atespace:team-a"}},
+	}); err != nil {
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces(ssd-fast) failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("tx.Commit failed: %v", err)
+	}
+
+	// Precondition mismatch aborts before sweeping tuples.
+	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("DeleteAtespace wrong version = %v, want ErrVersionConflict", err)
+	}
+	if diff := cmp.Diff([]string{"allowed_atespace atespace:team-a", "allowed_atespace atespace:team-b"}, externalVolumeClassTuples(t, p, "nfs-gold")); diff != "" {
+		t.Fatalf("nfs-gold tuples changed on failed delete (-want +got):\n%s", diff)
+	}
+
+	// Deleting team-a sweeps its external volume class tuples while preserving team-b's.
+	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteAtespace(team-a) failed: %v", err)
+	}
+	if diff := cmp.Diff([]string{"allowed_atespace atespace:team-b"}, externalVolumeClassTuples(t, p, "nfs-gold")); diff != "" {
+		t.Errorf("nfs-gold tuples after DeleteAtespace(team-a) (-want +got):\n%s", diff)
+	}
+	if got := externalVolumeClassTuples(t, p, "ssd-fast"); len(got) != 0 {
+		t.Errorf("ssd-fast tuples after DeleteAtespace(team-a) = %v, want empty", got)
+	}
+}

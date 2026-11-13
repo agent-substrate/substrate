@@ -49,7 +49,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -2031,8 +2030,8 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	worker := &ateapi.Worker{NodeName: "node-1"}
 	tmpl := &ateapi.ActorTemplate{
 		Volumes: []*ateapi.Volume{
-			{Name: "mounted", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "sc"}}},
-			{Name: "unmounted", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "sc"}}},
+			{Name: "mounted", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "sc"}}}},
+			{Name: "unmounted", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "sc"}}}},
 		},
 		Containers: []*ateapi.Container{
 			{Name: "main", Image: "img", VolumeMounts: []*ateapi.VolumeMount{{Name: "mounted", MountPath: "/data"}}},
@@ -2077,7 +2076,7 @@ func TestEnsureVolumesCreated(t *testing.T) {
 	tmpl := &ateapi.ActorTemplate{
 		Volumes: []*ateapi.Volume{{
 			Name:     "data",
-			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "sc"}},
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "sc"}}},
 		}},
 	}
 	tests := []struct {
@@ -2093,6 +2092,12 @@ func TestEnsureVolumesCreated(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+			if _, err := persistence.CreateExternalVolumeClass(ctx, &ateapi.ExternalVolumeClass{
+				Metadata:   &ateapi.ResourceMetadata{Name: "sc"},
+				DriverName: "mock",
+			}); err != nil {
+				t.Fatalf("CreateExternalVolumeClass: %v", err)
+			}
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "id1"},
@@ -2110,9 +2115,6 @@ func TestEnsureVolumesCreated(t *testing.T) {
 			w := &ActorWorkflow{
 				store:          persistence,
 				pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}},
-				storageClassLister: &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
-					"sc": {ObjectMeta: metav1.ObjectMeta{Name: "sc"}, Provisioner: "mock"},
-				}},
 			}
 
 			_, err = w.ensureVolumesCreated(ctx, actorRef, actor, tmpl)
@@ -3084,7 +3086,7 @@ func volumeTemplate(declared []string, mounted ...string) *ateapi.ActorTemplate 
 		Containers: []*ateapi.Container{{Name: "main", Image: "img"}},
 	}
 	for _, name := range declared {
-		tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "sc"}}})
+		tmpl.Volumes = append(tmpl.Volumes, &ateapi.Volume{Name: name, External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{ExternalVolumeClass: &ateapi.ObjectRef{Name: "sc"}}}})
 	}
 	for _, name := range mounted {
 		tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts, &ateapi.VolumeMount{Name: name, MountPath: "/" + name})

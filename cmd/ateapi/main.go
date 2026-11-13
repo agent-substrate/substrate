@@ -62,7 +62,6 @@ import (
 	"google.golang.org/grpc/reflection"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -287,18 +286,14 @@ func main() {
 	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
-	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
-	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
-	scInformerFactory.Start(stopCh)
 
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
-	scInformerFactory.WaitForCacheSync(stopCh)
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
@@ -347,7 +342,6 @@ func main() {
 		persistence,
 		workerCache,
 		csiDriverConfigLister,
-		storageClassLister,
 		ateletDialer,
 		instruments,
 		*defaultEgressGatewayAddress,
