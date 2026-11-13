@@ -63,7 +63,7 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 			containerErr = err
 			return
 		}
-		pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
+		pgContainer, err := postgres.Run(ctx, dockerenv.PostgresImage,
 			postgres.WithDatabase("atepg"),
 			postgres.WithUsername("atepg"),
 			postgres.WithPassword("atepg"),
