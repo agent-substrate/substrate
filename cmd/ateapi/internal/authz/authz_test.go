@@ -579,7 +579,7 @@ func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
 	}
 	t.Cleanup(fgaSrv.Close)
 
-	_, pm, err := New(ctx, pool, fgaSrv, nil, testSystemPrincipals())
+	authorizer, pm, err := New(ctx, pool, fgaSrv, []string{"root-owner"}, testSystemPrincipals())
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -813,5 +813,53 @@ func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
 	}
 	if err := txNoop.Commit(ctx); err != nil {
 		t.Fatalf("txNoop.Commit failed: %v", err)
+	}
+
+	// 6. Runtime Authorizer.Check evaluation with contextual parent_global tuples:
+	// - Bootstrap/global owner manages the class and its access policy.
+	// - Editor of allowed atespace (space-2 on nfs-gold) can Get the class, but
+	//   cannot Delete it, read/write its access policy, or Get a disallowed class.
+	// - Viewer of allowed atespace cannot Get the class.
+	writeTestTuple(t, ctx, pool, pm, "bob", RoleEditor, AtespaceObject("space-2"))
+	writeTestTuple(t, ctx, pool, pm, "dave", RoleViewer, AtespaceObject("space-2"))
+
+	rootCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "root-owner", Kind: principal.KindJWT})
+	bobCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "bob", Kind: principal.KindJWT})
+	daveCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "dave", Kind: principal.KindJWT})
+
+	nfsGoldObj := ExternalVolumeClassObject("nfs-gold")
+	ssdFastObj := ExternalVolumeClassObject("ssd-fast")
+
+	for _, rel := range []string{
+		RelationCanGet,
+		RelationCanDelete,
+		RelationCanCreateAccessPolicy,
+		RelationCanGetAccessPolicy,
+		RelationCanUpdateAccessPolicy,
+		RelationCanDeleteAccessPolicy,
+	} {
+		if err := authorizer.Check(rootCtx, rel, nfsGoldObj); err != nil {
+			t.Errorf("expected root-owner allowed %s on nfs-gold, got %v", rel, err)
+		}
+	}
+	if err := authorizer.Check(bobCtx, RelationCanGet, nfsGoldObj); err != nil {
+		t.Errorf("expected allowed-atespace editor bob allowed can_get on nfs-gold, got %v", err)
+	}
+	for _, rel := range []string{
+		RelationCanDelete,
+		RelationCanCreateAccessPolicy,
+		RelationCanGetAccessPolicy,
+		RelationCanUpdateAccessPolicy,
+		RelationCanDeleteAccessPolicy,
+	} {
+		if err := authorizer.Check(bobCtx, rel, nfsGoldObj); apierror.Code(err) != codes.PermissionDenied {
+			t.Errorf("expected bob denied %s on nfs-gold, got %v", rel, err)
+		}
+	}
+	if err := authorizer.Check(bobCtx, RelationCanGet, ssdFastObj); apierror.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected bob denied can_get on disallowed ssd-fast, got %v", err)
+	}
+	if err := authorizer.Check(daveCtx, RelationCanGet, nfsGoldObj); apierror.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected allowed-atespace viewer dave denied can_get on nfs-gold, got %v", err)
 	}
 }
