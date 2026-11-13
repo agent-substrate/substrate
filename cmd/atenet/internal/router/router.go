@@ -39,6 +39,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/credprovider/v1"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
+	"go.ate.dev/substrate/cmd/atenet/internal/router/egress/tokenexchange"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/ateapiauth"
@@ -253,6 +254,12 @@ func (s *RouterServer) Run(ctx context.Context) error {
 			slog.InfoContext(ctx, "egress credential injection enabled",
 				slog.String("provider", address),
 				slog.String("provider_name", providerName))
+		}
+
+		// TODO(#1661): pass the client to egress.New once the handler injects
+		// exchanged tokens.
+		if _, err := tokenexchange.New(s.cfg.TokenExchangeCAFile); err != nil {
+			return fmt.Errorf("loading --token-exchange-ca-file: %w", err)
 		}
 
 		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers)

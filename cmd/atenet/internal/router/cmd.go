@@ -92,6 +92,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 	fs.StringVar(&cfg.CredentialProvider.ClientCert, "credential-provider-client-cert", "", "Credential bundle presented to the credential provider as the client certificate; required unless --credential-provider-insecure is set")
 	fs.StringArrayVar(&cfg.CredentialProvider.ServerNames, "credential-provider-server-name", nil, "SAN/SNI expected on a credential provider's serving certificate. Repeat once per --credential-provider-address, in the same order, or omit")
 	fs.BoolVar(&cfg.CredentialProvider.Insecure, "credential-provider-insecure", false, "Dial the credential provider WITHOUT TLS. Development only: secrets cross the network in the clear. Without this, a missing --credential-provider-ca-file or --credential-provider-client-cert fails startup instead of silently downgrading")
+	fs.StringVar(&cfg.TokenExchangeCAFile, "token-exchange-ca-file", "", "PEM certificates the egress gateway trusts for token exchange endpoints, in addition to the system roots. A missing file or one with no certificates fails startup")
 
 	// Envoy learns the collector over xDS rather than from its own environment,
 	// so the router has to carry the address for it. Defaulting to

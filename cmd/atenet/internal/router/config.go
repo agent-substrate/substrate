@@ -184,6 +184,9 @@ type routerConfig struct {
 	// CredentialProvider with no Addresses leaves the injector disabled, so a
 	// request that needs an injection is denied. See egress.Handler.
 	CredentialProvider credentialProviderConfig
+	// TokenExchangeCAFile holds PEM certificates the egress gateway trusts for
+	// token exchange endpoints, in addition to the system roots.
+	TokenExchangeCAFile string
 
 	LogLevel    string
 	MetricsAddr string
