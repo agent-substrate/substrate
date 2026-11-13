@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
@@ -127,9 +128,8 @@ var (
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(), "Unix socket to serve the OTLP relay on, which forwards the node's worker telemetry to OTEL_EXPORTER_OTLP_ENDPOINT so worker pods need no network path to the collector. Empty disables the relay.")
 
-	actorStatsPollInterval     = pflag.Duration("actor-stats-poll-interval", time.Minute, fmt.Sprintf("Actor resource utilization sampling frequency. 0 disables the sampling entirely; minimum accepted value is %v.", minActorStatsPollInterval))
-	actorGuestMetricsUIDs      = pflag.StringSlice("debug-actor-guest-metrics-uids", nil, "Actor UIDs to expose on the loopback guest metrics endpoint (127.0.0.1:9092). Empty disables the endpoint.")
-	actorGuestMetricsTokenFile = pflag.String("debug-actor-guest-metrics-token-file", "", "File containing the bearer token required by the actor guest metrics endpoint.")
+	actorStatsPollInterval = pflag.Duration("actor-stats-poll-interval", time.Minute, fmt.Sprintf("Actor resource utilization sampling frequency. 0 disables the sampling entirely; minimum accepted value is %v.", minActorStatsPollInterval))
+	actorGuestMetricsUIDs  = pflag.StringSlice("debug-actor-guest-metrics-uids", nil, "Actor UIDs whose guest metrics to expose on /metrics. Empty disables per-actor metrics.")
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
@@ -214,6 +214,16 @@ func main() {
 	readiness := &serverboot.Readiness{}
 	serving := make(chan struct{})
 	readiness.AddCheck("serving", servingCheck(serving))
+	statsInterval := clampActorStatsPollInterval(ctx, *actorStatsPollInterval)
+	guestMetrics, err := newActorGuestMetrics(*actorGuestMetricsUIDs, statsInterval)
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid actor guest debug metrics configuration", err)
+	}
+	if guestMetrics != nil {
+		if err := prometheus.Register(guestMetrics); err != nil {
+			serverboot.Fatal(ctx, "Failed to register actor guest debug metrics", err)
+		}
+	}
 	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
 	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
@@ -331,11 +341,6 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
 	}
 
-	statsInterval := clampActorStatsPollInterval(ctx, *actorStatsPollInterval)
-	guestMetrics, err := newActorGuestMetrics(*actorGuestMetricsUIDs, statsInterval, *actorGuestMetricsTokenFile)
-	if err != nil {
-		serverboot.Fatal(ctx, "Invalid actor guest debug metrics configuration", err)
-	}
 	if statsInterval > 0 {
 		if statsInst, err := newStatsInstruments(otel.Meter("atelet")); err != nil {
 			// Telemetry must not take the node's lifecycle daemon down with
@@ -347,9 +352,6 @@ func main() {
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
 			startStatsPoller(ctx, statsInterval, statsInst, k8sClient, guestMetrics)
-			if guestMetrics != nil {
-				go guestMetrics.serve(shutdownCtx)
-			}
 		}
 	}
 

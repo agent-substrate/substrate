@@ -15,20 +15,12 @@
 package main
 
 import (
-	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/http"
-	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -49,16 +41,15 @@ type actorGuestReading struct {
 	hasCPU bool
 }
 
-// actorGuestMetrics serves only the operator's allowlist on a separate registry.
+// actorGuestMetrics exposes samples for the operator's allowlist.
 // The stats poller publishes a complete snapshot after each sweep.
 type actorGuestMetrics struct {
-	allowed   map[string]struct{}
-	interval  time.Duration
-	tokenHash [sha256.Size]byte
-	latest    atomic.Pointer[map[string]actorGuestReading]
+	allowed  map[string]struct{}
+	interval time.Duration
+	latest   atomic.Pointer[map[string]actorGuestReading]
 }
 
-func newActorGuestMetrics(uids []string, interval time.Duration, tokenFile string) (*actorGuestMetrics, error) {
+func newActorGuestMetrics(uids []string, interval time.Duration) (*actorGuestMetrics, error) {
 	if len(uids) == 0 {
 		return nil, nil
 	}
@@ -75,18 +66,6 @@ func newActorGuestMetrics(uids []string, interval time.Duration, tokenFile strin
 		}
 		m.allowed[uid] = struct{}{}
 	}
-	if tokenFile == "" {
-		return nil, errors.New("--debug-actor-guest-metrics-token-file is required")
-	}
-	token, err := os.ReadFile(tokenFile)
-	if err != nil {
-		return nil, fmt.Errorf("read actor guest metrics bearer token: %w", err)
-	}
-	value := strings.TrimSpace(string(token))
-	if len(value) < 32 || strings.ContainsAny(value, " \t\r\n") {
-		return nil, errors.New("actor guest metrics bearer token must contain at least 32 bytes and no whitespace")
-	}
-	m.tokenHash = sha256.Sum256([]byte(value))
 	return m, nil
 }
 
@@ -161,38 +140,5 @@ func (m *actorGuestMetrics) Collect(ch chan<- prometheus.Metric) {
 		if reading.hasCPU {
 			ch <- prometheus.MustNewConstMetric(guestCPUCores, prometheus.GaugeValue, reading.cores, labels...)
 		}
-	}
-}
-
-func (m *actorGuestMetrics) handler() http.Handler {
-	registry := prometheus.NewRegistry()
-	registry.MustRegister(m)
-	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
-		scheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
-		hash := sha256.Sum256([]byte(token))
-		if !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare(hash[:], m.tokenHash[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-			return
-		}
-		handler.ServeHTTP(w, r)
-	})
-	return mux
-}
-
-func (m *actorGuestMetrics) serve(ctx context.Context) {
-	server := &http.Server{
-		Addr:              "127.0.0.1:9092",
-		Handler:           m.handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-	}
-	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
-	defer stop()
-	slog.InfoContext(ctx, "Starting actor guest debug metrics", slog.String("addr", server.Addr))
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.ErrorContext(ctx, "Actor guest debug metrics server failed", slog.Any("err", err))
 	}
 }

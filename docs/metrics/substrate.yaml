@@ -136,9 +136,9 @@ cardinality_rules:
       metrics in the standard telemetry pipeline.
       They have too many values at the target of 1 billion actors. Put them on
       spans and logs. The trace_id field connects a log to a metric.
-      The separate loopback Prometheus debug endpoint may use actor_uid,
+      The opt-in ate_debug_actor_guest_* Prometheus series may use actor_uid,
       actor_name and actor_atespace for an explicit operator allowlist of at
-      most 16 UIDs per atelet.
+      most 16 UIDs per atelet. These series are excluded from OTLP export.
     enforced: false
     could_be_enforced_by: >
       A Weaver Rego policy can refuse a forbidden attribute in this registry. It

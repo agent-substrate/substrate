@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
@@ -195,7 +197,6 @@ func TestActorGuestDebugMetrics(t *testing.T) {
 	const uid = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a0"
 	const other = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a1"
 	const unselected = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a2"
-	const token = "test-bearer-token-for-actor-guest-metrics"
 	const labels = `{actor_atespace="team",actor_name="my-agent",actor_uid="` + uid + `"}`
 	const cpu = "ate_debug_actor_guest_cpu_usage_cores" + labels + " 1"
 	const memory = "ate_debug_actor_guest_memory_usage_bytes" + labels + " 4096"
@@ -212,34 +213,24 @@ func TestActorGuestDebugMetrics(t *testing.T) {
 		return sample
 	}
 
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	metrics, err := newActorGuestMetrics([]string{uid, other}, time.Minute, tokenFile)
+	metrics, err := newActorGuestMetrics([]string{uid, other}, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	worker := &fakeStatsWorker{}
 	poller, _ := newPollerFixture(t, map[string]*fakeStatsWorker{"worker": worker})
 	poller.guestMetrics = metrics
-	handler := metrics.handler()
-	for _, header := range []string{"", "Bearer incorrect"} {
-		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-		req.Header.Set("Authorization", header)
-		res := httptest.NewRecorder()
-		handler.ServeHTTP(res, req)
-		if res.Code != http.StatusUnauthorized {
-			t.Fatalf("unauthorized scrape returned %d", res.Code)
-		}
+	if err := prometheus.Register(metrics); err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { prometheus.Unregister(metrics) })
+	handler := promhttp.Handler()
 	scrape := func(samples ...*ateworkerpb.WorkloadStatsSample) string {
 		t.Helper()
 		worker.resp = &ateworkerpb.GetActiveWorkloadStatsResponse{Samples: samples}
 		poller.collect(t.Context())
 		res := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
 		handler.ServeHTTP(res, req)
 		if res.Code != http.StatusOK {
 			t.Fatalf("scrape returned %d: %s", res.Code, res.Body)
@@ -281,8 +272,8 @@ func TestActorGuestDebugMetrics(t *testing.T) {
 
 func TestActorGuestDebugMetricsConfig(t *testing.T) {
 	const uid = "c7f3fb50-ef2d-4075-b59a-4a8e192e48a0"
-	if metrics, err := newActorGuestMetrics(nil, 0, ""); metrics != nil || err != nil {
-		t.Fatalf("empty allowlist should disable the endpoint, got %v, %v", metrics, err)
+	if metrics, err := newActorGuestMetrics(nil, 0); metrics != nil || err != nil {
+		t.Fatalf("empty allowlist should disable per-actor metrics, got %v, %v", metrics, err)
 	}
 	for _, tc := range []struct {
 		uids     []string
@@ -291,9 +282,8 @@ func TestActorGuestDebugMetricsConfig(t *testing.T) {
 		{[]string{uid}, 0},
 		{[]string{"*"}, time.Minute},
 		{make([]string, maxDebugActorUIDs+1), time.Minute},
-		{[]string{uid}, time.Minute},
 	} {
-		if _, err := newActorGuestMetrics(tc.uids, tc.interval, ""); err == nil {
+		if _, err := newActorGuestMetrics(tc.uids, tc.interval); err == nil {
 			t.Errorf("accepted invalid config with UIDs %q and interval %v", tc.uids, tc.interval)
 		}
 	}

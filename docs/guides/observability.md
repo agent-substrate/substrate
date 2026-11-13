@@ -271,17 +271,16 @@ jsonPayload.msg="Actor usage sampled" AND jsonPayload."ate.actor.uid"="8f2a…"
 ### Guest Metrics for Selected Actors
 
 For microVM troubleshooting, set `--debug-actor-guest-metrics-uids=<uid>[,<uid>...]`
-on atelet and point `--debug-actor-guest-metrics-token-file` at a file containing
-a random bearer token of at least 32 bytes. With up to 16 explicit actor UIDs,
-atelet serves `http://127.0.0.1:9092/metrics` on its loopback interface. The endpoint
-is off with an empty allowlist and requires actor stats polling.
-The series carry `actor_uid`, `actor_name` and `actor_atespace`. Use the UID
-to distinguish actors recreated with the same name.
+on atelet to expose guest resource usage for up to 16 explicit actor UIDs on its
+existing Prometheus `/metrics` endpoint. An empty allowlist disables these
+series. Actor stats polling must be enabled.
 
-Pod port-forward can reach the loopback listener, so each scrape must also send
-the bearer token. Configure the scraper with `authorization.credentials_file`
-and give the token only to operators authorized to see the selected actors.
-Restart atelet to load a new token.
+The series carry `actor_uid`, `actor_name` and `actor_atespace`. Use the UID
+to distinguish actors recreated with the same name. The default
+`ate-system-observability` NetworkPolicy allows traffic to the metrics port from
+any source. Before enabling these metrics, restrict access to the scrape
+endpoint, pod port-forwarding, and the metrics backend to readers authorized
+to see those identities.
 
 * `ate_debug_actor_guest_cpu_usage_cores{actor_uid="…"}` is the mean CPU cores
   used between two distinct samples in the same activation. It is absent until
@@ -290,11 +289,11 @@ Restart atelet to load a new token.
   page cache. `ate_debug_actor_guest_memory_working_set_bytes{actor_uid="…"}`
   reports the working set.
 
-The endpoint reuses cached samples from the stats sweep. A series disappears when
-the sweep no longer finds a usable reading, or when the sample exceeds twice the
+The debug metrics reuse cached samples from the stats sweep. A series disappears
+when the sweep no longer finds a usable reading or the sample exceeds twice the
 atelet polling interval. To inspect an actor after it moves, query the atelet on
-the new node, with that UID also allowlisted there. The debug series are separate
-from the standard Prometheus endpoint and OTLP export.
+the new node, with that UID also allowlisted there. These series are available
+through Prometheus scraping only.
 
 ### Secrets in Component Logs
 
@@ -382,7 +381,7 @@ identity to metric labels.
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
 
-The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the runtime on the actor's worker assignment or snapshot (each worker pool has exactly one class), so it adds no extra series next to the pool label; it exists so dashboards can aggregate by class without enumerating pool names. Actor name, UID and atespace stay off the standard metrics pipeline. They appear on logs and traces, including [per-actor usage events](#per-actor-usage-events), and on the opt-in [guest debug endpoint](#guest-metrics-for-selected-actors).
+The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the runtime on the actor's worker assignment or snapshot (each worker pool has exactly one class), so it adds no extra series next to the pool label; it exists so dashboards can aggregate by class without enumerating pool names. Actor name, UID and atespace stay off the standard metrics pipeline. They appear on logs and traces, including [per-actor usage events](#per-actor-usage-events), and on the opt-in [guest debug metrics](#guest-metrics-for-selected-actors).
 
 ### The metric registry
 
