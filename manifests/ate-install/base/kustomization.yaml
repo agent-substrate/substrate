@@ -26,12 +26,15 @@ kind: Kustomization
 # both the overlay's flags and the env override. The same goes for the
 # sandboxconfig and atenet-egress files: cmd/ate-setup applies the variant it
 # selects, so they are not listed here either.
+#
+# atenet-router-monitoring.yaml is absent too: its PodMonitoring kind exists
+# only where Google Managed Prometheus does, so cmd/ate-setup applies it
+# separately and skips it on a cluster without that CRD.
 resources:
   - ../ate-api-server.yaml
   - ../ate-idp-server.yaml
   - ../ate-controller.yaml
   - ../atelet.yaml
   - ../atenet-router.yaml
-  - ../atenet-router-monitoring.yaml
   - ../ate-otel-config.yaml
   - ../ate-system-networkpolicies.yaml
