@@ -15,13 +15,17 @@
 package apiauthn
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"net/url"
+	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/internal/oidcjwt"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -190,6 +194,36 @@ func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 	_, err = auth.authenticate(ctx)
 	if got := status.Convert(err).Message(); got != "invalid bearer token" {
 		t.Fatalf("verification error = %q, want generic error", got)
+	}
+}
+
+func TestJWTServerAuthenticatorLogsUnavailableKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		wantLog bool
+	}{
+		{"bad token", fmt.Errorf("bad signature"), false},
+		{"issuer keys unavailable", fmt.Errorf("%w: discovery failed", oidcjwt.ErrSigningKeysUnavailable), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			auth := jwtServerAuthenticator{providers: []JWTProvider{{Name: "test", Issuer: "https://issuer.example", Verify: func(context.Context, string) (string, error) {
+				return "", tc.err
+			}}}}
+			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+testGoodToken))
+			_, err := auth.authenticate(ctx)
+			if code := status.Code(err); code != codes.Unauthenticated {
+				t.Fatalf("code = %v, want Unauthenticated", code)
+			}
+			if got := strings.Contains(buf.String(), "discovery failed"); got != tc.wantLog {
+				t.Errorf("logged cause = %v, want %v; log: %s", got, tc.wantLog, buf.String())
+			}
+		})
 	}
 }
 

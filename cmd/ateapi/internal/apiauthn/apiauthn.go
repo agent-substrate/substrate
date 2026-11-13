@@ -23,10 +23,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"go.ate.dev/substrate/internal/oidcjwt"
 	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -178,7 +180,13 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 		}
 		id, err := provider.Verify(ctx, bearer)
 		if err != nil {
-			slog.DebugContext(ctx, "JWT verification failed", slog.String("provider", provider.Name), slog.Any("err", err))
+			// A bad token is the client's fault. An issuer whose keys cannot
+			// be fetched is the server's, and rejects every token.
+			level := slog.LevelDebug
+			if errors.Is(err, oidcjwt.ErrSigningKeysUnavailable) {
+				level = slog.LevelError
+			}
+			slog.Log(ctx, level, "JWT verification failed", slog.String("provider", provider.Name), slog.Any("err", err))
 			return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 		}
 		return principal.InjectContext(ctx, principal.PrincipalInfo{
