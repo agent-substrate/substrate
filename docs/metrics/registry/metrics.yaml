@@ -950,8 +950,10 @@ groups:
     brief: The time of one attempt of the scheduler to assign a worker during a resume.
     note: >
       One resume gives one record. ateapi retries an attempt that loses a race
-      for a worker, and records only the last attempt. If the retries run out,
-      the outcome is error, and error.type is the code that the caller gets.
+      for a worker, and records only the last attempt. If the retries run out
+      on a full worker, the outcome is no_capacity. If they run out on a version
+      conflict, the outcome is error, and error.type is the code that the caller
+      gets.
       The buckets are smaller than the buckets of the lifecycle histogram.
       This step is a read of the cache and some writes to the store. It is not
       a restore of some seconds. But the buckets go to 5 s. Thus you can see a
