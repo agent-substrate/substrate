@@ -104,14 +104,29 @@ func ActorSandboxAssetsFile(actorUID string) string {
 
 // ActorSnapshotStateFile is the per-actor file where atelet keeps what it
 // tracks of the actor's snapshots: its latest local and durable snapshots, so
-// a restarted atelet still knows them. Like ActorSandboxAssetsFile it lives
-// directly under ActorPath, outside the subdirs actordirs.ResetActorDirs wipes.
+// a restarted atelet still knows them. It lives directly under
+// ActorSnapshotPath, on the snapshot disk with the snapshots it tracks,
+// outside the subdirs actordirs.ResetActorDirs wipes.
 func ActorSnapshotStateFile(actorUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
-		"snapshot-state.json",
+		ActorSnapshotPath(actorUID),
+		snapshotStateFileName,
 	)
 }
+
+// PreviousSnapshotStateFile is where the previous release kept the actor's
+// snapshot state file: directly under ActorPath. The file moved from there
+// over two releases (see docs/reference/version-skew-policy.md). atelet moves
+// a file it finds there to ActorSnapshotStateFile at startup, so a node
+// upgraded from the previous release keeps the actor's snapshots.
+func PreviousSnapshotStateFile(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		snapshotStateFileName,
+	)
+}
+
+const snapshotStateFileName = "snapshot-state.json"
 
 // SandboxAssetsDir holds the actor's sandbox runtime assets, one entry per
 // asset name, each a hard link (or a directory of hard links, for a gVisor
