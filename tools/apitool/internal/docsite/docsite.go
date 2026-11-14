@@ -219,12 +219,21 @@ func (b viewBuilder) resourceView(page resourcePage) resourceView {
 		ParentAnchor: b.anchors.parentAnchor(page),
 		Subresources: subresourceLinks(b.pages, page),
 		Attrs:        b.attrTree(page.Message.Fields),
-		Example:      trimLicenseHeader(b.examples[page.Message.Name]),
+		Example:      b.exampleFor(page),
 	}
 	for _, m := range page.Methods {
 		rv.Methods = append(rv.Methods, b.methodView(page, m))
 	}
 	return rv
+}
+
+func (b viewBuilder) exampleFor(page resourcePage) string {
+	if page.Parent != "" {
+		if ex, ok := b.examples[page.Parent+"."+page.Message.Name]; ok {
+			return trimLicenseHeader(ex)
+		}
+	}
+	return trimLicenseHeader(b.examples[page.Message.Name])
 }
 
 // trimLicenseHeader drops the comment lines that start example, its license

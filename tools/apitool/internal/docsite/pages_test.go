@@ -98,24 +98,33 @@ func TestResourcePages(t *testing.T) {
 				[]model.Method{
 					rpc("GetGlobalAccessPolicy", "AccessPolicy", "AccessPolicy"),
 					rpc("GetAtespaceAccessPolicy", "AccessPolicy", "AccessPolicy"),
+					rpc("GetExternalVolumeClassAccessPolicy", "AccessPolicy", "AccessPolicy"),
 					rpc("UpdateGlobalAccessPolicy", "AccessPolicy", "AccessPolicy"),
 				},
 				resource("Atespace", model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Atespaces"}),
-				resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"}),
+				resource("ExternalVolumeClass", model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "ExternalVolumeClasses"}),
+				resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace", "ExternalVolumeClass"}, Singleton: true, Plural: "AccessPolicies"}),
 			),
 			want: []resourcePage{
 				{Message: resource("Atespace", model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Atespaces"}), Scope: "global"},
+				{Message: resource("ExternalVolumeClass", model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "ExternalVolumeClasses"}), Scope: "global"},
 				{
-					Message:   resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"}),
+					Message:   resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace", "ExternalVolumeClass"}, Singleton: true, Plural: "AccessPolicies"}),
 					Parent:    "Global",
 					Singleton: true,
 					Methods:   []model.Method{method("GetGlobalAccessPolicy", "AccessPolicy", "AccessPolicy"), method("UpdateGlobalAccessPolicy", "AccessPolicy", "AccessPolicy")},
 				},
 				{
-					Message:   resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"}),
+					Message:   resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace", "ExternalVolumeClass"}, Singleton: true, Plural: "AccessPolicies"}),
 					Parent:    "Atespace",
 					Singleton: true,
 					Methods:   []model.Method{method("GetAtespaceAccessPolicy", "AccessPolicy", "AccessPolicy")},
+				},
+				{
+					Message:   resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace", "ExternalVolumeClass"}, Singleton: true, Plural: "AccessPolicies"}),
+					Parent:    "ExternalVolumeClass",
+					Singleton: true,
+					Methods:   []model.Method{method("GetExternalVolumeClassAccessPolicy", "AccessPolicy", "AccessPolicy")},
 				},
 			},
 		},
@@ -150,7 +159,8 @@ func TestResourcePages_Invalid(t *testing.T) {
 			api: controlAPI(
 				[]model.Method{rpc("ResetAccessPolicy", "AccessPolicy", "AccessPolicy")},
 				resource("Atespace", model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "Atespaces"}),
-				resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace"}, Singleton: true, Plural: "AccessPolicies"}),
+				resource("ExternalVolumeClass", model.ResourceAnnotation{Scope: ateapi.Scope_SCOPE_GLOBAL, Plural: "ExternalVolumeClasses"}),
+				resource("AccessPolicy", model.ResourceAnnotation{Parents: []string{"Global", "Atespace", "ExternalVolumeClass"}, Singleton: true, Plural: "AccessPolicies"}),
 			),
 		},
 	}

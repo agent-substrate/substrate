@@ -66,11 +66,12 @@ func assertDetachedNodes(t *testing.T, plugin *attachFailVolumePlugin, step stri
 func createSingleVolumeActor(t *testing.T, tc *testContext, ns, name string) string {
 	t.Helper()
 	preview.InitForTest(t, "ExternalVolumes")
+	seedMockExternalVolumeClass(t, tc, "standard")
 	volumes := []*ateapi.Volume{{
 		Name: "vol1",
 		External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-			StorageClassName: "standard",
-			CapacityBytes:    10 << 30,
+			ExternalVolumeClass: &ateapi.ObjectRef{Name: "standard"},
+			CapacityBytes:       10 << 30,
 		}},
 	}}
 	mounts := []*ateapi.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}}

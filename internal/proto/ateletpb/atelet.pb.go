@@ -2352,8 +2352,17 @@ type ExternalVolumeSource struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	PublishContext map[string]string `protobuf:"bytes,4,rep,name=publish_context,json=publishContext,proto3" json:"publish_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// mount_options from the volume's class, passed to the CSI driver as
+	// VolumeCapability.Mount.MountFlags at mount time.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=32
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:minLength=1
+	// +k8s:eachVal=+k8s:maxLength=256
+	MountOptions  []string `protobuf:"bytes,5,rep,name=mount_options,json=mountOptions,proto3" json:"mount_options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeSource) Reset() {
@@ -2410,6 +2419,13 @@ func (x *ExternalVolumeSource) GetVolumeContext() map[string]string {
 func (x *ExternalVolumeSource) GetPublishContext() map[string]string {
 	if x != nil {
 		return x.PublishContext
+	}
+	return nil
+}
+
+func (x *ExternalVolumeSource) GetMountOptions() []string {
+	if x != nil {
+		return x.MountOptions
 	}
 	return nil
 }
@@ -4543,13 +4559,14 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
 	"containers\x12(\n" +
 	"\avolumes\x18\x02 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x18\n" +
-	"\x16DurableDirVolumeSource\"\x9b\x03\n" +
+	"\x16DurableDirVolumeSource\"\xc0\x03\n" +
 	"\x14ExternalVolumeSource\x12*\n" +
 	"\x11storage_volume_id\x18\x01 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x02 \x01(\tR\n" +
 	"volumeType\x12V\n" +
 	"\x0evolume_context\x18\x03 \x03(\v2/.atelet.ExternalVolumeSource.VolumeContextEntryR\rvolumeContext\x12Y\n" +
-	"\x0fpublish_context\x18\x04 \x03(\v20.atelet.ExternalVolumeSource.PublishContextEntryR\x0epublishContext\x1a@\n" +
+	"\x0fpublish_context\x18\x04 \x03(\v20.atelet.ExternalVolumeSource.PublishContextEntryR\x0epublishContext\x12#\n" +
+	"\rmount_options\x18\x05 \x03(\tR\fmountOptions\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aA\n" +

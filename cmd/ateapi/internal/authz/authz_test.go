@@ -17,9 +17,11 @@ package authz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/principal"
@@ -564,5 +567,329 @@ func TestAtespacedObjects_NoCollision(t *testing.T) {
 	}
 	if o1, o2 := ActorObject("a", "b"), ActorTemplateObject("a", "b"); o1 == o2 {
 		t.Errorf("ActorObject and ActorTemplateObject collided on %q", o1)
+	}
+}
+
+func TestPolicyManager_ExternalVolumeClassAtespaces(t *testing.T) {
+	pool := startPostgres(t)
+	ctx := context.Background()
+
+	fgaSrv, err := NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaSrv.Close)
+
+	authorizer, pm, err := New(ctx, pool, fgaSrv, []string{"root-owner"}, testSystemPrincipals())
+	if err != nil {
+		t.Fatalf("authz.New failed: %v", err)
+	}
+
+	checkAllowedAtespace := func(atespace, class string) bool {
+		t.Helper()
+		resp, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
+			StoreId:              pm.storeID,
+			AuthorizationModelId: pm.modelID,
+			TupleKey: &openfgav1.CheckRequestTupleKey{
+				User:     AtespaceObject(atespace),
+				Relation: RoleAllowedAtespace,
+				Object:   ExternalVolumeClassObject(class),
+			},
+		})
+		if err != nil {
+			t.Fatalf("Check(%s, %s, %s) failed: %v", atespace, RoleAllowedAtespace, class, err)
+		}
+		return resp.GetAllowed()
+	}
+
+	// 1. Nil transaction checks.
+	if err := pm.ReconcileExternalVolumeClassAtespaces(ctx, nil, "nfs-gold", nil); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces(nil tx) = %v, want ErrNilTransaction", err)
+	}
+	if err := pm.DeleteExternalVolumeClassPolicies(ctx, nil, "nfs-gold"); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("DeleteExternalVolumeClassPolicies(nil tx) = %v, want ErrNilTransaction", err)
+	}
+	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, nil, "space-1"); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("RemoveAtespaceFromExternalVolumeClasses(nil tx) = %v, want ErrNilTransaction", err)
+	}
+	if _, err := pm.ExternalVolumeClassesForAtespace(ctx, nil, "space-1"); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("ExternalVolumeClassesForAtespace(nil tx) = %v, want ErrNilTransaction", err)
+	}
+
+	// 2. Invalid member, disallowed role, and invalid atespace name checks.
+	for _, badMember := range []string{"user:alice", "atespace:*", "atespace:Bad", "atespace:space-1#editor"} {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("pool.Begin failed: %v", err)
+		}
+		err = pm.ReconcileExternalVolumeClassAtespaces(ctx, tx, "nfs-gold", []*ateapi.Binding{
+			{Role: RoleAllowedAtespace, Members: []string{badMember}},
+		})
+		_ = tx.Rollback(ctx)
+		if err == nil {
+			t.Errorf("ReconcileExternalVolumeClassAtespaces(%q) succeeded, want error", badMember)
+		}
+	}
+	for _, badRole := range []string{RoleOwner, RoleViewer, "parent_global", RelationCanGet, "not-a-relation"} {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("pool.Begin failed: %v", err)
+		}
+		err = pm.ReconcileExternalVolumeClassAtespaces(ctx, tx, "nfs-gold", []*ateapi.Binding{
+			{Role: badRole, Members: []string{"atespace:space-1"}},
+		})
+		_ = tx.Rollback(ctx)
+		if err == nil {
+			t.Errorf("ReconcileExternalVolumeClassAtespaces(role=%q) succeeded, want error", badRole)
+		}
+	}
+	for _, badAtespace := range []string{"", "*", "Bad", "space-1#editor"} {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("pool.Begin failed: %v", err)
+		}
+		err = pm.RemoveAtespaceFromExternalVolumeClasses(ctx, tx, badAtespace)
+		_, listErr := pm.ExternalVolumeClassesForAtespace(ctx, tx, badAtespace)
+		_ = tx.Rollback(ctx)
+		if err == nil {
+			t.Errorf("RemoveAtespaceFromExternalVolumeClasses(%q) succeeded, want error", badAtespace)
+		}
+		if listErr == nil {
+			t.Errorf("ExternalVolumeClassesForAtespace(%q) succeeded, want error", badAtespace)
+		}
+	}
+
+	// 3. Reconcile initial grant (with duplicate member deduplication) + diff update + rollback atomicity.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := pm.ReconcileExternalVolumeClassAtespaces(ctx, tx, "nfs-gold", []*ateapi.Binding{
+		{Role: RoleAllowedAtespace, Members: []string{"atespace:space-1", "atespace:space-2", "atespace:space-1"}},
+	}); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces initial grant failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("tx.Commit failed: %v", err)
+	}
+	if !checkAllowedAtespace("space-1", "nfs-gold") || !checkAllowedAtespace("space-2", "nfs-gold") {
+		t.Fatalf("expected space-1 and space-2 allowed on nfs-gold")
+	}
+	if checkAllowedAtespace("space-3", "nfs-gold") {
+		t.Fatalf("expected space-3 denied on nfs-gold")
+	}
+
+	// Rolled-back reconcile leaves committed tuples unchanged.
+	txRollback, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := pm.ReconcileExternalVolumeClassAtespaces(ctx, txRollback, "nfs-gold", nil); err != nil {
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces(nil) failed: %v", err)
+	}
+	if err := txRollback.Rollback(ctx); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	if !checkAllowedAtespace("space-1", "nfs-gold") || !checkAllowedAtespace("space-2", "nfs-gold") {
+		t.Fatalf("expected space-1 and space-2 still allowed after rolled-back clear")
+	}
+
+	// Update nfs-gold from {space-1, space-2} to {space-2, space-3}.
+	txUpdate, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := pm.ReconcileExternalVolumeClassAtespaces(ctx, txUpdate, "nfs-gold", []*ateapi.Binding{
+		{Role: RoleAllowedAtespace, Members: []string{"atespace:space-2", "atespace:space-3"}},
+	}); err != nil {
+		_ = txUpdate.Rollback(ctx)
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces update failed: %v", err)
+	}
+	if err := txUpdate.Commit(ctx); err != nil {
+		t.Fatalf("txUpdate.Commit failed: %v", err)
+	}
+	if checkAllowedAtespace("space-1", "nfs-gold") {
+		t.Errorf("expected space-1 removed from nfs-gold")
+	}
+	if !checkAllowedAtespace("space-2", "nfs-gold") || !checkAllowedAtespace("space-3", "nfs-gold") {
+		t.Errorf("expected space-2 and space-3 allowed on nfs-gold")
+	}
+
+	// 4. DeleteExternalVolumeClassPolicies clears only the targeted class.
+	txSSD, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := pm.ReconcileExternalVolumeClassAtespaces(ctx, txSSD, "ssd-fast", []*ateapi.Binding{
+		{Role: RoleAllowedAtespace, Members: []string{"atespace:space-2"}},
+	}); err != nil {
+		_ = txSSD.Rollback(ctx)
+		t.Fatalf("ReconcileExternalVolumeClassAtespaces(ssd-fast) failed: %v", err)
+	}
+	if err := txSSD.Commit(ctx); err != nil {
+		t.Fatalf("txSSD.Commit failed: %v", err)
+	}
+
+	txDelClass, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := pm.DeleteExternalVolumeClassPolicies(ctx, txDelClass, "ssd-fast"); err != nil {
+		_ = txDelClass.Rollback(ctx)
+		t.Fatalf("DeleteExternalVolumeClassPolicies(ssd-fast) failed: %v", err)
+	}
+	if err := txDelClass.Commit(ctx); err != nil {
+		t.Fatalf("txDelClass.Commit failed: %v", err)
+	}
+	if checkAllowedAtespace("space-2", "ssd-fast") {
+		t.Errorf("expected space-2 removed from ssd-fast after DeleteExternalVolumeClassPolicies")
+	}
+	if !checkAllowedAtespace("space-2", "nfs-gold") {
+		t.Errorf("expected nfs-gold untouched by DeleteExternalVolumeClassPolicies(ssd-fast)")
+	}
+
+	// 5. Reverse sweep across > maxTuplesPerWrite (105 classes) exercises both
+	// paginated reads and chunked deletes within one transaction.
+	const totalClasses = maxTuplesPerWrite + 5
+	txSeedMany, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	for i := range totalClasses {
+		className := fmt.Sprintf("class-%03d", i)
+		members := []string{"atespace:ephemeral"}
+		if i == 0 {
+			members = append(members, "atespace:survivor")
+		}
+		if err := pm.ReconcileExternalVolumeClassAtespaces(ctx, txSeedMany, className, []*ateapi.Binding{
+			{Role: RoleAllowedAtespace, Members: members},
+		}); err != nil {
+			_ = txSeedMany.Rollback(ctx)
+			t.Fatalf("seeding %s failed: %v", className, err)
+		}
+	}
+	if err := txSeedMany.Commit(ctx); err != nil {
+		t.Fatalf("txSeedMany.Commit failed: %v", err)
+	}
+
+	// Rolled-back sweep leaves all seeded tuples intact.
+	txSweepRollback, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, txSweepRollback, "ephemeral"); err != nil {
+		_ = txSweepRollback.Rollback(ctx)
+		t.Fatalf("RemoveAtespaceFromExternalVolumeClasses(rollback) failed: %v", err)
+	}
+	if err := txSweepRollback.Rollback(ctx); err != nil {
+		t.Fatalf("txSweepRollback.Rollback failed: %v", err)
+	}
+	if !checkAllowedAtespace("ephemeral", "class-000") || !checkAllowedAtespace("ephemeral", "class-104") {
+		t.Fatalf("expected ephemeral still allowed after rolled-back sweep")
+	}
+
+	txSweep, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	gotClasses, err := pm.ExternalVolumeClassesForAtespace(ctx, txSweep, "ephemeral")
+	if err != nil {
+		_ = txSweep.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) failed: %v", err)
+	}
+	wantClasses := make([]string, totalClasses)
+	for i := range totalClasses {
+		wantClasses[i] = fmt.Sprintf("class-%03d", i)
+	}
+	if !slices.Equal(gotClasses, wantClasses) {
+		_ = txSweep.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) = %v, want %v", gotClasses, wantClasses)
+	}
+	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, txSweep, "ephemeral"); err != nil {
+		_ = txSweep.Rollback(ctx)
+		t.Fatalf("RemoveAtespaceFromExternalVolumeClasses(ephemeral) failed: %v", err)
+	}
+	if err := txSweep.Commit(ctx); err != nil {
+		t.Fatalf("txSweep.Commit failed: %v", err)
+	}
+	for i := range totalClasses {
+		className := fmt.Sprintf("class-%03d", i)
+		if checkAllowedAtespace("ephemeral", className) {
+			t.Fatalf("expected ephemeral removed from %s", className)
+		}
+	}
+	if !checkAllowedAtespace("survivor", "class-000") {
+		t.Errorf("expected survivor retained on class-000")
+	}
+
+	// Second sweep is a no-op, and ExternalVolumeClassesForAtespace returns empty.
+	txNoop, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("pool.Begin failed: %v", err)
+	}
+	afterSweep, err := pm.ExternalVolumeClassesForAtespace(ctx, txNoop, "ephemeral")
+	if err != nil {
+		_ = txNoop.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) after sweep failed: %v", err)
+	}
+	if len(afterSweep) != 0 {
+		_ = txNoop.Rollback(ctx)
+		t.Fatalf("ExternalVolumeClassesForAtespace(ephemeral) after sweep = %v, want empty", afterSweep)
+	}
+	if err := pm.RemoveAtespaceFromExternalVolumeClasses(ctx, txNoop, "ephemeral"); err != nil {
+		_ = txNoop.Rollback(ctx)
+		t.Fatalf("second RemoveAtespaceFromExternalVolumeClasses(ephemeral) failed: %v", err)
+	}
+	if err := txNoop.Commit(ctx); err != nil {
+		t.Fatalf("txNoop.Commit failed: %v", err)
+	}
+
+	// 6. Runtime Authorizer.Check evaluation with contextual parent_global tuples:
+	// - Bootstrap/global owner manages the class and its access policy.
+	// - Editor of allowed atespace (space-2 on nfs-gold) can Get the class, but
+	//   cannot Delete it, read/write its access policy, or Get a disallowed class.
+	// - Viewer of allowed atespace cannot Get the class.
+	writeTestTuple(t, ctx, pool, pm, "bob", RoleEditor, AtespaceObject("space-2"))
+	writeTestTuple(t, ctx, pool, pm, "dave", RoleViewer, AtespaceObject("space-2"))
+
+	rootCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "root-owner", Kind: principal.KindJWT})
+	bobCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "bob", Kind: principal.KindJWT})
+	daveCtx := principal.InjectContext(ctx, principal.PrincipalInfo{ID: "dave", Kind: principal.KindJWT})
+
+	nfsGoldObj := ExternalVolumeClassObject("nfs-gold")
+	ssdFastObj := ExternalVolumeClassObject("ssd-fast")
+
+	for _, rel := range []string{
+		RelationCanGet,
+		RelationCanDelete,
+		RelationCanCreateAccessPolicy,
+		RelationCanGetAccessPolicy,
+		RelationCanUpdateAccessPolicy,
+		RelationCanDeleteAccessPolicy,
+	} {
+		if err := authorizer.Check(rootCtx, rel, nfsGoldObj); err != nil {
+			t.Errorf("expected root-owner allowed %s on nfs-gold, got %v", rel, err)
+		}
+	}
+	if err := authorizer.Check(bobCtx, RelationCanGet, nfsGoldObj); err != nil {
+		t.Errorf("expected allowed-atespace editor bob allowed can_get on nfs-gold, got %v", err)
+	}
+	for _, rel := range []string{
+		RelationCanDelete,
+		RelationCanCreateAccessPolicy,
+		RelationCanGetAccessPolicy,
+		RelationCanUpdateAccessPolicy,
+		RelationCanDeleteAccessPolicy,
+	} {
+		if err := authorizer.Check(bobCtx, rel, nfsGoldObj); apierror.Code(err) != codes.PermissionDenied {
+			t.Errorf("expected bob denied %s on nfs-gold, got %v", rel, err)
+		}
+	}
+	if err := authorizer.Check(bobCtx, RelationCanGet, ssdFastObj); apierror.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected bob denied can_get on disallowed ssd-fast, got %v", err)
+	}
+	if err := authorizer.Check(daveCtx, RelationCanGet, nfsGoldObj); apierror.Code(err) != codes.PermissionDenied {
+		t.Errorf("expected allowed-atespace viewer dave denied can_get on nfs-gold, got %v", err)
 	}
 }

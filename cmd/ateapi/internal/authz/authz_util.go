@@ -31,6 +31,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 )
 
 const (
@@ -40,9 +41,14 @@ const (
 	// GlobalRootObject is the singleton global scope object identifier in OpenFGA.
 	GlobalRootObject = "global:root"
 
+	atespaceObjectPrefix            = "atespace:"
+	externalVolumeClassObjectPrefix = "external_volume_class:"
+
 	RoleOwner  = "owner"
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
+
+	RoleAllowedAtespace = "allowed_atespace"
 
 	RoleController       = "controller"
 	RoleEgressGateway    = "egress_gateway"
@@ -79,6 +85,9 @@ const (
 	RelationCanListTags             = "can_list_tags"
 	RelationCanUseTag               = "can_use_tag"
 	RelationCanMintActorJWT         = "can_mint_actor_jwt"
+
+	RelationCanCreateExternalVolumeClass = "can_create_external_volume_class"
+	RelationCanListExternalVolumeClasses = "can_list_external_volume_classes"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -119,13 +128,19 @@ var objectIDReplacer = strings.NewReplacer(
 
 // AtespaceObject formats an atespace name as an OpenFGA object string.
 func AtespaceObject(name string) string {
-	return "atespace:" + objectIDReplacer.Replace(name)
+	return atespaceObjectPrefix + objectIDReplacer.Replace(name)
 }
 
 // WorkerObject formats a worker name as an OpenFGA object string. Workers are
 // global-scoped.
 func WorkerObject(name string) string {
 	return "worker:" + objectIDReplacer.Replace(name)
+}
+
+// ExternalVolumeClassObject formats an external volume class name as an
+// OpenFGA object string. External volume classes are global-scoped.
+func ExternalVolumeClassObject(name string) string {
+	return externalVolumeClassObjectPrefix + objectIDReplacer.Replace(name)
 }
 
 // ActorObject formats an actor as an OpenFGA object string.
@@ -172,6 +187,32 @@ func FormatMember(member string) (string, error) {
 		return "", fmt.Errorf("member %q must not contain control characters", member)
 	}
 	return formatUser(id), nil
+}
+
+// validateAtespaceName validates a bare atespace resource name and returns its
+// OpenFGA object identifier.
+func validateAtespaceName(name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("atespace name %q must not be empty", name)
+	}
+	if errs := content.IsDNS1123Label(name); len(errs) > 0 {
+		return "", fmt.Errorf("invalid atespace name %q: %s", name, strings.Join(errs, "; "))
+	}
+	return AtespaceObject(name), nil
+}
+
+// FormatAtespaceMember validates an atespace policy member string
+// ("atespace:<name>", where <name> is a valid Substrate resource name) and
+// returns its OpenFGA object identifier.
+func FormatAtespaceMember(member string) (string, error) {
+	name, ok := strings.CutPrefix(member, atespaceObjectPrefix)
+	if !ok || strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("member %q must have non-empty \"atespace:<name>\" format", member)
+	}
+	if name == "*" {
+		return "", fmt.Errorf("wildcard member %q is not allowed", member)
+	}
+	return validateAtespaceName(name)
 }
 
 //go:embed model.fga

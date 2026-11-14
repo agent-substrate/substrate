@@ -34,9 +34,10 @@ import (
 )
 
 type mountCall struct {
-	volumeID   string
-	targetPath string
-	attributes map[string]string
+	volumeID     string
+	targetPath   string
+	attributes   map[string]string
+	mountOptions []string
 }
 
 type fakeWorkerPlugin struct {
@@ -50,9 +51,10 @@ type fakeWorkerPlugin struct {
 
 func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
 	f.mountCalls = append(f.mountCalls, mountCall{
-		volumeID:   req.VolumeID,
-		targetPath: req.TargetPath,
-		attributes: req.VolumeContext,
+		volumeID:     req.VolumeID,
+		targetPath:   req.TargetPath,
+		attributes:   req.VolumeContext,
+		mountOptions: req.MountOptions,
 	})
 	if f.mountErrs != nil {
 		if err, ok := f.mountErrs[req.VolumeID]; ok {
@@ -359,6 +361,41 @@ func TestMountExternalVolumes(t *testing.T) {
 		// Verify host mount directory for vol-2 was also created prior to MountVolume call.
 		if _, err := os.Stat(expectedPath2); err != nil {
 			t.Errorf("stat vol-2 mount path %q: %v", expectedPath2, err)
+		}
+	})
+
+	t.Run("forwards mount options to plugin", func(t *testing.T) {
+		useTempNodeDirs(t)
+
+		volWithOpts := &ateletpb.Volume{
+			Name: "vol-opts",
+			External: &ateletpb.ExternalVolumeSource{
+				StorageVolumeId: "mock-vol-opts",
+				VolumeType:      "mock-driver",
+				MountOptions:    []string{"nfsvers=4.1", "noatime"},
+			},
+		}
+
+		fake := &fakeWorkerPlugin{}
+		s := &Atelet{
+			volumePlugins: map[string]volume.VolumePluginWorkerPlane{
+				"mock-driver": fake,
+			},
+		}
+
+		if err := s.mountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{volWithOpts}); err != nil {
+			t.Fatalf("mountExternalVolumes failed: %v", err)
+		}
+
+		wantCalls := []mountCall{
+			{
+				volumeID:     "mock-vol-opts",
+				targetPath:   ateletpath.ExternalVolumeHostPath(actorUID, "vol-opts"),
+				mountOptions: []string{"nfsvers=4.1", "noatime"},
+			},
+		}
+		if diff := cmp.Diff(wantCalls, fake.mountCalls, cmp.AllowUnexported(mountCall{})); diff != "" {
+			t.Errorf("mountCalls mismatch (-want +got):\n%s", diff)
 		}
 	})
 }
