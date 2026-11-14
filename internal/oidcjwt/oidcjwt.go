@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -623,12 +624,45 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 
 	jwkSet, err := fetchJSON[jwkSetT](ctx, httpClient, oidcConfig.JWKSURI)
 	if err != nil {
-		return nil, fmt.Errorf("while fetching JWKS: %w", err)
+		fallback, ok := sameOriginJWKSURI(issuer, oidcConfig.JWKSURI)
+		if !ok {
+			return nil, fmt.Errorf("while fetching JWKS: %w", err)
+		}
+		slog.InfoContext(ctx, "JWKS fetch failed; retrying at the issuer's origin",
+			slog.String("jwksURI", oidcConfig.JWKSURI), slog.String("fallback", fallback), slog.Any("err", err))
+		jwkSet, err = fetchJSON[jwkSetT](ctx, httpClient, fallback)
+		if err != nil {
+			return nil, fmt.Errorf("while fetching JWKS (issuer-origin fallback %s also failed): %w", fallback, err)
+		}
 	}
 
 	slog.InfoContext(ctx, "Fetched JWK set", slog.Any("jwkSet", jwkSet))
 
 	return keysFromJWKSet(ctx, jwkSet, "issuer "+issuer)
+}
+
+// sameOriginJWKSURI returns jwksURI rewritten to issuer's origin (scheme and
+// host), and false when the two already share an origin or either URL is
+// unparseable. Managed Kubernetes offerings may publish a jwks_uri whose host
+// is unreachable from the pod network (e.g. an API-server load balancer VIP
+// that only node subnets may reach); the JWKS endpoint is served by the same
+// API server that served the discovery document, so the issuer's origin —
+// which just answered — is a working equivalent.
+func sameOriginJWKSURI(issuer, jwksURI string) (string, bool) {
+	issuerURL, err := url.Parse(issuer)
+	if err != nil {
+		return "", false
+	}
+	jwksURL, err := url.Parse(jwksURI)
+	if err != nil {
+		return "", false
+	}
+	if strings.EqualFold(jwksURL.Scheme, issuerURL.Scheme) && strings.EqualFold(jwksURL.Host, issuerURL.Host) {
+		return "", false
+	}
+	jwksURL.Scheme = issuerURL.Scheme
+	jwksURL.Host = issuerURL.Host
+	return jwksURL.String(), true
 }
 
 // keysFromJWKSet converts a JWK set into verification keys. origin names where
