@@ -17,6 +17,8 @@ package steps
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -184,7 +186,7 @@ func buildAPIConfig(logLevel string) (string, error) {
 // authentication config, pointing it at the cluster's service account issuer.
 func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 	return e.applyAPIAuthenticationConfig(ctx, &apiconfig.AuthenticationConfig{
-		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(e.jwtIssuer(ctx))},
+		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(e.jwtIssuer(ctx), e.kubeAPIServerURL())},
 	})
 }
 
@@ -245,29 +247,94 @@ func (e *Env) jwtIssuer(ctx context.Context) string {
 // discoverable one.
 const inClusterIssuer = "https://kubernetes.default.svc"
 
+// kubeAPIServerURL is the kube-apiserver URL from the rest.Config the Env's
+// client was built with. Empty when there is no client, as in unit tests that
+// construct a fake Client without Config, or under NewLocalEnv.
+func (e *Env) kubeAPIServerURL() string {
+	if e == nil || e.Kube == nil || e.Kube.Config == nil {
+		return ""
+	}
+	return e.Kube.Config.Host
+}
+
 // kubernetesJWTProvider builds the default kubernetes JWT provider entry.
 //
 // An in-cluster issuer is not reachable over public discovery, so the apiserver
 // is pointed at its own projected service account CA and token to complete the
 // OIDC discovery handshake. A GKE or otherwise external issuer needs neither.
-func kubernetesJWTProvider(issuer string) apiconfig.JWTProviderConfig {
+//
+// The cluster's own issuer is either of the two kubernetes.default.svc names,
+// or any issuer whose host and port match apiServerURL, the kube-apiserver
+// URL from the rest config ate-setup uses. apiServerURL may be empty.
+func kubernetesJWTProvider(issuer, apiServerURL string) apiconfig.JWTProviderConfig {
 	p := apiconfig.JWTProviderConfig{
 		Name:      "kubernetes",
 		Issuer:    issuer,
 		Audiences: []string{"api.ate-system.svc"},
 	}
-	switch issuer {
-	case inClusterIssuer, inClusterIssuer + ".cluster.local":
+	if issuerNeedsInClusterDiscovery(issuer, apiServerURL) {
 		p.CertificateAuthorityFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 		p.DiscoveryTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	}
 	return p
 }
 
+// issuerNeedsInClusterDiscovery reports whether ate-api-server must use the
+// pod's service account CA and token to fetch the issuer's signing keys.
+//
+// The two kubernetes.default.svc names are always in-cluster. Any other
+// issuer is in-cluster only when its host and port match the kube-apiserver
+// URL, so a Talos-style https://<control-plane-ip>:6443 issuer is covered
+// and a public issuer such as GKE is not.
+func issuerNeedsInClusterDiscovery(issuer, apiServerURL string) bool {
+	switch issuer {
+	case inClusterIssuer, inClusterIssuer + ".cluster.local":
+		return true
+	}
+	return sameHostPort(issuer, apiServerURL)
+}
+
+// sameHostPort reports whether a and b name the same host and port.
+// A missing scheme is treated as https, and a missing port as the scheme
+// default, so a rest.Config Host of 192.0.2.10:6443 matches
+// https://192.0.2.10:6443, and https://apiserver.example matches
+// https://apiserver.example:443.
+func sameHostPort(a, b string) bool {
+	ha, okA := hostPort(a)
+	hb, okB := hostPort(b)
+	return okA && okB && strings.EqualFold(ha, hb)
+}
+
+func hostPort(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		default:
+			return "", false
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port), true
+}
+
 // setKubernetesJWTProvider replaces the kubernetes entry in cfg, or prepends
 // one if none exists, preserving any additional JWT providers.
-func setKubernetesJWTProvider(cfg *apiconfig.AuthenticationConfig, issuer string) {
-	k8sProvider := kubernetesJWTProvider(issuer)
+func setKubernetesJWTProvider(cfg *apiconfig.AuthenticationConfig, issuer, apiServerURL string) {
+	k8sProvider := kubernetesJWTProvider(issuer, apiServerURL)
 	for i := range cfg.JWTProviders {
 		if cfg.JWTProviders[i].Name == k8sProvider.Name {
 			cfg.JWTProviders[i] = k8sProvider
@@ -278,9 +345,11 @@ func setKubernetesJWTProvider(cfg *apiconfig.AuthenticationConfig, issuer string
 }
 
 // buildAuthenticationConfig renders the default authentication.yaml for issuer.
-func buildAuthenticationConfig(issuer string) (string, error) {
+// apiServerURL is the kube-apiserver URL used to decide whether issuer needs
+// in-cluster discovery credentials; it may be empty.
+func buildAuthenticationConfig(issuer, apiServerURL string) (string, error) {
 	return marshalAuthenticationConfig(&apiconfig.AuthenticationConfig{
-		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(issuer)},
+		JWTProviders: []apiconfig.JWTProviderConfig{kubernetesJWTProvider(issuer, apiServerURL)},
 	})
 }
 

@@ -76,7 +76,7 @@ func (e *Env) ensureAPIAuthenticationConfig(ctx context.Context) error {
 	var update func(context.Context) error
 	if e.Cfg.ExpectedJWTIssuer != "" {
 		update = func(ctx context.Context) error {
-			setKubernetesJWTProvider(parsed, e.Cfg.ExpectedJWTIssuer)
+			setKubernetesJWTProvider(parsed, e.Cfg.ExpectedJWTIssuer, e.kubeAPIServerURL())
 			return e.applyAPIAuthenticationConfig(ctx, parsed)
 		}
 	}
