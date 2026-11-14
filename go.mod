@@ -28,7 +28,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.21.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.20.4
 	github.com/moby/sys/user v0.4.1
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
 	github.com/opencontainers/runtime-spec v1.3.0
