@@ -176,6 +176,13 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 	}
 }
 
+// sandboxAssetFetcher is the slice of Atelet the syncer needs. Staging
+// through the same method as the Run/Restore path keeps the fetches from
+// ever diverging on cache layout or validation.
+type sandboxAssetFetcher interface {
+	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error)
+}
+
 // defaultRuntimeDirsName is the directory under a worker's own that holds
 // one directory per default runtime the worker advertises, by bundle hash,
 // one per sandbox class, which the build stages the runtime's assets into.

@@ -79,10 +79,6 @@ func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandbox
 	return f.fn(ctx, rec)
 }
 
-func (f *fakeAssetFetcher) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, _ string) (map[string]string, error) {
-	return f.fn(ctx, rec)
-}
-
 // newTestAssetFetcher returns a sandboxAssetFetcher that maps every asset of
 // a record to a path under its digest without fetching anything.
 func newTestAssetFetcher() sandboxAssetFetcher {

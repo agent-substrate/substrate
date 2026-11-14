@@ -68,6 +68,26 @@ func multiVersionConfig() *atev1.SandboxConfig {
 	}
 }
 
+// gvisorConfig is a gVisor config with one version, "v1", the default, whose
+// gvisor asset is at url with the given sha256.
+func gvisorConfig(name, url, sha string) *atev1.SandboxConfig {
+	return &atev1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: atev1.SandboxConfigSpec{
+			SandboxClass:   atev1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1.SandboxVersionConfig{{
+				Name: "v1",
+				Assets: map[string]map[string]atev1.AssetFile{
+					runtime.GOARCH: {
+						gvisorAssetName: {URL: url, SHA256: sha},
+					},
+				},
+			}},
+		},
+	}
+}
+
 func TestRecordForArch(t *testing.T) {
 	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("gvisor release")))
 	tests := []struct {
@@ -733,7 +753,7 @@ func TestSyncPodAssetCacheAndEviction(t *testing.T) {
 			}
 
 			// A directory emptied under the syncer, as an older atelet leaves
-			// one it made for a prewarm that never came, is filled from the
+			// one it created before linking into it, is filled from the
 			// cache again without a download.
 			if err := os.RemoveAll(staged("pod-a", v1SHA)); err != nil {
 				t.Fatal(err)
