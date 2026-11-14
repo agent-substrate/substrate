@@ -235,6 +235,7 @@ func newHandler(client *http.Client) http.Handler {
 	mux.HandleFunc("/websocket", handleWebSocket)
 	mux.HandleFunc("/grpc", handleGRPC)
 	mux.HandleFunc("/connect", handleConnect)
+	mux.HandleFunc("/dns", handleDNS)
 	return mux
 }
 

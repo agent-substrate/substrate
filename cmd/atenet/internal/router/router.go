@@ -42,6 +42,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/ateapiauth"
+	atunneldns "go.ate.dev/substrate/internal/atunnel/dns"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
@@ -255,7 +256,13 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", providerName))
 		}
 
-		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers)
+		// DNS queries the gateway allows go to the resolvers Envoy itself uses.
+		dnsUpstreams, err := atunneldns.ResolvConfNameservers("/etc/resolv.conf")
+		if err != nil {
+			return fmt.Errorf("reading the egress gateway's DNS resolvers: %w", err)
+		}
+		egressHandler := egress.New(s.apiClient, loadActorIdentityRoots, s.cfg.EgressPolicyCacheTTL, providers,
+			egress.WithDNSUpstreams(dnsUpstreams))
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 

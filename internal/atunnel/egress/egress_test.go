@@ -529,6 +529,10 @@ func (f tunnelDialerFunc) DialContext(ctx context.Context, destination string) (
 	return f(ctx, destination)
 }
 
+func (f tunnelDialerFunc) ExchangeDNS(context.Context, []byte) ([]byte, error) {
+	return nil, errors.New("test dialer does not exchange DNS")
+}
+
 func (f tunnelDialerFunc) Close() error {
 	return nil
 }

@@ -89,7 +89,7 @@ func RegisterFlags(fs FlagSet) *Config {
 	fs.StringVar(&c.BrokerIdentity, "atunnel-broker-identity", installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "SPIFFE identity the node-local atelet must present on the credential broker connection. Override when atelet runs outside the default namespace.")
 	fs.StringVar(&c.EgressListenAddress, "atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	fs.StringVar(&c.EgressTrustBundle, "atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
-	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode (must be "+egresspolicy.DNSEgressPolicyEnforceInAtunnel+")")
+	fs.StringVar(&c.DNSEgressPolicy, "dns-egress-policy", "", "DNS egress policy enforcement mode ("+egresspolicy.DNSEgressPolicyEnforceInAtunnel+" or "+egresspolicy.DNSEgressPolicyEnforceInPEP+")")
 	return c
 }
 
@@ -270,4 +270,25 @@ func (t *Tunnel) Deactivate(ctx context.Context, actor resources.ActorAttributio
 		return fmt.Errorf("while deactivating actor networking: %w", err)
 	}
 	return nil
+}
+
+// actorDNSExchanger sends one actor's DNS queries to the egress PEP with the
+// actor's egress client.
+type actorDNSExchanger struct {
+	egress   *egress.Proxy
+	actorUID string
+}
+
+func (x actorDNSExchanger) Exchange(ctx context.Context, query []byte) ([]byte, error) {
+	return x.egress.ExchangeDNS(ctx, x.actorUID, query)
+}
+
+// ActorDNSExchanger returns what sends actor's DNS queries to the egress PEP,
+// or nil when --dns-egress-policy leaves DNS to the relay. Queries fail until
+// the actor's egress is activated, and for an actor without an egress gateway.
+func (t *Tunnel) ActorDNSExchanger(actor resources.ActorAttribution) dns.Exchanger {
+	if t.cfg.DNSEgressPolicy != egresspolicy.DNSEgressPolicyEnforceInPEP {
+		return nil
+	}
+	return actorDNSExchanger{egress: t.Egress, actorUID: actor.UID}
 }

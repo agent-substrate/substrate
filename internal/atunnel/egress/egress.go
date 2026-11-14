@@ -32,6 +32,8 @@ import (
 // tunnelDialer opens an authenticated tunnel to an original destination.
 type tunnelDialer interface {
 	DialContext(context.Context, string) (net.Conn, error)
+	// ExchangeDNS sends a DNS query to the gateway and returns its response.
+	ExchangeDNS(context.Context, []byte) ([]byte, error)
 	Close() error
 }
 

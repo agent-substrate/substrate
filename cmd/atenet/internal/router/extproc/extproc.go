@@ -168,6 +168,9 @@ func (s *Server) processRequestHeaders(
 	}
 
 	s.recorder.AddRouterRequest(start, elapsed, "Route ok", res.Target, md)
+	if res.Immediate != nil {
+		return res.Immediate
+	}
 	return &extprocv3.ProcessingResponse{
 		Response:        &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: res.Response},
 		DynamicMetadata: res.DynamicMetadata,
