@@ -149,30 +149,10 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: expected CONNECT, got %q", md.Method)
 	}
 
-	// Without roots the gateway cannot authenticate anyone. Fail closed, and
-	// as 503 rather than 403: this is our misconfiguration, not the actor's.
-	roots, err := h.loadActorIdentityRoots()
+	ref, err := h.authenticateActor(ctx, md, md.Host)
 	if err != nil {
-		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err,
-			"egress unavailable: actor-identity CA failed to load")
-	}
-
-	actorRef, err := authenticateActorCertificate(md, roots)
-	if err != nil {
-		// The body stays generic on purpose: an actor that fails authentication
-		// has not proven it is anyone, so it gets no detail about why. The
-		// specific reason rides along as the wrapped cause, which only the
-		// server-side log below reads.
-		slog.WarnContext(ctx, "egress denied: actor certificate rejected", slog.Any("err", err))
-		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err,
-			"egress denied: invalid actor certificate")
-	}
-
-	if err := h.validateActor(ctx, actorRef, md.Host); err != nil {
 		return extproc.Result{}, err
 	}
-
-	ref := resources.ActorRef{Atespace: actorRef.Atespace, Name: actorRef.Name}
 
 	// atunnel always sends the address the actor's kernel dialed, never a
 	// name. Refuse a name here, where there is still a response to do it with.
@@ -198,6 +178,37 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	res := allow()
 	res.DynamicMetadata = dynamicMetadata
 	return res, nil
+}
+
+// authenticateActor authenticates the actor behind a request on the egress
+// filter chain from the certificate atunnel presented, and confirms that the
+// control plane has the actor placed on a worker. A refusal is logged with
+// destination. Every error it returns is already a client-facing denial.
+func (h *Handler) authenticateActor(ctx context.Context, md *extproc.RequestMetadata, destination string) (resources.ActorRef, error) {
+	// Without roots the gateway cannot authenticate anyone. Fail closed, and
+	// as 503 rather than 403: this is our misconfiguration, not the actor's.
+	roots, err := h.loadActorIdentityRoots()
+	if err != nil {
+		return resources.ActorRef{}, extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err,
+			"egress unavailable: actor-identity CA failed to load")
+	}
+
+	actorRef, err := authenticateActorCertificate(md, roots)
+	if err != nil {
+		// The body stays generic on purpose: an actor that fails authentication
+		// has not proven it is anyone, so it gets no detail about why. The
+		// specific reason rides along as the wrapped cause, which only the
+		// server-side log below reads.
+		slog.WarnContext(ctx, "egress denied: actor certificate rejected", slog.Any("err", err))
+		return resources.ActorRef{}, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err,
+			"egress denied: invalid actor certificate")
+	}
+
+	if err := h.validateActor(ctx, actorRef, destination); err != nil {
+		return resources.ActorRef{}, err
+	}
+
+	return resources.ActorRef{Atespace: actorRef.Atespace, Name: actorRef.Name}, nil
 }
 
 // connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
