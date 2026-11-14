@@ -31,6 +31,7 @@ import (
 	"testing/synctest"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/compression"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -235,7 +236,7 @@ func TestDiffIDMismatchNotRetriedPerCredential(t *testing.T) {
 	}
 }
 
-// gatedLayer holds a layer flight open: its uncompressed stream closes
+// gatedLayer holds a layer flight open: its compressed stream closes
 // started, blocks until release is closed, then fails with err if set.
 type gatedLayer struct {
 	v1.Layer
@@ -247,24 +248,24 @@ func newGatedLayer(layer v1.Layer, err error) gatedLayer {
 	return gatedLayer{Layer: layer, started: make(chan struct{}), release: make(chan struct{}), err: err}
 }
 
-func (g gatedLayer) Uncompressed() (io.ReadCloser, error) {
+func (g gatedLayer) Compressed() (io.ReadCloser, error) {
 	close(g.started)
 	<-g.release
 	if g.err != nil {
 		return nil, g.err
 	}
-	return g.Layer.Uncompressed()
+	return g.Layer.Compressed()
 }
 
-// openCountingLayer counts opens of its uncompressed stream.
+// openCountingLayer counts opens of its compressed stream.
 type openCountingLayer struct {
 	v1.Layer
 	opens *atomic.Int32
 }
 
-func (c openCountingLayer) Uncompressed() (io.ReadCloser, error) {
+func (c openCountingLayer) Compressed() (io.ReadCloser, error) {
 	c.opens.Add(1)
-	return c.Layer.Uncompressed()
+	return c.Layer.Compressed()
 }
 
 // joinFlight runs ensureLayer for leader, then for joiner once the leader's
@@ -351,6 +352,10 @@ func TestSameBlobPullsShareOneFlight(t *testing.T) {
 	})
 }
 
+type uncompressedLayer struct{ v1.Layer }
+
+func (u uncompressedLayer) Compressed() (io.ReadCloser, error) { return u.Uncompressed() }
+
 // The hash covers the whole uncompressed stream, while the returned length
 // covers only what the consumer read.
 func TestReadVerifiedLayerDrainsStream(t *testing.T) {
@@ -359,19 +364,33 @@ func TestReadVerifiedLayerDrainsStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	zstdLayer := func(body string) v1.Layer {
+		return layerFromEntries(t, []tarEntry{{name: "lib", typeflag: tar.TypeReg, mode: 0o644, body: body}}, tarball.WithCompression(compression.ZStd))
+	}
 	readTen := func(r io.Reader) error {
 		_, err := io.CopyN(io.Discard, r, 10)
 		return err
 	}
-	n, err := readVerifiedLayer(good, diffID, readTen)
-	if err != nil {
-		t.Fatalf("readVerifiedLayer(good): %v", err)
-	}
-	if n != 10 {
-		t.Errorf("length = %d, want 10", n)
-	}
-	if _, err := readVerifiedLayer(evil, diffID, readTen); !errors.Is(err, errDiffIDMismatch) {
-		t.Errorf("readVerifiedLayer(evil) error = %v, want errDiffIDMismatch", err)
+	for _, tc := range []struct {
+		name       string
+		good, evil v1.Layer
+	}{
+		{name: "gzip", good: good, evil: evil},
+		{name: "zstd", good: zstdLayer("good"), evil: zstdLayer("EVIL")},
+		{name: "uncompressed", good: uncompressedLayer{good}, evil: uncompressedLayer{evil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := readVerifiedLayer(tc.good, diffID, readTen)
+			if err != nil {
+				t.Fatalf("readVerifiedLayer(good): %v", err)
+			}
+			if n != 10 {
+				t.Errorf("length = %d, want 10", n)
+			}
+			if _, err := readVerifiedLayer(tc.evil, diffID, readTen); !errors.Is(err, errDiffIDMismatch) {
+				t.Errorf("readVerifiedLayer(evil) error = %v, want errDiffIDMismatch", err)
+			}
+		})
 	}
 }
 
