@@ -17,9 +17,11 @@
 //
 // grpc/ holds one file per gRPC resource as ate-api-server returns it, with
 // server-set fields such as uid and status. Each is its message's protojson
-// form as YAML, named after the message, e.g. Actor.yaml. Tests check that
-// every resource has an example and that each example parses as its message,
-// so a renamed or removed field fails them.
+// form as YAML, named after the message, e.g. Actor.yaml; a subresource with
+// several parents may also add a per-parent override named
+// "<Parent>.<Resource>.yaml", e.g. ExternalVolumeClass.AccessPolicy.yaml.
+// Tests check that every resource has an example and that each example parses
+// as its message, so a renamed or removed field fails them.
 //
 // k8s/ holds one file per Kubernetes resource as users apply it with kubectl,
 // named after its kind, e.g. WorkerPool.yaml. Tests check each against its

@@ -94,6 +94,17 @@ tuples:
     relation: api_server_sidecar
     object: global:root
 
+  # External volume classes (linked to global:root; space-1 allowed on nfs-gold only)
+  - user: global:root
+    relation: parent_global
+    object: external_volume_class:nfs-gold
+  - user: atespace:space-1
+    relation: allowed_atespace
+    object: external_volume_class:nfs-gold
+  - user: global:root
+    relation: parent_global
+    object: external_volume_class:ssd-restricted
+
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
     check:
@@ -572,3 +583,77 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_actor_jwt: false
+
+  - name: 10. External Volume Classes & Access Policies
+    check:
+      - user: user:carol # Global owner
+        object: global:root
+        assertions:
+          can_create_external_volume_class: true
+          can_list_external_volume_classes: true
+      - user: user:frank # Global viewer
+        object: global:root
+        assertions:
+          can_create_external_volume_class: false
+          can_list_external_volume_classes: true
+      - user: user:bob # Atespace editor
+        object: global:root
+        assertions:
+          can_create_external_volume_class: false
+          can_list_external_volume_classes: false
+      - user: user:carol # Global owner manages class and its access policy
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: true
+          can_delete: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
+          can_delete_access_policy: true
+      - user: user:frank # Global viewer reads class and its access policy
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: true
+          can_delete: false
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
+      - user: user:alice # Owner of allowed atespace space-1 reads class, not its policy
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: true
+          can_delete: false
+          can_create_access_policy: false
+          can_get_access_policy: false
+          can_update_access_policy: false
+          can_delete_access_policy: false
+      - user: user:bob # Editor of allowed atespace space-1 reads class, not its policy
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: true
+          can_delete: false
+          can_create_access_policy: false
+          can_get_access_policy: false
+          can_update_access_policy: false
+          can_delete_access_policy: false
+      - user: user:bob # Editor of space-1 cannot read disallowed class
+        object: external_volume_class:ssd-restricted
+        assertions:
+          can_get: false
+          can_delete: false
+          can_get_access_policy: false
+      - user: user:dave # Viewer of allowed atespace space-1 cannot read class
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_get: false
+          can_delete: false
+          can_get_access_policy: false
+      - user: atespace:space-1
+        object: external_volume_class:nfs-gold
+        assertions:
+          allowed_atespace: true
+      - user: atespace:space-1
+        object: external_volume_class:ssd-restricted
+        assertions:
+          allowed_atespace: false

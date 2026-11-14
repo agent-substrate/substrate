@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -161,4 +162,155 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 	}
 	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapi.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get after DeleteAtespace", err, codes.NotFound)
+}
+
+func TestExternalVolumeClassAccessPolicy_CRUD(t *testing.T) {
+	preview.InitForTest(t, string(preview.GateExternalVolumes))
+	tc := setupPreviewTest(t, namespaceForTest("ns-evc-access-policy"))
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	createAtespace(t, tc, "team-a")
+	createAtespace(t, tc, "team-b")
+	createAtespace(t, tc, "team-c")
+	createExternalVolumeClass(t, tc, "nfs-gold")
+	ref := &ateapi.ObjectRef{Name: "nfs-gold"}
+	policy := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-a", "atespace:team-b"}}},
+	}
+
+	_, err := tc.client.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: "missing"},
+		AccessPolicy:        policy,
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "parent ExternalVolumeClass or referenced member Atespace does not exist")
+
+	_, err = tc.client.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy: &ateapi.AccessPolicy{
+			Metadata: &ateapi.ResourceMetadata{Name: "default"},
+			Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:ghost"}}},
+		},
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "parent ExternalVolumeClass or referenced member Atespace does not exist")
+
+	// Create and Update require preview opt-in; Get and Delete stay ungated.
+	_, err = tc.noOptInClient.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        policy,
+	})
+	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "access_policy: Forbidden")
+
+	_, err = tc.noOptInClient.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	})
+	wantCode(t, "Get before create (no opt-in)", err, codes.NotFound)
+
+	created, err := tc.client.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        policy,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	_, err = tc.client.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        policy,
+	})
+	wantCode(t, "second Create", err, codes.AlreadyExists)
+
+	got, err := tc.noOptInClient.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	})
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("Get mismatch (-created +got):\n%s", diff)
+	}
+
+	_, err = tc.noOptInClient.UpdateExternalVolumeClassAccessPolicy(ctx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        created,
+	})
+	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "access_policy: Forbidden")
+
+	badUpdate := proto.CloneOf(created)
+	badUpdate.Bindings = []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:ghost"}}}
+	_, err = tc.client.UpdateExternalVolumeClassAccessPolicy(ctx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        badUpdate,
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "referenced member Atespace does not exist")
+
+	// Deleting member team-a scrubs it from the stored policy and bumps version.
+	if _, err := tc.client.DeleteAtespace(ctx, &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}}); err != nil {
+		t.Fatalf("DeleteAtespace(team-a) failed: %v", err)
+	}
+	afterScrub, err := tc.client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	})
+	if err != nil {
+		t.Fatalf("Get after DeleteAtespace failed: %v", err)
+	}
+	wantScrubbed := []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-b"}}}
+	if diff := cmp.Diff(wantScrubbed, afterScrub.GetBindings(), protocmp.Transform()); diff != "" {
+		t.Fatalf("bindings after DeleteAtespace(team-a) (-want +got):\n%s", diff)
+	}
+
+	update := proto.CloneOf(afterScrub)
+	update.Bindings[0].Members = append(update.Bindings[0].Members, "atespace:team-c")
+	updated, err := tc.client.UpdateExternalVolumeClassAccessPolicy(ctx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        update,
+	})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if diff := cmp.Diff(update.GetBindings(), updated.GetBindings(), protocmp.Transform()); diff != "" {
+		t.Errorf("updated bindings mismatch (-want +got):\n%s", diff)
+	}
+
+	_, err = tc.client.DeleteExternalVolumeClassAccessPolicy(ctx, &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+		Options:             &ateapi.DeleteOptions{Version: created.GetMetadata().GetVersion()},
+	})
+	wantCode(t, "Delete with stale version", err, codes.Aborted)
+
+	if _, err := tc.noOptInClient.DeleteExternalVolumeClassAccessPolicy(ctx, &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	}); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	_, err = tc.client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	})
+	wantCode(t, "Get after delete", err, codes.NotFound)
+
+	// Deleting the ExternalVolumeClass removes its policy with it.
+	recreatePolicy := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default"},
+		Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-b"}}},
+	}
+	if _, err := tc.client.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		AccessPolicy:        recreatePolicy,
+	}); err != nil {
+		t.Fatalf("re-Create failed: %v", err)
+	}
+	if _, err := tc.client.DeleteExternalVolumeClass(ctx, &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: ref}); err != nil {
+		t.Fatalf("DeleteExternalVolumeClass failed: %v", err)
+	}
+	_, err = tc.client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+		ExternalVolumeClass: ref,
+		Name:                resources.SingletonName,
+	})
+	wantCode(t, "Get after DeleteExternalVolumeClass", err, codes.NotFound)
 }

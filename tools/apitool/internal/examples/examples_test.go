@@ -52,6 +52,18 @@ func resources(t *testing.T) map[string]model.Message {
 	return byName
 }
 
+func resolveGRPCExampleResource(name string, rs map[string]model.Message) (model.Message, bool) {
+	if parent, resName, hasDot := strings.Cut(name, "."); hasDot {
+		msg, ok := rs[resName]
+		if !ok || msg.ResourceAnnotation == nil || !slices.Contains(msg.ResourceAnnotation.Parents, parent) {
+			return model.Message{}, false
+		}
+		return msg, true
+	}
+	msg, ok := rs[name]
+	return msg, ok
+}
+
 func TestGRPCResources_OnePerResource(t *testing.T) {
 	got, err := examples.GRPCResources()
 	if err != nil {
@@ -64,8 +76,8 @@ func TestGRPCResources_OnePerResource(t *testing.T) {
 		}
 	}
 	for name := range got {
-		if _, ok := rs[name]; !ok {
-			t.Errorf("grpc/%s.yaml names no resource", name)
+		if _, ok := resolveGRPCExampleResource(name, rs); !ok {
+			t.Errorf("grpc/%s.yaml names no resource (or valid <Parent>.<Resource> subresource override)", name)
 		}
 	}
 }
@@ -77,7 +89,7 @@ func TestGRPCResources_ParsesAsResource(t *testing.T) {
 	}
 	rs := resources(t)
 	for _, name := range slices.Sorted(maps.Keys(got)) {
-		msg, ok := rs[name]
+		msg, ok := resolveGRPCExampleResource(name, rs)
 		if !ok {
 			continue // Reported by TestGRPCResources_OnePerResource.
 		}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -147,6 +148,18 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
 		return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 	}
+	classes, err := p.policyManager.ExternalVolumeClassesForAtespace(ctx, tx, name)
+	if err != nil {
+		return nil, fmt.Errorf("listing external volume classes for atespace %q: %w", name, err)
+	}
+	if len(classes) > 0 {
+		if err := scrubAtespaceFromExternalVolumeClassPolicies(ctx, tx, name, classes); err != nil {
+			return nil, err
+		}
+		if err := p.policyManager.RemoveAtespaceFromExternalVolumeClasses(ctx, tx, name); err != nil {
+			return nil, fmt.Errorf("removing atespace %q from external volume class policies: %w", name, err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
 	}
@@ -156,4 +169,94 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 	}
 	out.Metadata.DeleteTime = timestamppb.Now()
 	return out, nil
+}
+
+// scrubAtespaceFromExternalVolumeClassPolicies locks the affected policy rows
+// in sorted class-name order before RemoveAtespaceFromExternalVolumeClasses
+// locks their OpenFGA tuple rows, matching the per-class policy write lock
+// order (policy row FOR UPDATE -> tuple).
+func scrubAtespaceFromExternalVolumeClassPolicies(ctx context.Context, tx pgx.Tx, atespaceName string, classes []string) error {
+	if len(classes) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT external_volume_class_name, uid, version, proto
+		FROM external_volume_class_access_policies
+		WHERE external_volume_class_name = ANY($1)
+		ORDER BY external_volume_class_name
+		FOR UPDATE`, classes)
+	if err != nil {
+		return fmt.Errorf("locking external volume class access policies for atespace %q: %w", atespaceName, err)
+	}
+	type lockedPolicy struct {
+		className string
+		policy    *ateapi.AccessPolicy
+	}
+	var locked []lockedPolicy
+	for rows.Next() {
+		var className, uid string
+		var version int64
+		var protoBytes []byte
+		if err := rows.Scan(&className, &uid, &version, &protoBytes); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning external volume class access policy row: %w", err)
+		}
+		policy, err := unmarshalAccessPolicy(uid, version, protoBytes)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		locked = append(locked, lockedPolicy{className: className, policy: policy})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading external volume class access policies for atespace %q: %w", atespaceName, err)
+	}
+
+	targetMember := "atespace:" + atespaceName
+	for _, item := range locked {
+		if !scrubPolicyMember(item.policy, targetMember) {
+			continue
+		}
+		oldMeta := proto.CloneOf(item.policy.Metadata)
+		setUpdateMetadata(item.policy.Metadata, oldMeta)
+		protoBytes, err := proto.Marshal(item.policy)
+		if err != nil {
+			return fmt.Errorf("marshaling scrubbed access policy for external volume class %q: %w", item.className, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE external_volume_class_access_policies
+			SET version = $1, proto = $2
+			WHERE external_volume_class_name = $3`,
+			item.policy.GetMetadata().GetVersion(), protoBytes, item.className); err != nil {
+			return fmt.Errorf("updating scrubbed access policy for external volume class %q: %w", item.className, err)
+		}
+	}
+	return nil
+}
+
+// scrubPolicyMember removes targetMember from every binding in policy, dropping
+// any binding whose member list becomes empty so Binding.members stays
+// non-empty. It reports whether policy was modified.
+func scrubPolicyMember(policy *ateapi.AccessPolicy, targetMember string) bool {
+	changed := false
+	var keptBindings []*ateapi.Binding
+	for _, b := range policy.GetBindings() {
+		if !slices.Contains(b.GetMembers(), targetMember) {
+			keptBindings = append(keptBindings, b)
+			continue
+		}
+		changed = true
+		keptMembers := slices.DeleteFunc(slices.Clone(b.GetMembers()), func(m string) bool {
+			return m == targetMember
+		})
+		if len(keptMembers) > 0 {
+			b.Members = keptMembers
+			keptBindings = append(keptBindings, b)
+		}
+	}
+	if changed {
+		policy.Bindings = keptBindings
+	}
+	return changed
 }

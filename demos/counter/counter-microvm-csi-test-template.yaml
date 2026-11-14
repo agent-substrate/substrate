@@ -45,4 +45,5 @@ volumes:
   external:
     template:
       capacityBytes: 1073741824 # 1Gi
-      storageClassName: csi-hostpath-sc
+      externalVolumeClass:
+        name: csi-hostpath

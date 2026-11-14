@@ -17,6 +17,7 @@ package controlapi
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -39,12 +40,16 @@ func TestMapAccessPolicyWrite_Codes(t *testing.T) {
 		{name: "apierror passes through", err: apierror.InvalidArgument("bad"), want: codes.InvalidArgument},
 		{name: "plain error", err: errors.New("boom"), want: codes.Internal},
 		{name: "not found", err: store.ErrNotFound, want: codes.NotFound},
+		{name: "failed precondition", err: store.ErrFailedPrecondition, want: codes.FailedPrecondition},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := mapAccessPolicyWrite(nil, tc.err)
+			_, err := mapAccessPolicyWrite(nil, tc.err, "custom precondition message")
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("mapAccessPolicyWrite(%v) code = %v, want %v", tc.err, got, tc.want)
+			}
+			if errors.Is(tc.err, store.ErrFailedPrecondition) && !strings.Contains(err.Error(), "custom precondition message") {
+				t.Errorf("mapAccessPolicyWrite(ErrFailedPrecondition) = %q, want custom precondition message", err.Error())
 			}
 		})
 	}

@@ -35,7 +35,7 @@ ACTOR_MEMORY=""
 ACTOR_CPU=""
 # Empty leaves the WorkerPool pods unsized.
 WORKER_MEMORY=""
-STORAGE_CLASS_NAME=""
+EXTERNAL_VOLUME_CLASS="${EXTERNAL_VOLUME_CLASS:-}"
 WAIT_TIMEOUT_SECS=""
 
 usage() {
@@ -54,8 +54,9 @@ usage() {
   echo "                          ActorTemplates (default: 1)."
   echo "  --worker-memory SIZE    Forwarded to workloads/deploy.sh. Memory request and limit"
   echo "                          for each WorkerPool pod (default: unset, the pod is unsized)."
-  echo "  --storage-class-name S  Forwarded to workloads/deploy.sh. StorageClass for the glutton-storage"
-  echo "                          external volume; setting it deploys glutton-storage."
+  echo "  --external-volume-class S"
+  echo "                          Forwarded to workloads/deploy.sh. ExternalVolumeClass for the"
+  echo "                          glutton-storage external volume; setting it deploys glutton-storage."
   echo "  --wait-timeout SECONDS  Forwarded to workloads/deploy.sh. The timeout in seconds for"
   echo "                          waiting for the workers to be ready (default: 300)"
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
@@ -88,8 +89,8 @@ while [[ "$#" -gt 0 ]]; do
     --actor-cpu=*) ACTOR_CPU="${1#*=}" ;;
     --worker-memory) shift; WORKER_MEMORY="$1" ;;
     --worker-memory=*) WORKER_MEMORY="${1#*=}" ;;
-    --storage-class-name) shift; STORAGE_CLASS_NAME="$1" ;;
-    --storage-class-name=*) STORAGE_CLASS_NAME="${1#*=}" ;;
+    --external-volume-class) shift; EXTERNAL_VOLUME_CLASS="$1" ;;
+    --external-volume-class=*) EXTERNAL_VOLUME_CLASS="${1#*=}" ;;
     --wait-timeout) shift; WAIT_TIMEOUT_SECS="$1" ;;
     --wait-timeout=*) WAIT_TIMEOUT_SECS="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
@@ -134,8 +135,8 @@ if [[ "${action}" == "deploy" ]]; then
   if [[ -n "${WORKER_MEMORY}" ]]; then
     workload_args+=(--worker-memory "${WORKER_MEMORY}")
   fi
-  if [[ -n "${STORAGE_CLASS_NAME}" ]]; then
-    workload_args+=(--storage-class-name "${STORAGE_CLASS_NAME}")
+  if [[ -n "${EXTERNAL_VOLUME_CLASS}" ]]; then
+    workload_args+=(--external-volume-class "${EXTERNAL_VOLUME_CLASS}")
   fi
   if [[ -n "${WAIT_TIMEOUT_SECS}" ]]; then
     workload_args+=(--wait-timeout "${WAIT_TIMEOUT_SECS}")

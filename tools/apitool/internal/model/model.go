@@ -146,8 +146,8 @@ func (m Message) IsResource() bool {
 type ResourceAnnotation struct {
 	// Parents lists the resource types this resource is a subresource of:
 	// another resource's message name, or GlobalParent. For example,
-	// ["Global", "Atespace"] for AccessPolicy; empty for the top-level
-	// Actor.
+	// ["Global", "Atespace", "ExternalVolumeClass"] for AccessPolicy; empty
+	// for the top-level Actor.
 	Parents []string
 	// Singleton is true if each parent has at most one instance of this
 	// resource. For example, true for EgressPolicy.
