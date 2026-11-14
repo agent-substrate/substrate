@@ -122,6 +122,29 @@ not a local entry point. See [automation/README.md](../../benchmarking/automatio
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
+Results can use `gs://bucket/prefix`, `s3://bucket/prefix`,
+`az://container/prefix`, or a local path. For example, pass
+`--dest s3://benchmark-results/substrate` to the runner or orchestrator.
+The `runs/<name>/run_date=/run_ts=/run_tag=` layout is the same for every backend.
+Local paths inside a Job disappear with the pod unless backed by a volume.
+
+All runners use [result_store.py](../../benchmarking/result_store.py), backed by
+[obstore](https://developmentseed.org/obstore/latest/). Install
+`benchmarking/requirements.txt` to use its `list`, `cat`, and `download` commands
+from a workstation. New runners should import its `upload` function; consumers
+can use `ResultStore` to list and read paths relative to a result root.
+
+Configure credentials on the runner pod through workload identity or obstore's
+[provider configuration](https://developmentseed.org/obstore/latest/api/store/).
+For an S3-compatible service, set `AWS_ENDPOINT`, `AWS_REGION`,
+`AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`; use `AWS_ALLOW_HTTP=true` only
+for a development endpoint using HTTP. These settings must reach the Job, not
+just the orchestrator. Workstation retrieval uses the workstation's credentials.
+For Azure, `az://` names the container; set `AZURE_STORAGE_ACCOUNT_NAME` for
+the account and configure credentials using obstore's Azure environment settings.
+The generic Job templates take only the destination; supply provider settings
+through your cluster's pod configuration.
+
 Four flags control the optional post-run measurements described in
 [Benchmark output files](#benchmark-output-files):
 
@@ -673,11 +696,11 @@ To pull the step rows out of a run's results:
 
 ```bash
 RUN=<dest>/runs/<test>/run_date=<YYYY-MM-DD>/run_ts=<ts>/run_tag=<commit>
-gcloud storage cat "$RUN/stats.jsonl" | grep '"metric": "ladder_step_'
+python3 benchmarking/result_store.py cat "$RUN/stats.jsonl" | grep '"metric": "ladder_step_'
 ```
 
 `<dest>` is the orchestrator's `--dest`, and its log has the full `RUN` path
-on each `Uploaded ... -> gs://...` line.
+on each `Uploaded ... -> ...` line.
 
 ### Isolate Mode
 

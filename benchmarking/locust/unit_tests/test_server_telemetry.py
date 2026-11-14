@@ -785,6 +785,16 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(telemetry.call_args.kwargs["lag_s"], 70)
         self.assertNotIn("worker_pod_count", telemetry.call_args.kwargs)
 
+    @mock.patch.object(runner, "extract_and_record_server_telemetry")
+    @mock.patch.object(runner, "upload", side_effect=OSError("storage unavailable"))
+    @mock.patch.object(runner, "run_test", return_value=0)
+    def test_upload_failure_is_not_success(self, _run, _upload, _telemetry):
+        with mock.patch.object(sys, "argv", ARGV + ["--no-cluster-facts", "--allow-empty-stats"]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            # An uncaught upload error makes the runner process exit non-zero.
+            with self.assertRaisesRegex(OSError, "storage unavailable"):
+                runner.main()
+
     # Ladder rows follow the telemetry harvest, whose wait covers their
     # last samples, and a failure there still uploads the run.
     @mock.patch.object(runner, "upload")

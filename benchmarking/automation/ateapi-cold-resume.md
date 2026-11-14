@@ -117,13 +117,17 @@ PY
 
 $S/benchmarking/automation/venv/bin/python -u $D/run.py \
   --repo file://$S --branch $(git branch --show-current) \
-  --dest gs://<results-bucket>/<prefix> \
+  --dest s3://<results-bucket>/<prefix> \
   --tests $S/benchmarking/automation/tests.yaml \
   --test-name ateapi_cold_resume_pause_fake_smoke \
   --target-cluster-dir $D/target-clusters \
   --manifests-dir $S/benchmarking/automation/manifests \
   --junit-output $D/junit.xml 2>&1 | tee $D/orchestrator.log
 ```
+
+Configure storage credentials on the runner Job and on your workstation for
+retrieval; see [result storage](../../docs/guides/benchmarking.md#headless-automation-only).
+The example uses S3; GCS and Azure destinations work with the same commands.
 
 Keep your workstation awake for the whole run. If it suspends, the
 orchestrator pauses too, and the teardown and the next test wait for it. For
@@ -137,8 +141,11 @@ explains the per-step rows and where the run path is in the log.
 lists the files. To copy them all down:
 
 ```bash
-st=$(grep -o 'gs://[^ ]*/status.json' $D/orchestrator.log | head -1)
-mkdir -p $D/results && gcloud storage cp "${st%/status.json}/*" $D/results/
+python3 -m venv "$D/results-venv"
+"$D/results-venv/bin/pip" install -r "$S/benchmarking/requirements.txt"
+st=$(grep -Eo '(gs|s3|az)://[^ ]*/status.json' "$D/orchestrator.log" | head -1)
+"$D/results-venv/bin/python" "$S/benchmarking/result_store.py" download \
+  "${st%/status.json}" "$D/results"
 ```
 
 The capacity is the highest step whose `resume_rps` keeps up with its
