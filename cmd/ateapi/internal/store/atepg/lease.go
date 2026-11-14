@@ -116,15 +116,30 @@ func (p *Persistence) cleanupExpiredLeases(ctx context.Context) (int64, error) {
 }
 
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
-	var returnedKey string
-	err := p.pool.QueryRow(ctx, `
+	// SendBatch keeps both statements in one transaction on one connection.
+	// Refresh the TTL after the upsert has finished waiting for a row lock.
+	batch := &pgx.Batch{}
+	batch.Queue(`
 		INSERT INTO leases (key, token, expires_at)
 		VALUES ($1, $2, clock_timestamp() + make_interval(secs => $3))
 		ON CONFLICT (key) DO UPDATE
 		SET token = EXCLUDED.token,
 		    expires_at = EXCLUDED.expires_at
-		WHERE leases.expires_at <= clock_timestamp()
-		RETURNING key`, key, token, ttl.Seconds()).Scan(&returnedKey)
+		WHERE leases.expires_at <= clock_timestamp()`, key, token, ttl.Seconds())
+	batch.Queue(`
+		UPDATE leases
+		SET expires_at = clock_timestamp() + make_interval(secs => $3)
+		WHERE key = $1 AND token = $2
+		RETURNING key`, key, token, ttl.Seconds())
+	results := p.pool.SendBatch(ctx, batch)
+	_, err := results.Exec()
+	var returnedKey string
+	if err == nil {
+		err = results.QueryRow().Scan(&returnedKey)
+	}
+	if closeErr := results.Close(); closeErr != nil {
+		return false, fmt.Errorf("acquiring lease for %q: %w", key, closeErr)
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
