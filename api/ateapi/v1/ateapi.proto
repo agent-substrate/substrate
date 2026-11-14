@@ -1066,8 +1066,13 @@ message TagStatus {
   // moves between snapshots and is usable only once COMPLETED. Unset until it
   // is recorded; a tag whose creation failed first never gets one.
   //
+  // (-- Custom validation allows an update to record the snapshot once, and then
+  // only to move its durable_snapshot from PENDING to COMPLETED. --)
+  //
   // +k8s:optional
+  // +k8s:update=NoUnset
   // +k8s:subfield(durable_snapshot)=+k8s:required
+  // +k8s:customValidation
   Snapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
@@ -1075,6 +1080,7 @@ message TagStatus {
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string actor_template_uid = 2;
 }
 
@@ -1097,6 +1103,7 @@ message Tag {
   // status is set by the control plane; it is ignored on write.
   //
   // +k8s:optional
+  // +k8s:update=NoUnset
   TagStatus status = 2;
 
   // scope controls who may create an Actor from this tag.

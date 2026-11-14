@@ -1545,53 +1545,6 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}
 	})
 
-	t.Run("Tag_ImmutableFields", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
-		tag := storeTag(t, s, newTestInProgressTag("production", actor))
-
-		tests := []struct {
-			name   string
-			mutate func(*ateapi.Tag)
-		}{
-			{
-				name: "snapshot uri",
-				mutate: func(toUpdate *ateapi.Tag) {
-					toUpdate.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://private/elsewhere"
-				},
-			},
-			{
-				name: "snapshot content scope",
-				mutate: func(toUpdate *ateapi.Tag) {
-					toUpdate.Status.Snapshot.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-				},
-			},
-			{
-				name: "clearing the snapshot",
-				mutate: func(toUpdate *ateapi.Tag) {
-					toUpdate.Status.Snapshot = nil
-				},
-			},
-			{
-				name:   "actor template uid",
-				mutate: func(toUpdate *ateapi.Tag) { toUpdate.Status.ActorTemplateUid = "other-template-uid" },
-			},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
-					tt.mutate(toUpdate)
-					return nil
-				})
-				if !errors.Is(err, store.ErrImmutableField) {
-					t.Errorf("UpdateTag error = %v, want one matching store.ErrImmutableField", err)
-				}
-			})
-		}
-	})
-
 	t.Run("Tag_RecordSnapshotAfterReserve", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -1616,14 +1569,6 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}
 		if diff := cmp.Diff(pending, recorded.GetStatus().GetSnapshot(), protocmp.Transform()); diff != "" {
 			t.Errorf("recorded snapshot mismatch (-want +got):\n%s", diff)
-		}
-
-		// Once recorded, the snapshot is fixed like any other.
-		if _, err := s.UpdateTag(ctx, tagRef, store.PreconditionFrom(recorded), func(toUpdate *ateapi.Tag) error {
-			toUpdate.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://private/elsewhere"
-			return nil
-		}); !errors.Is(err, store.ErrImmutableField) {
-			t.Errorf("rewriting a recorded snapshot = %v, want one matching store.ErrImmutableField", err)
 		}
 	})
 

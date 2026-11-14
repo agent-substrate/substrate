@@ -436,3 +436,33 @@ func TestUpdateTag_PendingTag(t *testing.T) {
 		t.Errorf("stored scope = %v, want %v: the rejected update published a pending tag", got, want)
 	}
 }
+
+// TestUpdateTagStatus checks that ServiceImpl lets a write complete a pending
+// tag's snapshot, and rejects writes that repoint it.
+func TestUpdateTagStatus(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+	impl := newServiceImpl(persistence, nil)
+
+	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
+	tag := storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, "v1", actor))
+	ref := resources.TagRefFromTag(tag)
+	repoint := func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot.DurableSnapshot.Object.SnapshotUri += "-elsewhere"
+		return nil
+	}
+
+	if _, err := impl.UpdateTag(ctx, ref, store.PreconditionFrom(tag), repoint); apierror.Code(err) != codes.InvalidArgument {
+		t.Errorf("UpdateTag repointing the snapshot: error = %v, want code InvalidArgument", err)
+	}
+	if _, err := impl.MarkTagForDeletion(ctx, ref, store.OptionalPrecondition{UID: tag.GetMetadata().GetUid(), Version: tag.GetMetadata().GetVersion()}, repoint); apierror.Code(err) != codes.InvalidArgument {
+		t.Errorf("MarkTagForDeletion repointing the snapshot: error = %v, want code InvalidArgument", err)
+	}
+	if _, err := impl.UpdateTag(ctx, ref, store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+		return nil
+	}); err != nil {
+		t.Errorf("UpdateTag completing the snapshot failed: %v", err)
+	}
+}

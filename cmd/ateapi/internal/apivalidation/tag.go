@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -86,4 +87,22 @@ func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Opera
 	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), tag.Metadata, nil)
 	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &tag.Metadata.Atespace, nil)...)
 	return errs
+}
+
+// ValidateCustom_TagStatus_Snapshot allows an update to record status.snapshot
+// once, and then only to move its durable_snapshot from PENDING to COMPLETED. A
+// tag never moves between snapshots.
+func ValidateCustom_TagStatus_Snapshot(_ context.Context, op operation.Operation, fldPath *field.Path, value, oldValue *ateapi.Snapshot) field.ErrorList {
+	if op.Type != operation.Update || oldValue == nil || proto.Equal(value, oldValue) {
+		return nil
+	}
+	if oldValue.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING &&
+		value.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
+		completed := proto.CloneOf(oldValue)
+		completed.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+		if proto.Equal(completed, value) {
+			return nil
+		}
+	}
+	return field.ErrorList{field.Forbidden(fldPath, "may only change durable_snapshot.state from PENDING to COMPLETED")}
 }
