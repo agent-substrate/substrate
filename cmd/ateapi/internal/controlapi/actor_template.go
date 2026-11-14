@@ -128,7 +128,7 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapi.Delete
 }
 
 func (s *ServiceImpl) MarkActorTemplateForDeletion(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.OptionalPrecondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
-	return s.store.MarkActorTemplateForDeletion(ctx, templateRef, precondition, mutate)
+	return s.store.MarkActorTemplateForDeletion(ctx, templateRef, precondition, validatedActorTemplateMutation(ctx, mutate))
 }
 
 func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.OptionalPrecondition) (*ateapi.ActorTemplate, error) {
@@ -137,10 +137,26 @@ func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resou
 }
 
 func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
-	// ActorTemplates are immutable to clients: there is no update RPC, and
-	// the only writer is the template reconciler, which updates status. The
-	// store enforces metadata immutability, so this layer has nothing to add.
-	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
+	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, validatedActorTemplateMutation(ctx, mutate))
+}
+
+// validatedActorTemplateMutation wraps mutate so the ActorTemplate it writes is
+// validated as an update of the stored ActorTemplate. There is no update RPC
+// for ActorTemplates, so only the server mutates them, and a validation
+// failure is an internal error.
+func validatedActorTemplateMutation(ctx context.Context, mutate func(*ateapi.ActorTemplate) error) func(*ateapi.ActorTemplate) error {
+	return func(toUpdate *ateapi.ActorTemplate) error {
+		oldVal := proto.CloneOf(toUpdate)
+		if mutate != nil {
+			if err := mutate(toUpdate); err != nil {
+				return err
+			}
+		}
+		if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), toUpdate, oldVal); len(errs) > 0 {
+			return resources.ToInternalError(errs)
+		}
+		return nil
+	}
 }
 
 // actorTemplateGetter is the storage subset template resolution needs.

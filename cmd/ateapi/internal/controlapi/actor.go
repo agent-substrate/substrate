@@ -317,8 +317,10 @@ func (s *ServiceImpl) validatedActorMutation(ctx context.Context, mutate func(*a
 	return func(toUpdate *ateapi.Actor) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
-		if err := mutate(toUpdate); err != nil {
-			return err
+		if mutate != nil {
+			if err := mutate(toUpdate); err != nil {
+				return err
+			}
 		}
 		newVal := toUpdate
 

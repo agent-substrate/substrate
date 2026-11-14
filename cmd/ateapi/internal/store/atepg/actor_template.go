@@ -69,16 +69,6 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 	return out, nil
 }
 
-func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi.ActorTemplate) error {
-	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
@@ -118,9 +108,6 @@ func (p *Persistence) updateActorTemplate(ctx context.Context, templateRef resou
 		if err := mutate(dbTemplate); err != nil {
 			return nil, err
 		}
-	}
-	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
-		return nil, err
 	}
 	if dbTemplate.Metadata == nil {
 		dbTemplate.Metadata = &ateapi.ResourceMetadata{}
