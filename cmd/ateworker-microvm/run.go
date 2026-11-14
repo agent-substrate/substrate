@@ -110,6 +110,21 @@ type runningActor struct {
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
 	workloadIDs []string
+
+	// workloadNames maps this actor's guest container ids to the actor-level
+	// container names that run under them, so events observed guest-side (the
+	// OOM kills watchOOMEvents reports) carry the name the actor spec uses.
+	// May be nil: a miss falls back to the raw container id.
+	workloadNames map[string]string
+}
+
+// workloadName resolves an actor container's name from one of its guest
+// container ids, falling back to the id itself when unknown.
+func (ra *runningActor) workloadName(id string) string {
+	if name, ok := ra.workloadNames[id]; ok && name != "" {
+		return name
+	}
+	return id
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
@@ -173,6 +188,16 @@ func workloadIDs(ctrs []actorContainer) []string {
 		ids = append(ids, c.id)
 	}
 	return ids
+}
+
+// containerNamesByID maps the guest container ids of the actor's containers to
+// the actor-level names that run under them (see runningActor.workloadNames).
+func containerNamesByID(ctrs []actorContainer) map[string]string {
+	names := make(map[string]string, len(ctrs))
+	for _, c := range ctrs {
+		names[c.id] = c.name
+	}
+	return names
 }
 
 // actorContainer is one of the actor's containers prepared for the shared micro-VM:
@@ -610,13 +635,16 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := &runningActor{chProc: chProc, vfsdProc: vfsdProc, apiSocket: apiSocket, memoryBytes: p.size.MemoryBytes, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs), workloadNames: containerNamesByID(ctrs)}
 	if err := s.tunnel.ActivateIngress(p.attribution(), s.sandboxDialer(p.actorUID)); err != nil {
 		return err
 	}
 	ra.memory.Resume(uint64(s.leafMemoryHigh(p.size.MemoryBytes)))
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
+	// Guest OOM kills are otherwise invisible: the VM keeps running and the
+	// actor stays RUNNING with no signal anywhere (issue #3615).
+	go s.watchOOMEvents(p.attribution(), ra)
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
 	// container id (see StartRootfsContainer). The goroutines read over ac for

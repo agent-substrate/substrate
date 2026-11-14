@@ -529,8 +529,9 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
-		workloadIDs: workloadIDs(ctrs),
-		guestAgent:  guestAC,
+		workloadIDs:   workloadIDs(ctrs),
+		workloadNames: containerNamesByID(ctrs),
+		guestAgent:    guestAC,
 	}
 
 	// Re-attach stdout/stderr forwarding for each container over the agent
@@ -547,6 +548,9 @@ func (s *AteWorkerService) restoreMemoryFidelity(ctx context.Context, p actorBoo
 	ra.memory.Resume(uint64(s.leafMemoryHigh(p.size.MemoryBytes)))
 	s.setRunningVM(actorUID, ra)
 	go s.watchVM(p.attribution(), p.actorDirs, ra)
+	// Restored guests keep running their containers, so guest OOM kills need
+	// watching here too (see coldBootActor, issue #3615).
+	go s.watchOOMEvents(p.attribution(), ra)
 
 	// Publish the guest to GetWorkloadStats, past the last error return above
 	// for the same reason as in coldBootActor. Same client the forwarding above
