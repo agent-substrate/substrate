@@ -37,7 +37,15 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *RPCService) CreateActor(ctx context.Context, req *ateapi.CreateActorRequest) (created *ateapi.Actor, err error) {
+func (s *RPCService) CreateActor(ctx context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error) {
+	return s.createActor(ctx, req, false)
+}
+
+func (s *RPCService) createGoldenActor(ctx context.Context, req *ateapi.CreateActorRequest) (*ateapi.Actor, error) {
+	return s.createActor(ctx, req, true)
+}
+
+func (s *RPCService) createActor(ctx context.Context, req *ateapi.CreateActorRequest, golden bool) (created *ateapi.Actor, err error) {
 	// First scrub any fields that users are not allowed to set, then fill the
 	// defaults so validation sees the final resource state.
 	inActor := req.Actor
@@ -64,6 +72,10 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapi.CreateActorReq
 
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
 
+	// The public RPC always scrubs status; only the template reconciler sets this.
+	if golden {
+		inActor.Status = &ateapi.ActorStatus{GoldenSnapshotActor: true}
+	}
 	// Handle the creation, including validation of the final stored object.
 	stored, err := s.impl.CreateActor(ctx, inActor)
 	setSpanActorAttributes(ctx, stored)
@@ -124,8 +136,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapi.ActorStatus{
-		State:           ateapi.ActorState_ACTOR_STATE_SUSPENDED,
-		ExternalVolumes: externalVolumesStatus(initVols),
+		State:               ateapi.ActorState_ACTOR_STATE_SUSPENDED,
+		GoldenSnapshotActor: inActor.GetStatus().GetGoldenSnapshotActor(),
+		ExternalVolumes:     externalVolumesStatus(initVols),
 	}
 	if sourceTag != nil {
 		// The Actor starts out borrowing the tag's snapshot rather than
@@ -227,6 +240,12 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapi.ListActorsReque
 	page, err := s.impl.ListActors(ctx, req.GetAtespace(), toStoreListOptions(req.GetOptions()))
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
+	}
+	if req.GetExcludeGoldenActors() {
+		// Preserve the cursor even if filtering leaves this page empty.
+		page.Items = slices.DeleteFunc(page.Items, func(actor *ateapi.Actor) bool {
+			return actor.GetStatus().GetGoldenSnapshotActor()
+		})
 	}
 	return &ateapi.ListActorsResponse{
 		Actors:        page.Items,

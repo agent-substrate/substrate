@@ -222,7 +222,9 @@ Rules:
 - `next_page_token` **must** be present on every List response message. It **must** be empty when there are no further pages.
 - The repeated resource field **must** use the plural form of the resource name (e.g., `actors`, not `actor`).
 - If a user provides a `page_size` above the maximum, coerce it silently. If a user provides a negative value, return `INVALID_ARGUMENT`.
-- Sorting and filtering as specified in AIP-132 are not supported.
+- General sorting and filtering as specified in AIP-132 are not supported.
+  ListActors supports the resource-specific `exclude_golden_actors` field on
+  its request to hide temporary golden snapshot actors. It defaults to false.
 - Clients must iterate over all pages until an empty `next_page_token` is returned. Clients should not assume that an empty result (i.e. len(actors) == 0) means the end of the stream.
 
 **Divergence from AIP-132:** AIP-132 puts `page_size` and `page_token` at the top level of the request. Substrate groups them in a shared `ListOptions` message, following the `DeleteOptions` pattern (section #3.5), so every List method carries the same controls with the same validation.
