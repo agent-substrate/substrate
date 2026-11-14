@@ -167,7 +167,7 @@ func defaultWorkerRuntime(class string) *ateapi.ActorSandboxRuntime {
 	return &ateapi.ActorSandboxRuntime{
 		SandboxClass: class,
 		Version: &ateapi.VersionedSandboxCompat{
-			SchemaVersion: hardware.SchemaVersionV1,
+			SchemaVersion: hardware.SchemaVersionV2,
 			Attributes: []*ateapi.AttributeEntry{
 				{Key: hardware.AttrArchitecture, Value: "amd64"},
 				{Key: hardware.AttrSandboxBundleHash, Value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},

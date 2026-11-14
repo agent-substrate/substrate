@@ -2870,7 +2870,7 @@ func runtimeFor(t *testing.T, rec *sandboxAssetsRecord) *ateletpb.ActorSandboxRu
 	return &ateletpb.ActorSandboxRuntime{
 		SandboxClass: rec.SandboxClass,
 		Version: &ateletpb.VersionedSandboxCompat{
-			SchemaVersion: hardware.SchemaVersionV1,
+			SchemaVersion: hardware.SchemaVersionV2,
 			Attributes: []*ateletpb.AttributeEntry{
 				{Key: hardware.AttrArchitecture, Value: runtime.GOARCH},
 				{Key: hardware.AttrSandboxBundleHash, Value: hash},
