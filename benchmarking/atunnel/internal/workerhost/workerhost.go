@@ -112,6 +112,8 @@ func (h *Host) host(ctx context.Context, attribution resources.ActorAttribution,
 		Veth:       true,
 		EgressPort: h.tunnel.EgressPort,
 		DNSPolicy:  h.tunnel.ActorEgressPolicy(attribution),
+
+		DNSExchanger: h.tunnel.ActorDNSExchanger(attribution),
 	}, h.tunnel.Egress, h.tunnel.DNSRelay)
 	if err != nil {
 		return err

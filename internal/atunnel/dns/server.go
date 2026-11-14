@@ -31,6 +31,9 @@ type serverConfig struct {
 	policy PolicySource
 	// metrics counts the policy decisions. Nil records nothing.
 	metrics *metrics
+	// exchanger, when set, receives every valid query in place of the
+	// upstreams, and policy is not consulted.
+	exchanger Exchanger
 }
 
 type netConn struct {
@@ -62,6 +65,9 @@ func newServer(
 	config *serverConfig,
 	netC *netConn,
 ) (*Server, error) {
+	if config.exchanger != nil {
+		return newDoHServer(ctx, config.exchanger, netC), nil
+	}
 	if netC.egressUDP == nil {
 		egressUDP, err := net.ListenPacket("udp", ":0")
 		if err != nil {
@@ -109,6 +115,30 @@ func newServer(
 	}()
 
 	return s, nil
+}
+
+// newDoHServer starts a server that exchanges every query with the egress
+// PEP. It opens no upstream sockets.
+func newDoHServer(ctx context.Context, exchanger Exchanger, netC *netConn) *Server {
+	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
+	s := &Server{
+		stopServing: stopServing,
+		n:           netC,
+		limiter:     newLimiter(),
+	}
+	doh := newDoHHandler(netC.udp, netC.tcpListener, s.limiter, exchanger)
+
+	s.serving.Go(func() {
+		if err := doh.serveUDP(serveCtx); err != nil {
+			slog.WarnContext(ctx, "Actor DNS socket stopped", slog.Any("err", err))
+		}
+	})
+	s.serving.Go(func() {
+		if err := doh.serveTCP(serveCtx); err != nil {
+			slog.WarnContext(ctx, "Actor DNS listener stopped", slog.Any("err", err))
+		}
+	})
+	return s
 }
 
 // Stop cancels in-flight queries and connections, closes the sockets, and
