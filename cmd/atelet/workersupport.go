@@ -363,8 +363,9 @@ func (s *workerSupportServer) ReportActorCrashed(ctx context.Context, req *atele
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
 		},
-		ActorUid: req.GetActorUid(),
-		Message:  req.GetMessage(),
+		ActorUid:     req.GetActorUid(),
+		Message:      req.GetMessage(),
+		ExecutionUid: req.GetExecutionUid(),
 	}); err != nil {
 		return nil, err
 	}

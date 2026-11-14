@@ -41,7 +41,7 @@ func (s *Server) ReportActorCrashed(ctx context.Context, req *ateapi.ReportActor
 	if err := s.authorizeHostedActor(ctx, caller, workerName, actorRef, req.GetActorUid()); err != nil {
 		return nil, err
 	}
-	actor, err := s.control.CrashActorReportedByWorker(ctx, actorRef, req.GetActorUid(), workerName, req.GetMessage())
+	actor, err := s.control.CrashActorReportedByWorker(ctx, actorRef, req.GetActorUid(), workerName, req.GetExecutionUid(), req.GetMessage())
 	if err != nil {
 		return nil, err
 	}

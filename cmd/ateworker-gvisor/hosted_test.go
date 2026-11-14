@@ -43,7 +43,7 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)}, 0)
+			_, _, _ = s.admitActor(resources.ActorAttribution{UID: fmt.Sprintf("actor-%d", i)}, "", 0)
 		}()
 	}
 	wg.Wait()
@@ -56,20 +56,25 @@ func TestAdmitActorEnforcesTheCeilingConcurrently(t *testing.T) {
 // Re-admitting an actor that is already hosted keeps its slot, so it succeeds
 // on a full worker and a retry cannot lose its place to another actor.
 func TestAdmitActorKeepsAHostedActorsSlot(t *testing.T) {
+	const firstUID = "754f3dc4-2996-41c4-8e5a-a1b79e6678d5"
+	const nextUID = "a6ba5a75-ad36-48fc-ad2e-e845527a25b1"
 	s := &AteWorkerService{actors: map[string]*hostedActor{}, maxActors: 1}
-	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0)
+	first, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, firstUID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, 0)
+	again, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-a"}, nextUID, 0)
 	if err != nil {
 		t.Fatalf("re-admitting a hosted actor on a full worker: %v", err)
+	}
+	if first.executionUID != firstUID || again.executionUID != nextUID {
+		t.Errorf("execution UIDs = %q, %q, want %q, %q", first.executionUID, again.executionUID, firstUID, nextUID)
 	}
 	if again == first {
 		t.Error("re-admission kept the old record; readers could not tell the incarnations apart")
 	}
 	// ResourceExhausted, so the control plane treats it as a capacity miss.
-	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, 0); apierror.Code(err) != codes.ResourceExhausted {
+	if _, _, err := s.admitActor(resources.ActorAttribution{UID: "actor-b"}, "", 0); apierror.Code(err) != codes.ResourceExhausted {
 		t.Errorf("admitting past the ceiling: got %v, want ResourceExhausted", err)
 	}
 	if got := len(s.hostedActors()); got != 1 {
@@ -85,7 +90,7 @@ func TestDrainingActorsStillCountAgainstTheCeiling(t *testing.T) {
 		maxActors: 1,
 		draining:  1,
 	}
-	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, nil, 0); err == nil {
+	if _, err := s.hostActor(context.Background(), resources.ActorAttribution{UID: "actor-a"}, "", nil, 0); err == nil {
 		t.Error("admitted an actor while a draining one still held the only place")
 	}
 }
