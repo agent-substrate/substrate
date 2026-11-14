@@ -177,6 +177,15 @@ type actorSnapshotsRecord struct {
 	// (CommitLocal or CommitDurable). While it is unset, the actor's
 	// directories and volumes are still that Checkpoint's to clean up.
 	Started bool `json:"started,omitempty"`
+	// Prune names the local snapshots a commit superseded that a prune has not
+	// deleted yet, oldest first. Each is listed in the save that records the
+	// commit superseding it, so a state file that lags memory never lists a
+	// snapshot a later commit recorded, and an atelet restart finishes the
+	// prune. A prune deletes only these, never a snapshot it does not list,
+	// and a listed snapshot is never committed again: commits refuse an older
+	// generation, and a retried Checkpoint is answered from the snapshot it
+	// committed rather than checkpointed again.
+	Prune []string `json:"prune,omitempty"`
 	// ReportDueSince is when the latest change atelet owes a report of (a
 	// new LatestDurable, or local snapshots cleared by a detach) finished.
 	// Zero once no report is due: the control plane acknowledged or refused
@@ -220,9 +229,13 @@ type actorSnapshots struct {
 	op *actorOp
 	// hold records the Run, Restore, Checkpoint, PromoteSnapshot, or Terminate
 	// of the actor in progress on this node. While set, atelet does not detach
-	// the actor or report its state (nor start a background upload when
-	// hold.blocksUploads), and the entry stays in memory.
+	// or prune the actor or report its state (nor start a background upload
+	// when hold.blocksUploads), and the entry stays in memory.
 	hold holdKind
+	// pruning is the actor's prune in progress, or nil. A prune worker,
+	// BeginCheckpoint, or BeginStart runs it. The entry stays in memory while
+	// pruning is set.
+	pruning *pruneOp
 	// reportDeferred is set when a report of the actor's state is held back
 	// while hold is set, so holdLocked queues it once the RPC ends.
 	reportDeferred bool
@@ -339,19 +352,16 @@ func (a *actorSnapshots) keepUploading() bool {
 }
 
 // clearSupersededUploading clears Uploading when keepUploading reports it is
-// no longer kept. It returns the local copy to delete, or nil, and whether
-// Uploading was cleared.
-func (a *actorSnapshots) clearSupersededUploading() (removed *SnapshotRef, cleared bool) {
+// no longer kept, and reports whether it did. The commit that superseded the
+// snapshot listed its local copy for a prune (see Prune), which deletes it
+// once Uploading no longer keeps it.
+func (a *actorSnapshots) clearSupersededUploading() bool {
 	if a.Uploading == nil || a.keepUploading() {
-		return nil, false
+		return false
 	}
-	old := a.Uploading
 	a.Uploading = nil
 	a.uploadingFailed = false
-	if !a.localSuperseded(old) {
-		return nil, true
-	}
-	return old, true
+	return true
 }
 
 // nextUploadTarget returns the snapshot the next background upload makes
@@ -420,14 +430,6 @@ func (a *actorSnapshots) supersededUpload() *actorOp {
 		return nil
 	}
 	return a.op
-}
-
-// localInUse reports whether a Run or Restore of the actor in progress may use
-// a superseded local snapshot. A Restore may read any local snapshot in place;
-// a Checkpoint or PromoteSnapshot only reads LatestLocal, which is not
-// superseded until the new snapshot is committed, and a Terminate reads none.
-func (a *actorSnapshots) localInUse() bool {
-	return a.hold == holdStart
 }
 
 // runningDetach returns the snapshot an opDetach goroutine is currently

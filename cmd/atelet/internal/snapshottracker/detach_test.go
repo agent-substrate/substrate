@@ -269,7 +269,7 @@ func TestTrackerDetach(t *testing.T) {
 		{
 			name: "refused after a start",
 			setup: func(t *testing.T, tr *Tracker) {
-				end, err := tr.BeginStart(t.Context(), trackedActorUID)
+				_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 				if err != nil {
 					t.Fatalf("beginStart: %v", err)
 				}
@@ -280,7 +280,7 @@ func TestTrackerDetach(t *testing.T) {
 		{
 			name: "refused while a start is in progress",
 			setup: func(t *testing.T, tr *Tracker) {
-				end, err := tr.BeginStart(t.Context(), trackedActorUID)
+				_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 				if err != nil {
 					t.Fatalf("beginStart: %v", err)
 				}
@@ -392,7 +392,7 @@ func TestTrackerDetachTimer(t *testing.T) {
 	tr := newIdleTestTracker(t, store)
 	tr.CommitLocal(trackedActorUID, testRef("s1", 1, tr.clock.Now()))
 
-	endStart, err := tr.BeginStart(t.Context(), trackedActorUID)
+	_, endStart, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 	if err != nil {
 		t.Fatalf("beginStart: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 		t.Fatal("no detach scheduled after the checkpoint")
 	}
 
-	if _, err := tr.BeginStart(t.Context(), trackedActorUID); apierror.Code(err) != codes.Unavailable {
+	if _, _, err := tr.BeginStart(t.Context(), trackedActorUID, ""); apierror.Code(err) != codes.Unavailable {
 		t.Fatalf("beginStart = %v, want Unavailable", err)
 	}
 	if got := detachDueOf(tr, trackedActorUID); !got.Equal(due) {
@@ -466,7 +466,7 @@ func TestTrackerStartFailsIfItCannotSave(t *testing.T) {
 	if err := os.Remove(stateFile); err != nil {
 		t.Fatal(err)
 	}
-	end, err := tr.BeginStart(t.Context(), trackedActorUID)
+	_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 	if err != nil {
 		t.Fatalf("beginStart once saves work: %v", err)
 	}
@@ -485,7 +485,8 @@ func TestTrackerWaitsForDetach(t *testing.T) {
 		{
 			name: "BeginStart",
 			begin: func(tr *Tracker, ctx context.Context, uid string) (func(), error) {
-				return tr.BeginStart(ctx, uid)
+				_, end, err := tr.BeginStart(ctx, uid, "")
+				return end, err
 			},
 		},
 		{
@@ -715,7 +716,7 @@ func TestTrackerHoldsFirstCheckpoint(t *testing.T) {
 func TestTrackerLiftsBackoffWithDetach(t *testing.T) {
 	for name, drop := range map[string]func(t *testing.T, tr *Tracker){
 		"start": func(t *testing.T, tr *Tracker) {
-			end, err := tr.BeginStart(t.Context(), trackedActorUID)
+			_, end, err := tr.BeginStart(t.Context(), trackedActorUID, "")
 			if err != nil {
 				t.Fatalf("beginStart: %v", err)
 			}

@@ -42,17 +42,18 @@ type Store interface {
 // locally, and the latest one confirmed in object storage. State reports them,
 // BeginCheckpoint and BeginPromote reject a stale generation before Checkpoint
 // or PromoteSnapshot does any work, and commits never replace a snapshot with
-// an older generation. It uploads and detaches them in the background.
+// an older generation. It uploads and detaches them in the background, and
+// prunes the local snapshots a commit superseded.
 //
 // Callers serialize lifecycle RPCs (Run, Restore, Checkpoint, PromoteSnapshot,
 // DetachActor, and Terminate) per actor before calling Tracker, so at most one
 // RPC runs for an actor at a time.
 //
-// Background work runs off two delaying workqueues of actor UIDs, one for
-// uploads and one for detaches, each drained by a fixed pool of workers of its
-// own, so slow uploads cannot hold up a due detach, nor detaches an upload.
-// Each change to an actor's state queues the actor on each queue for when its
-// next upload or detach is due:
+// Background work runs off three delaying workqueues of actor UIDs, one for
+// uploads, one for detaches, and one for prunes, each drained by a fixed pool
+// of workers of its own, so slow uploads cannot hold up a due detach or prune,
+// nor detaches an upload. Each change to an actor's state queues the actor on
+// each queue for when its next upload, detach, or prune is due:
 //  1. A checkpoint records the new snapshot as LatestLocal with CommitLocal,
 //     and schedules the actor's detach detachDelay after the checkpoint. An
 //     immediate checkpoint records its upload with CommitDurable first. A
@@ -78,7 +79,16 @@ type Store interface {
 //  5. An upload leaves LatestLocal on disk so a same-node Restore still
 //     reads it. A detach, in the background or via Detach, makes LatestLocal
 //     durable and then deletes all the actor's local snapshots and its other
-//     files on this node except snapshot-state.json.
+//     files on this node except snapshot-state.json. A commit
+//     lists the local snapshot it supersedes (Prune), in the same save, and a
+//     prune worker deletes the listed snapshots once no upload reads them,
+//     off the Checkpoint path, whose reply does not wait for the disk. A
+//     prune deletes only listed snapshots, so a state file that lags memory
+//     never costs a snapshot it does not name. A Checkpoint that finds a
+//     prune still due runs it before it writes, so an actor whose disk falls
+//     behind waits on its own pause rather than pile snapshots up. A prune
+//     that fails leaves the snapshot listed for the actor's next state
+//     change, Checkpoint, Detach, or Terminate to try again.
 //  6. A Run or Restore unschedules the actor's detach as it begins
 //     (BeginStart), and saves that before the workload can start, so atelet
 //     does not detach an actor whose start has begun, even after a restart or
@@ -86,7 +96,8 @@ type Store interface {
 //     again. A background detach that comes due while a Run, Restore,
 //     Checkpoint, PromoteSnapshot, or Terminate is in progress (BeginStart,
 //     BeginCheckpoint, BeginPromote, or BeginTerminate) waits for it to end,
-//     which queues the actor again unless Terminate forgot it.
+//     which queues the actor again unless Terminate forgot it. So does a
+//     prune, since a Restore may read the superseded copy it would delete.
 //  7. A background upload that records a new LatestDurable, or a background
 //     detach that records one or clears LatestLocal, makes a report of the
 //     actor's state due (ReportDueSince), saved with the change so that it
@@ -110,39 +121,45 @@ type Store interface {
 // explicit control-plane call does not wait behind other actors' background
 // work, and its detach finishes even if the caller leaves.
 //
-// The first table shows how each RPC on an actor treats the actor's upload or
-// detach in progress, and its report due. The RPC waits for the operation to
-// end as it begins (BeginStart, BeginCheckpoint, BeginPromote, or Detach),
-// cancels it and waits for it to stop, or leaves it alone (-). A Checkpoint or
-// PromoteSnapshot cancels once it commits its snapshot, and Terminate cancels
-// in Forget, once the workload is gone. A canceled report is neither sent nor
-// retried, though an attempt under way finishes.
+// The first table shows how each RPC on an actor treats the actor's upload,
+// detach, or prune in progress, and its report due. The RPC waits for the
+// operation to end as it begins (BeginStart, BeginCheckpoint, BeginPromote, or
+// Detach), cancels it and waits for it to stop, or leaves it alone (-). A
+// Checkpoint or PromoteSnapshot cancels once it commits its snapshot, and
+// Terminate cancels in Forget, once the workload is gone. A canceled report is
+// neither sent nor retried, though an attempt under way finishes.
 //
-//	RPC                   upload in progress  detach in progress  report due
-//	Run, Restore          -                   waits               -
-//	deferred Checkpoint   -                   waits               cancels
-//	immediate Checkpoint  cancels             waits               cancels
-//	PromoteSnapshot       waits if the same   waits               cancels if a
-//	                      snapshot, else                          local snapshot
-//	                      cancels                                 is kept
-//	DetachActor           waits               waits               keeps, and its
-//	                                                              detach makes
-//	                                                              one due
-//	Terminate             cancels             cancels             cancels
+//	RPC                   upload        detach   prune    report due
+//	Run, Restore          -             waits    -        -
+//	deferred Checkpoint   -             waits    waits    cancels
+//	immediate Checkpoint  cancels       waits    waits    cancels
+//	PromoteSnapshot       waits if the  waits    -        cancels if a
+//	                      same snapshot,                  local snapshot
+//	                      else cancels                    is kept
+//	DetachActor           waits         waits    waits    keeps, and its
+//	                                                      detach makes
+//	                                                      one due
+//	Terminate             cancels       cancels  cancels  cancels
 //
-// The second table shows whether an upload, detach, or report of the actor
-// that comes due while an RPC or background work of the actor runs begins, or
-// waits for it to end. An upload or detach is the actor's one operation in
-// progress, whether a worker or DetachActor runs it.
+// A Restore does not read a snapshot listed to prune in place (see
+// BeginStart); it reads the durable copy instead.
 //
-//	running               upload due          detach due          report due
-//	Run, Restore          begins              waits               waits
-//	deferred Checkpoint   begins              waits               waits
-//	immediate Checkpoint  waits               waits               waits
-//	PromoteSnapshot       waits               waits               waits
-//	Terminate             waits               waits               waits
-//	upload or detach      waits               waits               begins
-//	report                begins              begins              waits
+// The second table shows whether an upload, detach, prune, or report of the
+// actor that comes due while an RPC or background work of the actor runs
+// begins, or waits for it to end. An upload or detach is the actor's one
+// operation in progress, whether a worker or DetachActor runs it; a prune runs
+// beside an upload, but not beside a detach.
+//
+//	running               upload due  detach due  prune due  report due
+//	Run, Restore          begins      waits       waits      waits
+//	deferred Checkpoint   begins      waits       waits      waits
+//	immediate Checkpoint  waits       waits       waits      waits
+//	PromoteSnapshot       waits       waits       waits      waits
+//	Terminate             waits       waits       waits      waits
+//	upload                waits       waits       begins     begins
+//	detach                waits       waits       waits      begins
+//	prune                 begins      waits       waits      begins
+//	report                begins      begins      begins     waits
 type Tracker struct {
 	// ctx bounds background work, and shuts the queues down when it ends.
 	ctx context.Context
@@ -202,6 +219,13 @@ type Tracker struct {
 	// reporting holds the queue and settings for reporting snapshot state
 	// changes to the control plane.
 	reporting reportQueue
+	// pruning holds the queue and settings for deleting superseded local
+	// snapshots.
+	pruning pruneQueue
+	// removeLocalSnapshot deletes one local snapshot of an actor, as a prune
+	// does: removeLocalCheckpoint, unless a test replaces it with one that
+	// blocks or fails.
+	removeLocalSnapshot func(ctx context.Context, actorUID, name string) error
 	// workersDone counts the workers, and the detaches Detach calls started,
 	// still running.
 	workersDone sync.WaitGroup
@@ -221,7 +245,7 @@ type Tracker struct {
 	// actors maps actorUID to the entries requeueLocked keeps in memory (see
 	// requeueLocked). requeueLocked drops any other entry, and findLocked then
 	// reads the state from the file. Read and change it through findLocked,
-	// findOrAddLocked, addLocked, dropLocked, and localInUseLocked.
+	// findOrAddLocked, addLocked, and dropLocked.
 	actors map[string]*actorSnapshots
 }
 
@@ -339,6 +363,8 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 		retries:             workqueue.NewTypedItemExponentialFailureRateLimiter[string](snapshotRetryDelay, maxSnapshotRetryDelay),
 		workers:             [numOpKinds]int{opUpload: DefaultUploadWorkers, opDetach: DefaultDetachWorkers},
 		reporting:           newReportQueue(clk),
+		pruning:             newPruneQueue(),
+		removeLocalSnapshot: removeLocalCheckpoint,
 		locks:               actorlock.New(),
 		actors:              map[string]*actorSnapshots{},
 	}
@@ -357,6 +383,7 @@ func New(ctx context.Context, store Store, clk clock.WithTicker, opts ...Option)
 			q.ShutDown()
 		}
 		t.reporting.queue.ShutDown()
+		t.pruning.queue.ShutDown()
 	})
 	return t
 }
@@ -407,16 +434,6 @@ func (t *Tracker) dropLocked(actorUID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.actors, actorUID)
-}
-
-// localInUseLocked reports whether a Run or Restore of the actor in progress
-// may use a superseded local snapshot (see actorSnapshots.localInUse). An
-// entry with one stays in memory, so this never reads the snapshot state file.
-func (t *Tracker) localInUseLocked(actorUID string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	a := t.actors[actorUID]
-	return a != nil && a.localInUse()
 }
 
 // uploadDueLocked returns when the actor's background upload is due, as
