@@ -51,6 +51,7 @@ Public APIs, one directory per API and version: `api/<name>/<version>`, and
 |---|---|
 | `api/ateapi/v1` | Control-plane gRPC API |
 | `api/credprovider/v1` | Credential provider plugin gRPC API |
+| `api/hook/v1` | Lifecycle hook plugin gRPC API |
 | `api/objectstore/v1` | Object store plugin gRPC API |
 | `api/infra/k8s/ate/v1` | Kubernetes CRD types, group `ate.dev` |
 
