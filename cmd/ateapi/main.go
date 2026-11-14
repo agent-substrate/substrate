@@ -117,6 +117,8 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
+
+	authzPureGoShortCircuit = pflag.Bool("authz-pure-go-short-circuit", false, "Short-circuit immutable bootstrap owner and system role authorization checks in pure Go without OpenFGA.")
 )
 
 func main() {
@@ -261,7 +263,7 @@ func main() {
 		IngressRouterSPIFFEID:    *ingressRouterSPIFFEID,
 		AteletSPIFFEID:           ateletSPIFFEID,
 		APIServerSidecarSPIFFEID: *apiServerSidecarSPIFFEID,
-	})
+	}, authz.WithPureGoShortCircuit(*authzPureGoShortCircuit))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}

@@ -243,7 +243,7 @@ type SystemPrincipals struct {
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
 // check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals) (*Authorizer, *PolicyManager, error) {
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, system SystemPrincipals, opts ...Option) (*Authorizer, *PolicyManager, error) {
 	owners, err := parseBootstrapOwners(bootstrapOwners)
 	if err != nil {
 		return nil, nil, err
@@ -257,11 +257,15 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 		return nil, nil, err
 	}
 	authorizer := &Authorizer{
-		fgaServer:        fgaServer,
-		storeID:          storeID,
-		modelID:          modelID,
-		bootstrapOwners:  owners,
-		systemPrincipals: systemPrincipals,
+		fgaServer:          fgaServer,
+		storeID:            storeID,
+		modelID:            modelID,
+		bootstrapOwners:    owners,
+		systemPrincipals:   systemPrincipals,
+		pureGoShortCircuit: false,
+	}
+	for _, opt := range opts {
+		opt(authorizer)
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,
