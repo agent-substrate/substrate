@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -508,5 +509,158 @@ func testSetupBundleRootfsRepairsWhiteoutParentUnderSetgidDir(t *testing.T) {
 	assertOwner(t, filepath.Join(rootfs, "srv/shared/docs"), 1000, 1000, os.ModeDir|os.ModeSetgid|0o770)
 	if _, err := os.Lstat(filepath.Join(rootfs, "srv/shared/docs/old")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("whited-out srv/shared/docs/old: Lstat error %v, want ErrNotExist", err)
+	}
+}
+
+func BenchmarkUnmountAllUnder(b *testing.B) {
+	bundlesDir := filepath.Join(b.TempDir(), "bundles")
+	for _, sub := range []string{
+		filepath.Join(bundlesDir, "pause", "rootfs", "bin"),
+		filepath.Join(bundlesDir, "pause", "upper", "tmp"),
+		filepath.Join(bundlesDir, "pause", "work", "work"),
+		filepath.Join(bundlesDir, "main", "rootfs", "etc"),
+		filepath.Join(bundlesDir, "main", "upper", "var", "log"),
+		filepath.Join(bundlesDir, "main", "work", "work"),
+		filepath.Join(bundlesDir, "main", "volumes", "vol0", "bin"),
+		filepath.Join(bundlesDir, "main", "volumes", "vol1", "lib"),
+	} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			b.Fatalf("MkdirAll(%q): %v", sub, err)
+		}
+	}
+	for i := range 32 {
+		p := filepath.Join(bundlesDir, "main", "upper", "var", "log", fmt.Sprintf("file-%02d.log", i))
+		if err := os.WriteFile(p, []byte("log"), 0o644); err != nil {
+			b.Fatalf("WriteFile(%q): %v", p, err)
+		}
+	}
+	for _, f := range []string{
+		filepath.Join(bundlesDir, "pause", "config.json"),
+		filepath.Join(bundlesDir, "main", "config.json"),
+		filepath.Join(bundlesDir, "main", OverlaySpecFileName),
+	} {
+		if err := os.WriteFile(f, []byte("{}"), 0o644); err != nil {
+			b.Fatalf("WriteFile(%q): %v", f, err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := UnmountAllUnder(bundlesDir); err != nil {
+			b.Fatalf("UnmountAllUnder: %v", err)
+		}
+	}
+}
+
+func TestMountPointsUnderStatx_MissingAndUnmountedBundles(t *testing.T) {
+	pts, err := mountPointsUnderStatx(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || len(pts) != 0 {
+		t.Fatalf("mountPointsUnderStatx(missing) = %v, %v; want empty, nil", pts, err)
+	}
+
+	bundlesDir := filepath.Join(t.TempDir(), "bundles")
+	// Include container and volume names matching bundle scratch directories to
+	// ensure pruning only applies inside a bundle directory.
+	for _, sub := range []string{
+		filepath.Join(bundlesDir, "upper", "rootfs"),
+		filepath.Join(bundlesDir, "work", "rootfs"),
+		filepath.Join(bundlesDir, "rootfs", "rootfs"),
+		filepath.Join(bundlesDir, "volumes", "rootfs"),
+		filepath.Join(bundlesDir, "main", "upper", "nested"),
+		filepath.Join(bundlesDir, "main", "work", "nested"),
+		filepath.Join(bundlesDir, "main", "rootfs", "etc"),
+		filepath.Join(bundlesDir, "main", "volumes", "upper"),
+		filepath.Join(bundlesDir, "main", "volumes", "work"),
+	} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, cfg := range []string{"upper", "work", "rootfs", "volumes", "main"} {
+		if err := os.WriteFile(filepath.Join(bundlesDir, cfg, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("/proc", filepath.Join(bundlesDir, "main", "proc-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	pts, err = mountPointsUnderStatx(bundlesDir)
+	if err != nil || len(pts) != 0 {
+		t.Fatalf("mountPointsUnderStatx(unmounted bundles) = %v, %v; want empty, nil", pts, err)
+	}
+}
+
+// Stacked mounts and mounts hidden beneath another mount require multiple passes
+// of UnmountAllUnder; container and volume names colliding with upper/work/rootfs/volumes
+// must still be discovered and detached.
+func TestUnmountAllUnder_StackedMountsAndBundleNameCollisions(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+
+	layer := t.TempDir()
+	writeLayer(t, layer, map[string]string{"marker.txt": "mounted"}, nil)
+
+	bundlesDir := filepath.Join(t.TempDir(), "bundles")
+	t.Cleanup(func() { _ = UnmountAllUnder(bundlesDir) })
+
+	for _, cname := range []string{"pause", "upper", "work", "rootfs", "volumes"} {
+		bdir := filepath.Join(bundlesDir, cname)
+		if err := os.MkdirAll(bdir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteSpec(bdir, &OverlaySpec{
+			Layers: []string{layer},
+			ImageVolumes: []ImageVolumeOverlay{
+				{Name: "upper", Layers: []string{layer}},
+				{Name: "work", Layers: []string{layer}},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := SetupBundleRootfs(bdir); err != nil {
+			t.Fatalf("SetupBundleRootfs(%s): %v", cname, err)
+		}
+	}
+
+	// Stack a mount over another mount that also hides an inner submount.
+	outer := filepath.Join(bundlesDir, "stacked", "outer")
+	inner := filepath.Join(outer, "inner")
+	if err := os.MkdirAll(outer, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", outer, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mount outer 1: %v", err)
+	}
+	if err := os.Mkdir(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", inner, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mount inner: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, "hidden.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", outer, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mount outer 2 (stacked): %v", err)
+	}
+
+	if err := UnmountAllUnder(bundlesDir); err != nil {
+		t.Fatalf("UnmountAllUnder: %v", err)
+	}
+	left, err := mountPointsUnderStatx(bundlesDir)
+	if err != nil || !slices.Equal(left, nil) {
+		t.Fatalf("remaining mounts = %v (err=%v), want none", left, err)
+	}
+	for _, cname := range []string{"pause", "upper", "work", "rootfs", "volumes"} {
+		if _, err := os.Stat(filepath.Join(bundlesDir, cname, "rootfs", "marker.txt")); err == nil {
+			t.Errorf("%s rootfs still mounted", cname)
+		}
+		if _, err := os.Stat(filepath.Join(bundlesDir, cname, "volumes", "upper", "marker.txt")); err == nil {
+			t.Errorf("%s volume upper still mounted", cname)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(inner, "hidden.txt")); err == nil {
+		t.Error("stacked inner tmpfs still mounted")
 	}
 }

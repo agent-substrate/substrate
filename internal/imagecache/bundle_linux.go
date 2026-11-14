@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -339,12 +340,38 @@ func setOpaque(root *os.Root, rel string) error {
 // SetupBundleRootfs, keyed by directory rather than by container name so a
 // single call cleans up all of an actor's bundle mounts. Missing mounts are
 // not an error.
+//
+// Inside an OCI container bundle directory (identified by OverlaySpecFileName
+// or config.json), overlay scratch trees ("upper" and "work") are skipped and
+// unmounted "rootfs" and "volumes/<name>" directories are not descended into.
+// Each pass detaches the mount roots visible on top; mounts stacked below
+// another mount become visible on the following pass.
 func UnmountAllUnder(dir string) error {
-	points, err := mountPointsUnder(dir)
+	const maxPasses = 16
+	for range maxPasses {
+		points, err := mountPointsUnderStatx(dir)
+		if err != nil {
+			return err
+		}
+		if len(points) == 0 {
+			return nil
+		}
+		if err := detachAll(points); err != nil {
+			return err
+		}
+	}
+	points, err := mountPointsUnderStatx(dir)
 	if err != nil {
 		return err
 	}
-	// Deepest first, so nested mounts unmount before their parents.
+	if len(points) > 0 {
+		return fmt.Errorf("mounts remain under %q after %d unmount passes: %v", dir, maxPasses, points)
+	}
+	return nil
+}
+
+func detachAll(points []string) error {
+	// Longer paths first for deterministic ordering across discovered roots.
 	sort.Slice(points, func(i, j int) bool { return len(points[i]) > len(points[j]) })
 	var errs []error
 	for _, p := range points {
@@ -355,13 +382,130 @@ func UnmountAllUnder(dir string) error {
 	return errors.Join(errs...)
 }
 
-// mountPointsUnder lists mount points at or below dir per
-// /proc/self/mountinfo.
-func mountPointsUnder(dir string) ([]string, error) {
-	f, err := os.Open("/proc/self/mountinfo")
+func statxAt(dirfd int, path string) (unix.Statx_t, error) {
+	var sx unix.Statx_t
+	const flags = unix.AT_SYMLINK_NOFOLLOW | unix.AT_NO_AUTOMOUNT | unix.AT_STATX_DONT_SYNC
+	err := unix.Statx(dirfd, path, flags, unix.STATX_TYPE, &sx)
+	return sx, err
+}
+
+func isDisconnectedMountErr(err error) bool {
+	return errors.Is(err, unix.ENOTCONN) || errors.Is(err, unix.ESTALE) || errors.Is(err, unix.EIO)
+}
+
+// mountPointsUnderStatx lists mount roots at or below dir via statx
+// STATX_ATTR_MOUNT_ROOT instead of scanning /proc/self/mountinfo.
+func mountPointsUnderStatx(dir string) ([]string, error) {
+	dir = filepath.Clean(dir)
+	dirSx, err := statxAt(unix.AT_FDCWD, dir)
 	if err != nil {
-		return nil, fmt.Errorf("while opening mountinfo: %w", err)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) {
+			return nil, nil
+		}
+		if isDisconnectedMountErr(err) {
+			return []string{dir}, nil
+		}
+		return nil, &os.PathError{Op: "statx", Path: dir, Err: err}
 	}
-	defer f.Close()
-	return mountPointsIn(f, dir)
+	if dirSx.Attributes_mask&unix.STATX_ATTR_MOUNT_ROOT == 0 {
+		return nil, fmt.Errorf("statx on %q did not report STATX_ATTR_MOUNT_ROOT support", dir)
+	}
+	if dirSx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
+		return []string{dir}, nil
+	}
+	if dirSx.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return nil, nil
+	}
+	var points []string
+	if err := walkMountsUnderStatx(dir, false, &points); err != nil {
+		return nil, err
+	}
+	return points, nil
+}
+
+// walkMountsUnderStatx scans curDir for mount roots using dirfd-relative statx.
+//
+// Inside an OCI container bundle directory (identified by OverlaySpecFileName
+// or config.json), overlay scratch trees ("upper" and "work") are skipped
+// before statx, and unmounted "rootfs" or "volumes/<name>" directories are not
+// descended into so extracted non-overlay rootfs trees are not walked.
+func walkMountsUnderStatx(curDir string, inVolumesDir bool, points *[]string) error {
+	f, err := os.Open(curDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) {
+			return nil
+		}
+		if isDisconnectedMountErr(err) {
+			*points = append(*points, curDir)
+			return nil
+		}
+		return err
+	}
+	names, readErr := f.Readdirnames(-1)
+	if readErr != nil {
+		_ = f.Close()
+		if errors.Is(readErr, os.ErrNotExist) || errors.Is(readErr, unix.ENOENT) {
+			return nil
+		}
+		if isDisconnectedMountErr(readErr) {
+			*points = append(*points, curDir)
+			return nil
+		}
+		return readErr
+	}
+
+	isBundleDir := !inVolumesDir && (slices.Contains(names, OverlaySpecFileName) || slices.Contains(names, "config.json"))
+	dirfd := int(f.Fd())
+	type subdir struct {
+		path  string
+		inVol bool
+	}
+	var subdirs []subdir
+
+	for _, name := range names {
+		if isBundleDir && (name == "upper" || name == "work") {
+			continue
+		}
+		fullPath := filepath.Join(curDir, name)
+		sx, err := statxAt(dirfd, name)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			if isDisconnectedMountErr(err) {
+				*points = append(*points, fullPath)
+				continue
+			}
+			_ = f.Close()
+			return &os.PathError{Op: "statx", Path: fullPath, Err: err}
+		}
+		if sx.Attributes_mask&unix.STATX_ATTR_MOUNT_ROOT == 0 {
+			_ = f.Close()
+			return fmt.Errorf("statx on %q did not report STATX_ATTR_MOUNT_ROOT support", fullPath)
+		}
+		if sx.Mode&unix.S_IFMT == unix.S_IFLNK {
+			continue
+		}
+		if sx.Attributes&unix.STATX_ATTR_MOUNT_ROOT != 0 {
+			*points = append(*points, fullPath)
+			continue
+		}
+		if sx.Mode&unix.S_IFMT == unix.S_IFDIR {
+			if inVolumesDir || (isBundleDir && name == "rootfs") {
+				continue
+			}
+			subdirs = append(subdirs, subdir{
+				path:  fullPath,
+				inVol: isBundleDir && name == "volumes",
+			})
+		}
+	}
+	_ = f.Close()
+
+	for _, sub := range subdirs {
+		if err := walkMountsUnderStatx(sub.path, sub.inVol, points); err != nil {
+			return err
+		}
+	}
+	return nil
 }
