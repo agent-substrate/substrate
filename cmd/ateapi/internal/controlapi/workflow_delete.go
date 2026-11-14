@@ -70,20 +70,19 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, volumesDetachedErr)
 	}
 
-	// Release worker if atelet termination and volume detachment did not fail.
+	// Release worker and delete volumes if atelet termination and volume detachment did not fail.
 	if atletTerminatedErr == nil && volumesDetachedErr == nil {
 		if actor, err = w.ensureWorkerReleased(ctx, actorRef, actor); err != nil {
 			errs = append(errs, fmt.Errorf("while releasing worker: %w", err))
 		}
+		if err := w.ensureVolumesDeleted(ctx, actor); err != nil {
+			errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
+		}
 	} else {
-		slog.WarnContext(ctx, "skipping releasing worker due to atelet termination or volume detachment failure",
+		slog.WarnContext(ctx, "skipping releasing worker and deleting volumes due to atelet termination or volume detachment failure",
 			slog.Any("actor", actorRef),
 			slog.Any("atletTerminatedErr", atletTerminatedErr),
 			slog.Any("volumesDetachedErr", volumesDetachedErr))
-	}
-
-	if err := w.ensureVolumesDeleted(ctx, actor); err != nil {
-		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
 	}
 
 	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
