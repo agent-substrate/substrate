@@ -93,6 +93,12 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
+	if w.hooks != nil && preview.IsEnabled(preview.GateLifecycleHooks) && !isInternalGoldenActor(ctx) {
+		hookCtx, done := stepSpan(ctx, "CallLifecycleDeleteHooks")
+		meta := actor.GetMetadata()
+		w.hooks.OnDeleteActor(hookCtx, meta.GetAtespace(), meta.GetName(), meta.GetUid(), callerPrincipalFromContext(hookCtx))
+		_ = done(nil)
+	}
 	return w.finalizeDeleted(ctx, actor)
 }
 

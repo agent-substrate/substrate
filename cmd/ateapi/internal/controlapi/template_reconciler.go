@@ -369,7 +369,7 @@ func (r *ActorTemplateReconciler) tagGoldenActor(ctx context.Context, tmpl *atea
 // saveGoldenTag finishes cleanup before recording terminal success, so retries
 // can rediscover the tag even if deletion or the status write fails.
 func (r *ActorTemplateReconciler) saveGoldenTag(ctx context.Context, tmpl *ateapi.ActorTemplate, ref *ateapi.ObjectRef) error {
-	if _, err := r.control.DeleteActor(ctx, &ateapi.DeleteActorRequest{Actor: ref}); err != nil && apierror.Code(err) != codes.NotFound {
+	if _, err := r.control.DeleteActor(withInternalGoldenActor(ctx), &ateapi.DeleteActorRequest{Actor: ref}); err != nil && apierror.Code(err) != codes.NotFound {
 		return fmt.Errorf("while deleting golden actor: %w", err)
 	}
 	_, err := r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapi.GoldenSnapshotStatus) {
@@ -453,7 +453,7 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 	if apierror.Code(err) != codes.NotFound {
 		return nil, fmt.Errorf("while getting golden actor: %w", err)
 	}
-	actor, err = r.control.CreateActor(ctx, &ateapi.CreateActorRequest{
+	actor, err = r.control.CreateActor(withInternalGoldenActor(ctx), &ateapi.CreateActorRequest{
 		Actor: &ateapi.Actor{
 			Metadata: &ateapi.ResourceMetadata{
 				Atespace: goldenActorRef.GetAtespace(),
