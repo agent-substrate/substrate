@@ -946,6 +946,56 @@ func TestValidateActorTemplate(t *testing.T) {
 		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
 		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template", "storage_class_name"), nil, "").WithOrigin("format=k8s-long-name")}},
 	}, {
+		name: "external volume template from a snapshot",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+				CapacityBytes: 10 << 30, StorageClassName: "fast-ssd",
+				ContentSource: &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: "projects/p/global/snapshots/seed"}},
+			}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
+	}, {
+		name: "external volume template content_source without a member",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+				CapacityBytes: 10 << 30, StorageClassName: "fast-ssd",
+				ContentSource: &ateapi.VolumeContentSource{},
+			}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template", "content_source"), nil, "one of").WithOrigin("union")}},
+	}, {
+		name: "external volume template snapshot missing storage_snapshot_id",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+				CapacityBytes: 10 << 30, StorageClassName: "fast-ssd",
+				ContentSource: &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{}},
+			}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Required(field.NewPath("volumes").Index(0).Child("external", "template", "content_source", "snapshot", "storage_snapshot_id"), "")}},
+	}, {
+		name: "external volume template snapshot storage_snapshot_id too long",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+				CapacityBytes: 10 << 30, StorageClassName: "fast-ssd",
+				ContentSource: &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: strings.Repeat("s", 257)}},
+			}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.TooLong(field.NewPath("volumes").Index(0).Child("external", "template", "content_source", "snapshot", "storage_snapshot_id"), nil, 256).WithOrigin("maxLength")}},
+	}, {
+		name: "external volume template snapshot storage_snapshot_id with a control character",
+		mutate: func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+				CapacityBytes: 10 << 30, StorageClassName: "fast-ssd",
+				ContentSource: &ateapi.VolumeContentSource{Snapshot: &ateapi.SnapshotContentSource{StorageSnapshotId: "snap\x00id"}},
+			}}}}
+		},
+		want:            field.ErrorList{field.Forbidden(field.NewPath("volumes").Index(0).Child("external"), "")},
+		wantWithPreview: map[string]field.ErrorList{"ALL": {field.Invalid(field.NewPath("volumes").Index(0).Child("external", "template", "content_source", "snapshot", "storage_snapshot_id"), nil, "")}},
+	}, {
 		name: "valid resources",
 		mutate: func(tmpl *ateapi.ActorTemplate) {
 			tmpl.Containers[0].Resources = &ateapi.ResourceRequirements{Limits: resources.CPUMemory(500, 2<<30)}

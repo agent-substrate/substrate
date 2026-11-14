@@ -21,10 +21,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -65,9 +63,6 @@ const (
 	extPathA    = "/mnt/ate-external-a"
 	extPathB    = "/mnt/ate-external-b"
 	extCapacity = 1 << 30
-
-	// probeWrittenContent is the fixed string the probe's /writefile writes.
-	probeWrittenContent = "written by probe"
 
 	payloadName    = "payload.txt"
 	payloadContent = "delivered by an image volume"
@@ -238,75 +233,13 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	})
 }
 
-// probeJSON calls a probe endpoint through the router and decodes its reply.
-func probeJSON(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) map[string]string {
-	t.Helper()
-
-	resp, err := router.Get(ctx, actorRef, path)
-	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s: status %d: %s", path, resp.StatusCode, body)
-	}
-
-	var out map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding %s: %v", path, err)
-	}
-	return out
-}
-
-// requireContent fails unless path holds want. Used to verify a mount
-// delivers what the volume behind it should.
-func requireContent(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path, want string) {
-	t.Helper()
-
-	got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+path)
-	if got["error"] != "" {
-		t.Fatalf("reading %s: %s", path, got["error"])
-	}
-	if got["content"] != want {
-		t.Errorf("content at %s = %q, want %q", path, got["content"], want)
-	}
-}
-
 // requireContentAtBoth fails unless both paths hold want, so both mounts must
 // be live and backed by the same volume.
 func requireContentAtBoth(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, pathA, pathB, want string) {
 	t.Helper()
 
-	requireContent(ctx, t, router, actorRef, pathA, want)
-	requireContent(ctx, t, router, actorRef, pathB, want)
-}
-
-// requireUnreadable fails if path can be read.
-func requireUnreadable(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) {
-	t.Helper()
-
-	if got := probeJSON(ctx, t, router, actorRef, "/readfile?path="+path); got["error"] == "" {
-		t.Errorf("%s is readable (%q), want it hidden", path, got["content"])
-	}
-}
-
-// requireWriteRejected fails if path can be written.
-func requireWriteRejected(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) {
-	t.Helper()
-
-	if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+path); got["error"] == "" {
-		t.Errorf("write to %s succeeded, want it rejected as read-only", path)
-	}
-}
-
-// requireWrite writes through path and fails if the write is rejected.
-func requireWrite(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) {
-	t.Helper()
-
-	if got := probeJSON(ctx, t, router, actorRef, "/writefile?path="+path); got["error"] != "" {
-		t.Fatalf("writing %s: %s", path, got["error"])
-	}
+	e2e.RequireProbeContent(ctx, t, router, actorRef, pathA, want)
+	e2e.RequireProbeContent(ctx, t, router, actorRef, pathB, want)
 }
 
 // requireSharedWrite writes through writePath and requires the content at both
@@ -315,8 +248,8 @@ func requireWrite(ctx context.Context, t *testing.T, router *e2e.RouterClient, a
 func requireSharedWrite(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, writePath, aliasPath string) {
 	t.Helper()
 
-	requireWrite(ctx, t, router, actorRef, writePath)
-	requireContentAtBoth(ctx, t, router, actorRef, writePath, aliasPath, probeWrittenContent)
+	e2e.RequireProbeWrite(ctx, t, router, actorRef, writePath)
+	requireContentAtBoth(ctx, t, router, actorRef, writePath, aliasPath, e2e.ProbeWrittenContent)
 }
 
 // requireAssignedNode fails unless the actor's status records want as its
@@ -398,19 +331,19 @@ func TestCombinedVolumes(t *testing.T) {
 	}
 
 	t.Run("DeliversImageContents", func(t *testing.T) {
-		requireContent(ctx, t, router, actorRef, payloadPath, payloadContent)
+		e2e.RequireProbeContent(ctx, t, router, actorRef, payloadPath, payloadContent)
 	})
 
 	t.Run("UpperLayerWins", func(t *testing.T) {
-		requireContent(ctx, t, router, actorRef, mountPath+"/"+shadowedName, shadowedContent)
+		e2e.RequireProbeContent(ctx, t, router, actorRef, mountPath+"/"+shadowedName, shadowedContent)
 	})
 
 	t.Run("WhiteoutHidesLowerLayerFile", func(t *testing.T) {
-		requireUnreadable(ctx, t, router, actorRef, mountPath+"/"+deletedName)
+		e2e.RequireProbeUnreadable(ctx, t, router, actorRef, mountPath+"/"+deletedName)
 	})
 
 	t.Run("MountIsReadOnly", func(t *testing.T) {
-		requireWriteRejected(ctx, t, router, actorRef, mountPath+"/should-not-exist")
+		e2e.RequireProbeWriteRejected(ctx, t, router, actorRef, mountPath+"/should-not-exist")
 	})
 
 	t.Run("SameImageVolumeAtTwoPaths", func(t *testing.T) {
@@ -445,13 +378,13 @@ func TestCombinedVolumes(t *testing.T) {
 			t.Fatalf("ResumeActor after suspend: %v", err)
 		}
 		requireContentAtBoth(resumeCtx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
-		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", probeWrittenContent)
+		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", e2e.ProbeWrittenContent)
 
 		// Suspend detached the external volume; the resume must reattach it
 		// once and restore both of its mounts.
 		t.Run("ExternalVolumeReattached", func(t *testing.T) {
 			requireExternalVolume(t)
-			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt", probeWrittenContent)
+			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt", e2e.ProbeWrittenContent)
 			requireAssignedToWorkerNode(ctx, t, clients, actorRef)
 		})
 	})
@@ -460,9 +393,9 @@ func TestCombinedVolumes(t *testing.T) {
 	t.Run("RevertRewindsOnlySnapshottedVolumes", func(t *testing.T) {
 		// Written after the suspend above, so it is in no snapshot the revert
 		// can return the actor to.
-		requireWrite(ctx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
+		e2e.RequireProbeWrite(ctx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
 		if storageClass != "" {
-			requireWrite(ctx, t, router, actorRef, extPathA+"/"+postSnapshotName)
+			e2e.RequireProbeWrite(ctx, t, router, actorRef, extPathA+"/"+postSnapshotName)
 		}
 
 		reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapi.RevertActorRequest{Actor: actorRef.ToObjectRef()})
@@ -486,8 +419,8 @@ func TestCombinedVolumes(t *testing.T) {
 
 		// The durable dir is part of the snapshot: the write it held when the
 		// snapshot was taken comes back, and the one made afterwards is gone.
-		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", probeWrittenContent)
-		requireUnreadable(resumeCtx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
+		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", e2e.ProbeWrittenContent)
+		e2e.RequireProbeUnreadable(resumeCtx, t, router, actorRef, scratchPathA+"/"+postSnapshotName)
 
 		// An external volume is a disk whose lifetime is the actor's and whose
 		// contents are never part of a snapshot, so a revert does not rewind
@@ -495,7 +428,7 @@ func TestCombinedVolumes(t *testing.T) {
 		// snapshot but this volume exactly as the discarded execution left it.
 		t.Run("ExternalVolumeNotReverted", func(t *testing.T) {
 			requireExternalVolume(t)
-			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/"+postSnapshotName, extPathB+"/"+postSnapshotName, probeWrittenContent)
+			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/"+postSnapshotName, extPathB+"/"+postSnapshotName, e2e.ProbeWrittenContent)
 		})
 	})
 }

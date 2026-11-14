@@ -16,9 +16,11 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -97,5 +99,91 @@ func TestParseTagScope(t *testing.T) {
 	}
 	if _, err := parseTagScope("global"); err == nil {
 		t.Fatal("parseTagScope(global) succeeded")
+	}
+}
+
+// TestWithVolumesFlag checks how --with-volumes maps onto
+// CreateTagRequest.volume_selection.
+func TestWithVolumesFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		want     *ateapi.ExternalVolumeSelection
+		wantArgs []string
+		wantErr  bool
+	}{
+		{name: "unset captures none", args: []string{"t1"}, want: nil, wantArgs: []string{"t1"}},
+		{name: "bare captures all", args: []string{"t1", "--with-volumes"}, want: &ateapi.ExternalVolumeSelection{}, wantArgs: []string{"t1"}},
+		{name: "bare before another flag", args: []string{"--with-volumes", "--other", "x", "t1"}, want: &ateapi.ExternalVolumeSelection{}, wantArgs: []string{"t1"}},
+		{name: "names", args: []string{"t1", "--with-volumes=data,cache"}, want: &ateapi.ExternalVolumeSelection{Names: []string{"data", "cache"}}, wantArgs: []string{"t1"}},
+		{name: "repeated names", args: []string{"t1", "--with-volumes=data", "--with-volumes=cache"}, want: &ateapi.ExternalVolumeSelection{Names: []string{"data", "cache"}}, wantArgs: []string{"t1"}},
+		{name: "explicit all", args: []string{"t1", "--with-volumes=*"}, want: &ateapi.ExternalVolumeSelection{}, wantArgs: []string{"t1"}},
+		// pflag cannot tell a value from an argument once a space separates
+		// them, so the names land in args. createTagArgs explains this.
+		{name: "space-separated names become an argument", args: []string{"t1", "--with-volumes", "data"}, want: &ateapi.ExternalVolumeSelection{}, wantArgs: []string{"t1", "data"}},
+		{name: "empty value", args: []string{"t1", "--with-volumes="}, wantErr: true},
+		{name: "all then names", args: []string{"t1", "--with-volumes", "--with-volumes=data"}, wantErr: true},
+		{name: "names then all", args: []string{"t1", "--with-volumes=data", "--with-volumes"}, wantErr: true},
+		{name: "all among names", args: []string{"t1", "--with-volumes=data,*"}, wantErr: true},
+		{name: "trailing comma", args: []string{"t1", "--with-volumes=data,"}, wantErr: true},
+		{name: "only a comma", args: []string{"t1", "--with-volumes=,"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var v volumeSelectionValue
+			cmd := &cobra.Command{Use: "tag"}
+			cmd.Flags().String("other", "", "")
+			addWithVolumesFlag(cmd, &v)
+			err := cmd.Flags().Parse(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Parse(%q) error = %v, wantErr %v", tt.args, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if diff := cmp.Diff(tt.want, v.sel, protocmp.Transform()); diff != "" {
+				t.Errorf("selection mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tt.wantArgs, cmd.Flags().Args()); diff != "" {
+				t.Errorf("args mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestCreateTagArgs verifies the hint about joining names to --with-volumes
+// with = shows only when a bare --with-volumes left an extra argument.
+func TestCreateTagArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+		// wantHint is text the hint about joining names with = must contain,
+		// or empty when no hint may be given.
+		wantHint string
+	}{
+		{name: "one argument", args: []string{"t1", "--with-volumes"}},
+		{name: "names after bare flag", args: []string{"t1", "--with-volumes", "data"}, wantErr: true, wantHint: `if "data" names volumes, join them to the flag with =, e.g. --with-volumes=data`},
+		{name: "two names before bare flag", args: []string{"t1", "t2", "--with-volumes"}, wantErr: true, wantHint: `if "t2" names volumes`},
+		{name: "extra argument without flag", args: []string{"t1", "data"}, wantErr: true},
+		{name: "extra argument with names", args: []string{"t1", "--with-volumes=cache", "data"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var v volumeSelectionValue
+			cmd := &cobra.Command{Use: "tag"}
+			addWithVolumesFlag(cmd, &v)
+			if err := cmd.Flags().Parse(tt.args); err != nil {
+				t.Fatalf("Parse(%q): %v", tt.args, err)
+			}
+			err := createTagArgs(cmd, cmd.Flags().Args())
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("createTagArgs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			hinted := err != nil && strings.Contains(err.Error(), "join them to the flag with =")
+			if hinted != (tt.wantHint != "") || (tt.wantHint != "" && !strings.Contains(err.Error(), tt.wantHint)) {
+				t.Errorf("createTagArgs() error = %v, want hint %q", err, tt.wantHint)
+			}
+		})
 	}
 }

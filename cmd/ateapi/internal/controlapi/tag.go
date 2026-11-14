@@ -49,7 +49,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapi.CreateTagRequest
 	actorRef := resources.ActorRefFromObjectRef(req.GetTag().GetSourceActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
+	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag(), req.GetVolumeSelection())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)
@@ -76,7 +76,7 @@ func (s *RPCService) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*at
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
-	return tag, nil
+	return s.impl.refreshTagVolumeSnapshots(ctx, tag), nil
 }
 
 func (s *ServiceImpl) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapi.Tag, error) {

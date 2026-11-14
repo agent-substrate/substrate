@@ -212,3 +212,76 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+### Starting volumes from an existing snapshot
+
+`contentSource` fills each actor's volume from a snapshot in the storage
+system, which may have been taken outside Substrate. Every actor of the
+template starts from the same content, in its own volume:
+
+```yaml
+volumes:
+- name: shared-storage
+  external:
+    template:
+      capacityBytes: 5368709120 # 5Gi
+      storageClassName: csi-nfs-sc
+      contentSource:
+        snapshot:
+          storageSnapshotId: <snapshot-id>
+```
+
+`storageSnapshotId` is the handle the StorageClass's CSI driver uses for the
+snapshot. `capacityBytes` must be at least the snapshot's size.
+
+- The driver must support CSI snapshots, or `create actor` fails with
+  `FAILED_PRECONDITION`.
+- `create actor` does not check that the snapshot exists. A missing snapshot
+  fails the actor's first resume with `FAILED_PRECONDITION`.
+
+## 5. Snapshotting Volumes with a Tag
+
+A tag can also snapshot a suspended actor's external volumes. An actor created
+from that tag restores them on its first resume:
+
+```bash
+kubectl ate suspend actor <actor-name> -a <atespace>
+# All external volumes, or only the named ones.
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes
+kubectl ate --preview create tag <tag-name> -a <atespace> --actor <actor-name> --with-volumes=shared-storage
+kubectl ate --preview create actor <new-actor> -a <atespace> --template <template-name> --tag <tag-name>
+kubectl ate resume actor <new-actor> -a <atespace>
+```
+
+- Each restored volume is a new volume with its own copy of the data. Writes
+  to it don't reach the source actor or other actors created from the tag.
+- A volume the tag did not capture starts from its template's `contentSource`,
+  or empty without one.
+- The driver of every captured volume must support CSI snapshots, or
+  `create tag` fails.
+- `create tag` does not wait for the storage system to finish the snapshots.
+  `create actor` fails with `FAILED_PRECONDITION` until they are ready to use.
+  `kubectl ate get tag <tag-name> -a <atespace> -o yaml` shows `readyToUse`
+  for each volume snapshot.
+- Deleting the tag deletes its volume snapshots. Actors that already resumed
+  keep their volumes. An actor created from the tag that never resumed can no
+  longer restore them.
+
+## 6. Known limitations
+
+- **Restoring volumes from a tag needs every ate API server on the same
+  release.** `kubectl ate --preview create tag --with-volumes` snapshots an
+  actor's external volumes, and an actor created from that tag restores them
+  on its first resume. An ate API server from a release without this feature
+  drops the tag's volume snapshots from the actor and provisions its volumes
+  empty, without an error. This can happen while ate API servers roll to a new
+  release, or after a rollback. Until every ate API server runs the new
+  release, don't resume actors created from a tag with volumes. A rollback
+  loses the volume contents of those actors that never resumed. Actors that
+  already resumed keep their volumes.
+- **`contentSource` needs every ate API server on the same release.** An ate
+  API server from a release without this feature ignores `contentSource` and
+  provisions the volume empty, without an error. When it updates the
+  template's status, it also removes `contentSource` from the stored template
+  for good. Don't create templates with `contentSource` until every ate API
+  server runs the new release, and recreate them after a rollback.
