@@ -323,6 +323,8 @@ func TestAuthorize_Refusals(t *testing.T) {
 		lookedUp bool
 	}{
 		{name: "empty jwt", want: codes.InvalidArgument},
+		{name: "jwt over MaxJWTSize", jwt: strings.Repeat("a", MaxJWTSize+1), want: codes.InvalidArgument, msg: "longer than"},
+		{name: "garbage jwt of MaxJWTSize", jwt: strings.Repeat("a", MaxJWTSize), want: codes.Unauthenticated},
 		{name: "verifier refuses", jwt: good, verifier: fakeVerifier{err: errors.New("expired")}, want: codes.Unauthenticated},
 		{name: "bad signature", jwt: badSignature, want: codes.Unauthenticated},
 		{name: "wrong audience", jwt: wrongAudience, want: codes.Unauthenticated},
@@ -516,8 +518,9 @@ func writeServerCA(t *testing.T, srv *httptest.Server) string {
 	return path
 }
 
-// TestIssuerRoots checks that a .svc issuer is verified against the CA file
-// alone and any other issuer against the system roots as well.
+// TestIssuerRoots checks that a .svc or .svc.cluster.local issuer is verified
+// against the CA file alone and any other issuer against the system roots as
+// well.
 func TestIssuerRoots(t *testing.T) {
 	srv := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(srv.Close)
@@ -537,10 +540,13 @@ func TestIssuerRoots(t *testing.T) {
 		{"https://idp.ate-system.svc", bundleOnly},
 		{"https://IDP.ATE-SYSTEM.SVC.", bundleOnly},
 		{"https://idp.ate-system.svc:443", bundleOnly},
+		{"https://idp.ate-system.svc.cluster.local", bundleOnly},
+		{"https://IDP.ATE-SYSTEM.SVC.CLUSTER.LOCAL.", bundleOnly},
+		{"https://idp.ate-system.svc.cluster.local:443", bundleOnly},
 		{"https://idp.example.com", withSystem},
 		{"https://svc.example.com", withSystem},
 		{"https://idp.svc.example.com", withSystem},
-		{"https://idp.ate-system.svc.cluster.local", withSystem},
+		{"https://idp.ate-system.svc.cluster.example", withSystem},
 	} {
 		t.Run(tc.issuer, func(t *testing.T) {
 			loadRoots, _, err := issuerRoots(tc.issuer, caFile)
