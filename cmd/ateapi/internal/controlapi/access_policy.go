@@ -43,7 +43,7 @@ func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapi.C
 
 func (s *ServiceImpl) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
 	created, err := s.store.CreateGlobalAccessPolicy(ctx, policy)
-	return mapAccessPolicyWrite(created, err)
+	return mapAccessPolicyWrite(created, err, "")
 }
 
 func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapi.GetGlobalAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
@@ -84,7 +84,7 @@ func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 		errs := apivalidation.ValidateGlobalAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal)
 		return resources.ToAPIError(errs)
 	})
-	return mapAccessPolicyWrite(updated, err)
+	return mapAccessPolicyWrite(updated, err, "")
 }
 
 func (s *RPCService) CreateAtespaceAccessPolicy(ctx context.Context, req *ateapi.CreateAtespaceAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
@@ -101,7 +101,7 @@ func (s *RPCService) CreateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 
 func (s *ServiceImpl) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapi.AccessPolicy) (*ateapi.AccessPolicy, error) {
 	created, err := s.store.CreateAtespaceAccessPolicy(ctx, name, policy)
-	return mapAccessPolicyWrite(created, err)
+	return mapAccessPolicyWrite(created, err, "parent Atespace does not exist")
 }
 
 func (s *RPCService) GetAtespaceAccessPolicy(ctx context.Context, req *ateapi.GetAtespaceAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
@@ -142,7 +142,7 @@ func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 		errs := apivalidation.ValidateAtespaceAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal)
 		return resources.ToAPIError(errs)
 	})
-	return mapAccessPolicyWrite(updated, err)
+	return mapAccessPolicyWrite(updated, err, "parent Atespace does not exist")
 }
 
 func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapi.DeleteAtespaceAccessPolicyRequest) (*ateapi.AccessPolicy, error) {
@@ -154,7 +154,7 @@ func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapi
 
 func (s *ServiceImpl) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapi.AccessPolicy, error) {
 	deleted, err := s.store.DeleteAtespaceAccessPolicy(ctx, name, precondition)
-	return mapAccessPolicyWrite(deleted, err)
+	return mapAccessPolicyWrite(deleted, err, "parent Atespace does not exist")
 }
 
 func replaceAccessPolicy(policy *ateapi.AccessPolicy) func(*ateapi.AccessPolicy) error {
@@ -168,7 +168,7 @@ func replaceAccessPolicy(policy *ateapi.AccessPolicy) func(*ateapi.AccessPolicy)
 	}
 }
 
-func mapAccessPolicyWrite(policy *ateapi.AccessPolicy, err error) (*ateapi.AccessPolicy, error) {
+func mapAccessPolicyWrite(policy *ateapi.AccessPolicy, err error, preconditionMsg string) (*ateapi.AccessPolicy, error) {
 	switch {
 	case err == nil:
 		return policy, nil
@@ -183,7 +183,7 @@ func mapAccessPolicyWrite(policy *ateapi.AccessPolicy, err error) (*ateapi.Acces
 	case errors.Is(err, store.ErrPreconditionRequired):
 		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, apierror.FailedPrecondition("parent Atespace does not exist")
+		return nil, apierror.FailedPrecondition("%s", preconditionMsg)
 	default:
 		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
 	}
