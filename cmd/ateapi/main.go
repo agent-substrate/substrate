@@ -343,7 +343,7 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
-	controlSrv := controlapi.NewRPCService(
+	controlSrv, controlImpl := controlapi.NewRPCService(
 		persistence,
 		workerCache,
 		csiDriverConfigLister,
@@ -359,7 +359,7 @@ func main() {
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
+	templateReconciler := controlapi.NewActorTemplateReconciler(controlImpl, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's worker restarts.

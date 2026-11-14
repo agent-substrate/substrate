@@ -60,7 +60,8 @@ type VolumePluginRegistry interface {
 }
 
 // NewRPCService creates an instance of the ControlServer service. This is what
-// implements the outward-facing RPC interface.
+// implements the outward-facing RPC interface. It also returns the ServiceImpl
+// the service uses, for in-process writers such as the ActorTemplateReconciler.
 //
 // instruments may be nil; the record helpers no-op.
 //
@@ -85,7 +86,7 @@ func NewRPCService(
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	snapshotLocation string,
-) *RPCService {
+) (*RPCService, *ServiceImpl) {
 	impl := newServiceImpl(persistence, storageClassLister)
 	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
@@ -102,7 +103,7 @@ func NewRPCService(
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
-	return s
+	return s, impl
 }
 
 // serviceStore enumerates the exact storage methods needed by

@@ -138,9 +138,8 @@ func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resou
 
 func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapi.ActorTemplate) error) (*ateapi.ActorTemplate, error) {
 	// ActorTemplates are immutable to clients: there is no update RPC, and
-	// the only writer is the template reconciler, which updates status
-	// against the store directly. The store enforces metadata immutability,
-	// so this layer has nothing to add.
+	// the only writer is the template reconciler, which updates status. The
+	// store enforces metadata immutability, so this layer has nothing to add.
 	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
 }
 
