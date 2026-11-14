@@ -43,7 +43,7 @@ type Relay struct {
 
 // NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
 func NewRelay(resolvConfPath string) (*Relay, error) {
-	upstreams, err := resolvConfNameservers(resolvConfPath)
+	upstreams, err := ResolvConfNameservers(resolvConfPath)
 	if err != nil {
 		return nil, err
 	}

@@ -532,6 +532,7 @@ func TestValidateDNSEgressPolicy(t *testing.T) {
 		wantErr bool
 	}{
 		{mode: DNSEgressPolicyEnforceInAtunnel, wantErr: false},
+		{mode: DNSEgressPolicyEnforceInPEP, wantErr: false},
 		{mode: "", wantErr: true},
 		{mode: "unknown", wantErr: true},
 	}
@@ -539,6 +540,34 @@ func TestValidateDNSEgressPolicy(t *testing.T) {
 		err := ValidateDNSEgressPolicy(tc.mode)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("ValidateDNSEgressPolicy(%q) error = %v, wantErr = %v", tc.mode, err, tc.wantErr)
+		}
+	}
+}
+
+func TestPolicyAllowsHostname(t *testing.T) {
+	policy, errs := Compile(&ateapi.EgressPolicy{Rules: []*ateapi.EgressRule{
+		{Https: &ateapi.HttpsRule{Hostnames: []string{"api.example.com"}}},
+		{TlsPassthrough: &ateapi.TlsPassthroughRule{Hostnames: []string{"*.db.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{5432}}}},
+	}})
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	tests := []struct {
+		hostname string
+		want     bool
+	}{
+		{hostname: "api.example.com", want: true},
+		{hostname: "API.Example.COM.", want: true},
+		{hostname: "primary.db.example.com", want: true},
+		{hostname: "db.example.com", want: false},
+		{hostname: "a.b.db.example.com", want: false},
+		{hostname: "other.example.com", want: false},
+		{hostname: "_sip._tcp.example.com", want: false},
+		{hostname: "", want: false},
+	}
+	for _, tc := range tests {
+		if got := policy.AllowsHostname(tc.hostname); got != tc.want {
+			t.Errorf("AllowsHostname(%q) = %v, want %v", tc.hostname, got, tc.want)
 		}
 	}
 }
