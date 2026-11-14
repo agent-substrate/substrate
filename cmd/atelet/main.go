@@ -736,8 +736,18 @@ func (g *ateapiCSIDriverConfigGetter) Get(ctx context.Context, driverName string
 			Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 		})
 		if err != nil {
-			if status.Code(err) == codes.Unimplemented && g.fallback != nil {
-				return g.fallback.Get(ctx, driverName)
+			switch status.Code(err) {
+			case codes.Unimplemented:
+				if g.fallback != nil {
+					return g.fallback.Get(ctx, driverName)
+				}
+			case codes.Unavailable:
+				return nil, apierror.Unavailable("while listing CsiDriverConfigs from ate-api-server: %w", err)
+			case codes.Canceled, codes.DeadlineExceeded:
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, fmt.Errorf("while listing CsiDriverConfigs from ate-api-server: %w", ctxErr)
+				}
+				return nil, apierror.Unavailable("while listing CsiDriverConfigs from ate-api-server: %w", err)
 			}
 			return nil, fmt.Errorf("while listing CsiDriverConfigs from ate-api-server: %w", err)
 		}
@@ -834,6 +844,7 @@ type Atelet struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiPlugins            map[string]csiNodePluginSlot
 	csiDriverConfigGetter csi.CSIDriverConfigGetter
+	clock                 clock.PassiveClock
 	systemInfoVolumes     *systemInfoVolumeRefresher
 
 	// snapshots tracks each actor's snapshots on this node.
@@ -905,6 +916,7 @@ func NewService(
 		instruments:           instruments,
 		volumePlugins:         maps.Clone(volumePlugins),
 		csiDriverConfigGetter: csiDriverConfigGetter,
+		clock:                 clock.RealClock{},
 		systemInfoVolumes:     systemInfoVolumes,
 		snapshots:             snapshots,
 		workerActorJWTs:       newWorkerActorJWTs(workers),

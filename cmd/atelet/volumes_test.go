@@ -26,6 +26,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	csipb "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/go-cmp/cmp"
@@ -33,6 +34,7 @@ import (
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
@@ -44,6 +46,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 type mountCall struct {
@@ -664,12 +667,26 @@ func TestAteapiCSIDriverConfigGetter(t *testing.T) {
 	if _, err := (&ateapiCSIDriverConfigGetter{control: control}).Get(ctx, "nfs.csi.k8s.io"); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("Get(Unimplemented, nil fallback) = %v, want Unimplemented", err)
 	}
-	for _, code := range []codes.Code{codes.Unavailable, codes.PermissionDenied} {
+	for _, tc := range []struct {
+		code     codes.Code
+		wantCode codes.Code
+	}{
+		{codes.Unavailable, codes.Unavailable},
+		{codes.DeadlineExceeded, codes.Unavailable},
+		{codes.Canceled, codes.Unavailable},
+		{codes.PermissionDenied, codes.Internal},
+	} {
 		spy.calls.Store(0)
-		control.err = status.Error(code, "rpc failed")
-		if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); status.Code(err) != code || spy.calls.Load() != 0 {
-			t.Fatalf("Get(%v) = %v (fallbackCalls=%d), want %v without fallback", code, err, spy.calls.Load(), code)
+		control.err = status.Error(tc.code, "rpc failed")
+		if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); apierror.Code(err) != tc.wantCode || spy.calls.Load() != 0 {
+			t.Fatalf("Get(%v) apierror.Code = %v (err=%v, fallbackCalls=%d), want %v without fallback", tc.code, apierror.Code(err), err, spy.calls.Load(), tc.wantCode)
 		}
+	}
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	control.err = status.Error(codes.Canceled, "canceled")
+	if _, err := getter.Get(canceledCtx, "nfs.csi.k8s.io"); apierror.Code(err) != codes.Canceled {
+		t.Fatalf("Get(canceled ctx) apierror.Code = %v, want Canceled", apierror.Code(err))
 	}
 	if got, err := (&ateapiCSIDriverConfigGetter{fallback: crdFallback}).Get(ctx, "pd.csi.storage.gke.io"); err != nil || got.GetDriverName() != "pd.csi.storage.gke.io" {
 		t.Fatalf("Get(nil control) = (%v, %v)", got, err)
@@ -743,7 +760,7 @@ func assertNodePluginClosed(t *testing.T, p volume.VolumePluginWorkerPlane) {
 func TestAteletGetPlugin(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	sockDir, err := os.MkdirTemp("/tmp", "atelet-csi-*")
+	sockDir, err := os.MkdirTemp("", "atelet-csi-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
@@ -761,7 +778,7 @@ func TestAteletGetPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("reuse, socket swap, bad redial, transient error, and delete", func(t *testing.T) {
+	t.Run("TTL reuse, socket swap, bad redial, apierror.Unavailable, and delete", func(t *testing.T) {
 		t.Parallel()
 		const driver = "nfs.csi.k8s.io"
 		sock1, srv1 := startTestCSINodeSocket(t, sockDir, "s1.sock", driver, nil)
@@ -771,7 +788,9 @@ func TestAteletGetPlugin(t *testing.T) {
 			Spec:       atev1.CSIDriverConfigSpec{DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9000", NodeSocketOverride: sock1},
 		})
 		control := &fakeCsiDriverConfigListClient{}
-		s := cleanupAteletCSIPlugins(t, &Atelet{csiDriverConfigGetter: &ateapiCSIDriverConfigGetter{control: control, fallback: &directCSIDriverConfigGetter{client: crdClient}}})
+		getterSpy := &spyCSIGetter{inner: &ateapiCSIDriverConfigGetter{control: control, fallback: &directCSIDriverConfigGetter{client: crdClient}}}
+		fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+		s := cleanupAteletCSIPlugins(t, &Atelet{csiDriverConfigGetter: getterSpy, clock: fakeClock})
 
 		mustMount := func(wantSrv *testCSINodeServer, wantCount int32) *csi.Plugin {
 			t.Helper()
@@ -786,47 +805,70 @@ func TestAteletGetPlugin(t *testing.T) {
 			return p
 		}
 
+		// Cold call queries getter once; warm calls within defaultCSIPluginConfigTTL make 0 extra getter calls.
 		p1 := mustMount(srv1, 1)
+		if got := getterSpy.calls.Load(); got != 1 {
+			t.Fatalf("cold getter calls = %d, want 1", got)
+		}
+		fakeClock.Step(defaultCSIPluginConfigTTL - time.Nanosecond)
+		if p := mustMount(srv1, 2); p != p1 || getterSpy.calls.Load() != 1 {
+			t.Fatalf("warm TTL call = (%p, calls=%d), want (%p, calls=1)", p, getterSpy.calls.Load(), p1)
+		}
+
+		// Stepping to TTL boundary revalidates, preserves p1 across promotion/controller/demotion, and refreshes TTL.
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 1}, DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9001", NodeSocketOverride: sock1}, nil)
-		if p := mustMount(srv1, 2); p != p1 {
-			t.Fatalf("promotion changed plugin pointer %p -> %p", p1, p)
+		fakeClock.Step(time.Nanosecond)
+		if p := mustMount(srv1, 3); p != p1 || getterSpy.calls.Load() != 2 {
+			t.Fatalf("post-TTL promotion = (%p, calls=%d), want (%p, calls=2)", p, getterSpy.calls.Load(), p1)
+		}
+		if p := mustMount(srv1, 4); p != p1 || getterSpy.calls.Load() != 2 {
+			t.Fatalf("refreshed TTL call = (%p, calls=%d), want (%p, calls=2)", p, getterSpy.calls.Load(), p1)
 		}
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 2}, DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9999", NodeSocketOverride: sock1, Tls: &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: true, ServerName: "x"}}, nil)
-		if p := mustMount(srv1, 3); p != p1 {
+		fakeClock.Step(defaultCSIPluginConfigTTL)
+		if p := mustMount(srv1, 5); p != p1 {
 			t.Fatalf("controller/tls edit changed node plugin pointer %p -> %p", p1, p)
 		}
 		control.setSingle(nil, nil)
-		if p := mustMount(srv1, 4); p != p1 {
+		fakeClock.Step(defaultCSIPluginConfigTTL)
+		if p := mustMount(srv1, 6); p != p1 {
 			t.Fatalf("demotion to identical CRD changed plugin pointer %p -> %p", p1, p)
 		}
 
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 3}, DriverName: driver, NodeSocketOverride: sock2}, nil)
+		fakeClock.Step(defaultCSIPluginConfigTTL)
 		p2 := mustMount(srv2, 1)
 		if p2 == p1 {
 			t.Fatal("socket update returned stale plugin")
 		}
 		assertNodePluginClosed(t, p1)
 
-		control.setSingle(nil, status.Error(codes.Unavailable, "api-server restarting"))
-		if _, err := s.getPlugin(ctx, driver); status.Code(err) != codes.Unavailable {
-			t.Fatalf("getPlugin(Unavailable) = %v, want Unavailable", err)
-		}
-		if err := p2.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: "v1", TargetPath: filepath.Join(sockDir, "mnt")}); err != nil {
-			t.Fatalf("p2 closed on transient error: %v", err)
+		for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded} {
+			control.setSingle(nil, status.Error(code, "api-server restarting"))
+			fakeClock.Step(defaultCSIPluginConfigTTL)
+			_, err := s.getPlugin(ctx, driver)
+			if st, _ := apierror.FromError(err); st.Code() != codes.Unavailable || !strings.Contains(st.Message(), driver) {
+				t.Fatalf("getPlugin(%v) status = (%v, %q), want (Unavailable, containing %q)", code, st.Code(), st.Message(), driver)
+			}
+			if err := p2.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: "v1", TargetPath: filepath.Join(sockDir, "mnt")}); err != nil {
+				t.Fatalf("p2 closed on transient %v: %v", code, err)
+			}
 		}
 
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 4}, DriverName: driver, NodeSocketOverride: "unix://" + filepath.Join(sockDir, "missing.sock")}, nil)
+		fakeClock.Step(defaultCSIPluginConfigTTL)
 		if _, err := s.getPlugin(ctx, driver); err == nil {
 			t.Fatal("getPlugin(missing.sock) = nil, want dial error")
 		}
 		assertNodePluginClosed(t, p2)
 
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 5}, DriverName: driver, NodeSocketOverride: sock2}, nil)
-		p3 := mustMount(srv2, 3)
+		p3 := mustMount(srv2, 4)
 		control.setSingle(nil, nil)
 		if err := crdClient.AteV1().CSIDriverConfigs().Delete(ctx, "crd-nfs", metav1.DeleteOptions{}); err != nil {
 			t.Fatal(err)
 		}
+		fakeClock.Step(defaultCSIPluginConfigTTL)
 		if _, err := s.getPlugin(ctx, driver); !apierrors.IsNotFound(err) {
 			t.Fatalf("getPlugin(deleted) = %v, want IsNotFound", err)
 		}
@@ -880,4 +922,103 @@ func TestAteletGetPlugin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVolumeMountUnmountUnavailableCodes(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+	const actorUID = "actor-unavail"
+	cachedVol := &ateletpb.Volume{Name: "vol-1", External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "vid-1", VolumeType: "cached.csi.io"}}
+	unavailVol := &ateletpb.Volume{Name: "vol-2", External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "vid-2", VolumeType: "unavail.csi.io"}}
+
+	busyErr := errors.New("device or resource busy")
+	cachedPlugin := &fakeWorkerPlugin{unmountErr: busyErr}
+	control := &fakeCsiDriverConfigListClient{err: status.Error(codes.Unavailable, "api-server restarting")}
+	s := &Atelet{
+		volumePlugins:         map[string]volume.VolumePluginWorkerPlane{"cached.csi.io": cachedPlugin},
+		csiDriverConfigGetter: &ateapiCSIDriverConfigGetter{control: control},
+	}
+
+	// Pre-pass fails with Unavailable before creating host directories or mounting earlier volumes.
+	err := s.mountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{cachedVol, unavailVol})
+	if apierror.Code(err) != codes.Unavailable || len(cachedPlugin.mountCalls) != 0 {
+		t.Fatalf("mountExternalVolumes() code = %v (err=%v), mountCalls = %d; want Unavailable and 0 mounts", apierror.Code(err), err, len(cachedPlugin.mountCalls))
+	}
+	if _, statErr := os.Stat(ateletpath.ExternalVolumeHostPath(actorUID, "vol-1")); !os.IsNotExist(statErr) {
+		t.Fatalf("vol-1 mount dir created despite pre-pass failure: statErr = %v", statErr)
+	}
+
+	// Unmount returns Unavailable only when every failed volume failed with Unavailable.
+	if err := s.unmountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{unavailVol}); apierror.Code(err) != codes.Unavailable {
+		t.Fatalf("unmountExternalVolumes(all Unavailable) code = %v (err=%v), want Unavailable", apierror.Code(err), err)
+	}
+	mixedErr := s.unmountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{unavailVol, cachedVol})
+	if apierror.Code(mixedErr) != codes.Internal || !errors.Is(mixedErr, busyErr) {
+		t.Fatalf("unmountExternalVolumes(mixed) code = %v, errors.Is(busy) = %t (err=%v); want Internal wrapping busyErr", apierror.Code(mixedErr), errors.Is(mixedErr, busyErr), mixedErr)
+	}
+
+	// Context errors ([DeadlineExceeded] and [Unavailable, Canceled]) preserve context status codes.
+	expiredCtx, cancelExpired := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancelExpired()
+	control.err = status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	if err := s.unmountExternalVolumes(expiredCtx, actorUID, []*ateletpb.Volume{unavailVol}); apierror.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("unmountExternalVolumes([DeadlineExceeded]) code = %v (err=%v), want DeadlineExceeded", apierror.Code(err), err)
+	}
+
+	cancelMidCtx, cancelMid := context.WithCancel(ctx)
+	defer cancelMid()
+	secondUnavailVol := &ateletpb.Volume{Name: "vol-3", External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "vid-3", VolumeType: "unavail-2.csi.io"}}
+	var unmountCalls int
+	s.csiDriverConfigGetter = getterFunc(func(c context.Context, driver string) (*ateapi.CsiDriverConfig, error) {
+		unmountCalls++
+		if unmountCalls == 1 {
+			cancelMid()
+			return nil, apierror.Unavailable("ateapi restarting")
+		}
+		return nil, c.Err()
+	})
+	if err := s.unmountExternalVolumes(cancelMidCtx, actorUID, []*ateletpb.Volume{unavailVol, secondUnavailVol}); apierror.Code(err) != codes.Canceled {
+		t.Fatalf("unmountExternalVolumes([Unavailable, Canceled]) code = %v (err=%v), want Canceled", apierror.Code(err), err)
+	}
+
+	// Pre-pass deduplicates s.getPlugin per unique VolumeType so a mid-call TTL expiry cannot evict vol-1's plugin.
+	sockDir, err := os.MkdirTemp("", "atelet-dedup-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	sock1, srv1 := startTestCSINodeSocket(t, sockDir, "s1.sock", "dedup.csi.io", nil)
+	sock2, _ := startTestCSINodeSocket(t, sockDir, "s2.sock", "dedup.csi.io", nil)
+	stepSock, _ := startTestCSINodeSocket(t, sockDir, "step.sock", "step.csi.io", nil)
+	fc := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	var dedupCalls int
+	dedupAtelet := cleanupAteletCSIPlugins(t, &Atelet{
+		clock: fc,
+		csiDriverConfigGetter: getterFunc(func(_ context.Context, driver string) (*ateapi.CsiDriverConfig, error) {
+			if driver == "step.csi.io" {
+				fc.Step(defaultCSIPluginConfigTTL)
+				return &ateapi.CsiDriverConfig{DriverName: driver, NodeSocketOverride: stepSock}, nil
+			}
+			dedupCalls++
+			if dedupCalls == 1 {
+				return &ateapi.CsiDriverConfig{DriverName: driver, NodeSocketOverride: sock1}, nil
+			}
+			return &ateapi.CsiDriverConfig{DriverName: driver, NodeSocketOverride: sock2}, nil
+		}),
+	})
+	if _, err := dedupAtelet.getPlugin(ctx, "dedup.csi.io"); err != nil {
+		t.Fatal(err)
+	}
+	v1 := &ateletpb.Volume{Name: "d1", External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "vid-1", VolumeType: "dedup.csi.io"}}
+	vStep := &ateletpb.Volume{Name: "step", External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "vid-s", VolumeType: "step.csi.io"}}
+	v2 := &ateletpb.Volume{Name: "d2", External: &ateletpb.ExternalVolumeSource{StorageVolumeId: "vid-2", VolumeType: "dedup.csi.io"}}
+	if err := dedupAtelet.mountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{v1, vStep, v2}); err != nil || dedupCalls != 1 || srv1.publishes.Load() != 2 {
+		t.Fatalf("mountExternalVolumes(dedup) err = %v, dedupCalls = %d, publishes = %d; want (nil, 1, 2)", err, dedupCalls, srv1.publishes.Load())
+	}
+}
+
+type getterFunc func(context.Context, string) (*ateapi.CsiDriverConfig, error)
+
+func (f getterFunc) Get(ctx context.Context, driverName string) (*ateapi.CsiDriverConfig, error) {
+	return f(ctx, driverName)
 }
