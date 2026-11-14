@@ -19,10 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
@@ -69,6 +71,67 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	}
 	if got, want := stored.GetMetadata().GetVersion(), created.GetMetadata().GetVersion()+1; got != want {
 		t.Errorf("version = %d, want %d", got, want)
+	}
+}
+
+func TestCreateActorKeepsPreassignedMetadata(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	preassignedTime := timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+
+	tests := []struct {
+		name       string
+		actor      string
+		uid        string
+		createTime *timestamppb.Timestamp
+	}{
+		{name: "assigns uid and create_time when empty", actor: "actor-a"},
+		{
+			name:       "keeps caller-assigned uid and create_time",
+			actor:      "actor-b",
+			uid:        "11111111-2222-4333-8444-555555555555",
+			createTime: preassignedTime,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := s.CreateActor(ctx, &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{
+					Atespace:   "team-a",
+					Name:       tc.actor,
+					Uid:        tc.uid,
+					CreateTime: tc.createTime,
+				},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "default", Name: "template-a"},
+				Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			stored, err := s.GetActor(ctx, resources.ActorRefFromActor(created))
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			for _, a := range []*ateapi.Actor{created, stored} {
+				meta := a.GetMetadata()
+				if meta.GetUid() == "" {
+					t.Fatal("uid is empty")
+				}
+				if tc.uid != "" && meta.GetUid() != tc.uid {
+					t.Errorf("uid = %q, want %q", meta.GetUid(), tc.uid)
+				}
+				if meta.GetCreateTime() == nil || meta.GetUpdateTime() == nil {
+					t.Fatal("timestamps are nil")
+				}
+				if !meta.GetCreateTime().AsTime().Equal(meta.GetUpdateTime().AsTime()) {
+					t.Errorf("create_time %v != update_time %v", meta.GetCreateTime().AsTime(), meta.GetUpdateTime().AsTime())
+				}
+				if tc.createTime != nil && !meta.GetCreateTime().AsTime().Equal(tc.createTime.AsTime()) {
+					t.Errorf("create_time = %v, want %v", meta.GetCreateTime().AsTime(), tc.createTime.AsTime())
+				}
+			}
+		})
 	}
 }
 
