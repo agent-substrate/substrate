@@ -25,8 +25,10 @@ import (
 	"go.ate.dev/substrate/internal/netns"
 )
 
-// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource) (*Server, error) {
+// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace. It
+// forwards queries policy allows to the worker pod's resolvers, or, when
+// exchanger is not nil, sends every query to exchanger without checking policy.
+func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource, exchanger Exchanger) (*Server, error) {
 	// Bind the wildcard because the microVM tap's gateway address is added later.
 	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
 
@@ -51,13 +53,15 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource)
 		return nil, err
 	}
 
-	egressUDP, err := net.ListenPacket("udp", ":0")
-	if err != nil {
-		_ = netC.udp.Close()
-		_ = netC.tcpListener.Close()
-		return nil, fmt.Errorf("while opening the worker DNS egress socket: %w", err)
+	if exchanger == nil {
+		egressUDP, err := net.ListenPacket("udp", ":0")
+		if err != nil {
+			_ = netC.udp.Close()
+			_ = netC.tcpListener.Close()
+			return nil, fmt.Errorf("while opening the worker DNS egress socket: %w", err)
+		}
+		netC.egressUDP = egressUDP
 	}
-	netC.egressUDP = egressUDP
 
-	return r.serveOn(ctx, &netC, policy)
+	return r.serveOn(ctx, &netC, policy, exchanger)
 }
