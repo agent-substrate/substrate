@@ -36,10 +36,10 @@ const execTimeout = 1 * time.Minute
 // the limit keeps a misbehaving binary from ballooning atelet's heap.
 const maxResponseBytes = 1 << 20
 
-// exec runs the plugin once for image and returns its parsed response. The
-// protocol is the kubelet's: a CredentialProviderRequest as JSON on stdin, a
-// CredentialProviderResponse as JSON on stdout.
-func (p *plugin) exec(ctx context.Context, image string) (*credentialproviderv1.CredentialProviderResponse, error) {
+// exec runs the plugin once for image and returns its parsed response and
+// raw stderr. The protocol is the kubelet's: a CredentialProviderRequest as
+// JSON on stdin, a CredentialProviderResponse as JSON on stdout.
+func (p *plugin) exec(ctx context.Context, image string) (*credentialproviderv1.CredentialProviderResponse, string, error) {
 	req := &credentialproviderv1.CredentialProviderRequest{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "CredentialProviderRequest",
@@ -49,7 +49,7 @@ func (p *plugin) exec(ctx context.Context, image string) (*credentialproviderv1.
 	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("while encoding credential provider request: %w", err)
+		return nil, "", fmt.Errorf("while encoding credential provider request: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
@@ -57,6 +57,7 @@ func (p *plugin) exec(ctx context.Context, image string) (*credentialproviderv1.
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, p.path, p.args...)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdin = bytes.NewReader(reqJSON)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -64,23 +65,24 @@ func (p *plugin) exec(ctx context.Context, image string) (*credentialproviderv1.
 	// settings (proxy vars, cloud SDK config) to reach their metadata service.
 	cmd.Env = append(os.Environ(), p.env...)
 
+	errStr := func() string { return truncate(stderr.String()) }
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("while running credential provider %q: %w (stderr: %s)", p.name, err, truncate(stderr.String()))
+		return nil, errStr(), fmt.Errorf("while running credential provider %q: %w (stderr: %s)", p.name, err, errStr())
 	}
 	if stdout.Len() > maxResponseBytes {
-		return nil, fmt.Errorf("credential provider %q returned %d bytes, over the %d byte limit", p.name, stdout.Len(), maxResponseBytes)
+		return nil, errStr(), fmt.Errorf("credential provider %q returned %d bytes, over the %d byte limit", p.name, stdout.Len(), maxResponseBytes)
 	}
 
 	var resp credentialproviderv1.CredentialProviderResponse
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		return nil, fmt.Errorf("while decoding response from credential provider %q: %w (stderr: %s)", p.name, err, truncate(stderr.String()))
+		return nil, errStr(), fmt.Errorf("while decoding response from credential provider %q: %w (stderr: %s)", p.name, err, errStr())
 	}
 	// A response encoded at a version we did not ask for may have different
 	// field semantics, so refuse it rather than misread the credentials.
 	if resp.APIVersion != supportedAPIVersion {
-		return nil, fmt.Errorf("credential provider %q responded with apiVersion %q, want %q", p.name, resp.APIVersion, supportedAPIVersion)
+		return nil, errStr(), fmt.Errorf("credential provider %q responded with apiVersion %q, want %q", p.name, resp.APIVersion, supportedAPIVersion)
 	}
-	return &resp, nil
+	return &resp, errStr(), nil
 }
 
 // truncate bounds plugin stderr so a chatty provider cannot flood atelet's

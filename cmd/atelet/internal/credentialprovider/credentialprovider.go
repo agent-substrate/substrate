@@ -25,6 +25,8 @@ package credentialprovider
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,11 +157,38 @@ func (k *Keychain) Candidates(ctx context.Context, target authn.Resource) ([]aut
 
 // cacheEntry is one plugin response's auth map, held until expiry. The whole
 // map is kept because a Registry or Global entry serves other images, which
-// may match a different key. An empty map is cached too, so "no credentials
-// for you" costs no further subprocess.
+// may match a different key. Responses with no usable credentials are not
+// cached so a transient STS or metadata-server throttle cannot poison pulls.
 type cacheEntry struct {
 	auth      map[string]credentialproviderv1.AuthConfig
 	expiresAt time.Time
+}
+
+type pluginFlight struct {
+	waiters     int
+	finished    bool
+	cancel      context.CancelFunc
+	done        chan struct{}
+	leaderImage string
+	auth        map[string]credentialproviderv1.AuthConfig
+	keyType     credentialproviderv1.PluginCacheKeyType
+	err         error
+}
+
+func (p *plugin) releaseWaiter(flightKey string, f *pluginFlight) {
+	var cancel context.CancelFunc
+	p.mu.Lock()
+	f.waiters--
+	if f.waiters == 0 && !f.finished {
+		if p.flights[flightKey] == f {
+			delete(p.flights, flightKey)
+		}
+		cancel = f.cancel
+	}
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // plugin is one configured provider executable and its response cache.
@@ -171,8 +200,9 @@ type plugin struct {
 	matchImages          []string
 	defaultCacheDuration time.Duration
 
-	mu    sync.Mutex
-	cache map[string]cacheEntry
+	mu      sync.Mutex
+	cache   map[string]cacheEntry
+	flights map[string]*pluginFlight
 }
 
 // claims reports whether this plugin is configured to handle image.
@@ -208,20 +238,223 @@ const globalCacheKey = "global"
 // Only zero is raised. A provider naming a shorter lifetime has opted into
 // caching and may be describing a genuinely short-lived credential, so
 // stretching it could serve an expired one.
-const minCacheDuration = time.Minute
+const (
+	minCacheDuration  = time.Minute
+	maxExecAttempts   = 5
+	retryBaseInterval = 200 * time.Millisecond
+	retryMaxInterval  = 2 * time.Second
+)
+
+// usableAuthMap returns a copy of raw containing only entries with a non-empty
+// password. Providers throttled by an upstream token service can exit 0 with an
+// empty map or an empty password; treating those as unusable keeps Candidates
+// from trying a blank secret and keeps store from caching the failure.
+func usableAuthMap(raw map[string]credentialproviderv1.AuthConfig) map[string]credentialproviderv1.AuthConfig {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]credentialproviderv1.AuthConfig
+	for k, v := range raw {
+		if v.Password == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]credentialproviderv1.AuthConfig, len(raw))
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func isTransientThrottleOutput(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	lower := strings.ToLower(msg)
+	for _, phrase := range []string{
+		"too many requests",
+		"quota_exceeded",
+		"quota exceeded",
+		"resource_exhausted",
+		"rate limit",
+		"temporarily unavailable",
+		"service unavailable",
+		"bad gateway",
+		"gateway timeout",
+		"internal server error",
+		"i/o timeout",
+		"tls handshake timeout",
+		"connection reset",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	for _, code := range []string{"429", "500", "502", "503", "504"} {
+		for _, prefix := range []string{
+			"status " + code,
+			"status: " + code,
+			"status=" + code,
+			"status code " + code,
+			"status code: " + code,
+			"http " + code,
+			"http/1.1 " + code,
+			"http/2 " + code,
+			"code " + code,
+			"code=" + code,
+			"error " + code,
+		} {
+			if strings.Contains(lower, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // provide returns the plugin's auth map for image, from the cache if
-// possible; cached reports which.
+// possible; cached reports which. Concurrent cold misses for the same registry
+// share one plugin execution so a burst of pulls on a fresh node does not
+// stampede the node's metadata or STS endpoint.
 func (p *plugin) provide(ctx context.Context, image string) (auth map[string]credentialproviderv1.AuthConfig, cached bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	if auth, ok := p.lookup(image); ok {
 		return auth, true, nil
 	}
-	resp, err := p.exec(ctx, image)
+
+	regKey := "reg:" + registryOf(image)
+	auth, keyType, leaderImage, isLeader, err := p.joinOrRunFlight(ctx, regKey, image)
 	if err != nil {
 		return nil, false, err
 	}
-	p.store(image, resp)
-	return resp.Auth, false, nil
+	if isLeader || image == leaderImage ||
+		keyType == credentialproviderv1.RegistryPluginCacheKeyType ||
+		keyType == credentialproviderv1.GlobalPluginCacheKeyType {
+		return auth, !isLeader && len(auth) > 0, nil
+	}
+
+	// The plugin scopes credentials per repository (Image), and the registry
+	// flight ran for a different repository. Check the cache first, then run a
+	// repository-scoped flight.
+	if auth, ok := p.lookup(image); ok {
+		return auth, true, nil
+	}
+	auth, _, _, isImgLeader, err := p.joinOrRunFlight(ctx, "img:"+image, image)
+	if err != nil {
+		return nil, false, err
+	}
+	return auth, !isImgLeader && len(auth) > 0, nil
+}
+
+func (p *plugin) joinOrRunFlight(ctx context.Context, flightKey, image string) (
+	auth map[string]credentialproviderv1.AuthConfig,
+	keyType credentialproviderv1.PluginCacheKeyType,
+	leaderImage string,
+	isLeader bool,
+	err error,
+) {
+	p.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		p.mu.Unlock()
+		return nil, "", "", false, err
+	}
+	if cachedAuth, ok := p.lookupLocked(image, time.Now()); ok {
+		p.mu.Unlock()
+		return cachedAuth, credentialproviderv1.RegistryPluginCacheKeyType, image, false, nil
+	}
+	f, ok := p.flights[flightKey]
+	if ok {
+		f.waiters++
+		p.mu.Unlock()
+	} else {
+		execCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		f = &pluginFlight{
+			waiters:     1,
+			cancel:      cancel,
+			done:        make(chan struct{}),
+			leaderImage: image,
+		}
+		p.flights[flightKey] = f
+		isLeader = true
+		p.mu.Unlock()
+		go p.runFlight(execCtx, flightKey, f)
+	}
+
+	select {
+	case <-f.done:
+		return f.auth, f.keyType, f.leaderImage, isLeader, f.err
+	case <-ctx.Done():
+		p.releaseWaiter(flightKey, f)
+		return nil, "", "", false, ctx.Err()
+	}
+}
+
+func (p *plugin) runFlight(ctx context.Context, flightKey string, f *pluginFlight) {
+	resp, err := p.execWithRetry(ctx, f.leaderImage)
+	var auth map[string]credentialproviderv1.AuthConfig
+	var keyType credentialproviderv1.PluginCacheKeyType
+	if err == nil && resp != nil {
+		auth = usableAuthMap(resp.Auth)
+		keyType = resp.CacheKeyType
+		if len(auth) > 0 {
+			clean := *resp
+			clean.Auth = auth
+			p.store(f.leaderImage, &clean)
+		}
+	}
+
+	f.auth = auth
+	f.keyType = keyType
+	f.err = err
+
+	p.mu.Lock()
+	if p.flights[flightKey] == f {
+		delete(p.flights, flightKey)
+	}
+	f.finished = true
+	cancel := f.cancel
+	p.mu.Unlock()
+
+	cancel()
+	close(f.done)
+}
+
+func (p *plugin) execWithRetry(ctx context.Context, image string) (*credentialproviderv1.CredentialProviderResponse, error) {
+	var lastResp *credentialproviderv1.CredentialProviderResponse
+	var lastErr error
+	for attempt := range maxExecAttempts {
+		if attempt > 0 {
+			base := min(retryBaseInterval<<(attempt-1), retryMaxInterval)
+			wait := base + time.Duration(rand.Int64N(int64(base/2)+1))
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		resp, stderr, err := p.exec(ctx, image)
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil || attempt == maxExecAttempts-1 || !isTransientThrottleOutput(stderr) {
+				return nil, err
+			}
+			slog.WarnContext(ctx, "Retrying transient image credential provider error",
+				slog.String("provider", p.name), slog.Int("attempt", attempt+1), slog.Any("err", err))
+			continue
+		}
+		lastResp = resp
+		lastErr = nil
+		if len(usableAuthMap(resp.Auth)) > 0 || attempt == maxExecAttempts-1 || !isTransientThrottleOutput(stderr) {
+			return resp, nil
+		}
+		slog.WarnContext(ctx, "Retrying image credential provider after empty credentials with throttle stderr",
+			slog.String("provider", p.name), slog.Int("attempt", attempt+1), slog.String("stderr", stderr))
+	}
+	return lastResp, lastErr
 }
 
 // lookup tries every key type the plugin might have stored under, most
@@ -229,7 +462,10 @@ func (p *plugin) provide(ctx context.Context, image string) (auth map[string]cre
 func (p *plugin) lookup(image string) (map[string]credentialproviderv1.AuthConfig, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	now := time.Now()
+	return p.lookupLocked(image, time.Now())
+}
+
+func (p *plugin) lookupLocked(image string, now time.Time) (map[string]credentialproviderv1.AuthConfig, bool) {
 	for _, key := range []string{image, registryOf(image), globalCacheKey} {
 		entry, ok := p.cache[key]
 		if !ok {
@@ -245,8 +481,12 @@ func (p *plugin) lookup(image string) (map[string]credentialproviderv1.AuthConfi
 }
 
 // store caches resp's auth map under the key type the plugin asked for. A
-// response carrying an unrecognized cacheKeyType is not cached at all.
+// response carrying no usable credentials or an unrecognized cacheKeyType is
+// not cached.
 func (p *plugin) store(image string, resp *credentialproviderv1.CredentialProviderResponse) {
+	if len(resp.Auth) == 0 {
+		return
+	}
 	var key string
 	switch resp.CacheKeyType {
 	case credentialproviderv1.ImagePluginCacheKeyType:
