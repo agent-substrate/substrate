@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,8 +40,9 @@ import (
 type gatedRegistry struct {
 	host string
 
-	mu    sync.Mutex
-	gates map[string]chan struct{}
+	mu      sync.Mutex
+	gates   map[string]chan struct{}
+	arrived chan string // nil until arrivals is called
 }
 
 func newGatedRegistry(t *testing.T) *gatedRegistry {
@@ -50,15 +52,23 @@ func newGatedRegistry(t *testing.T) *gatedRegistry {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
 				g.mu.Lock()
-				var ch chan struct{}
+				var (
+					matched string
+					ch      chan struct{}
+				)
 				for hex, c := range g.gates {
 					if strings.Contains(r.URL.Path, hex) {
+						matched = hex
 						ch = c
 						break
 					}
 				}
+				arrived := g.arrived
 				g.mu.Unlock()
 				if ch != nil {
+					if arrived != nil {
+						arrived <- matched
+					}
 					<-ch
 				}
 			}
@@ -66,6 +76,15 @@ func newGatedRegistry(t *testing.T) *gatedRegistry {
 		})
 	})
 	return g
+}
+
+// arrivals returns a channel that receives the digest hex of each gated blob
+// GET as it reaches its gate.
+func (g *gatedRegistry) arrivals() <-chan string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.arrived = make(chan string, 16)
+	return g.arrived
 }
 
 // gate blocks future GETs of the layer's compressed blob until release.
@@ -387,5 +406,87 @@ func TestDetachedPullBoundedByPullTimeout(t *testing.T) {
 
 	if _, err := store.EnsureImage(context.Background(), ref); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("EnsureImage on a wedged pull = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// Larger layers at the end of the manifest must start in the first
+// layerPullConcurrency wave ahead of smaller layers, breaking ties in manifest
+// order while LayerDirs still returns layers in manifest order.
+func TestPullStartsLargestLayersFirst(t *testing.T) {
+	reg := newGatedRegistry(t)
+	specs := []struct {
+		name string
+		size int
+	}{
+		{"a", 1 << 11},
+		{"b", 1 << 11}, // ties with "a"; manifest order picks "a" before "b"
+		{"c", 1 << 16},
+		{"d", 1 << 18},
+		{"e", 1 << 20},
+	}
+	layers := make([]v1.Layer, len(specs))
+	digests := make([]string, len(specs))
+	releases := make([]func(), len(specs))
+	for i, s := range specs {
+		layers[i] = layerFromEntries(t, []tarEntry{
+			{name: s.name, typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat(s.name, s.size)},
+		})
+		d, err := layers[i].Digest()
+		if err != nil {
+			t.Fatalf("layer %s digest: %v", s.name, err)
+		}
+		digests[i] = d.Hex
+		releases[i] = reg.gate(t, layers[i])
+	}
+
+	order, err := layerPullOrder(layers)
+	if err != nil {
+		t.Fatalf("layerPullOrder: %v", err)
+	}
+	if want := []int{4, 3, 2, 0, 1}; !slices.Equal(order, want) {
+		t.Fatalf("layerPullOrder = %v, want %v", order, want)
+	}
+
+	ref := reg.host + "/test/lpt:latest"
+	pushImage(t, ref, v1.Config{}, layers...)
+
+	arrived := reg.arrivals()
+	store := newTestStore(t)
+	done := make(chan error, 1)
+	var img *Image
+	go func() {
+		var err error
+		img, err = store.EnsureImage(context.Background(), ref)
+		done <- err
+	}()
+
+	// All 5 layers are gated, so at most layerPullConcurrency (4) blob GETs can
+	// arrive before a gate opens: "c", "d", "e" by size, plus "a" ahead of
+	// equal-sized "b" by manifest order.
+	firstWave := make([]string, layerPullConcurrency)
+	for i := range firstWave {
+		select {
+		case firstWave[i] = <-arrived:
+		case err := <-done:
+			t.Fatalf("EnsureImage returned before %d layer pulls arrived: %v", layerPullConcurrency, err)
+		}
+	}
+	if slices.Contains(firstWave, digests[1]) {
+		t.Errorf("first %d layer pulls = %v, want layer b (%s) queued behind larger layers c..e and earlier tie a", layerPullConcurrency, firstWave, digests[1])
+	}
+
+	for _, release := range releases {
+		release()
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	if len(img.LayerDirs) != len(layers) {
+		t.Fatalf("len(LayerDirs) = %d, want %d", len(img.LayerDirs), len(layers))
+	}
+	for i, dir := range img.LayerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName, specs[i].name)); err != nil {
+			t.Errorf("LayerDirs[%d] missing entry %q: %v", i, specs[i].name, err)
+		}
 	}
 }
