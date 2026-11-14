@@ -15,12 +15,14 @@
 package apivalidation
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"testing"
 
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/preview"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -70,6 +72,70 @@ func selectorLabelsOfSize(n int) map[string]string {
 		labels[fmt.Sprintf("k%d", i)] = "v"
 	}
 	return labels
+}
+
+func annotationsOfBytes(extra int) map[string]string {
+	out := make(map[string]string, 16)
+	for i := range 16 {
+		valLen := 253
+		if i == 0 {
+			valLen += extra
+		}
+		out[fmt.Sprintf("k%02d", i)] = strings.Repeat("v", valLen)
+	}
+	return out
+}
+
+func TestValidateAnnotations(t *testing.T) {
+	path := field.NewPath("annotations")
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        field.ErrorList
+	}{{
+		name: "nil",
+	}, {
+		name:        "arbitrary values",
+		annotations: map[string]string{"owner": "team-a", "owner/team": "platform", "runbook": "https://runbooks.example.com/a?b=1&c=2"},
+	}, {
+		name:        "max entries (16)",
+		annotations: selectorLabelsOfSize(16),
+	}, {
+		name:        "too many entries (17)",
+		annotations: selectorLabelsOfSize(17),
+		want:        field.ErrorList{field.TooMany(path, 17, 16).WithOrigin("maxProperties")},
+	}, {
+		name:        "invalid key format",
+		annotations: map[string]string{"bad key!": "1"},
+		want:        field.ErrorList{field.Invalid(path, "bad key!", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		name:        "reserved exact prefix ate.dev/",
+		annotations: map[string]string{"ate.dev/internal": "1"},
+		want:        field.ErrorList{field.Invalid(path, "ate.dev/internal", "")},
+	}, {
+		name:        "reserved subdomain prefix foo.ate.dev/",
+		annotations: map[string]string{"foo.ate.dev/internal": "1"},
+		want:        field.ErrorList{field.Invalid(path, "foo.ate.dev/internal", "")},
+	}, {
+		name:        "non-reserved lookalike domain myate.dev/",
+		annotations: map[string]string{"myate.dev/ok": "1"},
+	}, {
+		name:        "exactly max total bytes",
+		annotations: annotationsOfBytes(0),
+	}, {
+		name:        "exceeds max total bytes by 1",
+		annotations: annotationsOfBytes(1),
+		want:        field.ErrorList{field.TooLong(path, "", maxAnnotationsSizeBytes)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := MakeCreateOp(context.Background())
+			rm := validResourceMetadata(func(m *ateapi.ResourceMetadata) {
+				m.Annotations = tt.annotations
+			})
+			assertValidateErr(t, Validate_ResourceMetadata(context.Background(), op, nil, rm, nil), tt.want)
+		})
+	}
 }
 
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {

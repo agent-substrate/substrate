@@ -49,6 +49,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 		name        string
 		templateRef string
 		tag         string
+		annotations string
 		want        *ateapi.Actor
 		wantErr     bool
 	}{
@@ -88,13 +89,32 @@ func TestBuildCreateActorRequest(t *testing.T) {
 				ActorTemplate: &ateapi.ObjectRef{Atespace: "shared-templates", Name: "counter"},
 			},
 		},
+		{
+			name:        "annotations with URLs and equals signs in values",
+			templateRef: "counter",
+			annotations: "owner=team-a,example.com/url=https://example.com:8443/path?a=1&b=2",
+			want: &ateapi.Actor{
+				Metadata: &ateapi.ResourceMetadata{
+					Atespace: "demo",
+					Name:     "my-counter",
+					Annotations: map[string]string{
+						"owner":           "team-a",
+						"example.com/url": "https://example.com:8443/path?a=1&b=2",
+					},
+				},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter"},
+			},
+		},
 		{name: "malformed template ref", templateRef: "a/b/c", wantErr: true},
 		{name: "malformed tag", templateRef: "counter", tag: "a/b/c", wantErr: true},
+		{name: "annotation missing equals sign", templateRef: "counter", annotations: "no-equals", wantErr: true},
+		{name: "annotation invalid key", templateRef: "counter", annotations: "bad key!=v", wantErr: true},
+		{name: "annotation duplicate key", templateRef: "counter", annotations: "k=1,k=2", wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag)
+			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag, test.annotations)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("buildCreateActorRequest error = %v, wantErr %t", err, test.wantErr)
 			}
@@ -290,10 +310,11 @@ func TestUpdateActor(t *testing.T) {
 	baseActor := func() *ateapi.Actor {
 		return &ateapi.Actor{
 			Metadata: &ateapi.ResourceMetadata{
-				Atespace: "demo",
-				Name:     "my-counter",
-				Uid:      "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
-				Version:  3,
+				Atespace:    "demo",
+				Name:        "my-counter",
+				Uid:         "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
+				Version:     3,
+				Annotations: map[string]string{"owner": "team-a"},
 			},
 			ActorTemplate:  &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
 			WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
@@ -303,32 +324,36 @@ func TestUpdateActor(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		mutate       func(*ateapi.Actor)
-		wantTemplate *ateapi.ObjectRef
-		wantSelector *ateapi.Selector
+		name            string
+		mutate          func(*ateapi.Actor)
+		wantTemplate    *ateapi.ObjectRef
+		wantSelector    *ateapi.Selector
+		wantAnnotations map[string]string
 	}{
 		{
-			name: "repoint template keeps worker selector",
+			name: "repoint template keeps worker selector and annotations",
 			mutate: func(a *ateapi.Actor) {
 				a.ActorTemplate = &ateapi.ObjectRef{Atespace: "shared", Name: "counter-v2"}
 			},
-			wantTemplate: &ateapi.ObjectRef{Atespace: "shared", Name: "counter-v2"},
-			wantSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			wantTemplate:    &ateapi.ObjectRef{Atespace: "shared", Name: "counter-v2"},
+			wantSelector:    &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			wantAnnotations: map[string]string{"owner": "team-a"},
 		},
 		{
 			name: "update worker selector keeps template",
 			mutate: func(a *ateapi.Actor) {
 				a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}}
 			},
-			wantTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
-			wantSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
+			wantTemplate:    &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector:    &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid", "env": "prod"}},
+			wantAnnotations: map[string]string{"owner": "team-a"},
 		},
 		{
-			name:         "nil worker selector clears existing selector",
-			mutate:       func(a *ateapi.Actor) { a.WorkerSelector = nil },
-			wantTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
-			wantSelector: nil,
+			name:            "nil worker selector clears existing selector",
+			mutate:          func(a *ateapi.Actor) { a.WorkerSelector = nil },
+			wantTemplate:    &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector:    nil,
+			wantAnnotations: map[string]string{"owner": "team-a"},
 		},
 		{
 			name: "update both template and worker selector",
@@ -336,8 +361,27 @@ func TestUpdateActor(t *testing.T) {
 				a.ActorTemplate = &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v2"}
 				a.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 			},
-			wantTemplate: &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v2"},
-			wantSelector: &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			wantTemplate:    &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v2"},
+			wantSelector:    &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			wantAnnotations: map[string]string{"owner": "team-a"},
+		},
+		{
+			name: "update annotations",
+			mutate: func(a *ateapi.Actor) {
+				a.Metadata.Annotations = map[string]string{"owner": "team-b", "env": "prod"}
+			},
+			wantTemplate:    &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector:    &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			wantAnnotations: map[string]string{"owner": "team-b", "env": "prod"},
+		},
+		{
+			name: "nil annotations clears existing annotations",
+			mutate: func(a *ateapi.Actor) {
+				a.Metadata.Annotations = nil
+			},
+			wantTemplate:    &ateapi.ObjectRef{Atespace: "demo", Name: "counter-v1"},
+			wantSelector:    &ateapi.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			wantAnnotations: nil,
 		},
 	}
 
@@ -357,6 +401,7 @@ func TestUpdateActor(t *testing.T) {
 			want := baseActor()
 			want.ActorTemplate = tc.wantTemplate
 			want.WorkerSelector = tc.wantSelector
+			want.Metadata.Annotations = tc.wantAnnotations
 			want.Metadata.Version = 4
 			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("updated actor mismatch (-want +got):\n%s", diff)

@@ -272,6 +272,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, inActor)
 		// Restore status and metadata from the server.
+		metadata.Annotations = inActor.GetMetadata().GetAnnotations()
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
 		defaults.Apply(toUpdate)
