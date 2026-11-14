@@ -16,7 +16,9 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"sort"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -145,6 +147,37 @@ func (a *NamespaceAuthorizer) Grants() map[string][]string {
 			list = append(list, ns)
 		}
 		sort.Strings(list)
+		out[atespace] = list
+	}
+	return out
+}
+
+// NamespaceGrant describes one grant allowing an atespace to resolve Secrets
+// in Namespace. MatchLabels is nil when the grant admits every Secret there.
+type NamespaceGrant struct {
+	Namespace   string            `json:"namespace"`
+	MatchLabels map[string]string `json:"match_labels,omitempty"`
+}
+
+// GrantDetails returns the loaded policy per atespace, sorted by namespace and
+// preserving each grant's secretSelector labels.
+func (a *NamespaceAuthorizer) GrantDetails() map[string][]NamespaceGrant {
+	if a == nil {
+		return nil
+	}
+	out := make(map[string][]NamespaceGrant, len(a.allowed))
+	for atespace, namespaces := range a.allowed {
+		names := slices.Sorted(maps.Keys(namespaces))
+		list := make([]NamespaceGrant, 0, len(names))
+		for _, ns := range names {
+			for _, g := range namespaces[ns] {
+				var labels map[string]string
+				if len(g.labels) > 0 {
+					labels = maps.Clone(g.labels)
+				}
+				list = append(list, NamespaceGrant{Namespace: ns, MatchLabels: labels})
+			}
+		}
 		out[atespace] = list
 	}
 	return out
