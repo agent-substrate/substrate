@@ -88,3 +88,30 @@ UDP and TCP call up to the DNS protocol layer (`golang.org/x/net/dns/dnsmessage`
   - Over UDP, a response larger than the Actor accepts (512 bytes, or the size in its EDNS `OPT` record): an empty response with `TC` set, so the resolver retries over TCP.
 - Over TCP, queries on one connection are exchanged concurrently and may be answered out of order. A query over the `inFlight` limit is answered `SERVFAIL`.
 - The egress client exists only after the Actor's egress is activated. Queries before that, and all queries of an Actor without an egress gateway, are answered `SERVFAIL`.
+
+## Measuring lookup latency
+
+`TestActorDNSLatency` in `internal/e2e/suites/networking` logs how long DNS lookups take from inside an Actor, for a name its EgressPolicy allows and for one it does not. Run it under each `--dns-egress-policy` mode and compare the two.
+
+The cluster needs Substrate installed the way the e2e suites need it (see [`internal/e2e/README.md`](../../e2e/README.md)), and the egress demo, whose `/dns` endpoint the test drives. `ate-setup` keeps an existing demo, so delete it first to pick up a changed one:
+
+```sh
+go run ./cmd/ate-setup delete demo egress   # only if it is already deployed
+go run ./cmd/ate-setup deploy demo egress
+```
+
+`ate-setup` has no setting for the mode. Change it on the controller, which rolls the worker pools:
+
+```sh
+kubectl -n ate-system get deploy ate-controller -o yaml \
+  | sed 's/--dns-egress-policy=enforce-in-atunnel/--dns-egress-policy=enforce-in-pep/' \
+  | kubectl apply -f -
+```
+
+Run the test, which is skipped unless `E2E_DNS_LATENCY` is set. It takes under a minute and logs one line each for the allowed and the blocked name:
+
+```sh
+E2E_DNS_LATENCY=1 hack/run-e2e.sh ./internal/e2e/suites/networking -run '^TestActorDNSLatency$' -v -args --no-color
+```
+
+On kind, add `--kind` to `ate-setup` and use `hack/run-e2e-kind.sh`.
