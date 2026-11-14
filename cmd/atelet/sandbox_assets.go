@@ -124,22 +124,15 @@ type sandboxAssetsRecord struct {
 // hard link, so the download runs once per node, concurrent callers for one
 // asset share it, and what an actor was handed stays valid whatever the
 // cache evicts later. An asset already present under dstDir is kept as it
-// is: dstDir is the actor's own, reset at Run and Restore, so a Checkpoint
-// or Terminate finds exactly what its activation staged.
+// is: an actor's dstDir is its own, reset at Run and Restore, so a
+// Checkpoint or Terminate finds exactly what its activation staged, and a
+// worker's default runtime directory, once filled, costs a stat per asset.
 func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	// Owner-only, like the actor's bundle dir: the worker runs the binaries
 	// as root, and nothing else needs to see them.
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return nil, wrapFileSystemErr("while creating sandbox assets dir", err)
 	}
-	return s.stageSandboxAssets(ctx, rec, dstDir)
-}
-
-// stageSandboxAssets is ensureSandboxAssets into a dstDir that exists: it
-// creates nothing above the assets, so a caller whose dstDir may be removed
-// under it, as the prewarmer's is when its worker goes, fails instead of
-// recreating the directory.
-func (s *Atelet) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
 		if !plainAssetName(name) {

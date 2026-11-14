@@ -62,18 +62,20 @@ func testCPUFeatures() []string {
 	}
 }
 
-// fakeAssetFetcher answers ensureSandboxAssets from fn. The paths it returns
-// are not under dstDir: the syncer only runs what it is handed, so where the
-// fake says a binary is does not matter.
+// fakeAssetFetcher answers ensureSandboxAssets from fn. It creates dstDir as
+// the real fetcher does, but the paths it returns are not under it: the
+// syncer only runs what it is handed, so where the fake says a binary is
+// does not matter.
 type fakeAssetFetcher struct {
 	fn func(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
 }
 
-func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, _ string) (map[string]string, error) {
-	return f.fn(ctx, rec)
-}
-
-func (f *fakeAssetFetcher) stageSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, _ string) (map[string]string, error) {
+func (f *fakeAssetFetcher) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
+	if dstDir != "" {
+		if err := os.MkdirAll(dstDir, 0o700); err != nil {
+			return nil, err
+		}
+	}
 	return f.fn(ctx, rec)
 }
 
@@ -174,7 +176,7 @@ func newTestSyncer(t *testing.T, objs ...any) *workerSandboxSyncer {
 	s := newWorkerSandboxSyncer(&workerSandboxResolver{
 		workerPools: atelisters.NewWorkerPoolLister(pools),
 		configs:     atelisters.NewSandboxConfigLister(configs),
-	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), nil, events.NewFakeRecorder(64))
+	}, pods, newTestAssetFetcher(), t.TempDir(), newRuntimeIndex(), events.NewFakeRecorder(64))
 	// The queue starts a goroutine; stop it with the test.
 	t.Cleanup(s.queue.ShutDown)
 	s.scratchDir = t.TempDir() // buildFile stages assets there
@@ -934,7 +936,7 @@ func TestStartWorkerSandboxSyncer(t *testing.T) {
 				ateFactory.Ate().V1().WorkerPools(),
 				ateFactory.Ate().V1().SandboxConfigs(),
 				newScriptAssetFetcher(t),
-				dir, newRuntimeIndex(), nil, &events.FakeRecorder{})
+				dir, newRuntimeIndex(), &events.FakeRecorder{})
 			if err != nil {
 				t.Fatalf("startWorkerSandboxSyncer() error = %v", err)
 			}

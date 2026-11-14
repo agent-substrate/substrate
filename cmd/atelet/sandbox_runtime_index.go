@@ -41,8 +41,7 @@ import (
 // never forgets an entry: a request may carry a hash a worker advertised
 // earlier, config churn is rare, and an entry is a few URLs. workers, by
 // worker pod UID, holds what each worker currently advertises and lives
-// with the pod; it is where the default runtime to prewarm and to protect
-// from eviction comes from.
+// with the pod.
 //
 // runtimes is also kept on disk, as one file that is the map serialized,
 // rewritten durably before a new entry is added and loaded again by
