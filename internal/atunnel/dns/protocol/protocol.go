@@ -20,6 +20,17 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
+// DNS over HTTPS (RFC 8484), as spoken between atunnel and the egress PEP.
+const (
+	// DoHPath is the path the PEP serves DNS queries on.
+	DoHPath = "/dns-query"
+	// DoHQueryParam is the GET parameter that carries the query, base64url
+	// encoded without padding.
+	DoHQueryParam = "dns"
+	// DoHMediaType is the media type of a DNS message in wire format.
+	DoHMediaType = "application/dns-message"
+)
+
 const (
 	dnsHeaderLen = 12
 
@@ -64,6 +75,11 @@ func ResponseSanityCheck(raw []byte) bool {
 		return false
 	}
 	return true
+}
+
+// TxnID of the DNS packet.
+func TxnID(raw []byte) uint16 {
+	return binary.BigEndian.Uint16(raw[0:2])
 }
 
 // SetTxnID in the DNS packet.
@@ -149,4 +165,65 @@ func ErrorPacket(hdr dnsmessage.Header, rcode dnsmessage.RCode, q *dnsmessage.Qu
 	fallback[3] = 0x80 | (byte(rcode) & 0x0f)
 
 	return fallback
+}
+
+// minUDPPayloadSize is the largest UDP DNS message a client accepts when its
+// query does not advertise a size with EDNS (RFC 1035 section 4.2.1).
+const minUDPPayloadSize = 512
+
+// UDPPayloadSize returns the largest UDP response the sender of query accepts:
+// the size in the query's EDNS OPT record (RFC 6891 section 6.1.2), or 512
+// when there is none.
+func UDPPayloadSize(query []byte) int {
+	opt, ok := optHeader(query)
+	if !ok {
+		return minUDPPayloadSize
+	}
+	return max(minUDPPayloadSize, int(opt.Class))
+}
+
+// HasEDNS reports whether msg carries an EDNS OPT record.
+func HasEDNS(msg []byte) bool {
+	_, ok := optHeader(msg)
+	return ok
+}
+
+// optHeader returns the header of msg's EDNS OPT record.
+func optHeader(msg []byte) (dnsmessage.ResourceHeader, bool) {
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil {
+		return dnsmessage.ResourceHeader{}, false
+	}
+	if p.SkipAllQuestions() != nil || p.SkipAllAnswers() != nil || p.SkipAllAuthorities() != nil {
+		return dnsmessage.ResourceHeader{}, false
+	}
+	for {
+		h, err := p.AdditionalHeader()
+		if err != nil {
+			return dnsmessage.ResourceHeader{}, false
+		}
+		if h.Type == dnsmessage.TypeOPT {
+			return h, true
+		}
+		if p.SkipAdditional() != nil {
+			return dnsmessage.ResourceHeader{}, false
+		}
+	}
+}
+
+// TruncatedPacket returns a response to the question q that carries the
+// response header hdr with the TC bit set and no records, which tells the
+// client to retry over TCP.
+func TruncatedPacket(hdr dnsmessage.Header, q dnsmessage.Question) []byte {
+	hdr.Response = true
+	hdr.Truncated = true
+	b := dnsmessage.NewBuilder(nil, hdr)
+	if err := b.StartQuestions(); err == nil {
+		_ = b.Question(q)
+	}
+	out, err := b.Finish()
+	if err != nil {
+		return ErrorPacket(hdr, dnsmessage.RCodeServerFailure, nil)
+	}
+	return out
 }
