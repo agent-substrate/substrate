@@ -16,6 +16,8 @@ package extproc
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -57,25 +59,27 @@ func WrapReqError(code envoy_type.StatusCode, cause error, format string, args .
 // ImmediateResponse tells the dataplane to answer the request itself, without
 // going upstream.
 func ImmediateResponse(statusCode envoy_type.StatusCode, message string) *extprocv3.ProcessingResponse {
+	return ImmediateResponseWithBody(statusCode, "text/plain", []byte(message), nil)
+}
+
+// ImmediateResponseWithBody is ImmediateResponse for a body of any content
+// type, with extra response headers.
+func ImmediateResponseWithBody(statusCode envoy_type.StatusCode, contentType string, body []byte, headers map[string]string) *extprocv3.ProcessingResponse {
+	// RawValue, not Value: newer versions of Envoy drop Value.
+	setHeaders := []*corev3.HeaderValueOption{{
+		Header: &corev3.HeaderValue{Key: "content-type", RawValue: []byte(contentType)},
+	}}
+	for _, key := range slices.Sorted(maps.Keys(headers)) {
+		setHeaders = append(setHeaders, &corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{Key: key, RawValue: []byte(headers[key])},
+		})
+	}
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ImmediateResponse{
 			ImmediateResponse: &extprocv3.ImmediateResponse{
-				Status: &envoy_type.HttpStatus{
-					Code: statusCode,
-				},
-				Body: []byte(message),
-				Headers: &extprocv3.HeaderMutation{
-					SetHeaders: []*corev3.HeaderValueOption{
-						{
-							// Using RawValues instead of Value: newer versions of Envoy
-							// drop Value and use RawValue
-							Header: &corev3.HeaderValue{
-								Key:      "content-type",
-								RawValue: []byte("text/plain"),
-							},
-						},
-					},
-				},
+				Status:  &envoy_type.HttpStatus{Code: statusCode},
+				Body:    body,
+				Headers: &extprocv3.HeaderMutation{SetHeaders: setHeaders},
 			},
 		},
 	}
