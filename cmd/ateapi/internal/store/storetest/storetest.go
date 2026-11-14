@@ -57,13 +57,13 @@ var (
 // SetupTestStore returns a real PostgreSQL-backed store with a database unique
 // to this test. A shared container keeps this suitable for packages that run
 // subtests in parallel; databases are dropped during cleanup.
-func SetupTestStore(t *testing.T) (store.Interface, func()) {
+func SetupTestStore(t testing.TB) (store.Interface, func()) {
 	t.Helper()
 	return SetupPostgresPersistence(t), func() {}
 }
 
 // SetupPostgresPersistence returns an isolated atepg persistence instance.
-func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
+func SetupPostgresPersistence(t testing.TB) *atepg.Persistence {
 	t.Helper()
 	ctx := context.Background()
 	admin := requireAdminPool(t)
@@ -120,7 +120,7 @@ func DefaultSystemPrincipals() authz.SystemPrincipals {
 // MustCreateAtespace creates name unless it already exists. PostgreSQL enforces
 // the parent relationship for actor and snapshot records, so test fixtures use
 // this before seeding those resources.
-func MustCreateAtespace(t *testing.T, ctx context.Context, s store.Interface, name string) {
+func MustCreateAtespace(t testing.TB, ctx context.Context, s store.Interface, name string) {
 	t.Helper()
 	_, err := s.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: name}})
 	if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
@@ -131,7 +131,7 @@ func MustCreateAtespace(t *testing.T, ctx context.Context, s store.Interface, na
 // MustCreateActor ensures actor's parent atespace exists, then creates actor.
 // Use the store method directly only in tests that exercise missing-parent
 // behavior.
-func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor *ateapi.Actor) *ateapi.Actor {
+func MustCreateActor(t testing.TB, ctx context.Context, s store.Interface, actor *ateapi.Actor) *ateapi.Actor {
 	t.Helper()
 	atespace := actor.GetMetadata().GetAtespace()
 	MustCreateAtespace(t, ctx, s, atespace)
@@ -142,6 +142,18 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 	return created
 }
 
+// Pool returns the pool behind s, for fixtures and measurements the store API
+// does not expose. s must come from SetupPostgresPersistence or SetupTestStore.
+func Pool(t testing.TB, s store.Interface) *pgxpool.Pool {
+	t.Helper()
+	persistence, _ := s.(*atepg.Persistence)
+	pool, ok := pools.Load(persistence)
+	if !ok {
+		t.Fatalf("store %T was not made by SetupPostgresPersistence", s)
+	}
+	return pool.(*pgxpool.Pool)
+}
+
 // MustSeedAssignment books assignment on workerName as BindActorToWorker does,
 // stamping its metadata the same way, but without the Actor update
 // BindActorToWorker commits with it. Tests use it to seed an Actor already
@@ -149,11 +161,7 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 // from SetupPostgresPersistence or SetupTestStore.
 func MustSeedAssignment(t *testing.T, ctx context.Context, s store.Interface, workerName string, assignment *ateapi.ActorAssignment) {
 	t.Helper()
-	persistence, _ := s.(*atepg.Persistence)
-	pool, ok := pools.Load(persistence)
-	if !ok {
-		t.Fatalf("seeding an assignment: store %T was not made by SetupPostgresPersistence", s)
-	}
+	pool := Pool(t, s)
 	now := timestamppb.Now()
 	assignment.Metadata = &ateapi.ResourceMetadata{
 		Name:       assignment.GetActorUid(),
@@ -166,7 +174,7 @@ func MustSeedAssignment(t *testing.T, ctx context.Context, s store.Interface, wo
 	if err != nil {
 		t.Fatalf("marshaling assignment: %v", err)
 	}
-	if _, err := pool.(*pgxpool.Pool).Exec(ctx, `INSERT INTO worker_assignments (actor_uid, worker_name, proto) VALUES ($1, $2, $3)`,
+	if _, err := pool.Exec(ctx, `INSERT INTO worker_assignments (actor_uid, worker_name, proto) VALUES ($1, $2, $3)`,
 		assignment.GetActorUid(), workerName, assignmentBytes); err != nil {
 		t.Fatalf("seeding assignment of actor %q on worker %q: %v", assignment.GetActorUid(), workerName, err)
 	}
@@ -248,7 +256,7 @@ func Shutdown() {
 	}
 }
 
-func requireAdminPool(t *testing.T) *pgxpool.Pool {
+func requireAdminPool(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()

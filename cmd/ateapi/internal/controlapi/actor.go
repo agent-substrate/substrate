@@ -22,6 +22,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/defaults"
@@ -30,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/preview"
+	"go.ate.dev/substrate/internal/principal"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
@@ -71,7 +73,46 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapi.CreateActorReq
 	return stored, err
 }
 
+type internalGoldenActorKey struct{}
+
+func withInternalGoldenActor(ctx context.Context) context.Context {
+	return context.WithValue(ctx, internalGoldenActorKey{}, true)
+}
+
+func isInternalGoldenActor(ctx context.Context) bool {
+	v, _ := ctx.Value(internalGoldenActorKey{}).(bool)
+	return v
+}
+
+func callerPrincipalFromContext(ctx context.Context) string {
+	if p, ok := principal.FromContext(ctx); ok {
+		return p.ID
+	}
+	return ""
+}
+
+func (s *ServiceImpl) hooksActive(ctx context.Context) bool {
+	return s.hooks != nil && preview.IsEnabled(preview.GateLifecycleHooks) && !isInternalGoldenActor(ctx)
+}
+
 func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*ateapi.Actor, error) {
+	if s.hooksActive(ctx) {
+		actorRef := resources.ActorRefFromActor(inActor)
+		var lease *store.Lease
+		var err error
+		ctx, lease, err = acquireLease(ctx, s.store, actorLeaseKey(actorRef), "actor")
+		if err != nil {
+			return nil, err
+		}
+		defer lease.Close()
+
+		if _, err := s.store.GetActor(ctx, actorRef); err == nil {
+			return nil, apierror.AlreadyExists("Actor %s already exists", actorRef.Name)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("while checking existing actor: %w", err)
+		}
+	}
+
 	// Check that the referenced ActorTemplate exists.
 	// FIXME: This is not atomic and it is not a guarantee that the template
 	// will still exist later.  Checking it here produces a nice error UX, but
@@ -121,6 +162,24 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 		return nil, resources.ToAPIError(errs)
 	}
 
+	var committed bool
+	if s.hooksActive(ctx) {
+		inActor.Metadata.Uid = uuid.NewString()
+		inActor.Metadata.CreateTime = timestamppb.Now()
+		outcome, err := s.hooks.OnCreateActor(ctx, inActor, template, callerPrincipalFromContext(ctx))
+		defer func() {
+			if !committed {
+				outcome.Rollback(ctx)
+			}
+		}()
+		if err != nil {
+			return nil, err
+		}
+		if errs := apivalidation.ValidateCreateActorRequest(ctx, &ateapi.CreateActorRequest{Actor: inActor}); len(errs) > 0 {
+			return nil, resources.ToAPIError(errs)
+		}
+	}
+
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapi.ActorStatus{
@@ -157,6 +216,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
+	committed = true
 
 	// Without this an actor that is created and never resumed has no record at
 	// all, at any retention.
@@ -272,6 +332,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapi.UpdateActorReq
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, inActor)
 		// Restore status and metadata from the server.
+		metadata.Annotations = inActor.GetMetadata().GetAnnotations()
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
 		defaults.Apply(toUpdate)

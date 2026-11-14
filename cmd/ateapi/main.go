@@ -36,6 +36,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/apiauthn"
 	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
+	"go.ate.dev/substrate/cmd/ateapi/internal/lifecyclehook"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workerservice"
@@ -104,7 +105,7 @@ var (
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
-	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
+	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet or lifecycle hooks.")
 	ateletServiceAccount   = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID expected on atelet's certificate, so it has to match what the deployment actually creates; a deployment that prefixes resource names needs it set.")
 
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
@@ -114,6 +115,7 @@ var (
 	snapshotLocation        = pflag.String("snapshot-location", "", "Base object-storage URI (for example gs://BUCKET/PREFIX/) that actor snapshots are stored under. Required unless the PerTemplateSnapshotLocation preview gate is enabled; with the gate, an actor template's snapshotConfig.storageLocation overrides it.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
+	lifecycleHooksConfig   = pflag.String("lifecycle-hooks-config", "", "YAML file configuring Actor create/delete lifecycle hooks (requires LifecycleHooks preview gate).")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
@@ -358,6 +360,27 @@ func main() {
 		*snapshotLocation,
 	)
 
+	if *lifecycleHooksConfig != "" {
+		if !preview.IsEnabled(preview.GateLifecycleHooks) {
+			serverboot.Fatal(ctx, "Invalid --lifecycle-hooks-config", fmt.Errorf("requires the %s preview gate to be enabled", preview.GateLifecycleHooks))
+		}
+		hooksCfg, err := lifecyclehook.LoadConfig(*lifecycleHooksConfig)
+		if err != nil {
+			serverboot.Fatal(ctx, "Invalid --lifecycle-hooks-config", err)
+		}
+		hookDispatcher, err := lifecyclehook.NewDispatcher(
+			hooksCfg,
+			lifecyclehook.WithTLSOptions(lifecyclehook.TLSOptions{
+				DefaultClientCredBundlePath: *ateletClientCredBundle,
+			}),
+		)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to initialize lifecycle hooks dispatcher", err)
+		}
+		defer func() { _ = hookDispatcher.Close() }()
+		controlSrv.SetLifecycleHooks(hookDispatcher)
+	}
+
 	// Drive stored ActorTemplates through the golden actor flow.
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
@@ -515,6 +538,7 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 		slog.String("snapshot-location", *snapshotLocation),
+		slog.String("lifecycle-hooks-config", *lifecycleHooksConfig),
 		slog.Any("preview", *previewFlags),
 	)
 }

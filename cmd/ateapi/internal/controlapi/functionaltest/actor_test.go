@@ -602,7 +602,7 @@ func TestListActors(t *testing.T) {
 	createTemplate(t, tc, ns)
 
 	resp1, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1", Annotations: map[string]string{"example.com/role": "worker"}},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}})
 	if err != nil {
@@ -944,7 +944,7 @@ func TestUpdateActor(t *testing.T) {
 	tmpl := createTemplate(t, tc, ns)
 
 	created, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1", Annotations: map[string]string{"example.com/env": "dev"}},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		WorkerSelector: &ateapi.Selector{
 			MatchLabels: map[string]string{"tier": "free"},
@@ -954,7 +954,9 @@ func TestUpdateActor(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	// Mutable field
+	// Mutable fields
+	updatedAnnotations := map[string]string{"example.com/env": "prod", "example.com/uri": "spiffe://example.com/agent/1"}
+	created.Metadata.Annotations = updatedAnnotations
 	created.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	// Output-only: server-owned, so this is ignored rather than applied.
 	created.Status = &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING}
@@ -964,7 +966,7 @@ func TestUpdateActor(t *testing.T) {
 	}
 
 	wantActor := &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
+		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2, Annotations: updatedAnnotations},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
@@ -981,7 +983,15 @@ func TestUpdateActor(t *testing.T) {
 		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
 	}
 
-	// Mutable template ref: repoint the actor at a second template.
+	gotActor, err := tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "id1"}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if diff := cmp.Diff(wantActor, gotActor, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
+	}
+
+	// Mutable template ref: repoint the actor at a second template and clear annotations.
 	tmpl2 := proto.Clone(tmpl).(*ateapi.ActorTemplate)
 	tmpl2.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl2"}
 	tmpl2.Status = nil
@@ -989,12 +999,14 @@ func TestUpdateActor(t *testing.T) {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 
+	updatedActor.Metadata.Annotations = nil
 	updatedActor.ActorTemplate = &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl2"}
 	repointed, err := tc.client.UpdateActor(context.Background(), &ateapi.UpdateActorRequest{Actor: updatedActor})
 	if err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
 	wantActor.Metadata.Version = 3
+	wantActor.Metadata.Annotations = nil
 	wantActor.ActorTemplate = &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl2"}
 	if diff := cmp.Diff(wantActor, repointed, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("UpdateActor response mismatch after template repoint (-want +got):\n%s", diff)
@@ -1210,8 +1222,9 @@ func TestDeleteActor_Success(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
+	annotations := map[string]string{"example.com/env": "dev"}
 	_, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
-		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "id1", Annotations: annotations},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}})
 	if err != nil {
@@ -1233,6 +1246,9 @@ func TestDeleteActor_Success(t *testing.T) {
 	}
 	if got := deleted.GetMetadata().GetAtespace(); got != testAtespace {
 		t.Errorf("deleted actor atespace = %q, want %q", got, testAtespace)
+	}
+	if diff := cmp.Diff(annotations, deleted.GetMetadata().GetAnnotations()); diff != "" {
+		t.Errorf("deleted actor annotations mismatch (-want +got):\n%s", diff)
 	}
 
 	_, err = tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{

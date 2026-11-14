@@ -1,0 +1,87 @@
+// Copyright 2026 The Agent Substrate Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package substrate.hook.v1;
+
+import "api/ateapi/v1/ateapi.proto";
+
+option go_package = "go.ate.dev/substrate/api/hook/v1;hook";
+
+// LifecycleHook is implemented by external control-plane services listed in
+// the ate-api-server lifecycle hooks configuration.
+service LifecycleHook {
+  // OnCreateActor runs on client-initiated CreateActor before the actor row is
+  // stored. A hook blocks the create only by returning `allowed` set to
+  // `false`. An error or missed deadline is logged and the hook is skipped for
+  // that call.
+  rpc OnCreateActor(OnCreateActorRequest) returns (OnCreateActorResponse);
+
+  // OnDeleteActor runs during DeleteActor after the actor's runtime, volumes,
+  // and snapshots are released, and as a compensating call when a CreateActor
+  // is rolled back after this hook allowed it or timed out. Never blocks
+  // deletion.
+  rpc OnDeleteActor(OnDeleteActorRequest) returns (OnDeleteActorResponse);
+}
+
+// OnCreateActorRequest carries the actor being created, its resolved parent
+// ActorTemplate, and the authenticated caller principal.
+message OnCreateActorRequest {
+  // Actor being created, with server-populated `metadata.uid` and
+  // `metadata.create_time`.
+  substrate.ateapi.v1.Actor actor = 1;
+
+  // Resolved parent ActorTemplate, passed as read-only context.
+  substrate.ateapi.v1.ActorTemplate actor_template = 2;
+
+  // Authenticated caller principal ID from the control-plane request context.
+  string caller_principal = 3;
+}
+
+// OnCreateActorResponse carries the hook's allow/deny decision and optional
+// annotation mutations.
+message OnCreateActorResponse {
+  // Whether the hook allows the CreateActor call to proceed. When `false`,
+  // CreateActor fails with `PERMISSION_DENIED`.
+  bool allowed = 1;
+
+  // Human-readable reason included in the `PERMISSION_DENIED` error when
+  // `allowed` is `false`.
+  string status_message = 2;
+
+  // Key-value pairs merged onto `actor.metadata.annotations`. Keys must match
+  // the hook's configured `allowedAnnotationPrefixes`. An empty value (`""`)
+  // deletes the key if present.
+  map<string, string> mutated_annotations = 3;
+}
+
+// OnDeleteActorRequest identifies the deleted actor and the caller that
+// initiated the deletion or rollback.
+message OnDeleteActorRequest {
+  // Atespace of the deleted actor (`metadata.atespace`).
+  string atespace = 1;
+
+  // Name of the deleted actor (`metadata.name`).
+  string name = 2;
+
+  // Unique identifier of the deleted actor (`metadata.uid`).
+  string uid = 3;
+
+  // Authenticated caller principal ID from the control-plane request context.
+  string caller_principal = 4;
+}
+
+// OnDeleteActorResponse is empty because OnDeleteActor is a notification.
+message OnDeleteActorResponse {}
