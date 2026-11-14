@@ -61,7 +61,7 @@ func failedRestoreRootfs(t *testing.T, actorUID string, overlays bool) *ateworke
 		// t.TempDir can remove the bundle.
 		t.Cleanup(func() { _ = imagecache.UnmountAllUnder(dirs.GetOciBundleDir()) })
 	}
-	if _, err := (&AteWorkerService{}).buildActorContainers(actorUID, dirs, containers); err != nil {
+	if _, err := (&AteWorkerService{}).buildActorContainers(actorUID, dirs, containers, nil); err != nil {
 		t.Fatalf("buildActorContainers: %v", err)
 	}
 	return dirs

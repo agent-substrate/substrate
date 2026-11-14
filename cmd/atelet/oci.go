@@ -83,7 +83,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 // prepareOCIDirectory pulls the container's image and writes the overlay spec
 // the worker composes its rootfs from. It returns the image and the process's
 // working directory, which the worker creates through the overlay.
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*imagecache.Image, string, error) {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, form imagecache.Form, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*imagecache.Image, string, error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -118,14 +118,14 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
-			return fmt.Errorf("in imageCache.EnsureImage(%q): %w", ref, err)
+		if img, err = imageCache.EnsureImageAs(gctx, ref, form); err != nil {
+			return fmt.Errorf("in imageCache.EnsureImageAs(%q): %w", ref, err)
 		}
 		return nil
 	})
 	g.Go(func() error {
 		var err error
-		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts)
+		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts, form)
 		return err
 	})
 	if err := g.Wait(); err != nil {
@@ -149,6 +149,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
 		Layers:       img.LayerDirs,
+		EROFS:        img.EROFS,
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
@@ -171,8 +172,10 @@ func resolveCwd(imageCfg *v1.Config) (string, error) {
 }
 
 // resolveImageVolumes pulls the image behind every image-typed volume this
-// container mounts and returns what the overlay spec needs to compose each.
-func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+// container mounts, in the same form as the container's image (the sandbox
+// that mounts the rootfs mounts the volumes too), and returns what the
+// overlay spec needs to compose each.
+func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, form imagecache.Form) ([]imagecache.ImageVolumeOverlay, error) {
 	mounted := make(map[string]bool, len(volumeMounts))
 	for _, vm := range volumeMounts {
 		mounted[vm.GetName()] = true
@@ -193,14 +196,15 @@ func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volu
 	for i, vol := range wanted {
 		g.Go(func() error {
 			volRef := vol.GetImage().GetReference()
-			img, err := imageCache.EnsureImage(gctx, volRef)
+			img, err := imageCache.EnsureImageAs(gctx, volRef, form)
 			if err != nil {
-				return fmt.Errorf("in imageCache.EnsureImage(%q) for volume %q: %w", volRef, vol.GetName(), err)
+				return fmt.Errorf("in imageCache.EnsureImageAs(%q) for volume %q: %w", volRef, vol.GetName(), err)
 			}
 			out[i] = imagecache.ImageVolumeOverlay{
 				Name:        vol.GetName(),
 				ImageDigest: img.Digest.String(),
 				Layers:      img.LayerDirs,
+				EROFS:       img.EROFS,
 			}
 			return nil
 		})
