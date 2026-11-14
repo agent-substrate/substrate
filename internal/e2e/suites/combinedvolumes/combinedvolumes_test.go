@@ -163,7 +163,7 @@ func buildFixtureImage(t *testing.T, repo string) string {
 func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients) string {
 	t.Helper()
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
+	if !e2e.PreviewEnabled(preview.GateExternalVolumes) {
 		t.Logf("preview gate %q is not enabled; the external-volume cases will be skipped", preview.GateExternalVolumes)
 		return ""
 	}

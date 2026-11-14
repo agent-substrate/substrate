@@ -29,7 +29,7 @@ import (
 func TestActorEgressPolicy(t *testing.T) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	service := &RPCService{impl: &ServiceImpl{store: persistence}}
+	service := &RPCService{gates: testGates, impl: &ServiceImpl{gates: testGates, store: persistence}}
 	if _, err := persistence.CreateAtespace(t.Context(), &ateapi.Atespace{
 		Metadata: &ateapi.ResourceMetadata{Name: testAtespace},
 	}); err != nil {

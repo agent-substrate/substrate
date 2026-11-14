@@ -63,10 +63,12 @@ Gate the fields a **user** sets with a declarative validation tag in the
 - `+k8s:ifDisabled(<Gate>)=+k8s:forbidden` rejects the field when the gate is
   off for this request.
 
-The gate state reaches the validators through `apivalidation.MakeCreateOp(ctx)`
-and `apivalidation.MakeUpdateOp(ctx)`. Every `Validate*` wrapper must build its
-`operation.Operation` with one of these, not with a bare
-`operation.Operation{...}` literal; otherwise the field is never gated.
+The gate state reaches the validators through the `operation.Operation`.
+A `Validate*` wrapper whose message holds a gated field takes the server's
+`*preview.Gates` and builds its operation with `makeGatedOp(ctx, typ, gates)`,
+as `ValidateCreateActorTemplateRequest` does. `apivalidation.MakeCreateOp()`
+and `apivalidation.MakeUpdateOp()` define no gates, so a gated field validated
+with them fails with `undefined validation option`.
 
 Unchanged values are not re-validated on update, so an object created while a
 gate was on stays usable after the gate is turned off.
@@ -78,18 +80,22 @@ subtle and will require careful thinking when implementing a gated feature.
 
 ## Gating behavior in code
 
+A binary builds its gates once with `preview.New(*previewFlags...)` and passes
+the `*preview.Gates` to the code that checks them. In ate-api, `RPCService`,
+`ServiceImpl`, `ActorWorkflow` and `WorkerWorkflow` each hold it as `gates`.
+
 For a check made while handling a user request, use the context-aware form:
 
 ```go
-if !preview.IsEnabledFor(ctx, preview.GateMyFeature) {
+if !s.gates.IsEnabledFor(ctx, preview.GateMyFeature) {
 	return nil, resources.ToAPIError(field.ErrorList{field.Forbidden(
 		path, "requires the MyFeature preview gate and a client that opts in to "+
 			"preview features (kubectl ate --preview, or the "+preview.Header+" header)")})
 }
 ```
 
-Use `preview.IsEnabled(gate)` only for checks that are about the process, not
-the request, e.g. whether a component should start a feature at all.
+Use `gates.IsEnabled(gate)` only for checks that are about the server, not the
+request, e.g. whether a component should start a feature at all.
 
 Be deliberate about what happens when a gate is turned **off** while the
 feature is in use. Prefer to keep cleanup paths (delete, suspend, detach)
@@ -114,16 +120,16 @@ through the interceptor, such as background reconcilers, are not opted out.
 
 Test gated code both with and without the gate.
 
-- Unit tests: `preview.InitForTest(t, "MyFeature")`, or with no gate names for
-  all-off. It restores the previous state when the test ends. Tests that use
-  it cannot run in parallel.
-- Tests of the gate mechanism itself use `preview.InitForTestFake` with fake
-  gate names, so they don't depend on real gates.
+- Unit tests: pass `preview.NewForTest(t, "MyFeature")`, or with no gate names
+  for all-off, to the code under test. In `controlapi`, `testGates` has the
+  gates most tests run with.
+- Tests that must not depend on real gates use `preview.NewForTestFake` with
+  fake gate names.
 - `apivalidation` tables: `assertValidate` takes `want` (gates off) and
   `wantWithPreview`, keyed by a `--preview` value such as `"ALL"`.
-- Functional tests (`controlapi/functionaltest`): `setupPreviewTest` gives a
-  client that sends the header, and `tc.noOptInClient` one that does not.
-  Neither enables a gate; call `preview.InitForTest` for that.
+- Functional tests (`controlapi/functionaltest`): `setupPreviewTest(t, ns,
+  gates...)` starts a server with those gates and gives a client that sends the
+  header. `tc.noOptInClient` does not send it.
 - E2E tests: start a test of a preview feature with
   `e2e.RequirePreview(t, preview.GateMyFeature)`. It skips unless the suite
   was run with `--preview` naming that gate, which must match what the

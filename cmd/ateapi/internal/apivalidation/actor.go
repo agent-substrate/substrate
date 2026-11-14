@@ -26,19 +26,19 @@ import (
 
 func ValidateCreateActorRequest(ctx context.Context, req *ateapi.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorRequest(ctx context.Context, req *ateapi.GetActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_GetActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorsRequest(ctx context.Context, req *ateapi.ListActorsRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_ListActorsRequest(ctx, op, nil, req, nil)
 }
 
@@ -48,42 +48,42 @@ func ValidateUpdateActorRequest(ctx context.Context, req *ateapi.UpdateActorRequ
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorRequest(ctx context.Context, req *ateapi.DeleteActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateResumeActorRequest(ctx context.Context, req *ateapi.ResumeActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_ResumeActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateSuspendActorRequest(ctx context.Context, req *ateapi.SuspendActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRevertActorRequest(ctx context.Context, req *ateapi.RevertActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_RevertActorRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintActorJWTRequest(ctx context.Context, req *ateapi.MintActorJwtRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_MintActorJwtRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapi.MintWorkerActorCertificateRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_MintWorkerActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
@@ -94,7 +94,7 @@ func ValidateMintWorkerActorJwtRequest(ctx context.Context, req *ateapi.MintWork
 
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := MakeUpdateOp(ctx)
+	op := MakeUpdateOp()
 	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 	if requireStatus {
 		// Status is optional in the schema, but is actually required to be set

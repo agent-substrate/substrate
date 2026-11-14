@@ -17,11 +17,11 @@ package functionaltest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
-	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -30,7 +30,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -377,11 +376,7 @@ func TestDeleteActorTemplate_Preconditions(t *testing.T) {
 // are accepted only when the server enables the gate and the client opts in
 // to preview features.
 func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
-	ns := namespaceForTest("ns-template-ext-vol-preview")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	for i, tt := range []struct {
+	tests := []struct {
 		name     string
 		gates    []string
 		optIn    bool
@@ -390,14 +385,20 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 		{name: "gate off", gates: nil, optIn: true, wantCode: codes.InvalidArgument},
 		{name: "no opt-in", gates: []string{"ExternalVolumes"}, optIn: false, wantCode: codes.InvalidArgument},
 		{name: "gate on and opt-in", gates: []string{"ExternalVolumes"}, optIn: true, wantCode: codes.OK},
-	} {
+	}
+	var gateSets [][]string
+	for _, tt := range tests {
+		gateSets = append(gateSets, tt.gates)
+	}
+	servers := setupPreviewTestPerGates(t, "ns-template-ext-vol-preview", gateSets...)
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preview.InitForTest(t, tt.gates...)
-			ctx := context.Background()
+			tc := servers[strings.Join(tt.gates, ",")]
+			client := tc.noOptInClient
 			if tt.optIn {
-				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
+				client = tc.client
 			}
-			_, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+			_, err := client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
 				ActorTemplate: &ateapi.ActorTemplate{
 					Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-ext-%d", i)},
 					Containers: []*ateapi.Container{{
@@ -425,11 +426,7 @@ func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
 // only with the gate on. A template that leaves it empty uses the server's
 // --snapshot-location.
 func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
-	ns := namespaceForTest("ns-template-storage-location-preview")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	for i, tt := range []struct {
+	tests := []struct {
 		name     string
 		gates    []string
 		optIn    bool
@@ -443,14 +440,20 @@ func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
 		{name: "gate on, no opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: false, wantCode: codes.OK},
 		{name: "gate on, opt-in, location set", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, location: "gs://my-bucket/snapshots", wantCode: codes.OK},
 		{name: "gate on, opt-in, no location", gates: []string{"PerTemplateSnapshotLocation"}, optIn: true, wantCode: codes.OK},
-	} {
+	}
+	var gateSets [][]string
+	for _, tt := range tests {
+		gateSets = append(gateSets, tt.gates)
+	}
+	servers := setupPreviewTestPerGates(t, "ns-template-storage-location-preview", gateSets...)
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preview.InitForTest(t, tt.gates...)
-			ctx := context.Background()
+			tc := servers[strings.Join(tt.gates, ",")]
+			client := tc.noOptInClient
 			if tt.optIn {
-				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
+				client = tc.client
 			}
-			_, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
+			_, err := client.CreateActorTemplate(context.Background(), &ateapi.CreateActorTemplateRequest{
 				ActorTemplate: &ateapi.ActorTemplate{
 					Metadata: &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-loc-%d", i)},
 					Containers: []*ateapi.Container{{
@@ -469,11 +472,7 @@ func TestCreateActorTemplate_PerTemplateSnapshotLocationPreview(t *testing.T) {
 }
 
 func TestCreateActorTemplate_GoldenEgressPolicyPreview(t *testing.T) {
-	tc := setupPreviewTest(t, namespaceForTest("ns-template-golden-egress-preview"))
-	t.Cleanup(tc.cleanup)
-	base := createTemplateWithSelector(t, tc, "base", nil)
-
-	for i, tt := range []struct {
+	tests := []struct {
 		name              string
 		gates             []string
 		optIn             bool
@@ -486,9 +485,20 @@ func TestCreateActorTemplate_GoldenEgressPolicyPreview(t *testing.T) {
 		{name: "gate on and opt-in", gates: []string{"GoldenEgressPolicy"}, optIn: true, wantCode: codes.OK},
 		{name: "all gates and opt-in", gates: []string{"ALL"}, optIn: true, wantCode: codes.OK},
 		{name: "golden snapshots disabled", gates: []string{"GoldenEgressPolicy"}, optIn: true, snapshotsDisabled: true, wantCode: codes.InvalidArgument},
-	} {
+	}
+	var gateSets [][]string
+	for _, tt := range tests {
+		gateSets = append(gateSets, tt.gates)
+	}
+	servers := setupPreviewTestPerGates(t, "ns-template-golden-egress-preview", gateSets...)
+	bases := map[*testContext]*ateapi.ActorTemplate{}
+	for _, tc := range servers {
+		bases[tc] = createTemplateWithSelector(t, tc, "base", nil)
+	}
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preview.InitForTest(t, tt.gates...)
+			tc := servers[strings.Join(tt.gates, ",")]
+			base := bases[tc]
 			client := tc.noOptInClient
 			if tt.optIn {
 				client = tc.client
@@ -518,17 +528,16 @@ func TestCreateActorTemplate_GoldenEgressPolicyPreview(t *testing.T) {
 				t.Fatalf("golden policy (-want +got):\n%s", diff)
 			}
 
-			// Opting out or disabling the gate must not strand existing templates.
-			preview.InitForTest(t)
+			// Opting out must not strand existing templates.
 			got, err := tc.noOptInClient.GetActorTemplate(t.Context(), &ateapi.GetActorTemplateRequest{ActorTemplate: ref})
 			if err != nil {
-				t.Fatalf("GetActorTemplate with gate disabled: %v", err)
+				t.Fatalf("GetActorTemplate without opt-in: %v", err)
 			}
 			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
-				t.Fatalf("template changed with gate disabled (-want +got):\n%s", diff)
+				t.Fatalf("template changed without opt-in (-want +got):\n%s", diff)
 			}
 			if _, err := tc.noOptInClient.DeleteActorTemplate(t.Context(), &ateapi.DeleteActorTemplateRequest{ActorTemplate: ref}); err != nil {
-				t.Fatalf("DeleteActorTemplate with gate disabled: %v", err)
+				t.Fatalf("DeleteActorTemplate without opt-in: %v", err)
 			}
 		})
 	}

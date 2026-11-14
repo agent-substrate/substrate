@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/pluginsocket"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -116,6 +117,7 @@ type ActorWorkflow struct {
 	pluginRegistry          VolumePluginRegistry
 	objectStorePlugin       objectstore.ControlProviderClient
 	clusterSnapshotLocation string
+	gates                   *preview.Gates
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -132,6 +134,7 @@ func NewActorWorkflow(
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
 	objectStorePlugin objectstore.ControlProviderClient,
+	gates *preview.Gates,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -143,13 +146,14 @@ func NewActorWorkflow(
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
 		objectStorePlugin:    objectStorePlugin,
+		gates:                gates,
 	}
 }
 
 // snapshotLocation returns the base object-storage URI actorTemplate's
 // snapshots are stored under; see resolveSnapshotLocation.
 func (w *ActorWorkflow) snapshotLocation(actorTemplate *ateapi.ActorTemplate) (string, error) {
-	return resolveSnapshotLocation(w.clusterSnapshotLocation, actorTemplate)
+	return resolveSnapshotLocation(w.gates, w.clusterSnapshotLocation, actorTemplate)
 }
 
 // cleanupSnapshot deletes every object under prefix through the control
@@ -201,6 +205,7 @@ type actorWorkflowStore interface {
 type WorkerWorkflow struct {
 	store          workerWorkflowStore
 	dialer         *AteletDialer
+	gates          *preview.Gates
 	reclaimTimeout time.Duration
 	now            func() time.Time
 
@@ -210,10 +215,11 @@ type WorkerWorkflow struct {
 
 // NewWorkerWorkflow creates a new WorkerWorkflow. dialer may be nil when the
 // caller only runs ReconcileAssignments.
-func NewWorkerWorkflow(store workerWorkflowStore, dialer *AteletDialer) *WorkerWorkflow {
+func NewWorkerWorkflow(store workerWorkflowStore, dialer *AteletDialer, gates *preview.Gates) *WorkerWorkflow {
 	return &WorkerWorkflow{
 		store:          store,
 		dialer:         dialer,
+		gates:          gates,
 		reclaimTimeout: defaultWorkerReclaimTimeout,
 		now:            time.Now,
 		gaveUp:         make(map[string]time.Time),

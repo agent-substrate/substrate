@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,24 +111,46 @@ func setupTest(t *testing.T, ns string) *testContext {
 }
 
 type testOptions struct {
-	allowPreview  bool // enable use of preview features over gRPC
+	allowPreview  bool     // enable use of preview features over gRPC
+	previewGates  []string // the server's --preview values
 	volumePlugins map[string]volume.VolumePluginControlPlane
 }
 
-// setupPreviewTest is setupTest with a client that opts in to preview
-// features. It does not enable any gate; call preview.InitForTest for that.
-func setupPreviewTest(t *testing.T, ns string) *testContext {
+// setupPreviewTest is setupTest with the server enabling previewGates and a
+// client that opts in to preview features.
+func setupPreviewTest(t *testing.T, ns string, previewGates ...string) *testContext {
 	t.Helper()
-	return setupTestWithOptions(t, ns, testOptions{allowPreview: true})
+	return setupTestWithOptions(t, ns, testOptions{allowPreview: true, previewGates: previewGates})
 }
 
-// setupTestWithVolumePlugins is setupPreviewTest with the default mock volume
-// plugin replaced by plugins, keyed by driver name. Tests that need a
-// failure-injecting plugin pass it here rather than swapping it into the
-// running RPCService, so each test owns its own plugin set.
+// setupPreviewTestPerGates starts one setupPreviewTest server for each
+// distinct entry of gateSets, keyed by its gates joined with ",". Table rows
+// that differ only in other fields share a server. Don't use it for tests that
+// run workloads through fakeAtelet: each setup points fakeAtelet at its own
+// object store, so only the last server's is live.
+func setupPreviewTestPerGates(t *testing.T, baseName string, gateSets ...[]string) map[string]*testContext {
+	t.Helper()
+	servers := map[string]*testContext{}
+	for _, gates := range gateSets {
+		key := strings.Join(gates, ",")
+		if _, ok := servers[key]; ok {
+			continue
+		}
+		tc := setupPreviewTest(t, namespaceForTest(baseName), gates...)
+		t.Cleanup(tc.cleanup)
+		servers[key] = tc
+	}
+	return servers
+}
+
+// setupTestWithVolumePlugins is setupPreviewTest with the ExternalVolumes gate
+// and the default mock volume plugin replaced by plugins, keyed by driver
+// name. Tests that need a failure-injecting plugin pass it here rather than
+// swapping it into the running RPCService, so each test owns its own plugin
+// set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
-	return setupTestWithOptions(t, ns, testOptions{volumePlugins: plugins, allowPreview: true})
+	return setupTestWithOptions(t, ns, testOptions{volumePlugins: plugins, allowPreview: true, previewGates: []string{string(preview.GateExternalVolumes)}})
 }
 
 func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testContext {
@@ -233,6 +256,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		testStorageLocation,
+		preview.NewForTest(t, options.previewGates...),
 	)
 
 	// 5. Start REAL gRPC Server for ATE API

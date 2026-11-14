@@ -306,7 +306,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
 		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	svc := &RPCService{gates: testGates, impl: newServiceImpl(persistence, nil, testGates)}
 
 	// Repointing at a template that does not exist is rejected.
 	_, err := svc.UpdateActor(ctx, &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{
@@ -592,12 +592,13 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			gates := testGates
 			if tt.gateOff {
-				preview.InitForTest(t)
+				gates = preview.NewForTest(t)
 			}
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence, nil, gates)
 			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{gates: gates, impl: impl}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: tt.template},
@@ -787,7 +788,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{gates: testGates, impl: newServiceImpl(racing, nil, testGates)}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapi.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -848,7 +849,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{gates: testGates, impl: newServiceImpl(racing, nil, testGates)}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -904,11 +905,11 @@ func rpcServiceWithActor(t *testing.T, actor *ateapi.Actor) (*RPCService, *ateap
 	t.Cleanup(cleanup)
 
 	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
-	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
+	return &RPCService{gates: testGates, impl: newServiceImpl(persistence, nil, testGates)}, created
 }
 
 func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
-	preview.InitForTest(t, "GoldenEgressPolicy")
+	gates := preview.NewForTest(t, "GoldenEgressPolicy")
 	for _, tt := range []struct {
 		name   string
 		policy *ateapi.EgressPolicyTemplate
@@ -922,9 +923,9 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence, nil, gates)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{gates: gates, impl: impl}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			storetest.MustCreateAtespace(t, ctx, persistence, "actors")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
@@ -936,7 +937,8 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 			}
 			tmplRef := resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()
 			// Existing templates remain usable without the preview gate.
-			preview.InitForTest(t)
+			impl.gates = preview.NewForTest(t)
+			svc.gates = impl.gates
 			for _, target := range []resources.ActorRef{
 				{Atespace: "actors", Name: "alpha"},
 				{Atespace: "actors", Name: tmpl.GetMetadata().GetUid()},
@@ -1021,7 +1023,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				}
 				actor.SourceTag = &ateapi.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
-			svc := &ServiceImpl{store: persistence}
+			svc := &ServiceImpl{gates: testGates, store: persistence}
 			created, err := svc.CreateActor(ctx, actor)
 			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
@@ -1051,7 +1053,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			workflow := &ActorWorkflow{store: persistence}
+			workflow := &ActorWorkflow{gates: testGates, store: persistence}
 			actorRef := resources.ActorRefFromActor(created)
 			loaded, _, err := workflow.loadActorForResume(ctx, actorRef)
 			if err != nil {
