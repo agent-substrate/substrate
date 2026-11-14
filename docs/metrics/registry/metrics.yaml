@@ -31,6 +31,32 @@ groups:
   # Attribute groups
   # ---------------------------------------------------------------------------
 
+  - id: registry.ate.store.connection
+    type: attribute_group
+    brief: Bounded PostgreSQL connection acquisition outcomes.
+    attributes:
+      - id: ate.store.connection.acquire.outcome
+        stability: development
+        brief: The result of one connection acquisition attempt.
+        type:
+          members:
+            - id: success
+              value: success
+              stability: development
+              brief: A connection was acquired.
+            - id: cancelled
+              value: cancelled
+              stability: development
+              brief: The caller cancelled the acquisition.
+            - id: timeout
+              value: timeout
+              stability: development
+              brief: The caller's acquisition deadline expired.
+            - id: error
+              value: error
+              stability: development
+              brief: Acquisition failed for another reason; error.type identifies a bounded failure class.
+
   - id: registry.ate.atespace
     type: attribute_group
     brief: >
@@ -759,6 +785,24 @@ groups:
       substrate:
         owner: opentelemetry
     attributes:
+      - id: db.client.connection.pool.name
+        stability: development
+        type: string
+        brief: >
+          The pool's name, unique within the instrumented application. Ateapi
+          emits only main (store and authorization), watch (worker-event
+          polling and expired-lease cleanup), owner (migrations and outbox
+          partition maintenance), and probe (readiness checks), never a DSN
+          or hostname.
+        examples: [main, watch, owner, probe]
+      - id: db.client.connection.state
+        stability: development
+        type: string
+        brief: >
+          The state of a connection in the pool. Ateapi emits idle for an
+          available connection or used for one acquired by a caller.
+          Connections under construction are excluded.
+        examples: [idle, used]
       - id: error.type
         stability: stable
         type: string
@@ -798,6 +842,112 @@ groups:
   # ---------------------------------------------------------------------------
   # Metrics. ateapi
   # ---------------------------------------------------------------------------
+
+  - id: metric.db.client.connection.count
+    type: metric
+    metric_name: db.client.connection.count
+    instrument: updowncounter
+    unit: "{connection}"
+    stability: development
+    brief: "The number of connections that are currently in state described by the `state` attribute."
+    note: >
+      Observable, following the upstream database pool conventions. Each
+      collection reads pgx pool statistics and reports both states, including
+      zeros. Connections under construction are not counted.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        cuj: Which pool has no idle database connections?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+      - ref: db.client.connection.state
+        requirement_level: required
+
+  - id: metric.db.client.connection.max
+    type: metric
+    metric_name: db.client.connection.max
+    instrument: updowncounter
+    unit: "{connection}"
+    stability: development
+    brief: The maximum number of open connections allowed.
+    note: >
+      Observable, following the upstream database pool conventions. Reports
+      the effective pgx maximum, including defaults and dedicated pool limits,
+      as the denominator for saturation rather than just the startup flag.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        cuj: Is the pool's acquired connection count near its configured capacity?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+
+  - id: metric.db.client.connection.wait_time
+    type: metric
+    metric_name: db.client.connection.wait_time
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time it took to obtain an open connection from the pool.
+    note: >
+      Extends the upstream pool wait-time metric to include unsuccessful
+      attempts. The histogram count gives acquisition rates by outcome,
+      without a separate failure counter. Filter outcome=success for successful
+      acquisition latency. Measures all of pgx Acquire, including connection
+      creation and validation, not just queueing; excludes SQL execution and
+      connection holding time. Recorded independently of trace sampling,
+      including startup acquisitions. On error, error.type is pool_closed for
+      a closed pool, connect_error for a pgconn connect failure,
+      including pgconn's internal connection timeout,
+      and _OTHER for other failures, including BeforeConnect and AfterConnect
+      hook failures;
+      caller cancellation and acquisition deadlines have their own outcomes
+      and no error.type.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [latency, traffic, errors]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]
+        cuj: Are callers waiting for connections or giving up before obtaining one?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+      - ref: ate.store.connection.acquire.outcome
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The acquisition outcome is error; values are pool_closed, connect_error, and _OTHER.
+
+  - id: metric.db.client.connection.pending_requests
+    type: metric
+    metric_name: db.client.connection.pending_requests
+    instrument: updowncounter
+    unit: "{request}"
+    stability: development
+    brief: The number of current pending requests for an open connection.
+    note: >
+      Follows the upstream database pool convention. Incremented at the start
+      of pgx Acquire and decremented on every return, including cancellation,
+      timeout, and error. Includes connection creation and validation, not
+      exclusively callers queued behind a saturated pool. Unlike wait_time,
+      exposes outstanding acquisitions before they complete. A pool's series
+      begins with its first acquisition and remains at zero when none are
+      pending, including after shutdown.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        cuj: Are connection acquisitions backing up before they complete?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
 
   - id: metric.ate.actor.crashes
     type: metric
