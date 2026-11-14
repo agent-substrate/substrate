@@ -17,17 +17,23 @@ package gcsissuer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google/downscope"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -368,4 +374,241 @@ func manyGrants(n int) []actorscope.Grant {
 		gs = append(gs, actorscope.Grant{Prefix: prefix(fmt.Sprintf("gs://b/p%d", i)), Access: actorscope.ReadOnly})
 	}
 	return gs
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestIssue_ConcurrentAccessAndSingleflight(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+		var stsCalls atomic.Int32
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		client := &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if stsCalls.Add(1) == 1 {
+					close(entered)
+					select {
+					case <-release:
+					case <-req.Context().Done():
+						return nil, req.Context().Err()
+					}
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"access_token":"downscoped-shared","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`)),
+				}, nil
+			}),
+		}
+		i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(client), WithClock(func() time.Time { return now }), WithCacheSize(16))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		// Leader starts the shared flight; a cancelled caller must not abort it
+		// while live joiners are still waiting.
+		cancelCtx, cancelFirst := context.WithCancel(t.Context())
+		defer cancelFirst()
+		cancelErr := make(chan error, 1)
+		go func() {
+			_, err := i.Issue(cancelCtx, "shared-actor", testGrants, false)
+			cancelErr <- err
+		}()
+		<-entered
+
+		const joiners = 8
+		var wg sync.WaitGroup
+		wg.Add(joiners)
+		errs := make([]error, joiners)
+		for idx := range joiners {
+			go func(idx int) {
+				defer wg.Done()
+				tok, err := i.Issue(t.Context(), "shared-actor", []actorscope.Grant{rwGrant}, false)
+				if err == nil && tok.AccessToken != "downscoped-shared" {
+					err = fmt.Errorf("unexpected token %q", tok.AccessToken)
+				}
+				errs[idx] = err
+			}(idx)
+		}
+		synctest.Wait()
+
+		cancelFirst()
+		if err := <-cancelErr; err == nil {
+			t.Fatal("cancelled caller got nil error")
+		}
+
+		close(release)
+		wg.Wait()
+		for idx, err := range errs {
+			if err != nil {
+				t.Fatalf("joiner %d: %v", idx, err)
+			}
+		}
+		if got := stsCalls.Load(); got != 1 {
+			t.Fatalf("STS calls for shared actor = %d, want 1", got)
+		}
+
+		// Hammer the bounded LRU concurrently across many actor UIDs to exercise
+		// concurrent cache Get/Add/eviction under -race.
+		var raceWG sync.WaitGroup
+		for g := range 32 {
+			raceWG.Add(1)
+			go func(g int) {
+				defer raceWG.Done()
+				for step := range 8 {
+					uid := fmt.Sprintf("actor-%d", (g+step)%24)
+					if _, err := i.Issue(t.Context(), uid, testGrants, step == 7); err != nil {
+						t.Errorf("concurrent Issue(%s): %v", uid, err)
+					}
+				}
+			}(g)
+		}
+		raceWG.Wait()
+	})
+}
+
+type tokenSourceFunc func() (*oauth2.Token, error)
+
+func (f tokenSourceFunc) Token() (*oauth2.Token, error) { return f() }
+
+func TestIssue_RetriesTransientSTSErrors(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+		var rootCalls atomic.Int32
+		flakyRoot := tokenSourceFunc(func() (*oauth2.Token, error) {
+			if rootCalls.Add(1) == 1 {
+				return nil, &googleapi.Error{Code: http.StatusTooManyRequests, Message: "Quota exceeded for quota metric"}
+			}
+			return &oauth2.Token{AccessToken: "source", Expiry: now.Add(time.Hour)}, nil
+		})
+		var calls atomic.Int32
+		client := &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch calls.Add(1) {
+				case 1:
+					return &http.Response{
+						StatusCode: http.StatusTooManyRequests,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`{"error":"quota_exceeded"}`)),
+					}, nil
+				case 2:
+					return &http.Response{
+						StatusCode: http.StatusServiceUnavailable,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`{"error":"backend_unavailable"}`)),
+					}, nil
+				default:
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`{"access_token":"recovered-token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`)),
+					}, nil
+				}
+			}),
+		}
+		i, err := New(t.Context(), "", WithTokenSource(flakyRoot), WithHTTPClient(client), WithClock(func() time.Time { return now }))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		tok, err := i.Issue(t.Context(), "9f1e", testGrants, false)
+		if err != nil {
+			t.Fatalf("Issue after transient 429/503: %v", err)
+		}
+		if tok.AccessToken != "recovered-token" {
+			t.Fatalf("AccessToken = %q, want recovered-token", tok.AccessToken)
+		}
+		if got := calls.Load(); got != 3 {
+			t.Fatalf("STS calls = %d, want 3", got)
+		}
+	})
+}
+
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestIssue_AbandonedFlightDoesNotPoisonNextCallerAndRetriesTruncatedBody(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC)
+		var calls atomic.Int32
+		entered := make(chan struct{})
+		lingerDone := make(chan struct{})
+
+		client := &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch calls.Add(1) {
+				case 1:
+					close(entered)
+					<-req.Context().Done()
+					// Linger briefly after mintCtx cancellation before returning so a new
+					// caller arrives before runFlight finishes.
+					<-lingerDone
+					return nil, req.Context().Err()
+				case 2:
+					// Simulate HTTP 200 with a truncated body read error: must retry.
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(errReader{err: io.ErrUnexpectedEOF}),
+					}, nil
+				default:
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`{"access_token":"after-abandon-and-eof","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`)),
+					}, nil
+				}
+			}),
+		}
+		i, err := New(t.Context(), "", WithTokenSource(staticSource(now.Add(time.Hour))), WithHTTPClient(client), WithClock(func() time.Time { return now }))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		ctx1, cancel1 := context.WithCancel(t.Context())
+		err1Ch := make(chan error, 1)
+		go func() {
+			_, err := i.Issue(ctx1, "abandoned-actor", testGrants, false)
+			err1Ch <- err
+		}()
+		<-entered
+
+		// Sole waiter cancels; releaseWaiter must atomically evict i.flights["abandoned-actor"]
+		// before runFlight finishes so Caller 2 starts a fresh flight instead of receiving Canceled.
+		cancel1()
+		if err := <-err1Ch; !errors.Is(err, context.Canceled) {
+			t.Fatalf("caller 1 err = %v, want context.Canceled", err)
+		}
+
+		type res struct {
+			tok string
+			err error
+		}
+		res2Ch := make(chan res, 1)
+		go func() {
+			tok, err := i.Issue(t.Context(), "abandoned-actor", testGrants, false)
+			res2Ch <- res{tok: tok.AccessToken, err: err}
+		}()
+		synctest.Wait()
+		close(lingerDone)
+
+		r2 := <-res2Ch
+		if r2.err != nil {
+			t.Fatalf("caller 2 failed after sole-waiter cancel: %v", r2.err)
+		}
+		if r2.tok != "after-abandon-and-eof" {
+			t.Fatalf("caller 2 token = %q, want after-abandon-and-eof", r2.tok)
+		}
+		if got := calls.Load(); got != 3 {
+			t.Fatalf("STS calls = %d, want 3 (1 abandoned + 1 body EOF + 1 ok)", got)
+		}
+	})
 }

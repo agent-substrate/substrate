@@ -70,6 +70,7 @@ type Source struct {
 	// for that JWT and the storage client built with the token. Nothing
 	// closes a client that leaves the cache. A transfer still using it
 	// finishes on it, and its connections close on their own once idle.
+	// k8s.io/utils/lru.Cache synchronizes Get, Add, and Remove internally.
 	cache *lru.Cache
 }
 
@@ -90,7 +91,12 @@ func New(cfg Config) (*Source, error) {
 		return nil, fmt.Errorf("exchangeclient: while loading the exchange CA bundle: %w", err)
 	}
 	creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: cfg.ServerName})
-	conn, err := grpc.NewClient(cfg.Address, grpc.WithTransportCredentials(creds), grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	conn, err := grpc.NewClient(
+		cfg.Address,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig":[{"round_robin":{}}]}`),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeclient: while creating the exchange client: %w", err)
 	}
@@ -139,6 +145,7 @@ func (s *Source) Client(ctx context.Context, actorJWT string, force bool) (objec
 		}
 	}
 	s.cache.Remove(actorJWT)
+
 	resp, err := s.exchange.ExchangeActorJwt(ctx, &exchangepb.ExchangeActorJwtRequest{ActorJwt: actorJWT, Force: force})
 	if err != nil {
 		return nil, err
