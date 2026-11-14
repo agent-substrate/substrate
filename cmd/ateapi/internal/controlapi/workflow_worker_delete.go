@@ -114,16 +114,7 @@ func (w *WorkerWorkflow) ensureMarkedForDeletion(ctx context.Context, name strin
 		return alreadyDeleting, nil
 	}
 	if err != nil {
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("Worker %s not found", name)
-		}
-		return nil, fmt.Errorf("while marking worker for deletion: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while marking worker for deletion: %w", err), "Worker %s", name)
 	}
 	return marked, nil
 }
@@ -241,7 +232,7 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
 		})
-		return releaseWriteError(name, err)
+		return releaseWriteError(name, actorRef, err)
 	}
 
 	opName := ateattr.OperationUnknown
@@ -268,7 +259,7 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 		return nil
 	})
 	if err != nil {
-		return releaseWriteError(name, err)
+		return releaseWriteError(name, actorRef, err)
 	}
 
 	logActorCrashed(ctx, actor, opName)
@@ -276,17 +267,15 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 	return nil
 }
 
-// releaseWriteError maps a failed write releasing an Actor from the Worker
-// name. A write without the Actor's lease, such as the UpdateActor RPC, can
-// still move its version.
-func releaseWriteError(name string, err error) error {
+// releaseWriteError maps a failed write releasing the Actor actorRef from the
+// Worker name. A write without the Actor's lease, such as the UpdateActor RPC,
+// can still move its version.
+func releaseWriteError(name string, actorRef resources.ActorRef, err error) error {
 	switch {
 	case err == nil, errors.Is(err, store.ErrNotFound):
 		return nil
-	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return apierror.Aborted("concurrent update conflict, please retry")
 	default:
-		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
+		return MapStoreError(fmt.Errorf("while releasing actor from worker %s: %w", name, err), "Actor %s", actorRef)
 	}
 }
 
@@ -372,19 +361,12 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, worker *ateapi.Wor
 	precondition := store.DeletePreconditions{UID: worker.GetMetadata().GetUid()}
 	deleted, err := w.store.DeleteWorker(ctx, name, precondition)
 	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return nil, apierror.NotFound("Worker %s not found", name)
-		case errors.Is(err, store.ErrUIDConflict):
-			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
-		case errors.Is(err, store.ErrVersionConflict):
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		case errors.Is(err, store.ErrFailedPrecondition):
+		if errors.Is(err, store.ErrFailedPrecondition) {
 			// The sweep released every Actor that names this Worker, so a
 			// leftover assignment means the store is inconsistent.
 			return nil, apierror.Internal("Worker %s still holds assignments after its Actors were released", name)
 		}
-		return nil, fmt.Errorf("while deleting worker from DB: %w", err)
+		return nil, MapStoreError(fmt.Errorf("while deleting worker from DB: %w", err), "Worker %s", name)
 	}
 	return deleted, nil
 }

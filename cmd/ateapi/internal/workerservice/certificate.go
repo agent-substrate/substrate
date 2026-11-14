@@ -17,7 +17,6 @@ package workerservice
 import (
 	"context"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -27,7 +26,7 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/substratex509"
@@ -50,10 +49,8 @@ func (s *Server) MintWorkerActorCertificate(ctx context.Context, req *ateapi.Min
 	// (via a cluster-level grant?).
 
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("actor not found")
-	} else if err != nil {
-		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	if err != nil {
+		return nil, controlapi.MapStoreError(fmt.Errorf("while retrieving actor: %w", err), "actor")
 	}
 	// Only the assigned worker may mint, via its node's atelet, checked before the
 	// UID so other callers get NotFound. Unlike MintWorkerActorJwt, a SUSPENDED

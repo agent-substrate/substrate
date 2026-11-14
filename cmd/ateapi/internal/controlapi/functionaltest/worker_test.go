@@ -383,8 +383,8 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
 	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "concurrent update conflict, please retry")
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
-	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Worker "+testWorkerName+" does not have uid "+foreignUID)
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID}), codes.Aborted, "Worker "+testWorkerName+" has a different uid")
+	assertGrpcError(t, del(&ateapi.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "Worker "+testWorkerName+" has a different uid")
 	if _, err := tc.client.GetWorker(ctx, &ateapi.GetWorkerRequest{Worker: ref}); err != nil {
 		t.Fatalf("a refused delete removed the worker: %v", err)
 	}

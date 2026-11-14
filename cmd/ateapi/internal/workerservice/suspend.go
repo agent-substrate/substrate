@@ -16,14 +16,13 @@ package workerservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
-	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/controlapi"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -74,10 +73,7 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 	// itself: the caller proves which node it is on, and nothing else.
 	worker, err := s.store.GetWorker(ctx, workerName)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Worker %s not found", workerName)
-		}
-		return fmt.Errorf("while fetching worker %s: %w", workerName, err)
+		return controlapi.MapStoreError(fmt.Errorf("while fetching worker %s: %w", workerName, err), "Worker %s", workerName)
 	}
 	if worker.GetNodeName() != caller.NodeName {
 		// Do not disclose Workers on other nodes.
@@ -91,10 +87,7 @@ func (s *Server) authorizeHostedActor(ctx context.Context, caller *ateletauth.Ca
 
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return apierror.NotFound("Actor %s not found", actorRef)
-		}
-		return fmt.Errorf("while fetching actor %s: %w", actorRef, err)
+		return controlapi.MapStoreError(fmt.Errorf("while fetching actor %s: %w", actorRef, err), "Actor %s", actorRef)
 	}
 	return checkActorHostedBy(ctx, actor, workerName, actorUID)
 }

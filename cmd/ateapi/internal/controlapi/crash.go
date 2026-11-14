@@ -150,7 +150,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	}); err != nil {
-		return fmt.Errorf("while marking actor crashed: %w", actorWriteError(actorRef, err))
+		return fmt.Errorf("while marking actor crashed: %w", MapStoreError(err, "Actor %s", actorRef))
 	}
 
 	// Count the crash only once it has committed.
