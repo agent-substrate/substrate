@@ -363,3 +363,96 @@ func TestWorkerRuntimeFor(t *testing.T) {
 		t.Errorf("WorkerRuntimeFor() before registration = %v, want nil", got)
 	}
 }
+
+func TestBestRuntime(t *testing.T) {
+	compat := func(hash string) *ateapi.VersionedSandboxCompat {
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: []*ateapi.AttributeEntry{
+			{Key: AttrArchitecture, Value: "amd64"},
+			{Key: AttrSandboxBundleHash, Value: hash},
+		}}
+	}
+	def := &ateapi.WorkerSandboxRuntime{Version: compat("v2"), ActorOverhead: &ateapi.RuntimeOverhead{MemoryBytes: 4 << 20}}
+	restorable1 := &ateapi.WorkerSandboxRuntime{Version: compat("v1"), ActorOverhead: &ateapi.RuntimeOverhead{MemoryBytes: 8 << 20}}
+	restorable0 := &ateapi.WorkerSandboxRuntime{Version: compat("v0"), ActorOverhead: &ateapi.RuntimeOverhead{MemoryBytes: 16 << 20}}
+	status := &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
+		SandboxClass:       "microvm",
+		DefaultRuntime:     def,
+		RestorableRuntimes: []*ateapi.WorkerSandboxRuntime{restorable1, restorable0},
+	}}}
+	stamp := func(class string, c *ateapi.VersionedSandboxCompat) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: c}
+	}
+
+	for _, tc := range []struct {
+		name         string
+		status       *ateapi.WorkerStatus
+		snap         *ateapi.ActorSandboxRuntime
+		floor        ateapi.SnapshotFidelity
+		wantRuntime  *ateapi.WorkerSandboxRuntime
+		wantFidelity ateapi.SnapshotFidelity
+	}{
+		{
+			name:         "zero requirement returns DefaultRuntime at MEMORY",
+			status:       status,
+			snap:         nil,
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			wantRuntime:  def,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+		{
+			name:         "matches DefaultRuntime at MEMORY",
+			status:       status,
+			snap:         stamp("microvm", compat("v2")),
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			wantRuntime:  def,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+		{
+			name:         "matches RestorableRuntime at MEMORY over DefaultRuntime fallback",
+			status:       status,
+			snap:         stamp("microvm", compat("v0")),
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			wantRuntime:  restorable0,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+		{
+			name:         "mismatched runtime with floor MEMORY returns nil and UNSPECIFIED",
+			status:       status,
+			snap:         stamp("microvm", compat("gone")),
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			wantRuntime:  nil,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
+		},
+		{
+			name:         "mismatched runtime with floor ROOTFS falls back to DefaultRuntime at ROOTFS",
+			status:       status,
+			snap:         stamp("microvm", compat("gone")),
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			wantRuntime:  def,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		},
+		{
+			name:         "mismatched runtime with floor VOLUMES returns DefaultRuntime at ROOTFS",
+			status:       status,
+			snap:         stamp("microvm", compat("gone")),
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			wantRuntime:  def,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		},
+		{
+			name:         "different sandbox class returns nil and UNSPECIFIED even at floor VOLUMES",
+			status:       status,
+			snap:         stamp("gvisor", compat("v2")),
+			floor:        ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			wantRuntime:  nil,
+			wantFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotRT, gotFidelity := NewRequirement(tc.snap).BestRuntime(tc.status, tc.floor)
+			if gotRT != tc.wantRuntime || gotFidelity != tc.wantFidelity {
+				t.Errorf("BestRuntime() = (%v, %v), want (%v, %v)", gotRT, gotFidelity, tc.wantRuntime, tc.wantFidelity)
+			}
+		})
+	}
+}

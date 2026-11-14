@@ -377,7 +377,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, apierror.Aborted("actor %s has moved off worker %s since it was read", actorRef, worker.GetMetadata().GetName())
 	}
 	constraints := schedulingConstraints(actor, actorTemplate)
-	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
+	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// The crash releases the worker, e.g. one whose pool the actor's
 		// worker_selector no longer matches after the failed attempt.
@@ -421,13 +421,8 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	constraints := schedulingConstraints(actor, actorTemplate)
 	snapRuntime := constraints.SnapshotRuntime
 	class = constraints.SandboxClass
-	relaxable := canRelaxRuntime(actor, constraints)
 
 	assignedWorker, err := w.scheduler.Schedule(ctx, constraints)
-	if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
-		constraints.RequiredRuntime = hardware.Requirement{}
-		assignedWorker, err = w.scheduler.Schedule(ctx, constraints)
-	}
 	if err != nil {
 		if errors.Is(err, scheduling.ErrNoCapacity) {
 			outcome = ateattr.SchedulerOutcomeNoCapacity
@@ -570,14 +565,16 @@ func schedulingConstraints(actor *ateapi.Actor, tmpl *ateapi.ActorTemplate) sche
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
-	required := hardware.NewRequirement(requiredSnapshotRuntime(snap, tmpl))
+	required := requiredSnapshotRuntime(snap, tmpl)
 	c := scheduling.Constraints{
 		SandboxClass:    snap.GetSandboxRuntime().GetSandboxClass(),
-		RequiredRuntime: required,
-		SnapshotRuntime: required,
+		SnapshotRuntime: hardware.NewRequirement(required),
 		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes:   requiredNodes,
 		Limits:          tmpl.GetResources().GetLimits(),
+	}
+	if canRelaxRuntime(actor, snap, required) {
+		c.MinFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
@@ -612,9 +609,10 @@ func requiredSnapshotRuntime(snap *ateapi.Snapshot, tmpl *ateapi.ActorTemplate) 
 	return snap.GetSandboxRuntime()
 }
 
-// canRelaxRuntime reports whether scheduling may drop its runtime requirement.
-func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bool {
-	if constraints.RequiredRuntime.Runtime() == nil {
+// canRelaxRuntime reports whether scheduling may accept a worker that
+// restores snap without its memory state.
+func canRelaxRuntime(actor *ateapi.Actor, snap *ateapi.Snapshot, required *ateapi.ActorSandboxRuntime) bool {
+	if required == nil {
 		return false
 	}
 	status := actor.GetStatus()
@@ -623,7 +621,6 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 	if status.GetState() == ateapi.ActorState_ACTOR_STATE_SUSPENDED && status.GetAssignedNode() != "" {
 		return false
 	}
-	snap := snapshotToResume(status)
 	if snap.GetLocality() == "" {
 		return true
 	}
@@ -633,17 +630,6 @@ func canRelaxRuntime(actor *ateapi.Actor, constraints scheduling.Constraints) bo
 		return true
 	}
 	return snap.GetDurableSnapshot().GetState() == ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
-}
-
-// appliesWithFallback reports whether worker satisfies constraints, or — when
-// relaxable — satisfies constraints with RequiredRuntime relaxed.
-func (w *ActorWorkflow) appliesWithFallback(worker *ateapi.Worker, constraints scheduling.Constraints, relaxable bool) bool {
-	relaxed := constraints
-	relaxed.RequiredRuntime = hardware.Requirement{}
-	if !w.scheduler.Applies(worker, relaxed) {
-		return false
-	}
-	return relaxable || constraints.RequiredRuntime.WorkerMatches(worker.GetStatus())
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the

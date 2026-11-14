@@ -189,25 +189,50 @@ func runtimeOf(class string, compat *ateapi.VersionedSandboxCompat) *ateapi.Acto
 	return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: compat}
 }
 
-// matchingRuntime returns the runtime from status that can restore the
-// snapshot: in the worker's entry for the snapshot's class, DefaultRuntime
-// first, then RestorableRuntimes in order. nil if the worker does not run
-// that class or nothing in its entry matches. Only for a requirement of
-// something.
-func (r Requirement) matchingRuntime(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
+// BestRuntime returns the runtime from status that restores the most of the
+// snapshot at or above floor, and that fidelity: in the worker's entry for
+// the snapshot's class, DefaultRuntime first, then RestorableRuntimes in
+// order for SNAPSHOT_FIDELITY_MEMORY. When no runtime matches at MEMORY, a
+// worker of the snapshot's class can cold-boot the snapshot without memory on
+// DefaultRuntime at SNAPSHOT_FIDELITY_ROOTFS. Returns nil and
+// SNAPSHOT_FIDELITY_UNSPECIFIED if the worker does not run that class or no
+// runtime reaches floor. A zero Requirement imposes no runtime constraint, so
+// DefaultRuntime loses nothing and returns SNAPSHOT_FIDELITY_MEMORY, meeting
+// any floor.
+func (r Requirement) BestRuntime(status *ateapi.WorkerStatus, floor ateapi.SnapshotFidelity) (*ateapi.WorkerSandboxRuntime, ateapi.SnapshotFidelity) {
+	if r.snap == nil {
+		classes := status.GetSandboxClasses()
+		if len(classes) == 0 {
+			return nil, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}
+		return classes[0].GetDefaultRuntime(), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	}
 	c := classOf(status, r.snap.GetSandboxClass())
 	if c == nil {
-		return nil
+		return nil, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
-	if def := c.GetDefaultRuntime(); r.matchesCompat(def.GetVersion()) {
-		return def
+	def := c.GetDefaultRuntime()
+	if r.matchesCompat(def.GetVersion()) {
+		return def, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	}
 	for _, rt := range c.GetRestorableRuntimes() {
 		if r.matchesCompat(rt.GetVersion()) {
-			return rt
+			return rt, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 		}
 	}
-	return nil
+	if ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS < floor {
+		return nil, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+	}
+	return def, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+}
+
+// matchingRuntime returns the runtime from status that can restore the
+// snapshot with memory state: DefaultRuntime first, then RestorableRuntimes in
+// order. nil if the worker does not run that class or nothing in its entry
+// matches. Only for a requirement of something.
+func (r Requirement) matchingRuntime(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
+	rt, _ := r.BestRuntime(status, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+	return rt
 }
 
 // MatchingRuntime returns the runtime from status that can restore the
@@ -231,18 +256,11 @@ func (r Requirement) WorkerMatches(status *ateapi.WorkerStatus) bool {
 }
 
 // WorkerRuntimeFor returns the worker's runtime that RuntimeFor stamps, as the
-// worker reported it, or nil before the worker has registered.
+// worker reported it, or nil when the worker has not registered or does not
+// run the snapshot's class.
 func (r Requirement) WorkerRuntimeFor(status *ateapi.WorkerStatus) *ateapi.WorkerSandboxRuntime {
-	if r.snap != nil {
-		if rt := r.matchingRuntime(status); rt != nil {
-			return rt
-		}
-	}
-	classes := status.GetSandboxClasses()
-	if len(classes) == 0 {
-		return nil
-	}
-	return classes[0].GetDefaultRuntime()
+	rt, _ := r.BestRuntime(status, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS)
+	return rt
 }
 
 // RuntimeFor returns the runtime a worker with status runs an actor under
