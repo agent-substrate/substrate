@@ -22,6 +22,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/internal/volume"
@@ -819,4 +822,99 @@ func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 			}
 		})
 	}
+}
+
+type mockNodeIDResolver struct {
+	mapping map[string]string
+}
+
+func (m *mockNodeIDResolver) ResolveNodeID(_ context.Context, driverName, kubeNodeName string) (string, error) {
+	if id, ok := m.mapping[kubeNodeName]; ok {
+		return id, nil
+	}
+	return "", fmt.Errorf("no CSI NodeID for node %q", kubeNodeName)
+}
+
+func TestPlugin_AttachVolume_ResolvesNodeID(t *testing.T) {
+	driver := &mockCSIDriver{}
+	var capturedNodeID string
+	driver.controllerPublishVolumeFunc = func(_ context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		capturedNodeID = req.NodeId
+		return &csi.ControllerPublishVolumeResponse{}, nil
+	}
+
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	require.NoError(t, err)
+	defer client.Close()
+
+	plugin := NewPlugin(client, WithNodeIDResolver(&mockNodeIDResolver{
+		mapping: map[string]string{"k8s-node-1": "csi-driver-node-id-1"},
+	}))
+	plugin.InitControllerCapabilities(context.Background())
+
+	_, err = plugin.AttachVolume(context.Background(), volume.AttachVolumeRequest{
+		VolumeID: "vol-1",
+		Node:     "k8s-node-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "csi-driver-node-id-1", capturedNodeID)
+}
+
+func TestPlugin_DetachVolume_ResolvesNodeID(t *testing.T) {
+	driver := &mockCSIDriver{}
+	var capturedNodeID string
+	driver.controllerUnpublishVolumeFunc = func(_ context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		capturedNodeID = req.NodeId
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	require.NoError(t, err)
+	defer client.Close()
+
+	plugin := NewPlugin(client, WithNodeIDResolver(&mockNodeIDResolver{
+		mapping: map[string]string{"k8s-node-2": "csi-driver-node-id-2"},
+	}))
+	plugin.InitControllerCapabilities(context.Background())
+
+	err = plugin.DetachVolume(context.Background(), "vol-2", "k8s-node-2")
+	require.NoError(t, err)
+	assert.Equal(t, "csi-driver-node-id-2", capturedNodeID)
+}
+
+func TestPlugin_AttachDetach_WithoutResolver_UsesNodeName(t *testing.T) {
+	driver := &mockCSIDriver{}
+	var attachNodeID, detachNodeID string
+	driver.controllerPublishVolumeFunc = func(_ context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		attachNodeID = req.NodeId
+		return &csi.ControllerPublishVolumeResponse{}, nil
+	}
+	driver.controllerUnpublishVolumeFunc = func(_ context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+		detachNodeID = req.NodeId
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	endpoint, cleanup := startMockCSIDriver(t, driver)
+	defer cleanup()
+
+	client, err := NewCSIClient(endpoint, nil)
+	require.NoError(t, err)
+	defer client.Close()
+
+	plugin := NewPlugin(client)
+	plugin.InitControllerCapabilities(context.Background())
+
+	_, err = plugin.AttachVolume(context.Background(), volume.AttachVolumeRequest{VolumeID: "vol-3", Node: "k8s-node-3"})
+	require.NoError(t, err)
+	assert.Equal(t, "k8s-node-3", attachNodeID)
+
+	err = plugin.DetachVolume(context.Background(), "vol-3", "k8s-node-3")
+	require.NoError(t, err)
+	assert.Equal(t, "k8s-node-3", detachNodeID)
 }
