@@ -274,6 +274,32 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			want:       []check{{RelationCanListActorAssignments, "worker:w-1"}},
 		},
 
+		// External volume classes.
+		{
+			name:       "CreateExternalVolumeClass",
+			fullMethod: ateapi.Control_CreateExternalVolumeClass_FullMethodName,
+			req:        &ateapi.CreateExternalVolumeClassRequest{},
+			want:       []check{{RelationCanCreateExternalVolumeClass, GlobalRootObject}},
+		},
+		{
+			name:       "ListExternalVolumeClasses",
+			fullMethod: ateapi.Control_ListExternalVolumeClasses_FullMethodName,
+			req:        &ateapi.ListExternalVolumeClassesRequest{},
+			want:       []check{{RelationCanListExternalVolumeClasses, GlobalRootObject}},
+		},
+		{
+			name:       "GetExternalVolumeClass",
+			fullMethod: ateapi.Control_GetExternalVolumeClass_FullMethodName,
+			req:        &ateapi.GetExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+			want:       []check{{RelationCanGet, "external_volume_class:nfs-gold"}},
+		},
+		{
+			name:       "DeleteExternalVolumeClass",
+			fullMethod: ateapi.Control_DeleteExternalVolumeClass_FullMethodName,
+			req:        &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
+			want:       []check{{RelationCanDelete, "external_volume_class:nfs-gold"}},
+		},
+
 		// Actor identity credentials.
 		{
 			name:       "MintActorJWT",
@@ -590,6 +616,18 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			fullMethod: ateapi.Control_ListWorkerActorAssignments_FullMethodName,
 			req:        &ateapi.ListWorkerActorAssignmentsRequest{Worker: &ateapi.ObjectRef{}},
 			wantField:  "worker.name",
+		},
+		{
+			name:       "GetExternalVolumeClass without a class",
+			fullMethod: ateapi.Control_GetExternalVolumeClass_FullMethodName,
+			req:        &ateapi.GetExternalVolumeClassRequest{},
+			wantField:  "external_volume_class.name",
+		},
+		{
+			name:       "DeleteExternalVolumeClass with an invalid name",
+			fullMethod: ateapi.Control_DeleteExternalVolumeClass_FullMethodName,
+			req:        &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs/gold"}},
+			wantField:  "external_volume_class.name",
 		},
 		{
 			name:       "MintActorJWT without an actor",
