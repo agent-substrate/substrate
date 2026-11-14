@@ -301,6 +301,7 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `atenet.egress.additionalExtprocService`     | `ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE`         | `--experimental-additional-egress-extproc-service` | —                     | (global)                                 |
 | `atenet.egress.credentialProvider`           | `ATE_CREDENTIAL_PROVIDER`                       | `--credential-provider`                            | —                     | (global)                                 |
 | `clusterSize`                                | `ATE_INSTALL_CLUSTER_SIZE`                      | `--cluster-size`                                   | `size0`               | (global)                                 |
+| `components`                                 | `ATE_INSTALL_COMPONENTS`                        | `--component`                                      | —                     | (global)                                 |
 | `context`                                    | `KUBECTL_CONTEXT`                               | `--context`                                        | —                     | (global)                                 |
 | `cordonSystemInfraComponents`                | `ATE_INSTALL_CORDON_SYSTEM_INFRA_COMPONENTS`    | `--cordon-system-infra-components`                 | `false`               | (global)                                 |
 | `csi.setup`                                  | `SETUP_CSI`                                     | `--setup-csi`                                      | `none`                | `deploy ate-system`                      |
@@ -326,7 +327,9 @@ demos, the [benchmarks](benchmarking.md#settings), and the
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
 | `sandboxClasses`                             | `ATE_INSTALL_SANDBOX_CLASSES`                   | `--sandbox-classes`                                | `gvisor,microvm`      | `deploy ate-system`, `deploy sandboxconfig` |
+| `storage.backend`                            | `STORAGE_BACKEND`                               | `--storage-backend`                                | `gcs`                 | (global)                                 |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
+| `storage.microVMAssetLocation`               | `MICROVM_ASSET_LOCATION`                        | `--microvm-asset-location`                         | —                     | (global)                                 |
 | `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
 | `storage.transferGSAName`                    | `SNAPSHOT_TRANSFER_GSA_NAME`                    | `--snapshot-transfer-gsa-name`                     | —                     | (global)                                 |
 
@@ -366,9 +369,22 @@ certificate the system roots trust works too.
 The exchange fetches the keys once at start, and exits if the issuer's
 certificate does not verify. Then ate-api-server does not start either.
 
+`storage.backend` selects the object store the objectstore-plugin sidecars
+use. `gcs`, the default, is the only in-tree backend off kind; kind uses `s3` against
+its in-cluster rustfs. `external` removes the in-tree storage settings from both
+sidecars and leaves them to a `--component` that replaces the sidecars, as
+[the object store plugin sidecar contract](../reference/object-store-plugin-sidecar.md)
+describes. ate-setup refuses `external` without a component, and sets no
+snapshot transfer service account under it. It does not stage the microVM
+assets either: upload them yourself and name the location with
+`storage.microVMAssetLocation`, as
+[microVM assets](../reference/object-store-plugin-sidecar.md#microvm-assets)
+shows.
+
 With `--kind`, ate-setup defaults `storage.snapshotLocation` to
 `gs://<storage.bucketName>/` (`gs://ate-snapshots/`, the bucket the in-cluster
-rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`. On GKE, ate-setup
+rustfs creates) and ignores an ambient `SNAPSHOT_LOCATION`, unless
+`storage.backend` is `external`. On GKE, ate-setup
 does not create the bucket or grant access to it: run substrate-gke's
 `tools/setup-gcp create bucket` and `create iam` first, or `bootstrap` for both
 (see [tools/setup-gcp](https://github.com/ai-on-gke/substrate-gke/blob/main/tools/setup-gcp/README.md) in substrate-gke).

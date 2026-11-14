@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -26,6 +27,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -902,6 +904,276 @@ func TestRenderE2ETuning(t *testing.T) {
 			t.Errorf("fake-atelet args = %v, want none", args)
 		}
 	})
+}
+
+// Operator components compose after ours, in the order given, so they patch
+// the result of the installer's own components.
+func TestRenderOperatorComponentsAfterOurs(t *testing.T) {
+	// Each replaces atelet's args; the last one composed wins.
+	component := func(arg string) string {
+		dir := t.TempDir()
+		body := `apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: DaemonSet
+      name: atelet
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value: [` + arg + `]
+`
+		if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	first, second := component("--first"), component("--second")
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), E2ETuning: true, Components: []string{first, second}}}
+
+	rendered, err := e.render(e.Cfg.Manifest("atelet.yaml"))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	daemonSets, _ := dataPlaneWorkloads(t, rendered)
+	if args, want := daemonSets["atelet"].Spec.Template.Spec.Containers[0].Args, []string{"--second"}; !slices.Equal(args, want) {
+		t.Errorf("atelet args = %v, want %v", args, want)
+	}
+}
+
+// objectStorePluginSidecars returns the objectstore-plugin init container of
+// atelet and of ate-api-server, failing unless each has exactly one.
+func objectStorePluginSidecars(t *testing.T, manifest []byte) (node, control corev1.Container) {
+	t.Helper()
+	daemonSets, deployments := dataPlaneWorkloads(t, manifest)
+	find := func(workload string, spec corev1.PodSpec) corev1.Container {
+		var found []corev1.Container
+		for _, c := range spec.InitContainers {
+			if c.Name == "objectstore-plugin" {
+				found = append(found, c)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("%s has %d objectstore-plugin init containers, want 1", workload, len(found))
+		}
+		return found[0]
+	}
+	return find("atelet", daemonSets["atelet"].Spec.Template.Spec),
+		find("ate-api-server", deployments["ate-api-server"].Spec.Template.Spec)
+}
+
+// The in-tree backends keep their storage settings and probe on both sidecars.
+// Under the external backend no in-tree object store setting reaches either
+// sidecar, on any overlay.
+func TestRenderStorageBackend(t *testing.T) {
+	root := repoRoot(t)
+	awsEnv := []string{"AWS_REGION", "AWS_ENDPOINT_URL", "AWS_S3_USE_PATH_STYLE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+	for _, tc := range []struct {
+		name    string
+		cfg     config.Config
+		backend string // ATE_STORAGE_BACKEND on both sidecars; empty for none
+		aws     bool   // whether the AWS_* settings are set
+	}{
+		{name: "gcs", cfg: config.Config{Router: config.RouterEnvoy, StorageBackend: config.StorageBackendGCS}, backend: "gcs"},
+		{name: "s3 kind", cfg: config.Config{Router: config.RouterEnvoy, Kind: true, StorageBackend: config.StorageBackendS3}, backend: "s3", aws: true},
+		{name: "external", cfg: config.Config{Router: config.RouterEnvoy, StorageBackend: config.StorageBackendExternal}},
+		{name: "external kind", cfg: config.Config{Router: config.RouterEnvoy, Kind: true, StorageBackend: config.StorageBackendExternal}},
+		{name: "external agentgateway", cfg: config.Config{Router: config.RouterAgentgateway, StorageBackend: config.StorageBackendExternal}},
+		{name: "external kind agentgateway", cfg: config.Config{Router: config.RouterAgentgateway, Kind: true, StorageBackend: config.StorageBackendExternal}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			e := &Env{Cfg: &cfg}
+			rendered, err := e.render(e.Cfg.Path(SystemOverlay(e.Cfg)))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			node, control := objectStorePluginSidecars(t, rendered)
+			for _, c := range []corev1.Container{node, control} {
+				env := map[string]string{}
+				for _, v := range c.Env {
+					env[v.Name] = v.Value
+				}
+				if got, ok := env["ATE_STORAGE_BACKEND"]; got != tc.backend || ok != (tc.backend != "") {
+					t.Errorf("objectstore-plugin ATE_STORAGE_BACKEND = %q (set %t), want %q", got, ok, tc.backend)
+				}
+				for _, name := range awsEnv {
+					if _, ok := env[name]; ok != tc.aws {
+						t.Errorf("objectstore-plugin env %s set = %t, want %t", name, ok, tc.aws)
+					}
+				}
+				if _, ok := env["POD_NAMESPACE"]; !ok {
+					t.Errorf("objectstore-plugin env = %v, missing POD_NAMESPACE", env)
+				}
+				if p := c.StartupProbe; p == nil || p.Exec == nil || !slices.Contains(p.Exec.Command, "healthcheck") {
+					t.Errorf("objectstore-plugin startupProbe = %+v, want the in-tree healthcheck", p)
+				}
+			}
+		})
+	}
+}
+
+// The example provider component replaces both objectstore-plugin sidecars
+// while everything docs/reference/object-store-plugin-sidecar.md promises
+// stays: the container name, the sockets, the mounts, and the exchange port
+// with its Service port and network policy. Resolving images leaves the
+// provider's image and args as written.
+func TestRenderObjectStoreProviderComponent(t *testing.T) {
+	const (
+		image     = "example.invalid/objectstore-plugin:v0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+		socketDir = "/run/objectstore-plugin"
+		certDir   = "/run/servicedns.podcert.ate.dev"
+	)
+	root := repoRoot(t)
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	resolver := images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+		return "sha256:2222222222222222222222222222222222222222222222222222222222222222", nil
+	})
+	for _, kind := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kind=%t", kind), func(t *testing.T) {
+			cfg := config.Config{
+				Root:           root,
+				Kind:           kind,
+				Router:         config.RouterEnvoy,
+				Images:         src,
+				StorageBackend: config.StorageBackendExternal,
+				Components:     []string{filepath.Join(root, "docs", "examples", "object-store-provider-component")},
+			}
+			rendered, err := (&Env{Cfg: &cfg, resolver: resolver}).renderSystemManifests(t.Context())
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			daemonSets, deployments := dataPlaneWorkloads(t, rendered)
+			node, control := objectStorePluginSidecars(t, rendered)
+			for _, side := range []struct {
+				workload, main, socket string
+				pod                    corev1.PodSpec
+				sidecar                corev1.Container
+				mounts                 map[string]string
+			}{
+				{
+					workload: "atelet", main: "atelet", socket: "node.sock",
+					pod: daemonSets["atelet"].Spec.Template.Spec, sidecar: node,
+					mounts: map[string]string{"objectstore-plugin": socketDir, "ate-base": "/var/lib/ate", "servicedns-ca": certDir},
+				},
+				{
+					workload: "ate-api-server", main: "ate-api-server", socket: "control.sock",
+					pod: deployments["ate-api-server"].Spec.Template.Spec, sidecar: control,
+					mounts: map[string]string{"objectstore-plugin": socketDir, "servicedns": certDir, "podidentity": "/run/podidentity.podcert.ate.dev"},
+				},
+			} {
+				c := side.sidecar
+				if c.Image != image {
+					t.Errorf("%s sidecar image = %q, want %q", side.workload, c.Image, image)
+				}
+				if c.RestartPolicy == nil || *c.RestartPolicy != corev1.ContainerRestartPolicyAlways {
+					t.Errorf("%s sidecar restartPolicy = %v, want Always", side.workload, c.RestartPolicy)
+				}
+				if want := "--socket=" + socketDir + "/" + side.socket; !slices.Contains(c.Args, want) {
+					t.Errorf("%s sidecar args = %q, want %s", side.workload, c.Args, want)
+				}
+				for _, arg := range c.Args {
+					if strings.HasPrefix(arg, "--preview") {
+						t.Errorf("%s sidecar args = %q, want no --preview on a provider image", side.workload, c.Args)
+					}
+				}
+				if p := c.StartupProbe; p == nil || p.Exec == nil || p.GRPC != nil || p.HTTPGet != nil || p.TCPSocket != nil ||
+					len(p.Exec.Command) == 0 || p.Exec.Command[0] != "/objectstore-plugin" {
+					t.Errorf("%s sidecar startupProbe = %+v, want only the component's exec", side.workload, p)
+				}
+				for _, env := range c.Env {
+					if env.Name == "ATE_STORAGE_BACKEND" || strings.HasPrefix(env.Name, "AWS_") {
+						t.Errorf("%s sidecar env %s survives the external backend", side.workload, env.Name)
+					}
+				}
+				volumes := map[string]bool{}
+				for _, v := range side.pod.Volumes {
+					volumes[v.Name] = true
+				}
+				for name, path := range side.mounts {
+					if !slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == name && m.MountPath == path }) || !volumes[name] {
+						t.Errorf("%s sidecar mounts = %+v, want volume %s at %s", side.workload, c.VolumeMounts, name, path)
+					}
+				}
+				i := slices.IndexFunc(side.pod.Containers, func(m corev1.Container) bool { return m.Name == side.main })
+				if i < 0 {
+					t.Fatalf("%s has no %s container", side.workload, side.main)
+				}
+				main := side.pod.Containers[i]
+				// Without the flag the binary's default names the same socket.
+				for _, arg := range main.Args {
+					if want := "--objectstore-plugin-socket=" + socketDir + "/" + side.socket; strings.HasPrefix(arg, "--objectstore-plugin-socket=") && arg != want {
+						t.Errorf("%s arg %s, want %s", side.main, arg, want)
+					}
+				}
+				if !slices.ContainsFunc(main.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "objectstore-plugin" && m.MountPath == socketDir }) {
+					t.Errorf("%s does not share the objectstore-plugin volume at %s", side.main, socketDir)
+				}
+			}
+			if i := slices.IndexFunc(node.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "ate-base" }); i < 0 ||
+				node.VolumeMounts[i].MountPropagation == nil || *node.VolumeMounts[i].MountPropagation != corev1.MountPropagationHostToContainer {
+				t.Errorf("atelet sidecar mounts = %+v, want ate-base with HostToContainer propagation", node.VolumeMounts)
+			}
+			if !slices.ContainsFunc(control.Ports, func(p corev1.ContainerPort) bool { return p.Name == "exchange" && p.ContainerPort == 8445 }) {
+				t.Errorf("ate-api-server sidecar ports = %+v, want exchange 8445", control.Ports)
+			}
+			assertExchangeReachableFromAtelet(t, rendered)
+		})
+	}
+}
+
+// assertExchangeReachableFromAtelet checks that the api Service forwards port
+// 8445 to the ate-api-server pods and that their network policy admits it only
+// from atelet.
+func assertExchangeReachableFromAtelet(t *testing.T, manifest []byte) {
+	t.Helper()
+	var service *corev1.Service
+	var policy *networkingv1.NetworkPolicy
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
+		var meta metav1.PartialObjectMetadata
+		if err := yaml.Unmarshal([]byte(doc), &meta); err != nil {
+			t.Fatalf("rendered document is not valid YAML: %v", err)
+		}
+		switch {
+		case meta.Kind == "Service" && meta.Name == "api":
+			service = &corev1.Service{}
+			if err := yaml.Unmarshal([]byte(doc), service); err != nil {
+				t.Fatalf("decoding Service: %v", err)
+			}
+		case meta.Kind == "NetworkPolicy" && meta.Name == "ate-api-server":
+			policy = &networkingv1.NetworkPolicy{}
+			if err := yaml.Unmarshal([]byte(doc), policy); err != nil {
+				t.Fatalf("decoding NetworkPolicy: %v", err)
+			}
+		}
+	}
+	if service == nil || !slices.ContainsFunc(service.Spec.Ports, func(p corev1.ServicePort) bool {
+		return p.Name == "exchange" && p.Port == 8445 && p.TargetPort.IntValue() == 8445
+	}) {
+		t.Errorf("Service api = %+v, want port exchange 8445 to 8445", service)
+	}
+	if service != nil && service.Spec.Selector["app"] != "ate-api-server" {
+		t.Errorf("Service api selector = %v, want app: ate-api-server", service.Spec.Selector)
+	}
+	if policy == nil {
+		t.Fatal("no NetworkPolicy ate-api-server rendered")
+	}
+	var from []map[string]string
+	for _, rule := range policy.Spec.Ingress {
+		if slices.ContainsFunc(rule.Ports, func(p networkingv1.NetworkPolicyPort) bool { return p.Port != nil && p.Port.IntValue() == 8445 }) {
+			for _, peer := range rule.From {
+				if peer.PodSelector == nil {
+					from = append(from, nil)
+					continue
+				}
+				from = append(from, peer.PodSelector.MatchLabels)
+			}
+		}
+	}
+	if want := []map[string]string{{"app": "atelet"}}; !reflect.DeepEqual(from, want) {
+		t.Errorf("NetworkPolicy ate-api-server admits 8445 from %v, want %v", from, want)
+	}
 }
 
 // Both paths that deliver the Envoy router pass it the install's allowlist,

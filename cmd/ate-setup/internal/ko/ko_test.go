@@ -16,6 +16,7 @@ package ko
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/yaml"
 )
 
 // Without --base-import-paths ko publishes cmd/atelet as "atelet-<md5>", and
@@ -254,5 +256,48 @@ func TestBuildEachStopsAfterAttempts(t *testing.T) {
 	}
 	if got := koRuns(t, dir, "atelet"); got != 0 {
 		t.Errorf("ko built atelet %d times, want 0", got)
+	}
+}
+
+// An operator's --component may name images ko does not build, such as an
+// object store plugin. ko resolve leaves them as written.
+func TestResolveLeavesOtherImages(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nothing is built, so ko never publishes to this repository.
+	r, err := New(root, []string{"KO_DOCKER_REPO=ko.local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"example.invalid/objectstore-plugin:v0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		"example.invalid/objectstore-plugin",
+		"registry.example:5000/team/objectstore-plugin:v1",
+	}
+	manifest := "apiVersion: v1\nkind: Pod\nmetadata:\n  name: p\nspec:\n  containers:\n"
+	for i, image := range want {
+		manifest += fmt.Sprintf("  - name: c%d\n    image: %s\n", i, image)
+	}
+
+	out, err := r.Resolve(t.Context(), "-", []byte(manifest))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	var pod struct {
+		Spec struct {
+			Containers []struct{ Image string }
+		}
+	}
+	if err := yaml.Unmarshal(out, &pod); err != nil {
+		t.Fatalf("ko resolve output is not YAML: %v\n%s", err, out)
+	}
+	var got []string
+	for _, c := range pod.Spec.Containers {
+		got = append(got, c.Image)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("resolved images = %q, want %q", got, want)
 	}
 }

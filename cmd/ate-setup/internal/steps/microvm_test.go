@@ -20,7 +20,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,7 +38,12 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	k8stesting "k8s.io/client-go/testing"
 
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
@@ -481,18 +488,14 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 		}
 	}
 
-	for _, tc := range []struct {
-		scheme string
-		bucket string
-	}{
-		{scheme: "gs", bucket: "my-test-bucket"},
-		{scheme: "s3", bucket: defaultKindMicroVMBucket},
+	// The gs and s3 locations are where gcs and s3 installs stage the assets.
+	for _, location := range []string{
+		"gs://my-test-bucket-assets/microvm-assets",
+		"s3://ate-snapshots/microvm-assets",
+		"az://acct/assets",
 	} {
-		t.Run(tc.scheme, func(t *testing.T) {
-			rendered, err := render.Template(tmplPath, map[string]string{
-				"BUCKET_SCHEME":     tc.scheme,
-				"ASSET_BUCKET_NAME": tc.bucket,
-			}, nil)
+		t.Run(location, func(t *testing.T) {
+			rendered, err := render.Template(tmplPath, map[string]string{"MICROVM_ASSET_LOCATION": location}, nil)
 			if err != nil {
 				t.Fatalf("render.Template(%s) = %v", tmplPath, err)
 			}
@@ -502,7 +505,7 @@ func TestMicroVMSandboxConfigTemplate(t *testing.T) {
 			for _, arch := range microvmArches {
 				for _, asset := range microvmAssets {
 					wantDigest := digests[arch][asset]
-					wantURL := tc.scheme + "://" + tc.bucket + "/" + microvmAssetsPrefix + "/" + arch + "/" + wantDigest
+					wantURL := location + "/" + arch + "/" + wantDigest
 					if !strings.Contains(string(rendered), wantURL) {
 						t.Errorf("rendered manifest missing expected bucket URL %q:\n%s", wantURL, rendered)
 					}
@@ -744,6 +747,118 @@ func TestPrepareMicroVMDepsRequiresBucketOnNonKind(t *testing.T) {
 	}
 	if got := len(cs.Actions()); got != 0 {
 		t.Errorf("DeploySandboxConfig() made %d API calls before preflight failed, want 0", got)
+	}
+}
+
+func TestPrepareMicroVMDepsExternal(t *testing.T) {
+	silenceStepLog(t)
+	// Neither docker nor gcloud: nothing is staged.
+	t.Setenv("PATH", t.TempDir())
+
+	for _, kind := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kind=%v", kind), func(t *testing.T) {
+			cs := fake.NewClientset()
+			disco := fake.NewClientset()
+			disco.Fake.Resources = []*metav1.APIResourceList{{
+				GroupVersion: atev1.GroupVersion.String(),
+				APIResources: []metav1.APIResource{{Name: "sandboxconfigs", Kind: "SandboxConfig"}},
+			}}
+			dc := dynamicfake.NewSimpleDynamicClient(clientgoscheme.Scheme)
+			var applied []byte
+			dc.PrependReactor("patch", "sandboxconfigs", func(action k8stesting.Action) (bool, k8sruntime.Object, error) {
+				applied = action.(k8stesting.PatchAction).GetPatch()
+				obj := &unstructured.Unstructured{}
+				return true, obj, obj.UnmarshalJSON(applied)
+			})
+			env := &Env{
+				Cfg: &config.Config{Root: repoRoot(t), Kind: kind, StorageBackend: config.StorageBackendExternal,
+					MicroVMAssetLocation: "az://acct/assets/"},
+				Kube: kube.NewFromClients(nil, cs, dc, disco.Discovery()),
+			}
+			prep, err := env.prepareMicroVMDeps(t.Context())
+			if err != nil {
+				t.Fatalf("prepareMicroVMDeps() = %v", err)
+			}
+			if want := (microVMPrepared{location: "az://acct/assets"}); !reflect.DeepEqual(*prep, want) {
+				t.Errorf("prepareMicroVMDeps() = %+v, want %+v", *prep, want)
+			}
+			if err := env.applyMicroVMSandboxConfig(t.Context(), prep); err != nil {
+				t.Fatalf("applyMicroVMSandboxConfig() = %v", err)
+			}
+			// Staging to rustfs would have looked up its pods.
+			if got := cs.Actions(); len(got) != 0 {
+				t.Errorf("applyMicroVMSandboxConfig() made API calls %v, want only the SandboxConfig apply", got)
+			}
+			var sc atev1.SandboxConfig
+			if err := json.Unmarshal(applied, &sc); err != nil {
+				t.Fatalf("decoding the applied SandboxConfig: %v\n%s", err, applied)
+			}
+			ver, ok := sc.Spec.DefaultVersionConfig()
+			if !ok {
+				t.Fatalf("applied SandboxConfig has no default version:\n%s", applied)
+			}
+			urls := 0
+			for _, arch := range microvmArches {
+				for name, af := range ver.Assets[arch] {
+					urls++
+					if want := "az://acct/assets/" + arch + "/" + af.SHA256; af.URL != want {
+						t.Errorf("applied %s %s url = %q, want %q", arch, name, af.URL, want)
+					}
+				}
+			}
+			if want := len(microvmArches) * len(microvmTemplateAssetFiles); urls != want {
+				t.Errorf("applied SandboxConfig has %d asset URLs, want %d:\n%s", urls, want, applied)
+			}
+
+			env.Cfg.MicroVMAssetLocation = ""
+			err = env.DeploySandboxConfig(t.Context(), DefaultSandboxClasses)
+			if err == nil || !strings.Contains(err.Error(), "--microvm-asset-location") {
+				t.Fatalf("DeploySandboxConfig() without a location = %v, want an error naming --microvm-asset-location", err)
+			}
+			if got := len(cs.Actions()); got != 0 {
+				t.Errorf("DeploySandboxConfig() made %d API calls before preflight failed, want 0", got)
+			}
+		})
+	}
+}
+
+func TestExternalMicroVMAssetLocation(t *testing.T) {
+	for _, tc := range []struct {
+		location string
+		snapshot string
+		want     string
+		wantErr  string
+	}{
+		{location: "az://acct/assets", want: "az://acct/assets"},
+		{location: "az://acct/a/b//", want: "az://acct/a/b"},
+		{location: "az://acct/assets", snapshot: "az://acct/snapshots/", want: "az://acct/assets"},
+		{location: "az://acct/assets", snapshot: "gs://acct/assets/", wantErr: "overlaps"},
+		{location: "az://acct/a//b", wantErr: "empty path segment"},
+		{location: "az://acct/assets", snapshot: "az://other/assets/", want: "az://acct/assets"},
+		{location: "az://acct/assets-2", snapshot: "az://acct/assets", want: "az://acct/assets-2"},
+		{location: "", wantErr: "--microvm-asset-location"},
+		{location: "//acct/assets", wantErr: "missing scheme"},
+		{location: "az://acct/", wantErr: "missing path"},
+		{location: "az:///assets", wantErr: "missing bucket"},
+		{location: "az://acct/assets?x=1", wantErr: "only a scheme, bucket, and path"},
+		{location: "az://acct/assets", snapshot: "az://acct/", wantErr: "overlaps"},
+		{location: "az://acct/assets", snapshot: "az://acct/assets/", wantErr: "overlaps"},
+		{location: "az://acct/snap/assets", snapshot: "az://acct/snap", wantErr: "overlaps"},
+		{location: "az://acct/a", snapshot: "az://acct/a/snap/", wantErr: "overlaps"},
+	} {
+		t.Run(tc.location+" "+tc.snapshot, func(t *testing.T) {
+			env := &Env{Cfg: &config.Config{MicroVMAssetLocation: tc.location, SnapshotLocation: tc.snapshot}}
+			got, err := env.externalMicroVMAssetLocation()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("externalMicroVMAssetLocation() = %q, %v, want an error containing %q", got, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("externalMicroVMAssetLocation() = %q, %v, want %q", got, err, tc.want)
+			}
+		})
 	}
 }
 

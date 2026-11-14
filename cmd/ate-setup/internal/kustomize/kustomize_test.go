@@ -155,3 +155,31 @@ func TestComposeReportsMissingComponent(t *testing.T) {
 		t.Error("Compose() = nil error for a missing component, want one")
 	}
 }
+
+// TestComposeQuotesComponentPaths uses directory names that are valid paths
+// but break an unquoted YAML list entry.
+func TestComposeQuotesComponentPaths(t *testing.T) {
+	for _, name := range []string{
+		"my provider",
+		"my provider #1",
+		"a: b",
+	} {
+		t.Run(name, func(t *testing.T) {
+			component := filepath.Join(t.TempDir(), name)
+			if err := os.MkdirAll(component, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(component, "kustomization.yaml"), []byte(testComponent), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			out, err := ComposeBytes([]byte(testDeployment), component)
+			if err != nil {
+				t.Fatalf("ComposeBytes() error = %v", err)
+			}
+			if !strings.Contains(string(out), `composed: "true"`) {
+				t.Errorf("ComposeBytes() output lacks the component's label:\n%s", out)
+			}
+		})
+	}
+}

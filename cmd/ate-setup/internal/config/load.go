@@ -15,7 +15,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 	"go.ate.dev/substrate/internal/actoridjwt"
@@ -189,6 +192,11 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 
+	components, err := resolveComponents(r)
+	if err != nil {
+		return nil, err
+	}
+
 	kubeconfig, kubeconfigEnv := splitKubeconfig(r)
 
 	// One configured connection serves both pools; both empty selects the
@@ -226,14 +234,16 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		APIAuthzBootstrapOwners:     bootstrapOwners,
 		EgressGatewayExtraSPIFFEIDs: splitList(r.String("ateapi.authz.egressGatewayExtraSPIFFEIDs")),
 
-		BucketName:         r.String("storage.bucketName"),
-		SnapshotLocation:   r.String("storage.snapshotLocation"),
-		TransferGSAName:    r.String("storage.transferGSAName"),
-		KODockerRepo:       r.String("ko.dockerRepo"),
-		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
-		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
-		ActorJWTIssuer:     actorJWTIssuer,
-		DockerBuildFlags:   strings.Fields(r.String("docker.buildFlags")),
+		StorageBackend:       r.String("storage.backend"),
+		BucketName:           r.String("storage.bucketName"),
+		SnapshotLocation:     r.String("storage.snapshotLocation"),
+		MicroVMAssetLocation: r.String("storage.microVMAssetLocation"),
+		TransferGSAName:      r.String("storage.transferGSAName"),
+		KODockerRepo:         r.String("ko.dockerRepo"),
+		KODefaultPlatforms:   r.String("ko.defaultPlatforms"),
+		ActorJWTAlgorithm:    r.String("actorJWT.algorithm"),
+		ActorJWTIssuer:       actorJWTIssuer,
+		DockerBuildFlags:     strings.Fields(r.String("docker.buildFlags")),
 		Images: images.Source{
 			Repo: strings.TrimSuffix(r.String("images.repo"), "/"),
 			Tag:  r.String("images.tag"),
@@ -270,6 +280,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		CordonSystemInfraComponents:    r.Bool("cordonSystemInfraComponents"),
 		FakeDataPlane:                  r.Bool("fakeDataPlane.enabled"),
 		E2ETuning:                      r.Bool("e2e.tuning"),
+		Components:                     components,
 		IngressAllowedSPIFFEIDs:        splitList(r.String("ingressAllowedSPIFFEIDs")),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
@@ -287,6 +298,63 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// resolveComponents makes the component paths absolute and checks each is a
+// kustomize Component, so a bad path fails before anything is applied. The
+// file already resolved its relative paths against its own directory; the
+// flag and the environment resolve against the working directory. The
+// absolute paths are written back so the report and the record name them.
+func resolveComponents(r *Resolved) ([]string, error) {
+	v, _ := r.Value("components")
+	paths := r.PathList("components")
+	for i, p := range paths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, err
+		}
+		paths[i] = abs
+		if err := checkComponent(abs); err != nil {
+			return nil, fmt.Errorf("%s: %w (from %s)", v.Setting.Key, err, v.From.Describe(v.Setting))
+		}
+	}
+	if joined := strings.Join(paths, string(os.PathListSeparator)); joined != v.Raw {
+		r.set("components", joined, v.From)
+	}
+	return paths, nil
+}
+
+// checkComponent reports whether dir holds a kustomization of kind Component.
+func checkComponent(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	// The file names kustomize accepts, in the order it looks for them.
+	for _, name := range []string{"kustomization.yaml", "kustomization.yml", "Kustomization"} {
+		path := filepath.Join(dir, name)
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var header struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal(raw, &header); err != nil {
+			return fmt.Errorf("parsing %s: %w", path, err)
+		}
+		if header.Kind != "Component" {
+			return fmt.Errorf("%s must declare kind: Component, got %q", path, header.Kind)
+		}
+		return nil
+	}
+	return fmt.Errorf("%s has no kustomization.yaml", dir)
 }
 
 // splitList splits a comma-separated value, dropping empty items, so an empty
@@ -353,14 +421,58 @@ func applyKindDefaults(r *Resolved) {
 	if !namedExplicitly(r, "ko.defaultPlatforms") {
 		r.set("ko.defaultPlatforms", "linux/"+runtime.GOARCH, OriginKindProfile)
 	}
+	// Kind stores snapshots in its local rustfs through S3. Unlike the
+	// settings above, an ambient value is kept, and validateResolved refuses
+	// gcs on kind.
+	if !r.Supplied("storage.backend") {
+		r.set("storage.backend", StorageBackendS3, OriginKindProfile)
+	}
 	if !namedExplicitly(r, "storage.bucketName") {
 		r.set("storage.bucketName", "ate-snapshots", OriginKindProfile)
 	}
 	// Follows the bucket, so the location names the one the local rustfs
 	// creates rather than a GCS bucket from the developer's environment.
-	if !namedExplicitly(r, "storage.snapshotLocation") {
+	// Under external the location is in the provider's object store.
+	if !namedExplicitly(r, "storage.snapshotLocation") && r.String("storage.backend") != StorageBackendExternal {
 		r.set("storage.snapshotLocation", "gs://"+r.String("storage.bucketName")+"/", OriginKindProfile)
 	}
+}
+
+// validateStorageBackend checks the backend against the cluster and the
+// settings it needs.
+func validateStorageBackend(cfg *Config, r *Resolved) error {
+	backend, _ := r.Value("storage.backend")
+	kind, _ := r.Value(kindEnabledKey)
+	switch cfg.StorageBackend {
+	case StorageBackendGCS:
+		if cfg.Kind {
+			return &ConflictError{A: backend, B: kind, Why: "kind stores snapshots in its local rustfs through " + StorageBackendS3}
+		}
+	case StorageBackendS3:
+		if !cfg.Kind {
+			return &ConflictError{A: backend, B: kind, Why: StorageBackendS3 + " is supported only on kind"}
+		}
+	case StorageBackendExternal:
+		if len(cfg.Components) == 0 {
+			components, _ := Lookup("components")
+			return fmt.Errorf("%s=%s (from %s) needs a component that configures the objectstore-plugin sidecars: set %s",
+				backend.Setting.Key, backend.Raw, backend.From.Describe(backend.Setting), components.Channels())
+		}
+		if cfg.FakeDataPlane {
+			fake, _ := r.Value("fakeDataPlane.enabled")
+			return &ConflictError{A: backend, B: fake,
+				Why: "fake-atelet takes the storage settings of the in-tree objectstore-plugin"}
+		}
+	default:
+		return &InvalidError{Value: backend, Want: strings.Join(
+			[]string{StorageBackendGCS, StorageBackendS3, StorageBackendExternal}, ", ")}
+	}
+	if cfg.MicroVMAssetLocation != "" && cfg.StorageBackend != StorageBackendExternal {
+		location, _ := r.Value("storage.microVMAssetLocation")
+		return &ConflictError{A: location, B: backend,
+			Why: "ate-setup stages the microVM assets itself on " + cfg.StorageBackend}
+	}
+	return nil
 }
 
 // namedExplicitly reports whether a flag or configuration file supplied the
@@ -401,6 +513,10 @@ func validateResolved(cfg *Config, r *Resolved) error {
 			return &InvalidError{Value: ipType, Want: strings.Join(
 				[]string{CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC}, ", ")}
 		}
+	}
+
+	if err := validateStorageBackend(cfg, r); err != nil {
+		return err
 	}
 
 	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {
