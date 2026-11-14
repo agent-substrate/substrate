@@ -124,8 +124,9 @@ type sandboxAssetsRecord struct {
 // hard link, so the download runs once per node, concurrent callers for one
 // asset share it, and what an actor was handed stays valid whatever the
 // cache evicts later. An asset already present under dstDir is kept as it
-// is: dstDir is the actor's own, reset at Run and Restore, so a Checkpoint
-// or Terminate finds exactly what its activation staged.
+// is: an actor's dstDir is its own, reset at Run and Restore, so a
+// Checkpoint or Terminate finds exactly what its activation staged, and a
+// worker's default runtime directory, once filled, costs a stat per asset.
 func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord, dstDir string) (map[string]string, error) {
 	// Owner-only, like the actor's bundle dir: the worker runs the binaries
 	// as root, and nothing else needs to see them.

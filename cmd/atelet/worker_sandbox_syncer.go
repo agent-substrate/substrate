@@ -32,7 +32,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"math/rand/v2"
 	"os"
@@ -110,27 +109,23 @@ const (
 
 // workerSandboxSyncer keeps a sandbox runtimes file in each local worker's
 // directory under workersDir: the runtimes of the enabled versions of the
-// SandboxConfig the worker's pool uses. It creates a worker's directory once
-// it writes the pod's file and removes it when the pod is gone.
+// SandboxConfig the worker's pool uses, with the default's assets linked
+// under the directory so they stay cached. It creates a worker's directory
+// when it first stages the pod's default and removes it when the pod is gone.
 type workerSandboxSyncer struct {
 	resolver *workerSandboxResolver
 	// index is told each pod's runtimes before its file is written, and
 	// what the pod advertises once it is.
 	index *runtimeIndex
-	// prewarm, if set, is handed each default runtime a pod's file
-	// advertises, with a directory under the pod's to link the assets into,
-	// so they are fetched before an actor asks for them and stay cached
-	// while none runs them.
-	prewarm runtimePrewarm
 	// recorder emits a Warning event on the worker pod when syncing its
 	// sandbox runtimes file fails.
 	recorder events.EventRecorder
 	// pods holds this node's worker pods, indexed by podUIDIndex.
 	pods   cache.Indexer
 	assets sandboxAssetFetcher
-	// scratchDir is where buildFile stages assets to verify them (and run
-	// the runsc probe), read from ateletpath once here so a test can point
-	// a syncer elsewhere.
+	// scratchDir is where buildFile stages a restorable version's assets to
+	// verify them, and the runsc it probes for any version, read from
+	// ateletpath once here so a test can point a syncer elsewhere.
 	scratchDir string
 	// queue carries pod UIDs. A workqueue never hands the same key to two
 	// workers at once, so a pod's file is never written and its directory
@@ -144,28 +139,27 @@ type workerSandboxSyncer struct {
 	probeCPUIdentity func() (vendor, model string, err error)
 	// runCPUFeatures is runRunscCPUFeatures. Overridable in tests.
 	runCPUFeatures func(ctx context.Context, runscPath string) ([]string, error)
-	// mu guards hostCPU, cpuFeatures and microvmAssets across the syncWorkers
-	// in run: hostCPU is the probed host CPU identity, nil until a probe
-	// succeeds; cpuFeatures is the encoded cpu_features of each runsc binary
-	// by its gVisor asset's SHA256 digest; and microvmAssets holds the
-	// bundle hashes of microVM versions whose assets have been verified in
-	// this atelet process. Restorable microVM versions are verified once per
-	// atelet process (except when two workers meet a version before either
+	// mu guards hostCPU, cpuFeatures and verifiedBundles across the
+	// syncWorkers in run: hostCPU is the probed host CPU identity, nil until
+	// a probe succeeds; cpuFeatures is the encoded cpu_features of each
+	// runsc binary by its gVisor asset's SHA256 digest; and verifiedBundles
+	// holds the bundle hashes of versions whose assets have been verified in
+	// this atelet process. A restorable version is verified once per atelet
+	// process (except when two workers meet a version before either
 	// memoizes it); the default version is staged on every sync.
-	mu            sync.Mutex
-	hostCPU       *cpuIdentity
-	cpuFeatures   map[string]string
-	microvmAssets map[string]bool
+	mu              sync.Mutex
+	hostCPU         *cpuIdentity
+	cpuFeatures     map[string]string
+	verifiedBundles map[string]bool
 }
 
-func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm, recorder events.EventRecorder) *workerSandboxSyncer {
+func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, recorder events.EventRecorder) *workerSandboxSyncer {
 	return &workerSandboxSyncer{
 		resolver:   resolver,
 		pods:       pods,
 		assets:     assets,
 		scratchDir: ateletpath.SandboxAssetScratchDir,
 		index:      index,
-		prewarm:    prewarm,
 		recorder:   recorder,
 		// Backoff doubles from 1s for informer lag and unresolved pools, and
 		// caps at 5m where uncapped retries for transient asset fetch or probe
@@ -178,23 +172,17 @@ func newWorkerSandboxSyncer(resolver *workerSandboxResolver, pods cache.Indexer,
 		probeCPUIdentity: hardware.ProbeCPUIdentity,
 		runCPUFeatures:   runRunscCPUFeatures,
 		cpuFeatures:      make(map[string]string),
-		microvmAssets:    make(map[string]bool),
+		verifiedBundles:  make(map[string]bool),
 	}
-}
-
-// runtimePrewarm is what the syncer asks of the runtime prewarmer: fetch a
-// default runtime and link its assets into the given directory.
-type runtimePrewarm interface {
-	enqueue(hash, dir string)
 }
 
 // defaultRuntimeDirsName is the directory under a worker's own that holds
 // one directory per default runtime the worker advertises, by bundle hash,
-// one per sandbox class, which the prewarmer links the runtime's assets
-// into. The links are what keeps the assets cached while no actor runs
-// them: the cache never evicts a linked entry. The syncer makes a runtime's
-// directory when the worker's file first advertises it as a default and
-// removes it when the file stops; they all go with the worker's directory.
+// one per sandbox class, which the build stages the runtime's assets into.
+// The links are what keeps the assets cached while no actor runs them: the
+// cache never evicts a linked entry. The build fills a runtime's directory
+// before the worker's file advertises it as a default, and the syncer
+// removes it once the file stops; they all go with the worker's directory.
 const defaultRuntimeDirsName = "default-runtime"
 
 // defaultRuntimeDir is the directory for the default runtime hash of the
@@ -203,17 +191,14 @@ func (s *workerSandboxSyncer) defaultRuntimeDir(uid, hash string) string {
 	return filepath.Join(s.podDir(uid), defaultRuntimeDirsName, strings.ReplaceAll(hash, ":", "-"))
 }
 
-// syncDefaultRuntimeDirs makes the worker pod's default-runtime directory
-// hold one directory per hash in defaults and nothing else: the others are
-// removed, which unlinks the runtimes the worker no longer advertises, and
-// the missing ones are created empty for the prewarmer to fill. Called
-// once the pod's file advertises defaults, so nothing it removes is a
-// runtime the worker still names.
-func (s *workerSandboxSyncer) syncDefaultRuntimeDirs(uid string, defaults []string) error {
+// pruneDefaultRuntimeDirs removes everything in the worker pod's
+// default-runtime directory but the directories of the hashes in defaults,
+// which unlinks the runtimes the worker no longer advertises as a default.
+// Called once the pod's file advertises defaults, each staged into its
+// directory by the build, so nothing it removes is a runtime the worker
+// still names.
+func (s *workerSandboxSyncer) pruneDefaultRuntimeDirs(uid string, defaults []string) error {
 	parent := filepath.Join(s.podDir(uid), defaultRuntimeDirsName)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return fmt.Errorf("while creating the worker's default runtime dir: %w", err)
-	}
 	want := make(map[string]bool, len(defaults))
 	for _, hash := range defaults {
 		want[filepath.Base(s.defaultRuntimeDir(uid, hash))] = true
@@ -227,11 +212,6 @@ func (s *workerSandboxSyncer) syncDefaultRuntimeDirs(uid string, defaults []stri
 			if err := os.RemoveAll(filepath.Join(parent, e.Name())); err != nil {
 				return fmt.Errorf("while removing a retired default runtime dir: %w", err)
 			}
-		}
-	}
-	for name := range want {
-		if err := os.Mkdir(filepath.Join(parent, name), 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("while creating a default runtime dir: %w", err)
 		}
 	}
 	return nil
@@ -249,7 +229,7 @@ func (s *workerSandboxSyncer) syncDefaultRuntimeDirs(uid string, defaults []stri
 // or a list/watch fails (e.g. Forbidden while an RBAC rollout lags the
 // binary), existing files and index entries stay as they are and only
 // changes wait.
-func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools ateinformers.WorkerPoolInformer, configs ateinformers.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, prewarm runtimePrewarm, recorder events.EventRecorder) (*workerSandboxSyncer, error) {
+func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInformer, workerPools ateinformers.WorkerPoolInformer, configs ateinformers.SandboxConfigInformer, assets sandboxAssetFetcher, workersDir string, index *runtimeIndex, recorder events.EventRecorder) (*workerSandboxSyncer, error) {
 	if err := pods.Informer().AddIndexers(cache.Indexers{podUIDIndex: func(obj any) ([]string, error) {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok {
@@ -263,7 +243,7 @@ func startWorkerSandboxSyncer(ctx context.Context, pods coreinformers.PodInforme
 		workerPools: workerPools.Lister(),
 		configs:     configs.Lister(),
 	}
-	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir, index, prewarm, recorder)
+	s := newWorkerSandboxSyncer(resolver, pods.Informer().GetIndexer(), assets, workersDir, index, recorder)
 	if err := watch(ctx, "worker pod", pods.Informer(), s.podHandler()); err != nil {
 		return nil, err
 	}
