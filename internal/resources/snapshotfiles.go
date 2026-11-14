@@ -28,15 +28,16 @@ const FSCheckpointSubdir = "fs"
 const RootfsCheckpointSubdir = "rootfs"
 
 // ValidateSnapshotFileNames requires each name to be a distinct plain file name
-// in the checkpoint directory or its "fs" or "rootfs" subdirectories. Actual
-// file access must still use os.Root so symlinks cannot escape that directory.
+// in the checkpoint directory, its "fs" or "rootfs" subdirectories, or a
+// per-volume directory under "fs". Actual file access must still use os.Root
+// so symlinks cannot escape that directory.
 func ValidateSnapshotFileNames(files []string) error {
 	seen := make(map[string]bool, len(files))
 	for i, name := range files {
 		dir := filepath.Dir(name)
 		base := filepath.Base(name)
 		switch {
-		case !filepath.IsLocal(name) || name != filepath.Clean(name) || base == "." || (dir != "." && dir != FSCheckpointSubdir && dir != RootfsCheckpointSubdir):
+		case !filepath.IsLocal(name) || name != filepath.Clean(name) || base == "." || (dir != "." && dir != FSCheckpointSubdir && dir != RootfsCheckpointSubdir && filepath.Dir(dir) != FSCheckpointSubdir):
 			return fmt.Errorf("snapshotFiles[%d] %q is not a file name in the checkpoint directory", i, name)
 		case seen[name]:
 			return fmt.Errorf("snapshotFiles[%d] %q is duplicated", i, name)

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // testBootID is the boot the tests record and reuse checkpoints on.
@@ -43,6 +44,13 @@ func TestRecordAndReuseCheckpoint(t *testing.T) {
 
 	wantResp := &ateworkerpb.CheckpointWorkloadResponse{
 		SnapshotFiles: []string{"checkpoint.img"},
+		SnapshotAttributes: []*ateworkerpb.AttributeEntry{{
+			Key:   "worker.durable_fs_layout",
+			Value: "per_volume",
+			CompatibleValues: []*ateworkerpb.CompatibleValue{
+				{Value: "", Fidelity: ateworkerpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+			},
+		}},
 	}
 	if err := RecordCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, wantResp); err != nil {
 		t.Fatalf("RecordCheckpoint: %v", err)
@@ -50,7 +58,7 @@ func TestRecordAndReuseCheckpoint(t *testing.T) {
 
 	// Reusing with matching fidelity and intact file succeeds.
 	got := ReuseCheckpoint(checkpointDir, testBootID, ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
-	if got == nil || !slices.Equal(got.GetSnapshotFiles(), wantResp.GetSnapshotFiles()) {
+	if !proto.Equal(got, wantResp) {
 		t.Fatalf("ReuseCheckpoint() = %v, want %v", got, wantResp)
 	}
 

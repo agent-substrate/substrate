@@ -31,11 +31,18 @@ func TestSchedule(t *testing.T) {
 	tierOne := map[string]string{"tier": "1"}
 	tierTwo := map[string]string{"tier": "2"}
 
+	// perVolume is a snapshot no worker without worker.layout restores, and
+	// newRT a worker runtime that restores it and older snapshots.
+	perVolume := noneOnOldWorkers()
+	newRT := withAttr(sandboxRuntime("gvisor", "amd64"), "worker.layout", "per_volume", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY)
+
 	tests := []struct {
 		name        string
 		fleet       fleet
 		constraints Constraints
-		wantPod     string // "" means ErrNoCapacity expected
+		wantPod     string // "" means wantErr expected
+		// wantErr is the error expected with no wantPod, ErrNoCapacity when nil.
+		wantErr error
 	}{
 		{
 			// Two full workers precede w-free so pair sampling cannot reach w-free
@@ -325,7 +332,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 				worker("w-amd", "gvisor", "node-b", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			wantPod:     "w-amd",
 		},
 		{
@@ -334,7 +341,7 @@ func TestSchedule(t *testing.T) {
 				worker("w-upgraded", "gvisor", "node-a", tierTwo,
 					withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			wantPod:     "w-upgraded",
 		},
 		{
@@ -342,7 +349,47 @@ func TestSchedule(t *testing.T) {
 			fleet: fleet{
 				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
 			},
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
+		},
+		{
+			name: "required runtime lowered by AtLeast matches a worker that restores less",
+			fleet: fleet{
+				worker("w-arm", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
+			},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY).AtLeast(ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_ROOTFS)},
+			wantPod:     "w-arm",
+		},
+		{
+			name: "snapshot runtime keeps out a worker that cannot restore it, with no required runtime",
+			fleet: fleet{
+				worker("w-old", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
+				worker("w-new", "gvisor", "node-b", tierTwo, withRuntimes(newRT)),
+			},
+			constraints: Constraints{SnapshotRuntime: perVolume},
+			wantPod:     "w-new",
+		},
+		{
+			name: "only workers that cannot restore the snapshot yields ErrNoRestoringWorker",
+			fleet: fleet{
+				worker("w-old", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
+			},
+			constraints: Constraints{SnapshotRuntime: perVolume},
+			wantErr:     ErrNoRestoringWorker,
+		},
+		{
+			name: "a full worker that restores the snapshot yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-old", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
+				worker("w-new", "gvisor", "node-b", tierTwo, withRuntimes(newRT), assigned("demo", "a")),
+			},
+			constraints: Constraints{SnapshotRuntime: perVolume},
+		},
+		{
+			name: "a worker that cannot restore the snapshot on another node yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-old", "gvisor", "node-a", tierTwo, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
+			},
+			constraints: Constraints{SnapshotRuntime: perVolume, RequiredNodes: []string{"node-b"}},
 		},
 	}
 
@@ -361,8 +408,12 @@ func TestSchedule(t *testing.T) {
 				return
 			}
 
-			if !errors.Is(err, ErrNoCapacity) {
-				t.Fatalf("Schedule() error = %v, want ErrNoCapacity", err)
+			wantErr := tc.wantErr
+			if wantErr == nil {
+				wantErr = ErrNoCapacity
+			}
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("Schedule() error = %v, want %v", err, wantErr)
 			}
 		})
 	}
@@ -504,21 +555,33 @@ func TestApplies(t *testing.T) {
 		{
 			name:        "matches required runtime via default runtime",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			want:        true,
 		},
 		{
 			name: "matches required runtime via restorable runtimes",
 			worker: worker("w", "gvisor", "node-a", nil,
 				withRuntimes(sandboxRuntime("gvisor", "amd64", "new"), sandboxRuntime("gvisor", "amd64", "old"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64", "old"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			want:        true,
 		},
 		{
 			name:        "skips worker when required runtime does not match",
 			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
-			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"))},
+			constraints: Constraints{RequiredRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			want:        false,
+		},
+		{
+			name:        "skips worker that cannot restore the snapshot",
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "amd64"))),
+			constraints: Constraints{SnapshotRuntime: noneOnOldWorkers()},
+			want:        false,
+		},
+		{
+			name:        "matches worker that restores the snapshot below its fidelity",
+			worker:      worker("w", "gvisor", "node-a", nil, withRuntimes(sandboxRuntime("gvisor", "arm64"))),
+			constraints: Constraints{SnapshotRuntime: hardware.NewRequirement(sandboxRuntime("gvisor", "amd64"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
+			want:        true,
 		},
 	}
 
@@ -569,6 +632,21 @@ func sandboxRuntime(class, arch string, bundleHash ...string) *ateapi.ActorSandb
 			Attributes:    attrs,
 		},
 	}
+}
+
+// withAttr adds a worker attribute key=value to rt, with a rule of f for a
+// side that lacks key.
+func withAttr(rt *ateapi.ActorSandboxRuntime, key, value string, f ateapi.CompatibleFidelity) *ateapi.ActorSandboxRuntime {
+	rt.Version.Attributes = append(rt.Version.Attributes, &ateapi.AttributeEntry{
+		Key: key, Value: value, CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: f}},
+	})
+	return rt
+}
+
+// noneOnOldWorkers is a MEMORY snapshot that a worker without worker.layout
+// cannot restore.
+func noneOnOldWorkers() hardware.Requirement {
+	return hardware.NewRequirement(withAttr(sandboxRuntime("gvisor", "amd64"), "worker.layout", "per_volume", ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 }
 
 // sandboxClass is the WorkerSandboxClass entry of def's class, with def as
@@ -742,14 +820,14 @@ func TestBooking(t *testing.T) {
 		{name: "cold boot books the default runtime's", constraints: Constraints{Limits: limits}, want: gib/2 + 4<<20 + 4<<20},
 		{
 			name:        "a restore books the matching runtime's",
-			constraints: Constraints{Limits: limits, RequiredRuntime: hardware.NewRequirement(old), SnapshotRuntime: hardware.NewRequirement(old)},
+			constraints: Constraints{Limits: limits, RequiredRuntime: hardware.NewRequirement(old, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY), SnapshotRuntime: hardware.NewRequirement(old, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			want:        gib/2 + 16<<20,
 		},
 		{
 			// relaxing what the worker must match doesn't change the runtime the
 			// actor restores under, so it doesn't change the price
 			name:        "a relaxed restore still books the matching runtime's",
-			constraints: Constraints{Limits: limits, SnapshotRuntime: hardware.NewRequirement(old)},
+			constraints: Constraints{Limits: limits, SnapshotRuntime: hardware.NewRequirement(old, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)},
 			want:        gib/2 + 16<<20,
 		},
 	} {

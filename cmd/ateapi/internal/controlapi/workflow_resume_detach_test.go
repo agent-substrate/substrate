@@ -62,6 +62,17 @@ func fillWorker(t *testing.T, st store.Interface, worker *ateapi.Worker) {
 	})
 }
 
+// noneOnAmd64 stamps a snapshot that a worker reporting testRuntime("amd64",
+// "") cannot restore.
+func noneOnAmd64() *ateapi.ActorSandboxRuntime {
+	rt := testRuntime("amd64", "")
+	rt.Version.Attributes = append(rt.Version.Attributes, &ateapi.AttributeEntry{
+		Key: "worker.layout", Value: "per_volume",
+		CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE}},
+	})
+	return rt
+}
+
 // detachedState is atelet's state after detaching snap.
 func detachedState(snap *ateapi.Snapshot) *ateletpb.ActorSnapshotState {
 	return &ateletpb.ActorSnapshotState{LatestDurable: &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
@@ -87,6 +98,7 @@ func TestShouldDetachFromNode(t *testing.T) {
 		{"no room wrapped by a step", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), errors.Join(noRoom), true},
 		{"assigned", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), nil, false},
 		{"another error", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), apierror.Aborted("conflict"), false},
+		{"pinned suspended actor with no worker that can restore its snapshot", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, "node-1"), apierror.FailedPrecondition("%w", errNoRestoringWorker), true},
 		{"not pinned", pinned(ateapi.ActorState_ACTOR_STATE_SUSPENDED, ""), noRoom, false},
 		{"resuming", pinned(ateapi.ActorState_ACTOR_STATE_RESUMING, "node-1"), noRoom, false},
 	}
@@ -201,6 +213,13 @@ func TestDetachFromFullNode(t *testing.T) {
 		name:     "no node has room: the assignment's error, without detaching",
 		node:     "node-1",
 		wantCode: codes.ResourceExhausted,
+	}, {
+		name:         "room only on a worker that cannot restore the snapshot: the assignment's error, without detaching",
+		node:         "node-1",
+		otherNode:    true,
+		otherRuntime: amd64RT,
+		snapRuntime:  noneOnAmd64(),
+		wantCode:     codes.ResourceExhausted,
 	}, {
 		name:         "room only on another runtime: detaches",
 		node:         "node-1",
@@ -520,6 +539,7 @@ func TestResumeActor_DetachesFromFullNode(t *testing.T) {
 				fillWorker(t, st, workers["node-1"])
 			}
 			snap := newPausedSnapshot(t, 1, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-snap-1", "node-1")
+			snap.SandboxRuntime = testSandboxRuntime()
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = "node-1"
 				a.Status.LastAssignedGeneration = 1
@@ -612,10 +632,9 @@ func TestResumeActor_NodeGoneWithPendingUpload(t *testing.T) {
 			memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			durable := newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, memory, "", "durable-1",
 				someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1"), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
+			durable.SandboxRuntime = testSandboxRuntime()
 			pending := newPausedSnapshot(t, 2, memory, "", "pending-2", "node-3")
-			if tt.otherRuntime {
-				pending.SandboxRuntime = testRuntime("amd64", "")
-			}
+			pending.SandboxRuntime = testSandboxRuntime()
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapi.Actor) {
 				a.Status.AssignedNode = tt.assignedNode
 				a.Status.LastAssignedGeneration = 2

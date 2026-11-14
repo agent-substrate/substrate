@@ -326,6 +326,7 @@ func do(ctx context.Context) error {
 		MemoryReservedBytes:  memoryReservedBytes,
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
+		Attributes:           registeredAttributes(),
 	}
 	if reporter, err := register.NewCrashReporter(reportConfig); err != nil {
 		slog.ErrorContext(ctx, "Crashed actors will not be reported", slog.Any("err", err))
@@ -931,8 +932,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint the sandbox, splitting container rootfs overlays into the
-		// rootfs bundle and durable-dir volumes into <checkpointPath>/fs when
-		// present.
+		// rootfs bundle and each durable-dir volume into its own bundle under
+		// <checkpointPath>/fs when present.
 		checkpointFn = func(ctx context.Context) error {
 			var sandbox *sandboxProcess
 			if hosted != nil {
@@ -997,8 +998,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
-	// (checkpoint.img and its page files, plus the fs/ and rootfs/ bundle files),
-	// rather than a hardcoded list.
+	// (checkpoint.img and its page files, plus the fs/<volume>/ and rootfs/
+	// bundle files), rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
 	if err != nil {
 		s.borrow.Return(borrowed)
@@ -1017,7 +1018,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}
+	resp := &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles, SnapshotAttributes: snapshotAttributes(snapshotFiles)}
 	if err := ateworker.RecordCheckpoint(checkpointPath, s.bootID, fidelity, resp); err != nil {
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
@@ -1025,8 +1026,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
-// dir, dir/fs, and dir/rootfs, which atelet ships to object storage as the
-// snapshot.
+// dir, dir/fs, each dir/fs/<volume>, and dir/rootfs, which atelet ships to
+// object storage as the snapshot.
 func listSnapshotFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -1044,8 +1045,19 @@ func listSnapshotFiles(dir string) ([]string, error) {
 			return nil, err
 		}
 		for _, e := range subEntries {
-			if e.Type().IsRegular() {
+			switch {
+			case e.Type().IsRegular():
 				files = append(files, filepath.Join(sub, e.Name()))
+			case e.IsDir() && sub == resources.FSCheckpointSubdir:
+				volumeEntries, err := os.ReadDir(filepath.Join(dir, sub, e.Name()))
+				if err != nil {
+					return nil, err
+				}
+				for _, v := range volumeEntries {
+					if v.Type().IsRegular() {
+						files = append(files, filepath.Join(sub, e.Name(), v.Name()))
+					}
+				}
 			}
 		}
 	}

@@ -33,78 +33,28 @@ func TestProbeHost(t *testing.T) {
 	}
 }
 
-func TestMatches(t *testing.T) {
-	runtimeWith := func(class, ver string, attrs ...*ateapi.AttributeEntry) *ateapi.ActorSandboxRuntime {
-		return &ateapi.ActorSandboxRuntime{
-			SandboxClass: class,
-			Version: &ateapi.VersionedSandboxCompat{
-				SchemaVersion: ver,
-				Attributes:    attrs,
-			},
-		}
+func TestRestoreFidelity(t *testing.T) {
+	const (
+		none    = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE
+		volumes = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES
+		rootfs  = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_ROOTFS
+		memory  = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY
+	)
+	rt := func(class, ver string, attrs ...*ateapi.AttributeEntry) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{SandboxClass: class, Version: &ateapi.VersionedSandboxCompat{SchemaVersion: ver, Attributes: attrs}}
 	}
-	amd64GVisor := runtimeWith("gvisor", "v1",
-		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-	)
-	amd64GVisorReordered := runtimeWith("gvisor", "v1",
-		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-	)
-	arm64GVisor := runtimeWith("gvisor", "v1",
-		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "arm64"},
-		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-	)
-	amd64MicroVM := runtimeWith("microvm", "v1",
-		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-	)
-	amd64GVisorV2 := runtimeWith("gvisor", "v2",
-		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-	)
-	amd64GVisorExtraAttr := runtimeWith("gvisor", "v1",
-		&ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"},
-		&ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: "7"},
-		&ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"},
-	)
-
-	tests := []struct {
-		name   string
-		worker *ateapi.ActorSandboxRuntime
-		snap   *ateapi.ActorSandboxRuntime
-		want   bool
-	}{
-		{"nil snapshot imposes no constraint", amd64GVisor, nil, true},
-		{"exact match", amd64GVisor, amd64GVisor, true},
-		{"attribute order ignored", amd64GVisor, amd64GVisorReordered, true},
-		{"different attribute value fails", arm64GVisor, amd64GVisor, false},
-		{"different sandbox class fails", amd64MicroVM, amd64GVisor, false},
-		{"different schema version fails", amd64GVisorV2, amd64GVisor, false},
-		{"attribute only the worker has is ignored", amd64GVisorExtraAttr, amd64GVisor, true},
-		{"attribute missing on worker fails", amd64GVisor, amd64GVisorExtraAttr, false},
-		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
-		{"nil version fails", &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
+	gvisor := func(attrs ...*ateapi.AttributeEntry) *ateapi.ActorSandboxRuntime { return rt("gvisor", "v1", attrs...) }
+	attr := func(key, value string, rules ...*ateapi.CompatibleValue) *ateapi.AttributeEntry {
+		return &ateapi.AttributeEntry{Key: key, Value: value, CompatibleValues: rules}
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := Matches(tc.worker, tc.snap); got != tc.want {
-				t.Errorf("Matches() = %v, want %v", got, tc.want)
-			}
-		})
+	rule := func(value string, f ateapi.CompatibleFidelity) *ateapi.CompatibleValue {
+		return &ateapi.CompatibleValue{Value: value, Fidelity: f}
 	}
-}
-
-func TestMatchesCompat(t *testing.T) {
-	compat := func(ver string, attrs ...*ateapi.AttributeEntry) *ateapi.VersionedSandboxCompat {
-		return &ateapi.VersionedSandboxCompat{SchemaVersion: ver, Attributes: attrs}
-	}
-	amd64 := &ateapi.AttributeEntry{Key: AttrArchitecture, Value: "amd64"}
-	arm64 := &ateapi.AttributeEntry{Key: AttrArchitecture, Value: "arm64"}
-	hash := &ateapi.AttributeEntry{Key: AttrSandboxBundleHash, Value: "sha256:abc"}
-	cpuBits := func(val string) *ateapi.AttributeEntry {
-		return &ateapi.AttributeEntry{Key: AttrCPUFeatures, Value: val}
-	}
+	amd64 := attr(AttrArchitecture, "amd64")
+	arm64 := attr(AttrArchitecture, "arm64")
+	hash := attr(AttrSandboxBundleHash, "sha256:abc")
+	cpuBits := func(val string) *ateapi.AttributeEntry { return attr(AttrCPUFeatures, val) }
+	const layout = "worker.layout"
 
 	// Build >64-bit masks so the subset check spans mask words.
 	highSnap, err := EncodeCPUFeatures("amd64", []string{"pni", "avx2", "avx512_bf16"})
@@ -120,40 +70,156 @@ func TestMatchesCompat(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	memorySnap := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	tests := []struct {
 		name         string
-		worker, snap *ateapi.VersionedSandboxCompat
-		want         bool
+		worker, snap *ateapi.ActorSandboxRuntime
+		// fidelity is the snapshot's, MEMORY when unset.
+		fidelity ateapi.SnapshotFidelity
+		want     ateapi.CompatibleFidelity
 	}{
-		{"equal", compat("v1", amd64), compat("v1", amd64), true},
-		{"key only the worker has is ignored", compat("v1", amd64, cpuBits("7")), compat("v1", amd64), true},
-		{"key only the snapshot has fails", compat("v1", amd64), compat("v1", amd64, cpuBits("7")), false},
-		{"key only the snapshot has fails even at equal count", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, hash), false},
-		{"value differs", compat("v1", arm64), compat("v1", amd64), false},
-		{"cpu_features exact match", compat("v1", amd64, cpuBits(highSnap)), compat("v1", amd64, cpuBits(highSnap)), true},
-		{"cpu_features worker is superset of snapshot", compat("v1", amd64, cpuBits(highWorkerSuperset)), compat("v1", amd64, cpuBits(highSnap)), true},
-		{"cpu_features worker missing a snapshot feature bit", compat("v1", amd64, cpuBits(highWorkerMissingOne)), compat("v1", amd64, cpuBits(highSnap)), false},
-		{"cpu_features empty snapshot set matches any worker", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, cpuBits("0")), true},
-		{"cpu_features empty worker set matches nothing", compat("v1", amd64, cpuBits("0")), compat("v1", amd64, cpuBits("7")), false},
-		{"cpu_features invalid worker bitmask fails", compat("v1", amd64, cpuBits("not-a-number")), compat("v1", amd64, cpuBits("7")), false},
-		{"cpu_features invalid snapshot bitmask fails", compat("v1", amd64, cpuBits("7")), compat("v1", amd64, cpuBits("-1")), false},
-		{"cpu_features non-canonical bitmask fails", compat("v1", amd64, cpuBits("07")), compat("v1", amd64, cpuBits("7")), false},
-		{"cpu_features uppercase hex fails", compat("v1", amd64, cpuBits("1F")), compat("v1", amd64, cpuBits("7")), false},
-		{"schema version differs", compat("v2", amd64), compat("v1", amd64), false},
-		{"both schema versions empty", compat("", amd64), compat("", amd64), false},
-		{"no attributes on either", compat("v1"), compat("v1"), true},
-		// Unlike Matches, a nil snapshot identity here is a stamped snapshot
-		// missing its identity, not the absence of a constraint.
-		{"nil snapshot identity", compat("v1", amd64), nil, false},
-		{"nil worker identity", nil, compat("v1", amd64), false},
-		{"both nil", nil, nil, false},
+		{name: "equal values", worker: gvisor(amd64, hash), snap: gvisor(amd64, hash), want: memory},
+		{name: "attribute order ignored", worker: gvisor(hash, amd64), snap: gvisor(amd64, hash), want: memory},
+		{name: "no attributes on either", worker: gvisor(), snap: gvisor(), want: memory},
+		{name: "different value with no rule falls to ROOTFS", worker: gvisor(arm64), snap: gvisor(amd64), want: rootfs},
+		{name: "key only the worker has falls to ROOTFS", worker: gvisor(amd64, hash), snap: gvisor(amd64), want: rootfs},
+		{name: "key only the snapshot has falls to ROOTFS", worker: gvisor(amd64), snap: gvisor(amd64, hash), want: rootfs},
+		{name: "key only the snapshot has falls to ROOTFS at equal count", worker: gvisor(amd64, cpuBits("7")), snap: gvisor(amd64, hash), want: rootfs},
+		{
+			name:   "worker rule for the snapshot's value",
+			worker: gvisor(amd64, attr(layout, "new", rule("old", volumes))),
+			snap:   gvisor(amd64, attr(layout, "old")),
+			want:   volumes,
+		},
+		{
+			name:   "worker rule for a snapshot without the key",
+			worker: gvisor(amd64, attr(layout, "new", rule("", memory))),
+			snap:   gvisor(amd64),
+			want:   memory,
+		},
+		{
+			name:   "snapshot rule for the worker's value",
+			worker: gvisor(amd64, attr(layout, "old")),
+			snap:   gvisor(amd64, attr(layout, "new", rule("old", volumes))),
+			want:   volumes,
+		},
+		{
+			name:   "snapshot rule for a worker without the key",
+			worker: gvisor(amd64),
+			snap:   gvisor(amd64, attr(layout, "new", rule("", rootfs))),
+			want:   rootfs,
+		},
+		{
+			name:   "both rules, the lower wins",
+			worker: gvisor(amd64, attr(layout, "a", rule("b", memory))),
+			snap:   gvisor(amd64, attr(layout, "b", rule("a", volumes))),
+			want:   volumes,
+		},
+		{
+			name:   "both rules, the lower wins either way round",
+			worker: gvisor(amd64, attr(layout, "a", rule("b", volumes))),
+			snap:   gvisor(amd64, attr(layout, "b", rule("a", memory))),
+			want:   volumes,
+		},
+		{
+			name:   "a rule for another value does not apply",
+			worker: gvisor(amd64, attr(layout, "new", rule("older", memory))),
+			snap:   gvisor(amd64, attr(layout, "old")),
+			want:   rootfs,
+		},
+		{
+			name:   "a rule applies only to a different value",
+			worker: gvisor(amd64, attr(layout, "same", rule("", none))),
+			snap:   gvisor(amd64, attr(layout, "same", rule("", none))),
+			want:   memory,
+		},
+		{
+			name:   "NONE from the snapshot",
+			worker: gvisor(amd64),
+			snap:   gvisor(amd64, attr(layout, "per_volume", rule("", none))),
+			want:   none,
+		},
+		{
+			name:   "NONE from the worker",
+			worker: gvisor(amd64, attr(layout, "new", rule("old", none))),
+			snap:   gvisor(amd64, attr(layout, "old")),
+			want:   none,
+		},
+		{
+			name:   "the lowest key wins",
+			worker: gvisor(arm64, attr(layout, "new", rule("", volumes))),
+			snap:   gvisor(amd64),
+			want:   volumes,
+		},
+		{name: "cpu_features exact match", worker: gvisor(amd64, cpuBits(highSnap)), snap: gvisor(amd64, cpuBits(highSnap)), want: memory},
+		{name: "cpu_features worker is superset of snapshot", worker: gvisor(amd64, cpuBits(highWorkerSuperset)), snap: gvisor(amd64, cpuBits(highSnap)), want: memory},
+		{name: "cpu_features worker missing a snapshot feature bit", worker: gvisor(amd64, cpuBits(highWorkerMissingOne)), snap: gvisor(amd64, cpuBits(highSnap)), want: rootfs},
+		{name: "cpu_features empty snapshot set matches any worker", worker: gvisor(amd64, cpuBits("7")), snap: gvisor(amd64, cpuBits("0")), want: memory},
+		{name: "cpu_features empty worker set matches nothing", worker: gvisor(amd64, cpuBits("0")), snap: gvisor(amd64, cpuBits("7")), want: rootfs},
+		{name: "cpu_features invalid worker bitmask", worker: gvisor(amd64, cpuBits("not-a-number")), snap: gvisor(amd64, cpuBits("7")), want: rootfs},
+		{name: "cpu_features invalid snapshot bitmask", worker: gvisor(amd64, cpuBits("7")), snap: gvisor(amd64, cpuBits("-1")), want: rootfs},
+		{name: "cpu_features non-canonical bitmask", worker: gvisor(amd64, cpuBits("07")), snap: gvisor(amd64, cpuBits("7")), want: rootfs},
+		{name: "cpu_features uppercase hex", worker: gvisor(amd64, cpuBits("1F")), snap: gvisor(amd64, cpuBits("7")), want: rootfs},
+		{name: "cpu_features on the snapshot only", worker: gvisor(amd64), snap: gvisor(amd64, cpuBits("7")), want: rootfs},
+		{name: "cpu_features on the worker only", worker: gvisor(amd64, cpuBits("7")), snap: gvisor(amd64), want: rootfs},
+		{name: "different schema version", worker: rt("gvisor", "v2", amd64), snap: gvisor(amd64), want: rootfs},
+		{name: "both schema versions empty", worker: rt("gvisor", "", amd64), snap: rt("gvisor", "", amd64), want: rootfs},
+		{name: "worker without a version", worker: &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, snap: gvisor(amd64), want: rootfs},
+		{name: "snapshot without a version", worker: gvisor(amd64), snap: &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor"}, want: rootfs},
+		{name: "different sandbox class", worker: rt("microvm", "v1", amd64), snap: gvisor(amd64), want: none},
+		{name: "nil worker", snap: gvisor(amd64), want: none},
+		{name: "ROOTFS snapshot on an equal worker", worker: gvisor(amd64), snap: gvisor(amd64), fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, want: rootfs},
+		{name: "ROOTFS snapshot on a different worker", worker: gvisor(arm64), snap: gvisor(amd64), fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, want: rootfs},
+		{
+			name:     "ROOTFS snapshot capped at VOLUMES",
+			worker:   gvisor(amd64),
+			snap:     gvisor(amd64, attr(layout, "new", rule("", volumes))),
+			fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			want:     volumes,
+		},
+		{
+			name:     "VOLUMES snapshot refused",
+			worker:   gvisor(amd64),
+			snap:     gvisor(amd64, attr(layout, "per_volume", rule("", none))),
+			fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			want:     none,
+		},
+		{name: "VOLUMES snapshot on a different worker", worker: gvisor(arm64), snap: gvisor(amd64), fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, want: volumes},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := MatchesCompat(tc.worker, tc.snap); got != tc.want {
-				t.Errorf("MatchesCompat() = %v, want %v", got, tc.want)
+			fidelity := tc.fidelity
+			if fidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
+				fidelity = memorySnap
+			}
+			if got := NewRequirement(tc.snap, fidelity).RestoreFidelity(tc.worker); got != tc.want {
+				t.Errorf("RestoreFidelity() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestOwnedKeys(t *testing.T) {
+	for _, tc := range []struct {
+		key        string
+		host, mine bool
+	}{
+		{key: AttrArchitecture, host: true},
+		{key: AttrCPUFeatures, host: true},
+		{key: AttrCPUVendor, host: true},
+		{key: AttrCPUModel, host: true},
+		{key: AttrSandboxBundleHash, host: true},
+		{key: "worker.durable_fs_layout", mine: true},
+		{key: "worker.", mine: true},
+		{key: "workers.x"},
+		{key: "other"},
+	} {
+		if got := IsHostKey(tc.key); got != tc.host {
+			t.Errorf("IsHostKey(%q) = %v, want %v", tc.key, got, tc.host)
+		}
+		if got := IsWorkerKey(tc.key); got != tc.mine {
+			t.Errorf("IsWorkerKey(%q) = %v, want %v", tc.key, got, tc.mine)
+		}
 	}
 }
 
@@ -173,8 +239,9 @@ func TestRequirement(t *testing.T) {
 			},
 		}
 	}
+	memory := ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY
 	snap := rt("7")
-	req := NewRequirement(snap)
+	req := NewRequirement(snap, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if req.Runtime() != snap {
 		t.Errorf("Runtime() = %v, want the prepared runtime", req.Runtime())
 	}
@@ -188,8 +255,8 @@ func TestRequirement(t *testing.T) {
 		{"worker mask invalid", rt("zz"), false},
 		{"worker superset after misses", rt("7"), true},
 	} {
-		if got := req.Matches(tc.worker); got != tc.want {
-			t.Errorf("%s: Matches() = %v, want %v", tc.name, got, tc.want)
+		if got := req.RestoreFidelity(tc.worker) == memory; got != tc.want {
+			t.Errorf("%s: RestoreFidelity() == MEMORY is %v, want %v", tc.name, got, tc.want)
 		}
 	}
 	status := &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
@@ -202,13 +269,16 @@ func TestRequirement(t *testing.T) {
 	}
 
 	// A snapshot mask that does not parse is remembered as matching nothing.
-	if NewRequirement(rt("zz")).Matches(rt("f")) {
-		t.Error("Matches() with an invalid snapshot mask = true, want false")
+	if got := NewRequirement(rt("zz"), ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY).RestoreFidelity(rt("f")); got == memory {
+		t.Errorf("RestoreFidelity() with an invalid snapshot mask = %v, want less", got)
 	}
 
 	var none Requirement
-	if none.Runtime() != nil || !none.Matches(nil) || !none.WorkerMatches(nil) {
+	if none.Runtime() != nil || !none.WorkerMatches(nil) || !none.WorkerRestores(nil) {
 		t.Error("the zero Requirement must require nothing")
+	}
+	if NewRequirement(nil, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY).Runtime() != nil {
+		t.Error("NewRequirement(nil) must require nothing")
 	}
 	if got := none.RuntimeFor(status); !proto.Equal(got, rt("3")) {
 		t.Errorf("zero Requirement RuntimeFor() = %v, want the default", got)
@@ -232,6 +302,18 @@ func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
 	restorable2 := compat("amd64", "v0-hash")
 	defRT := rt("gvisor", defCompat)
 	unmatchedRT := rt("gvisor", compat("arm64", "v2-hash"))
+
+	// The package-level forms the cases read as, for a MEMORY snapshot.
+	memory := ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	WorkerMatches := func(status *ateapi.WorkerStatus, snap *ateapi.ActorSandboxRuntime) bool {
+		return NewRequirement(snap, memory).WorkerMatches(status)
+	}
+	MatchingRuntime := func(status *ateapi.WorkerStatus, snap *ateapi.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
+		return NewRequirement(snap, memory).MatchingRuntime(status)
+	}
+	RuntimeFor := func(status *ateapi.WorkerStatus, snap *ateapi.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
+		return NewRequirement(snap, memory).RuntimeFor(status)
+	}
 
 	status := &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{
 		SandboxClass:       "gvisor",
@@ -348,7 +430,7 @@ func TestWorkerRuntimeFor(t *testing.T) {
 		{name: "a snapshot nothing restores cold boots on the default", snap: stamp(compat("gone")), want: def},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := NewRequirement(tc.snap)
+			r := NewRequirement(tc.snap, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 			got := r.WorkerRuntimeFor(status)
 			if got != tc.want {
 				t.Errorf("WorkerRuntimeFor() = %v, want %v", got, tc.want)
@@ -359,7 +441,63 @@ func TestWorkerRuntimeFor(t *testing.T) {
 			}
 		})
 	}
-	if got := NewRequirement(nil).WorkerRuntimeFor(&ateapi.WorkerStatus{}); got != nil {
+	if got := NewRequirement(nil, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY).WorkerRuntimeFor(&ateapi.WorkerStatus{}); got != nil {
 		t.Errorf("WorkerRuntimeFor() before registration = %v, want nil", got)
+	}
+}
+
+// WorkerMatches asks for the requirement's least fidelity, which AtLeast
+// lowers, and WorkerRestores for any fidelity above NONE.
+func TestWorkerMatchesAtLeast(t *testing.T) {
+	compat := func(arch string, attrs ...*ateapi.AttributeEntry) *ateapi.VersionedSandboxCompat {
+		return &ateapi.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: append([]*ateapi.AttributeEntry{{Key: AttrArchitecture, Value: arch}}, attrs...)}
+	}
+	layout := func(value string, f ateapi.CompatibleFidelity) *ateapi.AttributeEntry {
+		return &ateapi.AttributeEntry{Key: "worker.layout", Value: value, CompatibleValues: []*ateapi.CompatibleValue{{Value: "", Fidelity: f}}}
+	}
+	status := func(c *ateapi.VersionedSandboxCompat) *ateapi.WorkerStatus {
+		return &ateapi.WorkerStatus{SandboxClasses: []*ateapi.WorkerSandboxClass{{SandboxClass: "gvisor", DefaultRuntime: &ateapi.WorkerSandboxRuntime{Version: c}}}}
+	}
+	stamp := func(c *ateapi.VersionedSandboxCompat) *ateapi.ActorSandboxRuntime {
+		return &ateapi.ActorSandboxRuntime{SandboxClass: "gvisor", Version: c}
+	}
+	const (
+		volumes = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES
+		rootfs  = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_ROOTFS
+		memory  = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY
+		none    = ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE
+	)
+	oldWorker := status(compat("amd64"))
+	newWorker := status(compat("amd64", layout("per_volume", memory)))
+
+	for _, tc := range []struct {
+		name   string
+		worker *ateapi.WorkerStatus
+		snap   *ateapi.ActorSandboxRuntime
+		// matches is WorkerMatches at MEMORY, ROOTFS and VOLUMES.
+		matches  [3]bool
+		restores bool
+	}{
+		{name: "old snapshot on a new worker by its rule", worker: newWorker, snap: stamp(compat("amd64")), matches: [3]bool{true, true, true}, restores: true},
+		{name: "new snapshot on a new worker", worker: newWorker, snap: stamp(compat("amd64", layout("per_volume", none))), matches: [3]bool{true, true, true}, restores: true},
+		{name: "new snapshot on an old worker", worker: oldWorker, snap: stamp(compat("amd64", layout("per_volume", none))), matches: [3]bool{false, false, false}, restores: false},
+		{name: "another architecture restores at ROOTFS", worker: oldWorker, snap: stamp(compat("arm64")), matches: [3]bool{false, true, true}, restores: true},
+		{name: "a rule restores at VOLUMES", worker: oldWorker, snap: stamp(compat("amd64", layout("x", volumes))), matches: [3]bool{false, false, true}, restores: true},
+		{name: "another class", worker: oldWorker, snap: &ateapi.ActorSandboxRuntime{SandboxClass: "microvm", Version: compat("amd64")}, matches: [3]bool{false, false, false}, restores: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRequirement(tc.snap, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+			for i, f := range []ateapi.CompatibleFidelity{memory, rootfs, volumes} {
+				if got := r.AtLeast(f).WorkerMatches(tc.worker); got != tc.matches[i] {
+					t.Errorf("AtLeast(%v).WorkerMatches() = %v, want %v", f, got, tc.matches[i])
+				}
+			}
+			if got := r.WorkerMatches(tc.worker); got != tc.matches[0] {
+				t.Errorf("WorkerMatches() = %v, want it to ask for MEMORY, %v", got, tc.matches[0])
+			}
+			if got := r.WorkerRestores(tc.worker); got != tc.restores {
+				t.Errorf("WorkerRestores() = %v, want %v", got, tc.restores)
+			}
+		})
 	}
 }

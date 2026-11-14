@@ -917,3 +917,52 @@ func TestReconcilerSyncReportsActorOverhead(t *testing.T) {
 		t.Errorf("reported %d restorable runtimes, want 1", len(c.GetRestorableRuntimes()))
 	}
 }
+
+func TestReconcilerSyncReportsAttributes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), nodepath.SandboxRuntimesFileName)
+	f := gvisorFile(sandboxruntimes.Attributes{hardware.AttrArchitecture: "amd64", hardware.AttrSandboxBundleHash: "sha256:v2"},
+		sandboxruntimes.Attributes{hardware.AttrArchitecture: "amd64", hardware.AttrSandboxBundleHash: "sha256:v1"})
+	if _, err := sandboxruntimes.Write(path, f); err != nil {
+		t.Fatal(err)
+	}
+	layout := &ateletpb.AttributeEntry{
+		Key: "worker.layout", Value: "per_volume",
+		CompatibleValues: []*ateletpb.CompatibleValue{{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY}},
+	}
+	// Listed after layout, so the merge must sort.
+	alpha := &ateletpb.AttributeEntry{Key: "worker.alpha", Value: "1"}
+	var got *ateletpb.SetWorkerSandboxRuntimesRequest
+	r := newReconciler(
+		ReportConfig{SandboxClass: "gvisor", RuntimesFile: path, Attributes: []*ateletpb.AttributeEntry{layout, alpha}},
+		3,
+		func() (*sandboxruntimes.File, error) { return sandboxruntimes.Read(path) },
+		func(_ context.Context, req *ateletpb.SetWorkerSandboxRuntimesRequest) error {
+			got = req
+			return nil
+		},
+	)
+	if retry, err := r.sync(context.Background()); retry || err != nil {
+		t.Fatalf("sync() = %v, %v, want false, nil", retry, err)
+	}
+	c := got.GetSandboxClasses()[0]
+	for i, rt := range append([]*ateletpb.WorkerSandboxRuntime{c.GetDefaultRuntime()}, c.GetRestorableRuntimes()...) {
+		hash := []string{"sha256:v2", "sha256:v1"}[i]
+		want := []*ateletpb.AttributeEntry{
+			{Key: hardware.AttrArchitecture, Value: "amd64"},
+			{Key: hardware.AttrSandboxBundleHash, Value: hash},
+			alpha,
+			layout,
+		}
+		if diff := cmp.Diff(want, rt.GetVersion().GetAttributes(), protocmp.Transform()); diff != "" {
+			t.Errorf("runtime %d attributes mismatch (-want +got):\n%s", i, diff)
+		}
+		for _, a := range rt.GetVersion().GetAttributes() {
+			if a == layout || a == alpha {
+				t.Errorf("runtime %d shares the worker's attribute message %v", i, a)
+			}
+		}
+	}
+	if len(c.GetRestorableRuntimes()) != 1 {
+		t.Errorf("reported %d restorable runtimes, want 1", len(c.GetRestorableRuntimes()))
+	}
+}

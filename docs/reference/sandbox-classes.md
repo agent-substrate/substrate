@@ -22,7 +22,7 @@ An [`ActorTemplate`](api-guide.md#2-actortemplate-the-workload-blueprint) select
 | CPU limit enforcement | Host cgroup v2 `cpu.max` on the sandbox | Guest vCPU count, plus host cgroup v2 `cpu.max` on the VMM and `virtiofsd` |
 | Minimum `limits.memoryBytes` | None enforced by worker | `128 MiB` (`134217728` bytes) |
 | Per-container limits (`containers[].resources.limits`) | Accepted in the API, ignored at runtime | Enforced via guest cgroups (`cpuMillicores` floored at 10) |
-| `VOLUMES` and `ROOTFS` snapshot format | `runsc` filesystem checkpoint bundles (`fs/`, `rootfs/`) | Tar archives of the host directories |
+| `VOLUMES` and `ROOTFS` snapshot format | `runsc` filesystem checkpoint bundles (`fs/<volume>/`, `rootfs/`) | Tar archives of the host directories |
 
 ## CPU Count and Throttling
 
@@ -57,9 +57,9 @@ Volumes cannot mount at `/dev`, or at or under `/dev/pts`, `/proc`, or `/sys`.
 
 ## Snapshots (`VOLUMES`, `ROOTFS`, and `MEMORY`)
 
-On both classes, a `MEMORY` restore prefers a worker that offers a runtime compatible with the snapshot's `sandboxRuntime`. If none of those workers has room, a durable snapshot restores its `ROOTFS` state on any eligible worker of the same class and cold-boots under that worker's default runtime. See `sandboxRuntime` in [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
+On both classes, a restore prefers a worker that restores all of the snapshot by its `sandboxRuntime`. If none of those workers has room, a durable snapshot restores less of it on another eligible worker of the same class, and cold-boots under that worker's default runtime when it loses memory state. A worker that cannot restore the snapshot is never used. See `sandboxRuntime` in [Snapshot Storage Layout](api-guide.md#snapshot-storage-layout).
 
 How `VOLUMES` and `ROOTFS` state is stored differs by class:
 
-- **gVisor (`gvisor`):** `durableDir` volumes and container rootfs overlays live inside the Sentry's internal filesystems. `runsc` saves them as filesystem checkpoint bundles in the snapshot's `fs/` and `rootfs/` directories. A `VOLUMES` or `ROOTFS` restore uses the worker's default `runsc`, which may be a different version from the one that wrote the bundles. See the [Version Skew Policy](version-skew-policy.md#sandboxconfig).
+- **gVisor (`gvisor`):** `durableDir` volumes and container rootfs overlays live inside the Sentry's internal filesystems. `runsc` saves them as filesystem checkpoint bundles, one per volume in the snapshot's `fs/<volume>/` directories and one in `rootfs/`. Snapshots from earlier releases hold all volumes in one `fs/` bundle, which the worker still restores. A worker of an earlier release cannot restore a snapshot with per-volume bundles, which its stamp's `worker.durable_fs_layout` attribute records. A `VOLUMES` or `ROOTFS` restore uses the worker's default `runsc`, which may be a different version from the one that wrote the bundles. See the [Version Skew Policy](version-skew-policy.md#sandboxconfig).
 - **MicroVM (`microvm`):** Container rootfs upper layers and `durableDir` volumes live on the host filesystem and are shared into the guest over `virtio-fs`. `ateworker-microvm` archives them as tar files, one per volume and one per container. The format does not depend on the guest kernel or Cloud Hypervisor version.

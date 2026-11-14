@@ -35,6 +35,22 @@ func fidelityToAtelet(in ateapi.SnapshotFidelity) ateletpb.SnapshotFidelity {
 	}
 }
 
+// compatibleFidelityToAtelet maps a restore fidelity above
+// COMPATIBLE_FIDELITY_NONE onto atelet's SnapshotFidelity. Anything else comes
+// back UNSPECIFIED.
+func compatibleFidelityToAtelet(in ateapi.CompatibleFidelity) ateletpb.SnapshotFidelity {
+	switch in {
+	case ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_VOLUMES:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_ROOTFS:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	default:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+	}
+}
+
 // fidelityFromAtelet maps atelet's fidelity enum back onto the identical
 // public one. Anything else comes back UNSPECIFIED.
 func fidelityFromAtelet(in ateletpb.SnapshotFidelity) ateapi.SnapshotFidelity {

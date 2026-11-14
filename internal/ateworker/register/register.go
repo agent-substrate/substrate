@@ -171,6 +171,28 @@ func buildRuntimesRequest(epoch int64, class *sandboxruntimes.Class) *ateletpb.S
 	}
 }
 
+// addAttributes adds a copy of attrs to every runtime in req, keeping each
+// runtime's attributes sorted by key. The worker binary runs every runtime,
+// so its attributes hold for all of them.
+func addAttributes(req *ateletpb.SetWorkerSandboxRuntimesRequest, attrs []*ateletpb.AttributeEntry) {
+	if len(attrs) == 0 {
+		return
+	}
+	add := func(rt *ateletpb.WorkerSandboxRuntime) {
+		v := rt.GetVersion()
+		for _, a := range attrs {
+			v.Attributes = append(v.Attributes, proto.CloneOf(a))
+		}
+		slices.SortFunc(v.Attributes, func(a, b *ateletpb.AttributeEntry) int { return strings.Compare(a.GetKey(), b.GetKey()) })
+	}
+	for _, c := range req.GetSandboxClasses() {
+		add(c.GetDefaultRuntime())
+		for _, rt := range c.GetRestorableRuntimes() {
+			add(rt)
+		}
+	}
+}
+
 // setActorOverhead reports a copy of overhead on every runtime in req. The
 // restorable runtimes run under this worker too, so they cost it the same.
 func setActorOverhead(req *ateletpb.SetWorkerSandboxRuntimesRequest, overhead *ateletpb.RuntimeOverhead) {
@@ -230,6 +252,11 @@ type ReportConfig struct {
 	// ActorOverhead is what each actor costs the worker on top of its own
 	// limits, reported on every runtime. Nil is none.
 	ActorOverhead *ateletpb.RuntimeOverhead
+	// Attributes are the worker's own compatibility attributes, added to
+	// every runtime. They describe the worker binary: the value of a guest
+	// it boots, and rules for the other snapshot values it restores. Each
+	// key starts with hardware.WorkerKeyPrefix.
+	Attributes []*ateletpb.AttributeEntry
 	// SandboxClass is the class this worker implements ("gvisor", "microvm").
 	SandboxClass string
 	// RuntimesFile is the sandbox runtimes file atelet keeps for this worker
@@ -449,6 +476,7 @@ func (r *reconciler) sync(ctx context.Context) (retry bool, err error) {
 	}
 	req := buildRuntimesRequest(r.epoch, class)
 	setActorOverhead(req, r.cfg.ActorOverhead)
+	addAttributes(req, r.cfg.Attributes)
 	if proto.Equal(req, r.reported) {
 		return false, nil
 	}

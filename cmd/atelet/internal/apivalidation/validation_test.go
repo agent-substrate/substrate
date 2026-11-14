@@ -435,6 +435,15 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		name: "valid deferred",
 		obj:  valid(deferred("pause-snap-1")),
 	}, {
+		// atelet stamps the snapshot it takes.
+		name: "snapshot with a stamp",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Snapshot.SandboxRuntime = &ateletpb.ActorSandboxRuntime{SandboxClass: "gvisor", Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1", Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+			}}
+		}),
+		want: field.ErrorList{field.Forbidden(field.NewPath("snapshot", "sandbox_runtime"), "")},
+	}, {
 		name: "valid volumes fidelity",
 		obj: valid(func(r *ateletpb.CheckpointRequest) {
 			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
@@ -1175,6 +1184,40 @@ func TestValidateSetWorkerSandboxRuntimesRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.TooLong(defaultVersionPath.Child("attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
 	}, {
+		name: "valid compatible_values",
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateletpb.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{
+				{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY},
+			}}},
+		}),
+	}, {
+		name: "compatible_values entry for the attribute's own value",
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateletpb.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{
+				{Value: "per_volume", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY},
+			}}},
+		}),
+		want: field.ErrorList{field.Invalid(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(0).Child("value"), nil, "")},
+	}, {
+		name: "duplicate compatible_values value",
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateletpb.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{
+				{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY},
+				{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+			}}},
+		}),
+		want: field.ErrorList{field.Duplicate(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(1), nil)},
+	}, {
+		name: "unspecified compatible_values fidelity",
+		obj: withDefaultRuntime(&ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateletpb.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{{Value: ""}}}},
+		}),
+		want: field.ErrorList{field.Required(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(0).Child("fidelity"), "")},
+	}, {
 		name: "attributes at the bound",
 		obj:  withDefaultRuntime(compatWithAttributes(32)),
 	}, {
@@ -1858,6 +1901,46 @@ func TestValidateContainer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, Validate_Container(context.Background(), createOp, nil, tt.obj, nil), tt.want)
+		})
+	}
+}
+
+func TestValidateActorSandboxRuntime(t *testing.T) {
+	stamp := func(attrs ...*ateletpb.AttributeEntry) *ateletpb.ActorSandboxRuntime {
+		return &ateletpb.ActorSandboxRuntime{SandboxClass: "gvisor", Version: &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    append([]*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}}, attrs...),
+		}}
+	}
+	attrsPath := field.NewPath("version", "attributes")
+	tests := []struct {
+		name string
+		obj  *ateletpb.ActorSandboxRuntime
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj: stamp(&ateletpb.AttributeEntry{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{
+			{Value: "", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+		}}),
+	}, {
+		name: "duplicate key",
+		obj:  stamp(&ateletpb.AttributeEntry{Key: "architecture", Value: "arm64"}),
+		want: field.ErrorList{field.Duplicate(attrsPath.Index(1), nil)},
+	}, {
+		name: "compatible_values entry for the attribute's own value",
+		obj: stamp(&ateletpb.AttributeEntry{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{
+			{Value: "per_volume", Fidelity: ateletpb.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+		}}),
+		want: field.ErrorList{field.Invalid(attrsPath.Index(1).Child("compatible_values").Index(0).Child("value"), nil, "")},
+	}, {
+		name: "unspecified compatible_values fidelity",
+		obj:  stamp(&ateletpb.AttributeEntry{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateletpb.CompatibleValue{{Value: ""}}}),
+		want: field.ErrorList{field.Required(attrsPath.Index(1).Child("compatible_values").Index(0).Child("fidelity"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, ValidateActorSandboxRuntime(context.Background(), tt.obj))
 		})
 	}
 }

@@ -603,6 +603,57 @@ func TestValidateSetWorkerSandboxRuntimesRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.TooLong(defaultVersionPath.Child("attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
 	}, {
+		name: "valid compatible_values",
+		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = []*ateapi.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateapi.CompatibleValue{
+				{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY},
+				{Value: "flat", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+			}}}
+		}),
+	}, {
+		name: "compatible_values entry for the attribute's own value",
+		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = []*ateapi.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateapi.CompatibleValue{
+				{Value: "per_volume", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY},
+			}}}
+		}),
+		want: field.ErrorList{field.Invalid(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(0).Child("value"), nil, "")},
+	}, {
+		name: "duplicate compatible_values value",
+		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = []*ateapi.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateapi.CompatibleValue{
+				{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY},
+				{Value: "", Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE},
+			}}}
+		}),
+		want: field.ErrorList{field.Duplicate(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(1), nil)},
+	}, {
+		name: "unspecified compatible_values fidelity",
+		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = []*ateapi.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateapi.CompatibleValue{
+				{Value: ""},
+			}}}
+		}),
+		want: field.ErrorList{field.Required(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(0).Child("fidelity"), "")},
+	}, {
+		name: "compatible_values fidelity outside the enum",
+		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = []*ateapi.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: []*ateapi.CompatibleValue{
+				{Value: "", Fidelity: 5},
+			}}}
+		}),
+		want: field.ErrorList{field.Invalid(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "too many compatible_values",
+		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
+			var values []*ateapi.CompatibleValue
+			for i := range 33 {
+				values = append(values, &ateapi.CompatibleValue{Value: fmt.Sprintf("v%d", i), Fidelity: ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_NONE})
+			}
+			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = []*ateapi.AttributeEntry{{Key: "worker.layout", Value: "per_volume", CompatibleValues: values}}
+		}),
+		want: field.ErrorList{field.TooMany(defaultVersionPath.Child("attributes").Index(0).Child("compatible_values"), 33, 32).WithOrigin("maxItems")},
+	}, {
 		name: "attributes at the bound",
 		req: valid(func(r *ateapi.SetWorkerSandboxRuntimesRequest) {
 			r.SandboxClasses[0].DefaultRuntime.Version.Attributes = attributeEntries(32)

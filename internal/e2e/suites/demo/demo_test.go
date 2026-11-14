@@ -187,7 +187,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 			if diff := cmp.Diff(hardware.ColdBootRuntime(worker.GetStatus()), assignment.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
 				t.Fatalf("worker_assignment.sandbox_runtime mismatch (-worker default runtime +assignment):\n%s", diff)
 			}
-			if !hardware.Matches(assignment.GetSandboxRuntime(), goldenStamp) {
+			if hardware.NewRequirement(goldenStamp, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY).RestoreFidelity(assignment.GetSandboxRuntime()) != ateapi.CompatibleFidelity_COMPATIBLE_FIDELITY_MEMORY {
 				t.Fatalf("assigned runtime %v cannot restore the golden stamp %v", assignment.GetSandboxRuntime(), goldenStamp)
 			}
 			response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
@@ -216,9 +216,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 				t.Fatal("suspended Actor has no external snapshot URI")
 			}
 			snapshotStamp := suspendedSnap.GetSandboxRuntime()
-			if diff := cmp.Diff(assignment.GetSandboxRuntime(), snapshotStamp, protocmp.Transform()); diff != "" {
-				t.Fatalf("suspended snapshot stamp mismatch (-assignment +snapshot):\n%s", diff)
-			}
+			assertStampedUnder(t, "suspended snapshot", assignment.GetSandboxRuntime(), suspendedSnap)
 			assertSnapshotUnderLocation(t, snapshotURI, wantSnapshotLocation(t, at))
 			// The tag is given its own copy of the snapshot the suspend just took, so
 			// it survives the Actor being suspended again or deleted. A PENDING
@@ -298,8 +296,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to resume cloned Actor: %v", err)
 			}
-			if diff := cmp.Diff(snapshotStamp, cloneResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-				t.Errorf("cloned actor assignment stamp mismatch (-tag +assignment):\n%s", diff)
+			if diff := cmp.Diff(assignment.GetSandboxRuntime(), cloneResumed.GetActor().GetStatus().GetWorkerAssignment().GetSandboxRuntime(), protocmp.Transform()); diff != "" {
+				t.Errorf("cloned actor assignment runtime mismatch (-source assignment +clone assignment):\n%s", diff)
 			}
 			waitForActorState(ctx, t, clients, cloneName, ateapi.ActorState_ACTOR_STATE_RUNNING)
 			response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
@@ -750,9 +748,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
 	firstPause := getLocalSnapshotFromActor(t, paused.GetActor())
-	if diff := cmp.Diff(assignedRuntime, firstPause.snap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Errorf("local pause snapshot stamp mismatch (-assignment +local):\n%s", diff)
-	}
+	assertStampedUnder(t, "local pause snapshot", assignedRuntime, firstPause.snap)
 
 	// Resuming the actor keeps its local checkpoint on disk and lets the
 	// background upload finish.
@@ -798,9 +794,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 	durableSnap := durableSnapshot(suspended.GetActor().GetStatus())
-	if diff := cmp.Diff(assignedRuntime2, durableSnap.GetSandboxRuntime(), protocmp.Transform()); diff != "" {
-		t.Errorf("durable snapshot stamp after suspend mismatch (-assignment +snapshot):\n%s", diff)
-	}
+	assertStampedUnder(t, "durable snapshot after suspend", assignedRuntime2, durableSnap)
 
 	if tc.wantSnapshotFidelity != ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		validateSnapshotFidelity(ctx, t, clients, actorID, tc.wantSnapshotFidelity)
@@ -850,6 +844,35 @@ func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Cl
 	}
 	if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != want {
 		t.Errorf("snapshot %q content scope = %v, want %v", durableSnapshotURI(actor.GetStatus()), got, want)
+	}
+}
+
+// assertStampedUnder checks snap is stamped as a snapshot taken under
+// runtime: with runtime's host attributes, and worker attributes of its own,
+// which runtime restores in full. The worker's attributes describe the
+// snapshot, so their rules may differ from the ones runtime reports.
+func assertStampedUnder(t *testing.T, what string, runtime *ateapi.ActorSandboxRuntime, snap *ateapi.Snapshot) {
+	t.Helper()
+	hostOnly := func(rt *ateapi.ActorSandboxRuntime) *ateapi.ActorSandboxRuntime {
+		out := &ateapi.ActorSandboxRuntime{SandboxClass: rt.GetSandboxClass(), Version: &ateapi.VersionedSandboxCompat{SchemaVersion: rt.GetVersion().GetSchemaVersion()}}
+		for _, a := range rt.GetVersion().GetAttributes() {
+			if hardware.IsHostKey(a.GetKey()) {
+				out.Version.Attributes = append(out.Version.Attributes, a)
+			}
+		}
+		return out
+	}
+	stamp := snap.GetSandboxRuntime()
+	if stamp == nil {
+		t.Errorf("%s has no stamp", what)
+		return
+	}
+	if diff := cmp.Diff(hostOnly(runtime), hostOnly(stamp), protocmp.Transform()); diff != "" {
+		t.Errorf("%s stamp host attributes mismatch (-runtime +stamp):\n%s", what, diff)
+	}
+	required := hardware.NewRequirement(stamp, snap.GetFidelity())
+	if got := required.RestoreFidelity(runtime); got != required.Max() {
+		t.Errorf("%s stamp %v restores at %v under the runtime it was taken under %v, want %v", what, stamp, got, runtime, required.Max())
 	}
 }
 

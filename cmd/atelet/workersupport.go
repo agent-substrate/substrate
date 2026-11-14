@@ -171,6 +171,13 @@ func (s *workerSupportServer) SetWorkerSandboxRuntimes(ctx context.Context, req 
 	if errs := apivalidation.ValidateSetWorkerSandboxRuntimesRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
+	for _, c := range req.GetSandboxClasses() {
+		for _, rt := range append([]*ateletpb.WorkerSandboxRuntime{c.GetDefaultRuntime()}, c.GetRestorableRuntimes()...) {
+			if err := checkRegisteredAttributes(rt.GetVersion()); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "sandbox class %s: %v", c.GetSandboxClass(), err)
+			}
+		}
+	}
 	if _, err := s.workers.SetWorkerSandboxRuntimes(ctx, &ateapi.SetWorkerSandboxRuntimesRequest{
 		Worker:         &ateapi.ObjectRef{Name: workerIdentity.PodUID},
 		Epoch:          req.GetEpoch(),
@@ -255,7 +262,11 @@ func toAteAPICompat(in *ateletpb.VersionedSandboxCompat) *ateapi.VersionedSandbo
 	}
 	out := &ateapi.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
 	for _, a := range in.GetAttributes() {
-		out.Attributes = append(out.Attributes, &ateapi.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+		entry := &ateapi.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()}
+		for _, c := range a.GetCompatibleValues() {
+			entry.CompatibleValues = append(entry.CompatibleValues, &ateapi.CompatibleValue{Value: c.GetValue(), Fidelity: ateapi.CompatibleFidelity(c.GetFidelity())})
+		}
+		out.Attributes = append(out.Attributes, entry)
 	}
 	return out
 }
