@@ -28,6 +28,8 @@ import (
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -643,6 +645,40 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapi.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want the concurrently injected DRAINING to survive the retry", got.GetStatus().GetState())
+	}
+}
+
+// TestSyncer_DeletingWorkerIsLeftAlone verifies that a Worker marked for
+// deletion gets no updates, even when its pool's labels change.
+func TestSyncer_DeletingWorkerIsLeftAlone(t *testing.T) {
+	ctx := context.Background()
+
+	ns, podName, poolName := "ns-syncer-deleting", "worker-unit-deleting", "pool-deleting"
+
+	api := newFakeControl()
+	s, pods, poolIndexer := setupReconcileTest(t, api, workerPool(ns, poolName, map[string]string{"foo": "bar"}))
+	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"))
+
+	mustReconcile(t, ctx, s, key)
+	registeredWorker := api.get(testPodUID)
+	if registeredWorker == nil {
+		t.Fatal("worker not registered")
+	}
+
+	// Simulate an external deletion of this worker
+	registeredWorker.Metadata.DeleteTime = timestamppb.Now()
+	registeredWorker.Status.State = ateapi.WorkerState_WORKER_STATE_DRAINING
+	api.mu.Lock()
+	api.storeLocked(registeredWorker)
+	api.mu.Unlock()
+
+	if err := poolIndexer.Update(workerPool(ns, poolName, map[string]string{"foo": "new-value-for-foo-label"})); err != nil {
+		t.Fatalf("updating pool: %v", err)
+	}
+	mustReconcile(t, ctx, s, key)
+
+	if gotWorker := api.get(testPodUID); !proto.Equal(gotWorker, registeredWorker) {
+		t.Errorf("worker = %v, want it unchanged: %v", gotWorker, registeredWorker)
 	}
 }
 
