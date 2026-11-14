@@ -173,6 +173,10 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 `driver` is one of `nfs`, `hostpath`, `both`, or `none`, and defaults to `nfs`. The hostpath is for KIND clusters only. NFS has no such
 restriction, but it does need the `nfsd` kernel module loaded on the nodes.
 
+When `ate-api-server` is deployed and `--preview=ExternalVolumes` (or `ATE_PREVIEW`) is set
+for this command, `setup csi` also registers the matching `ExternalVolumeClass` (`csi-nfs`,
+`csi-hostpath`). Run it after `deploy ate-system`, or pass `--setup-csi` to `deploy ate-system`.
+
 
 ## Benchmarks
 
