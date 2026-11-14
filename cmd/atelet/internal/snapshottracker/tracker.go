@@ -153,7 +153,8 @@ type Tracker struct {
 	clock clock.WithTicker
 	// fromCurrentBoot reports whether an actor's local snapshot was written
 	// since the node last booted, or is nil without WithBootCheck. When set,
-	// atelet deletes any local snapshot written before the node rebooted (see
+	// atelet deletes any local snapshot written before the node rebooted, and
+	// the other files of an actor not started since (see
 	// prunePreRebootLocalLocked).
 	fromCurrentBoot func(actorUID, snapshotUUID string) bool
 	// uploadDelay is how long after UndurableSince the actor's latest local
@@ -231,7 +232,8 @@ type Option func(*Tracker)
 // WithBootCheck sets how atelet tells whether an actor's local snapshot was
 // written since the node last booted. A snapshot whose local copy is gone must
 // count as written before. With it, atelet deletes any local snapshot written
-// before the node rebooted, whose files may be torn.
+// before the node rebooted, whose files may be torn, and the other files on
+// this node of an actor not started since.
 func WithBootCheck(fromCurrentBoot func(actorUID, snapshotUUID string) bool) Option {
 	return func(t *Tracker) {
 		t.fromCurrentBoot = fromCurrentBoot
