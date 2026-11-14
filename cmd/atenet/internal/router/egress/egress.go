@@ -15,7 +15,8 @@
 // Package egress implements the ext_proc handler for outbound actor traffic.
 // It authenticates the actor behind an egress CONNECT and authorizes what goes
 // through the tunnel against the actor's EgressPolicy. The dataplane decides
-// TLS at the ClientHello using the SNI rules returned on CONNECT.
+// TLS at the ClientHello using the SNI rules returned on CONNECT. It also
+// answers the actor's DNS queries, which atunnel sends as DNS over HTTPS.
 //
 // Identity comes from the actor certificate presented in the mTLS handshake,
 // never from a request header. On the inner legs it arrives as filter state
@@ -91,6 +92,17 @@ type Handler struct {
 	// A special case of a map consisting of a single entry with empty string
 	// ("") key will match all provider URIs.
 	providers map[string]credprovider.CredentialProviderClient
+	// dns resolves the DNS queries policy allows.
+	dns *dnsForwarder
+}
+
+// Option customizes a Handler.
+type Option func(*Handler)
+
+// WithDNSUpstreams sets the resolvers, each "host:port", that DNS queries are
+// forwarded to. Without it every allowed DNS query is answered SERVFAIL.
+func WithDNSUpstreams(upstreams []string) Option {
+	return func(h *Handler) { h.dns = &dnsForwarder{upstreams: upstreams} }
 }
 
 // New builds the egress handler. loadActorIdentityRoots yields the egress
@@ -103,19 +115,24 @@ type Handler struct {
 // TLS-terminated MITM leg; none leaves them off, so a request that needs one is
 // denied. Actor JWT injections need no provider. See Handler.providers for the
 // map definition.
-func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, providers map[string]credprovider.CredentialProviderClient) *Handler {
+func New(apiClient ateapi.ControlClient, loadActorIdentityRoots func() (*x509.CertPool, error), policyCacheTTL time.Duration, providers map[string]credprovider.CredentialProviderClient, opts ...Option) *Handler {
 	if loadActorIdentityRoots == nil {
 		loadActorIdentityRoots = func() (*x509.CertPool, error) {
 			return nil, errors.New("no actor-identity CA configured")
 		}
 	}
-	return &Handler{
+	h := &Handler{
 		apiClient:              apiClient,
 		loadActorIdentityRoots: loadActorIdentityRoots,
 		policies:               newPolicyCache(apiClient, policyCacheTTL),
 		actorJWTs:              actorjwt.New(apiClient),
 		providers:              providers,
+		dns:                    &dnsForwarder{},
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress }
@@ -126,6 +143,9 @@ func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress
 func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestMetadata) (extproc.Result, error) {
 	switch leg := md.Attribute(extproc.FilterChainNameAttribute); leg {
 	case extproc.EgressFilterChainName, "":
+		if isDNSQuery(md) {
+			return h.handleDNSQuery(ctx, md, leg)
+		}
 		return h.handleConnect(ctx, md, leg)
 	case extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName:
 		return h.handleRequest(ctx, md, leg)
