@@ -89,10 +89,14 @@ func MaxDeadlineUnaryInterceptor(maxDeadline time.Duration) grpc.UnaryServerInte
 // InternalServerUnaryInterceptor is for internal services. A handler's error
 // reaches the caller with the code apierror gives it; any other error, including
 // a status received from an upstream service, is Internal with its full text.
+//
+// It rejects a request carrying a field this binary does not know, with
+// InvalidArgument. Under the version skew policy, an internal service's caller
+// sends a field only once the service knows it.
 func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	startTime := time.Now()
 
-	resp, err := handler(ctx, req)
+	resp, err := RejectUnknownFieldsUnaryInterceptor(ctx, req, info, handler)
 
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
