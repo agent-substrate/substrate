@@ -45,6 +45,10 @@ const (
 	// GateGoldenEgressPolicy controls configuring a golden actor's egress policy on its template.
 	GateGoldenEgressPolicy Gate = "GoldenEgressPolicy"
 
+	// GateLifecycleHooks controls whether Actor create/delete lifecycle hooks
+	// are enabled in ate-api-server.
+	GateLifecycleHooks Gate = "LifecycleHooks"
+
 	// GatePerTemplateSnapshotLocation controls whether an ActorTemplate may
 	// set snapshotConfig.storage_location. When disabled, the API rejects the
 	// field and snapshots are stored under ate-api-server's
@@ -60,6 +64,7 @@ const All = "ALL"
 var realKnownGates = []Gate{
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
+	GateLifecycleHooks,
 	GatePerTemplateSnapshotLocation,
 }
 

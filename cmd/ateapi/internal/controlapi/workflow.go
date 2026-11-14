@@ -24,6 +24,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/objectstore/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/lifecyclehook"
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
@@ -116,6 +117,7 @@ type ActorWorkflow struct {
 	pluginRegistry          VolumePluginRegistry
 	objectStorePlugin       objectstore.ControlProviderClient
 	clusterSnapshotLocation string
+	hooks                   lifecyclehook.Hooks
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
