@@ -25,7 +25,7 @@ import (
 	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/credbundle"
 	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/volume"
@@ -50,7 +50,7 @@ var defaultTLSPaths = tlsPaths{
 	caCert:     DefaultCACertPath,
 }
 
-// Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
+// Plugin implements volume.VolumePluginControlPlane and volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
 	client           *Client
 	stagingDirPrefix string
@@ -74,6 +74,14 @@ func NewPlugin(client *Client) *Plugin {
 		client:           client,
 		stagingDirPrefix: filepath.Join(nodepath.BasePath, "staging"),
 	}
+}
+
+// Close closes the underlying CSI client connection.
+func (p *Plugin) Close() error {
+	if p == nil || p.client == nil {
+		return nil
+	}
+	return p.client.Close()
 }
 
 // SupportsControllerCapability reports whether the driver supports the given controller RPC.
@@ -375,10 +383,9 @@ func getStandardCapabilities() []*csi.VolumeCapability {
 	}
 }
 
-// CSIDriverConfigGetter provides access to retrieve a CSIDriverConfig by name.
-// Both atelisters.CSIDriverConfigLister and direct client getters implement this interface.
+// CSIDriverConfigGetter retrieves a CsiDriverConfig by CSI driver name.
 type CSIDriverConfigGetter interface {
-	Get(name string) (*atev1.CSIDriverConfig, error)
+	Get(ctx context.Context, driverName string) (*ateapi.CsiDriverConfig, error)
 }
 
 // NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
@@ -386,23 +393,36 @@ func NewCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName 
 	return newCSIPlugin(ctx, getter, driverName, isController, defaultTLSPaths)
 }
 
+// NewCSIPluginFromConfig establishes a CSI client from cfg and returns a verified Plugin instance.
+func NewCSIPluginFromConfig(ctx context.Context, cfg *ateapi.CsiDriverConfig, driverName string, isController bool) (*Plugin, error) {
+	return newCSIPluginFromConfig(ctx, cfg, driverName, isController, defaultTLSPaths)
+}
+
 func newCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName string, isController bool, paths tlsPaths) (*Plugin, error) {
 	if getter == nil {
 		return nil, fmt.Errorf("missing csiDriverConfigGetter")
 	}
 
-	cfg, err := getter.Get(driverName)
+	cfg, err := getter.Get(ctx, driverName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve CSIDriverConfig for %q: %w", driverName, err)
+		return nil, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: %w", driverName, err)
+	}
+
+	return newCSIPluginFromConfig(ctx, cfg, driverName, isController, paths)
+}
+
+func newCSIPluginFromConfig(ctx context.Context, cfg *ateapi.CsiDriverConfig, driverName string, isController bool, paths tlsPaths) (*Plugin, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("missing CsiDriverConfig for %q", driverName)
 	}
 
 	var endpoint string
 	switch {
 	case isController:
-		endpoint = cfg.Spec.ControllerEndpoint
-	case cfg.Spec.NodeSocketOverride != "":
-		endpoint = cfg.Spec.NodeSocketOverride
-		slog.InfoContext(ctx, "Found CSIDriverConfig with NodeSocketOverride", slog.String("driver", driverName), slog.String("endpoint", endpoint))
+		endpoint = cfg.GetControllerEndpoint()
+	case cfg.GetNodeSocketOverride() != "":
+		endpoint = cfg.GetNodeSocketOverride()
+		slog.InfoContext(ctx, "Found CsiDriverConfig with NodeSocketOverride", slog.String("driver", driverName), slog.String("endpoint", endpoint))
 	default:
 		endpoint = "unix://" + kubeletPluginSocketPath(driverName)
 	}
@@ -443,19 +463,20 @@ func newCSIPlugin(ctx context.Context, getter CSIDriverConfigGetter, driverName 
 	return csiPlugin, nil
 }
 
-func resolveTLSConfig(cfg *atev1.CSIDriverConfig, paths tlsPaths) (*tls.Config, error) {
-	if cfg == nil || cfg.Spec.TLS == nil || !cfg.Spec.TLS.Enabled {
+func resolveTLSConfig(cfg *ateapi.CsiDriverConfig, paths tlsPaths) (*tls.Config, error) {
+	if !cfg.GetTls().GetEnabled() {
 		return nil, nil
 	}
 
-	tlsCfg := cfg.Spec.TLS
+	tlsCfg := cfg.GetTls()
 
-	if !tlsCfg.UsePodIdentity {
+	if !tlsCfg.GetUsePodIdentity() {
 		// TODO: Support manual certificates loaded from Secrets specified in the config.
 		return nil, fmt.Errorf("only pod identity TLS is supported in this configuration")
 	}
 
-	if tlsCfg.ServerName == "" {
+	serverName := tlsCfg.GetServerName()
+	if serverName == "" {
 		return nil, fmt.Errorf("tls.serverName is required when TLS is enabled")
 	}
 
@@ -468,7 +489,7 @@ func resolveTLSConfig(cfg *atev1.CSIDriverConfig, paths tlsPaths) (*tls.Config, 
 
 	return &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		ServerName: tlsCfg.ServerName,
+		ServerName: serverName,
 		// NextProtos configures ALPN h2 for gRPC over TLS.
 		NextProtos: []string{"h2"},
 		// Load Client Certificate dynamically.
@@ -503,7 +524,7 @@ func resolveTLSConfig(cfg *atev1.CSIDriverConfig, paths tlsPaths) (*tls.Config, 
 
 			leaf := state.PeerCertificates[0]
 			opts := x509.VerifyOptions{
-				DNSName:       tlsCfg.ServerName,
+				DNSName:       serverName,
 				Roots:         roots,
 				Intermediates: intermediates,
 				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},

@@ -15,6 +15,7 @@
 package csi
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -33,11 +34,9 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
-	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
+	"go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 const mockDriverName = "mock-driver"
@@ -179,13 +178,12 @@ func startTLSServer(t *testing.T, serverCert tls.Certificate, clientCAs *x509.Ce
 	return lis.Addr().String()
 }
 
-func driverConfig(endpoint string, tlsCfg *atev1.CSIDriverTLSConfig) *atev1.CSIDriverConfig {
-	return &atev1.CSIDriverConfig{
-		Spec: atev1.CSIDriverConfigSpec{
-			DriverName:         mockDriverName,
-			ControllerEndpoint: endpoint,
-			TLS:                tlsCfg,
-		},
+func driverConfig(endpoint string, tlsCfg *ateapi.CsiDriverTlsConfig) *ateapi.CsiDriverConfig {
+	return &ateapi.CsiDriverConfig{
+		Metadata:           &ateapi.ResourceMetadata{Name: mockDriverName},
+		DriverName:         mockDriverName,
+		ControllerEndpoint: endpoint,
+		Tls:                tlsCfg,
 	}
 }
 
@@ -194,29 +192,25 @@ func driverConfig(endpoint string, tlsCfg *atev1.CSIDriverTLSConfig) *atev1.CSID
 // and a real call both succeeded.
 func dialPlugin(t *testing.T, addr, serverName string, paths tlsPaths) (*Plugin, error) {
 	t.Helper()
-	cfg := driverConfig("tcp://"+addr, &atev1.CSIDriverTLSConfig{
+	cfg := driverConfig("tcp://"+addr, &ateapi.CsiDriverTlsConfig{
 		Enabled:        true,
 		UsePodIdentity: true,
 		ServerName:     serverName,
 	})
-	return newCSIPlugin(t.Context(), &mockLister{cfg: cfg}, mockDriverName, true /*isController*/, paths)
+	return newCSIPlugin(t.Context(), &mockGetter{cfg: cfg}, mockDriverName, true /*isController*/, paths)
 }
 
-// mockLister serves a single CSIDriverConfig under mockDriverName.
-type mockLister struct{ cfg *atev1.CSIDriverConfig }
+// mockGetter serves a single CsiDriverConfig under mockDriverName.
+type mockGetter struct{ cfg *ateapi.CsiDriverConfig }
 
-func (m *mockLister) List(labels.Selector) ([]*atev1.CSIDriverConfig, error) {
-	return []*atev1.CSIDriverConfig{m.cfg}, nil
-}
-
-func (m *mockLister) Get(name string) (*atev1.CSIDriverConfig, error) {
-	if name != mockDriverName {
-		return nil, fmt.Errorf("no CSIDriverConfig named %q", name)
+func (m *mockGetter) Get(_ context.Context, driverName string) (*ateapi.CsiDriverConfig, error) {
+	if driverName != mockDriverName {
+		return nil, fmt.Errorf("no CsiDriverConfig for driver %q", driverName)
 	}
 	return m.cfg, nil
 }
 
-var _ atelisters.CSIDriverConfigLister = (*mockLister)(nil)
+var _ CSIDriverConfigGetter = (*mockGetter)(nil)
 
 func TestMTLSSucceeds(t *testing.T) {
 	t.Parallel()
@@ -272,11 +266,11 @@ func TestResolveTLSConfigDisabled(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		cfg  *atev1.CSIDriverConfig
+		cfg  *ateapi.CsiDriverConfig
 	}{
 		{"nil config", nil},
 		{"no TLS block", driverConfig("", nil)},
-		{"TLS disabled", driverConfig("", &atev1.CSIDriverTLSConfig{Enabled: false})},
+		{"TLS disabled", driverConfig("", &ateapi.CsiDriverTlsConfig{Enabled: false})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := resolveTLSConfig(tc.cfg, defaultTLSPaths)
@@ -292,7 +286,7 @@ func TestResolveTLSConfigDisabled(t *testing.T) {
 
 func TestResolveTLSConfigRejectsManualCerts(t *testing.T) {
 	t.Parallel()
-	cfg := driverConfig("", &atev1.CSIDriverTLSConfig{Enabled: true, UsePodIdentity: false})
+	cfg := driverConfig("", &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: false})
 
 	if _, err := resolveTLSConfig(cfg, defaultTLSPaths); err == nil {
 		t.Fatal("resolveTLSConfig accepted usePodIdentity=false; manual certificates are unsupported")
@@ -301,7 +295,7 @@ func TestResolveTLSConfigRejectsManualCerts(t *testing.T) {
 
 func TestResolveTLSConfigRejectsEmptyServerName(t *testing.T) {
 	t.Parallel()
-	cfg := driverConfig("", &atev1.CSIDriverTLSConfig{Enabled: true, UsePodIdentity: true})
+	cfg := driverConfig("", &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: true})
 	_, err := resolveTLSConfig(cfg, defaultTLSPaths)
 	if err == nil {
 		t.Fatal("resolveTLSConfig accepted empty serverName when TLS is enabled")
@@ -317,7 +311,7 @@ func TestResolveTLSConfigFields(t *testing.T) {
 	ca := newTestCA(t)
 	paths := writeCreds(t, ca.clientBundle(t), ca.certPEM())
 
-	got, err := resolveTLSConfig(driverConfig("", &atev1.CSIDriverTLSConfig{
+	got, err := resolveTLSConfig(driverConfig("", &ateapi.CsiDriverTlsConfig{
 		Enabled:        true,
 		UsePodIdentity: true,
 		ServerName:     serverName,
