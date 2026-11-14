@@ -199,7 +199,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 				t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 			}
 			if tc.wantMetric {
-				assertCrashMetricDatapoint(t, reader, tc.wantOp, "ate-system", "tmpl", "pool-1", "gvisor", 1)
+				assertCrashMetricDatapoint(t, reader, tc.wantOp, "ate-system", "tmpl", "pool-1", "gvisor", ateattr.CrashReasonWorkerLost, 1)
 			} else {
 				assertNoCrashMetricDatapoint(t, reader)
 			}

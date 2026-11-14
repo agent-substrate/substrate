@@ -23,6 +23,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -196,6 +197,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					workerPoolNSVal := extractLabelValue(line, "ate_workerpool_namespace")
 					workerPoolVal := extractLabelValue(line, "ate_workerpool_name")
 					sandboxVal := extractLabelValue(line, "ate_sandbox_class")
+					reasonVal := extractLabelValue(line, "ate_crash_reason")
 
 					var crashErrs []string
 					if opVal == "" {
@@ -222,10 +224,18 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					if sandboxVal == "" {
 						crashErrs = append(crashErrs, "ate_sandbox_class label is missing or empty")
 					}
+					// The reason says which kind of loss it was. An unnamed
+					// value would make the label useless for separating a
+					// control plane response from a death in the sandbox.
+					if reasonVal == "" {
+						crashErrs = append(crashErrs, "ate_crash_reason label is missing or empty")
+					} else if !slices.Contains(ateattr.AllCrashReasons, reasonVal) {
+						crashErrs = append(crashErrs, fmt.Sprintf("ate_crash_reason %q is invalid (must be one of %v)", reasonVal, ateattr.AllCrashReasons))
+					}
 
 					if len(crashErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, tmplAtespace=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
-							line, strings.Join(crashErrs, "\n  - "), opVal, tmplAtespaceVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
+						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, tmplAtespace=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q, reason=%q)",
+							line, strings.Join(crashErrs, "\n  - "), opVal, tmplAtespaceVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal, reasonVal))
 					}
 				}
 			}

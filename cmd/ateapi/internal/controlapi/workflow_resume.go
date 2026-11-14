@@ -350,7 +350,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 			slog.String("actor", actorRef.String()),
 			slog.String("worker", worker.GetWorkerNamespace()+"/"+worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerDraining)); cerr != nil {
 			return nil, cerr
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
@@ -381,7 +381,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// The crash releases the worker, e.g. one whose pool the actor's
 		// worker_selector no longer matches after the failed attempt.
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); cerr != nil {
+		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerIneligible)); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
@@ -818,7 +818,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 				append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
 			message := fmt.Sprintf("%s: %s", crashMessageLocalSnapshotNodeGone, ateletCrashMessage("Restore", err))
-			return tele, 0, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationResume, message)
+			return tele, 0, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, message))
 		}
 		return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 	}

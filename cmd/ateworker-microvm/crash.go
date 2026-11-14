@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"go.ate.dev/substrate/internal/ateworker/register"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -32,7 +33,7 @@ const crashReportTimeout = 5 * time.Minute
 
 // crashReporter is the slice of register.CrashReporter the service uses.
 type crashReporter interface {
-	ReportCrashed(ctx context.Context, actor resources.ActorAttribution, message string) error
+	ReportCrashed(ctx context.Context, actor resources.ActorAttribution, message string, detail *ateletpb.CrashDetail) error
 }
 
 var _ crashReporter = (*register.CrashReporter)(nil)
@@ -53,8 +54,10 @@ func (s *AteWorkerService) watchVM(attribution resources.ActorAttribution, actor
 	}
 	ctx := context.Background()
 	message := fmt.Sprintf("%s exited: %s", what, exit)
+	reason := ateletpb.CrashReason_CRASH_REASON_SANDBOX_EXITED
 	if ra.memory.Killed() {
 		message = "killed for exceeding its memory limit"
+		reason = ateletpb.CrashReason_CRASH_REASON_MEMORY_LIMIT
 	}
 	slog.WarnContext(ctx, "Micro-VM died", slog.String("actorUID", attribution.UID), slog.String("reason", message))
 
@@ -78,7 +81,7 @@ func (s *AteWorkerService) watchVM(attribution resources.ActorAttribution, actor
 	}
 	reportCtx, cancel := context.WithTimeout(ctx, crashReportTimeout)
 	defer cancel()
-	if err := s.crashReporter.ReportCrashed(reportCtx, attribution, message); err != nil {
+	if err := s.crashReporter.ReportCrashed(reportCtx, attribution, message, &ateletpb.CrashDetail{Reason: reason}); err != nil {
 		slog.ErrorContext(ctx, "Failed to report the actor crashed", slog.String("actorUID", attribution.UID), slog.Any("err", err))
 	}
 }
