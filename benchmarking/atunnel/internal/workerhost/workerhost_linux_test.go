@@ -104,7 +104,7 @@ func TestHostsActorsWithTheWorkersCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ingressActorLis, err := netns.Listen(ctx, sandbox, []uint16{ActorPort})
+	ingressActorLis, err := netns.Listen(ctx, sandbox, "tcp4", []uint16{ActorPort})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,4 @@
+worker-actor/disallowed-egress: payload network 16:4 -> r1; bitwise r1 len 4 mask fffffffc xor 00000000 -> r1; cmp r1 == a9fe1100; verdict accept
+worker-actor/disallowed-egress: payload network 16:4 -> r1; bitwise r1 len 4 mask ffff0000 xor 00000000 -> r1; cmp r1 == a9fe0000; reject type 0 code 13
+worker-actor/disallowed-egress: meta l4proto -> r1; cmp r1 != 06; reject type 0 code 0
+worker-actor/prerouting: payload network 16:4 -> r1; bitwise r1 len 4 mask fffffffc xor 00000000 -> r1; cmp r1 != a9fe1100; meta l4proto -> r1; cmp r1 == 06; immediate 3a99 -> r1; redirect port r1

@@ -265,7 +265,7 @@ kubectl ate delete tag <tag-name> -a <atespace>
 
 ### Egress Policies
 
-An actor has at most one egress policy. See [Egress Traffic](../guides/egress-traffic.md), [Network Egress](../guides/network-egress.md), [MITM Trust Bundle](../guides/egress-trust-bundle.md), and [Egress Credential Injection](../guides/egress-credential-injection.md) for how outbound traffic is mediated and how rules are evaluated.
+An actor has at most one egress policy. See [Egress Traffic](../guides/egress-traffic.md), [MITM Trust Bundle](../guides/egress-trust-bundle.md), and [Egress Credential Injection](../guides/egress-credential-injection.md) for how outbound traffic is mediated and how rules are evaluated.
 
 Example `policy.yaml`:
 

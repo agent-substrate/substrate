@@ -105,7 +105,7 @@ rule, `egress_passthrough` under a `tls_passthrough` rule, and `denied`, which
 matches no chain and closes the connection, when neither covers the SNI. The
 passthrough chain resolves the SNI and relays the bytes to it on the dialed
 port; the address the actor dialed plays no part (see
-`docs/guides/network-egress.md`).
+`docs/guides/egress-traffic.md`).
 
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
