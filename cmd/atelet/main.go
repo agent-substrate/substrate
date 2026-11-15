@@ -2404,6 +2404,9 @@ func toWorkerWakeupProbe(in *ateletpb.WakeupProbe) *ateworkerpb.WakeupProbe {
 }
 
 type WorkerDialer struct {
+	// mu makes the lookup, create and insert in DialWorkerPod atomic, so
+	// concurrent dials for a pod share one conn.
+	mu    sync.Mutex
 	conns *lru.Cache
 }
 
@@ -2434,6 +2437,9 @@ var workerSocketPath = nodepath.WorkerSocketPath
 
 func (d *WorkerDialer) DialWorkerPod(ctx context.Context, podUID string) (*grpc.ClientConn, error) {
 	key := podUID
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	connAny, ok := d.conns.Get(key)
 	if ok {
