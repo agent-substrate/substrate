@@ -38,7 +38,7 @@ const (
 // FetchSnapshotRequest asks the plugin to download snapshot files.
 type FetchSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The snapshot to read, e.g. gs://<bucket>/<prefix>.
+	// The snapshot to read, e.g. <scheme>://<bucket>/<prefix>.
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// The JWT of the actor that owns the snapshot, for plugins that authorize
 	// storage access per actor. It is a worker-for-actor token ate-api-server
@@ -154,7 +154,7 @@ func (*FetchSnapshotResponse) Descriptor() ([]byte, []int) {
 // UploadSnapshotRequest asks the plugin to upload snapshot files.
 type UploadSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The snapshot to write, e.g. gs://<bucket>/<prefix>.
+	// The snapshot to write, e.g. <scheme>://<bucket>/<prefix>.
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// The JWT of the actor that owns the snapshot, for plugins that authorize
 	// storage access per actor. It is a worker-for-actor token ate-api-server
@@ -270,7 +270,7 @@ func (*UploadSnapshotResponse) Descriptor() ([]byte, []int) {
 type CleanupSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// A snapshot URI, or the prefix of a resource that owns several snapshots
-	// (e.g. gs://<bucket>/<root>/atespaces/<atespace>/actors/<uid>). Every file
+	// (e.g. <scheme>://<bucket>/<root>/atespaces/<atespace>/actors/<uid>). Every file
 	// below it is deleted. A bare bucket is rejected with INVALID_ARGUMENT.
 	SnapshotUri   string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -444,7 +444,7 @@ func (*CopySnapshotResponse) Descriptor() ([]byte, []int) {
 // FetchAssetRequest asks the plugin to fetch one content-addressed asset.
 type FetchAssetRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The object to read, e.g. gs://<bucket>/kata-assets/vmlinux. Which schemes
+	// The object to read, e.g. <scheme>://<bucket>/kata-assets/vmlinux. Which schemes
 	// a plugin serves is up to the plugin. At most 2048 bytes, the SandboxConfig
 	// URL's limit. Masked in logged requests, like the SandboxConfig URL it
 	// comes from.

@@ -35,7 +35,7 @@ const (
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
 // runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
 type AssetFile struct {
-	// url is where to download the asset from (e.g. a gs:// URL). atelet
+	// url is where to download the asset from (e.g. an s3:// URL). atelet
 	// fetches every URL through the node's object-store plugin, with the
 	// plugin's credentials. The plugin refuses URLs under a snapshot location.
 	// The in-tree plugin serves only its storage backend's scheme: gs:// on
