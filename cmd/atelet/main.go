@@ -2279,6 +2279,7 @@ func (s *Atelet) prepareOCIBundles(
 				Resources:    toAteworkerResources(ctr.GetResources()),
 				User:         user,
 				Cwd:          cwd,
+				ShmSizeBytes: ctr.GetShmSizeBytes(),
 			}
 			return nil
 		})

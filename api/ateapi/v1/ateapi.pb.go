@@ -2760,6 +2760,7 @@ func (x *ObjectRef) GetName() string {
 	return ""
 }
 
+// +k8s:customValidation # explicit shm sizes must fit actor and container memory limits
 type ActorTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
@@ -3335,7 +3336,18 @@ type Container struct {
 	// actor's sandbox. A limit of 0 leaves that resource unlimited.
 	//
 	// +k8s:optional
-	Resources     *ResourceRequirements `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	// shm_size_bytes is the capacity of the container's `/dev/shm` tmpfs in
+	// bytes. Must be nonnegative. Unset or 0 uses 64 MiB (67108864 bytes).
+	//
+	// An explicit size must not exceed the actor's memory limit or the
+	// container's memory limit, when set. Files consume the actor's memory
+	// budget. A volume mounted at `/dev/shm` replaces the tmpfs; a positive
+	// size has no effect and is not checked against memory limits in that case.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	ShmSizeBytes  int64 `protobuf:"varint,10,opt,name=shm_size_bytes,json=shmSizeBytes,proto3" json:"shm_size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3431,6 +3443,13 @@ func (x *Container) GetResources() *ResourceRequirements {
 		return x.Resources
 	}
 	return nil
+}
+
+func (x *Container) GetShmSizeBytes() int64 {
+	if x != nil {
+		return x.ShmSizeBytes
+	}
+	return 0
 }
 
 // SecurityContext holds security settings for a container's process,
@@ -10157,7 +10176,7 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\x12preferred_fidelity\x18\x02 \x01(\x0e2%.substrate.ateapi.v1.SnapshotFidelityR\x11preferredFidelity\x12_\n" +
 	"\x16golden_snapshot_config\x18\x03 \x01(\v2).substrate.ateapi.v1.GoldenSnapshotConfigR\x14goldenSnapshotConfig\"S\n" +
 	"\x14GoldenSnapshotConfig\x12;\n" +
-	"\x04mode\x18\x01 \x01(\x0e2'.substrate.ateapi.v1.GoldenSnapshotModeR\x04mode\"\xb8\x03\n" +
+	"\x04mode\x18\x01 \x01(\x0e2'.substrate.ateapi.v1.GoldenSnapshotModeR\x04mode\"\xde\x03\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
@@ -10167,7 +10186,9 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fwakeup_probe\x18\x06 \x01(\v2 .substrate.ateapi.v1.WakeupProbeR\vwakeupProbe\x12E\n" +
 	"\rvolume_mounts\x18\a \x03(\v2 .substrate.ateapi.v1.VolumeMountR\fvolumeMounts\x12O\n" +
 	"\x10security_context\x18\b \x01(\v2$.substrate.ateapi.v1.SecurityContextR\x0fsecurityContext\x12G\n" +
-	"\tresources\x18\t \x01(\v2).substrate.ateapi.v1.ResourceRequirementsR\tresources\"X\n" +
+	"\tresources\x18\t \x01(\v2).substrate.ateapi.v1.ResourceRequirementsR\tresources\x12$\n" +
+	"\x0eshm_size_bytes\x18\n" +
+	" \x01(\x03R\fshmSizeBytes\"X\n" +
 	"\x0fSecurityContext\x12E\n" +
 	"\fcapabilities\x18\x01 \x01(\v2!.substrate.ateapi.v1.CapabilitiesR\fcapabilities\"4\n" +
 	"\fCapabilities\x12\x10\n" +

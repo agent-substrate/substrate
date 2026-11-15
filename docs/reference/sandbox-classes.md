@@ -49,7 +49,9 @@ See [Per-container limits](api-guide.md#per-container-limits) in the API Guide.
 
 ## System Mounts (`/dev/shm` and `/tmp`)
 
-Each container gets its own `tmpfs` at `/dev/shm` (`64 MiB`, mode `1777`, `noexec`) and `/tmp` (mode `1777`). `/tmp` holds at most half of `limits.memoryBytes` on `gvisor`, and half of usable guest RAM (`MemTotal`) on `microvm`. The `/tmp` mount hides any files the image has in `/tmp`. A volume at either path replaces the `tmpfs`. Files in these `tmpfs` mounts count against the actor's memory limit. They live outside the container's rootfs overlay, so `MEMORY` snapshots keep them and `ROOTFS` snapshots start with them empty.
+Each container gets its own `tmpfs` at `/dev/shm` (mode `1777`, `noexec`) and `/tmp` (mode `1777`). On both sandbox classes, `/dev/shm` defaults to 64 MiB (`67108864` bytes). Set [`containers[].shmSizeBytes`](api-guide.md#shared-memory-shmsizebytes) to change its capacity; unset or `0` keeps the default. A volume mounted at `/dev/shm` replaces the tmpfs and takes precedence over this setting.
+
+`/tmp` holds at most half of `limits.memoryBytes` on `gvisor`, and half of usable guest RAM (`MemTotal`) on `microvm`. The `/tmp` mount hides any files the image has in `/tmp`. A volume at `/tmp` replaces its tmpfs. Files in these tmpfs mounts count against the actor's memory limit. They live outside the container's rootfs overlay, so `MEMORY` snapshots keep them and `ROOTFS` snapshots start with them empty.
 
 Neither sandbox class mounts anything at `/run`. As with containerd, `/run` is part of the container's rootfs overlay, so the image's files there stay visible and `ROOTFS` snapshots keep them.
 

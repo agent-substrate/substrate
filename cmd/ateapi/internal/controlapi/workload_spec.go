@@ -111,6 +111,7 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapi.ActorTemplate, actor *a
 			WakeupProbe:     toAteletWakeupProbe(ctr.GetWakeupProbe()),
 			SecurityContext: toAteletSecurityContext(ctr.GetSecurityContext()),
 			Resources:       ctrResources,
+			ShmSizeBytes:    ctr.GetShmSizeBytes(),
 		}
 		for _, env := range ctr.GetEnv() {
 			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvVar{

@@ -237,7 +237,7 @@ func TestSnapshotManifestFidelityAbsent(t *testing.T) {
 }
 
 // TestPrepareOCIBundlesFillsContainerSpec pins that each container's spec
-// carries its resolved args, env, capabilities and resource limits.
+// carries its resolved args, env, capabilities, resource limits and shm size.
 func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	useTempNodeDirs(t)
 	host := imageVolumeTestRegistry(t)
@@ -253,7 +253,12 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 			SecurityContext: &ateletpb.SecurityContext{
 				Capabilities: &ateletpb.Capabilities{Add: []string{"SETUID"}, Drop: []string{"KILL"}},
 			},
-			Resources: &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
+			Resources:    &ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
+			ShmSizeBytes: 1 << 30,
+		}, {
+			Name: "sidecar", Image: image, Command: []string{"/bin/app"}, ShmSizeBytes: 128 << 20,
+		}, {
+			Name: "default", Image: image, Command: []string{"/bin/app"},
 		}},
 	}
 
@@ -267,6 +272,18 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 		Env:          []string{"GREETING=hello", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_NET_BIND_SERVICE", "CAP_SETUID"},
 		Resources:    &ateworkerpb.ResourceRequirements{Limits: &ateworkerpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}},
+		Cwd:          "/",
+		ShmSizeBytes: 1073741824,
+	}, {
+		Args:         []string{"/bin/app"},
+		Env:          []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_KILL", "CAP_NET_BIND_SERVICE"},
+		Cwd:          "/",
+		ShmSizeBytes: 134217728,
+	}, {
+		Args:         []string{"/bin/app"},
+		Env:          []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Capabilities: []string{"CAP_AUDIT_WRITE", "CAP_KILL", "CAP_NET_BIND_SERVICE"},
 		Cwd:          "/",
 	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
@@ -764,12 +781,12 @@ func TestBuildWorkerWorkloadSpecForwardsContainerSpecs(t *testing.T) {
 		Containers: []*ateletpb.Container{{Name: "main"}, {Name: "sidecar"}},
 	}
 	containerSpecs := []*ateworkerpb.ContainerSpec{
-		{Args: []string{"/app", "serve"}},
+		{Args: []string{"/app", "serve"}, ShmSizeBytes: 1 << 30},
 		{Args: []string{"/sidecar"}},
 	}
 	want := &ateworkerpb.WorkloadSpec{
 		Containers: []*ateworkerpb.Container{
-			{Name: "main", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "serve"}}},
+			{Name: "main", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/app", "serve"}, ShmSizeBytes: 1073741824}},
 			{Name: "sidecar", ContainerSpec: &ateworkerpb.ContainerSpec{Args: []string{"/sidecar"}}},
 		},
 	}

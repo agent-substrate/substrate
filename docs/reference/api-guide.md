@@ -344,6 +344,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ResourceRequirements` | Optional. Compute limits for this container (`limits.cpuMillicores` and `limits.memoryBytes`), enforced inside the actor's sandbox. See [Per-container limits](#per-container-limits). |
+| `shmSizeBytes` | `int64` | Optional. Capacity in bytes of this container's `/dev/shm` tmpfs. Unset or `0` uses 64 MiB (`67108864` bytes). See [Shared memory](#shared-memory-shmsizebytes). |
 
 `command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
 
@@ -403,6 +404,38 @@ Per-container limits are microVM only today. gVisor applies cgroup limits at the
 These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A microVM guest's memory is `resources.limits.memoryBytes`, and its vCPU count is `resources.limits.cpuMillicores` rounded up to whole cores. A container limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
+
+### Shared memory (`shmSizeBytes`)
+
+Set `containers[].shmSizeBytes` (`shm_size_bytes` in protobuf) to change the
+container's `/dev/shm` capacity on gVisor or microVM. For example, this
+ActorTemplate fragment allows 1 GiB of shared memory within a 2 GiB actor:
+
+```yaml
+resources:
+  limits:
+    cpuMillicores: 1000
+    memoryBytes: 2147483648 # 2 GiB
+containers:
+  - name: app
+    shmSizeBytes: 1073741824 # 1 GiB
+    # Add the container's image pinned by digest.
+```
+
+The value must be nonnegative. Unset or `0` keeps the existing 64 MiB default.
+A positive value must not exceed the actor's memory limit or a positive
+per-container memory limit. The API checks these bounds on template creation
+and update. The default selected by `0` is exempt from these bounds, so existing
+templates with smaller memory limits remain valid.
+
+A volume mounted exactly at `/dev/shm` replaces the tmpfs. In that case a positive
+`shmSizeBytes` has no effect and is not checked against memory limits; negative
+values are still rejected.
+
+This capacity does not add to the actor's memory budget. Files in `/dev/shm`
+consume that budget, so leave room for the application's other memory use.
+The setting does not change `/tmp`. See [System mounts](sandbox-classes.md#system-mounts-devshm-and-tmp)
+for mount options and snapshot behavior.
 
 ### Container Wakeup Probe (`wakeupProbe`)
 
