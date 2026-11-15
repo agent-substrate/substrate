@@ -94,6 +94,7 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		ActorUID:   uid,
 		EgressPort: s.tunnel.EgressPort,
 		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
+		Families:   s.families,
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()

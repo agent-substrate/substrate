@@ -114,6 +114,7 @@ func (s *AteWorkerService) hostActor(ctx context.Context, attribution resources.
 		Veth:       true,
 		EgressPort: s.tunnel.EgressPort,
 		DNSPolicy:  s.tunnel.ActorEgressPolicy(attribution),
+		Families:   s.families,
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		evict()

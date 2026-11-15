@@ -541,7 +541,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 
 	// Network device: build the actor's tap and add a virtio-net to the created
 	// (pre-boot) VM with its FDs (SCM_RIGHTS).
-	tapFiles, err := setupActorTap(ctx, s.sandboxNetNS(actorUID), "tap0_kata", 1)
+	tapFiles, err := setupActorTap(ctx, s.sandboxNetNS(actorUID), "tap0_kata", 1, s.families)
 	if err != nil {
 		return fmt.Errorf("while building tap: %w", err)
 	}
@@ -597,7 +597,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	tContainers := time.Now()
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, containers, s.families.ActorVethIP(), wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 
@@ -668,7 +668,7 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
 		// Set guest DNS and hosts before serving the rootfs over virtio-fs, on boot and restore.
-		if err := actornet.WriteRootfsEtcFiles(bundleRootfs, ocispec.Hostname); err != nil {
+		if err := actornet.WriteRootfsEtcFiles(bundleRootfs, ocispec.Hostname, s.families); err != nil {
 			return nil, fmt.Errorf("while writing guest /etc files for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
@@ -1040,32 +1040,47 @@ func tailString(s string, n int) string {
 
 // configureGuestNetwork replicates the kata shim's guest network setup over the
 // agent: configure eth0 (IP/MAC/MTU), install the connected + default routes, and
-// pin the gateway's ARP entry to its fixed MAC (so a restored guest's frozen
-// neighbor entry stays valid).
+// pin the gateway's neighbor entry to its fixed MAC (so a restored guest's
+// frozen entry stays valid).
 func (s *AteWorkerService) configureGuestNetwork(ctx context.Context, ac *kata.AgentClient, mtu uint64) error {
+	var addresses []*agentpb.IPAddress
+	var routes []*agentpb.Route
+	var neighbors []*agentpb.ARPNeighbor
+	if s.families.Has(actornet.IPv4) {
+		addresses = append(addresses, &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethIPv4, Mask: "30"})
+		routes = append(routes,
+			&agentpb.Route{Dest: actornet.ActorVethSubnet, Device: actornet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
+			&agentpb.Route{Dest: "", Gateway: actornet.ActorVethGateway, Device: actornet.ActorVethName, Family: agentpb.IPFamily_v4},
+		)
+		neighbors = append(neighbors, &agentpb.ARPNeighbor{
+			ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethGateway},
+			Device:      actornet.ActorVethName, Lladdr: gatewayMAC, State: unix.NUD_PERMANENT,
+		})
+	}
+	if s.families.Has(actornet.IPv6) {
+		addresses = append(addresses, &agentpb.IPAddress{Family: agentpb.IPFamily_v6, Address: actornet.ActorVethIPv6, Mask: "126"})
+		routes = append(routes,
+			&agentpb.Route{Dest: actornet.ActorVethIPv6Subnet, Device: actornet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v6},
+			&agentpb.Route{Dest: "", Gateway: actornet.ActorVethIPv6Gateway, Device: actornet.ActorVethName, Family: agentpb.IPFamily_v6},
+		)
+		neighbors = append(neighbors, &agentpb.ARPNeighbor{
+			ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v6, Address: actornet.ActorVethIPv6Gateway},
+			Device:      actornet.ActorVethName, Lladdr: gatewayMAC, State: unix.NUD_PERMANENT,
+		})
+	}
 	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
-		Device: actornet.ActorVethName,
-		Name:   actornet.ActorVethName,
-		HwAddr: actorGuestMAC,
-		Mtu:    mtu,
-		IPAddresses: []*agentpb.IPAddress{
-			{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethIP, Mask: "30"},
-		},
-	}); err != nil {
-		return err
-	}
-	if err := ac.UpdateRoutes(ctx, []*agentpb.Route{
-		{Dest: actornet.ActorVethSubnet, Device: actornet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
-		{Dest: "", Gateway: actornet.ActorVethGateway, Device: actornet.ActorVethName, Family: agentpb.IPFamily_v4},
-	}); err != nil {
-		return err
-	}
-	return ac.AddARPNeighbors(ctx, []*agentpb.ARPNeighbor{{
-		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actornet.ActorVethGateway},
 		Device:      actornet.ActorVethName,
-		Lladdr:      gatewayMAC,
-		State:       0x80, // NUD_PERMANENT
-	}})
+		Name:        actornet.ActorVethName,
+		HwAddr:      actorGuestMAC,
+		Mtu:         mtu,
+		IPAddresses: addresses,
+	}); err != nil {
+		return err
+	}
+	if err := ac.UpdateRoutes(ctx, routes); err != nil {
+		return err
+	}
+	return ac.AddARPNeighbors(ctx, neighbors)
 }
 
 // waitForFile polls for path to exist, up to d. Used to wait for the kata-agent

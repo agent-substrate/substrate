@@ -139,9 +139,15 @@ func Do(ctx context.Context, targetNS Handle, do func(context.Context) error) er
 	return nil
 }
 
-// Listen opens wildcard TCP listeners inside ns.
+// Listen opens wildcard TCP listeners for network inside ns.
 // Sockets retain their namespace and can be served from another namespace.
-func Listen(ctx context.Context, ns Handle, ports []uint16) (_ []net.Listener, retErr error) {
+func Listen(ctx context.Context, ns Handle, network string, ports []uint16) (_ []net.Listener, retErr error) {
+	host := "0.0.0.0"
+	if network == "tcp6" {
+		host = "::"
+	} else if network != "tcp4" {
+		return nil, fmt.Errorf("unsupported listener network %q", network)
+	}
 	var listeners []net.Listener
 	defer func() {
 		if retErr != nil {
@@ -152,7 +158,7 @@ func Listen(ctx context.Context, ns Handle, ports []uint16) (_ []net.Listener, r
 	}()
 	if err := Do(ctx, ns, func(context.Context) error {
 		for _, port := range ports {
-			l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+			l, err := net.Listen(network, net.JoinHostPort(host, fmt.Sprint(port)))
 			if err != nil {
 				return fmt.Errorf("while listening on port %d: %w", port, err)
 			}

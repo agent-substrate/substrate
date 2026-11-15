@@ -36,64 +36,76 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
 	const egressPort = 15001
-
-	n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
-		ActorUID: "66666666-6666-6666-6666-666666666666", Veth: true, EgressPort: egressPort,
-	})
-	if err != nil {
-		t.Fatalf("SetupSandboxNetwork: %v", err)
-	}
-	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
-
-	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
-	if err != nil {
-		t.Fatalf("netns.Listen: %v", err)
-	}
-	defer listeners[0].Close()
-
-	type capture struct{ destination, payload string }
-	got := make(chan capture, 1)
-	accept := func() {
-		c, err := listeners[0].Accept()
-		if err != nil {
-			return
-		}
-		defer c.Close()
-		dst, err := linuxsys.TCPOriginalDestination(c)
-		if err != nil {
-			t.Errorf("TCPOriginalDestination: %v", err)
-			return
-		}
-		buf := make([]byte, len("hello"))
-		io.ReadFull(c, buf)
-		got <- capture{destination: dst, payload: string(buf)}
-	}
-	go accept()
-
-	for _, want := range []string{"93.184.216.34:443", "93.184.216.34:8080", "93.184.216.34:9999"} {
-		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
-			c, err := net.Dial("tcp", want)
+	for _, tc := range []struct {
+		name         string
+		uid          string
+		families     actornet.IPFamilies
+		network      string
+		destinations []string
+	}{
+		{"IPv4", "66666666-6666-6666-6666-666666666664", actornet.IPv4, "tcp4", []string{"93.184.216.34:443", "93.184.216.34:8080", "93.184.216.34:9999"}},
+		{"IPv6", "66666666-6666-6666-6666-666666666666", actornet.IPv6, "tcp6", []string{"[2001:db8::1]:443", "[2001:db8::1]:8080", "[2001:db8::1]:9999"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := actornet.SetupSandboxNetwork(ctx, actornet.SandboxNetworkConfig{
+				ActorUID: tc.uid, Veth: true, EgressPort: egressPort, Families: tc.families,
+			})
 			if err != nil {
-				return err
+				t.Fatalf("SetupSandboxNetwork: %v", err)
 			}
-			defer c.Close()
-			_, err = io.WriteString(c, "hello")
-			return err
-		}); err != nil {
-			t.Fatalf("sandbox egress dial to %s: %v", want, err)
-		}
-		select {
-		case c := <-got:
-			if c.destination != want {
-				t.Errorf("atunnel saw destination %q, want %q", c.destination, want)
+			t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
+
+			listeners, err := netns.Listen(ctx, n.GatewayNetNS, tc.network, []uint16{egressPort})
+			if err != nil {
+				t.Fatalf("netns.Listen: %v", err)
 			}
-			if c.payload != "hello" {
-				t.Errorf("atunnel read %q, want %q", c.payload, "hello")
+			defer listeners[0].Close()
+
+			type capture struct{ destination, payload string }
+			got := make(chan capture, 1)
+			accept := func() {
+				c, err := listeners[0].Accept()
+				if err != nil {
+					return
+				}
+				defer c.Close()
+				dst, err := linuxsys.TCPOriginalDestination(c)
+				if err != nil {
+					t.Errorf("TCPOriginalDestination: %v", err)
+					return
+				}
+				buf := make([]byte, len("hello"))
+				io.ReadFull(c, buf)
+				got <- capture{destination: dst, payload: string(buf)}
 			}
-		case <-time.After(10 * time.Second):
-			t.Fatalf("the sandbox's connection to %s never reached atunnel", want)
-		}
-		go accept()
+			go accept()
+
+			for _, want := range tc.destinations {
+				if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
+					c, err := net.Dial(tc.network, want)
+					if err != nil {
+						return err
+					}
+					defer c.Close()
+					_, err = io.WriteString(c, "hello")
+					return err
+				}); err != nil {
+					t.Fatalf("sandbox egress dial to %s: %v", want, err)
+				}
+				select {
+				case c := <-got:
+					if c.destination != want {
+						t.Errorf("atunnel saw destination %q, want %q", c.destination, want)
+					}
+					if c.payload != "hello" {
+						t.Errorf("atunnel read %q, want %q", c.payload, "hello")
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatalf("the sandbox's connection to %s never reached atunnel", want)
+				}
+				go accept()
+			}
+		})
 	}
 }
 
@@ -112,7 +124,7 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	}
 	t.Cleanup(func() { actornet.CleanupSandboxNetwork(n) })
 
-	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
+	listeners, err := netns.Listen(ctx, n.GatewayNetNS, "tcp4", []uint16{egressPort})
 	if err != nil {
 		t.Fatalf("netns.Listen: %v", err)
 	}

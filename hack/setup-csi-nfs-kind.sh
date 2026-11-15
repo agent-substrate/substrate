@@ -70,7 +70,7 @@ data:
       listeners:
       - name: csi_tls_listener
         address:
-          socket_address: { address: 0.0.0.0, port_value: 10000 }
+          socket_address: { address: "::", ipv4_compat: true, port_value: 10000 }
         filter_chains:
         - transport_socket:
             name: envoy.transport_sockets.tls

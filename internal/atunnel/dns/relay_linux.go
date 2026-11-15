@@ -26,9 +26,17 @@ import (
 )
 
 // Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource) (*Server, error) {
+func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource, gatewayIP string) (*Server, error) {
 	// Bind the wildcard because the microVM tap's gateway address is added later.
-	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
+	ip := net.ParseIP(gatewayIP)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid sandbox DNS gateway IP %q", gatewayIP)
+	}
+	host := "::"
+	if ip.To4() != nil {
+		host = "0.0.0.0"
+	}
+	address := net.JoinHostPort(host, strconv.Itoa(dnsPort))
 
 	netC := netConn{
 		dialer: *r.dialer,

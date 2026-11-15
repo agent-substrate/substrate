@@ -37,8 +37,8 @@ if [[ $# -gt 0 ]]; then
   esac
 fi
 
-# Only ipFamily is set; kind's per-family podSubnet/serviceSubnet defaults are
-# already what we want.
+# kind's singular ipFamily field accepts ipv4, ipv6, or dual. Its per-family
+# podSubnet and serviceSubnet defaults are already what we want.
 IP_FAMILY="${IP_FAMILY:-ipv4}"
 case "${IP_FAMILY}" in
   ipv4|ipv6|dual)
@@ -176,7 +176,8 @@ fi
 if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   server="$(kubectl config view \
     -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
-  if [[ "${server}" == "https://[::1]:"* ]]; then
+  if [[ "${server}" == "https://[::1]:"* ]] &&
+      ! kubectl --context="${KUBECTL_CONTEXT}" get --raw=/readyz >/dev/null 2>&1; then
     echo "Repointing the kubeconfig for '${KUBECTL_CONTEXT}' at localhost..."
     kubectl config set-cluster "${KUBECTL_CONTEXT}" \
       --server="https://localhost:${server##*:}" >/dev/null
@@ -227,6 +228,20 @@ done
 echo "Connecting local registry to cluster network..."
 if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}")" = "null" ]; then
   docker network connect "kind" "${reg_name}"
+fi
+
+if [[ "${IP_FAMILY}" == "ipv6" ]]; then
+  # atelet resolves its kind-registry image-cache endpoint through CoreDNS.
+  # Give IPv6-only pods the registry container's address on the kind network.
+  registry_ip="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").GlobalIPv6Address}}' "${reg_name}")"
+  corefile="$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get configmap coredns -o go-template='{{index .data "Corefile"}}')"
+  hosts=$'    hosts {\n        '"${registry_ip} ${reg_name}"$'\n        fallthrough\n    }\n'
+  corefile="${corefile/    forward/${hosts}    forward}"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system create configmap coredns \
+    --from-literal=Corefile="${corefile}" --dry-run=client -o yaml |
+    kubectl --context="${KUBECTL_CONTEXT}" apply -f -
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout restart deployment/coredns
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status deployment/coredns --timeout=120s
 fi
 
 # 5. Document the local registry in kube-public ConfigMap

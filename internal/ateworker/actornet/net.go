@@ -20,19 +20,19 @@ package actornet
 import (
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 const (
-	ActorVethName    = "eth0"
-	ActorVethGateway = "169.254.17.1"
-	ActorVethIP      = "169.254.17.2"
-
-	// ActorHTTPUpstream is the in-sandbox HTTP endpoint atunnel proxies actor
-	// ingress to.
-	ActorHTTPUpstream = "http://" + ActorVethIP + ":80"
+	ActorVethName        = "eth0"
+	ActorVethGateway     = "169.254.17.1"
+	ActorVethIPv4        = "169.254.17.2"
+	ActorVethIPv6Gateway = "fd00:169:254::1"
+	ActorVethIPv6        = "fd00:169:254::2"
 
 	// hostVethLocalAddress is the gateway interface's IP address and prefix length.
 	hostVethLocalAddress = "169.254.17.1/30"
@@ -41,13 +41,78 @@ const (
 
 	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
 	ActorVethSubnet = "169.254.17.0/30"
+	// ActorVethIPv6Subnet is the point-to-point /126 the actor veth lives on.
+	ActorVethIPv6Subnet = "fd00:169:254::/126"
 )
 
 var (
-	HostVethAddr  = MustParseAddr(hostVethLocalAddress)
-	ActorVethAddr = MustParseAddr(actorVethLocalAddress)
-	ActorVethGwIP = MustParseIP(ActorVethGateway)
+	HostVethAddr      = MustParseAddr(hostVethLocalAddress)
+	ActorVethAddr     = MustParseAddr(actorVethLocalAddress)
+	ActorVethGwIP     = MustParseIP(ActorVethGateway)
+	HostVethIPv6Addr  = mustParseIPv6VethAddr(ActorVethIPv6Gateway + "/126")
+	ActorVethIPv6Addr = mustParseIPv6VethAddr(ActorVethIPv6 + "/126")
+	ActorVethIPv6GwIP = MustParseIP(ActorVethIPv6Gateway)
 )
+
+func mustParseIPv6VethAddr(cidr string) *netlink.Addr {
+	addr := MustParseAddr(cidr)
+	// NODAD keeps each new veth address usable immediately instead of tentative for about one second.
+	addr.Flags = unix.IFA_F_NODAD
+	return addr
+}
+
+// IPFamilies is the set of IP families assigned to a worker Pod and its actors.
+type IPFamilies uint8
+
+const (
+	IPv4 IPFamilies = 1 << iota
+	IPv6
+)
+
+// IPFamiliesForPodIPs returns the address families Kubernetes assigned to a worker Pod.
+func IPFamiliesForPodIPs(podIPs []string) (IPFamilies, error) {
+	var families IPFamilies
+	for _, value := range podIPs {
+		ip, err := netip.ParseAddr(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid worker Pod IP %q: %w", value, err)
+		}
+		if ip.Is4() {
+			families |= IPv4
+		} else {
+			families |= IPv6
+		}
+	}
+	if families == 0 {
+		return 0, fmt.Errorf("worker Pod has no IP addresses")
+	}
+	return families, nil
+}
+
+// Has reports whether families contains family.
+func (f IPFamilies) Has(family IPFamilies) bool { return f&family != 0 }
+
+// ActorVethIP is the address used for local ingress and probes. IPv4 remains the
+// primary address on dual-stack workers.
+func (f IPFamilies) ActorVethIP() string {
+	if f == IPv6 {
+		return ActorVethIPv6
+	}
+	return ActorVethIPv4
+}
+
+// GatewayIP is the address of the sandbox's DNS relay.
+func (f IPFamilies) GatewayIP() string {
+	if f == IPv6 {
+		return ActorVethIPv6Gateway
+	}
+	return ActorVethGateway
+}
+
+// ActorHTTPUpstream is the in-sandbox endpoint atunnel proxies actor ingress to.
+func (f IPFamilies) ActorHTTPUpstream() string {
+	return "http://" + net.JoinHostPort(f.ActorVethIP(), "80")
+}
 
 // MustParseAddr parses a CIDR string into a netlink.Addr, panicking on error.
 func MustParseAddr(cidr string) *netlink.Addr {
@@ -58,11 +123,11 @@ func MustParseAddr(cidr string) *netlink.Addr {
 	return a
 }
 
-// MustParseIP parses an IPv4 string into a net.IP, panicking on error.
+// MustParseIP parses an IP address, panicking on error.
 func MustParseIP(s string) net.IP {
-	ip := net.ParseIP(s).To4()
+	ip := net.ParseIP(s)
 	if ip == nil {
-		panic(fmt.Sprintf("parsing constant IPv4 %q", s))
+		panic(fmt.Sprintf("parsing constant IP %q", s))
 	}
 	return ip
 }

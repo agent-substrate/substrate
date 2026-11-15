@@ -229,6 +229,15 @@ func TestTheNFSDriverConfigEnablesTLSAgainstTheControllerService(t *testing.T) {
 	}
 }
 
+func TestTheNFSControllerListensOnIPv4AndIPv6(t *testing.T) {
+	var configMap corev1.ConfigMap
+	decodeYAML(t, "csiNFSEnvoyConfigMap", csiNFSEnvoyConfigMap("spiffe://test"), &configMap)
+	want := `socket_address: { address: "::", ipv4_compat: true, port_value: 10000 }`
+	if !strings.Contains(configMap.Data["envoy.yaml"], want) {
+		t.Errorf("Envoy listener does not contain %q", want)
+	}
+}
+
 // hack/setup-csi-nfs-kind.sh is the same install by hand and must keep the same security decisions.
 func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 	script, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "setup-csi-nfs-kind.sh"))
@@ -243,6 +252,7 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
+		`socket_address: { address: "::", ipv4_compat: true, port_value: 10000 }`,
 		"require_client_certificate: true",
 		"serverName: csi-nfs-controller.kube-system.svc\n",
 		"usePodIdentity: true",
