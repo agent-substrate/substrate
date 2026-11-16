@@ -116,9 +116,6 @@ volumeMounts:
 * `name`: Must match the declared `volumes[].name`.
 * `mountPath`: Unix path inside the container sandbox where the volume will be mounted.
 
-> [!NOTE]
-> All declared volumes in `volumes` must be mounted by at least one container.
-
 ---
 
 ## 4. End-to-End Example
