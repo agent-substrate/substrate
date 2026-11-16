@@ -31,7 +31,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -41,18 +40,36 @@ import (
 	internaloidc "go.ate.dev/substrate/internal/oidcjwt"
 )
 
-// Kind represents the kind of actor token.
+// MaxJWTSize is the largest token, in bytes, Verify accepts.
+const MaxJWTSize = 8 << 10
+
+// Kind represents who an actor token speaks for.
 type Kind int
 
 const (
 	// KindUnspecified is the zero value indicating an unrecognized token kind.
 	KindUnspecified Kind = iota
-	// KindActor represents a token minted directly for an actor itself.
+
+	// KindActor represents a token minted for an actor itself. Egress gateways
+	// inject KindActor tokens into outbound requests matching an ActorJwtSource
+	// egress rule.
 	KindActor
-	// KindWorkerForActor represents a token minted for a worker/component acting
-	// on behalf of the actor.
+
+	// KindWorkerForActor represents a token minted for a Substrate component
+	// or worker acting on behalf of an actor (e.g. transfer and storage exchanges).
 	KindWorkerForActor
 )
+
+func (k Kind) String() string {
+	switch k {
+	case KindActor:
+		return "actor"
+	case KindWorkerForActor:
+		return "worker-for-actor"
+	default:
+		return "unspecified"
+	}
+}
 
 // ActorClaims contains Substrate-specific actor identity and placement claims.
 type ActorClaims struct {
@@ -81,39 +98,26 @@ type Claims struct {
 // Config configures the Verifier.
 type Config struct {
 	// Issuer is the OIDC issuer URL (e.g. "https://ate-idp-server.ate-system.svc").
-	// It is required.
+	// It is required. It must be https:// followed by a host and optional port,
+	// with no path, query or fragment.
 	Issuer string
 
-	// IssuerCAFile is the path to an optional PEM CA bundle that verifies the
-	// issuer's serving certificate. For an issuer whose host ends in .svc, it
-	// is the only trusted bundle. For external issuers, system roots are trusted
-	// as well. It is re-read when the file changes.
+	// IssuerCAFile is the path to a PEM CA bundle that verifies the issuer's
+	// serving certificate. For an issuer whose host ends in .svc, it is the
+	// only trusted bundle. For external issuers, system roots are trusted as
+	// well. It is required. It is re-read when the file changes.
 	IssuerCAFile string
 
 	// Audiences is the list of acceptable audiences. At least one audience is required.
 	Audiences []string
-
-	// DiscoveryTokenFile is an optional path to a bearer token file injected into
-	// discovery and JWKS requests.
-	DiscoveryTokenFile string
-
-	// ClockSkew is the permitted clock skew when validating time claims.
-	// If zero, the default 5 minutes is used.
-	ClockSkew time.Duration
-
-	// HTTPClient is an optional custom HTTP client for discovery and JWKS requests.
-	// When provided, IssuerCAFile and DiscoveryTokenFile are ignored.
-	HTTPClient *http.Client
 }
 
 // Verifier verifies Substrate actor tokens using OIDC discovery. It is safe for
 // concurrent use.
 type Verifier struct {
-	issuer     string
-	audiences  []string
-	inner      *internaloidc.Verifier
-	httpClient *http.Client
-	ownsClient bool
+	issuer    string
+	audiences []string
+	inner     *internaloidc.Verifier
 }
 
 // New returns a Verifier configured with cfg. It immediately discovers the
@@ -125,30 +129,20 @@ func New(ctx context.Context, cfg Config) (*Verifier, error) {
 	if err := actoridjwt.ValidateIssuer(cfg.Issuer); err != nil {
 		return nil, fmt.Errorf("oidcjwt: %w", err)
 	}
+	if cfg.IssuerCAFile == "" {
+		return nil, errors.New("oidcjwt: IssuerCAFile is required")
+	}
 	if len(cfg.Audiences) == 0 {
 		return nil, errors.New("oidcjwt: at least one audience is required")
 	}
 
-	client := cfg.HTTPClient
-	ownsClient := false
-	if client == nil {
-		var err error
-		if cfg.IssuerCAFile != "" {
-			loadRoots, err := issuerRoots(cfg.Issuer, cfg.IssuerCAFile)
-			if err != nil {
-				return nil, fmt.Errorf("oidcjwt: %w", err)
-			}
-			client, err = internaloidc.NewHTTPClientWithRoots(loadRoots)
-			if err != nil {
-				return nil, fmt.Errorf("oidcjwt: setting up HTTP client: %w", err)
-			}
-		} else {
-			client, err = internaloidc.NewHTTPClient(cfg.Issuer, "", cfg.DiscoveryTokenFile)
-			if err != nil {
-				return nil, fmt.Errorf("oidcjwt: setting up HTTP client: %w", err)
-			}
-		}
-		ownsClient = true
+	loadRoots, err := issuerRoots(cfg.Issuer, cfg.IssuerCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("oidcjwt: %w", err)
+	}
+	client, err := internaloidc.NewHTTPClientWithRoots(loadRoots)
+	if err != nil {
+		return nil, fmt.Errorf("oidcjwt: setting up HTTP client: %w", err)
 	}
 
 	opts := []internaloidc.Option{
@@ -159,37 +153,27 @@ func New(ctx context.Context, cfg Config) (*Verifier, error) {
 	inner := internaloidc.NewVerifier(cfg.Issuer, cfg.Audiences, keySource, opts...)
 
 	if err := inner.Refresh(ctx, time.Now()); err != nil {
-		if ownsClient {
-			client.CloseIdleConnections()
-		}
+		client.CloseIdleConnections()
 		return nil, fmt.Errorf("oidcjwt: warming key source: %w", err)
 	}
 
 	return &Verifier{
-		issuer:     cfg.Issuer,
-		audiences:  cfg.Audiences,
-		inner:      inner,
-		httpClient: client,
-		ownsClient: ownsClient,
+		issuer:    cfg.Issuer,
+		audiences: cfg.Audiences,
+		inner:     inner,
 	}, nil
-}
-
-// Close closes idle HTTP connections if the client was created by New.
-func (v *Verifier) Close() error {
-	if v.ownsClient && v.httpClient != nil {
-		v.httpClient.CloseIdleConnections()
-	}
-	return nil
 }
 
 // Verify validates rawJWT against the issuer's keys and returns the parsed claims.
 func (v *Verifier) Verify(ctx context.Context, rawJWT string) (*Claims, error) {
-	return v.VerifyAt(ctx, rawJWT, time.Now())
-}
+	if rawJWT == "" {
+		return nil, errors.New("oidcjwt: rawJWT is required")
+	}
+	if len(rawJWT) > MaxJWTSize {
+		return nil, fmt.Errorf("oidcjwt: rawJWT is longer than %d bytes", MaxJWTSize)
+	}
 
-// VerifyAt validates rawJWT as of the specified time.
-func (v *Verifier) VerifyAt(ctx context.Context, rawJWT string, now time.Time) (*Claims, error) {
-	parsed, err := v.inner.Verify(ctx, rawJWT, now)
+	parsed, err := v.inner.Verify(ctx, rawJWT, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -201,17 +185,25 @@ func (v *Verifier) VerifyAt(ctx context.Context, rawJWT string, now time.Time) (
 	case actoridjwt.KindWorkerForActor:
 		kind = KindWorkerForActor
 	default:
-		kind = KindUnspecified
+		return nil, errors.New("oidcjwt: token carries neither actor.ate.dev nor worker-for-actor.ate.dev claim")
 	}
 
-	var actorClaims *ActorClaims
-	if sub := parsed.SubstrateClaims.Substrate; sub != nil {
-		actorClaims = &ActorClaims{
-			Atespace:  sub.Atespace,
-			ActorName: sub.ActorName,
-			ActorUID:  sub.ActorUID,
-			Node:      sub.Node,
-		}
+	sub := parsed.SubstrateClaims.Substrate
+	if sub == nil || sub.Atespace == "" || sub.ActorName == "" || sub.ActorUID == "" {
+		return nil, errors.New("oidcjwt: actor token must carry atespace, actor name, and actor UID")
+	}
+	if kind == KindWorkerForActor && sub.Node == "" {
+		return nil, errors.New("oidcjwt: worker-for-actor token must carry node")
+	}
+	if kind == KindActor && sub.Node != "" {
+		return nil, errors.New("oidcjwt: an actor token carries no node")
+	}
+
+	actorClaims := &ActorClaims{
+		Atespace:  sub.Atespace,
+		ActorName: sub.ActorName,
+		ActorUID:  sub.ActorUID,
+		Node:      sub.Node,
 	}
 
 	return &Claims{

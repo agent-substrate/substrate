@@ -27,6 +27,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,7 +134,6 @@ func TestVerifyActorToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer verifier.Close()
 
 	now := time.Now()
 	claims := map[string]any{
@@ -179,6 +179,9 @@ func TestVerifyActorToken(t *testing.T) {
 	if verified.ActorClaims.ActorUID != "uid-9999" {
 		t.Errorf("got ActorUID %q, want uid-9999", verified.ActorClaims.ActorUID)
 	}
+	if verified.ActorClaims.Node != "" {
+		t.Errorf("got Node %q, want empty for actor token", verified.ActorClaims.Node)
+	}
 }
 
 func TestVerifyWorkerForActorToken(t *testing.T) {
@@ -199,7 +202,6 @@ func TestVerifyWorkerForActorToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer verifier.Close()
 
 	now := time.Now()
 	claims := map[string]any{
@@ -236,6 +238,137 @@ func TestVerifyWorkerForActorToken(t *testing.T) {
 	}
 }
 
+func TestVerifyRejectsUnspecifiedOrMissingActorClaims(t *testing.T) {
+	ti := newTestIssuer(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	ti.addRSAKey("test-key", &key.PublicKey)
+
+	cfg := oidcjwt.Config{
+		Issuer:       ti.server.URL,
+		IssuerCAFile: ti.caFile,
+		Audiences:    []string{testAudience},
+	}
+
+	verifier, err := oidcjwt.New(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	now := time.Now()
+
+	tests := []struct {
+		name   string
+		claims map[string]any
+	}{
+		{
+			name: "token with neither actor nor worker-for-actor claim",
+			claims: map[string]any{
+				"iss": ti.server.URL,
+				"sub": "some-subject",
+				"aud": []string{testAudience},
+				"exp": now.Add(time.Hour).Unix(),
+			},
+		},
+		{
+			name: "actor claim is empty object",
+			claims: map[string]any{
+				"iss":           ti.server.URL,
+				"sub":           "actor/test-atespace/test-actor",
+				"aud":           []string{testAudience},
+				"exp":           now.Add(time.Hour).Unix(),
+				"actor.ate.dev": map[string]any{},
+			},
+		},
+		{
+			name: "actor claim missing actorUID",
+			claims: map[string]any{
+				"iss": ti.server.URL,
+				"sub": "actor/test-atespace/test-actor",
+				"aud": []string{testAudience},
+				"exp": now.Add(time.Hour).Unix(),
+				"actor.ate.dev": map[string]any{
+					"atespace":  "test-atespace",
+					"actorName": "test-actor",
+				},
+			},
+		},
+		{
+			name: "worker-for-actor claim missing node",
+			claims: map[string]any{
+				"iss": ti.server.URL,
+				"sub": "worker-for-actor/test-atespace/test-actor",
+				"aud": []string{testAudience},
+				"exp": now.Add(time.Hour).Unix(),
+				"worker-for-actor.ate.dev": map[string]any{
+					"atespace":  "test-atespace",
+					"actorName": "test-actor",
+					"actorUID":  "uid-9999",
+				},
+			},
+		},
+		{
+			name: "actor claim carries node",
+			claims: map[string]any{
+				"iss": ti.server.URL,
+				"sub": "actor/test-atespace/test-actor",
+				"aud": []string{testAudience},
+				"exp": now.Add(time.Hour).Unix(),
+				"actor.ate.dev": map[string]any{
+					"atespace":  "test-atespace",
+					"actorName": "test-actor",
+					"actorUID":  "uid-9999",
+					"node":      "forbidden-node",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawJWT := mintTestJWT(t, "test-key", key, tt.claims)
+			if claims, err := verifier.Verify(t.Context(), rawJWT); err == nil {
+				t.Fatalf("expected Verify() to fail for %s, got claims: %+v", tt.name, claims)
+			}
+		})
+	}
+}
+
+func TestVerifyRejectsEmptyAndOversizedToken(t *testing.T) {
+	ti := newTestIssuer(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	ti.addRSAKey("test-key", &key.PublicKey)
+
+	cfg := oidcjwt.Config{
+		Issuer:       ti.server.URL,
+		IssuerCAFile: ti.caFile,
+		Audiences:    []string{testAudience},
+	}
+
+	verifier, err := oidcjwt.New(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	t.Run("empty token", func(t *testing.T) {
+		if _, err := verifier.Verify(t.Context(), ""); err == nil {
+			t.Fatal("expected error for empty token, got nil")
+		}
+	})
+
+	t.Run("oversized token exceeding MaxJWTSize", func(t *testing.T) {
+		oversized := strings.Repeat("a", oidcjwt.MaxJWTSize+1)
+		if _, err := verifier.Verify(t.Context(), oversized); err == nil {
+			t.Fatal("expected error for oversized token, got nil")
+		}
+	})
+}
+
 func TestVerifyRejectsAudienceMismatch(t *testing.T) {
 	ti := newTestIssuer(t)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -254,13 +387,17 @@ func TestVerifyRejectsAudienceMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer verifier.Close()
 
 	claims := map[string]any{
 		"iss": ti.server.URL,
 		"sub": "actor/test/bot",
 		"aud": []string{"wrong-audience"},
 		"exp": time.Now().Add(time.Hour).Unix(),
+		"actor.ate.dev": map[string]any{
+			"atespace":  "test",
+			"actorName": "bot",
+			"actorUID":  "uid-1",
+		},
 	}
 	rawJWT := mintTestJWT(t, "aud-key", key, claims)
 
@@ -287,7 +424,6 @@ func TestVerifyRejectsExpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer verifier.Close()
 
 	// More than 5 minutes skew in the past
 	expiredAt := time.Now().Add(-10 * time.Minute)
@@ -296,6 +432,11 @@ func TestVerifyRejectsExpiredToken(t *testing.T) {
 		"sub": "actor/test/bot",
 		"aud": []string{testAudience},
 		"exp": expiredAt.Unix(),
+		"actor.ate.dev": map[string]any{
+			"atespace":  "test",
+			"actorName": "bot",
+			"actorUID":  "uid-1",
+		},
 	}
 	rawJWT := mintTestJWT(t, "exp-key", key, claims)
 
@@ -308,12 +449,22 @@ func TestConfigValidation(t *testing.T) {
 	ctx := t.Context()
 
 	// Missing Issuer
-	if _, err := oidcjwt.New(ctx, oidcjwt.Config{Audiences: []string{"aud"}}); err == nil {
+	if _, err := oidcjwt.New(ctx, oidcjwt.Config{IssuerCAFile: "ca.pem", Audiences: []string{"aud"}}); err == nil {
 		t.Error("expected error for missing Issuer, got nil")
 	}
 
+	// Invalid Issuer scheme
+	if _, err := oidcjwt.New(ctx, oidcjwt.Config{Issuer: "http://insecure.example.com", IssuerCAFile: "ca.pem", Audiences: []string{"aud"}}); err == nil {
+		t.Error("expected error for non-https Issuer, got nil")
+	}
+
+	// Missing IssuerCAFile
+	if _, err := oidcjwt.New(ctx, oidcjwt.Config{Issuer: "https://example.com", Audiences: []string{"aud"}}); err == nil {
+		t.Error("expected error for missing IssuerCAFile, got nil")
+	}
+
 	// Missing Audiences
-	if _, err := oidcjwt.New(ctx, oidcjwt.Config{Issuer: "https://example.com"}); err == nil {
+	if _, err := oidcjwt.New(ctx, oidcjwt.Config{Issuer: "https://example.com", IssuerCAFile: "ca.pem"}); err == nil {
 		t.Error("expected error for missing Audiences, got nil")
 	}
 }
