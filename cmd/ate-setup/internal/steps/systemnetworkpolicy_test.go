@@ -16,6 +16,7 @@ package steps
 
 import (
 	"maps"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -517,3 +518,64 @@ func TestSystemNetworkPoliciesLeastPrivilege(t *testing.T) {
 // workerPoolLabelForTest is the label the WorkerPool controller puts on
 // worker pods (cmd/atecontroller/internal/controllers/workerpool_apply.go).
 const workerPoolLabelForTest = "ate.dev/worker-pool"
+
+// The egress gateway dials on an actor's behalf, so it must not reach the
+// metadata server, but it still needs every pod: the API, DNS, credentials.
+func TestSystemNetworkPoliciesKeepEgressGatewayOffMetadata(t *testing.T) {
+	metadata := []string{"169.254.169.254", "169.254.169.252", "fd20:ce::254", "fd00:ec2::254"}
+	for _, cfg := range installConfigs() {
+		t.Run(installName(cfg), func(t *testing.T) {
+			in := loadSystemInstall(t, cfg)
+			egress := in.pod(t, "atenet-egress")
+			var rules []networkingv1.NetworkPolicyEgressRule
+			for _, np := range in.policies {
+				if slices.Contains(np.Spec.PolicyTypes, networkingv1.PolicyTypeEgress) &&
+					mustSelector(t, &np.Spec.PodSelector).Matches(labels.Set(egress.labels)) {
+					rules = append(rules, np.Spec.Egress...)
+				}
+			}
+			if len(rules) == 0 {
+				t.Fatal("no egress NetworkPolicy selects atenet-egress")
+			}
+			allPods := false
+			for _, rule := range rules {
+				if len(rule.To) == 0 {
+					t.Errorf("an egress rule of atenet-egress admits every destination: %+v", rule)
+				}
+				for _, peer := range rule.To {
+					if peer.NamespaceSelector != nil && mustSelector(t, peer.NamespaceSelector).Empty() && peer.PodSelector == nil && len(rule.Ports) == 0 {
+						allPods = true
+					}
+					if peer.IPBlock == nil {
+						continue
+					}
+					for _, addr := range metadata {
+						if ipBlockAdmits(t, peer.IPBlock, addr) {
+							t.Errorf("atenet-egress may reach the metadata server at %s through %+v", addr, peer.IPBlock)
+						}
+					}
+				}
+			}
+			if !allPods {
+				t.Error("atenet-egress cannot reach every pod, and it needs the API, DNS and the credential providers")
+			}
+		})
+	}
+}
+
+// ipBlockAdmits reports whether addr is in block and not in its exceptions.
+func ipBlockAdmits(t *testing.T, block *networkingv1.IPBlock, addr string) bool {
+	t.Helper()
+	ip := netip.MustParseAddr(addr)
+	contains := func(cidr string) bool {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			t.Fatalf("ipBlock %q: %v", cidr, err)
+		}
+		return prefix.Contains(ip)
+	}
+	if !contains(block.CIDR) {
+		return false
+	}
+	return !slices.ContainsFunc(block.Except, contains)
+}

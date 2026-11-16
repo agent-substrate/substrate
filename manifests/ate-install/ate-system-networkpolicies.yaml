@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Ingress NetworkPolicies for the ate-system control plane.
+# Ingress NetworkPolicies for the ate-system control plane, and an egress one
+# that restricts the egress gateway from reaching the metadata server.
 #
 # Every pod in ate-system is denied ingress by default; the policies below
 # admit only the flows the control plane needs. NetworkPolicies are additive,
@@ -204,6 +205,35 @@ spec:
     ports:
     - protocol: TCP
       port: https
+---
+# The egress gateway dials whatever an actor's policy allows, so it must not
+# reach the metadata server and the credentials it hands out.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: atenet-egress-no-metadata
+  namespace: ate-system
+spec:
+  podSelector:
+    matchLabels:
+      app: atenet-egress
+  policyTypes:
+  - Egress
+  egress:
+  # An ipBlock may not cover pod IPs, so pods are allowed by selector.
+  - to:
+    - namespaceSelector: {}
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32 # metadata server
+        - 169.254.169.252/32 # where GKE redirects it
+    - ipBlock:
+        cidr: ::/0
+        except:
+        - fd20:ce::254/128 # metadata server on GCE
+        - fd00:ec2::254/128 # metadata server on AWS
 ---
 # Metrics and health endpoints. Kubelet probes come from the node and scrapers
 # run in whatever namespace the monitoring stack uses (GKE Managed Prometheus,

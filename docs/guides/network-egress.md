@@ -53,6 +53,8 @@ status or a particular resolver error string.
 
 In substrate, we consider everything originating from the actor to be untrusted. The egress PEP MUST NOT trust any decision or attestation coming from the actor itself; it MUST instead trust only information carried through substrate-controlled channels (e.g. the actor certificate and the CONNECT request produced by atunnel). For example, the PEP MUST NOT treat an actor-provided HTTP hostname or TLS SNI as proof that the original destination has that name. The PEP MAY use the hostname as a policy input, but when authorization is based on that hostname, it MUST route the traffic to the authorized hostname rather than use the hostname to authorize an arbitrary IP address from the CONNECT request.
 
+The PEP connects on the actor's behalf from inside the cluster, so it MUST NOT reach the node's metadata server, which would hand out the PEP's credentials. Substrate blocks it with an egress NetworkPolicy on `atenet-egress`. A rule that matches every host (`*`) still reaches other cluster and private destinations, so internal services that accept the PEP need their own authentication.
+
 ## Server-side TLS
 
 The egress PEP MUST serve TLS using a certificate that is valid for the configured PEP hostname and chains to a CA trusted by `atunnel`. `atunnel` uses the configured PEP hostname as the TLS server name and MUST reject the connection if it cannot verify the PEP's certificate.

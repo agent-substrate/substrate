@@ -117,7 +117,7 @@
     "threat": "Malicious actor gains access to the underlying node via node-local endpoints exposed on the network",
     "mitigating_invariants": "Network policies must prevent the actor from accessing system services on the node (e.g. instance metadata, host network namespace, host network interface).",
     "suggested_concrete_mitigations": "Per-actor network namespace, no host network access. Block node-local services such as instance metadata. Targeted ingress policies on host services.",
-    "notes": ""
+    "notes": "The egress gateway dials on actors' behalf, so an egress NetworkPolicy restricts its access to the metadata server."
   },
   {
     "threat_id": "T-17",
