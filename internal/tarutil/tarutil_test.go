@@ -219,6 +219,213 @@ func TestRoundTripLargeFile(t *testing.T) {
 	}
 }
 
+// A sparse file takes the same space after a round trip. Zeros the source
+// wrote, and a fully fallocated file, stay allocated: a zero-filled WAL
+// segment or a swap file relies on that.
+func TestRoundTripHoles(t *testing.T) {
+	const mib = 1 << 20
+	var fs unix.Statfs_t
+	if err := unix.Statfs(t.TempDir(), &fs); err != nil {
+		t.Fatal(err)
+	}
+	// a hole is at least a block or a page
+	blk := max(int64(fs.Bsize), int64(os.Getpagesize()))
+	data := func(n int64) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = byte(i%251) + 1
+		}
+		return b
+	}
+	for _, tc := range []struct {
+		name string
+		fill func(f *os.File) error
+		// holes is how many holes the archive records.
+		holes int
+		// sameAlloc is whether the extracted file takes the source's space.
+		sameAlloc bool
+	}{
+		{
+			name: "data between holes",
+			fill: func(f *os.File) error {
+				if _, err := f.WriteAt(data(mib), mib); err != nil {
+					return err
+				}
+				if _, err := f.WriteAt(data(mib), 5*mib); err != nil {
+					return err
+				}
+				return f.Truncate(8 * mib)
+			},
+			holes:     3,
+			sameAlloc: true,
+		},
+		{
+			name:      "only a hole",
+			fill:      func(f *os.File) error { return f.Truncate(8 * mib) },
+			holes:     1,
+			sameAlloc: true,
+		},
+		{
+			name: "written zeros",
+			fill: func(f *os.File) error {
+				if _, err := f.Write(make([]byte, 4*mib)); err != nil {
+					return err
+				}
+				return f.Truncate(8 * mib)
+			},
+			holes:     1,
+			sameAlloc: true,
+		},
+		{
+			name:      "fallocated",
+			fill:      func(f *os.File) error { return unix.Fallocate(int(f.Fd()), 0, 0, 8*mib) },
+			sameAlloc: true,
+		},
+		{
+			name: "more holes than recorded",
+			fill: func(f *os.File) error {
+				for i := range int64(maxHoles + 1) {
+					if _, err := f.WriteAt([]byte{1}, (2*i+1)*blk); err != nil {
+						return err
+					}
+				}
+				return f.Truncate((2*maxHoles + 2) * blk)
+			},
+			holes: maxHoles,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := t.TempDir()
+			f, err := os.Create(filepath.Join(src, "f"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.fill(f); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			tarPath := filepath.Join(t.TempDir(), "out.tar")
+			if err := Create(t.Context(), tarPath, src); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			a, err := os.Open(tarPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			hdr, err := tar.NewReader(a).Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			holes, err := parseHoles(hdr)
+			if err != nil {
+				t.Fatalf("parseHoles: %v", err)
+			}
+			if len(holes) != tc.holes {
+				t.Errorf("archive records %d holes, want %d", len(holes), tc.holes)
+			}
+
+			dst := t.TempDir()
+			if err := Extract(tarPath, dst); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			want, err := os.ReadFile(filepath.Join(src, "f"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(dst, "f"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("extracted %d bytes that differ from the %d archived", len(got), len(want))
+			}
+			if !tc.sameAlloc {
+				return
+			}
+			allocated := func(path string) int64 {
+				fi, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return fi.Sys().(*syscall.Stat_t).Blocks * 512
+			}
+			// filesystem metadata can take a few more blocks on either side
+			srcAlloc, dstAlloc := allocated(filepath.Join(src, "f")), allocated(filepath.Join(dst, "f"))
+			if d := dstAlloc - srcAlloc; d > 16*blk || d < -16*blk {
+				t.Errorf("extracted file takes %d bytes, source %d", dstAlloc, srcAlloc)
+			}
+		})
+	}
+}
+
+// A hole record only decides which zeros Extract leaves unwritten: data in a
+// recorded hole is still written, and an invalid record is ignored.
+func TestExtractHoleRecords(t *testing.T) {
+	// big enough that no filesystem stores the file inline
+	const size = 64 << 10
+	zeros, data := make([]byte, size), bytes.Repeat([]byte("x"), size)
+	for _, tc := range []struct {
+		name string
+		body []byte
+		rec  string
+		// sparse is whether the file comes back with no blocks allocated.
+		sparse bool
+	}{
+		{name: "zeros in a hole", body: zeros, rec: "0,65536", sparse: true},
+		{name: "data in a hole", body: data, rec: "0,65536"},
+		{name: "odd number of fields", body: zeros, rec: "0"},
+		{name: "not a number", body: zeros, rec: "0,x"},
+		{name: "empty hole", body: zeros, rec: "0,0"},
+		{name: "overlapping holes", body: zeros, rec: "0,8192,4096,4096"},
+		{name: "past the end", body: zeros, rec: "4096,65536"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			tw := tar.NewWriter(&b)
+			if err := tw.WriteHeader(&tar.Header{
+				Name: "f", Typeflag: tar.TypeReg, Mode: 0o644, Size: size,
+				PAXRecords: map[string]string{paxHoles: tc.rec},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(tc.body); err != nil {
+				t.Fatal(err)
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			tarPath := filepath.Join(t.TempDir(), "holes.tar")
+			if err := os.WriteFile(tarPath, b.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			dst := t.TempDir()
+			if err := Extract(tarPath, dst); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			path := filepath.Join(dst, "f")
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, tc.body) {
+				t.Errorf("extracted %d bytes that differ from the %d archived", len(got), len(tc.body))
+			}
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if blocks := fi.Sys().(*syscall.Stat_t).Blocks; (blocks == 0) != tc.sparse {
+				t.Errorf("file has %d blocks allocated, want sparse = %v", blocks, tc.sparse)
+			}
+		})
+	}
+}
+
 func TestCreateEmptyDir(t *testing.T) {
 	tarPath := filepath.Join(t.TempDir(), "empty.tar")
 	if err := Create(t.Context(), tarPath, t.TempDir()); err != nil {
