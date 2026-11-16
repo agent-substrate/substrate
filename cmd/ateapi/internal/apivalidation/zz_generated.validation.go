@@ -452,6 +452,36 @@ func Validate_ActorCrash(
 		errs = append(errs, fn(fldPath.Child("crash_time"), obj.CrashTime, oldVal, oldObj != nil)...)
 	}
 
+	{ // field v1.ActorCrash.Detail
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.CrashDetail,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_CrashDetail(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ActorCrash) *v1.CrashDetail {
+				return oldObj.Detail
+			})
+		errs = append(errs, fn(fldPath.Child("detail"), obj.Detail, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -2139,6 +2169,164 @@ func Validate_Container(
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_CrashDetail validates an instance of CrashDetail according
+// to declarative validation rules in the API schema.
+func Validate_CrashDetail(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *v1.CrashDetail) (errs field.ErrorList) {
+
+	{ // field v1.CrashDetail.Reason
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.CrashReason,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CrashDetail) *v1.CrashReason {
+				return &oldObj.Reason
+			})
+		errs = append(errs, fn(fldPath.Child("reason"), &obj.Reason, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.CrashDetail.ContainerName
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CrashDetail) *string {
+				return &oldObj.ContainerName
+			})
+		errs = append(errs, fn(fldPath.Child("container_name"), &obj.ContainerName, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.CrashDetail.ExitCode
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CrashDetail) *int32 {
+				return &oldObj.ExitCode
+			})
+		errs = append(errs, fn(fldPath.Child("exit_code"), &obj.ExitCode, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.CrashDetail.Signal
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 0); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CrashDetail) *int32 {
+				return &oldObj.Signal
+			})
+		errs = append(errs, fn(fldPath.Child("signal"), &obj.Signal, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.CrashDetail.LastStderrLine
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.CrashDetail) *string {
+				return &oldObj.LastStderrLine
+			})
+		errs = append(errs, fn(fldPath.Child("last_stderr_line"), &obj.LastStderrLine, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -6840,6 +7028,36 @@ func Validate_ReportActorCrashedRequest(
 				return &oldObj.Message
 			})
 		errs = append(errs, fn(fldPath.Child("message"), &obj.Message, oldVal, oldObj != nil)...)
+	}
+
+	{ // field v1.ReportActorCrashedRequest.Detail
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *v1.CrashDetail,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_CrashDetail(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *v1.ReportActorCrashedRequest) *v1.CrashDetail {
+				return oldObj.Detail
+			})
+		errs = append(errs, fn(fldPath.Child("detail"), obj.Detail, oldVal, oldObj != nil)...)
 	}
 
 	return errs

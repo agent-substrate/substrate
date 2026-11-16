@@ -60,7 +60,8 @@ func stateChangedAttrs(state string) []slog.Attr {
 func crashedAttrs() []slog.Attr {
 	return append(ateattr.ActorLogAttrs(testAttribution()),
 		slog.String(string(ateattr.ActorOperationNameKey), ateattr.OperationResume),
-		slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
+		slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed),
+		slog.String(string(ateattr.CrashReasonKey), ateattr.CrashReasonSandboxExited))
 }
 
 // usageSampledAttrs carries every UsageSampled key with a plausible value.

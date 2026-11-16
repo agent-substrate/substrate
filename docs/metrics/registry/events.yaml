@@ -79,6 +79,10 @@ groups:
 
       ate.actor.state is always crashed. It is set so a consumer reading the
       state off one attribute reaches crashed without special-casing the name.
+
+      ate.crash.reason carries the same value as the label on the counter, so
+      one reason query reads both signals. The crash message keeps the detail
+      that does not fit a bounded label.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -98,6 +102,8 @@ groups:
       - ref: ate.actor.operation.name
         requirement_level: required
       - ref: ate.actor.state
+        requirement_level: required
+      - ref: ate.crash.reason
         requirement_level: required
 
   - id: event.ate.actor.usage_sampled

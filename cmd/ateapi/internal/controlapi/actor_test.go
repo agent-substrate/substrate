@@ -96,7 +96,7 @@ func TestValidateActorStatusCrash(t *testing.T) {
 			name:   "truncated crash message fits",
 			oldVal: validActor(withActorStatus()),
 			newVal: validActor(withCrash(func(c *ateapi.ActorCrash) {
-				c.Message = newActorCrash(ateattr.OperationSuspend, strings.Repeat("x", 2*maxCrashMessageBytes)).GetMessage()
+				c.Message = newActorCrash(ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, strings.Repeat("x", 2*maxCrashMessageBytes))).GetMessage()
 			})),
 		},
 		{

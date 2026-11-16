@@ -31,6 +31,25 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// crashCause is what a crash records: the message a human reads and the
+// structured detail a client branches on. The two are set together so that a
+// crash can never carry a reason its message contradicts.
+type crashCause struct {
+	message string
+	detail  *ateapi.CrashDetail
+}
+
+// reasonCause pairs a message with the reason that classifies it.
+func reasonCause(reason ateapi.CrashReason, message string) crashCause {
+	return crashCause{message: message, detail: &ateapi.CrashDetail{Reason: reason}}
+}
+
+// reason reports the cause's reason, treating a cause with no detail as
+// unspecified.
+func (c crashCause) reason() ateapi.CrashReason {
+	return c.detail.GetReason()
+}
+
 // Fixed messages recorded in ActorCrash.message for crashes due to non-atelet
 // reasons. A failed atelet call builds its message with ateletCrashMessage instead.
 const (
@@ -87,7 +106,7 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 	if ateletErrorCrashesActor(ctx, isTerminateRPC, err) {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, st, actorRef, opName, ateletCrashMessage(rpc, err)); cerr != nil {
+		if cerr := crashActor(ctx, st, actorRef, opName, reasonCause(ateapi.CrashReason_CRASH_REASON_OPERATION_FAILED, ateletCrashMessage(rpc, err))); cerr != nil {
 			return cerr
 		}
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
@@ -109,17 +128,17 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 // fails with: FailedPrecondition once the crash is committed, since retrying
 // the operation is pointless, or crashActor's own error if the crash did not
 // commit, so the caller retries and the retry crashes the actor again.
-func crashActorAndFail(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
-	if err := crashActor(ctx, st, actorRef, opName, message); err != nil {
+func crashActorAndFail(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName string, cause crashCause) error {
+	if err := crashActor(ctx, st, actorRef, opName, cause); err != nil {
 		return err
 	}
-	return apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, message)
+	return apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, cause.message)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
 // assigned to, if any, so the worker can host other actors. message is
 // recorded in the actor's status.
-func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
+func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName string, cause crashCause) error {
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
@@ -133,14 +152,17 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	// Snapshot crash attributes before pod and pool pointers are cleared below;
 	// the counter itself is emitted only after the transition commits.
 	sandboxClass := actor.GetStatus().GetWorkerAssignment().GetSandboxRuntime().GetSandboxClass()
-	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
+	crashAttrs := append(
+		ateattr.ActorMetricAttributes(actor, sandboxClass, opName),
+		ateattr.CrashReasonAttribute(cause.reason()),
+	)
 
 	// The worker is released in the same write, so a failure leaves both the
 	// actor and its assignment for the caller's retry.
 	if _, err := st.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
 		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, message)
+			toUpdate.Status.Crash = newActorCrash(opName, cause)
 		}
 
 		// In-progress snapshot entries in Status.Snapshots are kept so a later
@@ -155,7 +177,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 	// Count the crash only once it has committed.
 	if !wasAlreadyCrashed {
-		logActorCrashed(ctx, actor, opName)
+		logActorCrashed(ctx, actor, opName, cause.reason())
 		recordActorCrash(ctx, crashAttrs)
 	}
 	return nil
@@ -163,14 +185,40 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 // newActorCrash records a crash that happens now, prefixing message with the
 // operation that failed when it is known.
-func newActorCrash(opName, message string) *ateapi.ActorCrash {
+func newActorCrash(opName string, cause crashCause) *ateapi.ActorCrash {
+	message := cause.message
 	if opName = ateattr.NormalizeOperationName(opName); opName != ateattr.OperationUnknown {
 		message = opName + " failed: " + message
 	}
 	return &ateapi.ActorCrash{
 		Message:   truncateUTF8(strings.ToValidUTF8(message, "�"), maxCrashMessageBytes),
 		CrashTime: timestamppb.Now(),
+		Detail:    sanitizeCrashDetail(cause.detail),
 	}
+}
+
+// sanitizeCrashDetail copies the detail a reporter sent, bounding the one
+// free-text field it controls the way the message is bounded. Copying rather
+// than storing what arrived keeps a field added to CrashDetail later from
+// reaching the actor's record before this function is taught to bound it.
+//
+// A crash nothing classified carries no detail at all, rather than an empty
+// one: that is the caller's doing, since only a nil detail stays nil here.
+func sanitizeCrashDetail(detail *ateapi.CrashDetail) *ateapi.CrashDetail {
+	if detail == nil {
+		return nil
+	}
+	sanitized := &ateapi.CrashDetail{
+		Reason:        detail.GetReason(),
+		ContainerName: detail.GetContainerName(),
+		ExitCode:      detail.GetExitCode(),
+		Signal:        detail.GetSignal(),
+		LastStderrLine: truncateUTF8(
+			strings.ToValidUTF8(detail.GetLastStderrLine(), "�"),
+			maxCrashMessageBytes,
+		),
+	}
+	return sanitized
 }
 
 // logActorCrashed carries the identity ate.actor.crashes cannot: actor identity
@@ -180,10 +228,11 @@ func newActorCrash(opName, message string) *ateapi.ActorCrash {
 // It names ate.actor.state for the same reason worker's lifecycle records do: a
 // crash is the one transition worker never observes, so a consumer taking the
 // last state an actor reached has to see this record to reach "crashed" at all.
-func logActorCrashed(ctx context.Context, actor *ateapi.Actor, opName string) {
+func logActorCrashed(ctx context.Context, actor *ateapi.Actor, opName string, reason ateapi.CrashReason) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
 	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), ateattr.NormalizeOperationName(opName)))
 	attrs = append(attrs, slog.String(string(ateattr.ActorStateKey), ateattr.ActorStateCrashed))
+	attrs = append(attrs, slog.String(string(ateattr.CrashReasonKey), ateattr.CrashReasonValue(reason)))
 	actorevent.Log(ctx, actorevent.Crashed, attrs)
 }
 

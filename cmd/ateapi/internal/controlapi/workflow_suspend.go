@@ -350,17 +350,17 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if mode == suspendAsync {
 		// A local snapshot on an unknown node can never be found by the scheduler.
 		if latestActor.GetStatus().GetAssignedNode() == "" {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageLocalSnapshotNodeUnknown))
 		}
 		if snapshotAtLatestGeneration(latestActor.GetStatus()) == nil {
-			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageLocalSnapshotMissing))
 		}
 	}
 	// Both modes mark the durable copy PENDING up front. Without it a sync
 	// suspend has nothing to mark COMPLETED, and atelet's background upload of
 	// an async suspend's snapshot could never be recorded.
 	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
-		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageDurableSnapshotMissing))
 	}
 
 	// A state that conflicts with the record crashes the actor. Atelet has
@@ -370,7 +370,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		slog.WarnContext(ctx, "Snapshot state atelet returned conflicts with the record",
 			slog.Any("actor", actorRef),
 			slog.Any("err", err))
-		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageSnapshotStateConflict))
 	}
 
 	// 1. Free the worker and finalize the actor in one write: record its new

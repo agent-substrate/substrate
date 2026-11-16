@@ -274,7 +274,7 @@ func TestRevertActor_UnreachableNode(t *testing.T) {
 				}
 				if tt.crashed {
 					s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
-					s.Crash = newActorCrash("ResumeActor", "interrupted execution")
+					s.Crash = newActorCrash("ResumeActor", reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "interrupted execution"))
 				}
 			})
 			want := proto.CloneOf(actor.GetStatus().GetSnapshots()[1])
@@ -459,7 +459,7 @@ func TestRevertActor_NoSnapshotToRevertTo(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapi.ActorState_ACTOR_STATE_CRASHED, func(a *ateapi.Actor) {
-		a.Status.Crash = newActorCrash("resume", crashMessageWorkerDraining)
+		a.Status.Crash = newActorCrash("resume", reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerDraining))
 	})
 
 	reverted, err := w.RevertActor(ctx, actorRef)

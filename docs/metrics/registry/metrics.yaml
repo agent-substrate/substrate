@@ -168,6 +168,65 @@ groups:
                 crashes because its worker is lost, or the operation is not in
                 this list. This is the default value.
 
+  - id: registry.ate.crash
+    type: attribute_group
+    brief: >
+      Why an actor was lost. The value set is closed and mirrors
+      substrate.ateapi.v1.CrashReason with the CRASH_REASON_ prefix dropped.
+      The crash message keeps the detail that does not fit a bounded label.
+    attributes:
+      - id: ate.crash.reason
+        stability: development
+        brief: The classification of the failure that moved an actor to CRASHED.
+        type:
+          members:
+            - id: sandbox_exited
+              stability: development
+              value: sandbox_exited
+              brief: The sentry, VMM, or virtiofsd process hosting the actor died.
+            - id: memory_limit
+              stability: development
+              value: memory_limit
+              brief: The host memory guard killed the sandbox.
+            - id: container_exited
+              stability: development
+              value: container_exited
+              brief: An application container exited.
+            - id: container_oom_killed
+              stability: development
+              value: container_oom_killed
+              brief: A container was killed inside the sandbox for using too much memory.
+            - id: guest_panic
+              stability: development
+              value: guest_panic
+              brief: The micro-VM guest kernel panicked.
+            - id: worker_lost
+              stability: development
+              value: worker_lost
+              brief: The worker pod hosting the actor went away or restarted.
+            - id: worker_ineligible
+              stability: development
+              value: worker_ineligible
+              brief: >
+                The assigned worker is draining or no longer satisfies the
+                actor's placement constraints.
+            - id: snapshot_unavailable
+              stability: development
+              value: snapshot_unavailable
+              brief: >
+                The actor's snapshot, or the node holding it, is missing or
+                conflicts with the actor's record.
+            - id: operation_failed
+              stability: development
+              value: operation_failed
+              brief: A lifecycle call to atelet failed.
+            - id: unspecified
+              stability: development
+              value: unspecified
+              brief: >
+                The reason was not set, such as a crash reported by a worker
+                that does not classify it. This is the default value.
+
   - id: registry.ate.template
     type: attribute_group
     brief: >
@@ -815,14 +874,19 @@ groups:
       plane problem.
       ate.sandbox.class is unknown when the actor's worker assignment is already
       clear or carries no sandbox runtime.
+      ate.crash.reason says which kind of loss it was, so one query separates a
+      control plane response, such as worker_lost, from a death inside the
+      sandbox, such as container_oom_killed.
     annotations:
       substrate:
         emitted_by: [ateapi]
         golden_signals: [errors]
         code_anchor: cmd/ateapi/internal/controlapi/metrics.go
-        cuj: Some actors go to the CRASHED state. How many?
+        cuj: Some actors go to the CRASHED state. How many, and why?
     attributes:
       - ref: ate.actor.operation.name
+        requirement_level: required
+      - ref: ate.crash.reason
         requirement_level: required
       - ref: ate.template.atespace
         requirement_level: required

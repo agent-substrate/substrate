@@ -112,7 +112,7 @@ func ReleasingWorkflows() []ReleasingWorkflow {
 			Name:  "crash",
 			State: ateapi.ActorState_ACTOR_STATE_RUNNING,
 			Finalize: func(_ *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapi.Actor) error {
-				return crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash")
+				return crashActor(ctx, st, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "test crash"))
 			},
 			WantRetry:      codes.OK,
 			WantFinalState: ateapi.ActorState_ACTOR_STATE_CRASHED,

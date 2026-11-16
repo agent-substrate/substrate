@@ -56,21 +56,22 @@ func NewCrashReporter(cfg ReportConfig) (*CrashReporter, error) {
 // is worth retrying for as long as the caller allows. A refusal, the actor
 // having moved on or an operation in flight owning it, is an answer and is
 // logged rather than returned.
-func (r *CrashReporter) ReportCrashed(ctx context.Context, actor resources.ActorAttribution, message string) error {
+func (r *CrashReporter) ReportCrashed(ctx context.Context, actor resources.ActorAttribution, message string, detail *ateletpb.CrashDetail) error {
 	conn, err := ateletdial.Dial(r.socketPath, r.tlsConfig)
 	if err != nil {
 		return fmt.Errorf("dial atelet: %w", err)
 	}
 	defer conn.Close()
-	return reportCrashedWithRetry(ctx, conn, actor, message, initialReportBackoff)
+	return reportCrashedWithRetry(ctx, conn, actor, message, detail, initialReportBackoff)
 }
 
-func reportCrashedWithRetry(ctx context.Context, conn grpc.ClientConnInterface, actor resources.ActorAttribution, message string, backoff time.Duration) error {
+func reportCrashedWithRetry(ctx context.Context, conn grpc.ClientConnInterface, actor resources.ActorAttribution, message string, detail *ateletpb.CrashDetail, backoff time.Duration) error {
 	req := &ateletpb.ReportActorCrashedRequest{
 		ActorAtespace: actor.Ref.Atespace,
 		ActorName:     actor.Ref.Name,
 		ActorUid:      actor.UID,
 		Message:       truncateMessage(message),
+		Detail:        detail,
 	}
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, reportTimeout)

@@ -344,6 +344,88 @@ message ReportActorCrashedRequest {
   // +k8s:required
   // +k8s:maxLength=4096
   string message = 4;
+
+  // The structured form of what the worker saw. A worker that does not
+  // classify the crash leaves this unset.
+  //
+  // +k8s:optional
+  CrashDetail detail = 5;
+}
+
+// CrashReason classifies the failure a worker reports.
+//
+// It mirrors substrate.ateapi.v1.CrashReason value for value, so that atelet
+// forwards a report without a translation table. The worker-facing proto does
+// not import the public API, and TestCrashReasonMirrorsTheAPI keeps the two in
+// step. Only the reasons a worker can observe are ever sent; the rest exist so
+// that the numbering cannot drift.
+enum CrashReason {
+  // CRASH_REASON_UNSPECIFIED means the reason was not set.
+  CRASH_REASON_UNSPECIFIED = 0;
+
+  // CRASH_REASON_SANDBOX_EXITED means the sentry, VMM, or virtiofsd process
+  // hosting the actor died.
+  CRASH_REASON_SANDBOX_EXITED = 1;
+
+  // CRASH_REASON_MEMORY_LIMIT means the host memory guard killed the sandbox.
+  CRASH_REASON_MEMORY_LIMIT = 2;
+
+  // CRASH_REASON_CONTAINER_EXITED means an application container exited.
+  CRASH_REASON_CONTAINER_EXITED = 3;
+
+  // CRASH_REASON_CONTAINER_OOM_KILLED means a container was killed inside the
+  // sandbox for using too much memory.
+  CRASH_REASON_CONTAINER_OOM_KILLED = 4;
+
+  // CRASH_REASON_GUEST_PANIC means the micro-VM guest kernel panicked.
+  CRASH_REASON_GUEST_PANIC = 5;
+
+  // CRASH_REASON_WORKER_LOST is raised by ateapi, never reported by a worker.
+  CRASH_REASON_WORKER_LOST = 6;
+
+  // CRASH_REASON_WORKER_INELIGIBLE is raised by ateapi, never reported by a
+  // worker.
+  CRASH_REASON_WORKER_INELIGIBLE = 7;
+
+  // CRASH_REASON_SNAPSHOT_UNAVAILABLE is raised by ateapi, never reported by a
+  // worker.
+  CRASH_REASON_SNAPSHOT_UNAVAILABLE = 8;
+
+  // CRASH_REASON_OPERATION_FAILED is raised by ateapi, never reported by a
+  // worker.
+  CRASH_REASON_OPERATION_FAILED = 9;
+}
+
+// CrashDetail carries the structured part of a crash a worker reports.
+message CrashDetail {
+  // reason classifies the failure.
+  //
+  // +k8s:optional
+  CrashReason reason = 1;
+
+  // container_name names the application container, for the container reasons.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=253
+  string container_name = 2;
+
+  // exit_code is the container's exit status for
+  // CRASH_REASON_CONTAINER_EXITED, or -1 when it is unknown.
+  //
+  // +k8s:optional
+  int32 exit_code = 3;
+
+  // signal is the signal that killed the container, when it died by one.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int32 signal = 4;
+
+  // last_stderr_line is the last line the container wrote to stderr.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=4096
+  string last_stderr_line = 5;
 }
 
 message ReportActorCrashedResponse {

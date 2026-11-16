@@ -1253,7 +1253,7 @@ func TestSuspendAndPause_FinalizeWithoutAssignment(t *testing.T) {
 					WorkerAssignment: wireTestAssignment(),
 				},
 			})
-			originalCrash := newActorCrash(ateattr.OperationDelete, "original crash reason")
+			originalCrash := newActorCrash(ateattr.OperationDelete, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "original crash reason"))
 			updateDuringCheckpoint(t, atelet, persistence, actorRef, func(s *ateapi.ActorStatus) {
 				s.State = ateapi.ActorState_ACTOR_STATE_CRASHED
 				s.Crash = originalCrash

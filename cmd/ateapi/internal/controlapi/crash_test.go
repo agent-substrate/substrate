@@ -250,7 +250,7 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, "test crash")
+			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "test crash"))
 
 			tt.check(t, ctx, st, err)
 		})
@@ -265,7 +265,7 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	seedActor(t, ctx, st, actorRef)
 
 	before := time.Now().Truncate(time.Microsecond)
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerDraining)); err != nil {
 		t.Fatalf("crashActor() = %v, want nil", err)
 	}
 	first, err := st.GetActor(ctx, actorRef)
@@ -281,7 +281,7 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	}
 
 	// Crashing an already-crashed actor, as a concurrent crash does, keeps the first crash.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerIneligible)); err != nil {
 		t.Fatalf("second crashActor() = %v, want nil", err)
 	}
 	second, err := st.GetActor(ctx, actorRef)
@@ -290,6 +290,99 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	}
 	if diff := cmp.Diff(crash, second.GetStatus().GetCrash(), protocmp.Transform()); diff != "" {
 		t.Errorf("Crash after re-crash differs from the first crash (-want +got):\n%s", diff)
+	}
+}
+
+// TestCrashActor_RecordsTheReason covers the structured half of a crash: the
+// reason reaches the stored detail, and the detail's one free-text field is
+// bounded like the message.
+func TestCrashActor_RecordsTheReason(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	seedActor(t, ctx, st, actorRef)
+
+	cause := crashCause{
+		message: "the container exited",
+		detail: &ateapi.CrashDetail{
+			Reason:         ateapi.CrashReason_CRASH_REASON_CONTAINER_EXITED,
+			ContainerName:  "agent",
+			ExitCode:       139,
+			Signal:         11,
+			LastStderrLine: strings.Repeat("x", 2*maxCrashMessageBytes),
+		},
+	}
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, cause); err != nil {
+		t.Fatalf("crashActor() = %v, want nil", err)
+	}
+
+	actor, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	detail := actor.GetStatus().GetCrash().GetDetail()
+	if got := detail.GetReason(); got != ateapi.CrashReason_CRASH_REASON_CONTAINER_EXITED {
+		t.Errorf("Crash.Detail.Reason = %v, want CONTAINER_EXITED", got)
+	}
+	if got := detail.GetContainerName(); got != "agent" {
+		t.Errorf("Crash.Detail.ContainerName = %q, want %q", got, "agent")
+	}
+	if got := detail.GetExitCode(); got != 139 {
+		t.Errorf("Crash.Detail.ExitCode = %d, want 139", got)
+	}
+	if got := detail.GetSignal(); got != 11 {
+		t.Errorf("Crash.Detail.Signal = %d, want 11", got)
+	}
+	if got := len(detail.GetLastStderrLine()); got > maxCrashMessageBytes {
+		t.Errorf("Crash.Detail.LastStderrLine is %d bytes, want at most %d", got, maxCrashMessageBytes)
+	}
+}
+
+// TestCrashCausesCarryTheirReason pins each fixed cause to the reason the
+// counter and the event report for it. A cause that loses its reason would
+// read as unspecified, which is the thing the reason label exists to avoid.
+func TestCrashCausesCarryTheirReason(t *testing.T) {
+	tests := []struct {
+		cause crashCause
+		want  ateapi.CrashReason
+	}{
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_LOST, crashMessageWorkerPodGone), ateapi.CrashReason_CRASH_REASON_WORKER_LOST},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_LOST, crashMessageWorkerRestarted), ateapi.CrashReason_CRASH_REASON_WORKER_LOST},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerDraining), ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE, crashMessageWorkerIneligible), ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageLocalSnapshotNodeUnknown), ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageLocalSnapshotNodeGone), ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageLocalSnapshotMissing), ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageDurableSnapshotMissing), ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageSnapshotStateConflict), ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE},
+		{reasonCause(ateapi.CrashReason_CRASH_REASON_OPERATION_FAILED, ateletCrashMessage("Restore", errors.New("boom"))), ateapi.CrashReason_CRASH_REASON_OPERATION_FAILED},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cause.message, func(t *testing.T) {
+			if got := tt.cause.reason(); got != tt.want {
+				t.Errorf("reason() = %v, want %v", got, tt.want)
+			}
+			if got := newActorCrash(ateattr.OperationUnknown, tt.cause).GetDetail().GetReason(); got != tt.want {
+				t.Errorf("stored reason = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A crash a worker reported without classifying it keeps the counter and the
+// event on one value rather than dropping the label.
+func TestCrashCauseWithoutDetailReadsAsUnspecified(t *testing.T) {
+	cause := crashCause{message: "the worker said so"}
+	if got := cause.reason(); got != ateapi.CrashReason_CRASH_REASON_UNSPECIFIED {
+		t.Errorf("reason() = %v, want UNSPECIFIED", got)
+	}
+	if got := ateattr.CrashReasonValue(cause.reason()); got != ateattr.CrashReasonUnspecified {
+		t.Errorf("label = %q, want %q", got, ateattr.CrashReasonUnspecified)
+	}
+	if got := newActorCrash(ateattr.OperationUnknown, cause).GetDetail(); got != nil {
+		t.Errorf("Crash.Detail = %v, want nil when nothing classified it", got)
 	}
 }
 
@@ -505,7 +598,7 @@ func TestNewActorCrash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newActorCrash(tt.opName, tt.message).GetMessage(); got != tt.want {
+			if got := newActorCrash(tt.opName, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, tt.message)).GetMessage(); got != tt.want {
 				t.Errorf("newActorCrash().Message = %q, want %q", got, tt.want)
 			}
 		})
@@ -558,14 +651,14 @@ func TestCrashActor_Metrics(t *testing.T) {
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "test crash")); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 
-	assertCrashMetricDatapoint(t, reader, ateattr.OperationResume, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
+	assertCrashMetricDatapoint(t, reader, ateattr.OperationResume, "demo-ns", "counter-template", "pool-1", "gvisor", ateattr.CrashReasonSandboxExited, 1)
 }
 
-func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass string, wantValue int64) {
+func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass, wantReason string, wantValue int64) {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -587,12 +680,14 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
 				wp, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
 				sc, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
+				reason, _ := dp.Attributes.Value(ateattr.CrashReasonKey)
 
 				if op.AsString() == wantOpName &&
 					tNS.AsString() == wantTmplNS &&
 					tName.AsString() == wantTmplName &&
 					wp.AsString() == wantWorkerPool &&
-					sc.AsString() == wantSandboxClass {
+					sc.AsString() == wantSandboxClass &&
+					reason.AsString() == wantReason {
 					if dp.Value != wantValue {
 						t.Errorf("metric value = %d, want %d", dp.Value, wantValue)
 					}
@@ -601,8 +696,8 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 			}
 		}
 	}
-	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
-		wantOpName, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
+	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q, reason=%q",
+		wantOpName, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass, wantReason)
 }
 
 // assertNoCrashMetricDatapoint fails if anything counted a crash. It is the
@@ -656,7 +751,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedActor(t, ctx, st, actorRef)
 		seedWorker(t, ctx, st, actorRef)
 
-		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageSnapshotStateConflict))
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 		}
@@ -670,7 +765,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedWorker(t, ctx, st, actorRef)
 
 		releaseErr := errors.New("state store unavailable")
-		err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+		err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageSnapshotStateConflict))
 		if !errors.Is(err, releaseErr) {
 			t.Fatalf("crashActorAndFail() = %v, want it to wrap %v", err, releaseErr)
 		}
@@ -693,7 +788,7 @@ func TestCrashActorAndFail(t *testing.T) {
 		seedWorker(t, ctx, st, actorRef)
 
 		for _, conflict := range []error{store.ErrVersionConflict, store.ErrUIDConflict} {
-			err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: conflict}, actorRef, ateattr.OperationSuspend, crashMessageSnapshotStateConflict)
+			err := crashActorAndFail(ctx, failingCrashStore{Interface: st, err: conflict}, actorRef, ateattr.OperationSuspend, reasonCause(ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE, crashMessageSnapshotStateConflict))
 			if got := apierror.Code(err); got != codes.Aborted {
 				t.Errorf("apierror.Code(err) for %v = %v, want %v (err: %v)", conflict, got, codes.Aborted, err)
 			}
@@ -865,7 +960,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		Status:        &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
 	})
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "test crash")); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 	// The logs exporter is on, so the record goes to OTLP only.
@@ -891,6 +986,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		string(ateattr.TemplateNameKey):       "counter-template",
 		string(ateattr.ActorOperationNameKey): ateattr.OperationResume,
 		string(ateattr.ActorStateKey):         ateattr.ActorStateCrashed,
+		string(ateattr.CrashReasonKey):        ateattr.CrashReasonSandboxExited,
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("crash record = %v, want %v", got, want)
@@ -900,7 +996,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	}
 
 	// Re-crashing an already-crashed actor must move neither signal.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, reasonCause(ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED, "test crash")); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if gotEvents := events(); len(gotEvents) != 1 {

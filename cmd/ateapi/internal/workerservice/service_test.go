@@ -71,10 +71,11 @@ type appliedReport struct {
 type crashCall struct {
 	ActorRef                      resources.ActorRef
 	ActorUID, WorkerName, Message string
+	Detail                        *ateapi.CrashDetail
 }
 
-func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef resources.ActorRef, actorUID, workerName, message string) (*ateapi.Actor, error) {
-	f.crashCalls = append(f.crashCalls, crashCall{actorRef, actorUID, workerName, message})
+func (f *fakeControl) CrashActorReportedByWorker(_ context.Context, actorRef resources.ActorRef, actorUID, workerName, message string, detail *ateapi.CrashDetail) (*ateapi.Actor, error) {
+	f.crashCalls = append(f.crashCalls, crashCall{actorRef, actorUID, workerName, message, detail})
 	return f.crashResp, f.err
 }
 

@@ -167,7 +167,71 @@ const (
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
 	StatsSourceKey         = attribute.Key("ate.stats.source")
+	CrashReasonKey         = attribute.Key("ate.crash.reason")
 )
+
+// Values for CrashReasonKey, mirroring ateapi.CrashReason with the
+// CRASH_REASON_ prefix dropped so the two cannot fork.
+const (
+	CrashReasonSandboxExited       = "sandbox_exited"
+	CrashReasonMemoryLimit         = "memory_limit"
+	CrashReasonContainerExited     = "container_exited"
+	CrashReasonContainerOOMKilled  = "container_oom_killed"
+	CrashReasonGuestPanic          = "guest_panic"
+	CrashReasonWorkerLost          = "worker_lost"
+	CrashReasonWorkerIneligible    = "worker_ineligible"
+	CrashReasonSnapshotUnavailable = "snapshot_unavailable"
+	CrashReasonOperationFailed     = "operation_failed"
+	CrashReasonUnspecified         = "unspecified"
+)
+
+// AllCrashReasons lists every value CrashReasonKey can take, so that the
+// registry and a dashboard can enumerate them without reading the enum.
+var AllCrashReasons = []string{
+	CrashReasonSandboxExited,
+	CrashReasonMemoryLimit,
+	CrashReasonContainerExited,
+	CrashReasonContainerOOMKilled,
+	CrashReasonGuestPanic,
+	CrashReasonWorkerLost,
+	CrashReasonWorkerIneligible,
+	CrashReasonSnapshotUnavailable,
+	CrashReasonOperationFailed,
+	CrashReasonUnspecified,
+}
+
+// CrashReasonValue maps the recorded reason onto its label value, so a producer
+// reports the reason the store holds rather than one it names by hand. A reason
+// outside the enum reads as unspecified rather than widening the label.
+func CrashReasonValue(reason ateapi.CrashReason) string {
+	switch reason {
+	case ateapi.CrashReason_CRASH_REASON_SANDBOX_EXITED:
+		return CrashReasonSandboxExited
+	case ateapi.CrashReason_CRASH_REASON_MEMORY_LIMIT:
+		return CrashReasonMemoryLimit
+	case ateapi.CrashReason_CRASH_REASON_CONTAINER_EXITED:
+		return CrashReasonContainerExited
+	case ateapi.CrashReason_CRASH_REASON_CONTAINER_OOM_KILLED:
+		return CrashReasonContainerOOMKilled
+	case ateapi.CrashReason_CRASH_REASON_GUEST_PANIC:
+		return CrashReasonGuestPanic
+	case ateapi.CrashReason_CRASH_REASON_WORKER_LOST:
+		return CrashReasonWorkerLost
+	case ateapi.CrashReason_CRASH_REASON_WORKER_INELIGIBLE:
+		return CrashReasonWorkerIneligible
+	case ateapi.CrashReason_CRASH_REASON_SNAPSHOT_UNAVAILABLE:
+		return CrashReasonSnapshotUnavailable
+	case ateapi.CrashReason_CRASH_REASON_OPERATION_FAILED:
+		return CrashReasonOperationFailed
+	default:
+		return CrashReasonUnspecified
+	}
+}
+
+// CrashReasonAttribute pairs CrashReasonKey with the reason's label value.
+func CrashReasonAttribute(reason ateapi.CrashReason) attribute.KeyValue {
+	return CrashReasonKey.String(CrashReasonValue(reason))
+}
 
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
 // the epoch is per activation. The measurement names follow the
