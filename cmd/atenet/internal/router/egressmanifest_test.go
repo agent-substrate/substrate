@@ -23,6 +23,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"sigs.k8s.io/yaml"
+
+	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 )
 
 // egressManifest is the envoy egress gateway ate-setup installs, which
@@ -259,6 +261,31 @@ func TestEgressManifestsConnectAccessLogIncludesProtocol(t *testing.T) {
 		format := str(child(child(child(al, "typed_config"), "log_format"), "text_format_source"), "inline_string")
 		if !strings.Contains(format, "protocol=%PROTOCOL%") {
 			t.Errorf("connect access_log[%d] format %q does not log protocol=%%PROTOCOL%%", i, format)
+		}
+	}
+}
+
+func TestEgressManifestsHTTPTimeouts(t *testing.T) {
+	t.Parallel()
+	tree := bootstrapTree(t)
+
+	outerHCM := hcm(outerChain(t, tree))
+	if got := str(child(outerHCM, "common_http_protocol_options"), "idle_timeout"); got != "30s" {
+		t.Errorf("chain %q common_http_protocol_options.idle_timeout = %q, want \"30s\"", extproc.EgressFilterChainName, got)
+	}
+
+	chains := list(mitmListener(t, tree), "filter_chains")
+	for _, name := range requestLegs {
+		chain := byName(chains, name)
+		if chain == nil {
+			t.Fatalf("no %q chain on mitm_listener", name)
+		}
+		h := hcm(chain)
+		if got := str(h, "request_headers_timeout"); got != "10s" {
+			t.Errorf("chain %q request_headers_timeout = %q, want \"10s\"", name, got)
+		}
+		if got := str(child(h, "common_http_protocol_options"), "idle_timeout"); got != "300s" {
+			t.Errorf("chain %q common_http_protocol_options.idle_timeout = %q, want \"300s\"", name, got)
 		}
 	}
 }
