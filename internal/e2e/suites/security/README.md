@@ -17,7 +17,8 @@ Prereqs: Go, kubectl, a running Docker. kind is created for you.
 2. Install the control plane. This is the slow step; it pulls about 570 MB:
 
    ```
-   go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}'
+   ATE_INGRESS_ALLOWED_SPIFFE_IDS=spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client \
+     go run ./cmd/ate-setup --kind deploy ate-system --credential-provider='{"name":"k8s.io"}'
    ```
 
    Stop there. The NFS/CSI and demo steps CI runs are for other suites.
