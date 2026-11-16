@@ -2,7 +2,7 @@ module go.ate.dev/substrate/hack/tools/controller-gen
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/fatih/color v1.18.0 // indirect
