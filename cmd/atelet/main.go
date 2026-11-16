@@ -2405,7 +2405,8 @@ func toWorkerWakeupProbe(in *ateletpb.WakeupProbe) *ateworkerpb.WakeupProbe {
 
 type WorkerDialer struct {
 	// mu makes the lookup, create and insert in DialWorkerPod atomic, so
-	// concurrent dials for a pod share one conn.
+	// concurrent dials for a pod share one conn. NewClient does no I/O, so
+	// holding mu across it is cheap.
 	mu    sync.Mutex
 	conns *lru.Cache
 }
