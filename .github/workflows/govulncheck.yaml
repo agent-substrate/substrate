@@ -36,6 +36,8 @@ jobs:
       - id: govulncheck
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
+          # Scan with the Go we build with. The default, stable, overrides go-version-file.
+          go-version-input: ""
           go-version-file: go.mod
           go-package: ./...
           work-dir: ${{ matrix.work-dir }}
