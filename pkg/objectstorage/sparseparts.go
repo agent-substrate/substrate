@@ -29,8 +29,10 @@ import (
 // 622 — so the node is nowhere near a ceiling and what limits a snapshot upload is how
 // early the streams can all start.
 const (
-	// sparsePartTarget is the populated source bytes per part. Parts smaller than this
-	// stop amortizing the ~0.25s a part upload costs before it transfers anything.
+	// sparsePartTarget is the populated bytes each part aims for. Every part costs
+	// about 0.25s before it sends anything, so smaller parts waste time. The exception
+	// is a file under twice this size, which still splits into two smaller parts.
+	// Uploading it as one stream would reserve the node's whole upload budget.
 	sparsePartTarget = 64 << 20
 	// sparseMaxParts caps the fan-out: past a dozen streams per-stream throughput falls
 	// faster than the extra parallelism gains.
@@ -103,9 +105,8 @@ func planSparseParts(exts []extentRange, populated int64, n int) [][]extentRange
 }
 
 // sparsePartCount picks how many parts to split a snapshot into. A snapshot
-// whose encoded stream can reach uploadCompositeMin (64 MiB) splits into at
-// least two range parts so it does not fall back to a single-stream composite
-// upload.
+// whose encoded stream can reach uploadCompositeMin splits into at least two
+// range parts so it does not fall back to a single-stream composite upload.
 func sparsePartCount(populated int64, extents int) int {
 	if populated < sparsePartTarget && sparseEncodedBound(populated, extents) < uploadCompositeMin {
 		return 1
