@@ -699,6 +699,89 @@ func TestPrintTagTo_YAML(t *testing.T) {
 	}
 }
 
+func TestPrintExternalVolumesTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	volumes := []*ateapi.ExternalVolume{
+		{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "shared",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			VolumeId:   "nfs-server#exports#shared",
+			VolumeType: "nfs.csi.k8s.io",
+		},
+		{
+			Metadata: &ateapi.ResourceMetadata{
+				Atespace:   "team-a",
+				Name:       "adopted",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
+			},
+			VolumeId:   "projects/p/zones/z/disks/preexisting",
+			VolumeType: "pd.csi.storage.gke.io",
+		},
+	}
+
+	if err := PrintExternalVolumesTo(&buf, volumes, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `ATESPACE   NAME      VOLUME TYPE             VOLUME ID                              AGE
+team-a     adopted   pd.csi.storage.gke.io   projects/p/zones/z/disks/preexisting   5h
+team-a     shared    nfs.csi.k8s.io          nfs-server#exports#shared              5m
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumesTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintExternalVolumesTo(&buf, nil, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintExternalVolumeTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	volume := &ateapi.ExternalVolume{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared"}}
+
+	if err := PrintExternalVolumeTo(&buf, volume, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "metadata": {
+    "atespace": "team-a",
+    "name": "shared"
+  }
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintExternalVolumeTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	volume := &ateapi.ExternalVolume{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared"}}
+
+	if err := PrintExternalVolumeTo(&buf, volume, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `metadata:
+  atespace: team-a
+  name: shared
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPrintAtespacesTo_Table(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pinNow(t, now)

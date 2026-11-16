@@ -27,7 +27,9 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -57,6 +59,12 @@ func (f *fakeStorageClassLister) Get(name string) (*storagev1.StorageClass, erro
 }
 
 var _ storagev1listers.StorageClassLister = (*fakeStorageClassLister)(nil)
+
+// volumeTestActor is the actor the volume tests provision for, in the
+// atespace newTestPersistence creates.
+func volumeTestActor() *ateapi.Actor {
+	return &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1", Uid: "actor-uid-123"}}
+}
 
 func TestActorVolumesStorageClassErrors(t *testing.T) {
 	ctx := context.Background()
@@ -100,7 +108,7 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 				}
 			})
 			t.Run("create", func(t *testing.T) {
-				res, err := createActorVolumes(ctx, &mockPluginRegistry{}, lister, "actor-uid-123", tmpl, volumes)
+				res, err := createActorVolumes(ctx, &mockPluginRegistry{}, lister, nil, volumeTestActor(), tmpl, volumes)
 				if got := apierror.Code(err); got != tt.wantCode {
 					t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
 				}
@@ -209,13 +217,21 @@ func TestCreateActorVolumes(t *testing.T) {
 		},
 	}
 
+	actor := volumeTestActor()
+	vol1Record := provisionedExternalVolumeName(actor.GetMetadata().GetUid(), "vol1")
+	dataVolRecord := provisionedExternalVolumeName(actor.GetMetadata().GetUid(), "data-vol")
+
 	tests := []struct {
 		name           string
 		tmpl           *ateapi.ActorTemplate
 		inputVolumes   []*ateapi.ExternalVolumeStatus
 		storageClasses map[string]*storagev1.StorageClass
-		wantErr        bool
-		wantRes        []*ateapi.ExternalVolumeStatus
+		// existing is a record an earlier attempt left in the store.
+		existing *ateapi.ExternalVolume
+		wantCode codes.Code
+		wantRes  []*ateapi.ExternalVolumeStatus
+		// wantRecords are the ExternalVolumes expected in the store afterwards.
+		wantRecords []*ateapi.ExternalVolume
 	}{
 		{
 			name: "partial failure returns error and preserves succeeded, failed, and remaining volumes",
@@ -226,16 +242,22 @@ func TestCreateActorVolumes(t *testing.T) {
 				{Name: "vol2", VolumeType: "mock-fast"},
 				{Name: "vol3", VolumeType: "mock-standard"},
 			},
-			wantErr: true,
+			wantCode: codes.FailedPrecondition,
 			wantRes: []*ateapi.ExternalVolumeStatus{
 				{
-					Name:            "vol1",
-					StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1",
-					VolumeType:      "mock-standard",
+					Name:               "vol1",
+					StorageVolumeId:    "mock-vol-substrate-actor-uid-123-vol1",
+					VolumeType:         "mock-standard",
+					ExternalVolumeName: vol1Record,
 				},
 				{Name: "vol2", VolumeType: "mock-fast"},
 				{Name: "vol3", VolumeType: "mock-standard"},
 			},
+			wantRecords: []*ateapi.ExternalVolume{{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: vol1Record},
+				VolumeId:   "mock-vol-substrate-actor-uid-123-vol1",
+				VolumeType: "mock-standard",
+			}},
 		},
 		{
 			name: "volume with a storage volume id is not created again",
@@ -246,7 +268,6 @@ func TestCreateActorVolumes(t *testing.T) {
 					StorageVolumeId: "existing-vol-id",
 				},
 			},
-			wantErr: false,
 			wantRes: []*ateapi.ExternalVolumeStatus{
 				{
 					Name:            "data-vol",
@@ -260,7 +281,7 @@ func TestCreateActorVolumes(t *testing.T) {
 			inputVolumes: []*ateapi.ExternalVolumeStatus{
 				{Name: "missing-vol"},
 			},
-			wantErr: true,
+			wantCode: codes.NotFound,
 			wantRes: []*ateapi.ExternalVolumeStatus{
 				{Name: "missing-vol"},
 			},
@@ -284,7 +305,6 @@ func TestCreateActorVolumes(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
 			wantRes: []*ateapi.ExternalVolumeStatus{
 				{
 					Name:            "data-vol",
@@ -294,8 +314,66 @@ func TestCreateActorVolumes(t *testing.T) {
 						"type":                      "pd-ssd",
 						"csi.storage.k8s.io/fstype": "ext4",
 					},
+					ExternalVolumeName: dataVolRecord,
 				},
 			},
+			wantRecords: []*ateapi.ExternalVolume{{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: dataVolRecord},
+				VolumeId:   "mock-vol-substrate-actor-uid-123-data-vol",
+				VolumeType: "mock-standard",
+				VolumeContext: map[string]string{
+					"type":                      "pd-ssd",
+					"csi.storage.k8s.io/fstype": "ext4",
+				},
+			}},
+		},
+		{
+			// A crash between the CSI call and the actor write leaves the
+			// record behind; the retry gets the same volume and reuses it.
+			name: "record left by an earlier attempt is reused",
+			tmpl: standardTmpl,
+			inputVolumes: []*ateapi.ExternalVolumeStatus{
+				{Name: "data-vol", VolumeType: "mock-standard"},
+			},
+			existing: &ateapi.ExternalVolume{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: dataVolRecord},
+				VolumeId:   "mock-vol-substrate-actor-uid-123-data-vol",
+				VolumeType: "mock-standard",
+			},
+			wantRes: []*ateapi.ExternalVolumeStatus{
+				{
+					Name:               "data-vol",
+					StorageVolumeId:    "mock-vol-substrate-actor-uid-123-data-vol",
+					VolumeType:         "mock-standard",
+					ExternalVolumeName: dataVolRecord,
+				},
+			},
+			wantRecords: []*ateapi.ExternalVolume{{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: dataVolRecord},
+				VolumeId:   "mock-vol-substrate-actor-uid-123-data-vol",
+				VolumeType: "mock-standard",
+			}},
+		},
+		{
+			name: "record naming other storage fails the volume",
+			tmpl: standardTmpl,
+			inputVolumes: []*ateapi.ExternalVolumeStatus{
+				{Name: "data-vol", VolumeType: "mock-standard"},
+			},
+			existing: &ateapi.ExternalVolume{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: dataVolRecord},
+				VolumeId:   "somebody-elses-disk",
+				VolumeType: "mock-standard",
+			},
+			wantCode: codes.FailedPrecondition,
+			wantRes: []*ateapi.ExternalVolumeStatus{
+				{Name: "data-vol", VolumeType: "mock-standard"},
+			},
+			wantRecords: []*ateapi.ExternalVolume{{
+				Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: dataVolRecord},
+				VolumeId:   "somebody-elses-disk",
+				VolumeType: "mock-standard",
+			}},
 		},
 	}
 
@@ -322,14 +400,55 @@ func TestCreateActorVolumes(t *testing.T) {
 				}
 			}
 			scLister := &fakeStorageClassLister{storageClasses: scs}
-			res, err := createActorVolumes(ctx, registry, scLister, "actor-uid-123", tt.tmpl, tt.inputVolumes)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("createActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
+			persistence := newTestPersistence(t)
+			if tt.existing != nil {
+				if _, err := persistence.CreateExternalVolume(ctx, tt.existing); err != nil {
+					t.Fatalf("CreateExternalVolume failed: %v", err)
+				}
+			}
+			res, err := createActorVolumes(ctx, registry, scLister, persistence, actor, tt.tmpl, tt.inputVolumes)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("createActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
 			}
 			if diff := cmp.Diff(tt.wantRes, res, protocmp.Transform()); diff != "" {
 				t.Errorf("createActorVolumes() mismatch (-want +got):\n%s", diff)
 			}
+			records, err := persistence.ListExternalVolumes(ctx, "team-a", store.ListOptions{})
+			if err != nil {
+				t.Fatalf("ListExternalVolumes failed: %v", err)
+			}
+			if diff := cmp.Diff(tt.wantRecords, records.Items, protocmp.Transform(), protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "uid", "version", "create_time", "update_time")); diff != "" {
+				t.Errorf("ExternalVolumes after createActorVolumes() mismatch (-want +got):\n%s", diff)
+			}
 		})
+	}
+}
+
+func TestProvisionedExternalVolumeName(t *testing.T) {
+	const uid = "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55"
+	short := provisionedExternalVolumeName(uid, "data")
+	if !strings.HasPrefix(short, "data-") || len(short) != len("data-")+16 {
+		t.Errorf("provisionedExternalVolumeName(uid, data) = %q, want the volume name and a 16 character hash", short)
+	}
+	if again := provisionedExternalVolumeName(uid, "data"); again != short {
+		t.Errorf("provisionedExternalVolumeName is not deterministic: %q then %q", short, again)
+	}
+	if other := provisionedExternalVolumeName("0f1c3d55-2f0a-4c0f-9f4e-8ba9b6ee2e1a", "data"); other == short {
+		t.Errorf("provisionedExternalVolumeName gives two actors the same name %q", short)
+	}
+	if other := provisionedExternalVolumeName(uid, "data-2"); other == short {
+		t.Errorf("provisionedExternalVolumeName gives two volumes the same name %q", short)
+	}
+	// Both the volume name and the result are DNS labels, so a long volume
+	// name is cut to fit, without leaving a dash before the hash.
+	for _, volumeName := range []string{"data", strings.Repeat("v", 63), strings.Repeat("v", 45) + "-vol"} {
+		got := provisionedExternalVolumeName(uid, volumeName)
+		if errs := resources.ValidateResourceName(got, nil); len(errs) > 0 {
+			t.Errorf("provisionedExternalVolumeName(uid, %q) = %q, want a resource name: %v", volumeName, got, errs)
+		}
+		if strings.Contains(got, "--") {
+			t.Errorf("provisionedExternalVolumeName(uid, %q) = %q, want no double dash", volumeName, got)
+		}
 	}
 }
 
@@ -357,7 +476,7 @@ func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	}}
 	input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
 
-	res, err := createActorVolumes(context.Background(), registry, scLister, "actor-uid-123", tmpl, input)
+	res, err := createActorVolumes(context.Background(), registry, scLister, nil, volumeTestActor(), tmpl, input)
 	if got := apierror.Code(err); got != codes.Internal {
 		t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, codes.Internal, err)
 	}
@@ -367,61 +486,225 @@ func TestCreateActorVolumesRejectsEmptyPluginID(t *testing.T) {
 	}
 }
 
+// failingExternalVolumeStore wraps a store, failing the calls whose error is
+// set.
+type failingExternalVolumeStore struct {
+	externalVolumeStore
+	createErr, getErr, deleteErr error
+}
+
+func (f *failingExternalVolumeStore) CreateExternalVolume(ctx context.Context, volume *ateapi.ExternalVolume) (*ateapi.ExternalVolume, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	return f.externalVolumeStore.CreateExternalVolume(ctx, volume)
+}
+
+func (f *failingExternalVolumeStore) GetExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef) (*ateapi.ExternalVolume, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return f.externalVolumeStore.GetExternalVolume(ctx, volumeRef)
+}
+
+func (f *failingExternalVolumeStore) DeleteExternalVolume(ctx context.Context, volumeRef resources.ExternalVolumeRef, precondition store.DeletePreconditions) (*ateapi.ExternalVolume, error) {
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	return f.externalVolumeStore.DeleteExternalVolume(ctx, volumeRef, precondition)
+}
+
+func TestCreateActorVolumesRecordErrors(t *testing.T) {
+	ctx := context.Background()
+	actor := volumeTestActor()
+	tmpl := &ateapi.ActorTemplate{
+		Volumes: []*ateapi.Volume{{
+			Name:     "data-vol",
+			External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{StorageClassName: "standard"}},
+		}},
+	}
+	registry := &mockPluginRegistry{
+		plugins: map[string]volume.VolumePluginControlPlane{"mock-standard": volume.NewMockVolumePlugin()},
+	}
+	scLister := &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
+		"standard": {ObjectMeta: metav1.ObjectMeta{Name: "standard"}, Provisioner: "mock-standard"},
+	}}
+	input := []*ateapi.ExternalVolumeStatus{{Name: "data-vol", VolumeType: "mock-standard"}}
+	existing := &ateapi.ExternalVolume{
+		Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: provisionedExternalVolumeName(actor.GetMetadata().GetUid(), "data-vol")},
+		VolumeId:   "mock-vol-substrate-actor-uid-123-data-vol",
+		VolumeType: "mock-standard",
+	}
+
+	tests := []struct {
+		name string
+		// existing is a record an earlier attempt left in the store.
+		existing *ateapi.ExternalVolume
+		store    failingExternalVolumeStore
+	}{
+		{
+			name:  "create fails",
+			store: failingExternalVolumeStore{createErr: errors.New("connection reset")},
+		},
+		{
+			name:     "read of the existing record fails",
+			existing: existing,
+			store:    failingExternalVolumeStore{getErr: errors.New("connection reset")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			persistence := newTestPersistence(t)
+			if tt.existing != nil {
+				if _, err := persistence.CreateExternalVolume(ctx, tt.existing); err != nil {
+					t.Fatalf("CreateExternalVolume failed: %v", err)
+				}
+			}
+			tt.store.externalVolumeStore = persistence
+			res, err := createActorVolumes(ctx, registry, scLister, &tt.store, actor, tmpl, input)
+			if got := apierror.Code(err); got != codes.Internal {
+				t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, codes.Internal, err)
+			}
+			// The volume stays unprovisioned in the status, so a retry
+			// provisions it again and gets the same volume back.
+			if diff := cmp.Diff(input, res, protocmp.Transform()); diff != "" {
+				t.Errorf("createActorVolumes() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 type trackingVolumePlugin struct {
 	volume.VolumePluginControlPlane
 	deletedIDs []string
+	// deleteErr is returned by every DeleteVolume call.
+	deleteErr error
 }
 
 func (t *trackingVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
 	t.deletedIDs = append(t.deletedIDs, volumeID)
-	return nil
+	return t.deleteErr
 }
 
 func TestDeleteActorVolumes(t *testing.T) {
 	ctx := context.Background()
+	actor := volumeTestActor()
+	derived := provisionedExternalVolumeName(actor.GetMetadata().GetUid(), "vol1")
+	record := func(name string) *ateapi.ExternalVolume {
+		return &ateapi.ExternalVolume{
+			Metadata:   &ateapi.ResourceMetadata{Atespace: "team-a", Name: name},
+			VolumeId:   "storage-vol-123",
+			VolumeType: "mock",
+		}
+	}
 
 	tests := []struct {
-		name        string
-		actorUID    string
-		volumes     []*ateapi.ExternalVolumeStatus
-		wantDeleted []string
+		name    string
+		volumes []*ateapi.ExternalVolumeStatus
+		// records are the ExternalVolumes in the store beforehand.
+		records []*ateapi.ExternalVolume
+		// storageErr is what the plugin's DeleteVolume returns.
+		storageErr error
+		// recordErr is what the store's DeleteExternalVolume returns.
+		recordErr   error
 		wantErr     bool
+		wantDeleted []string
+		// wantRecords are the ExternalVolumes left afterwards.
+		wantRecords []string
 	}{
 		{
-			name:     "uses storage volume ID when present",
-			actorUID: "uid-abc",
+			name: "uses storage volume ID when present and deletes the record the status names",
 			volumes: []*ateapi.ExternalVolumeStatus{
-				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock"},
+				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock", ExternalVolumeName: "vol1-record"},
 			},
+			records:     []*ateapi.ExternalVolume{record("vol1-record"), record("other")},
 			wantDeleted: []string{"storage-vol-123"},
-			wantErr:     false,
+			wantRecords: []string{"other"},
 		},
 		{
-			name:     "falls back to actorVolumeID when storage volume ID is empty",
-			actorUID: "uid-abc",
+			// The actor write after provisioning failed, so the status names
+			// neither the volume nor its record.
+			name: "falls back to the derived volume ID and record name",
 			volumes: []*ateapi.ExternalVolumeStatus{
-				{Name: "vol1", StorageVolumeId: "", VolumeType: "mock"},
+				{Name: "vol1", VolumeType: "mock"},
 			},
-			wantDeleted: []string{"substrate-uid-abc-vol1"},
-			wantErr:     false,
+			records:     []*ateapi.ExternalVolume{record(derived)},
+			wantDeleted: []string{"substrate-actor-uid-123-vol1"},
+		},
+		{
+			// Actors from before records were kept have none.
+			name: "a missing record is not an error",
+			volumes: []*ateapi.ExternalVolumeStatus{
+				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock", ExternalVolumeName: "vol1-record"},
+			},
+			wantDeleted: []string{"storage-vol-123"},
+		},
+		{
+			// A re-entered workflow whose earlier run deleted the storage but
+			// not the record still removes the record.
+			name: "a volume already gone from storage still loses its record",
+			volumes: []*ateapi.ExternalVolumeStatus{
+				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock", ExternalVolumeName: "vol1-record"},
+			},
+			records:     []*ateapi.ExternalVolume{record("vol1-record")},
+			storageErr:  status.Error(codes.NotFound, "no such volume"),
+			wantDeleted: []string{"storage-vol-123"},
+		},
+		{
+			name: "a failed storage delete keeps the record",
+			volumes: []*ateapi.ExternalVolumeStatus{
+				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock", ExternalVolumeName: "vol1-record"},
+			},
+			records:     []*ateapi.ExternalVolume{record("vol1-record")},
+			storageErr:  status.Error(codes.Unavailable, "storage down"),
+			wantErr:     true,
+			wantDeleted: []string{"storage-vol-123"},
+			wantRecords: []string{"vol1-record"},
+		},
+		{
+			name: "a failed record delete is reported",
+			volumes: []*ateapi.ExternalVolumeStatus{
+				{Name: "vol1", StorageVolumeId: "storage-vol-123", VolumeType: "mock", ExternalVolumeName: "vol1-record"},
+			},
+			records:     []*ateapi.ExternalVolume{record("vol1-record")},
+			recordErr:   errors.New("connection reset"),
+			wantErr:     true,
+			wantDeleted: []string{"storage-vol-123"},
+			wantRecords: []string{"vol1-record"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plugin := &trackingVolumePlugin{}
+			plugin := &trackingVolumePlugin{deleteErr: tt.storageErr}
 			registry := &mockPluginRegistry{
 				plugins: map[string]volume.VolumePluginControlPlane{
 					"mock": plugin,
 				},
 			}
-			err := deleteActorVolumes(ctx, registry, tt.actorUID, tt.volumes)
-			if (err != nil) != tt.wantErr {
+			persistence := newTestPersistence(t)
+			for _, r := range tt.records {
+				if _, err := persistence.CreateExternalVolume(ctx, r); err != nil {
+					t.Fatalf("CreateExternalVolume failed: %v", err)
+				}
+			}
+			volumeStore := &failingExternalVolumeStore{externalVolumeStore: persistence, deleteErr: tt.recordErr}
+			if err := deleteActorVolumes(ctx, registry, volumeStore, actor, tt.volumes); (err != nil) != tt.wantErr {
 				t.Fatalf("deleteActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}
-
 			if diff := cmp.Diff(tt.wantDeleted, plugin.deletedIDs); diff != "" {
 				t.Errorf("deletedIDs mismatch (-want +got):\n%s", diff)
+			}
+			left, err := persistence.ListExternalVolumes(ctx, "team-a", store.ListOptions{})
+			if err != nil {
+				t.Fatalf("ListExternalVolumes failed: %v", err)
+			}
+			var names []string
+			for _, r := range left.Items {
+				names = append(names, r.GetMetadata().GetName())
+			}
+			if diff := cmp.Diff(tt.wantRecords, names); diff != "" {
+				t.Errorf("ExternalVolumes left after deleteActorVolumes() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

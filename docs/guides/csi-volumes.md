@@ -119,6 +119,24 @@ volumeMounts:
 > [!NOTE]
 > All declared volumes in `volumes` must be mounted by at least one container.
 
+#### Provisioned volumes and `ExternalVolume` records
+
+The volume is provisioned on the actor's first resume. From then on the
+actor's status carries the CSI handle under `status.externalVolumes.volumes[]`
+(`storageVolumeId`, `volumeType`, `volumeContext`), and the same handle is
+recorded as an `ExternalVolume` in the actor's atespace, named in that entry's
+`externalVolumeName`:
+
+```bash
+kubectl ate get actor producer-42 -a ate-demo -o json \
+  | jq -r '.status.externalVolumes.volumes[] | [.name, .externalVolumeName] | @tsv'
+kubectl ate get externalvolumes -a ate-demo
+```
+
+Deleting the actor deletes the volume and its record. Deleting the record
+alone (`kubectl ate delete externalvolume`) leaves the volume and the actor as
+they are.
+
 ---
 
 ## 4. End-to-End Example
@@ -212,3 +230,37 @@ volumes:
       capacityBytes: 5368709120 # 5Gi
       storageClassName: csi-nfs-sc
 ```
+
+## 5. Registering an Existing Volume
+
+An `ExternalVolume` is an atespace-scoped record of a CSI volume that already
+exists in the storage system. It names the volume the way the node plugin needs
+it: the CSI driver (`volumeType`), the volume ID the driver reports
+(`volumeId`), and the mount metadata the driver returned when the volume was
+provisioned (`volumeContext`). Its lifetime is independent of any actor, and an
+atespace cannot be deleted while it holds one.
+
+Registering a volume names storage that the provider does not scope to an
+atespace, so only a global owner may do it; see
+[Authorization](authorization.md#external-volumes). It needs the
+`ExternalVolumes` preview gate and `--preview`:
+
+```bash
+kubectl ate --preview create externalvolume ctx -a ate-demo \
+  --volume-type nfs.csi.k8s.io \
+  --volume-id nfs-server.default.svc.cluster.local#exports#ctx \
+  --volume-context server=nfs-server.default.svc.cluster.local,share=/exports/ctx
+kubectl ate get externalvolumes -a ate-demo
+```
+
+Deleting an `ExternalVolume` removes the record only. The storage stays where
+it is:
+
+```bash
+kubectl ate delete externalvolume ctx -a ate-demo
+```
+
+Actor templates cannot reference an `ExternalVolume` yet. Every external volume
+an actor mounts is still provisioned for that actor from
+`volumes[].external.template`, as described above, and recorded as an
+`ExternalVolume` of its own.

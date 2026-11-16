@@ -44,7 +44,8 @@ Global
 │   ├── ActorTemplate
 │   ├── Actor
 │   │   └── EgressPolicy "default" subresource (singleton)
-│   └── Tag
+│   ├── Tag
+│   └── ExternalVolume
 └── Worker
     └── ActorAssignment            subresource (one per hosted Actor, managed by Substrate)
 ```
@@ -57,6 +58,7 @@ Global
 | `ActorTemplate` | Atespace | 0..N | Clients |
 | `Actor` | Atespace | 0..N | Clients |
 | `Tag` | Atespace | 0..N | Clients |
+| `ExternalVolume` | Atespace | 0..N | Clients and Substrate |
 | `Worker` | Global | 0..N | Substrate |
 
 ## Subresources
@@ -97,6 +99,7 @@ classDiagram
         class Actor
         class EgressPolicy
         class Tag
+        class ExternalVolume
         class Worker
         class ActorAssignment
     }
@@ -105,6 +108,7 @@ classDiagram
     Atespace "1" o-- "*" ActorTemplate
     Atespace "1" o-- "*" Actor
     Atespace "1" o-- "*" Tag
+    Atespace "1" o-- "*" ExternalVolume
     Actor "1" *-- "0..1" EgressPolicy
     Worker "1" *-- "*" ActorAssignment
     Actor "*" --> "1" ActorTemplate : actor_template

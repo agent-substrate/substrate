@@ -1928,8 +1928,27 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if len(resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()) != 1 {
 		t.Fatalf("expected 1 volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes())
 	}
-	if resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()[0].GetStorageVolumeId() == "" {
+	provisioned := resumeResp.GetActor().GetStatus().GetExternalVolumes().GetVolumes()[0]
+	if provisioned.GetStorageVolumeId() == "" {
 		t.Fatalf("expected non-empty storageVolumeId after ResumeActor")
+	}
+	// The volume is recorded as an ExternalVolume in the actor's atespace.
+	if provisioned.GetExternalVolumeName() == "" {
+		t.Fatalf("expected externalVolumeName after ResumeActor, got %v", provisioned)
+	}
+	recordRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: provisioned.GetExternalVolumeName()}
+	record, err := tc.client.GetExternalVolume(context.Background(), &ateapi.GetExternalVolumeRequest{ExternalVolume: recordRef})
+	if err != nil {
+		t.Fatalf("GetExternalVolume(%s) failed: %v", provisioned.GetExternalVolumeName(), err)
+	}
+	wantRecord := &ateapi.ExternalVolume{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: provisioned.GetExternalVolumeName()},
+		VolumeId:      provisioned.GetStorageVolumeId(),
+		VolumeType:    provisioned.GetVolumeType(),
+		VolumeContext: provisioned.GetVolumeContext(),
+	}
+	if diff := cmp.Diff(wantRecord, record, protocmp.Transform(), ignoreUID, ignoreTimestamps, protocmp.IgnoreFields(&ateapi.ResourceMetadata{}, "version")); diff != "" {
+		t.Errorf("ExternalVolume of the provisioned volume mismatch (-want +got):\n%s", diff)
 	}
 
 	// 3. Async SuspendActor
@@ -1983,6 +2002,10 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		t.Errorf("deleted actor name = %q, want %q", deleteResp.GetMetadata().GetName(), "actor-vol-lc")
 	}
 
+	// The record goes with the actor.
+	_, err = tc.client.GetExternalVolume(context.Background(), &ateapi.GetExternalVolumeRequest{ExternalVolume: recordRef})
+	assertGrpcError(t, err, codes.NotFound, fmt.Sprintf("ExternalVolume %s/%s not found", testAtespace, provisioned.GetExternalVolumeName()))
+
 	// Confirm GetActor returns NotFound after deletion
 	_, err = tc.client.GetActor(context.Background(), &ateapi.GetActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
@@ -1990,6 +2013,21 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("GetActor after delete err = %v, want NotFound", err)
 	}
+}
+
+// listExternalVolumeNames returns the names of the ExternalVolumes in
+// testAtespace.
+func listExternalVolumeNames(t *testing.T, tc *testContext) []string {
+	t.Helper()
+	listed, err := tc.client.ListExternalVolumes(context.Background(), &ateapi.ListExternalVolumesRequest{Atespace: testAtespace})
+	if err != nil {
+		t.Fatalf("ListExternalVolumes failed: %v", err)
+	}
+	var names []string
+	for _, v := range listed.GetExternalVolumes() {
+		names = append(names, v.GetMetadata().GetName())
+	}
+	return names
 }
 
 type partialFailVolumePlugin struct {
@@ -2102,6 +2140,15 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		t.Errorf("fail-vol2 unexpected state: %v", v2)
 	}
 
+	// Only the provisioned volume has an ExternalVolume.
+	wantRecords := []string{volsByName["succ-vol1"].GetExternalVolumeName()}
+	if wantRecords[0] == "" {
+		t.Errorf("succ-vol1 names no ExternalVolume: %v", volsByName["succ-vol1"])
+	}
+	if diff := cmp.Diff(wantRecords, listExternalVolumeNames(t, tc)); diff != "" {
+		t.Errorf("ExternalVolumes after the failed resume mismatch (-want +got):\n%s", diff)
+	}
+
 	// Call DeleteActor on the actor in ACTOR_STATE_SUSPENDED
 	_, err = tc.client.DeleteActor(context.Background(), &ateapi.DeleteActorRequest{
 		Actor: &ateapi.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
@@ -2117,6 +2164,9 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	}
 	if diff := cmp.Diff(wantDeleted, plugin.deleted); diff != "" {
 		t.Errorf("deleted volume IDs mismatch (-want +got):\n%s", diff)
+	}
+	if left := listExternalVolumeNames(t, tc); len(left) != 0 {
+		t.Errorf("ExternalVolumes left after DeleteActor = %v, want none", left)
 	}
 
 	// Confirm GetActor returns NotFound after deletion

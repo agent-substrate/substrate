@@ -338,6 +338,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runTagContractTests(t, setup)
+	runExternalVolumeContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
@@ -529,6 +530,7 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
+			{"external volumes", func(opts store.ListOptions) error { _, err := s.ListExternalVolumes(ctx, "", opts); return err }},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
 		}
 		for _, call := range calls {
@@ -554,6 +556,7 @@ func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.In
 			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
 			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
 			{"tags", func(opts store.ListOptions) error { _, err := s.ListTags(ctx, "", opts); return err }},
+			{"external volumes", func(opts store.ListOptions) error { _, err := s.ListExternalVolumes(ctx, "", opts); return err }},
 			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
 		}
 		for _, call := range calls {
@@ -1806,6 +1809,156 @@ func storeTag(t *testing.T, s store.Interface, tag *ateapi.Tag) *ateapi.Tag {
 		t.Fatalf("finalizing tag %q failed: %v", tag.GetMetadata().GetName(), err)
 	}
 	return stored
+}
+
+func newTestExternalVolume(atespace, name string) *ateapi.ExternalVolume {
+	return &ateapi.ExternalVolume{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: atespace, Name: name},
+		VolumeId:      "filestore-" + name,
+		VolumeType:    "filestore.csi.storage.gke.io",
+		VolumeContext: map[string]string{"ip": "10.0.0.2"},
+	}
+}
+
+func storeExternalVolume(t *testing.T, s store.Interface, volume *ateapi.ExternalVolume) *ateapi.ExternalVolume {
+	t.Helper()
+	stored, err := s.CreateExternalVolume(context.Background(), volume)
+	if err != nil {
+		t.Fatalf("CreateExternalVolume(%q) failed: %v", volume.GetMetadata().GetName(), err)
+	}
+	return stored
+}
+
+func runExternalVolumeContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("ExternalVolume_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		input := newTestExternalVolume("team-a", "scratch")
+		created, err := s.CreateExternalVolume(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateExternalVolume failed: %v", err)
+		}
+		if created.GetMetadata().GetVersion() != 1 || created.GetMetadata().GetUid() == "" {
+			t.Errorf("created volume metadata = %v, want server-owned uid and version 1", created.GetMetadata())
+		}
+		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
+			t.Errorf("CreateExternalVolume mutated its input metadata: %v", input.GetMetadata())
+		}
+
+		volumeRef := resources.ExternalVolumeRef{Atespace: "team-a", Name: "scratch"}
+		volume, err := s.GetExternalVolume(ctx, volumeRef)
+		if err != nil {
+			t.Fatalf("GetExternalVolume failed: %v", err)
+		}
+		if diff := cmp.Diff(input, volume, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
+			t.Errorf("stored external volume mismatch (-want +got):\n%s", diff)
+		}
+		if _, err := s.GetExternalVolume(ctx, resources.ExternalVolumeRef{Atespace: "team-a", Name: "missing"}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("missing GetExternalVolume = %v, want ErrNotFound", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteAtespace with an external volume = %v, want ErrFailedPrecondition", err)
+		}
+
+		if _, err := s.DeleteExternalVolume(ctx, volumeRef, store.DeletePreconditions{Version: volume.GetMetadata().GetVersion() + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale DeleteExternalVolume = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.DeleteExternalVolume(ctx, volumeRef, store.DeletePreconditions{UID: "another-lifecycle"}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("DeleteExternalVolume with another uid = %v, want ErrUIDConflict", err)
+		}
+		deleted, err := s.DeleteExternalVolume(ctx, volumeRef, store.DeletePreconditions{UID: volume.GetMetadata().GetUid(), Version: volume.GetMetadata().GetVersion()})
+		if err != nil || !proto.Equal(deleted, volume) {
+			t.Errorf("DeleteExternalVolume = (%v, %v), want the stored volume", deleted, err)
+		}
+		if _, err := s.GetExternalVolume(ctx, volumeRef); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("deleted GetExternalVolume = %v, want ErrNotFound", err)
+		}
+		if _, err := s.DeleteExternalVolume(ctx, volumeRef, store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("DeleteExternalVolume on a missing volume = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("CreateExternalVolume_ReusedName", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		input := newTestExternalVolume("team-a", "scratch")
+		if _, err := s.CreateExternalVolume(ctx, input); err != nil {
+			t.Fatalf("CreateExternalVolume failed: %v", err)
+		}
+		if _, err := s.CreateExternalVolume(ctx, input); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("duplicate CreateExternalVolume = %v, want ErrAlreadyExists", err)
+		}
+
+		stored, err := s.GetExternalVolume(ctx, resources.ExternalVolumeRef{Atespace: "team-a", Name: "scratch"})
+		if err != nil {
+			t.Fatalf("GetExternalVolume failed: %v", err)
+		}
+		if stored.GetMetadata().GetVersion() != 1 {
+			t.Errorf("volume version after rejected create = %d, want 1", stored.GetMetadata().GetVersion())
+		}
+	})
+
+	t.Run("CreateExternalVolume_UnknownAtespace", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateExternalVolume(ctx, newTestExternalVolume("team-missing", "scratch")); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("CreateExternalVolume in an unknown atespace = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
+	t.Run("ListExternalVolumes_PaginationAndScope", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		for _, atespace := range []string{"team-a", "team-b"} {
+			mustCreateAtespace(t, s, atespace)
+			for i := 0; i < 3; i++ {
+				storeExternalVolume(t, s, newTestExternalVolume(atespace, fmt.Sprintf("volume-%d", i)))
+			}
+		}
+
+		var scoped []*ateapi.ExternalVolume
+		for token := ""; ; {
+			page, err := s.ListExternalVolumes(ctx, "team-a", store.ListOptions{PageSize: 2, PageToken: token})
+			if err != nil {
+				t.Fatalf("scoped ListExternalVolumes failed: %v", err)
+			}
+			scoped = append(scoped, page.Items...)
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if len(scoped) != 3 {
+			t.Errorf("scoped ListExternalVolumes returned %d volumes, want 3", len(scoped))
+		}
+		for _, volume := range scoped {
+			if volume.GetMetadata().GetAtespace() != "team-a" {
+				t.Errorf("scoped ListExternalVolumes returned %s/%s", volume.GetMetadata().GetAtespace(), volume.GetMetadata().GetName())
+			}
+		}
+
+		var global []*ateapi.ExternalVolume
+		for token := ""; ; {
+			page, err := s.ListExternalVolumes(ctx, "", store.ListOptions{PageSize: 2, PageToken: token})
+			if err != nil {
+				t.Fatalf("global ListExternalVolumes failed: %v", err)
+			}
+			global = append(global, page.Items...)
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if len(global) != 6 {
+			t.Errorf("global ListExternalVolumes returned %d volumes, want 6", len(global))
+		}
+	})
 }
 
 func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -3729,6 +3882,38 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("DeleteTag failed: %v", err)
 		}
 		assertPruned(t, "DeleteTag", created, deleted)
+	})
+
+	t.Run("UnknownFields_ExternalVolume", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		volumeRef := resources.ExternalVolumeRef{Atespace: testAtespace, Name: "vol-1"}
+		volume := withUnknownField(newTestExternalVolume(testAtespace, volumeRef.Name))
+		withUnknownField(volume.Metadata)
+		created, err := s.CreateExternalVolume(ctx, volume)
+		if err != nil {
+			t.Fatalf("CreateExternalVolume failed: %v", err)
+		}
+
+		got, err := s.GetExternalVolume(ctx, volumeRef)
+		if err != nil {
+			t.Fatalf("GetExternalVolume failed: %v", err)
+		}
+		assertPruned(t, "GetExternalVolume", created, got)
+
+		list, err := s.ListExternalVolumes(ctx, testAtespace, store.ListOptions{})
+		if err != nil || len(list.Items) != 1 {
+			t.Fatalf("ListExternalVolumes = %d items, %v; want 1", len(list.Items), err)
+		}
+		assertPruned(t, "ListExternalVolumes", created, list.Items[0])
+
+		deleted, err := s.DeleteExternalVolume(ctx, volumeRef, store.DeletePreconditions{})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolume failed: %v", err)
+		}
+		assertPruned(t, "DeleteExternalVolume", created, deleted)
 	})
 
 	t.Run("UnknownFields_Atespace", func(t *testing.T) {

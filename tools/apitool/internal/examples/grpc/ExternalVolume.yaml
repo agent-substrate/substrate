@@ -1,0 +1,25 @@
+# Copyright 2026 The Agent Substrate Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+metadata:
+  atespace: prod
+  name: ctx
+  uid: 7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d
+  version: "1"
+  createTime: "2026-09-24T09:12:41Z"
+  updateTime: "2026-09-24T09:12:41Z"
+volumeId: nfs-server.default.svc.cluster.local#exports#ctx
+volumeType: nfs.csi.k8s.io
+volumeContext:
+  server: nfs-server.default.svc.cluster.local
+  share: /exports/ctx

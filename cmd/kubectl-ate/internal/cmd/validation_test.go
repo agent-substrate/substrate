@@ -331,6 +331,36 @@ func TestCLIUsageErrorsGoToStderrWithUsage(t *testing.T) {
 			wantUsageLine: "kubectl-ate create tag <tag-name> [flags]",
 		},
 		{
+			name:          "create externalvolume missing all",
+			args:          []string{"create", "externalvolume"},
+			wantErrorLine: "Error: missing required argument <volume-name> and required flags -a/--atespace, --volume-id, --volume-type",
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "create externalvolume missing --volume-type",
+			args:          []string{"create", "externalvolume", "ctx", "-a", "space-1", "--volume-id", "vol-1"},
+			wantErrorLine: "Error: missing required flag --volume-type",
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "swallowed flag after --volume-context",
+			args:          []string{"create", "externalvolume", "ctx", "-a", "space-1", "--volume-context", "--volume-id", "vol-1"},
+			wantErrorLine: `Error: flag "--volume-context" requires a value, got flag "--volume-id"`,
+			wantUsageLine: "kubectl-ate create externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "delete externalvolume with nothing",
+			args:          []string{"delete", "externalvolume"},
+			wantErrorLine: "Error: missing required argument <volume-name> and required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate delete externalvolume <volume-name> [flags]",
+		},
+		{
+			name:          "delete externalvolume missing -a",
+			args:          []string{"delete", "externalvolume", "ctx"},
+			wantErrorLine: "Error: missing required flag -a/--atespace",
+			wantUsageLine: "kubectl-ate delete externalvolume <volume-name> [flags]",
+		},
+		{
 			name:          "update tag missing scope",
 			args:          []string{"update", "tag", "t1", "-a", "space-1"},
 			wantErrorLine: "Error: missing required flag --scope",

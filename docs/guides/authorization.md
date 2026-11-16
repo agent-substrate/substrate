@@ -127,6 +127,9 @@ one **atespace**.
 | Create, update, delete egress policies | ✅ | | ✅ | ✅ | |
 | Create, publish, delete tags | ✅ | | ✅ | ✅ | |
 | Create an actor from a tag (`sourceTag`) | ✅ | | ✅ | ✅ | |
+| Get and list external volumes | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Register (create) external volumes | ✅ | | | | |
+| Delete external volumes | ✅ | | ✅ | ✅ | |
 | Workers: get, list, list assignments | ✅ | ✅ | | | |
 | Workers: create, update, delete, drain | ✅ | | | | |
 
@@ -201,6 +204,20 @@ viewer, and a global role holds the same role in every atespace. So
 | `UpdateTag` (including publishing) | `can_update`, the tag | Editor of its atespace |
 | `DeleteTag` | `can_delete`, the tag | Editor of its atespace |
 | `ListTags` | `can_list_tags`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
+
+### External volumes
+
+An `ExternalVolume` names storage by the volume ID the CSI driver reports.
+Storage providers do not scope volumes to atespaces, so a record in one
+atespace can name a volume that another atespace uses. Registering one is
+therefore reserved for global owners.
+
+| RPC | Permission, on | Allowed for |
+|---|---|---|
+| `CreateExternalVolume` | `can_create_external_volume`, `metadata.atespace` | Global owner |
+| `GetExternalVolume` | `can_get`, the external volume | Viewer of its atespace |
+| `DeleteExternalVolume` | `can_delete`, the external volume | Editor of its atespace |
+| `ListExternalVolumes` | `can_list_external_volumes`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
 
 ### Workers
 

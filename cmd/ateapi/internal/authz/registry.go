@@ -123,6 +123,13 @@ func onTag(relation string, ref resourceRef, fldPath *field.Path) ([]check, fiel
 	return []check{{relation: relation, object: TagObject(ref.GetAtespace(), ref.GetName())}}, nil
 }
 
+func onExternalVolume(relation string, ref resourceRef, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateRef(ref, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: ExternalVolumeObject(ref.GetAtespace(), ref.GetName())}}, nil
+}
+
 // onSourceTag checks can_use_tag on the tag an actor is created from, if the
 // request names one.
 func onSourceTag(ref *ateapi.ObjectRef, fldPath *field.Path) ([]check, field.ErrorList) {
@@ -319,6 +326,21 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapi.Control_DeleteTag_FullMethodName: rule(checksOf(func(r *ateapi.DeleteTagRequest) ([]check, field.ErrorList) {
 		return onTag(RelationCanDelete, r.GetTag(), field.NewPath("tag"))
+	})),
+
+	// External volumes: the atespace's global owner registers, viewers read,
+	// editors delete.
+	ateapi.Control_CreateExternalVolume_FullMethodName: rule(checksOf(func(r *ateapi.CreateExternalVolumeRequest) ([]check, field.ErrorList) {
+		return onAtespace(RelationCanCreateExternalVolume, r.GetExternalVolume().GetMetadata().GetAtespace(), field.NewPath("external_volume", "metadata", "atespace"))
+	})),
+	ateapi.Control_GetExternalVolume_FullMethodName: rule(checksOf(func(r *ateapi.GetExternalVolumeRequest) ([]check, field.ErrorList) {
+		return onExternalVolume(RelationCanGet, r.GetExternalVolume(), field.NewPath("external_volume"))
+	})),
+	ateapi.Control_ListExternalVolumes_FullMethodName: rule(checksOf(func(r *ateapi.ListExternalVolumesRequest) ([]check, field.ErrorList) {
+		return onAtespaceOrGlobal(RelationCanListExternalVolumes, r.GetAtespace(), field.NewPath("atespace"))
+	})),
+	ateapi.Control_DeleteExternalVolume_FullMethodName: rule(checksOf(func(r *ateapi.DeleteExternalVolumeRequest) ([]check, field.ErrorList) {
+		return onExternalVolume(RelationCanDelete, r.GetExternalVolume(), field.NewPath("external_volume"))
 	})),
 
 	// WorkerService is served only to atelet, which each handler
