@@ -56,6 +56,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/ptr"
 )
 
@@ -84,6 +85,7 @@ var (
 
 type testContext struct {
 	service         *controlapi.RPCService
+	templateQueue   workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
 	client          ateapi.ControlClient
 	noOptInClient   ateapi.ControlClient // never sends preview.Header
 	k8sClient       kubernetes.Interface
@@ -220,6 +222,8 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 
 	objectStore := objectstoretest.New()
 
+	templateQueue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]())
+	t.Cleanup(templateQueue.ShutDown)
 	service := controlapi.NewRPCService(
 		persistence,
 		wc,
@@ -233,6 +237,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		testStorageLocation,
+		templateQueue,
 	)
 
 	// 5. Start REAL gRPC Server for ATE API
@@ -312,6 +317,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 
 	return &testContext{
 		service:         service,
+		templateQueue:   templateQueue,
 		client:          client,
 		noOptInClient:   ateapi.NewControlClient(noOptInConn),
 		k8sClient:       k8sClient,

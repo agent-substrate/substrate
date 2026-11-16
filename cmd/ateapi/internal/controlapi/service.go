@@ -28,6 +28,7 @@ import (
 	"go.ate.dev/substrate/internal/volume/csi"
 	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // RPCService implements ateapi.ControlServer and provides the implementation of
@@ -51,6 +52,7 @@ type RPCService struct {
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
+	templateQueue  workqueue.TypedInterface[resources.ActorTemplateRef]
 }
 
 var _ ateapi.ControlServer = (*RPCService)(nil)
@@ -73,6 +75,8 @@ type VolumePluginRegistry interface {
 //
 // snapshotLocation is ate-api-server's cluster-wide --snapshot-location; see
 // resolveSnapshotLocation.
+//
+// templateQueue is shared with ActorTemplateReconciler.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -86,6 +90,7 @@ func NewRPCService(
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	snapshotLocation string,
+	templateQueue workqueue.TypedInterface[resources.ActorTemplateRef],
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
 	impl.clusterSnapshotLocation = snapshotLocation
@@ -100,6 +105,7 @@ func NewRPCService(
 		objectStorePlugin:     objectStorePlugin,
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
+		templateQueue:         templateQueue,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation

@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // fakeTemplateStore is an in-memory templateReconcilerStore.
@@ -47,6 +48,7 @@ type fakeTemplateStore struct {
 	// forcePageSize, when > 0, overrides the requested page size so tests
 	// can exercise the resync pagination loop.
 	forcePageSize int
+	listCalls     int
 }
 
 func newFakeTemplateStore(templates ...*ateapi.ActorTemplate) *fakeTemplateStore {
@@ -70,6 +72,7 @@ func (s *fakeTemplateStore) GetActorTemplate(_ context.Context, ref resources.Ac
 func (s *fakeTemplateStore) ListActorTemplates(_ context.Context, _ string, opts store.ListOptions) (store.ListResponse[*ateapi.ActorTemplate], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.listCalls++
 	refs := make([]resources.ActorTemplateRef, 0, len(s.templates))
 	for ref := range s.templates {
 		refs = append(refs, ref)
@@ -392,7 +395,7 @@ func withFailed(reason string) func(*ateapi.ActorTemplate) {
 }
 
 func newTestTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
-	return NewActorTemplateReconciler(persistence, control, 7*time.Second)
+	return NewActorTemplateReconciler(persistence, control, 7*time.Second, workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()))
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {
@@ -701,7 +704,7 @@ func TestReconcileOne_GoldenEgressPolicyBeforeResume(t *testing.T) {
 			persistence := newTestPersistence(t)
 			impl := newServiceImpl(persistence, nil)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}
@@ -756,7 +759,7 @@ func TestReconcileOne_GoldenEgressPolicyRecovery(t *testing.T) {
 			persistence := newTestPersistence(t)
 			impl := newServiceImpl(persistence, nil)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 				tmpl.Metadata = &ateapi.ResourceMetadata{Atespace: "templates", Name: "tmpl"}

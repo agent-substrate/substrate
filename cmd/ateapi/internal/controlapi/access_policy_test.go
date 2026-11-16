@@ -27,6 +27,7 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"k8s.io/client-go/util/workqueue"
 )
 
 func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
@@ -48,7 +49,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, "", nil, nil, "", nil, "")
+	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, "", nil, nil, "", nil, "", workqueue.NewTyped[resources.ActorTemplateRef]())
 	interceptor := authz.UnaryServerInterceptor(authorizer)
 
 	userCtx := func(id string) context.Context {

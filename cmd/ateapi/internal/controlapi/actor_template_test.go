@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -30,7 +31,9 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // validActorTemplate returns the smallest template that passes create
@@ -58,7 +61,7 @@ func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
 	impl := newServiceImpl(persistence, nil)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-	s := &RPCService{impl: impl}
+	s := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapi.CreateActorTemplateRequest {
 		return &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
@@ -127,7 +130,7 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 			persistence := newTestPersistence(t)
 			impl := newServiceImpl(persistence, nil)
 			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
-			s := &RPCService{impl: impl}
+			s := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 			ctx := context.Background()
 			if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 				t.Fatalf("CreateAtespace failed: %v", err)
@@ -154,7 +157,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
 	impl := newServiceImpl(persistence, nil)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-	s := &RPCService{impl: impl}
+	s := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -201,7 +204,7 @@ func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
 	persistence := newTestPersistence(t)
 	impl := newServiceImpl(persistence, nil)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-	s := &RPCService{impl: impl}
+	s := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 	ctx := context.Background()
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
@@ -515,5 +518,201 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	}
 	if got, want := reverted.GetMetadata().GetUid(), created.GetMetadata().GetUid(); got != want {
 		t.Errorf("uid after update = %q, want %q", got, want)
+	}
+}
+
+// createTemplateStore records templates in the reconciler's in-memory store.
+type createTemplateStore struct {
+	serviceStore
+	state *fakeTemplateStore
+	err   error
+}
+
+func (s *createTemplateStore) CreateActorTemplate(_ context.Context, template *ateapi.ActorTemplate) (*ateapi.ActorTemplate, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+	ref := resources.ActorTemplateRefFromActorTemplate(template)
+	if _, exists := s.state.templates[ref]; exists {
+		return nil, store.ErrAlreadyExists
+	}
+	stored := proto.CloneOf(template)
+	stored.Metadata.Uid = testTemplateUID
+	stored.Metadata.Version = 1
+	stored.Status = &ateapi.ActorTemplateStatus{}
+	s.state.templates[ref] = stored
+	return proto.CloneOf(stored), nil
+}
+
+func queuedTemplateRequest(name string) *ateapi.CreateActorTemplateRequest {
+	return &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(template *ateapi.ActorTemplate) {
+		template.Metadata = &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name}
+		template.Containers[0].WakeupProbe = &ateapi.WakeupProbe{
+			HttpGet:        &ateapi.HttpGetAction{Port: 8080, Path: "/ready"},
+			TimeoutSeconds: 30,
+		}
+	})}
+}
+
+type blockedTemplateCreate struct {
+	*createTemplateStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockedTemplateCreate) CreateActorTemplate(ctx context.Context, template *ateapi.ActorTemplate) (*ateapi.ActorTemplate, error) {
+	close(s.entered)
+	<-s.release
+	return s.createTemplateStore.CreateActorTemplate(ctx, template)
+}
+
+func TestCreateActorTemplate_DoesNotEnqueueAnUncommittedWrite(t *testing.T) {
+	st := newFakeTemplateStore()
+	r := newTestTemplateReconciler(st, &fakeGoldenControl{})
+	defer r.queue.ShutDown()
+	creator := &blockedTemplateCreate{
+		createTemplateStore: &createTemplateStore{state: st},
+		entered:             make(chan struct{}), release: make(chan struct{}),
+	}
+	svc := &RPCService{impl: creator, templateQueue: r.queue}
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.CreateActorTemplate(t.Context(), queuedTemplateRequest(testTemplateName))
+		done <- err
+	}()
+	select {
+	case <-creator.entered:
+	case err := <-done:
+		t.Fatalf("create returned before entering storage: %v", err)
+	}
+	beforeCommit := r.queue.Len()
+	close(creator.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if beforeCommit != 0 || r.queue.Len() != 1 {
+		t.Fatalf("queue before/after storage = %d/%d, want 0/1", beforeCommit, r.queue.Len())
+	}
+}
+
+func TestCreateActorTemplate_EnqueuesAfterStorage(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		disabled   bool
+		storeErr   error
+		wantCode   codes.Code
+		wantQueued int
+	}{
+		{name: "enabled", wantQueued: 1},
+		{name: "disabled", disabled: true},
+		{name: "store failed", storeErr: errors.New("store unavailable"), wantCode: codes.Internal},
+		{name: "already exists", storeErr: store.ErrAlreadyExists, wantCode: codes.AlreadyExists},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newFakeTemplateStore()
+			control := &fakeGoldenControl{snapshot: "gs://bucket/golden"}
+			r := newTestTemplateReconciler(st, control)
+			defer r.queue.ShutDown()
+			r.resync(t.Context())
+			svc := &RPCService{impl: &createTemplateStore{state: st, err: tt.storeErr}, templateQueue: r.queue}
+			req := queuedTemplateRequest(testTemplateName)
+			if tt.disabled {
+				req.ActorTemplate.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+			}
+			_, err := svc.CreateActorTemplate(t.Context(), req)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("create code = %v, want %v: %v", got, tt.wantCode, err)
+			}
+			if got := r.queue.Len(); got != tt.wantQueued {
+				t.Fatalf("queue length = %d, want %d before the next resync", got, tt.wantQueued)
+			}
+			if tt.wantQueued != 0 {
+				r.processNextWorkItem(t.Context())
+				if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetGoldenTag() == nil {
+					t.Fatal("template did not become ready without a resync")
+				}
+			}
+			if st.listCalls != 1 {
+				t.Fatalf("template lists = %d, want only the initial list", st.listCalls)
+			}
+		})
+	}
+}
+
+func TestCreateActorTemplate_QueueRecovery(t *testing.T) {
+	st := newFakeTemplateStore()
+	control := &fakeGoldenControl{snapshot: "gs://bucket/golden"}
+	r := newTestTemplateReconciler(st, control)
+	defer r.queue.ShutDown()
+	svc := &RPCService{impl: &createTemplateStore{state: st}, templateQueue: r.queue}
+	if _, err := svc.CreateActorTemplate(t.Context(), queuedTemplateRequest(testTemplateName)); err != nil {
+		t.Fatal(err)
+	}
+	if r.queue.Len() != 1 {
+		t.Fatal("create did not enqueue template")
+	}
+	// The recovery scan and create notification reach the same queue.
+	r.resync(t.Context())
+	if r.queue.Len() != 1 {
+		t.Fatal("duplicate event was not coalesced")
+	}
+	st.leaseErr = store.ErrLeaseConflict
+	r.processNextWorkItem(t.Context())
+	if len(control.createReqs) != 0 {
+		t.Fatal("created a golden actor while another replica held the lease")
+	}
+	st.leaseErr = nil
+	// A fresh replica must recover the pending template without a notification.
+	restarted := newTestTemplateReconciler(st, control)
+	defer restarted.queue.ShutDown()
+	restarted.resync(t.Context())
+	restarted.processNextWorkItem(t.Context())
+	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetGoldenTag() == nil {
+		t.Fatal("resync did not recover the unprocessed template")
+	}
+	if len(control.createReqs) != 1 {
+		t.Fatalf("golden creates = %d, want 1", len(control.createReqs))
+	}
+	// A late queued event must observe the terminal state instead of rebuilding.
+	r.queue.Add(testTemplateRef)
+	r.processNextWorkItem(t.Context())
+	if len(control.createReqs) != 1 {
+		t.Fatal("late event rebuilt the golden actor")
+	}
+	st.mu.Lock()
+	delete(st.templates, testTemplateRef)
+	st.mu.Unlock()
+	r.queue.Add(testTemplateRef)
+	r.processNextWorkItem(t.Context())
+	if len(control.createReqs) != 1 {
+		t.Fatal("queued event recreated a deleted template")
+	}
+}
+
+func TestCreateActorTemplate_QueuesBurstWithoutGlobalLists(t *testing.T) {
+	st := newFakeTemplateStore()
+	control := &fakeGoldenControl{}
+	r := newTestTemplateReconciler(st, control)
+	defer r.queue.ShutDown()
+	r.resync(t.Context())
+	svc := &RPCService{impl: &createTemplateStore{state: st}, templateQueue: r.queue}
+	const count = 32
+	var writers sync.WaitGroup
+	for i := range count {
+		writers.Go(func() {
+			if _, err := svc.CreateActorTemplate(t.Context(), queuedTemplateRequest(fmt.Sprintf("template-%d", i))); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	writers.Wait()
+	if r.queue.Len() != count || st.listCalls != 1 || len(control.createReqs) != 0 {
+		t.Fatalf("queue=%d, lists=%d, golden creates=%d; want %d,1,0", r.queue.Len(), st.listCalls, len(control.createReqs), count)
+	}
+	r.resync(t.Context())
+	if r.queue.Len() != count || st.listCalls != 2 {
+		t.Fatal("recovery resync duplicated the pending work")
 	}
 }

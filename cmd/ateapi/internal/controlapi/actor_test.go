@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/client-go/util/workqueue"
 )
 
 func TestValidateActorStatusCrash(t *testing.T) {
@@ -597,7 +598,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			}
 			impl := newServiceImpl(persistence, nil)
 			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: tt.template},
@@ -924,7 +925,7 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 			persistence := newTestPersistence(t)
 			impl := newServiceImpl(persistence, nil)
 			impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-			svc := &RPCService{impl: impl}
+			svc := &RPCService{impl: impl, templateQueue: workqueue.NewTyped[resources.ActorTemplateRef]()}
 			storetest.MustCreateAtespace(t, ctx, persistence, "templates")
 			storetest.MustCreateAtespace(t, ctx, persistence, "actors")
 			tmpl, err := svc.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
