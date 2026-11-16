@@ -575,12 +575,37 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   allow_dynamic_host_from_filter_state: true
-                  dns_cache_config:
+                  # Every forward proxy filter and cluster below uses this
+                  # cache through the alias, and Envoy rejects two different
+                  # configs under one cache name.
+                  dns_cache_config: &egress_dns_cache
                     name: egress_dns_cache
                     # V4_ONLY resolves nothing on an IPv6-only cluster. ALL
                     # returns both families and enables Happy Eyeballs, so
                     # neither family is stranded.
                     dns_lookup_family: ALL
+                    # The gateway never dials these, even for a "*" rule or a
+                    # name that resolves to them: loopback (this pod's admin
+                    # and ext_proc ports), link-local, unspecified, and the
+                    # cloud metadata servers. The filter also applies to IP
+                    # literals. A name that resolves only to these fails with
+                    # 503 (dns_resolution_failure{address_denied}).
+                    resolved_address_filter:
+                      ranges:
+                      - { address_prefix: 0.0.0.0, prefix_len: 8 }
+                      - { address_prefix: 127.0.0.0, prefix_len: 8 }
+                      - { address_prefix: 169.254.0.0, prefix_len: 16 }
+                      - { address_prefix: "::", prefix_len: 128 }
+                      - { address_prefix: "::1", prefix_len: 128 }
+                      - { address_prefix: "fe80::", prefix_len: 10 }
+                      # IPv4-mapped forms of the ranges above.
+                      - { address_prefix: "::ffff:0.0.0.0", prefix_len: 104 }
+                      - { address_prefix: "::ffff:127.0.0.0", prefix_len: 104 }
+                      - { address_prefix: "::ffff:169.254.0.0", prefix_len: 112 }
+                      # IPv6 metadata servers on GCE, AWS, and EKS Pod Identity.
+                      - { address_prefix: "fd20:ce::254", prefix_len: 128 }
+                      - { address_prefix: "fd00:ec2::254", prefix_len: 128 }
+                      - { address_prefix: "fd00:ec2::23", prefix_len: 128 }
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -777,9 +802,7 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   allow_dynamic_host_from_filter_state: true
-                  dns_cache_config:
-                    name: egress_dns_cache
-                    dns_lookup_family: ALL
+                  dns_cache_config: *egress_dns_cache
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -794,9 +817,7 @@ data:
           - name: envoy.filters.network.sni_dynamic_forward_proxy
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.sni_dynamic_forward_proxy.v3.FilterConfig
-              dns_cache_config:
-                name: egress_dns_cache
-                dns_lookup_family: ALL
+              dns_cache_config: *egress_dns_cache
               # Fallback when envoy.upstream.dynamic_port is absent; the CONNECT
               # leg always sets it.
               port_value: 443
@@ -1002,9 +1023,7 @@ data:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-            dns_cache_config:
-              name: egress_dns_cache
-              dns_lookup_family: ALL
+            dns_cache_config: *egress_dns_cache
         # The MITM must not weaken upstream authentication. Envoy decrypted the
         # actor's TLS with a leaf of its own; it still sends the real SNI here
         # and still validates the real origin's certificate against the public
@@ -1043,9 +1062,7 @@ data:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-            dns_cache_config:
-              name: egress_dns_cache
-              dns_lookup_family: ALL
+            dns_cache_config: *egress_dns_cache
         typed_extension_protocol_options:
           envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
@@ -1086,9 +1103,7 @@ data:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-            dns_cache_config:
-              name: egress_dns_cache
-              dns_lookup_family: ALL
+            dns_cache_config: *egress_dns_cache
             # Envoy refuses to build a dynamic forward proxy cluster without
             # auto_sni and auto_san_validation unless this is set, because for
             # the usual TLS case resolving the host from a header and then not
@@ -1116,9 +1131,7 @@ data:
           name: envoy.clusters.dynamic_forward_proxy
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
-            dns_cache_config:
-              name: egress_dns_cache
-              dns_lookup_family: ALL
+            dns_cache_config: *egress_dns_cache
 
       #ATE_MITM_EXTPROC_CLUSTER -- Don't modify this line.
   # SDS resource for the gateway serving cert. kubelet rotates the projected
