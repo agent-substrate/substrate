@@ -2,7 +2,7 @@ module go.ate.dev/substrate/hack/tools/buf
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 tool github.com/bufbuild/buf/cmd/buf
 
