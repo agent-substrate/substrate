@@ -136,11 +136,9 @@ pods anywhere.
 Give these people only Kubernetes Engine Cluster Viewer in IAM, and grant the
 rest through RBAC.
 
-`ate-api-server` checks a token's signature and expiry without asking
-Kubernetes whether its ServiceAccount still exists. Deleting alice's
-ServiceAccount doesn't revoke tokens she already holds: they work until they
-expire, plus a five-minute allowance for clock skew. To cut her off at once,
-remove her from access policies.
+Deleting alice's ServiceAccount revokes the tokens she already holds, once the
+caches described in [ServiceAccount tokens](#serviceaccount-tokens) expire. To
+cut her off at once, remove her from access policies.
 
 ### A token from your identity provider
 
@@ -254,7 +252,11 @@ step 3:
    ServiceAccount exists here. That includes `ate-system:ate-client`, the
    default [bootstrap owner](authorization.md#bootstrap-owners), so replace it
    first, and run the caller as a ServiceAccount that no one else in either
-   cluster can get a token for.
+   cluster can get a token for. `ate-api-server` can't ask the other cluster's
+   API server about its tokens, so it checks them offline only: deleting the
+   ServiceAccount, or the pod, Secret or node a token is bound to, doesn't
+   revoke the token. It works until it expires, plus a five-minute allowance
+   for clock skew.
 2. **Trust the other cluster's issuer.** Add a
    [JWT provider](#configuring-jwt-providers) whose `audiences` include the
    audience the pod requests. As a cluster admin of the other cluster, run
@@ -402,6 +404,40 @@ bad file if they restart.
 
 `ate-api-server` caches signing keys and refreshes them periodically, and when
 a token names an unknown key ID.
+
+## ServiceAccount tokens
+
+`ate-api-server` checks a token from the Substrate cluster's own ServiceAccount
+issuer twice. It first verifies the signature, expiry and audience like any
+other token. It then sends the token to the Kubernetes API server in a
+TokenReview, for the provider's `audiences`. Kubernetes rejects the token if
+its ServiceAccount, or the pod, Secret or node it is bound to, was deleted or
+replaced. A ServiceAccount recreated with the same name gets new tokens that
+work, and access policies that name it still apply to it.
+
+- **Revocation isn't immediate.** `ate-api-server` reuses an accepted review
+  for 10 seconds, and the Kubernetes API server caches its own result for as
+  long. Kubernetes also keeps accepting a token while its bound object is
+  being deleted, for up to a minute past the object's deletion timestamp.
+- **It depends on the Kubernetes API server.** A token `ate-api-server` hasn't
+  reviewed in the last 10 seconds fails with `Unavailable` when the review
+  can't run: the call to Kubernetes fails, too many reviews are in flight, or
+  the token's namespace is over its limit. Each `ate-api-server` replica
+  allows 10 reviews per second per ServiceAccount namespace, with bursts of
+  50. A token in use is reviewed again every 10 seconds, and each review
+  counts. All `kubectl ate` users share the `ate-system` limit, since their
+  tokens are for the `ate-client` ServiceAccount there. Callers can retry
+  `Unavailable`. Pod certificates and tokens from other issuers don't need the
+  Kubernetes API server.
+- **Kubernetes rejects a token it can't check.** If the Kubernetes API server
+  can't read the token's ServiceAccount or bound object, for example while
+  etcd is unavailable, the call fails with `Unauthenticated`, and
+  `ate-api-server` reuses that rejection for 2 seconds.
+- **Other issuers are checked offline only.** That includes ServiceAccount
+  tokens from [another cluster](#pods-in-another-cluster).
+
+`ate-api-server` learns the cluster's issuer from its own ServiceAccount token
+and logs it at startup. Its ClusterRole allows it to create TokenReviews.
 
 ## Not yet supported
 
