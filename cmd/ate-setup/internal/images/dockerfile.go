@@ -70,8 +70,11 @@ func dockerfilePlatforms(rootDir, koDefaultPlatforms string) (string, error) {
 // dockerBuildArgs returns the docker arguments that build contextPath for
 // platforms, push it as tag, and write the build metadata to metadataFile.
 // extraFlags go before the context.
+//
+// --provenance=false keeps buildx from attaching an attestation that differs
+// on every build, so an unchanged image keeps its digest.
 func dockerBuildArgs(platforms string, extraFlags []string, tag, metadataFile, contextPath string) []string {
-	args := []string{"buildx", "build", "--platform=" + platforms, "--push", "--metadata-file", metadataFile}
+	args := []string{"buildx", "build", "--platform=" + platforms, "--provenance=false", "--push", "--metadata-file", metadataFile}
 	args = append(args, extraFlags...)
 	return append(args, "-t", tag, contextPath)
 }

@@ -24,12 +24,12 @@ import (
 
 func TestDockerBuildArgs(t *testing.T) {
 	got := dockerBuildArgs("linux/amd64", []string{"--cache-from", "type=gha"}, "repo/img:build-1", "meta.json", "ctx")
-	want := []string{"buildx", "build", "--platform=linux/amd64", "--push", "--metadata-file", "meta.json", "--cache-from", "type=gha", "-t", "repo/img:build-1", "ctx"}
+	want := []string{"buildx", "build", "--platform=linux/amd64", "--provenance=false", "--push", "--metadata-file", "meta.json", "--cache-from", "type=gha", "-t", "repo/img:build-1", "ctx"}
 	if !slices.Equal(got, want) {
 		t.Errorf("dockerBuildArgs() = %q, want %q", got, want)
 	}
 	got = dockerBuildArgs("linux/amd64", nil, "repo/img:build-1", "meta.json", "ctx")
-	want = []string{"buildx", "build", "--platform=linux/amd64", "--push", "--metadata-file", "meta.json", "-t", "repo/img:build-1", "ctx"}
+	want = []string{"buildx", "build", "--platform=linux/amd64", "--provenance=false", "--push", "--metadata-file", "meta.json", "-t", "repo/img:build-1", "ctx"}
 	if !slices.Equal(got, want) {
 		t.Errorf("dockerBuildArgs() without flags = %q, want %q", got, want)
 	}
