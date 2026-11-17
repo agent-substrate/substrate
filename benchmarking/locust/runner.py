@@ -30,6 +30,7 @@ class, thus this module finds the test in the list; see test_file().
 
 import argparse
 import csv
+import functools
 import json
 import os
 import re
@@ -41,7 +42,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, TextIO
+from typing import IO, TYPE_CHECKING, Any, Callable, TextIO
 
 from cluster_facts import (
     EMPTY_FACTS,
@@ -56,6 +57,9 @@ from server_telemetry import extract_and_record_server_telemetry
 from phase_breakdown import append_phase_breakdown
 from ladder_steps import append_ladder_steps
 from turnover_window import append_turnover_window, fill_done_ts
+
+if TYPE_CHECKING:
+    import evaluate
 
 # Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
@@ -195,6 +199,18 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--test-entry",
+        type=json_object,
+        default={},
+        help=(
+            "The run's test entry from tests.yaml, as a JSON object. The runner "
+            "reads its `evaluations` (see benchmarking/evaluate/README.md): "
+            "their sources are set up before the run; after it they judge the "
+            "run, and the verdicts are written to evaluation.json, plus rows "
+            "in stats.jsonl. They never change the exit code or status.json"
+        ),
+    )
+    p.add_argument(
         "--phase-breakdown",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -208,6 +224,17 @@ def parse_args() -> argparse.Namespace:
     args, extra = p.parse_known_args()
     args.locust_extra = extra
     return args
+
+
+def json_object(value: str) -> dict[str, Any]:
+    """An argparse type: a JSON object."""
+    try:
+        obj = json.loads(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"not JSON: {e}") from None
+    if not isinstance(obj, dict):
+        raise argparse.ArgumentTypeError("not a JSON object")
+    return obj
 
 
 # Tests whose User class is implemented in Python. Closed set: new load
@@ -288,6 +315,7 @@ def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, l
         f"  users:          {args.users}",
         f"  uses_boomer:    {needs_boomer(args.file)}",
         f"  empty stats ok: {args.allow_empty_stats}",
+        f"  evaluations:    {evaluation_names(args.test_entry.get('evaluations'))}",
         f"  dest_prefix:    {dest_prefix}",
         f"  work_dir:       {work_dir}",
         # One flag for each line, with its value. A run gives many flags to
@@ -298,6 +326,87 @@ def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, l
     lines += [f"    {flag}" for flag in pair_flags(args.locust_extra)] or ["    (none)"]
     lines.append("====================")
     for line in lines:
+        tee(logs, line)
+
+
+def evaluation_names(evaluations: Any) -> str:
+    """The names in a test entry's evaluations, for the run config; never raises."""
+    if evaluations is None:
+        return "(none)"
+    try:
+        return ", ".join(str(e.get("name")) for e in evaluations) or "(empty)"
+    except (TypeError, AttributeError):
+        return "(unreadable, see below)"
+
+
+def prepare_evaluations(
+    args: argparse.Namespace, run_dir: Path, run_date: str, run_ts: int, uri: str, logs: TextIO
+) -> Callable[[], "evaluate.Report"] | None:
+    """What judges the run once it has finished: the evaluator of the test
+    entry's evaluations, whose sources start with the run, or, when it can't
+    judge the run, the report saying why. None without evaluations, or when
+    the evaluate package can't be imported. Called before the run so a typo
+    is in the log from the start; the run goes ahead either way. Sources ask
+    for runs from the same invocation, such as the suite's 1-user run, under
+    --dest with the same --tag. run_dir holds the run's artifacts under the
+    names they are stored under (see link_artifacts); the run is stored at
+    uri."""
+    evaluations = args.test_entry.get("evaluations")
+    if evaluations is None:
+        return None
+    # Imported here, not at the top: the runner works without the package.
+    try:
+        import evaluate  # benchmarking/evaluate, at /app/evaluate in the image
+        from evaluate import rundir
+    except ImportError as e:
+        tee(logs, f"Warning: evaluations will not be judged: can't import evaluate: {e}")
+        return None
+    identity = evaluate.RunIdentity(
+        uri=uri, test_name=args.name, tag=args.tag, run_date=run_date, run_ts=run_ts
+    )
+    artifacts = evaluate.LocalArtifacts(run_dir)
+    run_of = rundir.run_of_finder(
+        args.dest, args.tag, run_ts, artifacts, run_dir.parent / "evaluate"
+    )
+    try:
+        evaluator = evaluate.prepare(
+            evaluations, evaluate.BenchmarkRunContext(identity, artifacts, run_of=run_of)
+        )
+        return evaluator.evaluate
+    except evaluate.ConfigError as e:
+        error = f"config: {e}"
+    except Exception as e:  # never cost the run its load test
+        error = f"evaluate failed to load or prepare the evaluations: {type(e).__name__}: {e}"
+    tee(logs, f"Warning: evaluations will not be judged: {error}")
+    return functools.partial(evaluate.error_report, identity, error)
+
+
+def link_artifacts(files: list[tuple[Path, str]], run_dir: Path) -> None:
+    """Links each stored name in run_dir to its file, which need not exist yet,
+    so the evaluations' sources read the run as it will be stored."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    for src, basename in files:
+        link = run_dir / basename
+        link.unlink(missing_ok=True)  # a rerun in the same second reuses the work dir
+        link.symlink_to(src.absolute())
+
+
+def run_evaluations(
+    args: argparse.Namespace,
+    judge: Callable[[], "evaluate.Report"],
+    out_json: Path,
+    jsonl_path: Path | None,
+    data_ts: str,
+    logs: TextIO,
+) -> None:
+    """Judges the finished run with judge from prepare_evaluations, and
+    writes the report: evaluation.json, and stats.jsonl rows unless
+    jsonl_path is None (a run without stats)."""
+    import evaluate
+
+    report = judge()
+    evaluate.write(report, out_json, jsonl_path, data_ts, args.tag, args.name)
+    for line in evaluate.summary_lines(report):
         tee(logs, line)
 
 
@@ -569,16 +678,35 @@ def main() -> None:
     traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
     server_summary_json = work_dir / f"{args.name}_server_summary.json"
+    stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
+    evaluation_json = work_dir / f"{args.name}_evaluation.json"
 
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
         f"/run_date={run_date}/run_ts={run_ts}/run_tag={args.tag}"
     )
 
+    # The run's artifacts and the names they are stored under.
+    files: list[tuple[Path, str]] = [
+        (status_path, "status.json"),
+        (logs_path, "logs.txt"),
+        (traces_path, "traces.txt"),
+        (jsonl_path, "stats.jsonl"),
+        (stats_csv, "stats.csv"),
+        (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
+        (work_dir / f"{args.name}_failures.csv", "failures.csv"),
+        (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
+        (server_summary_json, "server_summary.json"),
+        (evaluation_json, "evaluation.json"),
+    ]
+    run_dir = work_dir / "run"
+    link_artifacts(files, run_dir)
+
     with open(logs_path, "w") as logs, open(traces_path, "w") as traces:
         traces.write("\t".join(TRACE_COLUMNS) + "\n")
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
+        judge = prepare_evaluations(args, run_dir, run_date, run_ts, prefix, logs)
         # Worker pods around the run, for OOMKilled restarts and evictions.
         pods_before = read_worker_pods(args, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
@@ -613,7 +741,6 @@ def main() -> None:
         # Density frontiers and server-side telemetry are additive. They are
         # kept out of the block above so that a failure here cannot discard
         # the measurements the trial actually came for.
-        stats_history_csv = work_dir / f"{args.name}_stats_history.csv"
         # Seeded up front so that a discovery failure still leaves a usable
         # value for the frontier summary below.
         facts = dict(EMPTY_FACTS)
@@ -716,23 +843,26 @@ def main() -> None:
         elif stats_generated:
             tee(logs, "Skipping phase breakdown (--no-phase-breakdown)")
 
+    # Evaluations come last: their sources read the finished logs.txt and
+    # stats.jsonl, so they run once logs.txt is closed, and append their own
+    # lines to it. Additive like the steps above: a failure here costs no
+    # measurement, and the rows are appended only to a run's stats.
+    if judge is not None:
+        with open(logs_path, "a") as logs:
+            try:
+                run_evaluations(
+                    args, judge, evaluation_json,
+                    jsonl_path if stats_generated else None, data_ts, logs,
+                )
+            except Exception as e:
+                tee(logs, f"Warning: Failed to run the evaluations: {e}")
+
     status_path.write_text(
         json.dumps(
             {"locust_exit_code": exit_code, "stats_generated": stats_generated}
         )
     )
 
-    files: list[tuple[Path, str]] = [
-        (status_path, "status.json"),
-        (logs_path, "logs.txt"),
-        (traces_path, "traces.txt"),
-        (jsonl_path, "stats.jsonl"),
-        (stats_csv, "stats.csv"),
-        (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
-        (work_dir / f"{args.name}_failures.csv", "failures.csv"),
-        (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
-        (server_summary_json, "server_summary.json"),
-    ]
     for src, basename in files:
         if not src.exists():
             print(f"Skipping {src}: not produced", flush=True)

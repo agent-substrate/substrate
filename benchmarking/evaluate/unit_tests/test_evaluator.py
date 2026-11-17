@@ -115,7 +115,7 @@ class ConfigTest(unittest.TestCase):
         echoed = config.to_json(evs)
         self.assertEqual(config.to_json(config.load(echoed)), echoed)
         self.assertEqual(echoed[0]["description"], "")
-        # Config names allow double underscores; external keys allow capitals and dots.
+        # Evaluation and condition names allow double underscores; external keys allow capitals and dots.
         dotted = [{
             "name": "ingress__rps",
             "variables": [{"name": "nh", "source": "run_results", "source_cfg": {
@@ -170,6 +170,10 @@ class ConfigTest(unittest.TestCase):
             "0: condition names repeated": broken("conditions", evaluations()[0]["conditions"] * 2),
             "0: variable names repeated": broken("variables.1.name", "trial"),
             "evaluations: evaluation names repeated": evaluations() + evaluations(),
+            # trial__x with value y and trial with value x__y would both be trial__x__y.
+            "0.variables.0.name: String should match pattern '^[a-z][a-z0-9]*(_[a-z0-9]+)*$'": broken(
+                "variables.0.name", "trial__x"),
+            "0.variables.1.name: String should match pattern": broken("variables.1.name", "server_"),
         }
         for message, evs in cases.items():
             with self.assertRaisesRegex(config.ConfigError, re.escape(message), msg=message):
