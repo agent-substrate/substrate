@@ -15,26 +15,40 @@
 //! The egress-policy dynamic module provides listener and HTTP filters for
 //! egress policy evaluation and storage. See the README in this directory.
 
-pub mod egress_policy;
-pub mod egress_policy_store;
-pub mod listener_filter;
-pub mod policy_store_filter;
+mod constants;
+mod egress_policy;
+mod egress_policy_store;
+mod listener_filter;
+mod pep_config;
+mod pep_http_filter;
+mod policy_refresh_filter;
+mod policy_store_filter;
 
-use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
-pub use egress_policy::*;
-pub use egress_policy_store::*;
-pub use listener_filter::*;
-pub use policy_store_filter::*;
+use envoy_proxy_dynamic_modules_rust_sdk::{declare_all_init_functions, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilterConfig};
+use pep_http_filter::*;
 
 declare_all_init_functions!(
   init,
-  http: policy_store_filter::new_http_filter_config_fn,
+  http: new_http_filter_config_fn,
   listener: listener_filter::new_listener_filter_config_fn,
 );
 
 /// Called when the dynamic module is loaded into Envoy.
 fn init() -> bool {
   true
+}
+
+pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
+  envoy_filter_config: &mut EC,
+  name: &str,
+  config: &[u8],
+) -> Option<Box<dyn HttpFilterConfig<EHF>>> {
+  match name {
+    "envoy_substrate_egress_policy_store" => policy_store_filter::new_http_filter_config_fn(envoy_filter_config, name, config),
+    "envoy_substrate_egress_pep" => pep_config::new_http_filter_config_fn(envoy_filter_config, name, config),
+    "envoy_substrate_egress_policy_refresh" => policy_refresh_filter::new_http_filter_config_fn(envoy_filter_config, name, config),
+    _ => None,
+  }
 }
 
 #[cfg(test)]

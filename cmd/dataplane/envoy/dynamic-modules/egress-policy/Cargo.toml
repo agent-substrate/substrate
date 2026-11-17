@@ -22,8 +22,12 @@ name = "envoy_substrate_egress_policy"
 crate-type = ["cdylib"]
 
 [dependencies]
+chrono.workspace = true
 envoy-proxy-dynamic-modules-rust-sdk.workspace = true
 rapidhash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thread_local.workspace = true
+
+[dev-dependencies]
+envoy-proxy-dynamic-modules-rust-sdk = { workspace = true, features = ["mock"] }

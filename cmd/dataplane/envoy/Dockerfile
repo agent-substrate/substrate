@@ -54,7 +54,7 @@ RUN arch="$(cat /target-arch)" \
 # Pin the multi-platform image index, not one platform's manifest, so that the
 # --platform the installer passes (the host architecture on kind, linux/amd64
 # otherwise) selects a matching Envoy binary.
-FROM envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43
+FROM envoyproxy/envoy:v1.40.0@sha256:459f2a6404c340fe6afccd69d85527012d47f3c036765493e6f8f3113fa384de
 
 # Copy the built dynamic module shared library from the builder stage
 COPY --from=builder /usr/src/dynamic-modules/target/release/libenvoy_substrate_egress_policy.so /usr/local/lib/libenvoy_substrate_egress_policy.so

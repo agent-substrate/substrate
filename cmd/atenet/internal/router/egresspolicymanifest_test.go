@@ -30,6 +30,7 @@ import (
 
 const (
 	extProcFilter                  = "envoy.filters.http.ext_proc"
+	compositeFilter                = "envoy.filters.http.composite"
 	setFilterStateFilter           = "envoy.filters.http.set_filter_state"
 	extProcServerCluster           = "ext_proc_server"
 	passthroughForwardProxyCluster = "egress_forward_proxy_passthrough"
@@ -167,8 +168,7 @@ func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 	want := []string{extproc.EgressFilterChainName, extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName}
 	var got []string
 	for _, lc := range allChains(bootstrapTree(t)) {
-		h := hcm(lc.chain)
-		if h == nil || filterIndex(list(h, "http_filters"), extProcFilter) < 0 {
+		if cfg, _, _ := extProcOf(lc.chain); cfg == nil {
 			continue
 		}
 		name := str(lc.chain, "name")
@@ -231,11 +231,21 @@ func websocketDisabled(n node) bool {
 // among the http_filters, or nil and -1.
 func extProcOf(chain node) (node, int, []node) {
 	filters := list(hcm(chain), "http_filters")
-	i := filterIndex(filters, extProcFilter)
-	if i < 0 {
-		return nil, -1, filters
+	if i := filterIndex(filters, extProcFilter); i >= 0 {
+		return child(filters[i], "typed_config"), i, filters
 	}
-	return child(filters[i], "typed_config"), i, filters
+	for i, f := range filters {
+		if str(f, "name") != compositeFilter {
+			continue
+		}
+		for _, m := range list(child(child(child(f, "typed_config"), "matcher"), "matcher_list"), "matchers") {
+			inner := child(child(child(child(m, "on_match"), "action"), "typed_config"), "typed_config")
+			if str(inner, "name") == extProcFilter {
+				return child(inner, "typed_config"), i, filters
+			}
+		}
+	}
+	return nil, -1, filters
 }
 
 // Every ext_proc in the egress gateway fails closed, talks to the co-located
@@ -605,7 +615,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 	}
 	admitted := strs(child(child(cfg, "metadata_options"), "receiving_namespaces"), "untyped")
 	if !slices.Contains(admitted, extproc.EgressPolicyMetadataNamespace) {
-		t.Errorf("the CONNECT leg's ext_proc does not admit dynamic metadata in %q; the SNI rules would be dropped and every ClientHello denied", extproc.EgressPolicyMetadataNamespace)
+		t.Errorf("the CONNECT leg's ext_proc does not admit dynamic metadata in %q; the egress rules would be dropped and every ClientHello denied", extproc.EgressPolicyMetadataNamespace)
 	}
 
 	writers := filterStateWriters(tree, extproc.EgressPolicyHashFilterStateKey)
@@ -642,6 +652,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesHashToTheInnerListener(t *test
 		extproc.ConnectAuthorityFilterStateKey,
 		extproc.UpstreamDynamicPortFilterStateKey,
 		extproc.EgressPolicyHashFilterStateKey,
+		extproc.EgressPolicyCreatedAtFilterStateKey,
 	}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("outer chain set_filter_state actions write keys %v, want %v", gotKeys, wantKeys)
@@ -825,5 +836,79 @@ func TestEgressManifestsConnectLegHandsTheDialedPortToTheInnerListener(t *testin
 	}
 	if str(entry, "shared_with_upstream") == "" {
 		t.Errorf("%s is not shared with upstream; the passthrough chain would dial its fallback port", extproc.UpstreamDynamicPortFilterStateKey)
+	}
+}
+
+func TestEgressManifestsMITMLegSkipsExtProcOnFilterState(t *testing.T) {
+	tree := bootstrapTree(t)
+	chain := byName(list(mitmListener(t, tree), "filter_chains"), extproc.EgressTLSMITMFilterChainName)
+	if chain == nil {
+		t.Fatalf("no %q chain on mitm_listener", extproc.EgressTLSMITMFilterChainName)
+	}
+	filters := list(hcm(chain), "http_filters")
+	pepAt := filterIndex(filters, "envoy.filters.http.dynamic_modules")
+	compAt := filterIndex(filters, compositeFilter)
+	if compAt < 0 {
+		t.Fatalf("chain %q has no %s filter", extproc.EgressTLSMITMFilterChainName, compositeFilter)
+	}
+	if pepAt < 0 || pepAt > compAt {
+		t.Errorf("chain %q runs %s at [%d] and dynamic_modules at [%d]; the PEP module must run before composite evaluates filter state", extproc.EgressTLSMITMFilterChainName, compositeFilter, compAt, pepAt)
+	}
+	if got := str(child(filters[pepAt], "typed_config"), "filter_name"); got != "envoy_substrate_egress_pep" {
+		t.Errorf("chain %q first dynamic_modules filter_name = %q, want envoy_substrate_egress_pep", extproc.EgressTLSMITMFilterChainName, got)
+	}
+	matchers := list(child(child(child(filters[compAt], "typed_config"), "matcher"), "matcher_list"), "matchers")
+	if len(matchers) != 1 {
+		t.Fatalf("chain %q composite filter has %d matchers, want 1", extproc.EgressTLSMITMFilterChainName, len(matchers))
+	}
+	single := child(child(child(matchers[0], "predicate"), "not_matcher"), "single_predicate")
+	if got := str(child(child(single, "input"), "typed_config"), "key"); got != "dev.ate.policy.egress.skip_callout" {
+		t.Errorf("chain %q composite matcher keys on filter state %q, want %q", extproc.EgressTLSMITMFilterChainName, got, "dev.ate.policy.egress.skip_callout")
+	}
+	if got := str(child(single, "value_match"), "exact"); got != "true" {
+		t.Errorf("chain %q composite matcher value_match.exact = %q, want %q", extproc.EgressTLSMITMFilterChainName, got, "true")
+	}
+	inner := child(child(child(child(matchers[0], "on_match"), "action"), "typed_config"), "typed_config")
+	if got := str(inner, "name"); got != extProcFilter {
+		t.Errorf("chain %q composite action filter = %q, want %q", extproc.EgressTLSMITMFilterChainName, got, extProcFilter)
+	}
+}
+
+func TestEgressManifestsMITMLegRefreshesEgressPolicy(t *testing.T) {
+	tree := bootstrapTree(t)
+	chain := byName(list(mitmListener(t, tree), "filter_chains"), extproc.EgressTLSMITMFilterChainName)
+	if chain == nil {
+		t.Fatalf("no %q chain on mitm_listener", extproc.EgressTLSMITMFilterChainName)
+	}
+	cfg, extProcAt, filters := extProcOf(chain)
+	if cfg == nil {
+		t.Fatalf("chain %q has no ext_proc filter", extproc.EgressTLSMITMFilterChainName)
+	}
+	admitted := strs(child(child(cfg, "metadata_options"), "receiving_namespaces"), "untyped")
+	if !slices.Contains(admitted, extproc.EgressPolicyMetadataNamespace) {
+		t.Errorf("chain %q ext_proc does not admit dynamic metadata in %q", extproc.EgressTLSMITMFilterChainName, extproc.EgressPolicyMetadataNamespace)
+	}
+	storeAt, refreshAt := -1, -1
+	for i, f := range filters {
+		switch str(f, "name") {
+		case compositeFilter:
+			for _, m := range list(child(child(child(f, "typed_config"), "matcher"), "matcher_list"), "matchers") {
+				inner := child(child(child(child(m, "on_match"), "action"), "typed_config"), "typed_config")
+				if str(inner, "name") == "envoy.filters.http.dynamic_modules" &&
+					str(child(inner, "typed_config"), "filter_name") == "envoy_substrate_egress_policy_store" {
+					storeAt = i
+				}
+			}
+		case "envoy.filters.http.dynamic_modules":
+			if str(child(f, "typed_config"), "filter_name") == "envoy_substrate_egress_policy_refresh" {
+				refreshAt = i
+			}
+		}
+	}
+	if storeAt <= extProcAt {
+		t.Errorf("chain %q runs envoy_substrate_egress_policy_store at [%d], want after ext_proc at [%d]", extproc.EgressTLSMITMFilterChainName, storeAt, extProcAt)
+	}
+	if refreshAt <= storeAt {
+		t.Errorf("chain %q runs envoy_substrate_egress_policy_refresh at [%d], want after policy store at [%d]", extproc.EgressTLSMITMFilterChainName, refreshAt, storeAt)
 	}
 }

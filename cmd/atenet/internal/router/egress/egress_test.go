@@ -406,6 +406,14 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 		},
 		{name: "https rule on another port", policy: httpsPolicy("api.example.com"), dialed: "93.184.216.34:8443"},
 		{name: "https rule on the dialed port", policy: httpsPolicyOnPorts(ports(8443), "api.example.com"), dialed: "93.184.216.34:8443", want: mitm("api.example.com")},
+		{
+			name:   "https rule with effects",
+			policy: combined(credentialInjectionPolicySample("api.example.com"), httpsPolicy("plain.example.com")),
+			want: []egresspolicy.SNIRule{
+				{Pattern: "api.example.com", Mode: egresspolicy.SNIModeMITM, HasEffects: true},
+				{Pattern: "plain.example.com", Mode: egresspolicy.SNIModeMITM, HasEffects: false},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -454,8 +462,9 @@ func sniRulesOf(t *testing.T, res extproc.Result) []egresspolicy.SNIRule {
 	for i, v := range listVal.GetValues() {
 		fields := v.GetStructValue().GetFields()
 		out[i] = egresspolicy.SNIRule{
-			Pattern: fields[extproc.EgressSNIRulePatternKey].GetStringValue(),
-			Mode:    egresspolicy.SNIMode(fields[extproc.EgressSNIRuleModeKey].GetStringValue()),
+			Pattern:    fields[extproc.EgressSNIRulePatternKey].GetStringValue(),
+			Mode:       egresspolicy.SNIMode(fields[extproc.EgressSNIRuleModeKey].GetStringValue()),
+			HasEffects: fields[extproc.EgressSNIRuleHasEffectsKey].GetBoolValue(),
 		}
 	}
 	return out

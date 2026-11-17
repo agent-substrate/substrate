@@ -18,11 +18,9 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::envoy_dynamic_module_type_on_listener_filter_status, envoy_log_trace, EnvoyListenerFilter,
   EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
 };
-pub use crate::egress_policy::{EgressPolicy, SniRule};
+use crate::constants::{ATE_POLICY_EGRESS_HASH, SNI_MODE_MITM};
+use crate::egress_policy::EgressPolicy;
 use crate::egress_policy_store::GlobalEgressPolicyStore;
-
-/// Filter state holding the egress policy hash.
-pub const ATE_POLICY_EGRESS_HASH: &[u8] = b"dev.ate.policy.egress.hash";
 
 /// Filter state this filter writes the chosen chain name to.
 pub const ATE_EGRESS_FILTER_CHAIN: &[u8] = b"dev.ate.egress.filter_chain";
@@ -39,9 +37,6 @@ pub const ATE_EGRESS_FILTER_CHAIN_CLEARTEXT: &str = "cleartext";
 /// Verdict for a denied connection. No chain has this name.
 pub const ATE_EGRESS_FILTER_CHAIN_DENIED: &str = "denied";
 
-/// Mode of a rule whose match terminates the connection.
-pub const SNI_MODE_MITM: &str = "mitm";
-
 /// Mode of a rule whose match forwards the connection without decryption.
 pub const SNI_MODE_PASSTHROUGH: &str = "passthrough";
 
@@ -50,27 +45,6 @@ const TRANSPORT_TLS: &str = "tls";
 
 /// Transport protocol Envoy assumes when no inspector detected one.
 const TRANSPORT_RAW_BUFFER: &str = "raw_buffer";
-
-/// Reports whether a normalized `hostname` matches `pattern`. Must agree with
-/// HostnamePattern.Matches in internal/egresspolicy.
-pub fn pattern_matches(pattern: &str, hostname: &str) -> bool {
-  if hostname.is_empty() {
-    return false;
-  }
-  if pattern == "*" {
-    return true;
-  }
-  if let Some(suffix) = pattern.strip_prefix("*.") {
-    return match hostname
-      .strip_suffix(suffix)
-      .and_then(|rest| rest.strip_suffix('.'))
-    {
-      Some(label) => !label.is_empty() && !label.contains('.'),
-      None => false,
-    };
-  }
-  pattern == hostname
-}
 
 /// ASCII-lowercases an SNI and strips one trailing dot, as the gateway does.
 fn normalize_sni(sni: &str) -> String {
@@ -100,7 +74,7 @@ pub fn tls_verdict(policy: Option<&EgressPolicy>, sni: Option<&str>) -> &'static
   match policy
     .rules
     .iter()
-    .find(|rule| pattern_matches(&rule.pattern, &hostname))
+    .find(|rule| rule.pattern_matches(&hostname))
   {
     Some(rule) if rule.mode == SNI_MODE_MITM => ATE_EGRESS_FILTER_CHAIN_MITM,
     Some(rule) if rule.mode == SNI_MODE_PASSTHROUGH => ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH,
@@ -181,6 +155,7 @@ pub fn new_listener_filter_config_fn<
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::egress_policy::SniRule;
   use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyBuffer, MockEnvoyListenerFilter, MockEnvoyListenerFilterConfig,
   };
@@ -192,42 +167,10 @@ mod tests {
         .map(|(pattern, mode)| SniRule {
           pattern: pattern.to_string(),
           mode: mode.to_string(),
+          has_effects: false,
         })
         .collect(),
       hash: 0,
-    }
-  }
-
-  #[test]
-  fn test_pattern_matches() {
-    let cases: &[(&str, &str, bool)] = &[
-      // "*" matches every name and only names.
-      ("*", "anything.example.com", true),
-      ("*", "localhost", true),
-      ("*", "", false),
-      // "*.suffix" matches exactly one non-empty leftmost label.
-      ("*.example.com", "api.example.com", true),
-      ("*.example.com", "example.com", false),
-      ("*.example.com", "a.b.example.com", false),
-      ("*.example.com", ".example.com", false),
-      ("*.example.com", "xexample.com", false),
-      ("*.example.com", "api.example.co", false),
-      ("*.example.com", "api.example.com.evil", false),
-      // Anything else matches the whole name.
-      ("api.example.com", "api.example.com", true),
-      ("api.example.com", "www.api.example.com", false),
-      ("api.example.com", "api.example.co", false),
-      ("example.com", "api.example.com", false),
-      // Normalization is the caller's job.
-      ("api.example.com", "API.example.com", false),
-      ("api.example.com", "api.example.com.", false),
-    ];
-    for (pattern, hostname, want) in cases {
-      assert_eq!(
-        pattern_matches(pattern, hostname),
-        *want,
-        "pattern_matches({pattern:?}, {hostname:?})"
-      );
     }
   }
 

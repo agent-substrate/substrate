@@ -42,7 +42,7 @@ fi
 # this E2E test setup; production keeps the gateway's normal root behavior.
 root_image="${image}"
 if [[ "${gateway}" == agentgateway ]]; then
-  root_image="envoyproxy/envoy:v1.39.5@sha256:8fc594a5d85eb76dca24155cfb9208882406873932b20cf33649a0a611194c43"
+  root_image="envoyproxy/envoy:v1.40.0@sha256:459f2a6404c340fe6afccd69d85527012d47f3c036765493e6f8f3113fa384de"
 fi
 
 # Use the helper image's public roots on every Pod start. The separate init
