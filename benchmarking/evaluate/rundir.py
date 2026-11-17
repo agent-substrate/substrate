@@ -32,7 +32,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from .sources.base import BenchmarkRunContext, LocalArtifacts, RunIdentity, no_other_runs
+from .sources.base import ArtifactStore, BenchmarkRunContext, LocalArtifacts, RunIdentity, no_other_runs
+from .sources.run_results import read_stats
 
 RUN_PATH = re.compile(r"^(?P<root>.*)/runs/(?P<test>[^/]+)/run_date=(?P<date>[^/]+)/run_ts=(?P<ts>\d+)"
                       r"/run_tag=(?P<tag>[^/]+)/?$")
@@ -95,6 +96,17 @@ def same_invocation(uri: str, tmp: Path) -> Callable[[str], BenchmarkRunContext]
             raise LookupError(f"no run of {test} at {other}") from None
 
     return run_of
+
+
+def data_timestamp(artifacts: ArtifactStore) -> str:
+    """The timestamp the run's stats.jsonl rows carry (trial_summary's); "" without one
+    or when stats.jsonl is corrupt (the evaluation then says why)."""
+    try:
+        stats = read_stats(artifacts.fetch("stats.jsonl"))
+    except ValueError:
+        return ""
+    row = stats.get("trial_summary") or next(iter(stats.values()), {})
+    return str(row.get("timestamp") or "")
 
 
 def _split(uri: str) -> tuple[str, str]:
