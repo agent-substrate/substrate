@@ -70,6 +70,15 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	}
 	user := formatUser(p.ID)
 	var grants []*openfgav1.TupleKey
+	// A Check only evaluates the caller, so only the caller's own bootstrap
+	// grant can affect the result.
+	if _, ok := a.bootstrapOwners[user]; ok {
+		grants = append(grants, &openfgav1.TupleKey{
+			User:     user,
+			Relation: RoleOwner,
+			Object:   GlobalRootObject,
+		})
+	}
 	if p.Kind == principal.KindMTLS {
 		for _, role := range a.systemPrincipals[user] {
 			grants = append(grants, &openfgav1.TupleKey{
@@ -93,6 +102,12 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 // on object, without applying caller-derived grants or bootstrap owner
 // overrides.
 func (a *Authorizer) CheckSubject(ctx context.Context, subject, relation, object string) error {
+	if IsBypassed(ctx) {
+		return nil
+	}
+	if a == nil || a.fgaServer == nil {
+		return apierror.Internal("authz: authorizer is not initialized")
+	}
 	allowed, err := a.checkRaw(ctx, subject, relation, object)
 	if err != nil {
 		return err
@@ -104,19 +119,10 @@ func (a *Authorizer) CheckSubject(ctx context.Context, subject, relation, object
 }
 
 // checkRaw reports whether user has relation on object. Besides the stored
-// tuples, OpenFGA evaluates these as contextual tuples: object's structural
-// parent links, user's bootstrap owner grant if configured, and grants.
+// tuples, OpenFGA evaluates object's structural parent links and grants as
+// contextual tuples.
 func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string, grants ...*openfgav1.TupleKey) (bool, error) {
 	tuples := append(contextualTuples(object), grants...)
-	// A Check only evaluates the caller, so only the caller's own bootstrap
-	// grant can affect the result.
-	if _, ok := a.bootstrapOwners[user]; ok {
-		tuples = append(tuples, &openfgav1.TupleKey{
-			User:     user,
-			Relation: RoleOwner,
-			Object:   GlobalRootObject,
-		})
-	}
 	var ctxTuples *openfgav1.ContextualTupleKeys
 	if len(tuples) > 0 {
 		ctxTuples = &openfgav1.ContextualTupleKeys{TupleKeys: tuples}

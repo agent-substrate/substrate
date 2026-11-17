@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	authv1 "k8s.io/api/authentication/v1"
@@ -33,6 +34,7 @@ import (
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -177,7 +179,16 @@ func clientWithToken(t *testing.T, ctx context.Context, token string) *ateclient
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	api, err := ateclient.NewClient(connectCtx, e2e.KubeConfig, e2e.KubeContext, "", tokenFile, false)
+	// Opt in to preview features when the install enables any, as
+	// e2e.NewClients does.
+	var opts []grpc.DialOption
+	for _, enabled := range preview.AsMap() {
+		if enabled {
+			opts = preview.DialOptionsWithOptIn()
+			break
+		}
+	}
+	api, err := ateclient.NewClient(connectCtx, e2e.KubeConfig, e2e.KubeContext, "", tokenFile, false, opts...)
 	if err != nil {
 		t.Fatalf("ateclient.NewClient: %v", err)
 	}

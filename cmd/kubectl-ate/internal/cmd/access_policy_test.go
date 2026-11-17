@@ -102,6 +102,33 @@ func TestDeleteScopeFromFlags(t *testing.T) {
 	}
 }
 
+// The flag conflicts are rejected before the manifest is read or the server
+// is dialed, so no cluster is needed.
+func TestUpdateAccessPolicyFlagConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "filename with role",
+			args:    []string{"update", "access-policy", "-c", "csi-nfs", "-f", "policy.yaml", "--role", "allowed_atespace"},
+			wantErr: "--role cannot be combined with --filename",
+		},
+		{
+			name:    "filename with add-member",
+			args:    []string{"update", "access-policy", "-c", "csi-nfs", "-f", "policy.yaml", "--add-member", "atespace:team-a"},
+			wantErr: "--filename cannot be combined with --add-member or --remove-member",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := runRootCLI(t, tc.args...); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadAccessPolicyManifest(t *testing.T) {
 	t.Parallel()
 	ownerAlice := []*ateapi.Binding{{Role: "owner", Members: []string{"user:alice"}}}

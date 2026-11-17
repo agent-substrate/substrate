@@ -554,6 +554,8 @@ func runUpdateAccessPolicy(cmd *cobra.Command, _ []string) error {
 	hasFile := accessPolicyFlags.filename != ""
 	hasMemberFlags := len(accessPolicyFlags.addMembers) > 0 || len(accessPolicyFlags.removeMembers) > 0
 	switch {
+	case hasFile && accessPolicyFlags.role != "":
+		return errors.New("--role cannot be combined with --filename; the manifest sets each binding's role")
 	case hasFile && hasMemberFlags:
 		return errors.New("--filename cannot be combined with --add-member or --remove-member")
 	case !hasFile && !hasMemberFlags:

@@ -591,7 +591,7 @@ func TestAccessPolicy_ExternalVolumeClassGovernance(t *testing.T) {
 	}
 	checkCreateTemplate := func(ctx context.Context, classes ...string) error {
 		vols := make([]*ateapi.Volume, 0, len(classes))
-		for i, c := range classes {
+		for _, c := range classes {
 			vols = append(vols, &ateapi.Volume{
 				Name: "vol-" + c,
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
@@ -599,7 +599,6 @@ func TestAccessPolicy_ExternalVolumeClassGovernance(t *testing.T) {
 					ExternalVolumeClass: &ateapi.ObjectRef{Name: c},
 				}},
 			})
-			_ = i
 		}
 		req := &ateapi.CreateActorTemplateRequest{
 			ActorTemplate: &ateapi.ActorTemplate{
