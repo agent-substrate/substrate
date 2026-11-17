@@ -41,3 +41,25 @@ jobs:
           go-version-file: go.mod
           go-package: ./...
           work-dir: ${{ matrix.work-dir }}
+
+  report-scheduled-failure:
+    needs: govulncheck
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or update the failure issue
+        run: |
+          title="Scheduled govulncheck failed"
+          issue=$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "${issue}" ]; then
+            gh issue comment "${issue}" --body "Failed again: ${RUN_URL}"
+          else
+            gh issue create --title "${title}" --label area/security \
+              --body "The weekly govulncheck run on main failed: ${RUN_URL}"
+          fi
