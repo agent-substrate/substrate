@@ -516,6 +516,9 @@ def run_test(
     if test_type(test) == "locust":
         flags, own = split_metadata_flag(test)
         flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+        # The whole entry, so runner features (such as observers or evaluations)
+        # read what they need without adding a new flag per field.
+        flags += ["--test-entry", json.dumps(test)]
     manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)
