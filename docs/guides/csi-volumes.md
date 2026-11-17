@@ -126,9 +126,9 @@ volumeMounts:
 
 The following example demonstrates setting up an NFS CSI driver with Substrate and deploying an `ActorTemplate` that mounts an external NFS volume.
 
-### Step 1: Create the ExternalVolumeClass
+### Step 1: Create the ExternalVolumeClass and Grant It to the Atespace
 
-Create the `ExternalVolumeClass` through the Substrate API (`ate-setup setup csi nfs` registers `csi-nfs` automatically when the `ExternalVolumes` preview gate is enabled):
+Create the `ExternalVolumeClass` through the Substrate API (`ate-setup setup csi nfs` registers `csi-nfs` automatically when the `ExternalVolumes` preview gate is enabled) and grant the target atespace permission to use it:
 
 ```bash
 kubectl ate --preview create external-volume-class -f - <<'EOF'
@@ -141,6 +141,8 @@ parameters:
 mountOptions:
 - nfsvers=4.1
 EOF
+
+kubectl ate --preview update access-policy -c csi-nfs --add-member atespace:ate-demo
 ```
 
 ### Step 2: Register the CSIDriverConfig

@@ -4,7 +4,7 @@ linkTitle: "CLI Reference"
 weight: 3
 card_icon: "fa-solid fa-terminal"
 description: >
-  Manage atespaces, external volume classes, actor templates, actors, snapshots, egress policies, and logs with the kubectl-ate plugin.
+  Manage atespaces, external volume classes, access policies, actor templates, actors, snapshots, egress policies, and logs with the kubectl-ate plugin.
 ---
 
 # `kubectl-ate`
@@ -196,6 +196,41 @@ kubectl ate delete external-volume-class <name> --uid <uid> --version <version>
 | `DRIVER` | The CSI driver name (`driverName`) that provisions volumes of this class. |
 | `PARAMETERS` | Comma-separated `key=value` driver parameters sorted by key, cut to 40 characters with `...`; `-o yaml` shows them all. `-` when the class defines no parameters. |
 | `AGE` | Time elapsed since the external volume class was created. |
+
+### Access Policies
+
+An **access policy** (`AccessPolicy`) binds role grants on one of three scopes: the deployment-wide `--global` singleton (`owner`, `viewer`), an atespace via `-a`/`--atespace` (`owner`, `editor`, `viewer`), or an external volume class via `-c`/`--external-volume-class` (`allowed_atespace`). Global and atespace policies take `"user:<id>"` members; external volume class policies take `"atespace:<name>"` members. Creating or updating an external volume class access policy requires `--preview`.
+
+```bash
+# Get the access policy for global, an atespace, or an external volume class.
+kubectl ate get access-policy --global
+kubectl ate get access-policy -a <atespace>
+kubectl ate get access-policy -c <class> -o yaml
+
+# Create or replace an access policy from a YAML/JSON manifest (use -f - for stdin).
+kubectl ate create access-policy -a <atespace> -f policy.yaml
+kubectl ate update access-policy -a <atespace> -f policy.yaml
+
+# Grant or revoke atespace access on an external volume class in place
+# (creates the policy if none exists, and retries on version conflicts).
+kubectl ate update access-policy -c <class> --add-member atespace:<atespace> --preview
+kubectl ate update access-policy -c <class> --remove-member atespace:<atespace> --preview
+
+# Add or remove a principal on an atespace or global policy in place.
+kubectl ate update access-policy -a <atespace> --role editor --add-member user:<principal-id>
+
+# Delete the access policy of an atespace or external volume class.
+kubectl ate delete access-policy -a <atespace>
+kubectl ate delete access-policy -c <class> [--uid <uid>] [--version <version>]
+```
+
+#### `kubectl ate get access-policy` output columns
+
+| Column | Meaning |
+|---|---|
+| `SCOPE` | `<global>`, the atespace name, or the external volume class name. |
+| `ROLE` | Role granted by the binding (`owner`, `editor`, `viewer`, or `allowed_atespace`), or `<none>` when the policy has no bindings. |
+| `MEMBERS` | Comma-separated member identifiers bound to that role. |
 
 ### Actor Templates
 
