@@ -50,6 +50,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
@@ -78,6 +79,7 @@ var (
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	healthListenAddr     = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
+	pprofCfg             = pprofserver.RegisterFlags(pflag.CommandLine)
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
@@ -152,6 +154,9 @@ func main() {
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+	if err := pprofCfg.Validate(); err != nil {
+		serverboot.Fatal(ctx, "Invalid pprof configuration", err)
+	}
 
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Storage settings moved to the objectstore-plugin sidecar", err)
@@ -200,6 +205,7 @@ func main() {
 	// The probes have their own server, so /metrics starts here and serves
 	// during the store connect and the schema migrations.
 	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	go pprofserver.Start(ctx, pprofCfg)
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName: "ateapi",

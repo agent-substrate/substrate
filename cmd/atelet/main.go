@@ -66,6 +66,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/substratex509"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/internal/volume"
@@ -103,6 +104,7 @@ var (
 	port              = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	healthListenAddr  = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
+	pprofCfg          = pprofserver.RegisterFlags(pflag.CommandLine)
 
 	grpcServerCredBundle  = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
 	clientCACerts         = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
@@ -159,6 +161,9 @@ func main() {
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+	if err := pprofCfg.Validate(); err != nil {
+		serverboot.Fatal(ctx, "Invalid pprof configuration", err)
+	}
 	slog.InfoContext(ctx, "atelet starting", slog.String("version", version.Version))
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid environment", err)
@@ -213,6 +218,7 @@ func main() {
 	serving := make(chan struct{})
 	readiness.AddCheck("serving", servingCheck(serving))
 	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	go pprofserver.Start(ctx, pprofCfg)
 	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
 	// The OTLP relay lets the worker pods on this node export telemetry over a

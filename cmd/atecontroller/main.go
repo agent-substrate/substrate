@@ -31,6 +31,7 @@ import (
 	"go.ate.dev/substrate/internal/k8sresolver"
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/version"
 	"go.ate.dev/substrate/pkg/client/clientset/versioned"
 	"go.ate.dev/substrate/pkg/client/informers/externalversions"
@@ -63,6 +64,7 @@ var (
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	previewFlags = pflag.StringSlice("preview", nil, "Preview gates to enable.")
+	pprofCfg     = pprofserver.RegisterFlags(pflag.CommandLine)
 
 	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		"OTLP endpoint set on worker pods, which export to it directly when their node's atelet serves no OTLP relay. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
@@ -162,6 +164,9 @@ func main() {
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+	if err := pprofCfg.Validate(); err != nil {
+		serverboot.Fatal(ctx, "Invalid pprof configuration", err)
+	}
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
@@ -196,6 +201,7 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsBindAddr(servePull)))
+	go pprofserver.Start(ctx, pprofCfg)
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)

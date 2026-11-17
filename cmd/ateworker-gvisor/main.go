@@ -59,6 +59,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/snapshotcache"
 	"go.ate.dev/substrate/internal/version"
@@ -105,6 +106,7 @@ var (
 	podIPs = pflag.String("pod-ips", "", "The comma-separated IPs of the current pod")
 
 	tunnelConfig = atunnel.RegisterFlags(pflag.CommandLine)
+	pprofCfg     = pprofserver.RegisterFlags(pflag.CommandLine)
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
@@ -155,6 +157,9 @@ func do(ctx context.Context) error {
 	}
 	if err := preview.Init(*previewFlags...); err != nil {
 		return fmt.Errorf("invalid --preview: %w", err)
+	}
+	if err := pprofCfg.Validate(); err != nil {
+		return fmt.Errorf("invalid pprof configuration: %w", err)
 	}
 
 	slog.InfoContext(ctx, "ateworker booting", slog.String("version", version.Version))
@@ -208,6 +213,7 @@ func do(ctx context.Context) error {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	go pprofserver.Start(ctx, pprofCfg)
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,
