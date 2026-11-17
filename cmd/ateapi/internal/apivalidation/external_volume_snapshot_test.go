@@ -290,6 +290,21 @@ func TestValidateExternalVolumeSnapshot(t *testing.T) {
 			snapshot:  validExternalVolumeSnapshot(withStatus(&ateapi.ExternalVolumeSnapshotStatus{ErrorMessage: strings.Repeat("x", 4097)})),
 			wantError: field.ErrorList{field.TooLongCharacters(status.Child("error_message"), "", 4096).WithOrigin("maxLength")},
 		},
+		{
+			name:      "handle and error together",
+			snapshot:  validExternalVolumeSnapshot(withStatus(&ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"})),
+			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
+		},
+		{
+			name:      "ready_to_use without a handle",
+			snapshot:  validExternalVolumeSnapshot(withStatus(&ateapi.ExternalVolumeSnapshotStatus{ReadyToUse: true})),
+			wantError: field.ErrorList{field.Forbidden(status.Child("ready_to_use"), "")},
+		},
+		{
+			name:      "restore_size_bytes without a handle",
+			snapshot:  validExternalVolumeSnapshot(withStatus(&ateapi.ExternalVolumeSnapshotStatus{RestoreSizeBytes: 1})),
+			wantError: field.ErrorList{field.Forbidden(status.Child("restore_size_bytes"), "")},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -324,14 +339,61 @@ func TestValidateExternalVolumeSnapshotUpdate(t *testing.T) {
 			wantError: field.ErrorList{field.Invalid(field.NewPath("origin"), nil, "").WithOrigin("immutable")},
 		},
 		{
+			name:   "setting a status",
+			old:    nil,
+			mutate: withStatus(captured),
+		},
+		{
+			name:      "dropping the status",
+			old:       ready,
+			mutate:    withStatus(nil),
+			wantError: field.ErrorList{field.Invalid(status, nil, "").WithOrigin("update")},
+		},
+		{
+			name:      "readiness without a handle",
+			old:       pending,
+			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ReadyToUse = true },
+			wantError: field.ErrorList{field.Forbidden(status.Child("ready_to_use"), "")},
+		},
+		{
+			name:      "size without a handle",
+			old:       pending,
+			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.RestoreSizeBytes = 1 },
+			wantError: field.ErrorList{field.Forbidden(status.Child("restore_size_bytes"), "")},
+		},
+		{
 			name:   "a later error replaces the error",
 			old:    failed,
 			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "other" },
 		},
 		{
+			name:      "clearing the error without a handle",
+			old:       failed,
+			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "" },
+			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
+		},
+		{
 			name:   "recording the handle clears the error",
 			old:    failed,
 			mutate: withStatus(captured),
+		},
+		{
+			name:      "a handle that keeps the error",
+			old:       failed,
+			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SnapshotId = "snap-handle" },
+			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
+		},
+		{
+			name:      "an error while the handle is set",
+			old:       captured,
+			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "quota exceeded" },
+			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
+		},
+		{
+			name:      "clearing the error after the handle",
+			old:       &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"},
+			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "" },
+			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
 		},
 		{
 			name:   "readiness and size after the handle",
@@ -390,4 +452,35 @@ func TestValidateExternalVolumeSnapshotUpdate(t *testing.T) {
 		newVal.Status = proto.CloneOf(failed)
 		assertValidateErr(t, ValidateExternalVolumeSnapshotUpdate(ctx, newVal, oldVal), nil)
 	})
+
+	// An update does not re-check a status rule whose fields it left
+	// unchanged.
+	for _, tt := range []struct {
+		name   string
+		old    *ateapi.ExternalVolumeSnapshotStatus
+		mutate func(*ateapi.ExternalVolumeSnapshotStatus)
+	}{
+		{
+			name:   "unchanged handle and error",
+			old:    &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"},
+			mutate: func(s *ateapi.ExternalVolumeSnapshotStatus) { s.ReadyToUse = true },
+		},
+		{
+			name:   "unchanged readiness without a handle",
+			old:    &ateapi.ExternalVolumeSnapshotStatus{ReadyToUse: true},
+			mutate: func(s *ateapi.ExternalVolumeSnapshotStatus) { s.ErrorMessage = "quota exceeded" },
+		},
+		{
+			name:   "unchanged size without a handle",
+			old:    &ateapi.ExternalVolumeSnapshotStatus{RestoreSizeBytes: 1},
+			mutate: func(s *ateapi.ExternalVolumeSnapshotStatus) { s.ErrorMessage = "quota exceeded" },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			oldVal := validExternalVolumeSnapshot(withStatus(proto.CloneOf(tt.old)))
+			newVal := proto.CloneOf(oldVal)
+			tt.mutate(newVal.Status)
+			assertValidateErr(t, ValidateExternalVolumeSnapshotUpdate(ctx, newVal, oldVal), nil)
+		})
+	}
 }
