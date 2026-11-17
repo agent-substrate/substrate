@@ -25,6 +25,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/egress"
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 )
 
 func NewRouterCmd() *cobra.Command {
@@ -55,6 +56,7 @@ func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
 
 	fs.StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	fs.StringVar(&cfg.HealthAddr, "health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
+	cfg.Pprof = pprofserver.RegisterFlags(fs)
 	fs.StringVar(&cfg.AtenetRouter, "atenet-dataplane", string(atenetRouterEnvoy), "Atenet ingress and egress dataplane: envoy or agentgateway")
 	fs.StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
 	fs.StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of this atenet-router in the operations namespace. Override when the deployment renames the Service.")

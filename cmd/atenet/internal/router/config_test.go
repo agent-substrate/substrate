@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/ingress"
+	"go.ate.dev/substrate/internal/serverboot/pprofserver"
 )
 
 func TestRouterConfigValidate(t *testing.T) {
@@ -46,6 +47,11 @@ func TestRouterConfigValidate(t *testing.T) {
 			name:    "unknown router rejected",
 			cfg:     routerConfig{Mode: ModeIngress, AtenetRouter: "blah"},
 			wantErr: "--atenet-dataplane must be",
+		},
+		{
+			name:    "negative pprof mutex fraction rejected",
+			cfg:     routerConfig{Mode: ModeIngress, Pprof: &pprofserver.Config{MutexFraction: -1}},
+			wantErr: "--pprof-mutex-fraction must not be negative",
 		},
 		{
 			name: "credential providers paired by position are valid",
