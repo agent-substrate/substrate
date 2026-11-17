@@ -212,9 +212,10 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		// it was given. Kubernetes' external-provisioner checks the same way.
 		//
 		// The caller only knows the volume by its requested name, not the ID
-		// the driver issued, so delete it here rather than leak it.
+		// the driver issued, so delete it here rather than leak it. NotFound
+		// means the volume is already gone.
 		volumeID := resp.GetVolume().GetVolumeId()
-		if delErr := p.DeleteVolume(ctx, volumeID); delErr != nil {
+		if delErr := p.DeleteVolume(ctx, volumeID); delErr != nil && status.Code(delErr) != codes.NotFound {
 			// %v keeps DeleteVolume's gRPC code out of the CreateVolume error.
 			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q, and deleting volume %q failed: %v", req.SourceSnapshotID, volumeID, delErr)
 		}

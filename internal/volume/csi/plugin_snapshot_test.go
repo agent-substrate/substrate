@@ -399,9 +399,11 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 		wantErr        bool
 		// wantErrContains is a substring the error must contain.
 		wantErrContains string
-		wantSource      string
-		wantCreateCalls int
-		wantDeleted     []string
+		// wantErrNotContain is a substring the error must not contain.
+		wantErrNotContain string
+		wantSource        string
+		wantCreateCalls   int
+		wantDeleted       []string
 	}{
 		{
 			name:            "no source",
@@ -443,6 +445,17 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 			wantErrContains: "vol-v",
 			wantCreateCalls: 1,
 			wantDeleted:     []string{"vol-v"},
+		},
+		{
+			name:              "unrestored volume is already gone",
+			caps:              snapshotCaps,
+			source:            "snap-1",
+			dropSource:        true,
+			deleteErr:         status.Error(codes.NotFound, "gone"),
+			wantErr:           true,
+			wantErrNotContain: "deleting volume",
+			wantCreateCalls:   1,
+			wantDeleted:       []string{"vol-v"},
 		},
 		{
 			// Drivers may report the source in their own format, as GCE PD
@@ -509,6 +522,9 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 			}
 			if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
 				t.Errorf("CreateVolume error = %v, want it to contain %q", err, tt.wantErrContains)
+			}
+			if tt.wantErrNotContain != "" && strings.Contains(err.Error(), tt.wantErrNotContain) {
+				t.Errorf("CreateVolume error = %v, want it not to contain %q", err, tt.wantErrNotContain)
 			}
 			if tt.deleteErr != nil && status.Code(err) != codes.Unknown {
 				t.Errorf("CreateVolume error code = %v, want %v so the cleanup's code doesn't leak", status.Code(err), codes.Unknown)
