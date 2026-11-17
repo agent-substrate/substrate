@@ -245,3 +245,69 @@ func TestRequestsWithoutMeterIsNoOp(t *testing.T) {
 		t.Fatalf("EnsureImage: %v", err)
 	}
 }
+
+// collectSize returns the ate.imagecache.size value, checking its shape.
+func collectSize(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != sizeMetric {
+				continue
+			}
+			if m.Unit != "By" {
+				t.Errorf("unit = %q, want By", m.Unit)
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("data type = %T, want Sum[int64]", m.Data)
+			}
+			if sum.IsMonotonic {
+				t.Error("IsMonotonic = true, want false (an updowncounter)")
+			}
+			if len(sum.DataPoints) != 1 || sum.DataPoints[0].Attributes.Len() != 0 {
+				t.Fatalf("data points = %+v, want one with no labels", sum.DataPoints)
+			}
+			return sum.DataPoints[0].Value
+		}
+	}
+	t.Fatalf("%s not collected", sizeMetric)
+	return 0
+}
+
+// TestSizeIsMeasuredOnCollection checks the size follows pulls and evictions
+// on the next collection, with no eviction loop involved.
+func TestSizeIsMeasuredOnCollection(t *testing.T) {
+	_, host := newTestRegistry(t)
+	ref := host + "/test/size:latest"
+	pushOneLayerImage(t, ref)
+
+	store, reader := newMeteredStore(t, WithMinAge(0))
+	ctx := context.Background()
+
+	if got := collectSize(t, reader); got != 0 {
+		t.Errorf("empty cache size = %d, want 0", got)
+	}
+	if _, err := store.EnsureImage(ctx, ref); err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	want, err := store.CacheSize()
+	if err != nil {
+		t.Fatalf("CacheSize: %v", err)
+	}
+	if want == 0 {
+		t.Fatal("CacheSize = 0 after a pull, want the layer's size")
+	}
+	if got := collectSize(t, reader); got != want {
+		t.Errorf("size after pull = %d, want %d", got, want)
+	}
+	if _, err := store.EvictUnused(ctx, want, false); err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if got := collectSize(t, reader); got != 0 {
+		t.Errorf("size after evicting everything = %d, want 0", got)
+	}
+}
