@@ -9,7 +9,7 @@ Depends on [`cel-expr-python`](https://github.com/cel-expr/cel-python) and
 
 - A **source** reads the run and returns several named **values**, or
   says it can't judge the run (`invalid`, with a reason). Sources:
-  `run_results`.
+  `cel`, `run_results`.
 - A **variable** is one source query: `{name, source, source_cfg}`. Its values
   are exposed to CEL as a map under `<variable>` (`<variable>.<value>`, or
   `<variable>["<value>"]` when `<value>` contains dots or CEL keywords).
@@ -87,7 +87,7 @@ A source is a class with three hooks (`sources/base.py`):
 | hook | runs | does |
 |---|---|---|
 | `validate(cfg)`, a classmethod | when the evaluations are loaded | raises `ValueError` for a bad `source_cfg` |
-| `init(run)` | once, when the run starts (its files may not exist yet) | takes the `BenchmarkRunContext`, the run being evaluated: which run it is (`identity`: `uri`, and `test_name`, `tag`, `run_date`, `run_ts` when known), where it is stored, and its stored artifacts (`artifact(name)`, a local path or None); the source chooses what it reads |
+| `init(run)` | once, when the run starts (its files may not exist yet) | takes the `BenchmarkRunContext`, the run being evaluated: which run it is (`identity`: `uri`, and `test_name`, `tag`, `run_date`, `run_ts` when known), where it is stored, and its stored artifacts (`artifact(name)`, a local path or None); the source chooses what it reads. |
 | `query(cfg)` | after the run, once per distinct `source_cfg` | returns named values (numbers, bools, strings or null), or raises `SourceInvalid(reason, values)` when it can't judge the run |
 
 Value names come from `source_cfg` or are fixed by the source, never from the
@@ -98,6 +98,116 @@ from a hook makes the source's variables `invalid` with the error, and so does
 a value of another type, such as a list or a mapping, or a value name that
 isn't a non-empty string. Sources never write files. A new source is a class
 in `sources/` and a line in `SOURCES`.
+
+### `cel`
+
+Binds data read from runs to CEL, and evaluates named expressions into
+values. The source has no notion of what the data means: what counts as
+good, which run to compare against, and every formula live in the config.
+
+```yaml
+source: cel
+source_cfg:
+  inputs:                    # the data, each a CEL variable
+  - name: stats
+    reader: json_lines
+    reader_cfg: {file: stats.jsonl}
+  locals:                    # optional: ordered list of named in-between results
+  - name: trials
+    cel: "stats.lines.filter(l, l.metric == 'trial_summary')"
+  checks:                    # optional: what must hold for the values to mean anything
+  - name: has_trial
+    cel: "size(trials) > 0"
+  values:                    # the outputs
+  - name: cores
+    cel: "size(trials) > 0 ? dyn(trials[size(trials) - 1].measurements.allocatable_cores) : null"
+```
+
+- `inputs: [{name: <name>, reader: <reader>, reader_cfg: {...}}, ...]`:
+  each input names a reader and its `reader_cfg`, and the reader's data
+  from this run becomes the CEL variable `<name>`.
+- `locals: [{name: <name>, cel: <cel>}, ...]`: ordered list of named in-between
+  results, such as a filtered list or a median. They are evaluated top to
+  bottom, so each local may read inputs and earlier locals by bare name.
+  Entries can share locals through YAML anchors. A local holds whatever CEL
+  produces, including `timestamp` and `duration`.
+- `checks: [{name: <name>, cel: <cel bool>}, ...]`: conditions the data must meet before the
+  values mean anything (for example, both runs used the same mode). A check
+  that is false or fails to evaluate makes the variable `invalid`, and the
+  reason names the check. Unlike an evaluation's conditions, a check judges
+  the data, not the run.
+- `values: [{name: <name>, cel: <cel>}, ...]`: the outputs. Each must give a double, bool,
+  string or `null`; a whole number such as `size(x)` must be converted with
+  `double()`. Use CEL's native `null` with `dyn()` for missing or empty cases
+  (`size(xs) > 0 ? dyn(...) : null`). A non-finite float (`0.0 / 0.0`) also
+  becomes `null`.
+- Names match `^[a-z][a-z0-9_]*$` and are unique within each list. An input
+  and a local can't share a name.
+  Whole numbers stay integers here (`size(x) - 1` indexes a list), so write
+  doubles as `1500.0`.
+- Functions beyond standard CEL: the CEL math extension (`ext_math`:
+  `math.least`, `math.greatest`, `math.round`, ...), plus two explicitly
+  defined numeric helpers: `round(x, digits)` (Python-style rounding, shared
+  with evaluation conditions) and `percentile(xs, p)` over `list(double)`
+  (linear interpolation between the closest ranks, `p` from 0 to 100, raising
+  an error on an empty list like `math.least`/`math.greatest`).
+
+What is checked, when, and what happens on a mismatch:
+
+| what | when | on a mismatch |
+|---|---|---|
+| unknown `source_cfg` key or reader, bad `reader_cfg`, bad or repeated names | config load | the evaluations fail to load |
+| `select` / `until` expressions on `json_lines` | config load | load error |
+| every expression compiles with inferred local types, and value return types can be double, bool, string or null | config load | load error |
+| reader output has its declared `fields`, of their types | run time | `TypeError` makes the variable `invalid` |
+| missing JSON keys inside `lines` or `data` | run time | reading a missing key makes the variable `invalid`, unless guarded with `has()` |
+| a reader can't read its run (absent file, unhashable `unique_by`, `select` eval error) | run time | `invalid`, and the reason names the input |
+| a local, check or value fails to evaluate, or a value gives another type | run time | `invalid`, and the reason names it |
+
+A reader is a class in `sources/cel/` and a line in `READERS`
+(`sources/cel/reader.py`): its `Config` (a pydantic model of its
+`reader_cfg`), its `fields` (the top-level fields of its data and their
+types, checked at run time; inputs are `map(string, dyn)` in CEL, so a field
+name is not checked at config load) and `read(run, cfg)`, which raises
+`ReadError` when the run can't be read. A reader exposes data and
+passes no judgment on it. All numbers are doubles, and a field a record lacks
+is absent rather than null.
+
+#### `json`
+
+One JSON object file from the run: `{name: summary, reader: json, reader_cfg: {file: server_summary.json}}`.
+
+- `data`: the parsed JSON object, with leaf coercion as in `run_results`.
+- `uri`: where the run is stored.
+
+#### `json_lines`
+
+Filtered lines of one of the run's JSON-lines or prefixed-JSON files:
+
+```yaml
+- name: records
+  reader: json_lines
+  reader_cfg:
+    file: logs.txt
+    prefix: "[boomer] "
+    until: "has(line.msg) && line.msg == 'sweperf shutdown started'"
+    select: "has(line.msg) && line.msg == 'sweperf task record' && has(line.v) && line.v == 1.0"
+```
+
+- `lines`: selected JSON objects, in file order. Values are coerced as in
+  `run_results`: numbers and numeric strings without `_` become doubles,
+  `"true"`/`"false"` become bools, and a null or non-finite number is left out.
+- `unparsed_lines`: `[{line_no, text, error}]` for each prefixed (or, when
+  `prefix` is unset, non-blank) line that isn't a JSON object.
+- `uri`: where the run is stored.
+- Optional `reader_cfg` keys:
+  - `prefix`: skip lines not starting with `prefix` and strip it before
+    parsing JSON (without it, blank lines are skipped).
+  - `until`: CEL boolean expression over `line`; stop reading when a parsed
+    object matches (that line is not emitted).
+  - `select`: CEL boolean expression over `line`; keep only matching objects.
+  - `unique_by`: field name; keep only the first selected object per distinct
+    value of that field (useful to bound list size before CEL evaluation).
 
 ### `run_results`
 
@@ -129,7 +239,7 @@ invalid conditions and variables.
 | file | |
 |---|---|
 | `config.py` | loads and validates an `evaluations` block (pydantic models) |
-| `cel_env.py` | shared CEL environment, `round()`, and evaluation |
+| `cel_env.py` | shared CEL environment, helpers (`round`, `percentile`), and evaluation |
 | `evaluator.py` | runs the source hooks and judges a run into a `Report` |
 | `sources/` | the hooks (`base.py`) and the sources |
 
