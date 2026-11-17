@@ -284,7 +284,6 @@ func main() {
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	workerPoolLister := ateFactory.Ate().V1().WorkerPools().Lister()
-	csiDriverConfigLister := ateFactory.Ate().V1().CSIDriverConfigs().Lister()
 
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
@@ -346,7 +345,6 @@ func main() {
 	controlSrv := controlapi.NewRPCService(
 		persistence,
 		workerCache,
-		csiDriverConfigLister,
 		storageClassLister,
 		ateletDialer,
 		instruments,

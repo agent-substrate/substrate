@@ -26,9 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -88,7 +86,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -403,10 +400,7 @@ func main() {
 	defer ateapiConn.Close()
 	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 	controlService := ateapi.NewControlClient(ateapiConn)
-	csiDriverConfigGetter := &ateapiCSIDriverConfigGetter{
-		control:  controlService,
-		fallback: &directCSIDriverConfigGetter{client: ateClient},
-	}
+	csiDriverConfigGetter := &ateapiCSIDriverConfigGetter{control: controlService}
 
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
@@ -717,18 +711,13 @@ type csiDriverConfigListClient interface {
 	ListCsiDriverConfigs(ctx context.Context, in *ateapi.ListCsiDriverConfigsRequest, opts ...grpc.CallOption) (*ateapi.ListCsiDriverConfigsResponse, error)
 }
 
-// ateapiCSIDriverConfigGetter resolves CsiDriverConfig from ate-api-server first
-// and falls back to the Kubernetes CSIDriverConfig CRD.
+// ateapiCSIDriverConfigGetter resolves CsiDriverConfig from ate-api-server.
 type ateapiCSIDriverConfigGetter struct {
-	control  csiDriverConfigListClient
-	fallback csi.CSIDriverConfigGetter
+	control csiDriverConfigListClient
 }
 
 func (g *ateapiCSIDriverConfigGetter) Get(ctx context.Context, driverName string) (*ateapi.CsiDriverConfig, error) {
 	if g.control == nil {
-		if g.fallback != nil {
-			return g.fallback.Get(ctx, driverName)
-		}
 		return nil, errors.New("missing csiDriverConfigGetter")
 	}
 	for pageToken := ""; ; {
@@ -737,10 +726,6 @@ func (g *ateapiCSIDriverConfigGetter) Get(ctx context.Context, driverName string
 		})
 		if err != nil {
 			switch status.Code(err) {
-			case codes.Unimplemented:
-				if g.fallback != nil {
-					return g.fallback.Get(ctx, driverName)
-				}
 			case codes.Unavailable:
 				return nil, apierror.Unavailable("while listing CsiDriverConfigs from ate-api-server: %w", err)
 			case codes.Canceled, codes.DeadlineExceeded:
@@ -760,50 +745,7 @@ func (g *ateapiCSIDriverConfigGetter) Get(ctx context.Context, driverName string
 			break
 		}
 	}
-	if g.fallback != nil {
-		return g.fallback.Get(ctx, driverName)
-	}
 	return nil, status.Errorf(codes.NotFound, "CsiDriverConfig for driver %q not found", driverName)
-}
-
-// directCSIDriverConfigGetter retrieves CSIDriverConfig via direct API call rather than a cluster-wide watch informer.
-type directCSIDriverConfigGetter struct {
-	client versioned.Interface
-}
-
-func (g *directCSIDriverConfigGetter) Get(ctx context.Context, name string) (*ateapi.CsiDriverConfig, error) {
-	crd, err := g.client.AteV1().CSIDriverConfigs().Get(ctx, name, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, err
-	}
-	if err == nil && crd != nil && (crd.Spec.DriverName == "" || crd.Spec.DriverName == name) {
-		return csi.FromK8sCSIDriverConfig(crd), nil
-	}
-	if apierrors.IsNotFound(err) || (err == nil && crd != nil && crd.Spec.DriverName != "" && crd.Spec.DriverName != name) {
-		list, listErr := g.client.AteV1().CSIDriverConfigs().List(ctx, metav1.ListOptions{})
-		if listErr != nil {
-			return nil, listErr
-		}
-		var matched *atev1.CSIDriverConfig
-		var matchedNames []string
-		for i := range list.Items {
-			if list.Items[i].Spec.DriverName == name {
-				matched = &list.Items[i]
-				matchedNames = append(matchedNames, list.Items[i].Name)
-			}
-		}
-		if len(matchedNames) > 1 {
-			slices.Sort(matchedNames)
-			return nil, fmt.Errorf("multiple CSIDriverConfigs match driver %q: %s", name, strings.Join(matchedNames, ", "))
-		}
-		if matched != nil {
-			return csi.FromK8sCSIDriverConfig(matched), nil
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	return nil, apierrors.NewNotFound(atev1.Resource("csidriverconfigs"), name)
 }
 
 // Atelet is a service that allows controlling workloads on individual

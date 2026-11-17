@@ -22,8 +22,6 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// CSIDriverConfigs returns a TypedCSIDriverConfigInformer.
-	CSIDriverConfigs() TypedCSIDriverConfigInformer
 	// SandboxConfigs returns a TypedSandboxConfigInformer.
 	SandboxConfigs() TypedSandboxConfigInformer
 	// WorkerPools returns a TypedWorkerPoolInformer.
@@ -39,11 +37,6 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
-}
-
-// CSIDriverConfigs returns a TypedCSIDriverConfigInformer.
-func (v *version) CSIDriverConfigs() TypedCSIDriverConfigInformer {
-	return &cSIDriverConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // SandboxConfigs returns a TypedSandboxConfigInformer.

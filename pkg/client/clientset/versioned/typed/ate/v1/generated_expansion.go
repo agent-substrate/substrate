@@ -16,8 +16,6 @@
 
 package v1
 
-type CSIDriverConfigExpansion interface{}
-
 type SandboxConfigExpansion interface{}
 
 type WorkerPoolExpansion interface{}

@@ -29,7 +29,6 @@ import (
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
-	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -63,18 +62,17 @@ func newCSIPluginCacheKey(cfg *ateapi.CsiDriverConfig) csiPluginCacheKey {
 // ServiceImpl for business logic and invariants.
 type RPCService struct {
 	ateapi.UnimplementedControlServer
-	impl                  serviceStore
-	persistence           serviceStore
-	workerCache           *workercache.Cache
-	dialer                *AteletDialer
-	csiDriverConfigLister atelisters.CSIDriverConfigLister
-	actorWorkflow         *ActorWorkflow
-	workerWorkflow        *WorkerWorkflow
-	instruments           *Instruments
-	staticVolumePlugins   map[string]volume.VolumePluginControlPlane
-	mu                    sync.RWMutex
-	csiPlugins            map[string]csiPluginSlot
-	objectStorePlugin     objectstore.ControlProviderClient
+	impl                serviceStore
+	persistence         serviceStore
+	workerCache         *workercache.Cache
+	dialer              *AteletDialer
+	actorWorkflow       *ActorWorkflow
+	workerWorkflow      *WorkerWorkflow
+	instruments         *Instruments
+	staticVolumePlugins map[string]volume.VolumePluginControlPlane
+	mu                  sync.RWMutex
+	csiPlugins          map[string]csiPluginSlot
+	objectStorePlugin   objectstore.ControlProviderClient
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
@@ -103,7 +101,6 @@ type VolumePluginRegistry interface {
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
-	csiDriverConfigLister atelisters.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
 	instruments *Instruments,
@@ -117,17 +114,16 @@ func NewRPCService(
 	impl := newServiceImpl(persistence, storageClassLister)
 	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
-		impl:                  impl,
-		persistence:           persistence,
-		workerCache:           workerCache,
-		csiDriverConfigLister: csiDriverConfigLister,
-		dialer:                dialer,
-		instruments:           instruments,
-		staticVolumePlugins:   maps.Clone(volumePlugins),
-		csiPlugins:            make(map[string]csiPluginSlot),
-		objectStorePlugin:     objectStorePlugin,
-		actorJWTIssuer:        actorJWTIssuer,
-		actorIDJWTPool:        actorIDJWTPool,
+		impl:                impl,
+		persistence:         persistence,
+		workerCache:         workerCache,
+		dialer:              dialer,
+		instruments:         instruments,
+		staticVolumePlugins: maps.Clone(volumePlugins),
+		csiPlugins:          make(map[string]csiPluginSlot),
+		objectStorePlugin:   objectStorePlugin,
+		actorJWTIssuer:      actorJWTIssuer,
+		actorIDJWTPool:      actorIDJWTPool,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
@@ -184,23 +180,17 @@ type serviceStore interface {
 }
 
 func (s *RPCService) resolveCsiDriverConfig(ctx context.Context, driverName string) (*ateapi.CsiDriverConfig, bool, error) {
-	if s.impl != nil {
-		cfg, err := s.impl.GetCsiDriverConfigByDriverName(ctx, driverName)
-		if err == nil {
-			return cfg, false, nil
-		}
-		if !errors.Is(err, store.ErrNotFound) {
-			return nil, false, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: %w", driverName, err)
-		}
-		if s.csiDriverConfigLister == nil {
-			return nil, true, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: not found", driverName)
-		}
+	if s.impl == nil {
+		return nil, false, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: store is not configured", driverName)
 	}
-	cfg, k8sErr := csi.NewK8sCSIDriverConfigGetter(s.csiDriverConfigLister).Get(ctx, driverName)
-	if k8sErr != nil {
-		return nil, true, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: %w", driverName, k8sErr)
+	cfg, err := s.impl.GetCsiDriverConfigByDriverName(ctx, driverName)
+	if err == nil {
+		return cfg, false, nil
 	}
-	return cfg, false, nil
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, true, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: not found", driverName)
+	}
+	return nil, false, fmt.Errorf("failed to retrieve CsiDriverConfig for %q: %w", driverName, err)
 }
 
 func (s *RPCService) evictSlotLocked(driverName string, cur csiPluginSlot) (*csi.Plugin, uint64) {
@@ -292,8 +282,7 @@ func (s *RPCService) getPluginOnce(ctx context.Context, driverName string) (volu
 	return csiPlugin, false, nil
 }
 
-// GetPlugin retrieves a CSI volume plugin by driver name, reading CsiDriverConfig
-// from Postgres first and falling back to the Kubernetes CSIDriverConfig CRD.
+// GetPlugin retrieves a CSI volume plugin by driver name from the stored CsiDriverConfig.
 func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
 	if plugin, ok := s.staticVolumePlugins[driverName]; ok {
 		return plugin, nil

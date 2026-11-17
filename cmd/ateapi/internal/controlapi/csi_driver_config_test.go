@@ -25,18 +25,13 @@ import (
 
 	csipb "github.com/container-storage-interface/spec/lib/go/csi"
 	"go.ate.dev/substrate/api/ateapi/v1"
-	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
-	atelisters "go.ate.dev/substrate/pkg/client/listers/ate/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/cache"
 )
 
 type testCSIServer struct {
@@ -97,16 +92,6 @@ func cleanupCSIPlugins(t *testing.T, svc *RPCService) *RPCService {
 		}
 	})
 	return svc
-}
-
-func newCRDIndexer(driverName, ep string) (cache.Indexer, *atev1.CSIDriverConfig, atelisters.CSIDriverConfigLister) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	crd := &atev1.CSIDriverConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "crd-" + driverName, UID: types.UID("crd-uid"), ResourceVersion: "5"},
-		Spec:       atev1.CSIDriverConfigSpec{DriverName: driverName, ControllerEndpoint: ep},
-	}
-	_ = indexer.Add(crd)
-	return indexer, crd, atelisters.NewCSIDriverConfigLister(indexer)
 }
 
 func assertPluginClosed(t *testing.T, plugin volume.VolumePluginControlPlane) {
@@ -201,18 +186,19 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 		}
 		staticPlugin := volume.NewMockVolumePlugin()
 		plugins := map[string]volume.VolumePluginControlPlane{"nfs.csi.k8s.io": staticPlugin}
-		svc := NewRPCService(nil, nil, nil, nil, nil, nil, "", plugins, nil, "", nil, "")
+		svc := NewRPCService(nil, nil, nil, nil, nil, "", plugins, nil, "", nil, "")
 		svc.impl = &faultyServiceStore{err: errors.New("unexpected store call")}
 		delete(plugins, "nfs.csi.k8s.io")
 		if got, err := svc.GetPlugin(ctx, "nfs.csi.k8s.io"); err != nil || got != staticPlugin {
 			t.Fatalf("GetPlugin() = (%v, %v), want static override", got, err)
 		}
+		mustFailGetPlugin(t, &RPCService{}, "nfs.csi.k8s.io", nil, "store is not configured")
 	})
 
 	t.Run("postgres lookup, node_socket_override reuse, endpoint/tls invalidation, recreate, and delete", func(t *testing.T) {
 		const cfgName, driverName = "csi-nfs", "nfs.csi.k8s.io"
 		ep1, ep2 := startTestCSIServer(t, driverName, "vol-ep1", nil), startTestCSIServer(t, driverName, "vol-ep2", nil)
-		svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
+		svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
 		v1 := mustCreateCfg(t, st, cfgName, driverName, ep1)
 		p1 := mustGetCSIPlugin(t, svc, driverName, "vol-ep1")
 		v2 := mustUpdateCfg(t, st, v1, ep1, "unix:///var/lib/kubelet/plugins/nfs/csi.sock", nil)
@@ -235,40 +221,11 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("crd fallback, identical promotion/demotion reuse, and differing endpoint swap", func(t *testing.T) {
-		const driverName = "pd.csi.storage.gke.io"
-		epCRD, epPG := startTestCSIServer(t, driverName, "vol-crd", nil), startTestCSIServer(t, driverName, "vol-pg", nil)
-		indexer, crdObj, lister := newCRDIndexer(driverName, epCRD)
-		svc := cleanupCSIPlugins(t, NewRPCService(st, nil, lister, nil, nil, nil, "", nil, nil, "", nil, ""))
-		nilImplSvc := cleanupCSIPlugins(t, &RPCService{csiDriverConfigLister: lister})
-		nilImplPlugin := mustGetCSIPlugin(t, nilImplSvc, driverName, "vol-crd")
-		crdPlugin := mustGetCSIPlugin(t, svc, driverName, "vol-crd")
-
-		crdObjBumped := crdObj.DeepCopy()
-		crdObjBumped.ResourceVersion, crdObjBumped.Spec.NodeSocketOverride = "6", "unix:///var/lib/kubelet/plugins/pd/csi.sock"
-		_ = indexer.Update(crdObjBumped)
-		mustGetSamePlugin(t, svc, driverName, "vol-crd", crdPlugin)
-		mustCreateCfg(t, st, "csi-pd-same", driverName, epCRD)
-		mustGetSamePlugin(t, svc, driverName, "vol-crd", crdPlugin)
-		mustDeleteCfg(t, st, "csi-pd-same")
-		mustGetSamePlugin(t, svc, driverName, "vol-crd", crdPlugin)
-		mustCreateCfg(t, st, "csi-pd", driverName, epPG)
-		pgPlugin := mustGetSwappedPlugin(t, svc, driverName, "vol-pg", crdPlugin)
-		mustDeleteCfg(t, st, "csi-pd")
-		crdPlugin2 := mustGetSwappedPlugin(t, svc, driverName, "vol-crd", pgPlugin)
-		_ = indexer.Delete(crdObjBumped)
-		mustFailGetPlugin(t, svc, driverName, nil, "not found")
-		assertPluginClosed(t, crdPlugin2)
-		mustFailGetPlugin(t, nilImplSvc, driverName, nil, "not found")
-		assertPluginClosed(t, nilImplPlugin)
-	})
-
-	t.Run("transient store error fails loudly without fallback or eviction", func(t *testing.T) {
+	t.Run("transient store error fails loudly without eviction", func(t *testing.T) {
 		const driverName = "lustre.csi.storage.gke.io"
-		epPG, epCRD := startTestCSIServer(t, driverName, "vol-lustre-pg", nil), startTestCSIServer(t, driverName, "vol-lustre-crd", nil)
-		_, _, lister := newCRDIndexer(driverName, epCRD)
+		epPG := startTestCSIServer(t, driverName, "vol-lustre-pg", nil)
 		faulty := &faultyServiceStore{serviceStore: newServiceImpl(st, nil)}
-		svc := cleanupCSIPlugins(t, &RPCService{impl: faulty, csiDriverConfigLister: lister})
+		svc := cleanupCSIPlugins(t, &RPCService{impl: faulty})
 		mustCreateCfg(t, st, "csi-lustre", driverName, epPG)
 		cachedPlugin := mustGetCSIPlugin(t, svc, driverName, "vol-lustre-pg")
 
@@ -289,7 +246,7 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 			var once sync.Once
 			ep1 := startTestCSIServer(t, driver, "vol-v1", func() { once.Do(func() { close(enteredEp1); <-releaseEp1 }) })
 			ep2 := startTestCSIServer(t, driver, "vol-v2", nil)
-			svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
+			svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
 			created := mustCreateCfg(t, st, cfgName, driver, ep1)
 			var gotPlugin volume.VolumePluginControlPlane
 			var gotErr error

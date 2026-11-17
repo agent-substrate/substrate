@@ -31,21 +31,15 @@ import (
 	csipb "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
-	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"go.ate.dev/substrate/cmd/atelet/internal/actordirs"
 	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
-	"go.ate.dev/substrate/pkg/client/clientset/versioned/fake"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	k8stesting "k8s.io/client-go/testing"
 	clocktesting "k8s.io/utils/clock/testing"
 )
 
@@ -529,71 +523,6 @@ func TestVolumeHostDirectoryCleanup(t *testing.T) {
 	})
 }
 
-func TestDirectCSIDriverConfigGetter(t *testing.T) {
-	fakeClient := fake.NewSimpleClientset(
-		&atev1.CSIDriverConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: "test.csi.k8s.io"},
-			Spec:       atev1.CSIDriverConfigSpec{DriverName: "test.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9000"},
-		},
-		&atev1.CSIDriverConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: "custom-nfs-config"},
-			Spec:       atev1.CSIDriverConfigSpec{DriverName: "nfs.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9001", NodeSocketOverride: "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock"},
-		},
-		&atev1.CSIDriverConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: "dup-b"},
-			Spec:       atev1.CSIDriverConfigSpec{DriverName: "dup.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9002"},
-		},
-		&atev1.CSIDriverConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: "dup-a"},
-			Spec:       atev1.CSIDriverConfigSpec{DriverName: "dup.csi.k8s.io", ControllerEndpoint: "tcp://127.0.0.1:9003"},
-		},
-	)
-	getter := &directCSIDriverConfigGetter{client: fakeClient}
-	ctx := t.Context()
-
-	cfg, err := getter.Get(ctx, "test.csi.k8s.io")
-	if err != nil || cfg.GetDriverName() != "test.csi.k8s.io" {
-		t.Fatalf("Get(test.csi.k8s.io) = (%v, %v)", cfg, err)
-	}
-
-	nfsCfg, err := getter.Get(ctx, "nfs.csi.k8s.io")
-	if err != nil || nfsCfg.GetMetadata().GetName() != "custom-nfs-config" || nfsCfg.GetDriverName() != "nfs.csi.k8s.io" {
-		t.Fatalf("Get(nfs.csi.k8s.io) = (%v, %v)", nfsCfg, err)
-	}
-	if nfsCfg.GetNodeSocketOverride() != "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock" {
-		t.Errorf("got NodeSocketOverride %q", nfsCfg.GetNodeSocketOverride())
-	}
-
-	if _, err := getter.Get(ctx, "dup.csi.k8s.io"); err == nil || !strings.Contains(err.Error(), `multiple CSIDriverConfigs match driver "dup.csi.k8s.io": dup-a, dup-b`) {
-		t.Fatalf("Get(dup.csi.k8s.io) error = %v, want deterministic duplicate error", err)
-	}
-
-	if _, err := getter.Get(ctx, "missing.csi.k8s.io"); err == nil {
-		t.Fatal("expected error for missing driver, got nil")
-	}
-
-	listBoom := errors.New("apiserver list unavailable")
-	fakeClient.PrependReactor("list", "csidriverconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, listBoom
-	})
-	if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); !errors.Is(err, listBoom) {
-		t.Fatalf("Get with failing List = %v, want %v", err, listBoom)
-	}
-
-	getBoom := errors.New("apiserver get forbidden")
-	listCalled := false
-	fakeClient.PrependReactor("list", "csidriverconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
-		listCalled = true
-		return true, nil, listBoom
-	})
-	fakeClient.PrependReactor("get", "csidriverconfigs", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, getBoom
-	})
-	if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); !errors.Is(err, getBoom) || listCalled {
-		t.Fatalf("Get with non-NotFound error = %v (listCalled=%t), want %v without List", err, listCalled, getBoom)
-	}
-}
-
 type fakeCsiDriverConfigListClient struct {
 	mu    sync.Mutex
 	pages map[string]*ateapi.ListCsiDriverConfigsResponse
@@ -634,39 +563,19 @@ func (s *spyCSIGetter) Get(ctx context.Context, driverName string) (*ateapi.CsiD
 func TestAteapiCSIDriverConfigGetter(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	crdClient := fake.NewSimpleClientset(
-		&atev1.CSIDriverConfig{ObjectMeta: metav1.ObjectMeta{Name: "crd-nfs"}, Spec: atev1.CSIDriverConfigSpec{DriverName: "nfs.csi.k8s.io", NodeSocketOverride: "unix:///crd-nfs.sock"}},
-		&atev1.CSIDriverConfig{ObjectMeta: metav1.ObjectMeta{Name: "crd-pd"}, Spec: atev1.CSIDriverConfigSpec{DriverName: "pd.csi.storage.gke.io", NodeSocketOverride: "unix:///crd-pd.sock"}},
-	)
-	crdFallback := &directCSIDriverConfigGetter{client: crdClient}
 	control := &fakeCsiDriverConfigListClient{pages: map[string]*ateapi.ListCsiDriverConfigsResponse{
 		"":   {CsiDriverConfigs: []*ateapi.CsiDriverConfig{{Metadata: &ateapi.ResourceMetadata{Name: "other"}, DriverName: "other.csi.io"}}, NextPageToken: "p2"},
 		"p2": {CsiDriverConfigs: []*ateapi.CsiDriverConfig{{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"}, DriverName: "nfs.csi.k8s.io", NodeSocketOverride: "unix:///ateapi-nfs.sock"}}},
 	}}
-	spy := &spyCSIGetter{inner: crdFallback}
-	getter := &ateapiCSIDriverConfigGetter{control: control, fallback: spy}
+	getter := &ateapiCSIDriverConfigGetter{control: control}
 
-	if nfs, err := getter.Get(ctx, "nfs.csi.k8s.io"); err != nil || nfs.GetNodeSocketOverride() != "unix:///ateapi-nfs.sock" || spy.calls.Load() != 0 {
-		t.Fatalf("Get(nfs) = (%v, %v), fallbackCalls = %d", nfs, err, spy.calls.Load())
+	if nfs, err := getter.Get(ctx, "nfs.csi.k8s.io"); err != nil || nfs.GetNodeSocketOverride() != "unix:///ateapi-nfs.sock" {
+		t.Fatalf("Get(nfs) = (%v, %v)", nfs, err)
 	}
-	if pd, err := getter.Get(ctx, "pd.csi.storage.gke.io"); err != nil || pd.GetNodeSocketOverride() != "unix:///crd-pd.sock" || spy.calls.Load() != 1 {
-		t.Fatalf("Get(pd) = (%v, %v), fallbackCalls = %d", pd, err, spy.calls.Load())
-	}
-	if _, err := getter.Get(ctx, "missing.csi.io"); !apierrors.IsNotFound(err) {
-		t.Fatalf("Get(missing) error = %v, want apierrors.IsNotFound", err)
-	}
-	if _, err := (&ateapiCSIDriverConfigGetter{control: control}).Get(ctx, "missing.csi.io"); status.Code(err) != codes.NotFound {
-		t.Fatalf("Get(missing, nil fallback) code = %v, want NotFound", status.Code(err))
+	if _, err := getter.Get(ctx, "missing.csi.io"); status.Code(err) != codes.NotFound {
+		t.Fatalf("Get(missing) code = %v, want NotFound", status.Code(err))
 	}
 
-	spy.calls.Store(0)
-	control.err = status.Error(codes.Unimplemented, "unknown method ListCsiDriverConfigs")
-	if got, err := getter.Get(ctx, "nfs.csi.k8s.io"); err != nil || got.GetNodeSocketOverride() != "unix:///crd-nfs.sock" || spy.calls.Load() != 1 {
-		t.Fatalf("Get(Unimplemented) = (%v, %v), fallbackCalls = %d", got, err, spy.calls.Load())
-	}
-	if _, err := (&ateapiCSIDriverConfigGetter{control: control}).Get(ctx, "nfs.csi.k8s.io"); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("Get(Unimplemented, nil fallback) = %v, want Unimplemented", err)
-	}
 	for _, tc := range []struct {
 		code     codes.Code
 		wantCode codes.Code
@@ -674,12 +583,12 @@ func TestAteapiCSIDriverConfigGetter(t *testing.T) {
 		{codes.Unavailable, codes.Unavailable},
 		{codes.DeadlineExceeded, codes.Unavailable},
 		{codes.Canceled, codes.Unavailable},
+		{codes.Unimplemented, codes.Internal},
 		{codes.PermissionDenied, codes.Internal},
 	} {
-		spy.calls.Store(0)
 		control.err = status.Error(tc.code, "rpc failed")
-		if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); apierror.Code(err) != tc.wantCode || spy.calls.Load() != 0 {
-			t.Fatalf("Get(%v) apierror.Code = %v (err=%v, fallbackCalls=%d), want %v without fallback", tc.code, apierror.Code(err), err, spy.calls.Load(), tc.wantCode)
+		if _, err := getter.Get(ctx, "nfs.csi.k8s.io"); apierror.Code(err) != tc.wantCode {
+			t.Fatalf("Get(%v) apierror.Code = %v (err=%v), want %v", tc.code, apierror.Code(err), err, tc.wantCode)
 		}
 	}
 	canceledCtx, cancel := context.WithCancel(ctx)
@@ -688,11 +597,8 @@ func TestAteapiCSIDriverConfigGetter(t *testing.T) {
 	if _, err := getter.Get(canceledCtx, "nfs.csi.k8s.io"); apierror.Code(err) != codes.Canceled {
 		t.Fatalf("Get(canceled ctx) apierror.Code = %v, want Canceled", apierror.Code(err))
 	}
-	if got, err := (&ateapiCSIDriverConfigGetter{fallback: crdFallback}).Get(ctx, "pd.csi.storage.gke.io"); err != nil || got.GetDriverName() != "pd.csi.storage.gke.io" {
-		t.Fatalf("Get(nil control) = (%v, %v)", got, err)
-	}
-	if _, err := (&ateapiCSIDriverConfigGetter{}).Get(ctx, "pd.csi.storage.gke.io"); err == nil {
-		t.Fatal("Get(nil control, nil fallback) = nil, want error")
+	if _, err := (&ateapiCSIDriverConfigGetter{}).Get(ctx, "nfs.csi.k8s.io"); err == nil {
+		t.Fatal("Get(nil control) = nil, want error")
 	}
 }
 
@@ -783,12 +689,9 @@ func TestAteletGetPlugin(t *testing.T) {
 		const driver = "nfs.csi.k8s.io"
 		sock1, srv1 := startTestCSINodeSocket(t, sockDir, "s1.sock", driver, nil)
 		sock2, srv2 := startTestCSINodeSocket(t, sockDir, "s2.sock", driver, nil)
-		crdClient := fake.NewSimpleClientset(&atev1.CSIDriverConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: "crd-nfs"},
-			Spec:       atev1.CSIDriverConfigSpec{DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9000", NodeSocketOverride: sock1},
-		})
 		control := &fakeCsiDriverConfigListClient{}
-		getterSpy := &spyCSIGetter{inner: &ateapiCSIDriverConfigGetter{control: control, fallback: &directCSIDriverConfigGetter{client: crdClient}}}
+		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 1}, DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9000", NodeSocketOverride: sock1}, nil)
+		getterSpy := &spyCSIGetter{inner: &ateapiCSIDriverConfigGetter{control: control}}
 		fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 		s := cleanupAteletCSIPlugins(t, &Atelet{csiDriverConfigGetter: getterSpy, clock: fakeClock})
 
@@ -815,24 +718,14 @@ func TestAteletGetPlugin(t *testing.T) {
 			t.Fatalf("warm TTL call = (%p, calls=%d), want (%p, calls=1)", p, getterSpy.calls.Load(), p1)
 		}
 
-		// Stepping to TTL boundary revalidates, preserves p1 across promotion/controller/demotion, and refreshes TTL.
-		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 1}, DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9001", NodeSocketOverride: sock1}, nil)
+		// Stepping to TTL boundary revalidates, preserves p1 across controller/TLS edits, and refreshes TTL.
+		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 2}, DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9999", NodeSocketOverride: sock1, Tls: &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: true, ServerName: "x"}}, nil)
 		fakeClock.Step(time.Nanosecond)
 		if p := mustMount(srv1, 3); p != p1 || getterSpy.calls.Load() != 2 {
-			t.Fatalf("post-TTL promotion = (%p, calls=%d), want (%p, calls=2)", p, getterSpy.calls.Load(), p1)
+			t.Fatalf("post-TTL controller/tls edit = (%p, calls=%d), want (%p, calls=2)", p, getterSpy.calls.Load(), p1)
 		}
 		if p := mustMount(srv1, 4); p != p1 || getterSpy.calls.Load() != 2 {
 			t.Fatalf("refreshed TTL call = (%p, calls=%d), want (%p, calls=2)", p, getterSpy.calls.Load(), p1)
-		}
-		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 2}, DriverName: driver, ControllerEndpoint: "tcp://127.0.0.1:9999", NodeSocketOverride: sock1, Tls: &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: true, ServerName: "x"}}, nil)
-		fakeClock.Step(defaultCSIPluginConfigTTL)
-		if p := mustMount(srv1, 5); p != p1 {
-			t.Fatalf("controller/tls edit changed node plugin pointer %p -> %p", p1, p)
-		}
-		control.setSingle(nil, nil)
-		fakeClock.Step(defaultCSIPluginConfigTTL)
-		if p := mustMount(srv1, 6); p != p1 {
-			t.Fatalf("demotion to identical CRD changed plugin pointer %p -> %p", p1, p)
 		}
 
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 3}, DriverName: driver, NodeSocketOverride: sock2}, nil)
@@ -865,12 +758,9 @@ func TestAteletGetPlugin(t *testing.T) {
 		control.setSingle(&ateapi.CsiDriverConfig{Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: "u1", Version: 5}, DriverName: driver, NodeSocketOverride: sock2}, nil)
 		p3 := mustMount(srv2, 4)
 		control.setSingle(nil, nil)
-		if err := crdClient.AteV1().CSIDriverConfigs().Delete(ctx, "crd-nfs", metav1.DeleteOptions{}); err != nil {
-			t.Fatal(err)
-		}
 		fakeClock.Step(defaultCSIPluginConfigTTL)
-		if _, err := s.getPlugin(ctx, driver); !apierrors.IsNotFound(err) {
-			t.Fatalf("getPlugin(deleted) = %v, want IsNotFound", err)
+		if _, err := s.getPlugin(ctx, driver); status.Code(err) != codes.NotFound {
+			t.Fatalf("getPlugin(deleted) = %v, want NotFound", err)
 		}
 		assertNodePluginClosed(t, p3)
 		if len(s.csiPlugins) != 0 {

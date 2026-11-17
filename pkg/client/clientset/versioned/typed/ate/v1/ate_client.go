@@ -26,7 +26,6 @@ import (
 
 type AteV1Interface interface {
 	RESTClient() rest.Interface
-	CSIDriverConfigsGetter
 	SandboxConfigsGetter
 	WorkerPoolsGetter
 }
@@ -34,10 +33,6 @@ type AteV1Interface interface {
 // AteV1Client is used to interact with features provided by the ate group.
 type AteV1Client struct {
 	restClient rest.Interface
-}
-
-func (c *AteV1Client) CSIDriverConfigs() CSIDriverConfigInterface {
-	return newCSIDriverConfigs(c)
 }
 
 func (c *AteV1Client) SandboxConfigs() SandboxConfigInterface {

@@ -29,7 +29,6 @@ import (
 	"go.ate.dev/substrate/internal/volume/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const defaultCSIPluginConfigTTL = 30 * time.Second
@@ -189,7 +188,7 @@ func (s *Atelet) getPluginOnce(ctx context.Context, driverName string) (volume.V
 
 	cfg, err := s.csiDriverConfigGetter.Get(ctx, driverName)
 	if err != nil {
-		evictOnErr := apierrors.IsNotFound(err) || status.Code(err) == codes.NotFound
+		evictOnErr := status.Code(err) == codes.NotFound
 		retErr := wrapPluginError(err, "failed to retrieve CsiDriverConfig for %q: %w", driverName, err)
 		if !evictOnErr {
 			return nil, false, retErr
