@@ -417,6 +417,9 @@ func TestDeleteTag(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Tag "+tagRef.String()+" not found")
 }
 
+// TestDeleteTag_OwnsExternalVolumeSnapshots checks that DeleteTag refuses a
+// tag that owns snapshots before changing anything, so the tag and its
+// snapshot stay as they were.
 func TestDeleteTag_OwnsExternalVolumeSnapshots(t *testing.T) {
 	ns := namespaceForTest("ns-delete-tag-evs")
 	tc := setupTest(t, ns)
@@ -425,13 +428,25 @@ func TestDeleteTag_OwnsExternalVolumeSnapshots(t *testing.T) {
 	createTemplate(t, tc, ns)
 
 	tag := seedTag(t, tc, "actor-1", "v1", pendingTag)
-	seedExternalVolumeSnapshot(t, tc, tag)
 	tagRef := resources.TagRefFromTag(tag)
+	snapshotURI, err := resources.ParseSnapshotURI(tagSnapshotURI(tag))
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI: %v", err)
+	}
+	tc.objectStore.PutSnapshot(t, snapshotURI, "manifest.json")
+	seedExternalVolumeSnapshot(t, tc, tag)
 
-	_, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
+	_, err = tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
 	assertGrpcError(t, err, codes.FailedPrecondition, "Tag "+tagRef.String()+" still owns ExternalVolumeSnapshots")
-	if _, err := tc.persistence.GetTag(ctx, tagRef); err != nil {
-		t.Errorf("GetTag after the refused delete = %v, want the tag kept", err)
+	got, err := tc.persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the refused delete = %v, want the tag kept", err)
+	}
+	if diff := cmp.Diff(tag, got, protocmp.Transform()); diff != "" {
+		t.Errorf("the refused delete changed the tag (-before +after):\n%s", diff)
+	}
+	if objects := snapshotObjectNames(t, tc, snapshotURI.String()); len(objects) == 0 {
+		t.Errorf("the refused delete collected the tag's external snapshot %s", snapshotURI)
 	}
 }
 

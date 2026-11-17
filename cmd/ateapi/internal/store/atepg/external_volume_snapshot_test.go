@@ -31,13 +31,37 @@ func newTestExternalVolumeSnapshot(tag *ateapi.Tag) *ateapi.ExternalVolumeSnapsh
 	md := tag.GetMetadata()
 	return &ateapi.ExternalVolumeSnapshot{
 		Metadata:   &ateapi.ResourceMetadata{Atespace: md.GetAtespace(), Name: "substrate-snap-" + md.GetUid() + "-data"},
-		VolumeType: "pd.csi.storage.gke.io",
-		Origin: &ateapi.ExternalVolumeSnapshotOrigin{Tag: &ateapi.TagVolumeSnapshotOrigin{
+		DriverName: "pd.csi.storage.gke.io",
+		Origin: &ateapi.ExternalVolumeSnapshotOrigin{TagCapture: &ateapi.TagVolumeSnapshotOrigin{
 			Tag:              &ateapi.ObjectRef{Atespace: md.GetAtespace(), Name: md.GetName()},
 			TagUid:           md.GetUid(),
 			SourceVolumeName: "data",
 			SourceVolumeId:   "projects/p/zones/z/disks/data",
 		}},
+	}
+}
+
+// pendingTag leaves a test tag still being created, the only state in which a
+// tag takes new snapshots.
+func pendingTag(tag *ateapi.Tag) {
+	tag.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+}
+
+// waitBlockedBy waits until another backend waits on a lock tx holds. It fails
+// the test if done reports first.
+func waitBlockedBy(t *testing.T, s *Persistence, tx pgx.Tx, done <-chan error) {
+	t.Helper()
+	for blocked := false; !blocked; {
+		select {
+		case err := <-done:
+			t.Fatalf("returned %v before waiting on the lock", err)
+		default:
+		}
+		if err := s.pool.QueryRow(t.Context(), `
+			SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE $1::int = ANY(pg_blocking_pids(pid)))`, int32(tx.Conn().PgConn().PID())).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -76,22 +100,7 @@ func TestCreateExternalVolumeSnapshot_TagChangedConcurrently(t *testing.T) {
 			s := setupPostgresPersistence(t)
 			ctx := t.Context()
 			createTestAtespace(t, s, "team-a")
-			tag, err := s.CreateTag(ctx, &ateapi.Tag{
-				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"},
-				Scope:    ateapi.TagScope_TAG_SCOPE_ATESPACE,
-				Status: &ateapi.TagStatus{Snapshot: &ateapi.Snapshot{
-					Generation: 1,
-					Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-					Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					DurableSnapshot: &ateapi.SnapshotStorage{
-						State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
-						Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/team-a/tags/v1"},
-					},
-				}},
-			})
-			if err != nil {
-				t.Fatalf("CreateTag failed: %v", err)
-			}
+			tag := createTestTag(t, s, "team-a", "v1", pendingTag)
 
 			tx, err := s.pool.Begin(ctx)
 			if err != nil {
@@ -107,18 +116,7 @@ func TestCreateExternalVolumeSnapshot_TagChangedConcurrently(t *testing.T) {
 				_, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag))
 				created <- err
 			}()
-			for waiting := false; !waiting; {
-				select {
-				case err := <-created:
-					t.Fatalf("CreateExternalVolumeSnapshot returned %v before waiting on the tag", err)
-				default:
-				}
-				if err := s.pool.QueryRow(ctx, `
-					SELECT EXISTS (SELECT 1 FROM pg_stat_activity
-					WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid())`).Scan(&waiting); err != nil {
-					t.Fatal(err)
-				}
-			}
+			waitBlockedBy(t, s, tx, created)
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatalf("committing the tag change: %v", err)
 			}
@@ -138,22 +136,7 @@ func TestUpdateExternalVolumeSnapshot_DeletedDuringUpdate(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := t.Context()
 	createTestAtespace(t, s, "team-a")
-	tag, err := s.CreateTag(ctx, &ateapi.Tag{
-		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"},
-		Scope:    ateapi.TagScope_TAG_SCOPE_ATESPACE,
-		Status: &ateapi.TagStatus{Snapshot: &ateapi.Snapshot{
-			Generation: 1,
-			Owner:      ateapi.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-			Fidelity:   ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			DurableSnapshot: &ateapi.SnapshotStorage{
-				State:  ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING,
-				Object: &ateapi.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/team-a/tags/v1"},
-			},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("CreateTag failed: %v", err)
-	}
+	tag := createTestTag(t, s, "team-a", "v1", pendingTag)
 	created, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag))
 	if err != nil {
 		t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
@@ -163,7 +146,7 @@ func TestUpdateExternalVolumeSnapshot_DeletedDuringUpdate(t *testing.T) {
 		if _, err := s.pool.Exec(ctx, `DELETE FROM external_volume_snapshots WHERE atespace = $1 AND name = $2`, ref.Atespace, ref.Name); err != nil {
 			return err
 		}
-		toUpdate.Status = &ateapi.ExternalVolumeSnapshotStatus{StorageSnapshotId: "snap-handle"}
+		toUpdate.Status = &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle"}
 		return nil
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -186,5 +169,49 @@ func TestDeleteAtespace_BlockedBySnapshotWithoutTag(t *testing.T) {
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("DeleteAtespace with a snapshot = %v, want ErrFailedPrecondition", err)
+	}
+}
+
+// TestMarkTagForDeletion_SnapshotCreatedConcurrently records a snapshot for the
+// tag in a transaction that holds the tag FOR SHARE, as
+// CreateExternalVolumeSnapshot does, and commits only once marking the tag
+// waits on it. Marking must then see the snapshot and leave the tag unmarked.
+func TestMarkTagForDeletion_SnapshotCreatedConcurrently(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := t.Context()
+	createTestAtespace(t, s, "team-a")
+	tag := createTestTag(t, s, "team-a", "v1", pendingTag)
+	tagRef := resources.TagRefFromTag(tag)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op once committed
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM tags WHERE atespace = $1 AND name = $2 FOR SHARE`, tagRef.Atespace, tagRef.Name); err != nil {
+		t.Fatalf("locking the tag: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO external_volume_snapshots (atespace, name, uid, version, tag_name, tag_uid, proto)
+		VALUES ($1, 'snap', '7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f', 1, $2, $3, '')`,
+		tagRef.Atespace, tagRef.Name, tag.GetMetadata().GetUid()); err != nil {
+		t.Fatalf("inserting a snapshot: %v", err)
+	}
+
+	marked := make(chan error, 1)
+	go func() {
+		_, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{}, nil)
+		marked <- err
+	}()
+	waitBlockedBy(t, s, tx, marked)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("committing the snapshot: %v", err)
+	}
+	if err := <-marked; !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Errorf("MarkTagForDeletion = %v, want ErrFailedPrecondition", err)
+	}
+	got, err := s.GetTag(ctx, tagRef)
+	if err != nil || !proto.Equal(got, tag) {
+		t.Errorf("GetTag after the refused mark = %v, %v; want %v", got, err, tag)
 	}
 }

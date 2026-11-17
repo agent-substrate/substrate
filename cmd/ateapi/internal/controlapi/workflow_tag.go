@@ -111,7 +111,8 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 // it first would leak.
 //
 // The workflow is built in 3 phases:
-//  1. Load the tag (which names the snapshot to collect).
+//  1. Load the tag (which names the snapshot to collect) and mark it for
+//     deletion. A tag that owns ExternalVolumeSnapshots is left unmarked.
 //  2. Release that snapshot, tolerating a previous attempt partly collected.
 //  3. Finalize: drop the row.
 //
@@ -174,6 +175,9 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Tag %s not found", tagRef)
+		}
+		if errors.Is(err, store.ErrFailedPrecondition) {
+			return nil, apierror.FailedPrecondition("Tag %s still owns ExternalVolumeSnapshots", tagRef)
 		}
 		return nil, fmt.Errorf("while marking tag %s for deletion: %w", tagRef, err)
 	}
