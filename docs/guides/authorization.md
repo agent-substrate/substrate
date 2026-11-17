@@ -263,7 +263,7 @@ certificate.
 ## Managing access
 
 Each scope has one access policy, named `default`, managed with `kubectl ate`
-using `--global` or `-a <atespace>`:
+using `--global`, `-a <atespace>`, or `-c <external-volume-class>`:
 
 ```yaml
 # policy.yaml
@@ -283,17 +283,25 @@ kubectl ate --token-file me.token create access-policy -a team-a -f policy.yaml
 kubectl ate --token-file me.token get access-policy -a team-a -o yaml > current.yaml
 kubectl ate --token-file me.token update access-policy -a team-a -f current.yaml
 kubectl ate --token-file me.token delete access-policy -a team-a
+
+# Grant or revoke an atespace on an external volume class in place:
+kubectl ate --preview --token-file me.token update access-policy -c csi-nfs --add-member atespace:team-a
+kubectl ate --preview --token-file me.token update access-policy -c csi-nfs --remove-member atespace:team-a
 ```
 
 - Global policies accept `owner` and `viewer`; atespace policies also accept
-  `editor`.
-- `update` replaces the whole policy and needs the `uid` and `version` from
+  `editor`; external volume class policies accept `allowed_atespace` with
+  `atespace:<name>` members.
+- `update -f` replaces the whole policy and needs the `uid` and `version` from
   `get -o yaml`. It fails if the policy changed, or was deleted and recreated,
-  since.
+  since. `update --add-member` and `update --remove-member` read the stored
+  policy (or create one if adding members when none exists) and retry on
+  version conflicts.
 - The global policy can't be deleted; update it with no bindings instead.
-- Deleting an atespace deletes its policy, so a recreated atespace starts
-  with none. A request authorized against the old atespace and still in
-  flight across the delete and recreate can apply to the new one. See
+- Deleting an atespace deletes its policy and scrubs that atespace from every
+  external volume class access policy, so a recreated atespace starts with no
+  grants. A request authorized against the old atespace and still in flight
+  across the delete and recreate can apply to the new one. See
   [Known limitations](#known-limitations).
 - Changes take effect on the next call.
 
@@ -330,13 +338,18 @@ For a shared cluster, beyond replacing the default bootstrap owner:
 
 ## Known limitations
 
-- **Atespace names must not be reused.** Grants are keyed by atespace name,
-  and calls are authorized before the write runs. If an atespace is deleted
-  and recreated under the same name, a request authorized against the old
-  atespace and still in flight across the delete and recreate can land on
+- **Atespace names must not be reused.** Grants are keyed by atespace name
+  (both on the atespace itself and in external volume class `allowed_atespace`
+  bindings), and calls are authorized before the write runs. If an atespace is
+  deleted and recreated under the same name, a request authorized against the
+  old atespace and still in flight across the delete and recreate can land on
   the new one, including granting access to it or deleting it. Nothing
   enforces unique names. Once an atespace is deleted, don't create another
   one under that name; use a fresh name instead.
+- **Allowed-atespace editors can `Get` an external volume class, not `List`.**
+  `ListExternalVolumeClasses` requires global `viewer`; an editor of an
+  atespace granted `allowed_atespace` on a class can inspect that class by
+  name with `GetExternalVolumeClass`.
 - **Tags can copy an actor's data.** A tag is a durable copy of an actor's
   memory and disk, including secrets, and outlives the actor. Any atespace
   editor can tag, publish and clone any actor in the atespace.
