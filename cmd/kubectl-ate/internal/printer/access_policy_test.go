@@ -47,6 +47,12 @@ func TestPrintAccessPolicyTo(t *testing.T) {
 			want: []string{"<global>   owner"},
 		},
 		{
+			name: "external volume class table", atespace: "csi-nfs", policy: &ateapi.AccessPolicy{
+				Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-a"}}},
+			}, format: "table",
+			want: []string{"csi-nfs   allowed_atespace   atespace:team-a"},
+		},
+		{
 			name: "no bindings", atespace: "team-a", policy: &ateapi.AccessPolicy{}, format: "table",
 			want: []string{"team-a   <none>   <none>"},
 		},

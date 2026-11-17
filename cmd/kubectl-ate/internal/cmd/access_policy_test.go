@@ -33,21 +33,25 @@ import (
 func TestScopeFromFlags(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		atespace string
-		global   bool
-		want     accessPolicyScope
-		wantErr  string
+		name                string
+		atespace            string
+		externalVolumeClass string
+		global              bool
+		want                accessPolicyScope
+		wantErr             string
 	}{
 		{name: "atespace", atespace: "team-a", want: accessPolicyScope{atespace: "team-a"}},
+		{name: "external volume class", externalVolumeClass: "csi-nfs", want: accessPolicyScope{externalVolumeClass: "csi-nfs"}},
 		{name: "global", global: true, want: accessPolicyScope{}},
-		{name: "neither", wantErr: "one of --atespace or --global is required"},
-		{name: "both", atespace: "team-a", global: true, wantErr: "mutually exclusive"},
+		{name: "none", wantErr: "one of --atespace, --external-volume-class, or --global is required"},
+		{name: "atespace and global", atespace: "team-a", global: true, wantErr: "mutually exclusive"},
+		{name: "atespace and class", atespace: "team-a", externalVolumeClass: "csi-nfs", wantErr: "mutually exclusive"},
+		{name: "class and global", externalVolumeClass: "csi-nfs", global: true, wantErr: "mutually exclusive"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := scopeFromFlags(tc.atespace, tc.global)
+			got, err := scopeFromFlags(tc.atespace, tc.externalVolumeClass, tc.global)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("scopeFromFlags() error = %v, want %q", err, tc.wantErr)
@@ -59,6 +63,40 @@ func TestScopeFromFlags(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("scopeFromFlags() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeleteScopeFromFlags(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                string
+		atespace            string
+		externalVolumeClass string
+		want                accessPolicyScope
+		wantErr             string
+	}{
+		{name: "atespace", atespace: "team-a", want: accessPolicyScope{atespace: "team-a"}},
+		{name: "external volume class", externalVolumeClass: "csi-nfs", want: accessPolicyScope{externalVolumeClass: "csi-nfs"}},
+		{name: "neither", wantErr: "one of --atespace or --external-volume-class is required"},
+		{name: "both", atespace: "team-a", externalVolumeClass: "csi-nfs", wantErr: "mutually exclusive"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := deleteScopeFromFlags(tc.atespace, tc.externalVolumeClass)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("deleteScopeFromFlags() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("deleteScopeFromFlags() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("deleteScopeFromFlags() = %+v, want %+v", got, tc.want)
 			}
 		})
 	}
@@ -115,18 +153,33 @@ bindings: [{role: owner, members: ["user:alice"]}]
 	}
 }
 
-// fakeAccessPolicyClient records the last RPC and answers with policy or err.
+type fakeCallResponse struct {
+	policy *ateapi.AccessPolicy
+	err    error
+}
+
+// fakeAccessPolicyClient records the last RPC and answers with policy or err
+// (or consumes scripted responses when scripted is non-empty).
 type fakeAccessPolicyClient struct {
 	policy      *ateapi.AccessPolicy
 	err         error
+	scripted    []fakeCallResponse
 	atespaceErr error
+	classErr    error
 
 	method string
 	req    any
+	calls  int
 }
 
 func (f *fakeAccessPolicyClient) answer(method string, req any) (*ateapi.AccessPolicy, error) {
 	f.method, f.req = method, req
+	f.calls++
+	if len(f.scripted) > 0 {
+		next := f.scripted[0]
+		f.scripted = f.scripted[1:]
+		return next.policy, next.err
+	}
 	return f.policy, f.err
 }
 
@@ -158,11 +211,34 @@ func (f *fakeAccessPolicyClient) DeleteAtespaceAccessPolicy(_ context.Context, r
 	return f.answer("DeleteAtespaceAccessPolicy", req)
 }
 
+func (f *fakeAccessPolicyClient) GetExternalVolumeClassAccessPolicy(_ context.Context, req *ateapi.GetExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	return f.answer("GetExternalVolumeClassAccessPolicy", req)
+}
+
+func (f *fakeAccessPolicyClient) CreateExternalVolumeClassAccessPolicy(_ context.Context, req *ateapi.CreateExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	return f.answer("CreateExternalVolumeClassAccessPolicy", req)
+}
+
+func (f *fakeAccessPolicyClient) UpdateExternalVolumeClassAccessPolicy(_ context.Context, req *ateapi.UpdateExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	return f.answer("UpdateExternalVolumeClassAccessPolicy", req)
+}
+
+func (f *fakeAccessPolicyClient) DeleteExternalVolumeClassAccessPolicy(_ context.Context, req *ateapi.DeleteExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	return f.answer("DeleteExternalVolumeClassAccessPolicy", req)
+}
+
 func (f *fakeAccessPolicyClient) GetAtespace(_ context.Context, req *ateapi.GetAtespaceRequest, _ ...grpc.CallOption) (*ateapi.Atespace, error) {
 	if f.atespaceErr != nil {
 		return nil, f.atespaceErr
 	}
 	return &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: req.GetAtespace().GetName()}}, nil
+}
+
+func (f *fakeAccessPolicyClient) GetExternalVolumeClass(_ context.Context, req *ateapi.GetExternalVolumeClassRequest, _ ...grpc.CallOption) (*ateapi.ExternalVolumeClass, error) {
+	if f.classErr != nil {
+		return nil, f.classErr
+	}
+	return &ateapi.ExternalVolumeClass{Metadata: &ateapi.ResourceMetadata{Name: req.GetExternalVolumeClass().GetName()}}, nil
 }
 
 func TestAccessPolicyRunner(t *testing.T) {
@@ -171,22 +247,28 @@ func TestAccessPolicyRunner(t *testing.T) {
 		Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2},
 		Bindings: []*ateapi.Binding{{Role: "owner", Members: []string{"user:alice"}}},
 	}
+	storedEVC := &ateapi.AccessPolicy{
+		Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-2", Version: 1},
+		Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-a"}}},
+	}
 	edit := &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-1", Version: 2}}
 	teamA := accessPolicyScope{atespace: "team-a"}
+	csiNFS := accessPolicyScope{externalVolumeClass: "csi-nfs"}
 	global := accessPolicyScope{}
 	notFound := status.Error(codes.NotFound, "not found")
+	aborted := status.Error(codes.Aborted, "version mismatch")
+	alreadyExists := status.Error(codes.AlreadyExists, "exists")
 
 	tests := []struct {
-		name        string
-		scope       accessPolicyScope
-		client      *fakeAccessPolicyClient
-		run         func(context.Context, *accessPolicyRunner) error
-		wantMethod  string
-		wantReq     any
-		wantStdout  string
-		wantStderr  string
-		wantErr     string
-		wantNoCalls bool
+		name       string
+		scope      accessPolicyScope
+		client     *fakeAccessPolicyClient
+		run        func(context.Context, *accessPolicyRunner) error
+		wantMethod string
+		wantReq    any
+		wantStdout string
+		wantStderr string
+		wantErr    string
 	}{
 		{
 			name:       "get atespace",
@@ -196,6 +278,15 @@ func TestAccessPolicyRunner(t *testing.T) {
 			wantMethod: "GetAtespaceAccessPolicy",
 			wantReq:    &ateapi.GetAtespaceAccessPolicyRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
 			wantStdout: "team-a   owner   user:alice",
+		},
+		{
+			name:       "get external volume class",
+			scope:      csiNFS,
+			client:     &fakeAccessPolicyClient{policy: storedEVC},
+			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.get(ctx) },
+			wantMethod: "GetExternalVolumeClassAccessPolicy",
+			wantReq:    &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"}, Name: resources.SingletonName},
+			wantStdout: "csi-nfs   allowed_atespace   atespace:team-a",
 		},
 		{
 			name:       "get global",
@@ -215,12 +306,28 @@ func TestAccessPolicyRunner(t *testing.T) {
 			wantStderr: `atespace "team-a" has no access policy`,
 		},
 		{
+			name:       "get external volume class without a policy",
+			scope:      csiNFS,
+			client:     &fakeAccessPolicyClient{err: notFound},
+			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.get(ctx) },
+			wantMethod: "GetExternalVolumeClassAccessPolicy",
+			wantStderr: `external volume class "csi-nfs" has no access policy`,
+		},
+		{
 			name:       "get missing atespace",
 			scope:      teamA,
 			client:     &fakeAccessPolicyClient{err: notFound, atespaceErr: notFound},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.get(ctx) },
 			wantMethod: "GetAtespaceAccessPolicy",
 			wantErr:    `atespace "team-a" not found`,
+		},
+		{
+			name:       "get missing external volume class",
+			scope:      csiNFS,
+			client:     &fakeAccessPolicyClient{err: notFound, classErr: notFound},
+			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.get(ctx) },
+			wantMethod: "GetExternalVolumeClassAccessPolicy",
+			wantErr:    `external volume class "csi-nfs" not found`,
 		},
 		{
 			name:       "get permission denied",
@@ -240,6 +347,15 @@ func TestAccessPolicyRunner(t *testing.T) {
 			wantStdout: "team-a   owner   user:alice",
 		},
 		{
+			name:       "create external volume class",
+			scope:      csiNFS,
+			client:     &fakeAccessPolicyClient{policy: storedEVC},
+			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.create(ctx, edit) },
+			wantMethod: "CreateExternalVolumeClassAccessPolicy",
+			wantReq:    &ateapi.CreateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"}, AccessPolicy: edit},
+			wantStdout: "csi-nfs   allowed_atespace   atespace:team-a",
+		},
+		{
 			name:       "create global",
 			scope:      global,
 			client:     &fakeAccessPolicyClient{policy: stored},
@@ -250,7 +366,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 		{
 			name:       "create existing",
 			scope:      teamA,
-			client:     &fakeAccessPolicyClient{err: status.Error(codes.AlreadyExists, "exists")},
+			client:     &fakeAccessPolicyClient{err: alreadyExists},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.create(ctx, edit) },
 			wantMethod: "CreateAtespaceAccessPolicy",
 			wantErr:    "kubectl ate update access-policy",
@@ -264,9 +380,17 @@ func TestAccessPolicyRunner(t *testing.T) {
 			wantReq:    &ateapi.UpdateGlobalAccessPolicyRequest{AccessPolicy: edit},
 		},
 		{
+			name:       "update external volume class",
+			scope:      csiNFS,
+			client:     &fakeAccessPolicyClient{policy: storedEVC},
+			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.update(ctx, edit) },
+			wantMethod: "UpdateExternalVolumeClassAccessPolicy",
+			wantReq:    &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"}, AccessPolicy: edit},
+		},
+		{
 			name:       "update stale",
 			scope:      teamA,
-			client:     &fakeAccessPolicyClient{err: status.Error(codes.Aborted, "version mismatch")},
+			client:     &fakeAccessPolicyClient{err: aborted},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.update(ctx, edit) },
 			wantMethod: "UpdateAtespaceAccessPolicy",
 			wantErr:    "re-run",
@@ -280,7 +404,7 @@ func TestAccessPolicyRunner(t *testing.T) {
 			wantErr:    "kubectl ate create access-policy",
 		},
 		{
-			name:   "delete",
+			name:   "delete atespace",
 			scope:  teamA,
 			client: &fakeAccessPolicyClient{policy: stored},
 			run: func(ctx context.Context, r *accessPolicyRunner) error {
@@ -291,12 +415,120 @@ func TestAccessPolicyRunner(t *testing.T) {
 			wantStdout: `access policy for atespace "team-a" deleted`,
 		},
 		{
+			name:   "delete external volume class",
+			scope:  csiNFS,
+			client: &fakeAccessPolicyClient{policy: storedEVC},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.delete(ctx, &ateapi.DeleteOptions{Version: 1})
+			},
+			wantMethod: "DeleteExternalVolumeClassAccessPolicy",
+			wantReq:    &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"}, Name: resources.SingletonName, Options: &ateapi.DeleteOptions{Version: 1}},
+			wantStdout: `access policy for external volume class "csi-nfs" deleted`,
+		},
+		{
 			name:       "delete without a policy",
 			scope:      teamA,
 			client:     &fakeAccessPolicyClient{err: notFound},
 			run:        func(ctx context.Context, r *accessPolicyRunner) error { return r.delete(ctx, nil) },
 			wantMethod: "DeleteAtespaceAccessPolicy",
 			wantErr:    `atespace "team-a" has no access policy`,
+		},
+		{
+			name:  "add-member creates initial external volume class policy when absent",
+			scope: csiNFS,
+			client: &fakeAccessPolicyClient{
+				scripted: []fakeCallResponse{
+					{err: notFound},
+					{policy: storedEVC},
+				},
+			},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.mutateMembers(ctx, "", []string{"atespace:team-a"}, nil)
+			},
+			wantMethod: "CreateExternalVolumeClassAccessPolicy",
+			wantReq: &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+				AccessPolicy: &ateapi.AccessPolicy{
+					Metadata: &ateapi.ResourceMetadata{Name: "default"},
+					Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-a"}}},
+				},
+			},
+			wantStdout: "csi-nfs   allowed_atespace   atespace:team-a",
+		},
+		{
+			name:  "add-member retries on Aborted and deduplicates existing members",
+			scope: csiNFS,
+			client: &fakeAccessPolicyClient{
+				scripted: []fakeCallResponse{
+					{policy: storedEVC},
+					{err: aborted},
+					{policy: storedEVC},
+					{policy: &ateapi.AccessPolicy{
+						Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-2", Version: 2},
+						Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-a", "atespace:team-b"}}},
+					}},
+				},
+			},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.mutateMembers(ctx, "", []string{"atespace:team-a", "atespace:team-b"}, nil)
+			},
+			wantMethod: "UpdateExternalVolumeClassAccessPolicy",
+			wantReq: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+				AccessPolicy: &ateapi.AccessPolicy{
+					Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-2", Version: 1},
+					Bindings: []*ateapi.Binding{{Role: "allowed_atespace", Members: []string{"atespace:team-a", "atespace:team-b"}}},
+				},
+			},
+			wantStdout: "atespace:team-a,atespace:team-b",
+		},
+		{
+			name:  "remove-member drops empty binding",
+			scope: csiNFS,
+			client: &fakeAccessPolicyClient{
+				scripted: []fakeCallResponse{
+					{policy: storedEVC},
+					{policy: &ateapi.AccessPolicy{Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-2", Version: 2}}},
+				},
+			},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.mutateMembers(ctx, "", nil, []string{"atespace:team-a"})
+			},
+			wantMethod: "UpdateExternalVolumeClassAccessPolicy",
+			wantReq: &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+				ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+				AccessPolicy: &ateapi.AccessPolicy{
+					Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "u-2", Version: 1},
+				},
+			},
+			wantStdout: "csi-nfs   <none>   <none>",
+		},
+		{
+			name:   "add-member rejects invalid role on external volume class",
+			scope:  csiNFS,
+			client: &fakeAccessPolicyClient{},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.mutateMembers(ctx, "owner", []string{"atespace:team-a"}, nil)
+			},
+			wantErr: `only support role "allowed_atespace"`,
+		},
+		{
+			name:   "add-member requires --role on atespace",
+			scope:  teamA,
+			client: &fakeAccessPolicyClient{},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.mutateMembers(ctx, "", []string{"user:alice"}, nil)
+			},
+			wantErr: "--role is required",
+		},
+		{
+			name:   "overlapping --add-member and --remove-member rejected",
+			scope:  csiNFS,
+			client: &fakeAccessPolicyClient{},
+			run: func(ctx context.Context, r *accessPolicyRunner) error {
+				return r.mutateMembers(ctx, "", []string{"atespace:team-a"}, []string{"atespace:team-a"})
+			},
+			wantErr: "cannot be passed to both --add-member and --remove-member",
 		},
 	}
 	for _, tc := range tests {
