@@ -211,7 +211,3 @@ type SandboxConfigList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SandboxConfig `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&SandboxConfig{}, &SandboxConfigList{})
-}
