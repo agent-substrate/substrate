@@ -171,9 +171,9 @@ type Interface interface {
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the tag's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
-	// write wins, ErrFailedPrecondition, leaving the tag unchanged, if the tag
-	// owns ExternalVolumeSnapshots, even when it is already marked, or mutate's
-	// error. The snapshot check runs before mutate.
+	// write wins, or mutate's error. Once it returns, CreateExternalVolumeSnapshot
+	// refuses the tag, and every snapshot created for it before is listed by
+	// ListTagExternalVolumeSnapshots.
 	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing,
@@ -208,6 +208,29 @@ type Interface interface {
 	// ErrImmutableField; edits to the other metadata fields are discarded.
 	// The store does not validate status.
 	UpdateExternalVolumeSnapshot(ctx context.Context, snapshotRef resources.ExternalVolumeSnapshotRef, precondition Precondition, mutate func(toUpdate *ateapi.ExternalVolumeSnapshot) error) (*ateapi.ExternalVolumeSnapshot, error)
+
+	// ListTagExternalVolumeSnapshots returns the snapshots owned by the tag at
+	// tagRef with tagUID, in name order.
+	ListTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string) ([]*ateapi.ExternalVolumeSnapshot, error)
+
+	// UpdateTagExternalVolumeSnapshots updates every snapshot owned by the tag
+	// at tagRef with tagUID in one transaction, so all the writes land or none
+	// do. The snapshots are locked while mutate runs, so no precondition is
+	// needed.
+	//
+	// mutate runs once per snapshot, in name order, and edits it in place.
+	// The rules of UpdateExternalVolumeSnapshot apply to each snapshot. A
+	// snapshot whose status mutate leaves unchanged is not written.
+	//
+	// Returns the tag's snapshots in name order, after the update, or none if
+	// the tag owns none. If mutate or a rule fails for any snapshot, nothing
+	// is written and its error is returned.
+	UpdateTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string, mutate func(toUpdate *ateapi.ExternalVolumeSnapshot) error) ([]*ateapi.ExternalVolumeSnapshot, error)
+
+	// Deletes and returns a snapshot. Returns ErrNotFound if missing, or
+	// ErrUIDConflict/ErrVersionConflict if precondition does not describe the
+	// snapshot the caller observed.
+	DeleteExternalVolumeSnapshot(ctx context.Context, snapshotRef resources.ExternalVolumeSnapshotRef, precondition DeletePreconditions) (*ateapi.ExternalVolumeSnapshot, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns

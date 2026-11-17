@@ -256,14 +256,6 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
 	}
-	if markForDeletion {
-		// Checked before mutate, so a tag a previous attempt already marked
-		// is refused too. The check after the UPDATE below serializes against
-		// concurrent creates.
-		if err := p.checkTagOwnsNoSnapshots(ctx, p.pool, atespace, name); err != nil {
-			return nil, err
-		}
-	}
 	tagBeforeMutation := proto.Clone(dbTag).(*ateapi.Tag)
 	oldMeta := proto.CloneOf(dbTag.Metadata)
 	if mutate != nil {
@@ -289,15 +281,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
 	}
-	// The EXISTS check below must see snapshots committed while the UPDATE
-	// waited for their creates' row locks. Only READ COMMITTED takes a fresh
-	// snapshot per statement.
-	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return nil, fmt.Errorf("beginning tag update %s/%s: %w", atespace, name, err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-	commandTag, err := tx.Exec(ctx, `
+	commandTag, err := p.pool.Exec(ctx, `
 			UPDATE tags
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
@@ -311,35 +295,7 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
-	if markForDeletion {
-		// The UPDATE's row lock conflicts with the FOR SHARE lock that
-		// CreateExternalVolumeSnapshot takes, so this sees every snapshot
-		// created before it, and creates after it see delete_time and fail.
-		if err := p.checkTagOwnsNoSnapshots(ctx, tx, atespace, name); err != nil {
-			return nil, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing tag update %s/%s: %w", atespace, name, err)
-	}
 	return dbTag, nil
-}
-
-// checkTagOwnsNoSnapshots fails with ErrFailedPrecondition if the tag owns
-// any ExternalVolumeSnapshot.
-func (p *Persistence) checkTagOwnsNoSnapshots(ctx context.Context, q interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}, atespace, name string) error {
-	var ownsSnapshots bool
-	if err := q.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM external_volume_snapshots
-		WHERE atespace = $1 AND tag_name = $2)`, atespace, name).Scan(&ownsSnapshots); err != nil {
-		return fmt.Errorf("checking external volume snapshots of tag %s/%s: %w", atespace, name, err)
-	}
-	if ownsSnapshots {
-		return fmt.Errorf("%w: tag %s/%s still owns external volume snapshots", store.ErrFailedPrecondition, atespace, name)
-	}
-	return nil
 }
 
 // snapshotTagFKName matches external_volume_snapshots_tag_fk. Partitioning

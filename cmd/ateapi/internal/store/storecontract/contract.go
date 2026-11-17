@@ -1943,22 +1943,190 @@ func runExternalVolumeSnapshotContractTests(t *testing.T, setup func(t *testing.
 		}
 
 		// The tag owns the snapshot, so it cannot be deleted.
-		if _, err := s.DeleteTag(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
+		tagRef := resources.TagRefFromTag(tag)
+		if _, err := s.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteTag with a snapshot = %v, want ErrFailedPrecondition", err)
 		}
-		// Nor can it be marked for deletion, and the refusal leaves it as it was.
-		if _, err := s.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("MarkTagForDeletion with a snapshot = %v, want ErrFailedPrecondition", err)
+		// It can be marked for deletion. Then new snapshots are refused, and
+		// the existing one can still be listed, updated and deleted.
+		if _, err := s.MarkTagForDeletion(ctx, tagRef, store.DeletePreconditions{}, nil); err != nil {
+			t.Fatalf("MarkTagForDeletion with a snapshot failed: %v", err)
 		}
-		// The snapshot check runs before mutate, so a mutate that would skip
-		// an already marked tag does not hide the refusal.
-		if _, err := s.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, func(*ateapi.Tag) error {
-			return errors.New("mutate ran")
-		}); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("MarkTagForDeletion with a snapshot and a failing mutate = %v, want ErrFailedPrecondition", err)
+		if _, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag, "cache")); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("CreateExternalVolumeSnapshot for a marked tag = %v, want ErrFailedPrecondition", err)
 		}
-		if stored, err := s.GetTag(ctx, resources.TagRefFromTag(tag)); err != nil || !proto.Equal(stored, tag) {
-			t.Errorf("a refused MarkTagForDeletion wrote: GetTag = %v, %v; want %v", stored, err, tag)
+		owned, err := s.ListTagExternalVolumeSnapshots(ctx, tagRef, tag.GetMetadata().GetUid())
+		if err != nil || len(owned) != 1 || !proto.Equal(owned[0], creating) {
+			t.Errorf("ListTagExternalVolumeSnapshots of the marked tag = %v, %v; want [%v]", owned, err, creating)
+		}
+		ready, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(creating), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+			toUpdate.Status.ReadyToUse = true
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateExternalVolumeSnapshot of a marked tag's snapshot failed: %v", err)
+		}
+
+		if _, err := s.DeleteExternalVolumeSnapshot(ctx, ref, store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("DeleteExternalVolumeSnapshot with another uid = %v, want ErrUIDConflict", err)
+		}
+		if _, err := s.DeleteExternalVolumeSnapshot(ctx, ref, store.DeletePreconditions{Version: creating.GetMetadata().GetVersion()}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("DeleteExternalVolumeSnapshot with a stale version = %v, want ErrVersionConflict", err)
+		}
+		deleted, err := s.DeleteExternalVolumeSnapshot(ctx, ref, store.DeletePreconditions{UID: ready.GetMetadata().GetUid(), Version: ready.GetMetadata().GetVersion()})
+		if err != nil {
+			t.Fatalf("DeleteExternalVolumeSnapshot failed: %v", err)
+		}
+		if !proto.Equal(deleted, ready) {
+			t.Errorf("DeleteExternalVolumeSnapshot = %v, want %v", deleted, ready)
+		}
+		if _, err := s.DeleteExternalVolumeSnapshot(ctx, ref, store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("second DeleteExternalVolumeSnapshot = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetExternalVolumeSnapshot(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetExternalVolumeSnapshot after the delete = %v, want ErrNotFound", err)
+		}
+		// With the snapshot gone, the tag can be deleted.
+		if _, err := s.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+			t.Errorf("DeleteTag after its snapshot was deleted failed: %v", err)
+		}
+	})
+
+	t.Run("TagExternalVolumeSnapshots", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		tag := seedTag(t, s, testAtespace)
+		tagRef := resources.TagRefFromTag(tag)
+		tagUID := tag.GetMetadata().GetUid()
+		actor, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "actor-1"})
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		other, err := s.CreateTag(ctx, newTestInProgressTag("staging", actor))
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		for _, snap := range []*ateapi.ExternalVolumeSnapshot{
+			newTestExternalVolumeSnapshot(tag, "data"),
+			newTestExternalVolumeSnapshot(tag, "cache"),
+			newTestExternalVolumeSnapshot(other, "data"),
+		} {
+			if _, err := s.CreateExternalVolumeSnapshot(ctx, snap); err != nil {
+				t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
+			}
+		}
+		otherRef := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(newTestExternalVolumeSnapshot(other, "data"))
+		volumeName := func(snap *ateapi.ExternalVolumeSnapshot) string {
+			return snap.GetOrigin().GetTagCapture().GetSourceVolumeName()
+		}
+		// versions returns the version of each of the tag's snapshots, by
+		// source volume name.
+		versions := func(t *testing.T) map[string]int64 {
+			t.Helper()
+			owned, err := s.ListTagExternalVolumeSnapshots(ctx, tagRef, tagUID)
+			if err != nil {
+				t.Fatalf("ListTagExternalVolumeSnapshots failed: %v", err)
+			}
+			got := map[string]int64{}
+			for _, snap := range owned {
+				got[volumeName(snap)] = snap.GetMetadata().GetVersion()
+			}
+			return got
+		}
+		if diff := cmp.Diff(map[string]int64{"cache": 1, "data": 1}, versions(t)); diff != "" {
+			t.Errorf("ListTagExternalVolumeSnapshots mismatch (-want +got):\n%s", diff)
+		}
+		creating := func(handle string) *ateapi.ExternalVolumeSnapshotStatus {
+			return &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: handle}
+		}
+		mutateErr := errors.New("mutate failed")
+
+		// A rejected write for one snapshot rolls back the others.
+		for _, tt := range []struct {
+			name   string
+			mutate func(*ateapi.ExternalVolumeSnapshot) error
+			want   error
+		}{
+			{
+				name: "an immutable field on the second snapshot",
+				mutate: func(snap *ateapi.ExternalVolumeSnapshot) error {
+					snap.Status = creating("snap-handle")
+					if volumeName(snap) == "data" {
+						snap.DriverName = "other.csi.example.com"
+					}
+					return nil
+				},
+				want: store.ErrImmutableField,
+			},
+			{
+				name: "mutate fails on the second snapshot",
+				mutate: func(snap *ateapi.ExternalVolumeSnapshot) error {
+					if volumeName(snap) == "data" {
+						return mutateErr
+					}
+					snap.Status = creating("snap-handle")
+					return nil
+				},
+				want: mutateErr,
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				if _, err := s.UpdateTagExternalVolumeSnapshots(ctx, tagRef, tagUID, tt.mutate); !errors.Is(err, tt.want) {
+					t.Errorf("UpdateTagExternalVolumeSnapshots = %v, want %v", err, tt.want)
+				}
+				if diff := cmp.Diff(map[string]int64{"cache": 1, "data": 1}, versions(t)); diff != "" {
+					t.Errorf("a rejected batch wrote (-want +got):\n%s", diff)
+				}
+			})
+		}
+
+		// One volume's CreateSnapshot returned a handle and the other's failed.
+		updated, err := s.UpdateTagExternalVolumeSnapshots(ctx, tagRef, tagUID, func(snap *ateapi.ExternalVolumeSnapshot) error {
+			if volumeName(snap) == "data" {
+				snap.Status = creating("snap-handle")
+			} else {
+				snap.Status = &ateapi.ExternalVolumeSnapshotStatus{ErrorMessage: "quota exceeded"}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateTagExternalVolumeSnapshots failed: %v", err)
+		}
+		var got []string
+		for _, snap := range updated {
+			got = append(got, fmt.Sprintf("%s v%d %q %q", volumeName(snap), snap.GetMetadata().GetVersion(), snap.GetStatus().GetSnapshotId(), snap.GetStatus().GetErrorMessage()))
+		}
+		want := []string{`cache v2 "" "quota exceeded"`, `data v2 "snap-handle" ""`}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("updated snapshots mismatch (-want +got):\n%s", diff)
+		}
+		if snap, err := s.GetExternalVolumeSnapshot(ctx, otherRef); err != nil || snap.GetMetadata().GetVersion() != 1 {
+			t.Errorf("another tag's snapshot = %v, %v; want it unchanged at version 1", snap, err)
+		}
+
+		// A snapshot whose status is unchanged is not written.
+		if _, err := s.UpdateTagExternalVolumeSnapshots(ctx, tagRef, tagUID, func(snap *ateapi.ExternalVolumeSnapshot) error {
+			if volumeName(snap) == "cache" {
+				snap.Status = creating("cache-handle")
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateTagExternalVolumeSnapshots failed: %v", err)
+		}
+		if diff := cmp.Diff(map[string]int64{"cache": 3, "data": 2}, versions(t)); diff != "" {
+			t.Errorf("versions after a partial change (-want +got):\n%s", diff)
+		}
+
+		// A later tag that reuses the name owns none of the snapshots.
+		if owned, err := s.ListTagExternalVolumeSnapshots(ctx, tagRef, foreignUID); err != nil || len(owned) != 0 {
+			t.Errorf("ListTagExternalVolumeSnapshots with another uid = %v, %v; want none", owned, err)
+		}
+		none, err := s.UpdateTagExternalVolumeSnapshots(ctx, tagRef, foreignUID, func(*ateapi.ExternalVolumeSnapshot) error {
+			t.Error("mutate ran for a tag uid that owns no snapshots")
+			return nil
+		})
+		if err != nil || len(none) != 0 {
+			t.Errorf("UpdateTagExternalVolumeSnapshots with another uid = %v, %v; want none", none, err)
 		}
 	})
 

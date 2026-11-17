@@ -79,7 +79,29 @@ func (s *ServiceImpl) ListExternalVolumeSnapshots(ctx context.Context, atespace 
 // returns an error matching store.ErrImmutableField, as the store does. Other
 // validation failures return an Internal error.
 func (s *ServiceImpl) UpdateExternalVolumeSnapshot(ctx context.Context, ref resources.ExternalVolumeSnapshotRef, precondition store.Precondition, mutate func(*ateapi.ExternalVolumeSnapshot) error) (*ateapi.ExternalVolumeSnapshot, error) {
-	return s.store.UpdateExternalVolumeSnapshot(ctx, ref, precondition, func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+	return s.store.UpdateExternalVolumeSnapshot(ctx, ref, precondition, validatedExternalVolumeSnapshotMutation(ctx, mutate))
+}
+
+// Pass-through.
+func (s *ServiceImpl) ListTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string) ([]*ateapi.ExternalVolumeSnapshot, error) {
+	return s.store.ListTagExternalVolumeSnapshots(ctx, tagRef, tagUID)
+}
+
+// UpdateTagExternalVolumeSnapshots applies mutate to each snapshot the tag
+// owns and validates each result as an update of the stored snapshot.
+func (s *ServiceImpl) UpdateTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string, mutate func(*ateapi.ExternalVolumeSnapshot) error) ([]*ateapi.ExternalVolumeSnapshot, error) {
+	return s.store.UpdateTagExternalVolumeSnapshots(ctx, tagRef, tagUID, validatedExternalVolumeSnapshotMutation(ctx, mutate))
+}
+
+// Pass-through.
+func (s *ServiceImpl) DeleteExternalVolumeSnapshot(ctx context.Context, ref resources.ExternalVolumeSnapshotRef, precondition store.DeletePreconditions) (*ateapi.ExternalVolumeSnapshot, error) {
+	return s.store.DeleteExternalVolumeSnapshot(ctx, ref, precondition)
+}
+
+// validatedExternalVolumeSnapshotMutation wraps mutate so that it fails when
+// its result is not a valid update of the snapshot it was given.
+func validatedExternalVolumeSnapshotMutation(ctx context.Context, mutate func(*ateapi.ExternalVolumeSnapshot) error) func(*ateapi.ExternalVolumeSnapshot) error {
+	return func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
 		oldVal := proto.CloneOf(toUpdate)
 		if err := mutate(toUpdate); err != nil {
 			return err
@@ -92,5 +114,5 @@ func (s *ServiceImpl) UpdateExternalVolumeSnapshot(ctx context.Context, ref reso
 			return fmt.Errorf("%w: %w", store.ErrImmutableField, resources.ToInternalError(errs))
 		}
 		return resources.ToInternalError(errs)
-	})
+	}
 }

@@ -264,12 +264,9 @@ func (p *Persistence) UpdateExternalVolumeSnapshot(ctx context.Context, snapshot
 	if err := mutate(dbSnapshot); err != nil {
 		return nil, err
 	}
-	if err := validateUpdateExternalVolumeSnapshotMutation(stored, dbSnapshot); err != nil {
-		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
+	if err := checkExternalVolumeSnapshotMutation(stored, dbSnapshot); err != nil {
+		return nil, err
 	}
-	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure.
-	setUpdateMetadata(dbSnapshot.Metadata, stored.GetMetadata())
 
 	updatedBytes, err := proto.Marshal(dbSnapshot)
 	if err != nil {
@@ -290,4 +287,139 @@ func (p *Persistence) UpdateExternalVolumeSnapshot(ctx context.Context, snapshot
 		return nil, fmt.Errorf("updating external volume snapshot %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
 	return dbSnapshot, nil
+}
+
+// checkExternalVolumeSnapshotMutation rejects a mutation of stored that
+// changed an immutable field, and resets mutated's metadata to the next
+// revision of stored's.
+func checkExternalVolumeSnapshotMutation(stored, mutated *ateapi.ExternalVolumeSnapshot) error {
+	if err := validateUpdateExternalVolumeSnapshotMutation(stored, mutated); err != nil {
+		return fmt.Errorf("%w: %w", store.ErrImmutableField, err)
+	}
+	// Stored metadata is authoritative; discard any metadata edits made by the
+	// closure.
+	setUpdateMetadata(mutated.Metadata, stored.GetMetadata())
+	return nil
+}
+
+func (p *Persistence) ListTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string) ([]*ateapi.ExternalVolumeSnapshot, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT name, uid, version, proto FROM external_volume_snapshots
+		WHERE atespace = $1 AND tag_name = $2 AND tag_uid = $3
+		ORDER BY name`, tagRef.Atespace, tagRef.Name, tagUID)
+	if err != nil {
+		return nil, fmt.Errorf("listing external volume snapshots of tag %s: %w", tagRef, err)
+	}
+	return scanTagExternalVolumeSnapshots(rows, tagRef)
+}
+
+// scanTagExternalVolumeSnapshots reads rows of name, uid, version and proto
+// columns, and closes them.
+func scanTagExternalVolumeSnapshots(rows pgx.Rows, tagRef resources.TagRef) ([]*ateapi.ExternalVolumeSnapshot, error) {
+	defer rows.Close()
+	var snapshots []*ateapi.ExternalVolumeSnapshot
+	for rows.Next() {
+		var name, uid string
+		var version int64
+		var protoBytes []byte
+		if err := rows.Scan(&name, &uid, &version, &protoBytes); err != nil {
+			return nil, fmt.Errorf("scanning external volume snapshot row: %w", err)
+		}
+		snapshot := &ateapi.ExternalVolumeSnapshot{}
+		if err := unmarshalRow(protoBytes, snapshot, "external volume snapshot", tagRef.Atespace, name); err != nil {
+			return nil, err
+		}
+		if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("external volume snapshot %s/%s", tagRef.Atespace, name), snapshot.GetMetadata(), uid, version); err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading external volume snapshots of tag %s: %w", tagRef, err)
+	}
+	return snapshots, nil
+}
+
+func (p *Persistence) UpdateTagExternalVolumeSnapshots(ctx context.Context, tagRef resources.TagRef, tagUID string, mutate func(*ateapi.ExternalVolumeSnapshot) error) ([]*ateapi.ExternalVolumeSnapshot, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning external volume snapshot update of tag %s: %w", tagRef, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	// Locked so no other write lands between the read and the write.
+	rows, err := tx.Query(ctx, `
+		SELECT name, uid, version, proto FROM external_volume_snapshots
+		WHERE atespace = $1 AND tag_name = $2 AND tag_uid = $3
+		ORDER BY name
+		FOR UPDATE`, tagRef.Atespace, tagRef.Name, tagUID)
+	if err != nil {
+		return nil, fmt.Errorf("locking external volume snapshots of tag %s: %w", tagRef, err)
+	}
+	snapshots, err := scanTagExternalVolumeSnapshots(rows, tagRef)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*ateapi.ExternalVolumeSnapshot, 0, len(snapshots))
+	for _, stored := range snapshots {
+		mutated := proto.CloneOf(stored)
+		if err := mutate(mutated); err != nil {
+			return nil, err
+		}
+		if err := checkExternalVolumeSnapshotMutation(stored, mutated); err != nil {
+			return nil, err
+		}
+		// Only status may change, so an unchanged status needs no write.
+		if proto.Equal(stored.GetStatus(), mutated.GetStatus()) {
+			result = append(result, stored)
+			continue
+		}
+		updatedBytes, err := proto.Marshal(mutated)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling external volume snapshot: %w", err)
+		}
+		md := stored.GetMetadata()
+		commandTag, err := tx.Exec(ctx, `
+			UPDATE external_volume_snapshots
+			SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+			mutated.GetMetadata().GetVersion(), updatedBytes, md.GetAtespace(), md.GetName(), md.GetUid(), md.GetVersion())
+		if err != nil {
+			return nil, fmt.Errorf("updating external volume snapshot %s/%s: %w", md.GetAtespace(), md.GetName(), err)
+		}
+		if commandTag.RowsAffected() != 1 {
+			return nil, fmt.Errorf("updating locked external volume snapshot %s/%s affected %d rows, want 1", md.GetAtespace(), md.GetName(), commandTag.RowsAffected())
+		}
+		result = append(result, mutated)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing external volume snapshot update of tag %s: %w", tagRef, err)
+	}
+	return result, nil
+}
+
+func (p *Persistence) DeleteExternalVolumeSnapshot(ctx context.Context, snapshotRef resources.ExternalVolumeSnapshotRef, precondition store.DeletePreconditions) (*ateapi.ExternalVolumeSnapshot, error) {
+	atespace, name := snapshotRef.Atespace, snapshotRef.Name
+	var protoBytes []byte
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM external_volume_snapshots
+		WHERE atespace = $1 AND name = $2
+		  AND ($3::text = '' OR uid = $3::text)
+		  AND ($4::bigint = 0 OR version = $4::bigint)
+		RETURNING proto`, atespace, name, precondition.UID, precondition.Version).Scan(&protoBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var uid string
+		var version int64
+		err := p.pool.QueryRow(ctx, `SELECT uid, version FROM external_volume_snapshots WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&uid, &version)
+		return nil, mapDeleteError(err, uid, version, precondition)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deleting external volume snapshot %s/%s: %w", atespace, name, err)
+	}
+	snapshot := &ateapi.ExternalVolumeSnapshot{}
+	if err := unmarshalStored(protoBytes, snapshot); err != nil {
+		return nil, fmt.Errorf("unmarshaling deleted external volume snapshot: %w", err)
+	}
+	return snapshot, nil
 }
