@@ -244,7 +244,7 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
 - **API clients:** if the release changes the bundled PostgreSQL, it restarts once, and API calls fail until it is back.
 
-Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
+Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool and SandboxConfig fields new in this release. If the cluster used `ate.dev/v1` `CSIDriverConfig` CRDs under `--preview=ExternalVolumes` in 1.0, register each driver with `kubectl ate --preview create csi-driver-config -f` (see [CSI Volumes](csi-volumes.md)) and delete the old `CSIDriverConfig` objects.
 
 The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
 
@@ -285,7 +285,7 @@ go install ./cmd/kubectl-ate
 
 `deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
 
-Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+Fields that the new release added to WorkerPools or SandboxConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
 
 The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 

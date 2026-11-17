@@ -78,7 +78,6 @@ Global
 | :--- | :--- |
 | `WorkerPool` | Namespaced |
 | `SandboxConfig` | Cluster |
-| `CSIDriverConfig` | Cluster |
 
 ## Relationships
 

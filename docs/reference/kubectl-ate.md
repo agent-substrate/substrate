@@ -102,7 +102,7 @@ kubectl ate top workers
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
-> **Note:** Actors, workers, actor templates, external volume classes, and CSI driver configs live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, `kubectl get actortemplate`, and `kubectl get externalvolumeclass` return nothing; only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates), [External Volume Classes](#external-volume-classes), and [CSI Driver Configs](#csi-driver-configs)). `kubectl get csidriverconfig` lists the `ate.dev/v1` `CSIDriverConfig` CRD objects, which are separate from the control-plane `CsiDriverConfig` that `kubectl ate get csi-driver-config` shows. `kubectl get workerpool` *does* work, because pools are CRDs.
+> **Note:** Actors, workers, actor templates, external volume classes, and CSI driver configs live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, `kubectl get actortemplate`, `kubectl get externalvolumeclass`, and `kubectl get csidriverconfig` return nothing. Only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates), [External Volume Classes](#external-volume-classes), and [CSI Driver Configs](#csi-driver-configs)). `kubectl get workerpool` *does* work, because pools are CRDs.
 
 #### `kubectl ate get actor` output columns
 
@@ -197,7 +197,7 @@ kubectl ate delete external-volume-class <name> --uid <uid> --version <version>
 
 ### CSI Driver Configs
 
-A **CSI driver config** (`CsiDriverConfig`) is a global-scoped resource that records connection settings for a CSI driver (`driverName`): its controller gRPC endpoint (`controllerEndpoint`), optional node plugin socket (`nodeSocketOverride`), and mTLS settings (`tls`). Both `ate-api-server` and `atelet` read this resource first and fall back to the `ate.dev/v1` `CSIDriverConfig` CRD when no control-plane config matches (see [CSI Volumes](../guides/csi-volumes.md)). `driverName` is immutable after creation, while `controllerEndpoint`, `nodeSocketOverride`, and `tls` can be replaced with `update`. Creating or updating a CSI driver config requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI, and deleting fails while an external volume class references its `driverName`.
+A **CSI driver config** (`CsiDriverConfig`) is a global-scoped resource that records connection settings for a CSI driver (`driverName`): its controller gRPC endpoint (`controllerEndpoint`), optional node plugin socket (`nodeSocketOverride`), and mTLS settings (`tls`). Both `ate-api-server` and `atelet` read `CsiDriverConfig` from the control plane (see [CSI Volumes](../guides/csi-volumes.md)). `driverName` is immutable after creation, while `controllerEndpoint`, `nodeSocketOverride`, and `tls` can be replaced with `update`. Creating or updating a CSI driver config requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI, and deleting fails while an external volume class references its `driverName`.
 
 Example `csi-driver-config.yaml`:
 
