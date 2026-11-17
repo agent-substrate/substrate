@@ -27,7 +27,7 @@ In standard Kubernetes, CSI drivers are deployed to interact with asynchronous s
 | :--- | :--- | :--- |
 | **CSI Controller Communication** | Controller listens strictly on an in-pod Unix domain socket (`/csi/csi.sock`). Sidecars (`csi-provisioner`, `csi-attacher`) watch `etcd` and talk to the driver locally. | The Substrate control plane (`ateapi`) communicates directly with the CSI Controller via gRPC over the cluster network. The controller must be exposed over TCP via a Kubernetes `Service`. |
 | **Controller Authentication** | None (in-pod socket communication only). | Optional but recommended: Mutual TLS (mTLS) authenticated via Substrate's SPIFFE Pod Identity certificates and dynamic CA rotation. |
-| **CSI Node Communication** | `kubelet` communicates with the node plugin Unix domain socket. | Substrate's node daemon (`atelet`) connects directly to the CSI node plugin Unix socket (discovered via `CSIDriverConfig`). |
+| **CSI Node Communication** | `kubelet` communicates with the node plugin Unix domain socket. | Substrate's node daemon (`atelet`) connects directly to the CSI node plugin Unix socket (discovered via `CsiDriverConfig`). |
 | **Node Mount Propagation** | `kubelet` manages mounts under `/var/lib/kubelet/pods`. | The CSI Node plugin must mount Substrate target directories on the host (e.g. `/var/lib/ate`) with `mountPropagation: Bidirectional` so that `atelet` can bind-mount them into actor sandboxes. |
 
 ---
@@ -47,11 +47,11 @@ Standard CSI controller deployments can be made network-accessible and secured i
 
 Create a Kubernetes `Service` targeting the CSI Controller pods. This provides a stable DNS name and load balancing across controller replicas.
 
-Create the `Service` before the controller pods when the proxy's serving certificate comes from Substrate's `servicedns.podcert.ate.dev/identity` signer: it issues the certificate for the `<service>.<namespace>.svc` names of the `Service`s selecting the pod, and refuses to issue one for a pod no `Service` selects yet. The `Service` name is also what `spec.tls.serverName` in the `CSIDriverConfig` must be.
+Create the `Service` before the controller pods when the proxy's serving certificate comes from Substrate's `servicedns.podcert.ate.dev/identity` signer: it issues the certificate for the `<service>.<namespace>.svc` names of the `Service`s selecting the pod, and refuses to issue one for a pod no `Service` selects yet. The `Service` name is also what `tls.serverName` in the `CsiDriverConfig` must be.
 
 ### Securing with mTLS and Pod Identity
 
-When exposing the CSI Controller over the network, communication should be secured with mutual TLS (mTLS). In the [`CSIDriverConfig`](csi-volumes.md#2-dynamic-csi-driver-discovery-csidriverconfig) resource, configure the following fields under `spec.tls`:
+When exposing the CSI Controller over the network, communication should be secured with mutual TLS (mTLS). In the [`CsiDriverConfig`](csi-volumes.md#2-dynamic-csi-driver-discovery-csidriverconfig) resource, configure the following fields under `tls`:
 
 * `enabled: true`: Enables TLS/mTLS for gRPC communication between `ateapi` and the CSI Controller service. If `false` (or omitted), communication falls back to unencrypted plaintext gRPC.
 * `usePodIdentity: true`: Instructs `ateapi` to authenticate using Substrate's SPIFFE Pod Identity client certificate (`/run/podidentity.podcert.ate.dev/credential-bundle.pem`) and verify the controller's server certificate using Substrate's dynamic Service DNS CA trust bundle (`/run/servicedns.podcert.ate.dev/trust-bundle.pem`).
@@ -59,7 +59,7 @@ When exposing the CSI Controller over the network, communication should be secur
 
 > [!IMPORTANT]
 > **What happens if `usePodIdentity` is `false`?**
-> Currently, Substrate requires `usePodIdentity: true` whenever `spec.tls.enabled` is `true`. If `usePodIdentity` is set to `false` (or omitted when TLS is enabled), the `CSIDriverConfig` resource will be rejected by CRD validation (`tls.usePodIdentity must be true when tls.enabled is true; manual certificates are not yet supported`), and `ateapi` will return an error at runtime.
+> Currently, Substrate requires `usePodIdentity: true` whenever `tls.enabled` is `true`. If `usePodIdentity` is set to `false` (or omitted when TLS is enabled), `ate-api-server` rejects the `CsiDriverConfig` (`tls.use_pod_identity` must be `true` when `enabled` is `true`; manual certificates are not yet supported).
 
 ### Restricting Controller Communication to `ateapi`
 
@@ -286,24 +286,23 @@ spec:
     targetPort: 10000
 ```
 
-#### 4. Corresponding `CSIDriverConfig`
+#### 4. Corresponding `CsiDriverConfig`
+
+Register the `CsiDriverConfig` with `kubectl ate --preview create csi-driver-config -f -`:
 
 ```yaml
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
 metadata:
-  name: nfs.csi.k8s.io
-spec:
-  driverName: nfs.csi.k8s.io
-  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    # The one DNS name servicednssigner puts in the proxy's certificate is
-    # <service>.<namespace>.svc, so that, not the cluster.local form the
-    # endpoint dials, is the server name to verify.
-    serverName: csi-nfs-controller.kube-system.svc
+  name: csi-nfs
+driverName: nfs.csi.k8s.io
+controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
+nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
+tls:
+  enabled: true
+  usePodIdentity: true
+  # The one DNS name servicednssigner puts in the proxy's certificate is
+  # <service>.<namespace>.svc, so that, not the cluster.local form the
+  # endpoint dials, is the server name to verify.
+  serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ---
@@ -317,7 +316,7 @@ The CSI Node plugin runs as a DaemonSet on each worker node and handles `NodeSta
 When the CSI Node plugin mounts an external volume (such as an NFS share or a formatted block device), the filesystem mount is created inside the plugin container. For Substrate's node supervisor (`atelet`) and worker sandboxes (`ateworker-gvisor`, `ateworker-microvm`) on the host to see this filesystem mount, the following requirements must be met:
 
 1. **Bidirectional Mount Propagation (`mountPropagation: Bidirectional`):** The volume mount on the host Substrate target directory (e.g. `/var/lib/ate`) in the CSI Node plugin container must have `mountPropagation: Bidirectional`. This ensures that any mounts made by the CSI plugin inside the container propagate back to the host filesystem.
-2. **Unix Domain Socket Accessibility:** The CSI Node plugin must place its Unix domain socket under `/var/lib/kubelet/plugins/<driverName>/` (or the path defined in `CSIDriverConfig.spec.nodeSocketOverride`), which is shared with `atelet`.
+2. **Unix Domain Socket Accessibility:** The CSI Node plugin must place its Unix domain socket under `/var/lib/kubelet/plugins/<driverName>/` (or the path set in `CsiDriverConfig`'s `nodeSocketOverride`), which is shared with `atelet`.
 
 ### Example: `csi-nfs-node` DaemonSet Configuration
 

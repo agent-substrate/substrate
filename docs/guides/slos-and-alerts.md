@@ -196,8 +196,6 @@ Substrate introduces the following CRDs:
   creates and manages pods, and can be autoscaled via HPA.
 * `SandboxConfig`: declares sandbox types. Might be moved to the API server now
   that fine-grained auth is supported through OpenFGA. Read directly by atelets.
-* `CSIDriverConfig`: gives ATE direct access to CSI drivers without using
-  PV/PVCs. Read directly by atelets.
 
 In addition, ATE uses Secrets to project trust bundles into Actors,
 `StorageClass` to set up access to storage, and `PodCertificateRequest` to

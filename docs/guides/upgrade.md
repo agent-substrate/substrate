@@ -113,6 +113,7 @@ kubectl -n ate-system rollout status ds/atelet
 - **Done:** `daemon set "atelet" successfully rolled out`.
 - **Stuck:** the `N out of M` count does not move for more than about 6 minutes. A new atelet pod that cannot start stops the roll and leaves its node without atelet; if you cannot fix it quickly, [roll back step 2](#roll-back-step-2). A pod stuck in ContainerCreating usually means podcertificate-controller is not running. If `deploy atelet` times out, the roll still goes on; keep watching.
 - **Actors:** running actors keep running. A node's atelet is down for a few seconds while it restarts.
+- **ExternalVolumes preview:** when upgrading from 1.0, CSI volume operations fail on upgraded nodes from this step until `ate-api-server` is upgraded in step 4a and you register each driver with `kubectl ate --preview create csi-driver-config -f`. New `atelet` reads `CsiDriverConfig` from `ate-api-server` only. A 1.0 `ate-api-server` returns `Unimplemented`, and the database table is empty until drivers are registered.
 
 ### Step 3. Move each WorkerPool to the new worker image
 
@@ -244,7 +245,7 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
 - **API clients:** if the release changes the bundled PostgreSQL, it restarts once, and API calls fail until it is back.
 
-Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
+Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool and SandboxConfig fields new in this release. If the cluster used `ate.dev/v1` `CSIDriverConfig` CRDs under `--preview=ExternalVolumes` in 1.0, register each driver with `kubectl ate --preview create csi-driver-config -f` (see [CSI Volumes](csi-volumes.md)). Keep the old `CSIDriverConfig` CRD objects until you no longer plan to roll back, then delete them.
 
 The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
 
@@ -285,7 +286,9 @@ go install ./cmd/kubectl-ate
 
 `deploy sandboxconfig` removes a sandbox version new in this release, so actors suspended on it resume without their memory. `deploy ate-controller` restores the old CRDs, RBAC and `ate-controller`. No pool rolls. 
 
-Fields that the new release added to WorkerPools, SandboxConfigs or CSIDriverConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+Fields that the new release added to WorkerPools or SandboxConfigs are dropped from those objects. Remove them from your YAML files too, or `kubectl apply` rejects the files.
+
+If you used `--preview=ExternalVolumes` in 1.0, keep the old `CSIDriverConfig` CRD objects for rollback, because 1.0 `ate-api-server` and `atelet` read only the CRD and ignore database records.
 
 The database schema stays new; the old API server drops fields it does not know when it rewrites a record. Step 4e is not undone either: the NetworkPolicies and the bundled PostgreSQL stay as the new release left them.
 

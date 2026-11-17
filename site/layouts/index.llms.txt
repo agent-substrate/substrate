@@ -21,7 +21,7 @@ Agent Substrate maps stateful **Actors** (addressed as `<atespace>/<actor>` and 
 
 Every actor runs inside a Cloud Hypervisor microVM or gVisor (`runsc`) sandbox. Plain Linux containers are unsupported. Actors hold zero ambient credentials inside the sandbox and start with default-deny networking. Outbound traffic traverses `atunnel` (authenticated with a short-lived per-actor SPIFFE X.509 certificate) to `atenet-egress`, which enforces `EgressPolicy` host allowlists and injects external credentials or actor JWTs out of band.
 
-Substrate splits its APIs between cluster infrastructure and tenant workloads. Infrastructure resources (`WorkerPool`, `SandboxConfig`, `CSIDriverConfig` under `ate.dev/v1`) are Kubernetes CRDs reconciled by `atecontroller` and managed with `kubectl`. Workload and access resources (`Atespace`, `ActorTemplate`, `Actor`, `Tag`, `EgressPolicy`, `AccessPolicy`) live in PostgreSQL behind `ate-api-server`'s gRPC Control API (`api/ateapi/v1/ateapi.proto`) and are managed with `kubectl ate` or gRPC clients. Agent Substrate is a Cloud Native Computing Foundation sandbox project originally created by Google.
+Substrate splits its APIs between cluster infrastructure and tenant workloads. Infrastructure resources (`WorkerPool`, `SandboxConfig` under `ate.dev/v1`) are Kubernetes CRDs reconciled by `atecontroller` and managed with `kubectl`. Workload and access resources (`Atespace`, `ActorTemplate`, `Actor`, `Tag`, `EgressPolicy`, `AccessPolicy`, `ExternalVolumeClass`, `CsiDriverConfig`) live in PostgreSQL behind `ate-api-server`'s gRPC Control API (`api/ateapi/v1/ateapi.proto`) and are managed with `kubectl ate` or gRPC clients. Agent Substrate is a Cloud Native Computing Foundation sandbox project originally created by Google.
 
 ## Consolidated Reference Bundle
 
@@ -57,10 +57,9 @@ Substrate splits its APIs between cluster infrastructure and tenant workloads. I
 - [{{ $p.Title }}]({{ $url }}): {{ $statusPrefix }}{{ $desc }}
 {{- end -}}
 {{- if and $repo (eq (path.Base $section.Path) "reference") }}
-- [Control Plane gRPC Proto (ateapi.proto)]({{ printf "%s/blob/%s/api/ateapi/v1/ateapi.proto" $repo $branch }}): Canonical protobuf service and resource definitions for Atespace, ActorTemplate, Actor, Tag, EgressPolicy, AccessPolicy, and Worker.
+- [Control Plane gRPC Proto (ateapi.proto)]({{ printf "%s/blob/%s/api/ateapi/v1/ateapi.proto" $repo $branch }}): Canonical protobuf service and resource definitions for Atespace, ActorTemplate, Actor, Tag, EgressPolicy, AccessPolicy, ExternalVolumeClass, CsiDriverConfig, and Worker.
 - [WorkerPool CRD]({{ printf "%s/blob/%s/manifests/ate-install/generated/ate.dev_workerpools.yaml" $repo $branch }}): OpenAPI v3 Kubernetes CustomResourceDefinition schema for `ate.dev/v1` `WorkerPool`.
 - [SandboxConfig CRD]({{ printf "%s/blob/%s/manifests/ate-install/generated/ate.dev_sandboxconfigs.yaml" $repo $branch }}): OpenAPI v3 Kubernetes CustomResourceDefinition schema for `ate.dev/v1` `SandboxConfig`.
-- [CSIDriverConfig CRD]({{ printf "%s/blob/%s/manifests/ate-install/generated/ate.dev_csidriverconfigs.yaml" $repo $branch }}): OpenAPI v3 Kubernetes CustomResourceDefinition schema for `ate.dev/v1` `CSIDriverConfig`.
 - [Metrics & Events Registry]({{ printf "%s/tree/%s/docs/metrics/registry" $repo $branch }}): OpenTelemetry Weaver schema defining emitted metrics, log events, and attributes.
 {{- end -}}
 {{- end -}}

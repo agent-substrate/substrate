@@ -28,6 +28,11 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
+# TODO(v1.2): Remove after v1.1; kept so v1.0 atelet pods retain RBAC to read
+# CSIDriverConfig CRDs while DaemonSet/atelet rolls.
+- apiGroups: ["ate.dev"]
+  resources: ["csidriverconfigs"]
+  verbs: ["get", "list", "watch"]
 # SandboxConfigs are watched to pre-download sandbox assets into the node's
 # cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go),
 # and to write the runtimes of the configs local workers use to each worker's
