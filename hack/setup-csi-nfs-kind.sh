@@ -254,7 +254,33 @@ spec:
     serverName: csi-nfs-controller.kube-system.svc
 EOF
 
-# 9. Restart atelet to ensure it reconnects to the new CSI socket.
+# 9. Register the canonical CsiDriverConfig when ExternalVolumes preview is enabled.
+preview_gates="${ATE_PREVIEW:-}"
+case ",${preview_gates//[[:space:]]/}," in
+  *,ALL,*|*,ExternalVolumes,*)
+    if kubectl get deployment/ate-api-server -n "${ATE_NAMESPACE}" >/dev/null 2>&1; then
+      kubectl rollout status deployment/ate-api-server -n "${ATE_NAMESPACE}" --timeout=120s
+      echo "Registering csi-nfs CsiDriverConfig..."
+      if create_out="$(go -C "${ROOT}" run ./cmd/kubectl-ate --preview create csi-driver-config -f "${ROOT}/hack/csi/csi-driver-config-nfs.yaml" 2>&1)"; then
+        printf '%s\n' "${create_out}"
+      elif [[ "${create_out}" == *"AlreadyExists"* ]]; then
+        # Keep an existing csi-nfs for idempotence without duplicating manifest fields here.
+        # Run ate-setup setup csi to reconcile drifted mutable fields.
+        echo "CsiDriverConfig csi-nfs already exists; keeping it."
+      else
+        printf '%s\n' "${create_out}" >&2
+        exit 1
+      fi
+    else
+      echo "ate-api-server not found; skipping csi-nfs CsiDriverConfig registration."
+    fi
+    ;;
+  *)
+    echo "Skipping csi-nfs CsiDriverConfig registration: ExternalVolumes preview gate is disabled (set ATE_PREVIEW=ExternalVolumes)."
+    ;;
+esac
+
+# 10. Restart atelet to ensure it reconnects to the new CSI socket.
 echo "Restarting atelet DaemonSet (if present)..."
 kubectl rollout restart daemonset/atelet -n "${ATE_NAMESPACE}" >/dev/null 2>&1 || true
 
