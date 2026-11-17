@@ -199,10 +199,9 @@ Substrate introduces the following CRDs:
 * `CSIDriverConfig`: gives ATE direct access to CSI drivers without using
   PV/PVCs. Read directly by atelets.
 
-In addition, ATE uses Secrets to project trust bundles into Actors,
-`StorageClass` to set up access to storage, and `PodCertificateRequest` to
-provision SPIFFE mTLS identities to workers. Finally, the atelet is deployed as
-a daemonset on all nodes.
+In addition, ATE uses Secrets to project trust bundles into Actors and
+`PodCertificateRequest` to provision SPIFFE mTLS identities to workers.
+Finally, the atelet is deployed as a daemonset on all nodes.
 
 While failure conditions may be displayed on CRD status fields, these are hard
 to monitor and do not cover all the cases listed above. As a result, the primary

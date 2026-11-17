@@ -170,6 +170,8 @@ driverName: nfs.csi.k8s.io
 parameters:
   server: nfs-server.default.svc.cluster.local
   share: /
+mountOptions:
+- nfsvers=4.1
 ```
 
 ```bash
