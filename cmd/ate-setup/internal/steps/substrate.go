@@ -216,7 +216,8 @@ func EnsureExternalVolumeClassAtespaceAccess(ctx context.Context, client externa
 	member := "atespace:" + atespace
 	ref := &ateapi.ObjectRef{Name: className}
 
-	for attempt := range maxPolicyGrantAttempts {
+	var lastErr error
+	for range maxPolicyGrantAttempts {
 		current, err := client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
 			ExternalVolumeClass: ref,
 			Name:                resources.SingletonName,
@@ -239,7 +240,8 @@ func EnsureExternalVolumeClassAtespaceAccess(ctx context.Context, client externa
 				log.Stepf("granted atespace %q access to external volume class %q", atespace, className)
 				return nil
 			}
-			if status.Code(err) == codes.AlreadyExists && attempt+1 < maxPolicyGrantAttempts {
+			if status.Code(err) == codes.AlreadyExists {
+				lastErr = err
 				continue
 			}
 			return fmt.Errorf("creating access policy for external volume class %q: %w", className, err)
@@ -257,12 +259,13 @@ func EnsureExternalVolumeClassAtespaceAccess(ctx context.Context, client externa
 			log.Stepf("granted atespace %q access to external volume class %q", atespace, className)
 			return nil
 		}
-		if (status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound) && attempt+1 < maxPolicyGrantAttempts {
+		if status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound {
+			lastErr = err
 			continue
 		}
 		return fmt.Errorf("updating access policy for external volume class %q: %w", className, err)
 	}
-	return fmt.Errorf("exceeded %d attempts updating access policy for external volume class %q", maxPolicyGrantAttempts, className)
+	return fmt.Errorf("exceeded %d attempts updating access policy for external volume class %q: %w", maxPolicyGrantAttempts, className, lastErr)
 }
 
 func addExternalVolumeClassMember(policy *ateapi.AccessPolicy, member string) bool {

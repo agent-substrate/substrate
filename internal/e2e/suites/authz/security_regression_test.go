@@ -16,6 +16,8 @@ package authz
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,17 +347,20 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 //  1. A non-owner (atespace editor) cannot create/delete an ExternalVolumeClass
 //     or write its AccessPolicy.
 //  2. CreateActorTemplate referencing an ExternalVolumeClass is denied for an
-//     ungranted atespace — even when called by the bootstrap global owner —
-//     and succeeds once the atespace is granted allowed_atespace.
+//     ungranted atespace, including for the bootstrap global owner, and
+//     succeeds once the atespace is granted allowed_atespace.
 //  3. Deleting and recreating the atespace scrubs its class grant so
 //     CreateActorTemplate is denied again.
 func testExternalVolumeClassGovernance(t *testing.T, ctx context.Context, f *fixture) {
 	e2e.RequirePreview(t, preview.GateExternalVolumes)
 
+	// Leave room for the "-denied" suffix below within a 63-character name,
+	// and never end on "-".
 	className := "authz-evc-" + f.atespace
-	if len(className) > 63 {
-		className = className[:63]
+	if len(className) > 56 {
+		className = className[:56]
 	}
+	className = strings.TrimRight(className, "-")
 	classRef := &ateapi.ObjectRef{Name: className}
 	targetAtespace := f.atespace + "-evc"
 	createAtespace(t, ctx, f.clients, targetAtespace)
@@ -438,7 +443,7 @@ func testExternalVolumeClassGovernance(t *testing.T, ctx context.Context, f *fix
 					StorageLocation:      e2e.SnapshotLocation(t, "authz-evc-"+tmplName),
 					GoldenSnapshotConfig: &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 				},
-				Volumes: append(srcTmpl.GetVolumes(), &ateapi.Volume{
+				Volumes: append(slices.Clone(srcTmpl.GetVolumes()), &ateapi.Volume{
 					Name: "ext-data",
 					External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
 						CapacityBytes:       1 << 30,
