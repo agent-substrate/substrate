@@ -36,10 +36,10 @@ single-node Kind only, while NFS is not restricted to Kind.
 Both drivers expose their controllers over TCP so atelet and ateapi can reach them. Re-running this removes
 the previous deployment first, which clears stale mounts left behind by an earlier install.
 
-When ate-api-server is deployed and --preview=ExternalVolumes (or ATE_PREVIEW) is set
-for this command, this also registers the matching CsiDriverConfig (csi-nfs,
-csi-hostpath). Run "setup csi" after "deploy ate-system", or pass --setup-csi to
-"deploy ate-system", so the configs are registered.`,
+When ate-api-server is deployed with the ExternalVolumes preview gate enabled,
+this also registers the matching CsiDriverConfig (csi-nfs, csi-hostpath). Run
+"setup csi" after "deploy ate-system", or pass --setup-csi to "deploy ate-system",
+so the configs are registered.`,
 	// Rejecting an unknown driver here rather than in the step means it costs
 	// nothing: cobra validates arguments before the root command loads the
 	// configuration and connects to a cluster.

@@ -17,6 +17,8 @@ package steps
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,13 +27,18 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -413,38 +420,61 @@ func TestRegisterCSIDriverConfigsEarlySkipsAndErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("driver none skips with gate enabled", func(t *testing.T) {
-		env := &Env{Cfg: &config.Config{Root: root, PreviewGates: []string{"ExternalVolumes"}}}
+	t.Run("driver none skips", func(t *testing.T) {
+		env := &Env{Cfg: &config.Config{Root: root}}
 		if err := env.RegisterCSIDriverConfigs(context.Background(), "none"); err != nil {
 			t.Fatalf("RegisterCSIDriverConfigs(none) = %v, want nil", err)
 		}
 	})
 
 	for _, tc := range []struct {
-		name   string
-		driver string
-		gates  []string
+		name  string
+		gates []string
 	}{
-		{name: "nfs empty gates", driver: "nfs"},
-		{name: "hostpath empty gates", driver: "hostpath"},
-		{name: "both unrelated gate", driver: "both", gates: []string{"OtherGate"}},
+		{name: "empty gates"},
+		{name: "unrelated gate", gates: []string{"OtherGate"}},
+		{name: "ExternalVolumes", gates: []string{"ExternalVolumes"}},
+		{name: "ALL", gates: []string{"ALL"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := &Env{Cfg: &config.Config{Root: root, PreviewGates: tc.gates}}
-			if err := env.RegisterCSIDriverConfigs(context.Background(), tc.driver); err != nil {
-				t.Fatalf("RegisterCSIDriverConfigs(%q) with gate off = %v, want nil", tc.driver, err)
-			}
-		})
-	}
-
-	for _, gates := range [][]string{{"ExternalVolumes"}, {"ALL"}} {
-		t.Run("skips without ate-api-server "+gates[0], func(t *testing.T) {
+		t.Run("skips without ate-api-server "+tc.name, func(t *testing.T) {
 			env := &Env{
-				Cfg:  &config.Config{Root: root, PreviewGates: gates},
+				Cfg:  &config.Config{Root: root, PreviewGates: tc.gates},
 				Kube: fakeKube(t),
 			}
 			if err := env.RegisterCSIDriverConfigs(context.Background(), "both"); err != nil {
 				t.Fatalf("RegisterCSIDriverConfigs(both) = %v, want nil", err)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		gates []string
+	}{
+		{name: "empty gates"},
+		{name: "unrelated gate", gates: []string{"OtherGate"}},
+	} {
+		t.Run("attempts registration when ate-api-server is deployed with "+tc.name, func(t *testing.T) {
+			badKubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+			if err := os.WriteFile(badKubeconfig, []byte("invalid: ["), 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			apiDeployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: NamespaceAteSystem,
+					Name:      "ate-api-server",
+				},
+			}
+			env := &Env{
+				Cfg: &config.Config{
+					Root:         root,
+					PreviewGates: tc.gates,
+					Kubeconfig:   badKubeconfig,
+				},
+				Kube: fakeKube(t, apiDeployment),
+			}
+			if err := env.RegisterCSIDriverConfigs(context.Background(), "nfs"); err == nil {
+				t.Fatal("RegisterCSIDriverConfigs(nfs) = nil, want kubeconfig parse error proving client PreviewGates did not skip registration")
 			}
 		})
 	}
@@ -501,6 +531,95 @@ func (f *fakeCSIDriverConfigClient) UpdateCsiDriverConfig(_ context.Context, in 
 	return cfg, nil
 }
 
+// fakeCSIDriverConfigServer wraps fakeCSIDriverConfigClient behind a real gRPC
+// ControlServer with preview.UnaryServerInterceptor, matching ate-api-server's
+// preview header opt-in and ExternalVolumes gate rejection.
+type fakeCSIDriverConfigServer struct {
+	ateapi.UnimplementedControlServer
+	gateEnabled bool
+	backend     *fakeCSIDriverConfigClient
+}
+
+func (s *fakeCSIDriverConfigServer) checkGate(ctx context.Context) error {
+	if !s.gateEnabled || preview.IsOptedOut(ctx) {
+		return status.Error(codes.InvalidArgument, "csi_driver_config: Forbidden")
+	}
+	return nil
+}
+
+func (s *fakeCSIDriverConfigServer) CreateCsiDriverConfig(ctx context.Context, req *ateapi.CreateCsiDriverConfigRequest) (*ateapi.CsiDriverConfig, error) {
+	if err := s.checkGate(ctx); err != nil {
+		s.backend.creates++
+		return nil, err
+	}
+	return s.backend.CreateCsiDriverConfig(ctx, req)
+}
+
+func (s *fakeCSIDriverConfigServer) GetCsiDriverConfig(ctx context.Context, req *ateapi.GetCsiDriverConfigRequest) (*ateapi.CsiDriverConfig, error) {
+	return s.backend.GetCsiDriverConfig(ctx, req)
+}
+
+func (s *fakeCSIDriverConfigServer) UpdateCsiDriverConfig(ctx context.Context, req *ateapi.UpdateCsiDriverConfigRequest) (*ateapi.CsiDriverConfig, error) {
+	if err := s.checkGate(ctx); err != nil {
+		s.backend.updates++
+		return nil, err
+	}
+	return s.backend.UpdateCsiDriverConfig(ctx, req)
+}
+
+func dialFakeCSIDriverConfigServer(t *testing.T, gateEnabled bool, backend *fakeCSIDriverConfigClient) ateapi.ControlClient {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer(grpc.UnaryInterceptor(preview.UnaryServerInterceptor))
+	ateapi.RegisterControlServer(srv, &fakeCSIDriverConfigServer{
+		gateEnabled: gateEnabled,
+		backend:     backend,
+	})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() {
+		srv.Stop()
+		_ = lis.Close()
+	})
+
+	// Dial without preview.DialOptionsWithOptIn to match RegisterCSIDriverConfigs
+	// when the client did not pass --preview=ExternalVolumes.
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return lis.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return ateapi.NewControlClient(conn)
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	done := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- string(data)
+	}()
+
+	fn()
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
+}
+
 func TestRegisterCSIDriverConfigsClient(t *testing.T) {
 	const storedUID = "11111111-2222-3333-4444-555555555555"
 	nfs := &ateapi.CsiDriverConfig{
@@ -519,6 +638,61 @@ func TestRegisterCSIDriverConfigsClient(t *testing.T) {
 		DriverName:         "plain.csi.k8s.io",
 		ControllerEndpoint: "tcp://127.0.0.1:9000",
 	}
+
+	t.Run("succeeds without client preview gate when server accepts", func(t *testing.T) {
+		env := &Env{Cfg: &config.Config{Root: repoRoot(t)}} // PreviewGates is empty
+		configs, err := csiDriverConfigsForDriver(env.Cfg, csiDrivers["both"])
+		if err != nil {
+			t.Fatalf("csiDriverConfigsForDriver(both) = %v", err)
+		}
+		backend := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{}}
+		grpcClient := dialFakeCSIDriverConfigServer(t, true, backend)
+		if err := registerCSIDriverConfigs(context.Background(), grpcClient, configs); err != nil {
+			t.Fatalf("registerCSIDriverConfigs = %v, want nil", err)
+		}
+		if backend.creates != 2 || len(backend.stored) != 2 {
+			t.Errorf("creates=%d stored=%d, want 2/2", backend.creates, len(backend.stored))
+		}
+	})
+
+	t.Run("skips with warning when server rejects disabled ExternalVolumes gate", func(t *testing.T) {
+		t.Run("on create", func(t *testing.T) {
+			backend := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{}}
+			grpcClient := dialFakeCSIDriverConfigServer(t, false, backend)
+			var err error
+			stderr := captureStderr(t, func() {
+				err = registerCSIDriverConfigs(context.Background(), grpcClient, []*ateapi.CsiDriverConfig{nfs, plain})
+			})
+			if err != nil {
+				t.Fatalf("registerCSIDriverConfigs = %v, want nil", err)
+			}
+			if backend.creates != 1 {
+				t.Errorf("creates = %d, want 1 (stop after first gate rejection)", backend.creates)
+			}
+			if !strings.Contains(stderr, "Warning:") || !strings.Contains(stderr, string(preview.GateExternalVolumes)) {
+				t.Errorf("stderr = %q, want warning naming %s", stderr, preview.GateExternalVolumes)
+			}
+		})
+
+		t.Run("on update", func(t *testing.T) {
+			drifted := proto.CloneOf(nfs)
+			drifted.ControllerEndpoint = "tcp://10.0.0.9:50052"
+			client := &fakeCSIDriverConfigClient{
+				stored:    map[string]*ateapi.CsiDriverConfig{"csi-nfs": drifted},
+				updateErr: status.Error(codes.InvalidArgument, "csi_driver_config: Forbidden"),
+			}
+			var err error
+			stderr := captureStderr(t, func() {
+				err = registerCSIDriverConfigs(context.Background(), client, []*ateapi.CsiDriverConfig{nfs})
+			})
+			if err != nil {
+				t.Fatalf("registerCSIDriverConfigs = %v, want nil", err)
+			}
+			if !strings.Contains(stderr, "Warning:") || !strings.Contains(stderr, string(preview.GateExternalVolumes)) {
+				t.Errorf("stderr = %q, want warning naming %s", stderr, preview.GateExternalVolumes)
+			}
+		})
+	})
 
 	t.Run("creates missing configs", func(t *testing.T) {
 		client := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{}}
@@ -601,12 +775,20 @@ func TestRegisterCSIDriverConfigsClient(t *testing.T) {
 		}
 	})
 
-	t.Run("propagates RPC errors", func(t *testing.T) {
-		if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
-			stored:    map[string]*ateapi.CsiDriverConfig{},
-			createErr: status.Error(codes.Unavailable, "unavailable"),
-		}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
-			t.Error("create error = nil, want error")
+	t.Run("propagates non-preview-gate RPC errors", func(t *testing.T) {
+		for _, createErr := range []error{
+			status.Error(codes.Unavailable, "unavailable"),
+			status.Error(codes.PermissionDenied, "permission denied"),
+			status.Error(codes.Internal, "internal"),
+			status.Error(codes.InvalidArgument, "csi_driver_config.metadata.atespace: Forbidden"),
+			status.Error(codes.InvalidArgument, "csi_driver_config.tls.server_name: Invalid value: \"bad\""),
+		} {
+			if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
+				stored:    map[string]*ateapi.CsiDriverConfig{},
+				createErr: createErr,
+			}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
+				t.Errorf("create error (%v) = nil, want error", createErr)
+			}
 		}
 		if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
 			stored: map[string]*ateapi.CsiDriverConfig{"csi-nfs": nfs},
@@ -616,11 +798,17 @@ func TestRegisterCSIDriverConfigsClient(t *testing.T) {
 		}
 		drifted := proto.CloneOf(nfs)
 		drifted.ControllerEndpoint = "tcp://10.0.0.9:50052"
-		if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
-			stored:    map[string]*ateapi.CsiDriverConfig{"csi-nfs": drifted},
-			updateErr: status.Error(codes.Aborted, "conflict"),
-		}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
-			t.Error("update error = nil, want error")
+		for _, updateErr := range []error{
+			status.Error(codes.Aborted, "conflict"),
+			status.Error(codes.PermissionDenied, "permission denied"),
+			status.Error(codes.InvalidArgument, "csi_driver_config.metadata.atespace: Forbidden"),
+		} {
+			if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
+				stored:    map[string]*ateapi.CsiDriverConfig{"csi-nfs": drifted},
+				updateErr: updateErr,
+			}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
+				t.Errorf("update error (%v) = nil, want error", updateErr)
+			}
 		}
 	})
 }

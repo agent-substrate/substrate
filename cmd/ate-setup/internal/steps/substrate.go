@@ -18,10 +18,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -102,18 +104,15 @@ type csiDriverConfigClient interface {
 }
 
 // RegisterCSIDriverConfigs creates or updates the canonical CsiDriverConfig
-// resources for the selected CSI driver when the ExternalVolumes preview gate
-// is enabled and ate-api-server is deployed.
+// resources for the selected CSI driver when ate-api-server is deployed. If
+// ate-api-server rejects the request because the ExternalVolumes preview gate
+// is disabled, registration is skipped with a warning.
 func (e *Env) RegisterCSIDriverConfigs(ctx context.Context, driver string) error {
 	if err := ValidateCSIDriver(driver); err != nil {
 		return err
 	}
 	spec := csiDrivers[driver]
 	if spec.installsNothing() {
-		return nil
-	}
-	if !previewGateEnabled(e.Cfg.PreviewGates, preview.GateExternalVolumes) {
-		log.Infof("Skipping CsiDriverConfig registration: %s preview gate is disabled.", preview.GateExternalVolumes)
 		return nil
 	}
 	configs, err := csiDriverConfigsForDriver(e.Cfg, spec)
@@ -129,7 +128,7 @@ func (e *Env) RegisterCSIDriverConfigs(ctx context.Context, driver string) error
 		return nil
 	}
 
-	client, err := e.AteClient(ctx)
+	client, err := ateclient.NewClient(ctx, e.Cfg.Kubeconfig, e.Cfg.Context, "", "", false)
 	if err != nil {
 		return err
 	}
@@ -161,13 +160,27 @@ func csiDriverConfigsForDriver(cfg *config.Config, spec csiDriverSpec) ([]*ateap
 	return configs, nil
 }
 
+// isExternalVolumesDisabledError reports whether err is ate-api-server's
+// validation rejection when the ExternalVolumes preview gate is disabled.
+func isExternalVolumesDisabledError(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.InvalidArgument && strings.HasPrefix(st.Message(), "csi_driver_config: Forbidden")
+}
+
 func registerCSIDriverConfigs(ctx context.Context, client csiDriverConfigClient, configs []*ateapi.CsiDriverConfig) error {
+	// Opt in on the request so ate-setup setup csi works without --preview
+	// against an ate-api-server deployed with --preview=ExternalVolumes.
+	ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
 	for _, cfg := range configs {
 		name := cfg.GetMetadata().GetName()
 		_, err := client.CreateCsiDriverConfig(ctx, &ateapi.CreateCsiDriverConfigRequest{CsiDriverConfig: cfg})
 		if err == nil {
 			log.Stepf("registered csi driver config %q", name)
 			continue
+		}
+		if isExternalVolumesDisabledError(err) {
+			log.Warnf("Skipping CsiDriverConfig registration: %s preview gate is disabled on ate-api-server.", preview.GateExternalVolumes)
+			return nil
 		}
 		if status.Code(err) != codes.AlreadyExists {
 			return fmt.Errorf("creating csi driver config %q: %w", name, err)
@@ -196,6 +209,10 @@ func registerCSIDriverConfigs(ctx context.Context, client csiDriverConfigClient,
 			Version: existing.GetMetadata().GetVersion(),
 		}
 		if _, err := client.UpdateCsiDriverConfig(ctx, &ateapi.UpdateCsiDriverConfigRequest{CsiDriverConfig: updated}); err != nil {
+			if isExternalVolumesDisabledError(err) {
+				log.Warnf("Skipping CsiDriverConfig registration: %s preview gate is disabled on ate-api-server.", preview.GateExternalVolumes)
+				return nil
+			}
 			return fmt.Errorf("updating csi driver config %q: %w", name, err)
 		}
 		log.Stepf("updated csi driver config %q", name)

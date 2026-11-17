@@ -168,6 +168,59 @@ func TestTheNFSSetupsApplyTheSharedStorageClass(t *testing.T) {
 	}
 }
 
+// Both NFS setups register the canonical csi-nfs CsiDriverConfig from the
+// same checked-in manifest so neither carries an inline copy that can drift.
+func TestTheNFSSetupsRegisterTheSharedCSIDriverConfig(t *testing.T) {
+	const manifest = "hack/csi/csi-driver-config-nfs.yaml"
+	root := repoRoot(t)
+
+	raw, err := os.ReadFile(filepath.Join(root, manifest))
+	if err != nil {
+		t.Fatalf("reading %s: %v", manifest, err)
+	}
+	cfg, err := CSIDriverConfigFromManifest(raw)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", manifest, err)
+	}
+	if cfg.GetMetadata().GetName() != "csi-nfs" {
+		t.Errorf("csi-nfs metadata.name = %q, want csi-nfs", cfg.GetMetadata().GetName())
+	}
+	if cfg.GetDriverName() != "nfs.csi.k8s.io" {
+		t.Errorf("csi-nfs driverName = %q, want nfs.csi.k8s.io", cfg.GetDriverName())
+	}
+	var svc corev1.Service
+	decodeYAML(t, "csiNFSControllerService", csiNFSControllerService, &svc)
+	if !cfg.GetTls().GetEnabled() || !cfg.GetTls().GetUsePodIdentity() {
+		t.Fatalf("csi-nfs tls = %+v, want enabled with pod identity", cfg.GetTls())
+	}
+	if want := svc.Name + "." + svc.Namespace + ".svc"; cfg.GetTls().GetServerName() != want {
+		t.Errorf("csi-nfs tls.serverName = %q, want %q", cfg.GetTls().GetServerName(), want)
+	}
+	if want := "tcp://" + svc.Name + "." + svc.Namespace + ".svc.cluster.local:" + strconv.Itoa(int(svc.Spec.Ports[0].Port)); cfg.GetControllerEndpoint() != want {
+		t.Errorf("csi-nfs controllerEndpoint = %q, want %q", cfg.GetControllerEndpoint(), want)
+	}
+
+	goSetup := functionBody(t, "substrate.go", "func csiDriverConfigsForDriver(")
+	if !strings.Contains(goSetup, `"csi-driver-config-nfs.yaml"`) {
+		t.Errorf("csiDriverConfigsForDriver no longer loads %s", manifest)
+	}
+	script, err := os.ReadFile(filepath.Join(root, "hack", "setup-csi-nfs-kind.sh"))
+	if err != nil {
+		t.Fatalf("reading the shell setup: %v", err)
+	}
+	if !strings.Contains(string(script), manifest) {
+		t.Errorf("hack/setup-csi-nfs-kind.sh no longer registers %s", manifest)
+	}
+	for name, src := range map[string]string{
+		"csiDriverConfigsForDriver":  goSetup,
+		"hack/setup-csi-nfs-kind.sh": string(script),
+	} {
+		if strings.Contains(src, "\ndriverName:") {
+			t.Errorf("%s defines a CsiDriverConfig inline; register %s instead", name, manifest)
+		}
+	}
+}
+
 // Each --setup-csi value selects the drivers its name says.
 func TestCSIDriverSpellings(t *testing.T) {
 	for _, tc := range []struct {
@@ -247,6 +300,8 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 		"serverName: csi-nfs-controller.kube-system.svc\n",
 		"usePodIdentity: true",
 		"/sa/ate-api-server",
+		"ExternalVolumes",
+		"--preview create csi-driver-config -f",
 	} {
 		if !strings.Contains(src, required) {
 			t.Errorf("hack/setup-csi-nfs-kind.sh no longer contains %q", required)
@@ -254,6 +309,12 @@ func TestTheNFSShellSetupMatchesTheGoSetup(t *testing.T) {
 	}
 	if service, driver := strings.Index(src, "name: csi-nfs-controller\n  namespace: kube-system"), strings.Index(src, "csi-nfs-controller.yaml"); service < 0 || driver < 0 || service > driver {
 		t.Error("hack/setup-csi-nfs-kind.sh deploys the NFS driver before creating the csi-nfs-controller Service")
+	}
+	if crd, cdc := strings.Index(src, "kind: CSIDriverConfig"), strings.Index(src, "csi-driver-config-nfs.yaml"); crd < 0 || cdc < 0 || crd > cdc {
+		t.Error("hack/setup-csi-nfs-kind.sh registers the csi-nfs CsiDriverConfig before creating the CSIDriverConfig CRD")
+	}
+	if cdc, restart := strings.Index(src, "csi-driver-config-nfs.yaml"), strings.Index(src, "rollout restart daemonset/atelet"); cdc < 0 || restart < 0 || cdc > restart {
+		t.Error("hack/setup-csi-nfs-kind.sh restarts atelet before registering the csi-nfs CsiDriverConfig")
 	}
 }
 
