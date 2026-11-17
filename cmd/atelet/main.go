@@ -885,7 +885,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
-		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
+		return nil, apierror.Unavailable("while resetting actor dirs: %w", err)
 	}
 
 	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
@@ -1695,11 +1695,11 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 	}
 	defer endStart()
 
-	// Canceled so ate-api-server retries instead of crashing the actor. A
+	// Unavailable so ate-api-server retries instead of crashing the actor. A
 	// failure here points at atelet or the node's disk, not the actor.
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := actordirs.ResetActorDirsKeepingVolumes(actorUID); err != nil {
-		return nil, status.Errorf(codes.Canceled, "while resetting actor dirs: %v", err)
+		return nil, apierror.Unavailable("while resetting actor dirs: %w", err)
 	}
 	// A restore may bring another runtime than the one staged here before,
 	// so the assets dir is emptied for it; Run swaps a staged set in
