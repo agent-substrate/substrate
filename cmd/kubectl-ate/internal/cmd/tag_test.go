@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -123,6 +124,9 @@ func TestWithVolumesFlag(t *testing.T) {
 		{name: "empty value", args: []string{"t1", "--with-volumes="}, wantErr: true},
 		{name: "all then names", args: []string{"t1", "--with-volumes", "--with-volumes=data"}, wantErr: true},
 		{name: "names then all", args: []string{"t1", "--with-volumes=data", "--with-volumes"}, wantErr: true},
+		{name: "all among names", args: []string{"t1", "--with-volumes=data,*"}, wantErr: true},
+		{name: "trailing comma", args: []string{"t1", "--with-volumes=data,"}, wantErr: true},
+		{name: "only a comma", args: []string{"t1", "--with-volumes=,"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,6 +146,43 @@ func TestWithVolumesFlag(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.wantArgs, cmd.Flags().Args()); diff != "" {
 				t.Errorf("args mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestCreateTagArgs verifies the hint about joining names to --with-volumes
+// with = shows only when a bare --with-volumes left an extra argument.
+func TestCreateTagArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+		// wantHint is text the hint about joining names with = must contain,
+		// or empty when no hint may be given.
+		wantHint string
+	}{
+		{name: "one argument", args: []string{"t1", "--with-volumes"}},
+		{name: "names after bare flag", args: []string{"t1", "--with-volumes", "data"}, wantErr: true, wantHint: `if "data" names volumes, join them to the flag with =, e.g. --with-volumes=data`},
+		{name: "two names before bare flag", args: []string{"t1", "t2", "--with-volumes"}, wantErr: true, wantHint: `if "t2" names volumes`},
+		{name: "extra argument without flag", args: []string{"t1", "data"}, wantErr: true},
+		{name: "extra argument with names", args: []string{"t1", "--with-volumes=cache", "data"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var v volumeSelectionValue
+			cmd := &cobra.Command{Use: "tag"}
+			addWithVolumesFlag(cmd, &v)
+			if err := cmd.Flags().Parse(tt.args); err != nil {
+				t.Fatalf("Parse(%q): %v", tt.args, err)
+			}
+			err := createTagArgs(cmd, cmd.Flags().Args())
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("createTagArgs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			hinted := err != nil && strings.Contains(err.Error(), "join them to the flag with =")
+			if hinted != (tt.wantHint != "") || (tt.wantHint != "" && !strings.Contains(err.Error(), tt.wantHint)) {
+				t.Errorf("createTagArgs() error = %v, want hint %q", err, tt.wantHint)
 			}
 		})
 	}
