@@ -29,7 +29,6 @@ import (
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/resources"
-	"google.golang.org/protobuf/proto"
 )
 
 // statResponse mirrors the probe's /stat payload.
@@ -213,9 +212,9 @@ type stdinResponse struct {
 }
 
 // TestStdinReadsEOF asserts that a read from the actor's stdin returns EOF, as
-// it does from /dev/null on gVisor. The actor cold-boots from a copy of the
-// probe template with the golden snapshot disabled, so on microVM the check
-// covers the CloseStdin call in StartRootfsContainer.
+// it does from /dev/null on gVisor. The actor cold-boots with the golden
+// snapshot disabled, so on microVM the check covers the CloseStdin call in
+// StartRootfsContainer.
 func TestStdinReadsEOF(t *testing.T) {
 	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -223,23 +222,11 @@ func TestStdinReadsEOF(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	atespace, tmpl := e2e.DeployProbe(t, "imagefs-stdin")
-	coldRef := &ateapi.ObjectRef{Atespace: atespace, Name: "probe-no-golden"}
-	cold := proto.CloneOf(tmpl)
-	cold.Metadata = &ateapi.ResourceMetadata{Atespace: coldRef.Atespace, Name: coldRef.Name}
-	cold.Status = nil
-	cold.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
-	if _, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: cold}); err != nil {
-		t.Fatalf("CreateActorTemplate %q: %v", coldRef.Name, err)
-	}
-	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteActorTemplate(ctx, &ateapi.DeleteActorTemplateRequest{ActorTemplate: coldRef})
-	})
-
+	atespace, tmpl := e2e.DeployProbe(t, "imagefs-stdin", e2e.WithoutGoldenSnapshot())
 	ref := &ateapi.ObjectRef{Atespace: atespace, Name: "imagefs-stdin-actor"}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
-		ActorTemplate: coldRef,
+		ActorTemplate: &ateapi.ObjectRef{Atespace: atespace, Name: tmpl.GetMetadata().GetName()},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", ref.Name, err)
 	}

@@ -36,7 +36,10 @@ var probeManifests = SubstrateFixtureManifests{
 // ProbeOption adjusts what DeployProbe installs.
 type ProbeOption func(*probeConfig)
 
-type probeConfig struct{ trustBundles []string }
+type probeConfig struct {
+	trustBundles []string
+	fixtureOpts  []FixtureOption
+}
 
 // The allowlisted names atelet resolves trust bundles by.
 const (
@@ -61,13 +64,19 @@ func WithSystemRoots() ProbeOption {
 	return func(c *probeConfig) { c.trustBundles = append(c.trustBundles, systemRootsBundleName) }
 }
 
+// WithoutGoldenSnapshot disables the golden snapshot on the probe's
+// ActorTemplate, so actors created from it cold-boot.
+func WithoutGoldenSnapshot() ProbeOption {
+	return func(c *probeConfig) { c.fixtureOpts = append(c.fixtureOpts, WithGoldenSnapshotDisabled()) }
+}
+
 // DeployProbe builds the probe fixture image and installs the fixture for the
 // sandbox class under test, removing it when the test ends. name
 // distinguishes the caller (by convention its suite name): each suite gets
 // its own copy of the fixture, so no suite's cleanup can delete the fixture
 // out from under another running concurrently. It returns the fixture's
 // atespace (which also names the k8s namespace holding the pool) and the
-// created ActorTemplate, already golden-snapshotted.
+// created ActorTemplate, already golden-snapshotted unless WithoutGoldenSnapshot is passed.
 func DeployProbe(t *testing.T, name string, opts ...ProbeOption) (string, *ateapi.ActorTemplate) {
 	t.Helper()
 
@@ -81,6 +90,6 @@ func DeployProbe(t *testing.T, name string, opts ...ProbeOption) (string, *ateap
 		EnsureEgressTrustBundle(t, context.Background(), GetClients())
 	}
 
-	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, name, cfg.trustBundles)
+	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, name, cfg.trustBundles, cfg.fixtureOpts...)
 	return atespace, templates[0]
 }
