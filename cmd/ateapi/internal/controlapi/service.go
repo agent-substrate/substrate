@@ -37,7 +37,7 @@ import (
 // ServiceImpl for business logic and invariants.
 type RPCService struct {
 	ateapi.UnimplementedControlServer
-	impl                  serviceStore
+	impl                  *ServiceImpl
 	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer

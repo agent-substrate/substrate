@@ -2936,8 +2936,10 @@ type ExternalVolumeSnapshotStatus struct {
 	// ready_to_use is whether the storage system has finished the snapshot, so
 	// it can seed new volumes. It can be true only after `snapshot_id` is
 	// recorded. Drivers may return a handle while the copy continues in the
-	// background, so it can start false. It never moves from true back to
-	// false.
+	// background, so it can start false. GetTag, GetExternalVolumeSnapshot and
+	// CreateActor ask the storage system again and set it once the snapshot is
+	// ready. It stays false for a driver that cannot list snapshots. It never
+	// moves from true back to false.
 	//
 	// +k8s:optional
 	// +k8s:update=NoUnset

@@ -305,6 +305,63 @@ func TestCreateActor_TagVolumeSnapshotNotReady(t *testing.T) {
 	}
 }
 
+// TestGetTag_RefreshesVolumeSnapshotReadiness verifies that once the storage
+// system finishes a tag's volume snapshots, GetExternalVolumeSnapshot and
+// GetTag record them as ready to use.
+func TestGetTag_RefreshesVolumeSnapshotReadiness(t *testing.T) {
+	ns := namespaceForTest("ns-get-tag-refresh")
+	tc, plugin, workerName := setupTagVolumesTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	plugin.setReady(false)
+
+	suspendActorForTest(t, tc, workerName, "source")
+	tag := createVolumeTag(t, tc, "copying", &ateapi.ExternalVolumeSelection{})
+	tagRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "copying"}
+	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("GetTag failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]bool{"data": false, "cache": false}, tagVolumesReady(t, tc, tag)); diff != "" {
+		t.Fatalf("ready_to_use while copying mismatch (-want +got):\n%s", diff)
+	}
+
+	plugin.setReady(true)
+	dataRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: tagVolumeSnapshotName(t, tc, tag, "data")}
+	got, err := tc.client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: dataRef})
+	if err != nil {
+		t.Fatalf("GetExternalVolumeSnapshot failed: %v", err)
+	}
+	if !got.GetStatus().GetReadyToUse() {
+		t.Errorf("GetExternalVolumeSnapshot status = %v, want it ready to use", got.GetStatus())
+	}
+	if diff := cmp.Diff(map[string]bool{"data": true, "cache": false}, tagVolumesReady(t, tc, tag)); diff != "" {
+		t.Errorf("ready_to_use after GetExternalVolumeSnapshot mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := tc.client.GetTag(ctx, &ateapi.GetTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("GetTag failed: %v", err)
+	}
+	if diff := cmp.Diff(map[string]bool{"data": true, "cache": true}, tagVolumesReady(t, tc, tag)); diff != "" {
+		t.Errorf("ready_to_use after GetTag mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// tagVolumeSnapshotName returns the name of the ExternalVolumeSnapshot the tag
+// owns of volName.
+func tagVolumeSnapshotName(t *testing.T, tc *testContext, tag *ateapi.Tag, volName string) string {
+	t.Helper()
+	resp, err := tc.client.ListExternalVolumeSnapshots(context.Background(), &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: tag.GetMetadata().GetAtespace()})
+	if err != nil {
+		t.Fatalf("ListExternalVolumeSnapshots failed: %v", err)
+	}
+	for _, snap := range resp.GetExternalVolumeSnapshots() {
+		if origin := snap.GetOrigin().GetTagCapture(); origin.GetTagUid() == tag.GetMetadata().GetUid() && origin.GetSourceVolumeName() == volName {
+			return snap.GetMetadata().GetName()
+		}
+	}
+	t.Fatalf("tag %s owns no snapshot of volume %q", tag.GetMetadata().GetName(), volName)
+	return ""
+}
+
 // TestResumeActor_TagDeletedBeforeFirstResume verifies that an Actor created
 // from a tag that is deleted before its first resume fails that resume with
 // FailedPrecondition, instead of coming up with an empty volume.

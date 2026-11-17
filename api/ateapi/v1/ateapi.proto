@@ -98,7 +98,9 @@ service Control {
     option (method).resource = "Tag";
   }
 
-  // Get a Tag.
+  // Get a Tag. Asks the storage system about each ExternalVolumeSnapshot the
+  // tag owns that is not ready to use, and sets `ready_to_use` on the ones
+  // that are now ready.
   rpc GetTag(GetTagRequest) returns (Tag) {
     option (method).resource = "Tag";
   }
@@ -122,7 +124,9 @@ service Control {
     option (method).resource = "Tag";
   }
 
-  // Get an ExternalVolumeSnapshot.
+  // Get an ExternalVolumeSnapshot. A snapshot that is not ready to use is
+  // looked up in the storage system, and `ready_to_use` is set once it is
+  // ready.
   rpc GetExternalVolumeSnapshot(GetExternalVolumeSnapshotRequest) returns (ExternalVolumeSnapshot) {
     option (method).resource = "ExternalVolumeSnapshot";
   }
@@ -1262,8 +1266,10 @@ message ExternalVolumeSnapshotStatus {
   // ready_to_use is whether the storage system has finished the snapshot, so
   // it can seed new volumes. It can be true only after `snapshot_id` is
   // recorded. Drivers may return a handle while the copy continues in the
-  // background, so it can start false. It never moves from true back to
-  // false.
+  // background, so it can start false. GetTag, GetExternalVolumeSnapshot and
+  // CreateActor ask the storage system again and set it once the snapshot is
+  // ready. It stays false for a driver that cannot list snapshots. It never
+  // moves from true back to false.
   //
   // +k8s:optional
   // +k8s:update=NoUnset

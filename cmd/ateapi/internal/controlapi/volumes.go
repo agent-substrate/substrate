@@ -284,6 +284,77 @@ func (s *ServiceImpl) setTagVolumeSources(ctx context.Context, tag *ateapi.Tag, 
 	return nil
 }
 
+// refreshTagVolumeSnapshots asks the storage system whether the tag's
+// ExternalVolumeSnapshots that have a handle but are not ready to use are
+// ready now, and records those that are. CreateTag does not wait for
+// snapshots, so GetTag uses this to show when a tag can seed an Actor. Only a
+// finished tag that is not being deleted is refreshed. A failed lookup or
+// write is logged and leaves the snapshot not ready.
+func (s *ServiceImpl) refreshTagVolumeSnapshots(ctx context.Context, tag *ateapi.Tag) {
+	completed := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED) != ""
+	if !completed || tag.GetMetadata().GetDeleteTime() != nil {
+		return
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	snapshots, err := s.store.ListTagExternalVolumeSnapshots(ctx, tagRef, tag.GetMetadata().GetUid())
+	if err != nil {
+		slog.WarnContext(ctx, "failed to list the external volume snapshots of a tag",
+			slog.String("tag", tagRef.String()), slog.Any("error", err))
+		return
+	}
+	var creating []*ateapi.ExternalVolumeSnapshot
+	for _, snap := range snapshots {
+		if st := snap.GetStatus(); st.GetSnapshotId() != "" && !st.GetReadyToUse() {
+			creating = append(creating, snap)
+		}
+	}
+	s.recordVolumeSnapshotsReady(ctx, readyVolumeSnapshots(ctx, s.lookupVolumeSnapshots(ctx, creating)))
+}
+
+// refreshVolumeSnapshot asks the storage system whether a snapshot that has a
+// handle but is not ready to use is ready now, as refreshTagVolumeSnapshots
+// does, and returns the snapshot as recorded. A snapshot whose tag is being deleted is returned unchanged.
+func (s *ServiceImpl) refreshVolumeSnapshot(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) *ateapi.ExternalVolumeSnapshot {
+	if st := snap.GetStatus(); st.GetSnapshotId() == "" || st.GetReadyToUse() {
+		return snap
+	}
+	origin := snap.GetOrigin().GetTagCapture()
+	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(origin.GetTag()))
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "failed to get the tag of an external volume snapshot",
+				slog.String("tag", resources.TagRefFromObjectRef(origin.GetTag()).String()), slog.Any("error", err))
+		}
+		return snap
+	}
+	if tag.GetMetadata().GetUid() != origin.GetTagUid() || tag.GetMetadata().GetDeleteTime() != nil {
+		return snap
+	}
+	ready := readyVolumeSnapshots(ctx, []volumeSnapshotLookup{s.lookupVolumeSnapshot(ctx, snap)})
+	if len(ready) == 0 {
+		return snap
+	}
+	return s.recordVolumeSnapshotsReady(ctx, ready)[0]
+}
+
+// readyVolumeSnapshots returns the lookups that found their snapshot ready. A
+// failed lookup is logged.
+func readyVolumeSnapshots(ctx context.Context, lookups []volumeSnapshotLookup) []volumeSnapshotLookup {
+	var ready []volumeSnapshotLookup
+	for _, l := range lookups {
+		switch {
+		case errors.Is(l.err, errors.ErrUnsupported):
+		case l.err != nil:
+			slog.WarnContext(ctx, "failed to read an external volume snapshot",
+				slog.String("external_volume_snapshot", resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(l.snapshot).String()),
+				slog.Any("error", l.err))
+		case l.found && l.observed.ReadyToUse:
+			ready = append(ready, l)
+		}
+	}
+	return ready
+}
+
 // volumeSnapshotLookup is what the storage system reported about snapshot.
 type volumeSnapshotLookup struct {
 	snapshot *ateapi.ExternalVolumeSnapshot

@@ -41,7 +41,7 @@ func (s *RPCService) GetExternalVolumeSnapshot(ctx context.Context, req *ateapi.
 	if err != nil {
 		return nil, fmt.Errorf("while getting external volume snapshot: %w", err)
 	}
-	return snapshot, nil
+	return s.impl.refreshVolumeSnapshot(ctx, snapshot), nil
 }
 
 func (s *RPCService) ListExternalVolumeSnapshots(ctx context.Context, req *ateapi.ListExternalVolumeSnapshotsRequest) (*ateapi.ListExternalVolumeSnapshotsResponse, error) {

@@ -121,7 +121,9 @@ type ControlClient interface {
 	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
 	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag. Asks the storage system about each ExternalVolumeSnapshot the
+	// tag owns that is not ready to use, and sets `ready_to_use` on the ones
+	// that are now ready.
 	GetTag(ctx context.Context, in *GetTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// List Tags.
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
@@ -133,7 +135,9 @@ type ControlClient interface {
 	// external snapshot and become unrecoverable, so do not delete a tag while
 	// such Actors exist.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Get an ExternalVolumeSnapshot.
+	// Get an ExternalVolumeSnapshot. A snapshot that is not ready to use is
+	// looked up in the storage system, and `ready_to_use` is set once it is
+	// ready.
 	GetExternalVolumeSnapshot(ctx context.Context, in *GetExternalVolumeSnapshotRequest, opts ...grpc.CallOption) (*ExternalVolumeSnapshot, error)
 	// List ExternalVolumeSnapshots.
 	ListExternalVolumeSnapshots(ctx context.Context, in *ListExternalVolumeSnapshotsRequest, opts ...grpc.CallOption) (*ListExternalVolumeSnapshotsResponse, error)
@@ -695,7 +699,9 @@ type ControlServer interface {
 	// cannot collect it. When the Actor's latest snapshot is not uploaded yet,
 	// atelet uploads it first, so the call can take as long as that upload.
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
-	// Get a Tag.
+	// Get a Tag. Asks the storage system about each ExternalVolumeSnapshot the
+	// tag owns that is not ready to use, and sets `ready_to_use` on the ones
+	// that are now ready.
 	GetTag(context.Context, *GetTagRequest) (*Tag, error)
 	// List Tags.
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)
@@ -707,7 +713,9 @@ type ControlServer interface {
 	// external snapshot and become unrecoverable, so do not delete a tag while
 	// such Actors exist.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
-	// Get an ExternalVolumeSnapshot.
+	// Get an ExternalVolumeSnapshot. A snapshot that is not ready to use is
+	// looked up in the storage system, and `ready_to_use` is set once it is
+	// ready.
 	GetExternalVolumeSnapshot(context.Context, *GetExternalVolumeSnapshotRequest) (*ExternalVolumeSnapshot, error)
 	// List ExternalVolumeSnapshots.
 	ListExternalVolumeSnapshots(context.Context, *ListExternalVolumeSnapshotsRequest) (*ListExternalVolumeSnapshotsResponse, error)

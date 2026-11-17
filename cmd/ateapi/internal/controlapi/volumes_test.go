@@ -1117,3 +1117,171 @@ func TestRecordVolumeSnapshotReady(t *testing.T) {
 		})
 	}
 }
+
+// completeTag marks the tag's snapshot COMPLETED, as CreateTag does last.
+func completeTag(t *testing.T, ctx context.Context, persistence store.Interface, tag *ateapi.Tag) *ateapi.Tag {
+	t.Helper()
+	completed, err := persistence.UpdateTag(ctx, resources.TagRefFromTag(tag), store.PreconditionFrom(tag), func(toUpdate *ateapi.Tag) error {
+		toUpdate.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("completing tag: %v", err)
+	}
+	return completed
+}
+
+func TestRefreshTagVolumeSnapshots(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *ateapi.ExternalVolumeSnapshotStatus
+		result lookupResult
+		// pending leaves the tag's snapshot PENDING.
+		pending bool
+		// deleting marks the tag for deletion.
+		deleting    bool
+		wantLookups []string
+		wantReady   bool
+	}{
+		{
+			name:        "a snapshot the driver now reports ready is recorded",
+			status:      volumeSnapshotStatus("snap-data", false),
+			result:      lookupResult{snap: volume.Snapshot{ReadyToUse: true}, found: true},
+			wantLookups: []string{"snap-data"},
+			wantReady:   true,
+		},
+		{
+			name:        "a snapshot still copying stays not ready",
+			status:      volumeSnapshotStatus("snap-data", false),
+			result:      lookupResult{found: true},
+			wantLookups: []string{"snap-data"},
+		},
+		{
+			name:        "a snapshot deleted from the storage system stays not ready",
+			status:      volumeSnapshotStatus("snap-data", false),
+			wantLookups: []string{"snap-data"},
+		},
+		{
+			name:        "a failed lookup leaves the snapshot not ready",
+			status:      volumeSnapshotStatus("snap-data", false),
+			result:      lookupResult{err: errors.New("driver unavailable")},
+			wantLookups: []string{"snap-data"},
+		},
+		{
+			name:        "a driver that cannot look snapshots up leaves the snapshot not ready",
+			status:      volumeSnapshotStatus("snap-data", false),
+			result:      lookupResult{err: fmt.Errorf("lookup: %w", errors.ErrUnsupported)},
+			wantLookups: []string{"snap-data"},
+		},
+		{
+			name:      "a ready snapshot is not looked up",
+			status:    volumeSnapshotStatus("snap-data", true),
+			wantReady: true,
+		},
+		{
+			name:    "a pending tag is not looked up",
+			status:  volumeSnapshotStatus("snap-data", false),
+			result:  lookupResult{snap: volume.Snapshot{ReadyToUse: true}, found: true},
+			pending: true,
+		},
+		{
+			name:     "a tag being deleted is not looked up",
+			status:   volumeSnapshotStatus("snap-data", false),
+			result:   lookupResult{snap: volume.Snapshot{ReadyToUse: true}, found: true},
+			deleting: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			tag := seedCreatingVolumeTag(t, ctx, persistence, map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": tt.status})
+			if !tt.pending {
+				tag = completeTag(t, ctx, persistence, tag)
+			}
+			if tt.deleting {
+				var err error
+				if tag, err = persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); err != nil {
+					t.Fatalf("MarkTagForDeletion: %v", err)
+				}
+			}
+			plugin := &snapshotLookupPlugin{results: map[string]lookupResult{"snap-data": tt.result}}
+			impl := newServiceImpl(persistence, nil)
+			impl.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{testVolumeDriver: plugin}}
+
+			impl.refreshTagVolumeSnapshots(ctx, tag)
+			if diff := cmp.Diff(tt.wantLookups, plugin.lookups(), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("GetSnapshot calls mismatch (-want +got):\n%s", diff)
+			}
+			if got := storedVolumeSnapshotsReady(t, ctx, persistence, tag)["data"]; got != tt.wantReady {
+				t.Errorf("stored ready_to_use = %v, want %v", got, tt.wantReady)
+			}
+		})
+	}
+}
+
+func TestRefreshVolumeSnapshot(t *testing.T) {
+	ready := lookupResult{snap: volume.Snapshot{ReadyToUse: true, SizeBytes: 2048}, found: true}
+	tests := []struct {
+		name     string
+		status   *ateapi.ExternalVolumeSnapshotStatus
+		result   lookupResult
+		deleting bool
+		// wantReady is the ready_to_use returned and stored.
+		wantReady   bool
+		wantLookups []string
+	}{
+		{
+			name:        "a snapshot the driver now reports ready is recorded",
+			status:      volumeSnapshotStatus("snap-data", false),
+			result:      ready,
+			wantReady:   true,
+			wantLookups: []string{"snap-data"},
+		},
+		{
+			name:        "a snapshot still copying stays not ready",
+			status:      volumeSnapshotStatus("snap-data", false),
+			result:      lookupResult{found: true},
+			wantLookups: []string{"snap-data"},
+		},
+		{
+			name:      "a ready snapshot is not looked up",
+			status:    volumeSnapshotStatus("snap-data", true),
+			wantReady: true,
+		},
+		{
+			name:     "a snapshot of a tag being deleted is not looked up",
+			status:   volumeSnapshotStatus("snap-data", false),
+			result:   ready,
+			deleting: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+			tag := completeTag(t, ctx, persistence, seedCreatingVolumeTag(t, ctx, persistence, map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": tt.status}))
+			if tt.deleting {
+				if _, err := persistence.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); err != nil {
+					t.Fatalf("MarkTagForDeletion: %v", err)
+				}
+			}
+			plugin := &snapshotLookupPlugin{results: map[string]lookupResult{"snap-data": tt.result}}
+			impl := newServiceImpl(persistence, nil)
+			impl.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{testVolumeDriver: plugin}}
+
+			got := impl.refreshVolumeSnapshot(ctx, tagVolumeSnapshots(t, ctx, persistence, tag)["data"])
+			if got.GetStatus().GetReadyToUse() != tt.wantReady {
+				t.Errorf("returned ready_to_use = %v, want %v", got.GetStatus().GetReadyToUse(), tt.wantReady)
+			}
+			if diff := cmp.Diff(tt.wantLookups, plugin.lookups(), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("GetSnapshot calls mismatch (-want +got):\n%s", diff)
+			}
+			if stored := storedVolumeSnapshotsReady(t, ctx, persistence, tag)["data"]; stored != tt.wantReady {
+				t.Errorf("stored ready_to_use = %v, want %v", stored, tt.wantReady)
+			}
+		})
+	}
+}
