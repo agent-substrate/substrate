@@ -134,6 +134,11 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 	if opts.Modify != nil {
 		opts.Modify(tmpl)
 	}
+	for _, v := range tmpl.GetVolumes() {
+		if className := v.GetExternal().GetTemplate().GetExternalVolumeClass().GetName(); className != "" {
+			EnsureExternalVolumeClassAtespaceAccess(ctx, t, clients, className, opts.Atespace)
+		}
+	}
 	created, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl})
 	if err != nil {
 		t.Fatalf("failed to create ActorTemplate %s/%s: %v", opts.Atespace, opts.Name, err)
