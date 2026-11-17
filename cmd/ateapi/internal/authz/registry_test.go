@@ -43,25 +43,25 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "CreateAtespace",
 			fullMethod: ateapi.Control_CreateAtespace_FullMethodName,
 			req:        &ateapi.CreateAtespaceRequest{},
-			want:       []check{{RelationCanCreateAtespace, GlobalRootObject}},
+			want:       []check{{relation: RelationCanCreateAtespace, object: GlobalRootObject}},
 		},
 		{
 			name:       "ListAtespaces",
 			fullMethod: ateapi.Control_ListAtespaces_FullMethodName,
 			req:        &ateapi.ListAtespacesRequest{},
-			want:       []check{{RelationCanListAtespaces, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListAtespaces, object: GlobalRootObject}},
 		},
 		{
 			name:       "GetAtespace",
 			fullMethod: ateapi.Control_GetAtespace_FullMethodName,
 			req:        &ateapi.GetAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}},
-			want:       []check{{RelationCanGet, "atespace:team-a"}},
+			want:       []check{{relation: RelationCanGet, object: "atespace:team-a"}},
 		},
 		{
 			name:       "DeleteAtespace",
 			fullMethod: ateapi.Control_DeleteAtespace_FullMethodName,
 			req:        &ateapi.DeleteAtespaceRequest{Atespace: &ateapi.ObjectRef{Name: "team-a"}},
-			want:       []check{{RelationCanDelete, "atespace:team-a"}},
+			want:       []check{{relation: RelationCanDelete, object: "atespace:team-a"}},
 		},
 
 		// Actor templates.
@@ -71,31 +71,81 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req: &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
 				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
 			}},
-			want: []check{{RelationCanCreateActorTemplate, "atespace:team-a"}},
+			want: []check{{relation: RelationCanCreateActorTemplate, object: "atespace:team-a"}},
+		},
+		{
+			name:       "CreateActorTemplate with one external volume class",
+			fullMethod: ateapi.Control_CreateActorTemplate_FullMethodName,
+			req: &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
+				Volumes: []*ateapi.Volume{{
+					Name: "data",
+					External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+						ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+					}},
+				}},
+			}},
+			want: []check{
+				{relation: RelationCanCreateActorTemplate, object: "atespace:team-a"},
+				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-nfs"},
+			},
+		},
+		{
+			name:       "CreateActorTemplate with multiple external volume classes deduplicates",
+			fullMethod: ateapi.Control_CreateActorTemplate_FullMethodName,
+			req: &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
+				Volumes: []*ateapi.Volume{
+					{Name: "scratch", DurableDir: &ateapi.DurableDirVolumeSource{}},
+					{
+						Name: "data-1",
+						External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+							ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+						}},
+					},
+					{
+						Name: "data-2",
+						External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+							ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-nfs"},
+						}},
+					},
+					{
+						Name: "fast",
+						External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+							ExternalVolumeClass: &ateapi.ObjectRef{Name: "csi-ssd"},
+						}},
+					},
+				},
+			}},
+			want: []check{
+				{relation: RelationCanCreateActorTemplate, object: "atespace:team-a"},
+				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-nfs"},
+				{subject: "atespace:team-a", relation: RelationCanReference, object: "external_volume_class:csi-ssd"},
+			},
 		},
 		{
 			name:       "GetActorTemplate",
 			fullMethod: ateapi.Control_GetActorTemplate_FullMethodName,
 			req:        &ateapi.GetActorTemplateRequest{ActorTemplate: localTemplate},
-			want:       []check{{RelationCanGet, "actor_template:team-a/tmpl"}},
+			want:       []check{{relation: RelationCanGet, object: "actor_template:team-a/tmpl"}},
 		},
 		{
 			name:       "ListActorTemplates in an atespace",
 			fullMethod: ateapi.Control_ListActorTemplates_FullMethodName,
 			req:        &ateapi.ListActorTemplatesRequest{Atespace: "team-a"},
-			want:       []check{{RelationCanListActorTemplates, "atespace:team-a"}},
+			want:       []check{{relation: RelationCanListActorTemplates, object: "atespace:team-a"}},
 		},
 		{
 			name:       "ListActorTemplates across all atespaces",
 			fullMethod: ateapi.Control_ListActorTemplates_FullMethodName,
 			req:        &ateapi.ListActorTemplatesRequest{},
-			want:       []check{{RelationCanListActorTemplates, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListActorTemplates, object: GlobalRootObject}},
 		},
 		{
 			name:       "DeleteActorTemplate",
 			fullMethod: ateapi.Control_DeleteActorTemplate_FullMethodName,
 			req:        &ateapi.DeleteActorTemplateRequest{ActorTemplate: localTemplate},
-			want:       []check{{RelationCanDelete, "actor_template:team-a/tmpl"}},
+			want:       []check{{relation: RelationCanDelete, object: "actor_template:team-a/tmpl"}},
 		},
 
 		// Actors.
@@ -104,8 +154,8 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			fullMethod: ateapi.Control_CreateActor_FullMethodName,
 			req:        &ateapi.CreateActorRequest{Actor: &ateapi.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate}},
 			want: []check{
-				{RelationCanCreateActor, "atespace:team-a"},
-				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{relation: RelationCanCreateActor, object: "atespace:team-a"},
+				{relation: RelationCanUseTemplate, object: "actor_template:shared/tmpl"},
 			},
 		},
 		{
@@ -117,9 +167,9 @@ func TestDefaultRPCPermissions(t *testing.T) {
 				SourceTag:     &ateapi.ObjectRef{Atespace: "team-b", Name: "v1"},
 			}},
 			want: []check{
-				{RelationCanCreateActor, "atespace:team-a"},
-				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
-				{RelationCanUseTag, "tag:team-b/v1"},
+				{relation: RelationCanCreateActor, object: "atespace:team-a"},
+				{relation: RelationCanUseTemplate, object: "actor_template:shared/tmpl"},
+				{relation: RelationCanUseTag, object: "tag:team-b/v1"},
 			},
 		},
 		{
@@ -131,43 +181,43 @@ func TestDefaultRPCPermissions(t *testing.T) {
 				SourceTag:     &ateapi.ObjectRef{Atespace: "shared", Name: "0b5c7d4e-golden"},
 			}},
 			want: []check{
-				{RelationCanCreateActor, "atespace:team-a"},
-				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
-				{RelationCanUseTag, "tag:shared/0b5c7d4e-golden"},
+				{relation: RelationCanCreateActor, object: "atespace:team-a"},
+				{relation: RelationCanUseTemplate, object: "actor_template:shared/tmpl"},
+				{relation: RelationCanUseTag, object: "tag:shared/0b5c7d4e-golden"},
 			},
 		},
 		{
 			name:       "GetActor",
 			fullMethod: ateapi.Control_GetActor_FullMethodName,
 			req:        &ateapi.GetActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanGet, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanGet, object: "actor:team-a/runner"}},
 		},
 		{
 			name:       "ListActors in an atespace",
 			fullMethod: ateapi.Control_ListActors_FullMethodName,
 			req:        &ateapi.ListActorsRequest{Atespace: "team-a"},
-			want:       []check{{RelationCanListActors, "atespace:team-a"}},
+			want:       []check{{relation: RelationCanListActors, object: "atespace:team-a"}},
 		},
 		{
 			name:       "ListActors across all atespaces",
 			fullMethod: ateapi.Control_ListActors_FullMethodName,
 			req:        &ateapi.ListActorsRequest{},
-			want:       []check{{RelationCanListActors, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListActors, object: GlobalRootObject}},
 		},
 		{
 			name:       "UpdateActor checks the actor and the template",
 			fullMethod: ateapi.Control_UpdateActor_FullMethodName,
 			req:        &ateapi.UpdateActorRequest{Actor: &ateapi.Actor{Metadata: actorMeta, ActorTemplate: sharedTemplate}},
 			want: []check{
-				{RelationCanUpdate, "actor:team-a/runner"},
-				{RelationCanUseTemplate, "actor_template:shared/tmpl"},
+				{relation: RelationCanUpdate, object: "actor:team-a/runner"},
+				{relation: RelationCanUseTemplate, object: "actor_template:shared/tmpl"},
 			},
 		},
 		{
 			name:       "DeleteActor",
 			fullMethod: ateapi.Control_DeleteActor_FullMethodName,
 			req:        &ateapi.DeleteActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanDelete, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanDelete, object: "actor:team-a/runner"}},
 		},
 
 		// Actor lifecycle.
@@ -175,19 +225,19 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "ResumeActor",
 			fullMethod: ateapi.Control_ResumeActor_FullMethodName,
 			req:        &ateapi.ResumeActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanResume, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanResume, object: "actor:team-a/runner"}},
 		},
 		{
 			name:       "SuspendActor",
 			fullMethod: ateapi.Control_SuspendActor_FullMethodName,
 			req:        &ateapi.SuspendActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanSuspend, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanSuspend, object: "actor:team-a/runner"}},
 		},
 		{
 			name:       "RevertActor",
 			fullMethod: ateapi.Control_RevertActor_FullMethodName,
 			req:        &ateapi.RevertActorRequest{Actor: actorRef},
-			want:       []check{{RelationCanRevert, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanRevert, object: "actor:team-a/runner"}},
 		},
 
 		// Actor egress policies.
@@ -195,25 +245,25 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "GetActorEgressPolicy",
 			fullMethod: ateapi.Control_GetActorEgressPolicy_FullMethodName,
 			req:        &ateapi.GetActorEgressPolicyRequest{Actor: actorRef},
-			want:       []check{{RelationCanGetEgressPolicy, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanGetEgressPolicy, object: "actor:team-a/runner"}},
 		},
 		{
 			name:       "CreateActorEgressPolicy",
 			fullMethod: ateapi.Control_CreateActorEgressPolicy_FullMethodName,
 			req:        &ateapi.CreateActorEgressPolicyRequest{Actor: actorRef},
-			want:       []check{{RelationCanCreateEgressPolicy, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanCreateEgressPolicy, object: "actor:team-a/runner"}},
 		},
 		{
 			name:       "UpdateActorEgressPolicy",
 			fullMethod: ateapi.Control_UpdateActorEgressPolicy_FullMethodName,
 			req:        &ateapi.UpdateActorEgressPolicyRequest{Actor: actorRef},
-			want:       []check{{RelationCanUpdateEgressPolicy, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanUpdateEgressPolicy, object: "actor:team-a/runner"}},
 		},
 		{
 			name:       "DeleteActorEgressPolicy",
 			fullMethod: ateapi.Control_DeleteActorEgressPolicy_FullMethodName,
 			req:        &ateapi.DeleteActorEgressPolicyRequest{Actor: actorRef},
-			want:       []check{{RelationCanDeleteEgressPolicy, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanDeleteEgressPolicy, object: "actor:team-a/runner"}},
 		},
 
 		// Workers.
@@ -221,19 +271,19 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "CreateWorker",
 			fullMethod: ateapi.Control_CreateWorker_FullMethodName,
 			req:        &ateapi.CreateWorkerRequest{},
-			want:       []check{{RelationCanCreateWorker, GlobalRootObject}},
+			want:       []check{{relation: RelationCanCreateWorker, object: GlobalRootObject}},
 		},
 		{
 			name:       "ListWorkers",
 			fullMethod: ateapi.Control_ListWorkers_FullMethodName,
 			req:        &ateapi.ListWorkersRequest{},
-			want:       []check{{RelationCanListWorkers, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListWorkers, object: GlobalRootObject}},
 		},
 		{
 			name:       "GetWorker",
 			fullMethod: ateapi.Control_GetWorker_FullMethodName,
 			req:        &ateapi.GetWorkerRequest{Worker: workerRef},
-			want:       []check{{RelationCanGet, "worker:w-1"}},
+			want:       []check{{relation: RelationCanGet, object: "worker:w-1"}},
 		},
 		{
 			name:       "UpdateWorker",
@@ -241,37 +291,37 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req: &ateapi.UpdateWorkerRequest{Worker: &ateapi.Worker{
 				Metadata: &ateapi.ResourceMetadata{Name: "w-1"},
 			}},
-			want: []check{{RelationCanUpdate, "worker:w-1"}},
+			want: []check{{relation: RelationCanUpdate, object: "worker:w-1"}},
 		},
 		{
 			name:       "DeleteWorker",
 			fullMethod: ateapi.Control_DeleteWorker_FullMethodName,
 			req:        &ateapi.DeleteWorkerRequest{Worker: workerRef},
-			want:       []check{{RelationCanDelete, "worker:w-1"}},
+			want:       []check{{relation: RelationCanDelete, object: "worker:w-1"}},
 		},
 		{
 			name:       "DrainWorker",
 			fullMethod: ateapi.Control_DrainWorker_FullMethodName,
 			req:        &ateapi.DrainWorkerRequest{Worker: workerRef},
-			want:       []check{{RelationCanDrain, "worker:w-1"}},
+			want:       []check{{relation: RelationCanDrain, object: "worker:w-1"}},
 		},
 		{
 			name:       "MarkWorkerAvailable",
 			fullMethod: ateapi.Control_MarkWorkerAvailable_FullMethodName,
 			req:        &ateapi.MarkWorkerAvailableRequest{Worker: workerRef},
-			want:       []check{{RelationCanUpdate, "worker:w-1"}},
+			want:       []check{{relation: RelationCanUpdate, object: "worker:w-1"}},
 		},
 		{
 			name:       "MarkWorkerUnavailable",
 			fullMethod: ateapi.Control_MarkWorkerUnavailable_FullMethodName,
 			req:        &ateapi.MarkWorkerUnavailableRequest{Worker: workerRef},
-			want:       []check{{RelationCanUpdate, "worker:w-1"}},
+			want:       []check{{relation: RelationCanUpdate, object: "worker:w-1"}},
 		},
 		{
 			name:       "ListWorkerActorAssignments",
 			fullMethod: ateapi.Control_ListWorkerActorAssignments_FullMethodName,
 			req:        &ateapi.ListWorkerActorAssignmentsRequest{Worker: workerRef},
-			want:       []check{{RelationCanListActorAssignments, "worker:w-1"}},
+			want:       []check{{relation: RelationCanListActorAssignments, object: "worker:w-1"}},
 		},
 
 		// External volume classes.
@@ -279,49 +329,49 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "CreateExternalVolumeClass",
 			fullMethod: ateapi.Control_CreateExternalVolumeClass_FullMethodName,
 			req:        &ateapi.CreateExternalVolumeClassRequest{},
-			want:       []check{{RelationCanCreateExternalVolumeClass, GlobalRootObject}},
+			want:       []check{{relation: RelationCanCreateExternalVolumeClass, object: GlobalRootObject}},
 		},
 		{
 			name:       "ListExternalVolumeClasses",
 			fullMethod: ateapi.Control_ListExternalVolumeClasses_FullMethodName,
 			req:        &ateapi.ListExternalVolumeClassesRequest{},
-			want:       []check{{RelationCanListExternalVolumeClasses, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListExternalVolumeClasses, object: GlobalRootObject}},
 		},
 		{
 			name:       "GetExternalVolumeClass",
 			fullMethod: ateapi.Control_GetExternalVolumeClass_FullMethodName,
 			req:        &ateapi.GetExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
-			want:       []check{{RelationCanGet, "external_volume_class:nfs-gold"}},
+			want:       []check{{relation: RelationCanGet, object: "external_volume_class:nfs-gold"}},
 		},
 		{
 			name:       "DeleteExternalVolumeClass",
 			fullMethod: ateapi.Control_DeleteExternalVolumeClass_FullMethodName,
 			req:        &ateapi.DeleteExternalVolumeClassRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
-			want:       []check{{RelationCanDelete, "external_volume_class:nfs-gold"}},
+			want:       []check{{relation: RelationCanDelete, object: "external_volume_class:nfs-gold"}},
 		},
 		{
 			name:       "GetExternalVolumeClassAccessPolicy",
 			fullMethod: ateapi.Control_GetExternalVolumeClassAccessPolicy_FullMethodName,
 			req:        &ateapi.GetExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
-			want:       []check{{RelationCanGetAccessPolicy, "external_volume_class:nfs-gold"}},
+			want:       []check{{relation: RelationCanGetAccessPolicy, object: "external_volume_class:nfs-gold"}},
 		},
 		{
 			name:       "CreateExternalVolumeClassAccessPolicy",
 			fullMethod: ateapi.Control_CreateExternalVolumeClassAccessPolicy_FullMethodName,
 			req:        &ateapi.CreateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
-			want:       []check{{RelationCanCreateAccessPolicy, "external_volume_class:nfs-gold"}},
+			want:       []check{{relation: RelationCanCreateAccessPolicy, object: "external_volume_class:nfs-gold"}},
 		},
 		{
 			name:       "UpdateExternalVolumeClassAccessPolicy",
 			fullMethod: ateapi.Control_UpdateExternalVolumeClassAccessPolicy_FullMethodName,
 			req:        &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
-			want:       []check{{RelationCanUpdateAccessPolicy, "external_volume_class:nfs-gold"}},
+			want:       []check{{relation: RelationCanUpdateAccessPolicy, object: "external_volume_class:nfs-gold"}},
 		},
 		{
 			name:       "DeleteExternalVolumeClassAccessPolicy",
 			fullMethod: ateapi.Control_DeleteExternalVolumeClassAccessPolicy_FullMethodName,
 			req:        &ateapi.DeleteExternalVolumeClassAccessPolicyRequest{ExternalVolumeClass: &ateapi.ObjectRef{Name: "nfs-gold"}},
-			want:       []check{{RelationCanDeleteAccessPolicy, "external_volume_class:nfs-gold"}},
+			want:       []check{{relation: RelationCanDeleteAccessPolicy, object: "external_volume_class:nfs-gold"}},
 		},
 
 		// Actor identity credentials.
@@ -329,7 +379,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "MintActorJWT",
 			fullMethod: ateapi.Control_MintActorJwt_FullMethodName,
 			req:        &ateapi.MintActorJwtRequest{Actor: actorRef},
-			want:       []check{{RelationCanMintActorJWT, "actor:team-a/runner"}},
+			want:       []check{{relation: RelationCanMintActorJWT, object: "actor:team-a/runner"}},
 		},
 
 		// Tags.
@@ -340,25 +390,25 @@ func TestDefaultRPCPermissions(t *testing.T) {
 				Metadata:    &ateapi.ResourceMetadata{Atespace: "other", Name: "v1"},
 				SourceActor: actorRef,
 			}},
-			want: []check{{RelationCanCreateTag, "atespace:team-a"}},
+			want: []check{{relation: RelationCanCreateTag, object: "atespace:team-a"}},
 		},
 		{
 			name:       "GetTag",
 			fullMethod: ateapi.Control_GetTag_FullMethodName,
 			req:        &ateapi.GetTagRequest{Tag: tagRef},
-			want:       []check{{RelationCanGet, "tag:team-a/v1"}},
+			want:       []check{{relation: RelationCanGet, object: "tag:team-a/v1"}},
 		},
 		{
 			name:       "ListTags in an atespace",
 			fullMethod: ateapi.Control_ListTags_FullMethodName,
 			req:        &ateapi.ListTagsRequest{Atespace: "team-a"},
-			want:       []check{{RelationCanListTags, "atespace:team-a"}},
+			want:       []check{{relation: RelationCanListTags, object: "atespace:team-a"}},
 		},
 		{
 			name:       "ListTags across all atespaces",
 			fullMethod: ateapi.Control_ListTags_FullMethodName,
 			req:        &ateapi.ListTagsRequest{},
-			want:       []check{{RelationCanListTags, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListTags, object: GlobalRootObject}},
 		},
 		{
 			name:       "UpdateTag",
@@ -366,13 +416,13 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req: &ateapi.UpdateTagRequest{Tag: &ateapi.Tag{
 				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"},
 			}},
-			want: []check{{RelationCanUpdate, "tag:team-a/v1"}},
+			want: []check{{relation: RelationCanUpdate, object: "tag:team-a/v1"}},
 		},
 		{
 			name:       "DeleteTag",
 			fullMethod: ateapi.Control_DeleteTag_FullMethodName,
 			req:        &ateapi.DeleteTagRequest{Tag: tagRef},
-			want:       []check{{RelationCanDelete, "tag:team-a/v1"}},
+			want:       []check{{relation: RelationCanDelete, object: "tag:team-a/v1"}},
 		},
 	}
 
@@ -434,6 +484,20 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			fullMethod: ateapi.Control_CreateActorTemplate_FullMethodName,
 			req:        &ateapi.CreateActorTemplateRequest{},
 			wantField:  "actor_template.metadata.atespace",
+		},
+		{
+			name:       "CreateActorTemplate with invalid external volume class name",
+			fullMethod: ateapi.Control_CreateActorTemplate_FullMethodName,
+			req: &ateapi.CreateActorTemplateRequest{ActorTemplate: &ateapi.ActorTemplate{
+				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
+				Volumes: []*ateapi.Volume{{
+					Name: "data",
+					External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+						ExternalVolumeClass: &ateapi.ObjectRef{Name: "Bad_Name"},
+					}},
+				}},
+			}},
+			wantField: "actor_template.volumes[0].external.template.external_volume_class.name",
 		},
 		{
 			name:       "GetActorTemplate with a name containing a tab",

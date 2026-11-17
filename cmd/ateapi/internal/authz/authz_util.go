@@ -88,6 +88,7 @@ const (
 
 	RelationCanCreateExternalVolumeClass = "can_create_external_volume_class"
 	RelationCanListExternalVolumeClasses = "can_list_external_volume_classes"
+	RelationCanReference                 = "can_reference"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100

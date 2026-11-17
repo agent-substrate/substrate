@@ -88,6 +88,7 @@ type external_volume_class
 
     define can_get: viewer from parent_global or editor from allowed_atespace
     define can_delete: owner from parent_global
+    define can_reference: allowed_atespace
 
 type atespace
   relations
