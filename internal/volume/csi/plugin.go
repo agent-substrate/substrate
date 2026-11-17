@@ -215,7 +215,8 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		// the driver issued, so delete it here rather than leak it.
 		volumeID := resp.GetVolume().GetVolumeId()
 		if delErr := p.DeleteVolume(ctx, volumeID); delErr != nil {
-			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q, and deleting volume %q failed: %w", req.SourceSnapshotID, volumeID, delErr)
+			// %v keeps DeleteVolume's gRPC code out of the CreateVolume error.
+			return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q, and deleting volume %q failed: %v", req.SourceSnapshotID, volumeID, delErr)
 		}
 		return volume.CreateVolumeResponse{}, fmt.Errorf("CSI CreateVolume did not report restoring from requested snapshot %q", req.SourceSnapshotID)
 	}

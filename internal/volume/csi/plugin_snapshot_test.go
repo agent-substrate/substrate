@@ -510,6 +510,9 @@ func TestPlugin_CreateVolume_RestoreSource(t *testing.T) {
 			if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
 				t.Errorf("CreateVolume error = %v, want it to contain %q", err, tt.wantErrContains)
 			}
+			if tt.deleteErr != nil && status.Code(err) != codes.Unknown {
+				t.Errorf("CreateVolume error code = %v, want %v so the cleanup's code doesn't leak", status.Code(err), codes.Unknown)
+			}
 			if resp.ContentSourceSnapshotID != tt.wantSource {
 				t.Errorf("ContentSourceSnapshotID = %q, want %q", resp.ContentSourceSnapshotID, tt.wantSource)
 			}
