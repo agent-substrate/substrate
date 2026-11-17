@@ -427,7 +427,7 @@ func (a *fakeAtelet) respond(resp *ateletpb.GetActorEgressPolicyResponse) {
 
 // serveAtelet serves a fake atelet on the WorkerSupport socket, presenting a
 // certificate issued by ca to the atelet identity ateletID on the test node.
-func serveAtelet(t *testing.T, ca testCA, ateletID string) *fakeAtelet {
+func serveAtelet(t testing.TB, ca testCA, ateletID string) *fakeAtelet {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -533,4 +533,59 @@ func TestTunnelFetchesActorEgressPolicyFromAtelet(t *testing.T) {
 			t.Errorf("request mismatch (-want +got):\n%s", diff)
 		}
 	}
+}
+
+// The tunnel reuses its client connection to atelet across calls, avoiding
+// dialing and TLS handshake churn.
+func TestTunnelReusesSupportConnection(t *testing.T) {
+	cfg, ca := testConfigAndCA(t)
+	tunnel := startTunnel(t, cfg)
+	defer tunnel.Close()
+	_ = serveAtelet(t, ca, cfg.BrokerIdentity)
+
+	conn1, err := tunnel.SupportConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn2, err := tunnel.SupportConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn1 != conn2 {
+		t.Errorf("SupportConn() returned different connections: got %p and %p, want same instance", conn1, conn2)
+	}
+
+	// Invalidate forces a redial
+	tunnel.InvalidateSupportConn(conn1)
+	conn3, err := tunnel.SupportConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn3 == conn1 {
+		t.Errorf("SupportConn() returned same connection after InvalidateSupportConn: %p", conn3)
+	}
+}
+
+func BenchmarkActorEgressPolicyFetch(b *testing.B) {
+	cfg, ca := testConfigAndCA(b)
+	tunnel := startTunnel(b, cfg)
+	defer tunnel.Close()
+	atelet := serveAtelet(b, ca, cfg.BrokerIdentity)
+	policy := &ateletpb.EgressPolicy{Rules: []*ateletpb.EgressRule{{
+		Https: &ateletpb.EgressDestinations{Hostnames: []string{"example.com"}},
+	}}}
+	atelet.respond(&ateletpb.GetActorEgressPolicyResponse{EgressPolicy: policy})
+
+	ctx := context.Background()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			actor := resources.ActorAttribution{Ref: resources.ActorRef{Atespace: "space", Name: "bench"}}
+			source := tunnel.ActorEgressPolicy(actor)
+			_, err := source.EgressPolicy(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

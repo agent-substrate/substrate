@@ -27,7 +27,10 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"sync"
 	"time"
+
+	"google.golang.org/grpc"
 
 	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/atunnel/dns"
@@ -108,6 +111,11 @@ type Tunnel struct {
 	cfg Config
 	// ateletTLS is used to authenticate to atelet to fetch egress policies.
 	ateletTLS *tls.Config
+
+	supportMu        sync.Mutex
+	supportConn      *grpc.ClientConn
+	supportAddr      string
+	supportConnected time.Time
 }
 
 // Start builds the DNS relay and starts serving actor ingress, which proxies
@@ -268,6 +276,59 @@ func (t *Tunnel) Deactivate(ctx context.Context, actor resources.ActorAttributio
 	)
 	if err != nil {
 		return fmt.Errorf("while deactivating actor networking: %w", err)
+	}
+	return nil
+}
+
+const (
+	// workerSupportMaxConnAge bounds how long a shared gRPC connection to atelet is reused
+	// before being gracefully recycled, ensuring freshly rotated worker credentials are picked up.
+	workerSupportMaxConnAge = 10 * time.Minute
+)
+
+// SupportConn returns the shared *grpc.ClientConn to atelet, dialing lazily on first use
+// and reusing the connection across actor policy queries. If the socket path changes
+// or the connection exceeds max connection age, it redials.
+func (t *Tunnel) SupportConn() (*grpc.ClientConn, error) {
+	t.supportMu.Lock()
+	defer t.supportMu.Unlock()
+	currentSocket := nodepath.WorkerSupportSocket
+	if t.supportConn != nil && t.supportAddr == currentSocket && time.Since(t.supportConnected) < workerSupportMaxConnAge {
+		return t.supportConn, nil
+	}
+	if t.supportConn != nil {
+		_ = t.supportConn.Close()
+		t.supportConn = nil
+	}
+	conn, err := ateletdial.Dial(currentSocket, t.ateletTLS)
+	if err != nil {
+		return nil, err
+	}
+	t.supportConn = conn
+	t.supportAddr = currentSocket
+	t.supportConnected = time.Now()
+	return t.supportConn, nil
+}
+
+// InvalidateSupportConn closes and clears the cached connection if it matches conn,
+// forcing a fresh dial on the next request.
+func (t *Tunnel) InvalidateSupportConn(conn *grpc.ClientConn) {
+	t.supportMu.Lock()
+	defer t.supportMu.Unlock()
+	if t.supportConn == conn {
+		_ = t.supportConn.Close()
+		t.supportConn = nil
+	}
+}
+
+// Close closes any shared client connections to atelet.
+func (t *Tunnel) Close() error {
+	t.supportMu.Lock()
+	defer t.supportMu.Unlock()
+	if t.supportConn != nil {
+		err := t.supportConn.Close()
+		t.supportConn = nil
+		return err
 	}
 	return nil
 }

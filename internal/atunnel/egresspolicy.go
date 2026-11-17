@@ -24,11 +24,11 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/internal/ateattr"
-	"go.ate.dev/substrate/internal/ateletdial"
 	"go.ate.dev/substrate/internal/atunnel/dns"
-	"go.ate.dev/substrate/internal/nodepath"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 )
@@ -75,12 +75,15 @@ type actorEgressPolicy struct {
 func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicySource {
 	return &actorEgressPolicy{
 		fetch: func(ctx context.Context) (*ateletpb.EgressPolicy, error) {
-			conn, err := ateletdial.Dial(nodepath.WorkerSupportSocket, t.ateletTLS)
+			conn, err := t.SupportConn()
 			if err != nil {
 				return nil, err
 			}
-			defer conn.Close()
-			return getEgressPolicy(ctx, ateletpb.NewWorkerSupportClient(conn), actor.Ref)
+			policy, err := getEgressPolicy(ctx, ateletpb.NewWorkerSupportClient(conn), actor.Ref)
+			if err != nil && status.Code(err) == codes.Unavailable {
+				t.InvalidateSupportConn(conn)
+			}
+			return policy, err
 		},
 		ttl: egressPolicyTTL,
 		now: time.Now,
