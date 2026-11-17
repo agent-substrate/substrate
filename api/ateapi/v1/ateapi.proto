@@ -1167,9 +1167,10 @@ message ExternalVolumeSnapshot {
   // +k8s:immutable
   ExternalVolumeSnapshotOrigin origin = 3;
 
-  // status is set by the control plane; it is ignored on write.
+  // status is set by the control plane.
   //
   // +k8s:optional
+  // +k8s:update=NoUnset # dropping the status would bypass its update rules
   ExternalVolumeSnapshotStatus status = 4;
 }
 
@@ -1222,7 +1223,12 @@ message TagVolumeSnapshotOrigin {
 }
 
 // ExternalVolumeSnapshotStatus is the server-owned state of an
-// ExternalVolumeSnapshot.
+// ExternalVolumeSnapshot. Readers derive the snapshot's lifecycle from these
+// fields: it failed if `error_message` is set, it is pending until
+// `snapshot_id` is recorded, and it can seed new volumes once `ready_to_use`
+// is true.
+//
+// +k8s:customValidation # the fields that need `snapshot_id`, and when `error_message` may be cleared
 message ExternalVolumeSnapshotStatus {
   // snapshot_id is the snapshot handle returned by the storage system. It is
   // empty until the storage system returns it, and does not change once set.

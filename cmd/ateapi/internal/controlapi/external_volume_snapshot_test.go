@@ -54,13 +54,18 @@ func TestServiceImplExternalVolumeSnapshotValidation(t *testing.T) {
 		}
 	}
 
-	invalid := snapshot("invalid")
-	invalid.Origin.TagCapture.SourceVolumeId = "disk\x00"
-	if _, err := svc.CreateExternalVolumeSnapshot(ctx, invalid); apierror.Code(err) != codes.Internal {
-		t.Errorf("CreateExternalVolumeSnapshot(invalid) = %v, want Internal", err)
-	}
-	if _, err := svc.GetExternalVolumeSnapshot(ctx, resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(invalid)); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetExternalVolumeSnapshot after an invalid create = %v, want ErrNotFound", err)
+	invalidOrigin := snapshot("invalid-origin")
+	invalidOrigin.Origin.TagCapture.SourceVolumeId = "disk\x00"
+	invalidStatus := snapshot("invalid-status")
+	invalidStatus.Status = &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"}
+	for _, invalid := range []*ateapi.ExternalVolumeSnapshot{invalidOrigin, invalidStatus} {
+		name := invalid.GetMetadata().GetName()
+		if _, err := svc.CreateExternalVolumeSnapshot(ctx, invalid); apierror.Code(err) != codes.Internal {
+			t.Errorf("CreateExternalVolumeSnapshot(%s) = %v, want Internal", name, err)
+		}
+		if _, err := svc.GetExternalVolumeSnapshot(ctx, resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(invalid)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetExternalVolumeSnapshot(%s) after an invalid create = %v, want ErrNotFound", name, err)
+		}
 	}
 
 	created, err := svc.CreateExternalVolumeSnapshot(ctx, snapshot("data"))
@@ -88,7 +93,12 @@ func TestServiceImplExternalVolumeSnapshotValidation(t *testing.T) {
 		t.Errorf("updated snapshot = %v, want the handle recorded", ready)
 	}
 
-	// Each of these results would pass create validation.
+	failedSnapshot := snapshot("logs")
+	failedSnapshot.Status = &ateapi.ExternalVolumeSnapshotStatus{ErrorMessage: "quota exceeded"}
+	failed, err := svc.CreateExternalVolumeSnapshot(ctx, failedSnapshot)
+	if err != nil {
+		t.Fatalf("CreateExternalVolumeSnapshot(failed) failed: %v", err)
+	}
 	for _, tc := range []struct {
 		name          string
 		stored        *ateapi.ExternalVolumeSnapshot
@@ -104,6 +114,26 @@ func TestServiceImplExternalVolumeSnapshotValidation(t *testing.T) {
 			name:   "changing the handle",
 			stored: ready,
 			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SnapshotId = "other-handle" },
+		},
+		{
+			name:   "dropping the status",
+			stored: ready,
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status = nil },
+		},
+		{
+			name:   "an error while the handle is set",
+			stored: ready,
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "quota exceeded" },
+		},
+		{
+			name:   "clearing the error without a handle",
+			stored: failed,
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "" },
+		},
+		{
+			name:   "readiness without a handle",
+			stored: failed,
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ReadyToUse = true },
 		},
 		{
 			name:          "changing driver_name",
@@ -140,5 +170,19 @@ func TestServiceImplExternalVolumeSnapshotValidation(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Errorf("UpdateExternalVolumeSnapshot of a legacy snapshot's status failed: %v", err)
+	}
+
+	// A status rule is not re-checked while its fields are unchanged.
+	legacyStatus := snapshot("legacy-status")
+	legacyStatus.Status = &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"}
+	legacyStatus, err = persistence.CreateExternalVolumeSnapshot(ctx, legacyStatus)
+	if err != nil {
+		t.Fatalf("storing a legacy snapshot: %v", err)
+	}
+	if _, err := svc.UpdateExternalVolumeSnapshot(ctx, resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(legacyStatus), store.PreconditionFrom(legacyStatus), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+		toUpdate.Status.ReadyToUse = true
+		return nil
+	}); err != nil {
+		t.Errorf("UpdateExternalVolumeSnapshot of a legacy snapshot's readiness failed: %v", err)
 	}
 }

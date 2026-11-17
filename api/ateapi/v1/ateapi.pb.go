@@ -2677,9 +2677,10 @@ type ExternalVolumeSnapshot struct {
 	// +k8s:required
 	// +k8s:immutable
 	Origin *ExternalVolumeSnapshotOrigin `protobuf:"bytes,3,opt,name=origin,proto3" json:"origin,omitempty"`
-	// status is set by the control plane; it is ignored on write.
+	// status is set by the control plane.
 	//
 	// +k8s:optional
+	// +k8s:update=NoUnset # dropping the status would bypass its update rules
 	Status        *ExternalVolumeSnapshotStatus `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2890,7 +2891,12 @@ func (x *TagVolumeSnapshotOrigin) GetSourceVolumeId() string {
 }
 
 // ExternalVolumeSnapshotStatus is the server-owned state of an
-// ExternalVolumeSnapshot.
+// ExternalVolumeSnapshot. Readers derive the snapshot's lifecycle from these
+// fields: it failed if `error_message` is set, it is pending until
+// `snapshot_id` is recorded, and it can seed new volumes once `ready_to_use`
+// is true.
+//
+// +k8s:customValidation # the fields that need `snapshot_id`, and when `error_message` may be cleared
 type ExternalVolumeSnapshotStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// snapshot_id is the snapshot handle returned by the storage system. It is

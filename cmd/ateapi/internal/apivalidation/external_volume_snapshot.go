@@ -76,3 +76,29 @@ func ValidateCustom_TagVolumeSnapshotOrigin_SourceVolumeId(_ context.Context, _ 
 func ValidateCustom_ExternalVolumeSnapshotStatus_SnapshotId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidateStorageVolumeID(fldPath, *value)
 }
+
+// ValidateCustom_ExternalVolumeSnapshotStatus checks the status fields
+// against each other. snapshot_id and error_message are never both set, and
+// ready_to_use and restore_size_bytes need snapshot_id. On update, only the
+// write that records snapshot_id may clear error_message. An update does not
+// re-check a rule whose fields it left unchanged.
+func ValidateCustom_ExternalVolumeSnapshotStatus(_ context.Context, op operation.Operation, fldPath *field.Path, status, oldStatus *ateapi.ExternalVolumeSnapshotStatus) field.ErrorList {
+	update := op.Type == operation.Update
+	id, oldID := status.GetSnapshotId(), oldStatus.GetSnapshotId()
+	msg, oldMsg := status.GetErrorMessage(), oldStatus.GetErrorMessage()
+	var errs field.ErrorList
+	if id != "" && msg != "" && !(update && id == oldID && msg == oldMsg) {
+		errs = append(errs, field.Forbidden(fldPath.Child("error_message"), "may not be set together with snapshot_id"))
+	}
+	if id == "" && status.GetReadyToUse() && !(update && oldID == "" && oldStatus.GetReadyToUse()) {
+		errs = append(errs, field.Forbidden(fldPath.Child("ready_to_use"), "may not be set without snapshot_id"))
+	}
+	size := status.GetRestoreSizeBytes()
+	if id == "" && size > 0 && !(update && oldID == "" && size == oldStatus.GetRestoreSizeBytes()) {
+		errs = append(errs, field.Forbidden(fldPath.Child("restore_size_bytes"), "may not be set without snapshot_id"))
+	}
+	if update && oldMsg != "" && msg == "" && (oldID != "" || id == "") {
+		errs = append(errs, field.Forbidden(fldPath.Child("error_message"), "may be cleared only by the write that records snapshot_id"))
+	}
+	return errs
+}
