@@ -51,11 +51,13 @@ the latest snapshot first if it isn't durable yet, and keeps it until the upload
 succeeds, so a failing object store fills the disk faster.
 
 Size the disk that holds `/var/lib/ate/snapshots` for this. On the boot disk, it
-has to fit above the kubelet's `nodefs.available` eviction threshold, which
-[defaults to 10% of the disk](https://github.com/kubernetes/kubernetes/blob/a972b672c7612c4892557f3d6d2a952c741c5d1f/pkg/kubelet/eviction/defaults_linux.go#L24).
-A dedicated snapshot disk keeps this data off the boot disk, but it needs the
-same size. The kubelet doesn't watch that disk, so when it fills, the node gets
-no condition and atelet can't write new snapshots there.
+has to fit above the kubelet's `evictionHard` thresholds. Their
+[defaults](https://github.com/kubernetes/kubernetes/blob/a972b672c7612c4892557f3d6d2a952c741c5d1f/pkg/kubelet/eviction/defaults_linux.go#L22-L28)
+are 10% free for `nodefs.available`, and 15% free for `imagefs.available` on
+the disk that holds container images, which is often the boot disk. A
+dedicated snapshot disk keeps this data off the boot disk, but it needs the
+same size. The kubelet doesn't watch that disk, so when it fills, the node
+gets no condition and atelet can't write new snapshots there.
 
 ## When the Boot Disk Runs Out of Space
 
@@ -75,7 +77,7 @@ On GKE, [node auto-repair](https://docs.cloud.google.com/kubernetes-engine/docs/
 recreates a node whose boot disk stays out of space for about 30 minutes. The
 default `--snapshot-detach-delay` is also 30 minutes, so snapshots alone can
 hold the disk that long. The new boot disk starts empty, so any snapshot not
-yet uploaded is lost, along with every actor still running on the node.
+yet uploaded is lost.
 
 To recover sooner, lower `--snapshot-detach-delay`. It can't be shorter than
 `--snapshot-upload-delay`, which defaults to 5 minutes. An actor that resumes
