@@ -163,6 +163,8 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 	log := log.FromContext(ctx)
 	log.Info("Reconciling worker pool")
 
+	// The cache holds only Deployments with workerPoolLabel (CacheOptions). One
+	// without it reads as not found here, and the apply at the end labels it.
 	existing := &appsv1.Deployment{}
 	if err := r.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, existing); err != nil {
 		if !k8errors.IsNotFound(err) {

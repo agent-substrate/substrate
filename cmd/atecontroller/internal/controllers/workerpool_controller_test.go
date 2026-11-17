@@ -53,6 +53,8 @@ import (
 var (
 	cfg       *rest.Config
 	k8sClient client.Client
+	// cachedClient reads from the manager cache, as the reconcilers do.
+	cachedClient client.Client
 )
 
 func TestMain(m *testing.M) {
@@ -74,11 +76,13 @@ func TestMain(m *testing.M) {
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
+		Cache:                  CacheOptions(EgressMITMCAPoolRef(installdefaults.SystemNamespace)),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "manager creation failed: %v\n", err)
 		os.Exit(1)
 	}
+	cachedClient = mgr.GetClient()
 
 	if err := (&WorkerPoolReconciler{
 		Client:    mgr.GetClient(),
