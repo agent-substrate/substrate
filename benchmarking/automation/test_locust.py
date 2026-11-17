@@ -16,7 +16,10 @@
 python3 benchmarking/automation/test_locust.py"""
 
 import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import yaml
@@ -24,6 +27,8 @@ import yaml
 import controlplane
 import orchestrator
 from testtypes import locust
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def entry(**fields):
@@ -121,6 +126,55 @@ class TestsYamlTest(unittest.TestCase):
         with open(path) as f:
             tests = yaml.safe_load(f)["tests"]
         orchestrator.validate_and_normalize_tests(tests)
+
+
+class StubPathTest(unittest.TestCase):
+    def test_picks_the_tests_entry(self):
+        self.assertEqual(locust.stub_path(entry()), "benchmarking/locust/tests/resumepaused.py")
+
+    def test_needs_one_tests_entry(self):
+        for file in ("/app/shapes/ladder_shape.py", "/app/tests/a.py,/app/tests/b.py"):
+            with self.subTest(file=file), self.assertRaises(ValueError):
+                locust.validate(entry(file=file))
+
+
+class WorkloadsTest(unittest.TestCase):
+    def setUp(self):
+        # Stub paths are relative to the repo root, where the orchestrator runs.
+        cwd = os.getcwd()
+        os.chdir(REPO_ROOT)
+        self.addCleanup(os.chdir, cwd)
+        # The orchestrator image has no locust; make importing it fail here too.
+        patcher = mock.patch.dict(sys.modules, {"locust": None})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def installed(self, test):
+        with mock.patch("testtypes.locust.install_all") as install_all:
+            locust.workloads(test)
+        install_all.assert_called_once()
+        return install_all.call_args.args[0]
+
+    def test_every_tests_yaml_stub_loads_without_locust(self):
+        with open(REPO_ROOT / "benchmarking/automation/tests.yaml") as f:
+            tests = yaml.safe_load(f)["tests"]
+        for test in tests:
+            if test["type"] != "locust":
+                continue
+            with self.subTest(test=test["name"]):
+                self.assertEqual(self.installed(test), [("deploy_sh", test)])
+        self.assertNotIn(locust.NO_USERS_ENV, os.environ)
+
+    def test_stub_that_needs_locust_fails(self):
+        with self.assertRaisesRegex(ValueError, "must load without locust"):
+            self.installed(entry(file="/app/tests/sleep.py"))
+
+    def test_stub_without_workloads_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "bare.py").write_text("")
+            with mock.patch.object(locust, "REPO_STUB_DIR", d):
+                with self.assertRaisesRegex(ValueError, "does not define workloads"):
+                    self.installed(entry(file="/app/tests/bare.py"))
 
 
 if __name__ == "__main__":

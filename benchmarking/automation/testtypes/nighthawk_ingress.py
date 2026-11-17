@@ -26,6 +26,7 @@ import re
 from typing import Any
 
 from util import build_and_push, parse_duration_seconds, run
+from workloads import install_all
 
 TEST_TYPE = "nighthawk-ingress"
 
@@ -176,6 +177,11 @@ def pre_test(test: dict[str, Any]) -> None:
             "--timeout=300s",
         ]
     )
+
+
+def workloads(test: dict[str, Any]) -> None:
+    """Every nighthawk-ingress test uses deploy.sh's default workloads."""
+    install_all([("deploy_sh", test)])
 
 
 def job_subs(test: dict[str, Any]) -> dict[str, Any]:

@@ -20,15 +20,28 @@ The runner Job wraps benchmarking/locust/runner.py, which drives locust
 An optional `controlPlane:` block shapes ate-api-server and Postgres for a
 capacity run (see controlplane.py); without it pre_test leaves the cluster
 as installed.
+
+The test's stub (the /app/tests/ entry in `file`) says which workloads the
+test needs, through a workloads(test) function that returns (name, config)
+pairs for workloads.install_all.
 """
 
+import importlib.util
 import os
 from typing import Any
 
 import controlplane
 from util import build_and_push
+from workloads import install_all
 
 TEST_TYPE = "locust"
+
+# The runner image's stub directory, and where the stubs are in the repo.
+IMAGE_STUB_DIR = "/app/tests/"
+REPO_STUB_DIR = "benchmarking/locust/tests"
+# Set while the orchestrator loads a stub, so the stub skips its locust
+# imports and User class. The orchestrator image has no locust.
+NO_USERS_ENV = "LOCUST_NO_USERS"
 
 
 def control_plane_config(test: dict[str, Any]) -> dict[str, Any] | None:
@@ -38,11 +51,23 @@ def control_plane_config(test: dict[str, Any]) -> dict[str, Any] | None:
     return controlplane.config(test["controlPlane"])
 
 
+def stub_path(test: dict[str, Any]) -> str:
+    """The repo path of the test's stub. Raises ValueError unless `file`
+    has exactly one /app/tests/ entry."""
+    stubs = [f for f in str(test["file"]).split(",") if f.startswith(IMAGE_STUB_DIR)]
+    if len(stubs) != 1:
+        raise ValueError(
+            f"locust test {test.get('name')!r}: file needs one {IMAGE_STUB_DIR} entry, got {test['file']!r}"
+        )
+    return os.path.join(REPO_STUB_DIR, stubs[0].removeprefix(IMAGE_STUB_DIR))
+
+
 def validate(test: dict[str, Any]) -> None:
     name = test.get("name")
     for field in ("file", "duration", "users"):
         if field not in test:
             raise ValueError(f"locust test {name!r} missing {field!r}")
+    stub_path(test)
     if "controlPlane" not in test:
         return
     try:
@@ -66,6 +91,28 @@ def pre_test(test: dict[str, Any]) -> None:
     if cfg is None:
         return
     controlplane.shape(cfg)
+
+
+def workloads(test: dict[str, Any]) -> None:
+    """Install the workloads the test's stub asks for. Runs from the repo
+    root of the branch under test, so the stub comes from that branch."""
+    path = stub_path(test)
+    spec = importlib.util.spec_from_file_location("locust_stub", path)
+    stub = importlib.util.module_from_spec(spec)
+    prev = os.environ.get(NO_USERS_ENV)
+    os.environ[NO_USERS_ENV] = "1"
+    try:
+        spec.loader.exec_module(stub)
+    except ImportError as e:
+        raise ValueError(f"{path} must load without locust when {NO_USERS_ENV}=1: {e}") from e
+    finally:
+        if prev is None:
+            del os.environ[NO_USERS_ENV]
+        else:
+            os.environ[NO_USERS_ENV] = prev
+    if not hasattr(stub, "workloads"):
+        raise ValueError(f"{path} does not define workloads(test)")
+    install_all(stub.workloads(test))
 
 
 def job_tmpl(manifests_dir: str) -> str:

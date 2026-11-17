@@ -26,8 +26,8 @@ contract). The flow, with the type hooks marked:
         the runner image build [hook: build_image] are cached per
         target cluster.
      b. Sweep leftovers, deploy substrate, let the type shape the
-        cluster [hook: pre_test], deploy workloads (+ microvm deps when
-        the sandbox class needs them).
+        cluster [hook: pre_test], install the test's workloads
+        [hook: workloads].
      c. Render the type's Job template [hooks: job_tmpl, job_subs],
         submit it, wait, tail logs, delete the Job.
      d. Tear substrate + workloads down again so tests don't pollute
@@ -56,7 +56,6 @@ from testtypes import TYPES
 from util import (
     isolate_block,
     isolate_install_args,
-    isolate_workload_args,
     parse_duration_seconds,
     run,
     run_no_check,
@@ -443,47 +442,6 @@ def teardown_substrate() -> None:
     run_no_check(["go", "run", "./cmd/ate-setup", "delete", "ate-system"])
 
 
-def deploy_workloads(
-    worker_count: int = 1,
-    sandbox_class: str = "gvisor",
-    actor_memory: str = "",
-    wait_timeout_secs: int | str = "",
-    worker_memory: str = "",
-    fake_atelet_args: Iterable[str] = (),
-    actor_cpu: str = "",
-) -> None:
-    cmd = [
-        "benchmarking/workloads/deploy.sh",
-        "--deploy",
-        "--worker-count",
-        str(worker_count),
-        "--sandbox-class",
-        sandbox_class,
-    ]
-    # Empty keeps the default in workloads/deploy.sh (256Mi); RAM-consuming
-    # suites set actorMemory in tests.yaml.
-    if actor_memory:
-        cmd += ["--actor-memory", actor_memory]
-    # Empty keeps the default in workloads/deploy.sh (1 CPU). The scheduler
-    # books the limit against worker CPU capacity, so dense suites set
-    # actorCPU in tests.yaml to fit more actors per worker.
-    # str() because a whole number of cores (actorCPU: 1) parses as an int.
-    if actor_cpu:
-        cmd += ["--actor-cpu", str(actor_cpu)]
-    # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
-    # control how many workers the scheduler packs onto a node.
-    if worker_memory:
-        cmd += ["--worker-memory", worker_memory]
-    # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
-    # (whole seconds).
-    if wait_timeout_secs != "":
-        cmd += ["--wait-timeout", str(wait_timeout_secs)]
-    # An isolate block's tuning of fake-atelet, on the fake data plane.
-    cmd += list(fake_atelet_args)
-    # deploy.sh itself blocks until every template's golden snapshot exists.
-    run(cmd)
-
-
 def teardown_workloads() -> None:
     run_no_check(["benchmarking/workloads/deploy.sh", "--delete"])
 
@@ -645,22 +603,13 @@ def main() -> None:
             teardown_workloads()
             teardown_substrate()
 
-            sandbox_class = test.get("sandboxClass", "gvisor")
             status = "error"
             failure_msg = None
             start_time = time.time()
             try:
                 deploy_substrate(substrate_args(test))
                 TYPES[ttype].pre_test(test)
-                deploy_workloads(
-                    test.get("workerCount", 1),
-                    sandbox_class,
-                    test.get("actorMemory", ""),
-                    test.get("workerWaitTimeout", ""),
-                    test.get("workerMemory", ""),
-                    isolate_workload_args(test),
-                    test.get("actorCPU", ""),
-                )
+                TYPES[ttype].workloads(test)
                 try:
                     status = run_test(
                         test,
