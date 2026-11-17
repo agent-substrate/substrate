@@ -467,6 +467,11 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
     """Fail fast (ValueError) on malformed entries, before any cluster
     work: the type-independent fields here, everything else via the
     type's validate hook."""
+    names = [t.get("name") for t in tests]
+    duplicates = sorted({n for n in names if names.count(n) > 1}, key=str)
+    if duplicates:
+        # A run is stored under its test's name and the invocation's run_ts.
+        raise ValueError(f"test names must be unique: {', '.join(map(str, duplicates))}")
     for t in tests:
         name = t.get("name")
         if not t.get("targetCluster"):
@@ -492,6 +497,9 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         if ttype == "locust":
             # A malformed --metadata fails here rather than mid-sweep.
             split_metadata_flag(t)
+        elif "evaluations" in t:
+            # Only the locust runner judges evaluations (runner.py --test-entry).
+            raise ValueError(f"test {name!r}: 'evaluations' is supported only for type locust")
         isolate_block(t)
 
 
@@ -585,6 +593,7 @@ def run_test(
     image: str,
     dest: str,
     commit: str,
+    run_ts: int,
     manifests_dir: str = MANIFESTS_DIR,
 ) -> str:
     name = test["name"]
@@ -595,6 +604,7 @@ def run_test(
         "TAG": commit,
         "NAME": name,
         "DEST": dest,
+        "RUN_TS": run_ts,
     }
     mod = TYPES[test_type(test)]
     tmpl = mod.job_tmpl(manifests_dir)
@@ -606,6 +616,9 @@ def run_test(
     if test_type(test) == "locust":
         flags, own = split_metadata_flag(test)
         flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+        # The whole entry, so runner features (such as observers or evaluations)
+        # read what they need without adding a new flag per field.
+        flags += ["--test-entry", json.dumps(test)]
     manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)
@@ -685,6 +698,11 @@ def main() -> None:
     atexit.register(kubeconfig_dir.cleanup)
     kubeconfig = str(Path(kubeconfig_dir.name) / "kubeconfig")
     _ORIG_ENV["KUBECONFIG"] = os.environ["KUBECONFIG"] = kubeconfig
+
+    # Every run of this invocation is stored under this timestamp (runner.py
+    # --run-ts), so a run finds another test's run of the invocation by it.
+    run_ts = int(time.time())
+    print(f"Storing runs under run_ts={run_ts}", flush=True)
 
     # Config-independent setup: docker, then the substrate checkout.
     wait_for_docker()
@@ -776,6 +794,7 @@ def main() -> None:
                         images[ttype],
                         args.dest,
                         tag,
+                        run_ts,
                         args.manifests_dir,
                     )
                     if status != "complete":

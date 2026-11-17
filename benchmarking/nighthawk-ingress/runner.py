@@ -69,6 +69,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Root destination (gs://bucket/path or local path)",
     )
+    p.add_argument(
+        "--run-ts",
+        type=int,
+        default=None,
+        help="Unix seconds that name where the run is stored, shared by every run of one invocation. Default: now",
+    )
     p.add_argument("--envoy-cpu", required=True, type=int, dest="envoy_cpu")
     p.add_argument("--actors", type=int, default=100)
     # Event loops and per-loop pools are sized so the client never binds
@@ -213,9 +219,10 @@ def main() -> None:
     work_dir = Path(f"/tmp/{now.strftime('%Y%m%dT%H%M%SZ')}-nighthawk-runner")
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    stored_at = now if args.run_ts is None else datetime.fromtimestamp(args.run_ts, timezone.utc)
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
-        f"/run_date={now.strftime('%Y-%m-%d')}/run_ts={int(now.timestamp())}"
+        f"/run_date={stored_at.strftime('%Y-%m-%d')}/run_ts={int(stored_at.timestamp())}"
         f"/run_tag={args.tag}"
     )
 

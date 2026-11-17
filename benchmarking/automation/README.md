@@ -55,6 +55,9 @@ To run the cold resume tests from your workstation instead, see
      (`runner-job.yaml.tmpl` for locust,
      `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress,
      `nighthawk-egress-runner-job.yaml.tmpl` for nighthawk-egress).
+     Every Job gets `--run-ts`, one timestamp for the whole invocation,
+     which names where each run is stored, so all runs of an invocation
+     share their `run_ts=` path segment.
      A locust Job also gets `--metadata` with the target cluster's name,
      location and project, merged with the `BENCHMARK_METADATA` environment
      variable (a JSON object) if set. A `--metadata` in the test's own
@@ -222,13 +225,18 @@ gcloud projects add-iam-policy-binding <TEST_PROJECT_ID> \
 ```
 
 **Runner Job pod** (KSA `benchmark-runner` in namespace `benchmarking` on the
-test cluster's project) needs `roles/storage.objectUser` on the destination
-bucket so `runner.py` can upload results:
+test cluster's project) needs `roles/storage.objectCreator` on the destination
+bucket so `runner.py` can upload results, and `roles/storage.objectViewer` so
+that a `cel` input with a `from_test` can find and read that test's run (such as
+the suite's 1-user run) under `--dest` (without it, the variable is
+`invalid` and says why):
 
 ```bash
 RUNNER_PRINCIPAL="principal://iam.googleapis.com/projects/<TEST_PROJECT_NUMBER>/locations/global/workloadIdentityPools/<TEST_PROJECT_ID>.svc.id.goog/subject/ns/benchmarking/sa/benchmark-runner"
 gcloud storage buckets add-iam-policy-binding gs://<DEST_BUCKET> \
   --role=roles/storage.objectCreator --member="${RUNNER_PRINCIPAL}"
+gcloud storage buckets add-iam-policy-binding gs://<DEST_BUCKET> \
+  --role=roles/storage.objectViewer --member="${RUNNER_PRINCIPAL}"
 ```
 
 ## Updating tests

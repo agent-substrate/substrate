@@ -28,3 +28,6 @@ opentelemetry-instrumentation-grpc
 opentelemetry-instrumentation-requests
 google-cloud-storage
 kubernetes
+# Run evaluations (benchmarking/evaluate/requirements.txt).
+cel-expr-python==0.1.3
+pydantic>=2

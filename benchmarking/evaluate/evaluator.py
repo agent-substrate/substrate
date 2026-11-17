@@ -23,19 +23,21 @@ reads it fails to evaluate. A condition passes, fails, or is invalid when it
 fails to evaluate. An evaluation fails if any condition failed, else is invalid
 if any condition or variable is invalid, else passes: a source failure never
 lets an evaluation pass. The run summary combines the evaluations as
-fail, else invalid, else pass.
+fail, else invalid, else pass. A Report writes itself as evaluation.json and as
+rows for the run's stats.jsonl.
 """
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Final, Literal, Mapping, NamedTuple, Optional, Sequence
 
 from . import cel_env
 from .config import Condition, Evaluation, to_json
 from .sources import SOURCES
-from .sources.base import BenchmarkRunContext, Scalar, Source, SourceInvalid
+from .sources.base import BenchmarkRunContext, RunIdentity, Scalar, Source, SourceInvalid
 
 Status = Literal["pass", "fail", "invalid"]
 PASS: Final = "pass"
@@ -85,9 +87,85 @@ class Summary:
 class Report:
     """A run judged against its evaluations."""
     run: Mapping[str, str]  # which run was judged: its RunIdentity.record()
-    evaluated_at: str
+    evaluated_at: Optional[str]  # None when the evaluations failed to load
+    error: Optional[str]  # why the evaluations failed to load, None when they loaded
     summary: Summary
     evaluations: tuple[EvaluationResult, ...]
+
+    def write_json(self, path: Path) -> None:
+        """Writes the report to path as JSON (evaluation.json)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(asdict(self), indent=2, allow_nan=False) + "\n", encoding="utf-8")
+
+    def stats_rows(self, timestamp: str) -> list[dict[str, Any]]:
+        """Rows for the run's stats.jsonl, with its five keys (timestamp, tag,
+        test_name, metric, measurements) and string measurements, so the
+        existing pipeline picks them up: one `evaluation_<name>` row per
+        evaluation, then an `evaluations` row for the summary.
+
+        An evaluation's row has its status, passed, reason, failed_conditions and
+        invalid_conditions, and each value of each variable as <variable>__<value
+        name>, so a dashboard reads the numbers next to the verdict. Variable names
+        come from the config, and value names follow the query hook's rule
+        (sources/base.py), so the keys stay bounded. A variable name has no "__"
+        and doesn't end in "_" (config.py), so no two values share a key. A report
+        whose evaluations failed to load gets only the summary row, carrying the
+        error.
+        """
+        def row(metric: str, measurements: dict[str, Any]) -> dict[str, Any]:
+            return {"timestamp": timestamp, "tag": self.run.get("tag", ""),
+                    "test_name": self.run.get("test_name", ""), "metric": metric,
+                    "measurements": {k: _measurement(v) for k, v in measurements.items()}}
+
+        rows = []
+        for ev in self.evaluations:
+            m: dict[str, Any] = {
+                "status": ev.status, "passed": ev.passed, "reason": ev.reason,
+                "failed_conditions": ",".join(c.name for c in ev.conditions if c.status == FAIL),
+                "invalid_conditions": ",".join(c.name for c in ev.conditions if c.status == INVALID),
+            }
+            for var in ev.variables:
+                for name, value in var.values.items():
+                    m[f"{var.name}__{name}"] = value
+            rows.append(row(f"evaluation_{ev.name}", m))
+        s = self.summary
+        rows.append(row(SUMMARY_METRIC, {"status": s.status, "passed": s.passed, "failed": ",".join(s.failed),
+                                         "invalid": ",".join(s.invalid), "error": self.error or ""}))
+        return rows
+
+    def append_stats_rows(self, path: Path, timestamp: str) -> None:
+        """Appends stats_rows(timestamp) to path."""
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in self.stats_rows(timestamp)))
+
+    def summary_lines(self) -> list[str]:
+        """One line per evaluation, with failed or invalid condition reasons, for logs."""
+        if self.error:
+            return [f"evaluations not run: {self.error}"]
+        lines = []
+        for ev in self.evaluations:
+            line = f"evaluation {ev.name}: {ev.status}"
+            if ev.reason:
+                line += f" ({ev.reason})"
+            details = list(dict.fromkeys(c.reason for c in ev.conditions if c.reason))
+            lines.append(line + "".join(f"\n  {d}" for d in details))
+        lines.append(f"summary: {self.summary.status} ({len(self.evaluations)} evaluations)")
+        return lines
+
+
+# The summary row's metric, which no evaluation_<name> can equal.
+SUMMARY_METRIC = "evaluations"
+
+
+def _measurement(v: Any) -> Optional[str]:
+    """v as a stats.jsonl measurement: a string, or None."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v)) if abs(v) < 1e15 else repr(v)
+    return str(v)
 
 
 class ResolvedValues(NamedTuple):
@@ -143,7 +221,8 @@ class Evaluator:
                 name=ev.name, description=ev.description, status=status, passed=status == PASS, reason=reason,
                 conditions=conditions, variables=tuple(variables), config=echoed))
         status, failed, invalid = _combine(evaluation_results)
-        return Report(run=self.run.identity.record(), evaluated_at=now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        return Report(run=self.run.identity.record(),
+                      evaluated_at=now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), error=None,
                       summary=Summary(status=status, passed=status == PASS, failed=failed, invalid=invalid),
                       evaluations=tuple(evaluation_results))
 
@@ -168,6 +247,12 @@ class Evaluator:
                                           "bool, string or null")
         values = {k: None if isinstance(v, float) and not math.isfinite(v) else v for k, v in raw.items()}
         return ResolvedValues(values, invalid_reason)
+
+
+def error_report(identity: RunIdentity, error: str) -> Report:
+    """The Report of evaluations that failed to load: no verdict, and why."""
+    return Report(run=identity.record(), evaluated_at=None, error=error,
+                  summary=Summary(status=INVALID, passed=False, failed=(), invalid=()), evaluations=())
 
 
 def _combine(results: Sequence[ConditionResult | EvaluationResult]) -> tuple[Status, tuple[str, ...], tuple[str, ...]]:

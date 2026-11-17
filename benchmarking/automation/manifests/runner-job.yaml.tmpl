@@ -14,7 +14,7 @@
 
 # Per-test Job manifest. Rendered by orchestrator.py at runtime; placeholders
 # (${JOB_NAME}, ${IMAGE}, ${TEST_FILE}, ${DURATION}, ${USERS}, ${TAG},
-# ${NAME}, ${DEST}) are substituted before kubectl apply.
+# ${NAME}, ${DEST}, ${RUN_TS}) are substituted before kubectl apply.
 
 apiVersion: v1
 kind: Namespace
@@ -172,6 +172,8 @@ spec:
         - "${NAME}"
         - "--dest"
         - "${DEST}"
+        - "--run-ts"
+        - "${RUN_TS}"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
