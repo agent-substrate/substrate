@@ -171,7 +171,8 @@ type Interface interface {
 	// metadata.delete_time if unset and applies mutate, if non-nil, so callers can
 	// update the tag's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
-	// write wins, or mutate's error.
+	// write wins, ErrFailedPrecondition, leaving the tag unchanged, if the tag
+	// owns ExternalVolumeSnapshots, or mutate's error.
 	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing,
@@ -181,12 +182,12 @@ type Interface interface {
 	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions) (*ateapi.Tag, error)
 
 	// CreateExternalVolumeSnapshot stores a new snapshot and returns it with
-	// server-assigned metadata. The input is not mutated. No request carries
-	// a snapshot, so the store validates it.
+	// server-assigned metadata. The input is not mutated.
 	//
 	// Returns ErrAlreadyExists if the name is taken, or ErrFailedPrecondition
-	// if origin.tag does not name a stored tag with origin.tag_uid, or names
-	// one that is being deleted or has no PENDING durable snapshot.
+	// if origin.tag_capture.tag does not name a stored tag with
+	// origin.tag_capture.tag_uid, or names one that is being deleted or has no
+	// PENDING durable snapshot.
 	CreateExternalVolumeSnapshot(ctx context.Context, snapshot *ateapi.ExternalVolumeSnapshot) (*ateapi.ExternalVolumeSnapshot, error)
 
 	// Fetches a snapshot by reference. Returns ErrNotFound if missing.
@@ -196,15 +197,15 @@ type Interface interface {
 	ListExternalVolumeSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapi.ExternalVolumeSnapshot], error)
 
 	// UpdateExternalVolumeSnapshot performs a read-modify-write on the
-	// snapshot as UpdateTag does, and validates the result.
+	// snapshot as UpdateTag does.
 	//
-	// Only status may change. storage_snapshot_id and size_bytes are set
-	// once, ready_to_use never goes from true to false, and error_message is
-	// cleared only by the write that sets storage_snapshot_id. Any other
-	// change returns ErrImmutableField. A result that fails validation, such
-	// as ready_to_use or size_bytes without storage_snapshot_id, returns an
-	// error. A snapshot deleted between the read and the write returns
-	// ErrVersionConflict.
+	// Returns ErrPreconditionRequired if the precondition omits either guard,
+	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
+	// precondition no longer holds or the snapshot changed between the read
+	// and the write, or mutate's error with nothing written. Changing
+	// metadata.atespace, metadata.name, driver_name or origin returns
+	// ErrImmutableField; edits to the other metadata fields are discarded.
+	// The store does not validate status.
 	UpdateExternalVolumeSnapshot(ctx context.Context, snapshotRef resources.ExternalVolumeSnapshotRef, precondition Precondition, mutate func(toUpdate *ateapi.ExternalVolumeSnapshot) error) (*ateapi.ExternalVolumeSnapshot, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
