@@ -401,9 +401,9 @@ func PrintExternalVolumeSnapshotsTo(out io.Writer, snapshots []*ateapi.ExternalV
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ATESPACE\tNAME\tTAG\tVOLUME\tSTATE\tSIZE\tAGE")
 		for _, s := range snapshots {
-			origin := s.GetOrigin().GetTag()
+			origin := s.GetOrigin().GetTagCapture()
 			size := "<unknown>"
-			if n := s.GetStatus().GetSizeBytes(); n > 0 {
+			if n := s.GetStatus().GetRestoreSizeBytes(); n > 0 {
 				size = formatBytes(n)
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -426,7 +426,7 @@ func externalVolumeSnapshotState(s *ateapi.ExternalVolumeSnapshot) string {
 	switch {
 	case st.GetErrorMessage() != "":
 		return "Failed"
-	case st.GetStorageSnapshotId() == "":
+	case st.GetSnapshotId() == "":
 		return "Pending"
 	case !st.GetReadyToUse():
 		return "Captured"

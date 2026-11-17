@@ -27,7 +27,7 @@ func TestFilterByTag(t *testing.T) {
 	snapshot := func(name, tag string) *ateapi.ExternalVolumeSnapshot {
 		return &ateapi.ExternalVolumeSnapshot{
 			Metadata: &ateapi.ResourceMetadata{Name: name},
-			Origin: &ateapi.ExternalVolumeSnapshotOrigin{Tag: &ateapi.TagVolumeSnapshotOrigin{
+			Origin: &ateapi.ExternalVolumeSnapshotOrigin{TagCapture: &ateapi.TagVolumeSnapshotOrigin{
 				Tag: &ateapi.ObjectRef{Name: tag},
 			}},
 		}
@@ -71,16 +71,24 @@ func TestGetExternalVolumeSnapshotsTagFlag(t *testing.T) {
 		args     []string
 		atespace string
 		all      bool
+		tag      string
 		wantErr  string
 	}{
-		{name: "all atespaces", all: true, wantErr: "--tag requires -a/--atespace"},
-		{name: "by name", args: []string{"snap"}, atespace: "demo", wantErr: "--tag cannot be used when getting external volume snapshots by name"},
+		{name: "all atespaces", all: true, tag: "v1", wantErr: "--tag cannot be used with -A/--all-atespaces"},
+		{name: "by name", args: []string{"snap"}, atespace: "demo", tag: "v1", wantErr: "--tag cannot be used when getting external volume snapshots by name"},
+		{name: "bare name without an atespace", tag: "v1", wantErr: "--tag requires -a/--atespace, or <atespace>/<tag-name>"},
+		{name: "invalid name", atespace: "demo", tag: "MyTag", wantErr: "invalid --tag"},
+		{name: "too long", atespace: "demo", tag: strings.Repeat("a", 64), wantErr: "invalid --tag"},
+		{name: "invalid atespace", tag: "Demo/v1", wantErr: "invalid --tag"},
+		{name: "another atespace", atespace: "demo", tag: "other/v1", wantErr: `--tag "other/v1" is not in atespace "demo"`},
 		// A valid scope reaches client initialization, where the missing kubeconfig fails.
-		{name: "one atespace", atespace: "demo", wantErr: "failed to load kubeconfig"},
+		{name: "bare name in an atespace", atespace: "demo", tag: "v1", wantErr: "failed to load kubeconfig"},
+		{name: "atespace and name", tag: "demo/v1", wantErr: "failed to load kubeconfig"},
+		{name: "atespace and name in that atespace", atespace: "demo", tag: "demo/v1", wantErr: "failed to load kubeconfig"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			getExternalVolumeSnapshotAtespaceFlag, getExternalVolumeSnapshotAllAtespacesFlag, getExternalVolumeSnapshotTagFlag = tt.atespace, tt.all, "v1"
+			getExternalVolumeSnapshotAtespaceFlag, getExternalVolumeSnapshotAllAtespacesFlag, getExternalVolumeSnapshotTagFlag = tt.atespace, tt.all, tt.tag
 			err := getExternalVolumeSnapshotsCmd.RunE(getExternalVolumeSnapshotsCmd, tt.args)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("RunE() error = %v, want error containing %q", err, tt.wantErr)

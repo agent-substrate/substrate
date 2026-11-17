@@ -265,25 +265,31 @@ kubectl ate delete tag <tag-name> -a <atespace>
 
 #### External volume snapshots
 
-An `ExternalVolumeSnapshot` is owned by the tag named in its `origin.tag`, and
-the tag cannot be deleted while it has snapshots. Listing them needs the
-`ExternalVolumes` preview gate on the server, and `--preview`.
+An `ExternalVolumeSnapshot` is owned by the tag named in its
+`origin.tag_capture.tag`. `delete tag` fails while the tag owns snapshots, and
+leaves the tag unchanged.
 
 ```bash
 # List an Atespace's snapshots, all Atespaces' snapshots, or one tag's snapshots.
-# --tag needs -a, since a tag name is unique only within an atespace.
-kubectl ate --preview get externalvolumesnapshots -a <atespace>
-kubectl ate --preview get externalvolumesnapshots -A
-kubectl ate --preview get externalvolumesnapshots -a <atespace> --tag <tag-name>
-kubectl ate --preview get externalvolumesnapshot <snapshot-name> -a <atespace> -o yaml
+# --tag takes <atespace>/<tag-name>, or <tag-name> with -a, since a tag name is
+# unique only within an atespace.
+kubectl ate get external-volume-snapshots -a <atespace>
+kubectl ate get external-volume-snapshots -A
+kubectl ate get external-volume-snapshots --tag <atespace>/<tag-name>
+kubectl ate get external-volume-snapshot <snapshot-name> -a <atespace> -o yaml
 ```
+
+#### `kubectl ate get external-volume-snapshot` output columns
 
 | Column | Meaning |
 |---|---|
+| `ATESPACE` | The atespace the snapshot and its tag belong to. |
+| `NAME` | The snapshot's name. |
 | `TAG` | The tag that owns the snapshot. |
 | `VOLUME` | The volume of the tag's source actor the snapshot was taken from. |
-| `STATE` | `Pending` until the storage system returns a snapshot handle, `Failed` if taking the snapshot failed, `Captured` once it has a handle, and `Ready` once it can seed new volumes. |
+| `STATE` | Derived from `status`: `Failed` if `error_message` is set, otherwise `Pending` until `snapshot_id` is recorded, `Captured` until `ready_to_use` is true, and `Ready` once the snapshot can seed new volumes. |
 | `SIZE` | The minimum size of a volume restored from the snapshot; `<unknown>` until the driver reports it. |
+| `AGE` | Time elapsed since the snapshot was created. |
 
 ### Egress Policies
 

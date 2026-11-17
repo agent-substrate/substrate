@@ -17,6 +17,7 @@ package cmd
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -30,24 +31,36 @@ var (
 )
 
 var getExternalVolumeSnapshotsCmd = &cobra.Command{
-	Use:     "externalvolumesnapshot [snapshot-name ...]",
-	Aliases: []string{"externalvolumesnapshots"},
+	Use:     "external-volume-snapshot [snapshot-name ...]",
+	Aliases: []string{"external-volume-snapshots", "externalvolumesnapshot", "externalvolumesnapshots"},
 	Short:   "List or get external volume snapshots",
-	Long: "List or get the external volume snapshots that tags own.\n\n" +
-		"This needs the ExternalVolumes preview gate on the server, and --preview.",
-	Args: cobra.ArbitraryArgs,
+	Long:    "List or get the external volume snapshots that tags own.",
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateAtespaceFlags("external volume snapshots", args, getExternalVolumeSnapshotAtespaceFlag, getExternalVolumeSnapshotAllAtespacesFlag); err != nil {
-			return err
-		}
-		if getExternalVolumeSnapshotTagFlag != "" {
+		atespace := getExternalVolumeSnapshotAtespaceFlag
+		var tagName string
+		if tag := getExternalVolumeSnapshotTagFlag; tag != "" {
 			if len(args) > 0 {
 				return usageErrorf("--tag cannot be used when getting external volume snapshots by name")
 			}
-			// A tag name is unique only within an atespace.
-			if getExternalVolumeSnapshotAtespaceFlag == "" {
-				return usageErrorf("--tag requires -a/--atespace")
+			if getExternalVolumeSnapshotAllAtespacesFlag {
+				return usageErrorf("--tag cannot be used with -A/--all-atespaces")
 			}
+			// A tag name is unique only within an atespace.
+			if !strings.Contains(tag, "/") && atespace == "" {
+				return usageErrorf("--tag requires -a/--atespace, or <atespace>/<tag-name>")
+			}
+			ref, err := parseAtespacedName(tag, atespace)
+			if err != nil {
+				return usageErrorf("invalid --tag: %v", err)
+			}
+			if atespace != "" && ref.GetAtespace() != atespace {
+				return usageErrorf("--tag %q is not in atespace %q", tag, atespace)
+			}
+			atespace, tagName = ref.GetAtespace(), ref.GetName()
+		}
+		if err := validateAtespaceFlags("external volume snapshots", args, atespace, getExternalVolumeSnapshotAllAtespacesFlag); err != nil {
+			return err
 		}
 
 		ctx := cmd.Context()
@@ -61,7 +74,7 @@ var getExternalVolumeSnapshotsCmd = &cobra.Command{
 			snapshots := make([]*ateapi.ExternalVolumeSnapshot, 0, len(args))
 			for _, name := range args {
 				snapshot, err := client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{
-					ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: getExternalVolumeSnapshotAtespaceFlag, Name: name},
+					ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: atespace, Name: name},
 				})
 				if err != nil {
 					return fmt.Errorf("failed to get external volume snapshot %q: %w", name, err)
@@ -78,7 +91,7 @@ var getExternalVolumeSnapshotsCmd = &cobra.Command{
 		pageToken := ""
 		for {
 			resp, err := client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{
-				Atespace: getExternalVolumeSnapshotAtespaceFlag,
+				Atespace: atespace,
 				Options:  &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken},
 			})
 			if err != nil {
@@ -90,7 +103,7 @@ var getExternalVolumeSnapshotsCmd = &cobra.Command{
 				break
 			}
 		}
-		snapshots = filterByTag(snapshots, getExternalVolumeSnapshotTagFlag)
+		snapshots = filterByTag(snapshots, tagName)
 		return printer.PrintExternalVolumeSnapshotsTo(cmd.OutOrStdout(), snapshots, outputFmt)
 	},
 }
@@ -103,13 +116,13 @@ func filterByTag(snapshots []*ateapi.ExternalVolumeSnapshot, tag string) []*atea
 		return snapshots
 	}
 	return slices.DeleteFunc(snapshots, func(s *ateapi.ExternalVolumeSnapshot) bool {
-		return s.GetOrigin().GetTag().GetTag().GetName() != tag
+		return s.GetOrigin().GetTagCapture().GetTag().GetName() != tag
 	})
 }
 
 func init() {
 	getExternalVolumeSnapshotsCmd.Flags().StringVarP(&getExternalVolumeSnapshotAtespaceFlag, "atespace", "a", "", "get snapshots in a specific atespace (mutually exclusive with --all-atespaces)")
 	getExternalVolumeSnapshotsCmd.Flags().BoolVarP(&getExternalVolumeSnapshotAllAtespacesFlag, "all-atespaces", "A", false, "get snapshots across all atespaces (mutually exclusive with --atespace)")
-	getExternalVolumeSnapshotsCmd.Flags().StringVar(&getExternalVolumeSnapshotTagFlag, "tag", "", "list only the snapshots this tag owns; requires --atespace")
+	getExternalVolumeSnapshotsCmd.Flags().StringVar(&getExternalVolumeSnapshotTagFlag, "tag", "", "list only the snapshots this tag owns, as <tag-name> with --atespace or <atespace>/<tag-name>")
 	getCmd.AddCommand(getExternalVolumeSnapshotsCmd)
 }
