@@ -406,6 +406,9 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         if ttype == "locust":
             # A malformed --metadata fails here rather than mid-sweep.
             split_metadata_flag(t)
+        elif "evaluations" in t:
+            # Only the locust runner judges evaluations (runner.py --test-entry).
+            raise ValueError(f"test {name!r}: 'evaluations' is supported only for type locust")
         isolate_block(t)
 
 
@@ -516,6 +519,9 @@ def run_test(
     if test_type(test) == "locust":
         flags, own = split_metadata_flag(test)
         flags += ["--metadata", json.dumps({**run_metadata(), **own})]
+        # The whole entry, so runner features (such as observers or evaluations)
+        # read what they need without adding a new flag per field.
+        flags += ["--test-entry", json.dumps(test)]
     manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)

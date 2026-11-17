@@ -15,6 +15,7 @@
 """The sources, by the name a variable's `source` key gives (hooks: base.py)."""
 
 from .base import BenchmarkRunContext, Scalar, Source, SourceInvalid  # noqa: F401
+from .cel import Cel
 from .run_results import RunResults
 
-SOURCES: dict[str, type[Source]] = {"run_results": RunResults}
+SOURCES: dict[str, type[Source]] = {"cel": Cel, "run_results": RunResults}

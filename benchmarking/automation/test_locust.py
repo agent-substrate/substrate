@@ -60,6 +60,13 @@ class ValidateTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             locust.validate(test)
 
+    # Shape only: the runner validates the rest (benchmarking/evaluate).
+    def test_evaluations_shape(self):
+        locust.validate(entry(evaluations=[{"name": "e", "anything": "else"}]))
+        for bad in ({"evaluations": {"name": "e"}}, {"evaluations": [{"name": ""}]}, {"evaluations": ["e"]}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "locust test 't': evaluations must"):
+                locust.validate(entry(**bad))
+
 
 class PreTestTest(unittest.TestCase):
     def shaped(self, test):
