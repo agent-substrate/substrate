@@ -72,7 +72,8 @@ func tagVolumeHandles(t *testing.T, tc *testContext, tag *ateapi.Tag) map[string
 
 // TestCreateTag_CapturesVolumes verifies that a tag taken with external volumes
 // snapshots each of them and records an ExternalVolumeSnapshot with the handle
-// for each, and can then be deleted along with its snapshots.
+// for each, cannot seed an Actor yet, and can then be deleted along with its
+// snapshots.
 func TestCreateTag_CapturesVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-tag-capture-volumes")
 	tc, workerName := setupTagVolumesTest(t, ns)
@@ -100,6 +101,14 @@ func TestCreateTag_CapturesVolumes(t *testing.T) {
 	}
 
 	tagRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "with-volumes"}
+	// Actors cannot be created from a tag with volume snapshots yet.
+	_, err = tc.client.CreateActor(ctx, &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
+		Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
+		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tagRef,
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
+
 	if _, err := tc.client.DeleteTag(ctx, &ateapi.DeleteTagRequest{Tag: tagRef}); err != nil {
 		t.Fatalf("DeleteTag failed: %v", err)
 	}

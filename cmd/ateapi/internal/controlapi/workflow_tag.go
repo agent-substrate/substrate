@@ -107,8 +107,9 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, e
 	if err != nil {
 		return nil, err
 	}
-	// Volumes hold what the latest suspend wrote. Pairing them with an older
-	// snapshot's guest memory would make a tag that never existed.
+	// Volumes hold what the actor would resume with, which matches its latest
+	// snapshot. When that snapshot is not durable, the tag would fall back to
+	// an older one, so a tag that captures volumes is refused instead.
 	if len(volumes) > 0 && snapshot.GetGeneration() != latestSnapshot(actor.GetStatus(), func(*ateapi.Snapshot) bool { return true }).GetGeneration() {
 		return nil, apierror.FailedPrecondition("Actor %s's latest snapshot is not durable, so its external volumes cannot be tagged with an older one", actorRef)
 	}
@@ -155,7 +156,7 @@ func selectTagVolumes(actor *ateapi.Actor, sel *ateapi.ExternalVolumeSelection) 
 		return nil, apierror.InvalidArgument("Actor %s has no external volumes named %s", actorRef, strings.Join(sets.List(requested), ", "))
 	}
 	if len(selected) == 0 {
-		return nil, apierror.InvalidArgument("No volumes of Actor %s can be snapshotted; create the tag without a volume selection", actorRef)
+		return nil, apierror.FailedPrecondition("Actor %s has no external volumes to snapshot; create the tag without a volume selection", actorRef)
 	}
 	return selected, nil
 }
@@ -247,7 +248,9 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 //
 // The rows are recorded before the storage snapshots are taken, so a failed
 // create's snapshots are collected too. The tag is marked for deletion, so no
-// new row is recorded for it, and the list is complete.
+// new row is recorded for it, and the list is complete. Each row is
+// independent, and driver calls can take seconds, so they are released
+// concurrently.
 func (w *ActorWorkflow) ensureTagVolumeSnapshotsReleased(ctx context.Context, tag *ateapi.Tag) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseTagVolumeSnapshots")
 	defer func() { err = done(err) }()
@@ -261,12 +264,14 @@ func (w *ActorWorkflow) ensureTagVolumeSnapshotsReleased(ctx context.Context, ta
 		markSkipped(ctx, "tag owns no external volume snapshots")
 		return nil
 	}
-	var errs []error
-	for _, snap := range snapshots {
-		if err := w.releaseTagVolumeSnapshot(ctx, snap); err != nil {
-			errs = append(errs, err)
-		}
+	errs := make([]error, len(snapshots))
+	var wg sync.WaitGroup
+	for i, snap := range snapshots {
+		wg.Go(func() {
+			errs[i] = w.releaseTagVolumeSnapshot(ctx, snap)
+		})
 	}
+	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("while releasing the external volume snapshots of tag %s: %w", tagRef, err)
 	}
@@ -376,10 +381,11 @@ func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, snap *a
 
 // transientSnapshotError reports whether a failed CreateSnapshot may succeed on
 // a retry. An error without a gRPC status has code Unknown and counts as
-// transient.
+// transient. So does ResourceExhausted, which drivers return for rate limits
+// and quota that clear over time.
 func transientSnapshotError(err error) bool {
 	switch status.Code(err) {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.Unknown, codes.Internal:
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.Unknown, codes.Internal, codes.ResourceExhausted:
 		return true
 	}
 	return false
@@ -739,10 +745,10 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 // blocking here would put an unbounded storage operation inside a synchronous
 // RPC.
 //
-// No quiesce step is required. A SUSPENDED actor has already had its volumes
-// unmounted by atelet and detached by the control plane, so the filesystem is
-// cleanly unmounted with no dirty page cache, and the actor lease held by the
-// caller keeps a concurrent resume from re-attaching them mid-capture.
+// No quiesce step runs. A SUSPENDED actor's volumes are detached, and the
+// actor lease held by the caller keeps a concurrent resume from re-attaching
+// them mid-capture. atelet usually unmounts them cleanly first, but a revert
+// that detaches without atelet leaves them only crash-consistent.
 func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *ateapi.Tag, volumes []*ateapi.ExternalVolumeStatus, plugins []volume.VolumePluginControlPlane) (err error) {
 	ctx, done := stepSpan(ctx, "SnapshotVolumes")
 	defer func() { err = done(err) }()
@@ -947,13 +953,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag,
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
-		}
-		return nil, fmt.Errorf("while finalizing tag %s: %w", tagRef, err)
+		return nil, tagCreateUpdateError(tagRef, err, "finalizing")
 	}
 	return stored, nil
 }

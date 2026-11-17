@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/go-cmp/cmp"
@@ -32,6 +33,7 @@ import (
 	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
@@ -501,7 +503,7 @@ func TestSelectTagVolumes(t *testing.T) {
 		{name: "all", sel: &ateapi.ExternalVolumeSelection{}, want: []string{"data", "cache", "scratch"}},
 		{name: "named keeps actor order", sel: &ateapi.ExternalVolumeSelection{Names: []string{"scratch", "data"}}, want: []string{"data", "scratch"}},
 		{name: "unknown name", sel: &ateapi.ExternalVolumeSelection{Names: []string{"data", "missing"}}, wantCode: codes.InvalidArgument},
-		{name: "all with no volumes", actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-2"}}, sel: &ateapi.ExternalVolumeSelection{}, wantCode: codes.InvalidArgument},
+		{name: "all with no volumes", actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-2"}}, sel: &ateapi.ExternalVolumeSelection{}, wantCode: codes.FailedPrecondition},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -839,6 +841,14 @@ func TestDeleteTag_TransientFailureKeepsTag(t *testing.T) {
 			wantErrorMessage: "simulated snapshot failure",
 		},
 		{
+			name: "recovery rate limited",
+			fail: func(p *fakeSnapshotPlugin) {
+				p.failSnapshotOfVolume = "vol-cache"
+				p.failSnapshotCode = codes.ResourceExhausted
+			},
+			wantErrorMessage: "simulated snapshot failure",
+		},
+		{
 			name: "delete fails",
 			fail: func(p *fakeSnapshotPlugin) { p.failDeleteSnapshot = true },
 		},
@@ -953,7 +963,10 @@ func (s *faultyEVSStore) batchUpdateCalls() int {
 // snapshot is in flight at once, and that the results are recorded with one
 // batch write however many volumes there are.
 func TestTagActorSnapshot_SnapshotsVolumesConcurrently(t *testing.T) {
-	ctx := context.Background()
+	// A regression to one snapshot at a time blocks the rendezvous. The
+	// deadline turns that into a failure instead of a hang.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	persistence := newTestPersistence(t)
 	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 	plugin := newFakeSnapshotPlugin()
@@ -1037,5 +1050,151 @@ func TestTagVolumeSnapshotID(t *testing.T) {
 	}
 	if len(names) != 3 {
 		t.Errorf("tagVolumeSnapshotID gave %d distinct names for 3 volumes", len(names))
+	}
+}
+
+// TestTagActorSnapshot_NoHandleLeavesPendingTag verifies a driver that reports
+// success without a handle fails the create, which leaves the tag pending with
+// the volume's error recorded, rather than completing a tag that names no
+// snapshot.
+func TestTagActorSnapshot_NoHandleLeavesPendingTag(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	plugin := newFakeSnapshotPlugin()
+	plugin.noHandle = true
+	w, objects := newVolumeTagWorkflow(persistence, plugin)
+
+	actor := seedTagSourceWithVolumes(t, ctx, persistence, objects, template, "actor-1", "data")
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), &ateapi.ExternalVolumeSelection{}); apierror.Code(err) != codes.Internal {
+		t.Fatalf("TagActorSnapshot error = %v, want Internal", err)
+	}
+	stored, err := persistence.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "v1"})
+	if err != nil {
+		t.Fatalf("GetTag: %v", err)
+	}
+	if got, want := stored.GetStatus().GetSnapshot().GetDurableSnapshot().GetState(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING; got != want {
+		t.Errorf("tag snapshot status = %v, want %v", got, want)
+	}
+	want := map[string]*ateapi.ExternalVolumeSnapshotStatus{"data": {ErrorMessage: errorRecorded}}
+	if diff := cmp.Diff(want, tagVolumeStatuses(t, ctx, persistence, stored), protocmp.Transform()); diff != "" {
+		t.Errorf("volume snapshots mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestTagActorSnapshot_VolumesOnTwoDrivers verifies each volume is checked and
+// snapshotted with its own driver. A driver that cannot snapshot fails only a
+// selection that includes its volume, and each driver creates and deletes only
+// its own volume's snapshot.
+func TestTagActorSnapshot_VolumesOnTwoDrivers(t *testing.T) {
+	const otherDriver = "substrate.io/other"
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	plugin, other := newFakeSnapshotPlugin(), newFakeSnapshotPlugin()
+	other.caps.CreateDeleteSnapshot = false
+	w, objects := newVolumeTagWorkflow(persistence, plugin)
+	w.pluginRegistry.(*mockPluginRegistry).plugins[otherDriver] = other
+
+	actor := seedTagSourceWithVolumes(t, ctx, persistence, objects, template, "actor-1", "data", "cache")
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+		s.ExternalVolumes.Volumes[1].VolumeType = otherDriver
+	})
+	actorRef := resources.ActorRefFromActor(actor)
+
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "all"), &ateapi.ExternalVolumeSelection{}); apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("TagActorSnapshot of all volumes = %v, want FailedPrecondition", err)
+	}
+	if _, err := persistence.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "all"}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag = %v, want ErrNotFound: the rejected create reserved its tag", err)
+	}
+	dataOnly, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "data-only"), &ateapi.ExternalVolumeSelection{Names: []string{"data"}})
+	if err != nil {
+		t.Fatalf("TagActorSnapshot of data: %v", err)
+	}
+	if _, err := w.DeleteTag(ctx, resources.TagRefFromTag(dataOnly), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag: %v", err)
+	}
+
+	other.caps.CreateDeleteSnapshot = true
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "both"), &ateapi.ExternalVolumeSelection{})
+	if err != nil {
+		t.Fatalf("TagActorSnapshot of all volumes: %v", err)
+	}
+	drivers := map[string]string{}
+	for volName, snap := range tagVolumeSnapshots(t, ctx, persistence, tag) {
+		drivers[volName] = snap.GetDriverName()
+	}
+	if diff := cmp.Diff(map[string]string{"data": testVolumeDriver, "cache": otherDriver}, drivers); diff != "" {
+		t.Errorf("recorded drivers mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := w.DeleteTag(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag: %v", err)
+	}
+	dataSnaps := []string{
+		"snap-" + tagVolumeSnapshotID(dataOnly.GetMetadata().GetUid(), "data"),
+		"snap-" + tagVolumeSnapshotID(tag.GetMetadata().GetUid(), "data"),
+	}
+	cacheSnaps := []string{"snap-" + tagVolumeSnapshotID(tag.GetMetadata().GetUid(), "cache")}
+	for _, c := range []struct {
+		name   string
+		plugin *fakeSnapshotPlugin
+		want   []string
+	}{
+		{name: testVolumeDriver, plugin: plugin, want: dataSnaps},
+		{name: otherDriver, plugin: other, want: cacheSnaps},
+	} {
+		if diff := cmp.Diff(c.want, c.plugin.snapshotsCreated()); diff != "" {
+			t.Errorf("snapshots taken by %s mismatch (-want +got):\n%s", c.name, diff)
+		}
+		if diff := cmp.Diff(c.want, c.plugin.snapshotsDeleted()); diff != "" {
+			t.Errorf("snapshots deleted by %s mismatch (-want +got):\n%s", c.name, diff)
+		}
+	}
+}
+
+// TestTagActorSnapshot_VolumesPromotePendingSnapshot verifies that tagging
+// volumes after an asynchronous suspend, whose latest snapshot is pending on
+// its node, uploads that snapshot first and pairs the volumes with it.
+func TestTagActorSnapshot_VolumesPromotePendingSnapshot(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, atelet, objects := newWireFinalizeWorkflow(t, persistence)
+	plugin := newFakeSnapshotPlugin()
+	w.pluginRegistry = &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{testVolumeDriver: plugin}}
+
+	actor := seedTagSourceWithVolumes(t, ctx, persistence, objects, template, "actor-1", "data")
+	pausedURI := mustActorSnapshotURI(t, template, actor, "paused")
+	objects.PutSnapshot(t, pausedURI, "manifest.json", "memory.zst")
+	paused := newDurableSnapshot(2, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), pausedURI.Name(), pausedURI.String(), ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING)
+	paused.Locality = "node-1"
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
+		s.AssignedNode = "node-1"
+		s.LastAssignedGeneration = 2
+		s.Snapshots = append(s.Snapshots, proto.CloneOf(paused))
+	})
+	report := &ateletpb.SnapshotReport{Snapshot: &ateletpb.Snapshot{
+		SnapshotUuid: paused.GetUuid(),
+		Generation:   paused.GetGeneration(),
+		Fidelity:     fidelityToAtelet(paused.GetFidelity()),
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedURI.String()},
+	}}
+	atelet.promoteState = &ateletpb.ActorSnapshotState{LatestLocal: report, LatestDurable: proto.CloneOf(report)}
+
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(actor), "v1"), &ateapi.ExternalVolumeSelection{})
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	if got := atelet.promoteRequest().GetSnapshot().GetGeneration(); got != 2 {
+		t.Errorf("promoted generation = %d, want 2", got)
+	}
+	tagSnapshot := tagDurableSnapshotURI(tag, ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED)
+	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, tagSnapshot))); diff != "" {
+		t.Errorf("the tag's external snapshot mismatch, want the promoted one (-want +got):\n%s", diff)
+	}
+	want := []string{"snap-" + tagVolumeSnapshotID(tag.GetMetadata().GetUid(), "data")}
+	if diff := cmp.Diff(want, plugin.snapshotsCreated()); diff != "" {
+		t.Errorf("snapshots taken mismatch (-want +got):\n%s", diff)
 	}
 }
