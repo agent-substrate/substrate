@@ -413,6 +413,9 @@ func TestDetachedPullBoundedByPullTimeout(t *testing.T) {
 // layerPullConcurrency wave ahead of smaller layers, breaking ties in manifest
 // order while LayerDirs still returns layers in manifest order.
 func TestPullStartsLargestLayersFirst(t *testing.T) {
+	if layerPullConcurrency != 4 {
+		t.Fatalf("test assumes layerPullConcurrency == 4, got %d; update specs", layerPullConcurrency)
+	}
 	reg := newGatedRegistry(t)
 	specs := []struct {
 		name string
