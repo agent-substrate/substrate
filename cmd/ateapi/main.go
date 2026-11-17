@@ -98,9 +98,10 @@ var (
 	ingressRouterSPIFFEID    = pflag.String("ingress-router-spiffe-id", installdefaults.RouterSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of atenet-router. Holds the ingress_router authz role, which resumes and lists actors.")
 	apiServerSidecarSPIFFEID = pflag.String("api-server-sidecar-spiffe-id", installdefaults.APIServerSPIFFEID(installdefaults.NamespaceFromPodEnv()), "mTLS SPIFFE ID of the ate-api-server pod, which its sidecars share. Holds the api_server_sidecar role, which reads actors so the objectstore control plugin can scope their storage credentials.")
 
-	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
-	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
+	actorIDJWTPoolFile              = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	actorJWTIssuer                  = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
+	defaultEgressGatewayAddress     = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
+	egressGatewayAddressForAtespace = pflag.StringArray("egress-gateway-address-for-atespace", nil, "ATESPACE=HOST:PORT. Sends actors in ATESPACE to this egress PEP instead of --default-egress-gateway-address. Takes effect at the actor's next activation. Repeat the flag for each atespace. The gateway's SPIFFE ID must also be listed in --egress-gateway-spiffe-id, or its actor and egress policy lookups are denied.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -168,6 +169,10 @@ func main() {
 	// Restore; a value it would refuse must fail the rollout, not the actors.
 	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
 		serverboot.Fatal(ctx, "Invalid --default-egress-gateway-address", errs.ToAggregate())
+	}
+	egressAddressByAtespace, err := parseEgressGatewayAddressForAtespace(*egressGatewayAddressForAtespace)
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid --egress-gateway-address-for-atespace", err)
 	}
 	if *snapshotLocation != "" {
 		if err := resources.ValidateSnapshotLocation(*snapshotLocation); err != nil {
@@ -351,6 +356,7 @@ func main() {
 		ateletDialer,
 		instruments,
 		*defaultEgressGatewayAddress,
+		egressAddressByAtespace,
 		volPlugins,
 		objectstore.NewControlProviderClient(objectStorePluginConn),
 		*actorJWTIssuer,
@@ -509,6 +515,8 @@ func logFlagValues(ctx context.Context) {
 		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
+		slog.String("default-egress-gateway-address", *defaultEgressGatewayAddress),
+		slog.Any("egress-gateway-address-for-atespace", *egressGatewayAddressForAtespace),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
@@ -686,6 +694,37 @@ func buildJWTProviders(ctx context.Context, cfg *apiconfig.AuthenticationConfig)
 		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
 	}
 	return serverCfg, nil
+}
+
+// parseEgressGatewayAddressForAtespace parses
+// --egress-gateway-address-for-atespace values into a map keyed by
+// atespace. It returns nil when there are no values.
+func parseEgressGatewayAddressForAtespace(values []string) (map[string]string, error) {
+	var out map[string]string
+	for i, v := range values {
+		fldPath := field.NewPath("egress-gateway-address-for-atespace").Index(i)
+		atespace, addr, ok := strings.Cut(v, "=")
+		if !ok {
+			return nil, fmt.Errorf("%s: %q must be ATESPACE=HOST:PORT", fldPath, v)
+		}
+		if errs := resources.ValidateResourceName(atespace, fldPath); len(errs) > 0 {
+			return nil, errs.ToAggregate()
+		}
+		if addr == "" {
+			return nil, fmt.Errorf("%s: %q has an empty address", fldPath, v)
+		}
+		if errs := resources.ValidateHostPort(fldPath, addr); len(errs) > 0 {
+			return nil, errs.ToAggregate()
+		}
+		if _, dup := out[atespace]; dup {
+			return nil, fmt.Errorf("%s: atespace %q is repeated", fldPath, atespace)
+		}
+		if out == nil {
+			out = make(map[string]string, len(values))
+		}
+		out[atespace] = addr
+	}
+	return out, nil
 }
 
 // validateActorJWTIssuer checks that issuer is an OpenID issuer identifier: an

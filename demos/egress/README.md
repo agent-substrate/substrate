@@ -91,7 +91,9 @@ rejects that option with agentgateway rather than silently omitting it.
   and does not need that sidecar. The installer renders the matching configuration and container.
 - **Egress opt-in** — `ate-api-server --default-egress-gateway-address=atenet-egress.ate-system.svc:443`
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
-  atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
+  atelet `Run`/`Restore`, which turns on tunneled egress for every atespace. To send an atespace
+  to a different gateway, pass `--egress-gateway-address-for-atespace=ATESPACE=HOST:PORT` (repeat
+  per atespace); that gateway's SPIFFE ID must also be in `--egress-gateway-spiffe-id`.
 - **Egress policy** — the gateway denies by default, so the demo Actor needs an `EgressPolicy`
   before its fetches succeed. `kubectl ate create egress-policy` creates one from a manifest
   (step 3 below) and `kubectl ate get egress-policy` reads it back; the e2e suites create theirs

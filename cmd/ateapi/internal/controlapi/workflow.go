@@ -106,16 +106,17 @@ func logActorState(ctx context.Context, actor *ateapi.Actor, opName, state strin
 // each exported method begins with preview.ContextWithOptIn: the request was
 // already validated, and what the workflow writes is the system's own state.
 type ActorWorkflow struct {
-	store                   actorWorkflowStore
-	workerCache             *workercache.Cache
-	scheduler               scheduling.Scheduler
-	dialer                  *AteletDialer
-	storageClassLister      storagev1listers.StorageClassLister
-	instruments             *Instruments
-	egressGatewayAddress    string
-	pluginRegistry          VolumePluginRegistry
-	objectStorePlugin       objectstore.ControlProviderClient
-	clusterSnapshotLocation string
+	store                          actorWorkflowStore
+	workerCache                    *workercache.Cache
+	scheduler                      scheduling.Scheduler
+	dialer                         *AteletDialer
+	storageClassLister             storagev1listers.StorageClassLister
+	instruments                    *Instruments
+	egressGatewayAddress           string
+	egressGatewayAddressByAtespace map[string]string
+	pluginRegistry                 VolumePluginRegistry
+	objectStorePlugin              objectstore.ControlProviderClient
+	clusterSnapshotLocation        string
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -130,19 +131,21 @@ func NewActorWorkflow(
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	egressGatewayAddressByAtespace map[string]string,
 	pluginRegistry VolumePluginRegistry,
 	objectStorePlugin objectstore.ControlProviderClient,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
-		store:                store,
-		workerCache:          workerCache,
-		scheduler:            scheduling.New(workerCache),
-		dialer:               dialer,
-		storageClassLister:   storageClassLister,
-		instruments:          instruments,
-		egressGatewayAddress: egressGatewayAddress,
-		pluginRegistry:       pluginRegistry,
-		objectStorePlugin:    objectStorePlugin,
+		store:                          store,
+		workerCache:                    workerCache,
+		scheduler:                      scheduling.New(workerCache),
+		dialer:                         dialer,
+		storageClassLister:             storageClassLister,
+		instruments:                    instruments,
+		egressGatewayAddress:           egressGatewayAddress,
+		egressGatewayAddressByAtespace: egressGatewayAddressByAtespace,
+		pluginRegistry:                 pluginRegistry,
+		objectStorePlugin:              objectStorePlugin,
 	}
 }
 

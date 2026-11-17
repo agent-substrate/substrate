@@ -228,6 +228,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 		dialer,
 		instruments,
 		"",
+		nil,
 		volPlugins,
 		objectstoreplugintest.ControlClient(objectStore),
 		testActorJWTIssuer,

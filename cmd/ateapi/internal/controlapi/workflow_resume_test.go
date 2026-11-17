@@ -3496,3 +3496,28 @@ func TestAssignWorkerAttempt_RefusesChangedOverhead(t *testing.T) {
 		t.Fatalf("assignWorkerAttempt() with an unchanged overhead = %v", err)
 	}
 }
+
+func TestEgressGateway(t *testing.T) {
+	byAtespace := map[string]string{"test1": "override:443"}
+	for _, tt := range []struct {
+		name       string
+		def        string
+		byAtespace map[string]string
+		atespace   string
+		want       *ateletpb.EgressGateway
+	}{
+		{name: "no default, no map"},
+		{name: "default only", def: "default:443", atespace: "test1", want: &ateletpb.EgressGateway{Address: "default:443"}},
+		{name: "map hit", def: "default:443", byAtespace: byAtespace, atespace: "test1", want: &ateletpb.EgressGateway{Address: "override:443"}},
+		{name: "map miss", def: "default:443", byAtespace: byAtespace, atespace: "other", want: &ateletpb.EgressGateway{Address: "default:443"}},
+		{name: "map hit, no default", byAtespace: byAtespace, atespace: "test1", want: &ateletpb.EgressGateway{Address: "override:443"}},
+		{name: "map miss, no default", byAtespace: byAtespace, atespace: "other"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &ActorWorkflow{egressGatewayAddress: tt.def, egressGatewayAddressByAtespace: tt.byAtespace}
+			if got := w.egressGateway(tt.atespace); !proto.Equal(got, tt.want) {
+				t.Errorf("egressGateway(%q) = %v, want %v", tt.atespace, got, tt.want)
+			}
+		})
+	}
+}

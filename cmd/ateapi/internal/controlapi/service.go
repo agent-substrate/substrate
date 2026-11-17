@@ -71,6 +71,9 @@ type VolumePluginRegistry interface {
 //
 // actorJWTIssuer is copied verbatim into the iss claim of every actor JWT.
 //
+// egressGatewayAddressByAtespace overrides egressGatewayAddress for actors in
+// the listed atespaces. It may be nil and must not be modified afterwards.
+//
 // snapshotLocation is ate-api-server's cluster-wide --snapshot-location; see
 // resolveSnapshotLocation.
 func NewRPCService(
@@ -81,6 +84,7 @@ func NewRPCService(
 	dialer *AteletDialer,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	egressGatewayAddressByAtespace map[string]string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 	objectStorePlugin objectstore.ControlProviderClient,
 	actorJWTIssuer string,
@@ -101,7 +105,7 @@ func NewRPCService(
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, egressGatewayAddressByAtespace, s, objectStorePlugin)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
 	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
 	return s

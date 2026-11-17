@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -345,3 +346,52 @@ func TestRejectStorageEnv(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestParseEgressGatewayAddressForAtespace(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		values  []string
+		want    map[string]string
+		wantErr bool
+	}{
+		{name: "nil input"},
+		{
+			name:   "one atespace",
+			values: []string{"test1=egress-agents.ns.svc:443"},
+			want:   map[string]string{"test1": "egress-agents.ns.svc:443"},
+		},
+		{
+			name:   "two atespaces",
+			values: []string{"test1=a.ns.svc:443", "test2=b.ns.svc:8443"},
+			want:   map[string]string{"test1": "a.ns.svc:443", "test2": "b.ns.svc:8443"},
+		},
+		{name: "extra equals fails address validation", values: []string{"test1=host:443=x"}, wantErr: true},
+		{name: "no equals", values: []string{"test1"}, wantErr: true},
+		{name: "empty atespace", values: []string{"=host:443"}, wantErr: true},
+		{name: "invalid atespace", values: []string{"Test_1=host:443"}, wantErr: true},
+		{name: "empty address", values: []string{"test1="}, wantErr: true},
+		{name: "no port", values: []string{"test1=host"}, wantErr: true},
+		{name: "port out of range", values: []string{"test1=host:70000"}, wantErr: true},
+		{
+			name:   "ip address host",
+			values: []string{"test1=10.0.0.1:443"},
+			want:   map[string]string{"test1": "10.0.0.1:443"},
+		},
+		{
+			name:   "ipv6 host",
+			values: []string{"test1=[::1]:443"},
+			want:   map[string]string{"test1": "[::1]:443"},
+		},
+		{name: "repeated atespace", values: []string{"test1=a:443", "test1=b:443"}, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseEgressGatewayAddressForAtespace(tt.values)
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Fatalf("parseEgressGatewayAddressForAtespace(%q) error = %v, want error %t", tt.values, err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseEgressGatewayAddressForAtespace(%q) = %v, want %v", tt.values, got, tt.want)
+			}
+		})
+	}
+}
