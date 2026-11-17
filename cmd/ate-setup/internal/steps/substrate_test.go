@@ -19,12 +19,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	corev1 "k8s.io/api/core/v1"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
@@ -288,6 +291,336 @@ func TestCreateActorEgressPolicy(t *testing.T) {
 		client := &ateclient.Client{ControlClient: rec}
 		if err := CreateActorEgressPolicy(context.Background(), client, actorRef, rules); err != nil {
 			t.Fatalf("CreateActorEgressPolicy on AlreadyExists = %v, want nil", err)
+		}
+	})
+}
+
+func TestCSIDriverConfigFromManifest(t *testing.T) {
+	root := repoRoot(t)
+
+	var nfsSvc, hpSvc corev1.Service
+	decodeYAML(t, "csiNFSControllerService", csiNFSControllerService, &nfsSvc)
+	decodeYAML(t, "csiHostpathControllerService", csiHostpathControllerService, &hpSvc)
+
+	for _, tc := range []struct {
+		relPath string
+		name    string
+		driver  string
+		socket  string
+		svc     corev1.Service
+	}{
+		{
+			relPath: "hack/csi/csi-driver-config-nfs.yaml",
+			name:    "csi-nfs",
+			driver:  "nfs.csi.k8s.io",
+			socket:  "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock",
+			svc:     nfsSvc,
+		},
+		{
+			relPath: "hack/csi/csi-driver-config-hostpath.yaml",
+			name:    "csi-hostpath",
+			driver:  "hostpath.csi.k8s.io",
+			socket:  "unix:///var/lib/kubelet/plugins/csi-hostpath/csi.sock",
+			svc:     hpSvc,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(root, tc.relPath))
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", tc.relPath, err)
+			}
+			cfg, err := CSIDriverConfigFromManifest(raw)
+			if err != nil {
+				t.Fatalf("CSIDriverConfigFromManifest(%s): %v", tc.relPath, err)
+			}
+			if cfg.GetMetadata().GetName() != tc.name {
+				t.Errorf("metadata.name = %q, want %q", cfg.GetMetadata().GetName(), tc.name)
+			}
+			if cfg.GetDriverName() != tc.driver {
+				t.Errorf("driverName = %q, want %q", cfg.GetDriverName(), tc.driver)
+			}
+			if cfg.GetNodeSocketOverride() != tc.socket {
+				t.Errorf("nodeSocketOverride = %q, want %q", cfg.GetNodeSocketOverride(), tc.socket)
+			}
+			wantEndpoint := "tcp://" + tc.svc.Name + "." + tc.svc.Namespace + ".svc.cluster.local:" + strconv.Itoa(int(tc.svc.Spec.Ports[0].Port))
+			if cfg.GetControllerEndpoint() != wantEndpoint {
+				t.Errorf("controllerEndpoint = %q, want %q", cfg.GetControllerEndpoint(), wantEndpoint)
+			}
+			wantServer := tc.svc.Name + "." + tc.svc.Namespace + ".svc"
+			if !cfg.GetTls().GetEnabled() || !cfg.GetTls().GetUsePodIdentity() || cfg.GetTls().GetServerName() != wantServer {
+				t.Errorf("tls = %+v, want enabled pod-identity with serverName %q", cfg.GetTls(), wantServer)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "empty", raw: ""},
+		{name: "invalid yaml", raw: ":\n  - [unclosed"},
+		{name: "unknown field", raw: "metadata:\n  name: csi-nfs\nunknownField: value\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := CSIDriverConfigFromManifest([]byte(tc.raw)); err == nil {
+				t.Fatalf("CSIDriverConfigFromManifest(%s) = nil, want error", tc.name)
+			}
+		})
+	}
+}
+
+func TestCSIDriverConfigsForDriver(t *testing.T) {
+	cfg := &config.Config{Root: repoRoot(t)}
+	for _, tc := range []struct {
+		driver string
+		want   []string
+	}{
+		{driver: "none", want: nil},
+		{driver: "nfs", want: []string{"csi-nfs"}},
+		{driver: "hostpath", want: []string{"csi-hostpath"}},
+		{driver: "both", want: []string{"csi-hostpath", "csi-nfs"}},
+	} {
+		t.Run(tc.driver, func(t *testing.T) {
+			configs, err := csiDriverConfigsForDriver(cfg, csiDrivers[tc.driver])
+			if err != nil {
+				t.Fatalf("csiDriverConfigsForDriver(%q) = %v", tc.driver, err)
+			}
+			if len(configs) != len(tc.want) {
+				t.Fatalf("len(configs) = %d, want %d", len(configs), len(tc.want))
+			}
+			for i, name := range tc.want {
+				if configs[i].GetMetadata().GetName() != name {
+					t.Errorf("configs[%d].name = %q, want %q", i, configs[i].GetMetadata().GetName(), name)
+				}
+			}
+		})
+	}
+
+	t.Run("missing manifest returns error", func(t *testing.T) {
+		if _, err := csiDriverConfigsForDriver(&config.Config{Root: t.TempDir()}, csiDrivers["nfs"]); err == nil {
+			t.Fatal("csiDriverConfigsForDriver with empty root = nil, want error")
+		}
+	})
+}
+
+func TestRegisterCSIDriverConfigsEarlySkipsAndErrors(t *testing.T) {
+	root := repoRoot(t)
+
+	t.Run("unknown driver returns error", func(t *testing.T) {
+		env := &Env{Cfg: &config.Config{Root: root}}
+		if err := env.RegisterCSIDriverConfigs(context.Background(), "bogus"); err == nil {
+			t.Fatal("RegisterCSIDriverConfigs(bogus) = nil, want error")
+		}
+	})
+
+	t.Run("driver none skips with gate enabled", func(t *testing.T) {
+		env := &Env{Cfg: &config.Config{Root: root, PreviewGates: []string{"ExternalVolumes"}}}
+		if err := env.RegisterCSIDriverConfigs(context.Background(), "none"); err != nil {
+			t.Fatalf("RegisterCSIDriverConfigs(none) = %v, want nil", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		driver string
+		gates  []string
+	}{
+		{name: "nfs empty gates", driver: "nfs"},
+		{name: "hostpath empty gates", driver: "hostpath"},
+		{name: "both unrelated gate", driver: "both", gates: []string{"OtherGate"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &Env{Cfg: &config.Config{Root: root, PreviewGates: tc.gates}}
+			if err := env.RegisterCSIDriverConfigs(context.Background(), tc.driver); err != nil {
+				t.Fatalf("RegisterCSIDriverConfigs(%q) with gate off = %v, want nil", tc.driver, err)
+			}
+		})
+	}
+
+	for _, gates := range [][]string{{"ExternalVolumes"}, {"ALL"}} {
+		t.Run("skips without ate-api-server "+gates[0], func(t *testing.T) {
+			env := &Env{
+				Cfg:  &config.Config{Root: root, PreviewGates: gates},
+				Kube: fakeKube(t),
+			}
+			if err := env.RegisterCSIDriverConfigs(context.Background(), "both"); err != nil {
+				t.Fatalf("RegisterCSIDriverConfigs(both) = %v, want nil", err)
+			}
+		})
+	}
+}
+
+type fakeCSIDriverConfigClient struct {
+	stored    map[string]*ateapi.CsiDriverConfig
+	createErr error
+	getErr    error
+	updateErr error
+	creates   int
+	gets      int
+	updates   int
+	lastUpd   *ateapi.CsiDriverConfig
+}
+
+func (f *fakeCSIDriverConfigClient) CreateCsiDriverConfig(_ context.Context, in *ateapi.CreateCsiDriverConfigRequest, _ ...grpc.CallOption) (*ateapi.CsiDriverConfig, error) {
+	f.creates++
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	cfg := in.GetCsiDriverConfig()
+	name := cfg.GetMetadata().GetName()
+	for existingName, existing := range f.stored {
+		if existingName == name || existing.GetDriverName() == cfg.GetDriverName() {
+			return nil, status.Errorf(codes.AlreadyExists, "csi driver config %q already exists", name)
+		}
+	}
+	f.stored[name] = proto.CloneOf(cfg)
+	return cfg, nil
+}
+
+func (f *fakeCSIDriverConfigClient) GetCsiDriverConfig(_ context.Context, in *ateapi.GetCsiDriverConfigRequest, _ ...grpc.CallOption) (*ateapi.CsiDriverConfig, error) {
+	f.gets++
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	name := in.GetCsiDriverConfig().GetName()
+	cfg, ok := f.stored[name]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "csi driver config %q not found", name)
+	}
+	return proto.CloneOf(cfg), nil
+}
+
+func (f *fakeCSIDriverConfigClient) UpdateCsiDriverConfig(_ context.Context, in *ateapi.UpdateCsiDriverConfigRequest, _ ...grpc.CallOption) (*ateapi.CsiDriverConfig, error) {
+	f.updates++
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	cfg := proto.CloneOf(in.GetCsiDriverConfig())
+	f.lastUpd = cfg
+	f.stored[cfg.GetMetadata().GetName()] = cfg
+	return cfg, nil
+}
+
+func TestRegisterCSIDriverConfigsClient(t *testing.T) {
+	const storedUID = "11111111-2222-3333-4444-555555555555"
+	nfs := &ateapi.CsiDriverConfig{
+		Metadata:           &ateapi.ResourceMetadata{Name: "csi-nfs"},
+		DriverName:         "nfs.csi.k8s.io",
+		ControllerEndpoint: "tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052",
+		NodeSocketOverride: "unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock",
+		Tls: &ateapi.CsiDriverTlsConfig{
+			Enabled:        true,
+			UsePodIdentity: true,
+			ServerName:     "csi-nfs-controller.kube-system.svc",
+		},
+	}
+	plain := &ateapi.CsiDriverConfig{
+		Metadata:           &ateapi.ResourceMetadata{Name: "csi-plain"},
+		DriverName:         "plain.csi.k8s.io",
+		ControllerEndpoint: "tcp://127.0.0.1:9000",
+	}
+
+	t.Run("creates missing configs", func(t *testing.T) {
+		client := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{}}
+		if err := registerCSIDriverConfigs(context.Background(), client, []*ateapi.CsiDriverConfig{nfs, plain}); err != nil {
+			t.Fatalf("registerCSIDriverConfigs = %v, want nil", err)
+		}
+		if client.creates != 2 || client.gets != 0 || client.updates != 0 {
+			t.Errorf("creates=%d gets=%d updates=%d, want 2/0/0", client.creates, client.gets, client.updates)
+		}
+	})
+
+	t.Run("AlreadyExists matching spec keeps existing without update", func(t *testing.T) {
+		existingNFS := proto.CloneOf(nfs)
+		existingNFS.Metadata = &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: storedUID, Version: 4}
+		existingPlain := proto.CloneOf(plain)
+		existingPlain.Metadata = &ateapi.ResourceMetadata{Name: "csi-plain", Uid: storedUID, Version: 2}
+		existingPlain.Tls = &ateapi.CsiDriverTlsConfig{} // empty Tls matches nil Tls
+		client := &fakeCSIDriverConfigClient{
+			stored: map[string]*ateapi.CsiDriverConfig{"csi-nfs": existingNFS, "csi-plain": existingPlain},
+		}
+		if err := registerCSIDriverConfigs(context.Background(), client, []*ateapi.CsiDriverConfig{nfs, plain}); err != nil {
+			t.Fatalf("registerCSIDriverConfigs = %v, want nil", err)
+		}
+		if client.gets != 2 || client.updates != 0 {
+			t.Errorf("gets=%d updates=%d, want 2/0", client.gets, client.updates)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ateapi.CsiDriverConfig)
+	}{
+		{name: "controllerEndpoint drift", mutate: func(c *ateapi.CsiDriverConfig) { c.ControllerEndpoint = "tcp://10.0.0.9:50052" }},
+		{name: "nodeSocketOverride drift", mutate: func(c *ateapi.CsiDriverConfig) { c.NodeSocketOverride = "unix:///tmp/old.sock" }},
+		{name: "tls drift", mutate: func(c *ateapi.CsiDriverConfig) { c.Tls = nil }},
+	} {
+		t.Run("AlreadyExists "+tc.name+" updates with stored uid and version", func(t *testing.T) {
+			existing := proto.CloneOf(nfs)
+			existing.Metadata = &ateapi.ResourceMetadata{Name: "csi-nfs", Uid: storedUID, Version: 7}
+			tc.mutate(existing)
+			client := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{"csi-nfs": existing}}
+			if err := registerCSIDriverConfigs(context.Background(), client, []*ateapi.CsiDriverConfig{nfs}); err != nil {
+				t.Fatalf("registerCSIDriverConfigs(%s) = %v, want nil", tc.name, err)
+			}
+			if client.updates != 1 {
+				t.Fatalf("updates = %d, want 1", client.updates)
+			}
+			if got := client.lastUpd.GetMetadata(); got.GetName() != "csi-nfs" || got.GetUid() != storedUID || got.GetVersion() != 7 {
+				t.Errorf("update metadata = %+v, want name=csi-nfs uid=%s version=7", got, storedUID)
+			}
+			if !csiDriverConfigSpecEqual(client.lastUpd, nfs) {
+				t.Errorf("updated spec = %+v, want %+v", client.lastUpd, nfs)
+			}
+			if nfs.GetMetadata().GetUid() != "" {
+				t.Errorf("input config mutated: uid = %q", nfs.GetMetadata().GetUid())
+			}
+		})
+	}
+
+	t.Run("AlreadyExists immutable driverName mismatch fails", func(t *testing.T) {
+		existing := proto.CloneOf(nfs)
+		existing.DriverName = "other.csi.k8s.io"
+		client := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{"csi-nfs": existing}}
+		err := registerCSIDriverConfigs(context.Background(), client, []*ateapi.CsiDriverConfig{nfs})
+		if err == nil || !strings.Contains(err.Error(), "driverName") {
+			t.Fatalf("registerCSIDriverConfigs = %v, want driverName mismatch error", err)
+		}
+		if client.updates != 0 {
+			t.Errorf("updates = %d, want 0", client.updates)
+		}
+	})
+
+	t.Run("AlreadyExists with Get NotFound reports conflicting driver registration", func(t *testing.T) {
+		other := proto.CloneOf(nfs)
+		other.Metadata = &ateapi.ResourceMetadata{Name: "custom-nfs"}
+		client := &fakeCSIDriverConfigClient{stored: map[string]*ateapi.CsiDriverConfig{"custom-nfs": other}}
+		err := registerCSIDriverConfigs(context.Background(), client, []*ateapi.CsiDriverConfig{nfs})
+		if err == nil || !strings.Contains(err.Error(), "nfs.csi.k8s.io") {
+			t.Fatalf("registerCSIDriverConfigs = %v, want error naming driver nfs.csi.k8s.io", err)
+		}
+	})
+
+	t.Run("propagates RPC errors", func(t *testing.T) {
+		if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
+			stored:    map[string]*ateapi.CsiDriverConfig{},
+			createErr: status.Error(codes.Unavailable, "unavailable"),
+		}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
+			t.Error("create error = nil, want error")
+		}
+		if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
+			stored: map[string]*ateapi.CsiDriverConfig{"csi-nfs": nfs},
+			getErr: status.Error(codes.Internal, "internal"),
+		}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
+			t.Error("get error = nil, want error")
+		}
+		drifted := proto.CloneOf(nfs)
+		drifted.ControllerEndpoint = "tcp://10.0.0.9:50052"
+		if err := registerCSIDriverConfigs(context.Background(), &fakeCSIDriverConfigClient{
+			stored:    map[string]*ateapi.CsiDriverConfig{"csi-nfs": drifted},
+			updateErr: status.Error(codes.Aborted, "conflict"),
+		}, []*ateapi.CsiDriverConfig{nfs}); err == nil {
+			t.Error("update error = nil, want error")
 		}
 	})
 }

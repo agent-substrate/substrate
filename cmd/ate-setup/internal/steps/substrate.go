@@ -17,15 +17,18 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"sigs.k8s.io/yaml"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/preview"
@@ -56,23 +59,157 @@ func EnsureAtespace(ctx context.Context, client *ateclient.Client, atespace stri
 	return err
 }
 
+// unmarshalProtoManifest parses a single protojson-shaped YAML or JSON
+// document into dst. Parsing is strict so typos fail instead of being dropped.
+func unmarshalProtoManifest(manifest []byte, dst proto.Message) error {
+	jsonData, err := yaml.YAMLToJSON(manifest)
+	if err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+	if string(jsonData) == "null" {
+		return fmt.Errorf("manifest is empty")
+	}
+	return protojson.Unmarshal(jsonData, dst)
+}
+
 // ActorTemplateFromManifest parses a single protojson-shaped YAML or JSON
 // document into an ActorTemplate, as `kubectl ate create actor-template`
 // does. Parsing is strict: unknown fields are an error, so typos don't
 // silently drop configuration.
 func ActorTemplateFromManifest(manifest []byte) (*ateapi.ActorTemplate, error) {
-	jsonData, err := yaml.YAMLToJSON(manifest)
-	if err != nil {
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	if string(jsonData) == "null" {
-		return nil, fmt.Errorf("manifest is empty")
-	}
 	template := &ateapi.ActorTemplate{}
-	if err := protojson.Unmarshal(jsonData, template); err != nil {
+	if err := unmarshalProtoManifest(manifest, template); err != nil {
 		return nil, err
 	}
 	return template, nil
+}
+
+// CSIDriverConfigFromManifest parses a single protojson-shaped YAML or JSON
+// document into a CsiDriverConfig, as `kubectl ate create csi-driver-config`
+// does.
+func CSIDriverConfigFromManifest(manifest []byte) (*ateapi.CsiDriverConfig, error) {
+	cfg := &ateapi.CsiDriverConfig{}
+	if err := unmarshalProtoManifest(manifest, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+type csiDriverConfigClient interface {
+	CreateCsiDriverConfig(ctx context.Context, in *ateapi.CreateCsiDriverConfigRequest, opts ...grpc.CallOption) (*ateapi.CsiDriverConfig, error)
+	GetCsiDriverConfig(ctx context.Context, in *ateapi.GetCsiDriverConfigRequest, opts ...grpc.CallOption) (*ateapi.CsiDriverConfig, error)
+	UpdateCsiDriverConfig(ctx context.Context, in *ateapi.UpdateCsiDriverConfigRequest, opts ...grpc.CallOption) (*ateapi.CsiDriverConfig, error)
+}
+
+// RegisterCSIDriverConfigs creates or updates the canonical CsiDriverConfig
+// resources for the selected CSI driver when the ExternalVolumes preview gate
+// is enabled and ate-api-server is deployed.
+func (e *Env) RegisterCSIDriverConfigs(ctx context.Context, driver string) error {
+	if err := ValidateCSIDriver(driver); err != nil {
+		return err
+	}
+	spec := csiDrivers[driver]
+	if spec.installsNothing() {
+		return nil
+	}
+	if !previewGateEnabled(e.Cfg.PreviewGates, preview.GateExternalVolumes) {
+		log.Infof("Skipping CsiDriverConfig registration: %s preview gate is disabled.", preview.GateExternalVolumes)
+		return nil
+	}
+	configs, err := csiDriverConfigsForDriver(e.Cfg, spec)
+	if err != nil {
+		return err
+	}
+	present, err := e.Kube.DeploymentExists(ctx, e.Namespace(), "ate-api-server")
+	if err != nil {
+		return err
+	}
+	if !present {
+		log.Step("ate-api-server not found; skipping CsiDriverConfig registration")
+		return nil
+	}
+
+	client, err := e.AteClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	return registerCSIDriverConfigs(ctx, client, configs)
+}
+
+func csiDriverConfigsForDriver(cfg *config.Config, spec csiDriverSpec) ([]*ateapi.CsiDriverConfig, error) {
+	var paths []string
+	if spec.hostpath {
+		paths = append(paths, cfg.Path("hack", "csi", "csi-driver-config-hostpath.yaml"))
+	}
+	if spec.nfs {
+		paths = append(paths, cfg.Path("hack", "csi", "csi-driver-config-nfs.yaml"))
+	}
+	configs := make([]*ateapi.CsiDriverConfig, 0, len(paths))
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("reading csi driver config manifest %s: %w", p, err)
+		}
+		cdc, err := CSIDriverConfigFromManifest(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing csi driver config manifest %s: %w", p, err)
+		}
+		configs = append(configs, cdc)
+	}
+	return configs, nil
+}
+
+func registerCSIDriverConfigs(ctx context.Context, client csiDriverConfigClient, configs []*ateapi.CsiDriverConfig) error {
+	for _, cfg := range configs {
+		name := cfg.GetMetadata().GetName()
+		_, err := client.CreateCsiDriverConfig(ctx, &ateapi.CreateCsiDriverConfigRequest{CsiDriverConfig: cfg})
+		if err == nil {
+			log.Stepf("registered csi driver config %q", name)
+			continue
+		}
+		if status.Code(err) != codes.AlreadyExists {
+			return fmt.Errorf("creating csi driver config %q: %w", name, err)
+		}
+		existing, getErr := client.GetCsiDriverConfig(ctx, &ateapi.GetCsiDriverConfigRequest{
+			CsiDriverConfig: &ateapi.ObjectRef{Name: name},
+		})
+		if status.Code(getErr) == codes.NotFound {
+			return fmt.Errorf("csi driver config %q could not be created (AlreadyExists) and was not found by name (another CsiDriverConfig may already register driver %q)", name, cfg.GetDriverName())
+		}
+		if getErr != nil {
+			return fmt.Errorf("getting existing csi driver config %q: %w", name, getErr)
+		}
+		if existing.GetDriverName() != cfg.GetDriverName() {
+			return fmt.Errorf("csi driver config %q already exists with a different driverName (got %q, want %q); delete and recreate it",
+				name, existing.GetDriverName(), cfg.GetDriverName())
+		}
+		if csiDriverConfigSpecEqual(cfg, existing) {
+			log.Stepf("csi driver config %q already exists; keeping it", name)
+			continue
+		}
+		updated := proto.CloneOf(cfg)
+		updated.Metadata = &ateapi.ResourceMetadata{
+			Name:    name,
+			Uid:     existing.GetMetadata().GetUid(),
+			Version: existing.GetMetadata().GetVersion(),
+		}
+		if _, err := client.UpdateCsiDriverConfig(ctx, &ateapi.UpdateCsiDriverConfigRequest{CsiDriverConfig: updated}); err != nil {
+			return fmt.Errorf("updating csi driver config %q: %w", name, err)
+		}
+		log.Stepf("updated csi driver config %q", name)
+	}
+	return nil
+}
+
+func csiDriverConfigSpecEqual(a, b *ateapi.CsiDriverConfig) bool {
+	return a.GetDriverName() == b.GetDriverName() &&
+		a.GetControllerEndpoint() == b.GetControllerEndpoint() &&
+		a.GetNodeSocketOverride() == b.GetNodeSocketOverride() &&
+		a.GetTls().GetEnabled() == b.GetTls().GetEnabled() &&
+		a.GetTls().GetUsePodIdentity() == b.GetTls().GetUsePodIdentity() &&
+		a.GetTls().GetServerName() == b.GetTls().GetServerName()
 }
 
 // CreateActorTemplate creates the template through the ate API. Actor
