@@ -77,8 +77,22 @@ var released = []string{
 	"cmd/podcertcontroller",
 }
 
-// ReleaseComponents returns the Components a release publishes.
-func ReleaseComponents() []string { return slices.Clone(released) }
+// releasedTools is the allowlist of packages a release publishes as images
+// although no manifest deploys them. The kubectl-ate CLI is one: Helm-based
+// installs run its `admin make-ca-pool` and `admin make-jwt-pool` subcommands
+// from a bootstrap Job, which otherwise has to download the release binary
+// from GitHub at install time, an egress that air-gapped clusters cannot
+// make. An entry here is looked up by nothing under --image-repo, since the
+// manifests never name it.
+var releasedTools = []string{
+	"cmd/kubectl-ate",
+}
+
+// ReleaseComponents returns the Components a release publishes, plus the
+// releasedTools.
+func ReleaseComponents() []string {
+	return append(slices.Clone(released), releasedTools...)
+}
 
 // DockerfileImage is an image built from a Dockerfile with docker buildx
 // rather than with ko.
@@ -100,7 +114,9 @@ var releasedDockerfiles = []DockerfileImage{EnvoyDataplane}
 func ReleaseDockerfileImages() []DockerfileImage { return slices.Clone(releasedDockerfiles) }
 
 // IsReleased reports whether a release publishes pkg.
-func IsReleased(pkg string) bool { return slices.Contains(released, pkg) }
+func IsReleased(pkg string) bool {
+	return slices.Contains(released, pkg) || slices.Contains(releasedTools, pkg)
+}
 
 // KoReference is the ko:// reference the manifests name pkg by.
 //
