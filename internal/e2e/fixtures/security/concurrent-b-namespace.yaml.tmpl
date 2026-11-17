@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Atespace B of the concurrent security fixture: a namespace only.
+# Kubernetes half of the concurrent security fixture for atespace B: a k8s
+# Namespace only.
 #
-# Atespace B deliberately has no WorkerPool. It shares the 2-worker pool
-# deployed by concurrent-a-pool.yaml.tmpl in atespace A.
+# Applying this manifest does not create an atespace. e2e.DeploySubstrateFixture
+# creates the atespace of the same name through the ate API, from
+# concurrent-template.yaml.tmpl. This file exists because
+# e2e.DeploySubstrateFixture requires a k8s manifest next to each
+# ActorTemplate.
+#
+# Atespace B deliberately has no WorkerPool. Its actors run on the 2-worker
+# pool that concurrent-a-pool.yaml.tmpl deploys in the k8s namespace of
+# atespace A.
 
 apiVersion: v1
 kind: Namespace

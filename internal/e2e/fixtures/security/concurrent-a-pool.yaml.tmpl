@@ -12,14 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Atespace A of the concurrent security fixture: a namespace plus a
-# WorkerPool with replicas: 2.
+# Kubernetes half of the concurrent security fixture for atespace A: a k8s
+# Namespace plus a WorkerPool with replicas: 2.
+#
+# Applying this manifest does not create an atespace. e2e.DeploySubstrateFixture
+# creates the atespace of the same name through the ate API, from
+# concurrent-template.yaml.tmpl.
 #
 # replicas is 2 on purpose: the test runs two actors at the exact same time
 # on two distinct worker pods to verify space-invariance boundaries (NW-6,
-# NW-2, ST-1 [space], EX-4 [space]). Atespace B deploys
-# concurrent-b-namespace.yaml.tmpl, a namespace with no pool, so both
-# atespaces share this 2-worker pool.
+# NW-2, ST-1 [space], EX-4 [space]). The fixture for atespace B applies
+# concurrent-b-namespace.yaml.tmpl, a k8s Namespace with no pool, so the
+# actors of both atespaces share this 2-worker pool.
 
 apiVersion: v1
 kind: Namespace
