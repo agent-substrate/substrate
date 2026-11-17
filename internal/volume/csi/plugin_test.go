@@ -790,6 +790,17 @@ func TestPlugin_Capabilities_DisableStageUnstageAfterUnimplemented(t *testing.T)
 	}
 }
 
+func closedTCPEndpoint(t *testing.T) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	addr := lis.Addr().String()
+	_ = lis.Close()
+	return "tcp://" + addr
+}
+
 func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 	for _, isController := range []bool{true, false} {
 		t.Run(fmt.Sprintf("isController=%t", isController), func(t *testing.T) {
@@ -804,8 +815,14 @@ func TestNewCSIPlugin_CapabilityQueryFailureIsNotFatal(t *testing.T) {
 			endpoint, cleanup := startMockCSIDriver(t, driver)
 			defer cleanup()
 
-			cfg := driverConfig(endpoint, nil)
-			cfg.NodeSocketOverride = endpoint
+			unanswered := closedTCPEndpoint(t)
+			cfg := driverConfig(unanswered, nil)
+			cfg.NodeSocketOverride = "unix://" + filepath.Join(t.TempDir(), "unused.sock")
+			if isController {
+				cfg.ControllerEndpoint = endpoint
+			} else {
+				cfg.NodeSocketOverride = endpoint
+			}
 			plugin, err := newCSIPlugin(t.Context(), &mockGetter{cfg: cfg}, mockDriverName, isController, tlsPaths{})
 			if err != nil {
 				t.Fatalf("newCSIPlugin failed: %v", err)
@@ -845,7 +862,7 @@ func TestPlugin_CloseAndNewCSIPluginFromConfig(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, &mockCSIDriver{})
 	defer cleanup()
 
-	cfg := driverConfig(endpoint, nil)
+	cfg := driverConfig(closedTCPEndpoint(t), nil)
 	cfg.NodeSocketOverride = endpoint
 	plugin, err := NewCSIPluginFromConfig(ctx, cfg, mockDriverName, false)
 	if err != nil {

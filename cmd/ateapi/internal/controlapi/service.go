@@ -40,11 +40,61 @@ type csiPluginCacheKey struct {
 	tlsServerName      string
 }
 
+type csiPluginEntry struct {
+	mu      sync.Mutex
+	refs    int
+	retired bool
+	plugin  *csi.Plugin
+}
+
+func newCSIPluginEntry(p *csi.Plugin) *csiPluginEntry {
+	return &csiPluginEntry{refs: 1, plugin: p}
+}
+
+func (e *csiPluginEntry) acquire() func() {
+	e.mu.Lock()
+	e.refs++
+	e.mu.Unlock()
+	return sync.OnceFunc(e.release)
+}
+
+func (e *csiPluginEntry) release() {
+	e.mu.Lock()
+	e.refs--
+	shouldClose := e.retired && e.refs == 0
+	p := e.plugin
+	e.mu.Unlock()
+	if shouldClose {
+		_ = p.Close()
+	}
+}
+
+func (e *csiPluginEntry) retire() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.retired {
+		e.mu.Unlock()
+		return
+	}
+	e.retired = true
+	e.refs--
+	shouldClose := e.refs == 0
+	p := e.plugin
+	e.mu.Unlock()
+	if shouldClose {
+		_ = p.Close()
+	}
+}
+
+func noopRelease() {}
+
 type csiPluginSlot struct {
 	gen      uint64
 	inflight int
 	key      csiPluginCacheKey
-	plugin   *csi.Plugin
+	entry    *csiPluginEntry
 }
 
 func newCSIPluginCacheKey(cfg *ateapi.CsiDriverConfig) csiPluginCacheKey {
@@ -83,8 +133,9 @@ type RPCService struct {
 var _ ateapi.ControlServer = (*RPCService)(nil)
 
 // VolumePluginRegistry defines the interface for dynamic CSI plugin resolution.
+// Callers must invoke the returned release function when finished with the plugin.
 type VolumePluginRegistry interface {
-	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
+	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, func(), error)
 }
 
 // NewRPCService creates an instance of the ControlServer service. This is what
@@ -203,17 +254,28 @@ func (s *RPCService) resolveCsiDriverConfig(ctx context.Context, driverName stri
 	return cfg, false, nil
 }
 
-func (s *RPCService) evictSlotLocked(driverName string, cur csiPluginSlot) (*csi.Plugin, uint64) {
-	evicted := cur.plugin
-	cur.plugin, cur.key = nil, csiPluginCacheKey{}
+// Close retires all cached dynamic CSI controller plugins.
+func (s *RPCService) Close() {
+	s.mu.Lock()
+	slots := maps.Clone(s.csiPlugins)
+	clear(s.csiPlugins)
+	s.mu.Unlock()
+	for _, slot := range slots {
+		slot.entry.retire()
+	}
+}
+
+func (s *RPCService) evictSlotLocked(driverName string, cur csiPluginSlot) (*csiPluginEntry, uint64) {
+	evicted := cur.entry
+	cur.entry, cur.key = nil, csiPluginCacheKey{}
 	cur.gen++
 	s.csiPlugins[driverName] = cur
 	return evicted, cur.gen
 }
 
-func (s *RPCService) getPluginOnce(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, bool, error) {
+func (s *RPCService) getPluginOnce(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, func(), bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	s.mu.Lock()
 	if s.csiPlugins == nil {
@@ -228,7 +290,7 @@ func (s *RPCService) getPluginOnce(ctx context.Context, driverName string) (volu
 		s.mu.Lock()
 		cur := s.csiPlugins[driverName]
 		cur.inflight--
-		if cur.plugin == nil && cur.inflight == 0 {
+		if cur.entry == nil && cur.inflight == 0 {
 			delete(s.csiPlugins, driverName)
 		} else {
 			s.csiPlugins[driverName] = cur
@@ -239,69 +301,76 @@ func (s *RPCService) getPluginOnce(ctx context.Context, driverName string) (volu
 	cfg, evictOnErr, err := s.resolveCsiDriverConfig(ctx, driverName)
 	if err != nil {
 		if !evictOnErr {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		s.mu.Lock()
 		cur := s.csiPlugins[driverName]
 		if cur.gen != startGen {
-			retry := cur.plugin != nil
+			retry := cur.entry != nil
 			s.mu.Unlock()
-			return nil, retry, err
+			return nil, nil, retry, err
 		}
 		evicted, _ := s.evictSlotLocked(driverName, cur)
 		s.mu.Unlock()
-		_ = evicted.Close()
-		return nil, false, err
+		evicted.retire()
+		return nil, nil, false, err
 	}
 
 	key := newCSIPluginCacheKey(cfg)
 	s.mu.Lock()
 	cur := s.csiPlugins[driverName]
-	if cur.plugin != nil && cur.key == key {
+	if cur.entry != nil && cur.key == key {
+		release := cur.entry.acquire()
+		plugin := cur.entry.plugin
 		s.mu.Unlock()
-		return cur.plugin, false, nil
+		return plugin, release, false, nil
 	}
 	if cur.gen != startGen {
 		s.mu.Unlock()
-		return nil, true, nil
-	}
-	var preEvicted *csi.Plugin
-	if cur.plugin != nil {
-		preEvicted, startGen = s.evictSlotLocked(driverName, cur)
+		return nil, nil, true, nil
 	}
 	s.mu.Unlock()
-	_ = preEvicted.Close()
 
 	csiPlugin, err := csi.NewCSIPluginFromConfig(ctx, cfg, driverName, true)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 
 	s.mu.Lock()
 	cur = s.csiPlugins[driverName]
-	if (cur.plugin != nil && cur.key == key) || cur.gen != startGen {
-		matched, retry := cur.plugin, cur.plugin == nil || cur.key != key
+	if cur.entry != nil && cur.key == key {
+		release := cur.entry.acquire()
+		matched := cur.entry.plugin
 		s.mu.Unlock()
 		_ = csiPlugin.Close()
-		return matched, retry, nil
+		return matched, release, false, nil
 	}
-	cur.plugin, cur.key = csiPlugin, key
+	if cur.gen != startGen {
+		s.mu.Unlock()
+		_ = csiPlugin.Close()
+		return nil, nil, true, nil
+	}
+	prev := cur.entry
+	next := newCSIPluginEntry(csiPlugin)
+	release := next.acquire()
+	cur.entry, cur.key = next, key
 	cur.gen++
 	s.csiPlugins[driverName] = cur
 	s.mu.Unlock()
-	return csiPlugin, false, nil
+	prev.retire()
+	return csiPlugin, release, false, nil
 }
 
 // GetPlugin retrieves a CSI volume plugin by driver name, reading CsiDriverConfig
 // from Postgres first and falling back to the Kubernetes CSIDriverConfig CRD.
-func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
+func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, func(), error) {
 	if plugin, ok := s.staticVolumePlugins[driverName]; ok {
-		return plugin, nil
+		return plugin, noopRelease, nil
 	}
 	for {
-		plugin, retry, err := s.getPluginOnce(ctx, driverName)
+		plugin, release, retry, err := s.getPluginOnce(ctx, driverName)
 		if !retry {
-			return plugin, err
+			return plugin, release, err
 		}
 	}
 }

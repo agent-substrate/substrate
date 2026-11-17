@@ -306,6 +306,7 @@ func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testCon
 	cleanup := func() {
 		conn.Close()
 		grpcServer.Stop()
+		service.Close()
 		cancel()
 		cleanupStore()
 	}

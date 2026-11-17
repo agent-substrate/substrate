@@ -175,22 +175,15 @@ func (p *Persistence) UpdateCsiDriverConfig(ctx context.Context, name string, pr
 		return nil, err
 	}
 
+	// Snapshot the stored metadata before handing the config to mutate.
+	// Immutable fields are enforced by declarative validation in the service layer.
 	oldMeta := proto.CloneOf(dbConfig.GetMetadata())
-	oldDriverName := dbConfig.GetDriverName()
 	if mutate != nil {
 		if err := mutate(dbConfig); err != nil {
 			return nil, err
 		}
 	}
-	if got := dbConfig.GetMetadata().GetAtespace(); got != "" {
-		return nil, fmt.Errorf("%w: metadata.atespace must be empty, got %q", store.ErrImmutableField, got)
-	}
-	if got := dbConfig.GetMetadata().GetName(); got != name {
-		return nil, fmt.Errorf("%w: metadata.name changed from %q to %q", store.ErrImmutableField, name, got)
-	}
-	if got := dbConfig.GetDriverName(); got != oldDriverName {
-		return nil, fmt.Errorf("%w: driver_name changed from %q to %q", store.ErrImmutableField, oldDriverName, got)
-	}
+	dbConfig.Metadata = oldMeta
 	setUpdateMetadata(dbConfig.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbConfig)
@@ -198,10 +191,13 @@ func (p *Persistence) UpdateCsiDriverConfig(ctx context.Context, name string, pr
 		return nil, fmt.Errorf("marshaling csi driver config: %w", err)
 	}
 	commandTag, err := p.pool.Exec(ctx, `
-		UPDATE csi_driver_configs SET version = $1, proto = $2
-		WHERE name = $3 AND uid = $4 AND version = $5`,
-		dbConfig.GetMetadata().GetVersion(), updatedBytes, name, currentUID, currentVersion)
+		UPDATE csi_driver_configs SET version = $1, driver_name = $2, proto = $3
+		WHERE name = $4 AND uid = $5 AND version = $6`,
+		dbConfig.GetMetadata().GetVersion(), dbConfig.GetDriverName(), updatedBytes, name, currentUID, currentVersion)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: driver_name %q is already registered", store.ErrAlreadyExists, dbConfig.GetDriverName())
+		}
 		return nil, fmt.Errorf("updating csi driver config %q: %w", name, err)
 	}
 	if commandTag.RowsAffected() == 0 {
@@ -213,6 +209,11 @@ func (p *Persistence) UpdateCsiDriverConfig(ctx context.Context, name string, pr
 	return dbConfig, nil
 }
 
+// isDriverInUseByExternalVolumeClass checks whether any ExternalVolumeClass
+// references driverName. This guard is best-effort: CreateExternalVolumeClass
+// does not lock csi_driver_configs, so classes may be created before their
+// driver config (matching Kubernetes StorageClass ordering) and volume
+// provisioning resolves the driver config lazily.
 func isDriverInUseByExternalVolumeClass(ctx context.Context, tx pgx.Tx, driverName string) (bool, error) {
 	var inUse bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM external_volume_classes WHERE driver_name = $1)`, driverName).Scan(&inUse); err != nil {

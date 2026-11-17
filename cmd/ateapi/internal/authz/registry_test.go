@@ -305,19 +305,19 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			name:       "CreateCsiDriverConfig",
 			fullMethod: ateapi.Control_CreateCsiDriverConfig_FullMethodName,
 			req:        &ateapi.CreateCsiDriverConfigRequest{},
-			want:       []check{{RelationCanCreateCsiDriverConfig, GlobalRootObject}},
+			want:       []check{{relation: RelationCanCreateCsiDriverConfig, object: GlobalRootObject}},
 		},
 		{
 			name:       "ListCsiDriverConfigs",
 			fullMethod: ateapi.Control_ListCsiDriverConfigs_FullMethodName,
 			req:        &ateapi.ListCsiDriverConfigsRequest{},
-			want:       []check{{RelationCanListCsiDriverConfigs, GlobalRootObject}},
+			want:       []check{{relation: RelationCanListCsiDriverConfigs, object: GlobalRootObject}},
 		},
 		{
 			name:       "GetCsiDriverConfig",
 			fullMethod: ateapi.Control_GetCsiDriverConfig_FullMethodName,
 			req:        &ateapi.GetCsiDriverConfigRequest{CsiDriverConfig: &ateapi.ObjectRef{Name: "csi-nfs"}},
-			want:       []check{{RelationCanGet, "csi_driver_config:csi-nfs"}},
+			want:       []check{{relation: RelationCanGet, object: "csi_driver_config:csi-nfs"}},
 		},
 		{
 			name:       "UpdateCsiDriverConfig",
@@ -325,13 +325,13 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			req: &ateapi.UpdateCsiDriverConfigRequest{CsiDriverConfig: &ateapi.CsiDriverConfig{
 				Metadata: &ateapi.ResourceMetadata{Name: "csi-nfs"},
 			}},
-			want: []check{{RelationCanUpdate, "csi_driver_config:csi-nfs"}},
+			want: []check{{relation: RelationCanUpdate, object: "csi_driver_config:csi-nfs"}},
 		},
 		{
 			name:       "DeleteCsiDriverConfig",
 			fullMethod: ateapi.Control_DeleteCsiDriverConfig_FullMethodName,
 			req:        &ateapi.DeleteCsiDriverConfigRequest{CsiDriverConfig: &ateapi.ObjectRef{Name: "csi-nfs"}},
-			want:       []check{{RelationCanDelete, "csi_driver_config:csi-nfs"}},
+			want:       []check{{relation: RelationCanDelete, object: "csi_driver_config:csi-nfs"}},
 		},
 
 		// Actor identity credentials.

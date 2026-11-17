@@ -17,7 +17,6 @@ package controlapi
 import (
 	"context"
 	"errors"
-	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -87,15 +86,7 @@ func (f *faultyServiceStore) GetCsiDriverConfigByDriverName(ctx context.Context,
 
 func cleanupCSIPlugins(t *testing.T, svc *RPCService) *RPCService {
 	t.Helper()
-	t.Cleanup(func() {
-		svc.mu.Lock()
-		slots := maps.Clone(svc.csiPlugins)
-		clear(svc.csiPlugins)
-		svc.mu.Unlock()
-		for _, slot := range slots {
-			_ = slot.plugin.Close()
-		}
-	})
+	t.Cleanup(svc.Close)
 	return svc
 }
 
@@ -119,11 +110,12 @@ func assertPluginClosed(t *testing.T, plugin volume.VolumePluginControlPlane) {
 
 func mustGetCSIPlugin(t *testing.T, svc *RPCService, driverName, wantVolID string) *csi.Plugin {
 	t.Helper()
-	got, err := svc.GetPlugin(t.Context(), driverName)
+	got, release, err := svc.GetPlugin(t.Context(), driverName)
 	plugin, ok := got.(*csi.Plugin)
-	if err != nil || !ok {
-		t.Fatalf("GetPlugin(%q) = (%T, %v), want (*csi.Plugin, nil)", driverName, got, err)
+	if err != nil || !ok || release == nil {
+		t.Fatalf("GetPlugin(%q) = (%T, %p, %v), want (*csi.Plugin, non-nil release, nil)", driverName, got, release, err)
 	}
+	defer release()
 	if resp, err := plugin.CreateVolume(t.Context(), volume.CreateVolumeRequest{Name: "vol", CapacityBytes: 1 << 20}); err != nil || resp.VolumeID != wantVolID {
 		t.Fatalf("CreateVolume() = (%q, %v), want (%q, nil)", resp.VolumeID, err, wantVolID)
 	}
@@ -147,7 +139,7 @@ func mustGetSwappedPlugin(t *testing.T, svc *RPCService, driverName, wantVolID s
 }
 func mustFailGetPlugin(t *testing.T, svc *RPCService, driverName string, wantErr error, wantSubstr string) {
 	t.Helper()
-	_, err := svc.GetPlugin(t.Context(), driverName)
+	_, _, err := svc.GetPlugin(t.Context(), driverName)
 	if err == nil || errors.Is(err, store.ErrNotFound) || (wantErr != nil && !errors.Is(err, wantErr)) || !strings.Contains(err.Error(), wantSubstr) {
 		t.Fatalf("GetPlugin(%q) error = %v, want non-store.ErrNotFound matching (%v, %q)", driverName, err, wantErr, wantSubstr)
 	}
@@ -204,12 +196,14 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 		svc := NewRPCService(nil, nil, nil, nil, nil, nil, "", plugins, nil, "", nil, "")
 		svc.impl = &faultyServiceStore{err: errors.New("unexpected store call")}
 		delete(plugins, "nfs.csi.k8s.io")
-		if got, err := svc.GetPlugin(ctx, "nfs.csi.k8s.io"); err != nil || got != staticPlugin {
-			t.Fatalf("GetPlugin() = (%v, %v), want static override", got, err)
+		got, release, err := svc.GetPlugin(ctx, "nfs.csi.k8s.io")
+		if err != nil || got != staticPlugin || release == nil {
+			t.Fatalf("GetPlugin() = (%v, %p, %v), want static override", got, release, err)
 		}
+		release()
 	})
 
-	t.Run("postgres lookup, node_socket_override reuse, endpoint/tls invalidation, recreate, and delete", func(t *testing.T) {
+	t.Run("postgres lookup, node_socket_override reuse, failed dial preserves plugin, swap, and delete", func(t *testing.T) {
 		const cfgName, driverName = "csi-nfs", "nfs.csi.k8s.io"
 		ep1, ep2 := startTestCSIServer(t, driverName, "vol-ep1", nil), startTestCSIServer(t, driverName, "vol-ep2", nil)
 		svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
@@ -222,17 +216,59 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 		mustDeleteCfg(t, st, cfgName)
 		recreated := mustCreateCfg(t, st, cfgName, driverName, ep1)
 		p3 := mustGetSwappedPlugin(t, svc, driverName, "vol-ep1", p2)
+
+		// Failed dial (bad TLS or unreachable endpoint) must preserve working cached plugin p3.
 		withTLS := mustUpdateCfg(t, st, recreated, ep1, "", &ateapi.CsiDriverTlsConfig{Enabled: true, UsePodIdentity: true, ServerName: "csi-nfs.kube-system.svc"})
 		mustFailGetPlugin(t, svc, driverName, nil, "TLS")
-		assertPluginClosed(t, p3)
-		mustUpdateCfg(t, st, withTLS, ep2, "", nil)
-		p4 := mustGetCSIPlugin(t, svc, driverName, "vol-ep2")
+		if resp, err := p3.CreateVolume(ctx, volume.CreateVolumeRequest{Name: "still-open", CapacityBytes: 1 << 20}); err != nil || resp.VolumeID != "vol-ep1" {
+			t.Fatalf("p3 closed after failed dial: (%q, %v)", resp.VolumeID, err)
+		}
+		reverted := mustUpdateCfg(t, st, withTLS, ep1, "", nil)
+		mustGetSamePlugin(t, svc, driverName, "vol-ep1", p3)
+
+		mustUpdateCfg(t, st, reverted, ep2, "", nil)
+		p4 := mustGetSwappedPlugin(t, svc, driverName, "vol-ep2", p3)
 		mustDeleteCfg(t, st, cfgName)
 		mustFailGetPlugin(t, svc, driverName, nil, "not found")
 		assertPluginClosed(t, p4)
 		if len(svc.csiPlugins) != 0 {
 			t.Fatalf("len(csiPlugins) = %d, want 0", len(svc.csiPlugins))
 		}
+	})
+
+	t.Run("in-flight lease stays open across config update and delete until released", func(t *testing.T) {
+		const cfgName, driverName = "csi-lease", "lease.csi.k8s.io"
+		ep1, ep2 := startTestCSIServer(t, driverName, "vol-lease-1", nil), startTestCSIServer(t, driverName, "vol-lease-2", nil)
+		svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
+		v1 := mustCreateCfg(t, st, cfgName, driverName, ep1)
+
+		leased1, release1, err := svc.GetPlugin(ctx, driverName)
+		if err != nil {
+			t.Fatalf("GetPlugin(ep1) = %v", err)
+		}
+		mustUpdateCfg(t, st, v1, ep2, "", nil)
+		p2 := mustGetCSIPlugin(t, svc, driverName, "vol-lease-2")
+		if p2 == leased1 {
+			t.Fatal("GetPlugin(ep2) did not swap plugin")
+		}
+		if resp, err := leased1.CreateVolume(ctx, volume.CreateVolumeRequest{Name: "inflight-1", CapacityBytes: 1 << 20}); err != nil || resp.VolumeID != "vol-lease-1" {
+			t.Fatalf("in-flight lease closed on config update: (%q, %v)", resp.VolumeID, err)
+		}
+		release1()
+		release1() // idempotent
+		assertPluginClosed(t, leased1)
+
+		leased2, release2, err := svc.GetPlugin(ctx, driverName)
+		if err != nil {
+			t.Fatalf("GetPlugin(ep2) = %v", err)
+		}
+		mustDeleteCfg(t, st, cfgName)
+		mustFailGetPlugin(t, svc, driverName, nil, "not found")
+		if resp, err := leased2.CreateVolume(ctx, volume.CreateVolumeRequest{Name: "inflight-2", CapacityBytes: 1 << 20}); err != nil || resp.VolumeID != "vol-lease-2" {
+			t.Fatalf("in-flight lease closed on config delete: (%q, %v)", resp.VolumeID, err)
+		}
+		release2()
+		assertPluginClosed(t, leased2)
 	})
 
 	t.Run("crd fallback, identical promotion/demotion reuse, and differing endpoint swap", func(t *testing.T) {
@@ -292,9 +328,10 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 			svc := cleanupCSIPlugins(t, NewRPCService(st, nil, nil, nil, nil, nil, "", nil, nil, "", nil, ""))
 			created := mustCreateCfg(t, st, cfgName, driver, ep1)
 			var gotPlugin volume.VolumePluginControlPlane
+			var gotRelease func()
 			var gotErr error
 			var wg sync.WaitGroup
-			wg.Go(func() { gotPlugin, gotErr = svc.GetPlugin(ctx, driver) })
+			wg.Go(func() { gotPlugin, gotRelease, gotErr = svc.GetPlugin(ctx, driver) })
 			<-enteredEp1
 			var wantPlugin *csi.Plugin
 			switch mode {
@@ -311,6 +348,9 @@ func TestRPCServiceGetPlugin(t *testing.T) {
 			}
 			close(releaseEp1)
 			wg.Wait()
+			if gotRelease != nil {
+				defer gotRelease()
+			}
 			if mode == "delete" {
 				if gotErr == nil || errors.Is(gotErr, store.ErrNotFound) || !strings.Contains(gotErr.Error(), "not found") || len(svc.csiPlugins) != 0 {
 					t.Fatalf("concurrent GetPlugin() = (%v, %v), slots = %d; want non-store.ErrNotFound not-found error and 0 slots", gotPlugin, gotErr, len(svc.csiPlugins))
