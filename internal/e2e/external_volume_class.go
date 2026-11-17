@@ -77,7 +77,8 @@ func allowAtespaceOnExternalVolumeClass(ctx context.Context, client externalVolu
 	member := "atespace:" + atespace
 	ref := &ateapi.ObjectRef{Name: className}
 
-	for attempt := range maxPolicyGrantAttempts {
+	var lastErr error
+	for range maxPolicyGrantAttempts {
 		current, err := client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
 			ExternalVolumeClass: ref,
 			Name:                resources.SingletonName,
@@ -99,7 +100,8 @@ func allowAtespaceOnExternalVolumeClass(ctx context.Context, client externalVolu
 			if err == nil {
 				return true, nil
 			}
-			if status.Code(err) == codes.AlreadyExists && attempt+1 < maxPolicyGrantAttempts {
+			if status.Code(err) == codes.AlreadyExists {
+				lastErr = err
 				continue
 			}
 			return false, err
@@ -116,19 +118,21 @@ func allowAtespaceOnExternalVolumeClass(ctx context.Context, client externalVolu
 		if err == nil {
 			return true, nil
 		}
-		if (status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound) && attempt+1 < maxPolicyGrantAttempts {
+		if status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound {
+			lastErr = err
 			continue
 		}
 		return false, err
 	}
-	return false, fmt.Errorf("exceeded %d attempts updating access policy for external volume class %q", maxPolicyGrantAttempts, className)
+	return false, fmt.Errorf("exceeded %d attempts updating access policy for external volume class %q: %w", maxPolicyGrantAttempts, className, lastErr)
 }
 
 func revokeAtespaceOnExternalVolumeClass(ctx context.Context, client externalVolumeClassAccessPolicyClient, className, atespace string) error {
 	member := "atespace:" + atespace
 	ref := &ateapi.ObjectRef{Name: className}
 
-	for attempt := range maxPolicyGrantAttempts {
+	var lastErr error
+	for range maxPolicyGrantAttempts {
 		current, err := client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
 			ExternalVolumeClass: ref,
 			Name:                resources.SingletonName,
@@ -151,12 +155,13 @@ func revokeAtespaceOnExternalVolumeClass(ctx context.Context, client externalVol
 		if err == nil || status.Code(err) == codes.NotFound {
 			return nil
 		}
-		if status.Code(err) == codes.Aborted && attempt+1 < maxPolicyGrantAttempts {
+		if status.Code(err) == codes.Aborted {
+			lastErr = err
 			continue
 		}
 		return err
 	}
-	return fmt.Errorf("exceeded %d attempts revoking access policy member for external volume class %q", maxPolicyGrantAttempts, className)
+	return fmt.Errorf("exceeded %d attempts revoking access policy member for external volume class %q: %w", maxPolicyGrantAttempts, className, lastErr)
 }
 
 func addPolicyMember(policy *ateapi.AccessPolicy, role, member string) bool {
