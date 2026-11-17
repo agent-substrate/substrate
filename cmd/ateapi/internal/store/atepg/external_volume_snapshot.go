@@ -21,7 +21,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/resources"
 	"google.golang.org/protobuf/proto"
@@ -35,15 +34,12 @@ func (p *Persistence) CreateExternalVolumeSnapshot(ctx context.Context, snapshot
 		dbSnapshot.Metadata = &ateapi.ResourceMetadata{}
 	}
 	setCreateMetadata(dbSnapshot.Metadata)
-	if errs := apivalidation.ValidateExternalVolumeSnapshot(ctx, dbSnapshot); len(errs) > 0 {
-		return nil, fmt.Errorf("invalid external volume snapshot %s/%s: %w", atespace, name, errs.ToAggregate())
-	}
 	protoBytes, err := proto.Marshal(dbSnapshot)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling external volume snapshot: %w", err)
 	}
 
-	origin := dbSnapshot.GetOrigin().GetTag()
+	origin := dbSnapshot.GetOrigin().GetTagCapture()
 	tagRef := fmt.Sprintf("%s/%s", atespace, origin.GetTag().GetName())
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -84,9 +80,6 @@ func (p *Persistence) CreateExternalVolumeSnapshot(ctx context.Context, snapshot
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
-		}
-		if isForeignKeyViolation(err) {
-			return nil, store.ErrFailedPrecondition
 		}
 		return nil, fmt.Errorf("inserting external volume snapshot %s/%s: %w", atespace, name, err)
 	}
@@ -224,9 +217,9 @@ func (p *Persistence) listExternalVolumeSnapshotsGlobal(ctx context.Context, pag
 	return result, nextToken, nil
 }
 
-// validateUpdateExternalVolumeSnapshotMutation allows changes to status
-// only, and only those that keep its set-once fields. Whether
-// storage_snapshot_id and error_message are both set is checked on the result.
+// validateUpdateExternalVolumeSnapshotMutation rejects changes to the fields
+// the row is keyed and indexed by, and to driver_name. Validation in
+// ServiceImpl checks status changes.
 func validateUpdateExternalVolumeSnapshotMutation(stored, mutated *ateapi.ExternalVolumeSnapshot) error {
 	if s, m := stored.GetMetadata().GetAtespace(), mutated.GetMetadata().GetAtespace(); s != m {
 		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", s, m)
@@ -234,27 +227,11 @@ func validateUpdateExternalVolumeSnapshotMutation(stored, mutated *ateapi.Extern
 	if s, m := stored.GetMetadata().GetName(), mutated.GetMetadata().GetName(); s != m {
 		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", s, m)
 	}
-	if s, m := stored.GetVolumeType(), mutated.GetVolumeType(); s != m {
-		return fmt.Errorf("volume_type is immutable: mutation changed it from %q to %q", s, m)
+	if s, m := stored.GetDriverName(), mutated.GetDriverName(); s != m {
+		return fmt.Errorf("driver_name is immutable: mutation changed it from %q to %q", s, m)
 	}
 	if s, m := stored.GetOrigin(), mutated.GetOrigin(); !proto.Equal(s, m) {
 		return fmt.Errorf("origin is immutable: mutation changed it from %v to %v", s, m)
-	}
-	s, m := stored.GetStatus(), mutated.GetStatus()
-	if s.GetStorageSnapshotId() != "" && s.GetStorageSnapshotId() != m.GetStorageSnapshotId() {
-		return fmt.Errorf("status.storage_snapshot_id is immutable once set: mutation changed it from %q to %q", s.GetStorageSnapshotId(), m.GetStorageSnapshotId())
-	}
-	if s.GetReadyToUse() && !m.GetReadyToUse() {
-		return errors.New("status.ready_to_use cannot go from true to false")
-	}
-	if s.GetSizeBytes() != 0 && s.GetSizeBytes() != m.GetSizeBytes() {
-		return fmt.Errorf("status.size_bytes is immutable once set: mutation changed it from %d to %d", s.GetSizeBytes(), m.GetSizeBytes())
-	}
-	// A later failure may replace the error, but only the write that records
-	// a handle may clear it.
-	recovered := s.GetStorageSnapshotId() == "" && m.GetStorageSnapshotId() != ""
-	if s.GetErrorMessage() != "" && m.GetErrorMessage() == "" && !recovered {
-		return fmt.Errorf("status.error_message can only be cleared by recording storage_snapshot_id: mutation cleared %q", s.GetErrorMessage())
 	}
 	return nil
 }
@@ -296,9 +273,6 @@ func (p *Persistence) UpdateExternalVolumeSnapshot(ctx context.Context, snapshot
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure.
 	setUpdateMetadata(dbSnapshot.Metadata, stored.GetMetadata())
-	if errs := apivalidation.ValidateExternalVolumeSnapshot(ctx, dbSnapshot); len(errs) > 0 {
-		return nil, fmt.Errorf("invalid external volume snapshot %s/%s: %w", atespace, name, errs.ToAggregate())
-	}
 
 	updatedBytes, err := proto.Marshal(dbSnapshot)
 	if err != nil {

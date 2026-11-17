@@ -16,14 +16,11 @@ package functionaltest
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"go.ate.dev/substrate/api/ateapi/v1"
-	"go.ate.dev/substrate/internal/preview"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -39,8 +36,8 @@ func seedExternalVolumeSnapshot(t *testing.T, tc *testContext, tag *ateapi.Tag) 
 	md := tag.GetMetadata()
 	created, err := tc.persistence.CreateExternalVolumeSnapshot(context.Background(), &ateapi.ExternalVolumeSnapshot{
 		Metadata:   &ateapi.ResourceMetadata{Atespace: md.GetAtespace(), Name: "substrate-snap-" + md.GetUid() + "-data"},
-		VolumeType: "pd.csi.storage.gke.io",
-		Origin: &ateapi.ExternalVolumeSnapshotOrigin{Tag: &ateapi.TagVolumeSnapshotOrigin{
+		DriverName: "pd.csi.storage.gke.io",
+		Origin: &ateapi.ExternalVolumeSnapshotOrigin{TagCapture: &ateapi.TagVolumeSnapshotOrigin{
 			Tag:              &ateapi.ObjectRef{Atespace: md.GetAtespace(), Name: md.GetName()},
 			TagUid:           md.GetUid(),
 			SourceVolumeName: "data",
@@ -53,60 +50,70 @@ func seedExternalVolumeSnapshot(t *testing.T, tc *testContext, tag *ateapi.Tag) 
 	return created
 }
 
+// TestExternalVolumeSnapshot_GetAndList reads snapshots with no preview gate
+// enabled, from a client that does not opt in: reads are not gated.
 func TestExternalVolumeSnapshot_GetAndList(t *testing.T) {
+	tc := setupTest(t, namespaceForTest("ns-external-volume-snapshot"))
+	defer tc.cleanup()
+	ctx := context.Background()
+	tag := seedTag(t, tc, "actor-1", "v1", pendingTag)
+	created := seedExternalVolumeSnapshot(t, tc, tag)
+	ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetName()}
+
+	got, err := tc.client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: ref})
+	if err != nil {
+		t.Fatalf("GetExternalVolumeSnapshot failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("GetExternalVolumeSnapshot mismatch (-created +got):\n%s", diff)
+	}
+	for _, atespace := range []string{testAtespace, ""} {
+		list, err := tc.client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: atespace})
+		if err != nil {
+			t.Fatalf("ListExternalVolumeSnapshots(%q) failed: %v", atespace, err)
+		}
+		if diff := cmp.Diff([]*ateapi.ExternalVolumeSnapshot{created}, list.GetExternalVolumeSnapshots(), protocmp.Transform()); diff != "" {
+			t.Errorf("ListExternalVolumeSnapshots(%q) mismatch (-want +got):\n%s", atespace, diff)
+		}
+	}
+	other, err := tc.client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: "other-atespace"})
+	if err != nil || len(other.GetExternalVolumeSnapshots()) != 0 {
+		t.Errorf("ListExternalVolumeSnapshots(other-atespace) = %v, %v; want none", other.GetExternalVolumeSnapshots(), err)
+	}
+}
+
+func TestExternalVolumeSnapshot_GetAndListErrors(t *testing.T) {
+	tc := setupTest(t, namespaceForTest("ns-external-volume-snapshot-errors"))
+	defer tc.cleanup()
+	ctx := context.Background()
 	tests := []struct {
-		name  string
-		gates []string
-		optIn bool
-		// wantCode is the code of every call, or OK to check the results.
+		name     string
+		call     func() error
 		wantCode codes.Code
+		wantMsg  string
 	}{
-		{name: "gate enabled, client opts in", gates: []string{"ExternalVolumes"}, optIn: true, wantCode: codes.OK},
-		{name: "gate enabled, client does not opt in", gates: []string{"ExternalVolumes"}, wantCode: codes.InvalidArgument},
-		{name: "gate disabled", optIn: true, wantCode: codes.InvalidArgument},
+		{
+			name: "get missing",
+			call: func() error {
+				_, err := tc.client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: testAtespace, Name: "missing"}})
+				return err
+			},
+			wantCode: codes.NotFound,
+			wantMsg:  "ExternalVolumeSnapshot test-atespace/missing not found",
+		},
+		{
+			name: "list with an invalid page token",
+			call: func() error {
+				_, err := tc.client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: testAtespace, Options: &ateapi.ListOptions{PageToken: "%%%"}})
+				return err
+			},
+			wantCode: codes.InvalidArgument,
+			wantMsg:  "invalid page_token",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preview.InitForTest(t, tt.gates...)
-			tc := setupPreviewTest(t, namespaceForTest("ns-external-volume-snapshot"))
-			defer tc.cleanup()
-			ctx := context.Background()
-			client := tc.client
-			if !tt.optIn {
-				client = tc.noOptInClient
-			}
-
-			tag := seedTag(t, tc, "actor-1", "v1", pendingTag)
-			created := seedExternalVolumeSnapshot(t, tc, tag)
-			ref := &ateapi.ObjectRef{Atespace: testAtespace, Name: created.GetMetadata().GetName()}
-
-			got, getErr := client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: ref})
-			list, listErr := client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: testAtespace})
-			listAll, listAllErr := client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{})
-			if tt.wantCode != codes.OK {
-				for _, err := range []error{getErr, listErr, listAllErr} {
-					if status.Code(err) != tt.wantCode || !strings.Contains(err.Error(), preview.Header) {
-						t.Errorf("error = %v, want %v mentioning %s", err, tt.wantCode, preview.Header)
-					}
-				}
-				return
-			}
-			if getErr != nil || listErr != nil || listAllErr != nil {
-				t.Fatalf("GetExternalVolumeSnapshot = %v, ListExternalVolumeSnapshots = %v, %v; want all to succeed", getErr, listErr, listAllErr)
-			}
-			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
-				t.Errorf("GetExternalVolumeSnapshot mismatch (-created +got):\n%s", diff)
-			}
-			if diff := cmp.Diff([]*ateapi.ExternalVolumeSnapshot{created}, list.GetExternalVolumeSnapshots(), protocmp.Transform()); diff != "" {
-				t.Errorf("ListExternalVolumeSnapshots mismatch (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff([]*ateapi.ExternalVolumeSnapshot{created}, listAll.GetExternalVolumeSnapshots(), protocmp.Transform()); diff != "" {
-				t.Errorf("ListExternalVolumeSnapshots across all atespaces mismatch (-want +got):\n%s", diff)
-			}
-			_, err := client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: testAtespace, Name: "missing"}})
-			assertGrpcError(t, err, codes.NotFound, "ExternalVolumeSnapshot test-atespace/missing not found")
-			_, err = client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: testAtespace, Options: &ateapi.ListOptions{PageToken: "%%%"}})
-			assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+			assertGrpcError(t, tt.call(), tt.wantCode, tt.wantMsg)
 		})
 	}
 }

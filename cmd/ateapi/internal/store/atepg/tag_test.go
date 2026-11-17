@@ -28,10 +28,10 @@ import (
 )
 
 // createTestTag creates tagName over its own copy of an actor's
-// external snapshot, already finalized.
-func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *ateapi.Tag {
+// external snapshot, already finalized, with opts applied.
+func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string, opts ...func(*ateapi.Tag)) *ateapi.Tag {
 	t.Helper()
-	tag, err := s.CreateTag(context.Background(), &ateapi.Tag{
+	input := &ateapi.Tag{
 		Metadata: &ateapi.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
 		Scope:    ateapi.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapi.TagStatus{
@@ -45,7 +45,11 @@ func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *a
 				},
 			},
 		},
-	})
+	}
+	for _, opt := range opts {
+		opt(input)
+	}
+	tag, err := s.CreateTag(context.Background(), input)
 	if err != nil {
 		t.Fatalf("CreateTag(%s/%s) failed: %v", tagAtespace, tagName, err)
 	}

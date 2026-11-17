@@ -130,6 +130,8 @@ type ControlClient interface {
 	// Delete a Tag and the external snapshot it owns. Actors created from the
 	// tag that have not yet been suspended still point at that external snapshot
 	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Fails with `FAILED_PRECONDITION`, leaving the tag unchanged, while the tag
+	// owns ExternalVolumeSnapshots.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// Get an ExternalVolumeSnapshot.
 	GetExternalVolumeSnapshot(ctx context.Context, in *GetExternalVolumeSnapshotRequest, opts ...grpc.CallOption) (*ExternalVolumeSnapshot, error)
@@ -702,6 +704,8 @@ type ControlServer interface {
 	// Delete a Tag and the external snapshot it owns. Actors created from the
 	// tag that have not yet been suspended still point at that external snapshot
 	// and become unrecoverable, so do not delete a tag while such Actors exist.
+	// Fails with `FAILED_PRECONDITION`, leaving the tag unchanged, while the tag
+	// owns ExternalVolumeSnapshots.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
 	// Get an ExternalVolumeSnapshot.
 	GetExternalVolumeSnapshot(context.Context, *GetExternalVolumeSnapshotRequest) (*ExternalVolumeSnapshot, error)
