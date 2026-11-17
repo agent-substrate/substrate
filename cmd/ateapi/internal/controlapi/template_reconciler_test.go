@@ -493,6 +493,16 @@ func TestReconcileOne(t *testing.T) {
 			wantDeadline:   true,
 		},
 		{
+			name:         "deleted golden tag is rebuilt",
+			template:     testTemplate(withGoldenTag()),
+			control:      &fakeGoldenControl{snapshot: goldenSnapshot},
+			wantTag:      true,
+			wantDeadline: true,
+			wantCreates:  1,
+			wantResumes:  1,
+			wantSuspends: 1,
+		},
+		{
 			name: "suspend returning no snapshot errors",
 			template: testTemplate(
 				withSnapshotDeadline(time.Now().Add(-time.Minute))),
@@ -595,7 +605,7 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:     "terminal golden snapshot is a noop",
 			template: testTemplate(withGoldenTag()),
-			control:  &fakeGoldenControl{},
+			control:  &fakeGoldenControl{tag: &ateapi.Tag{}},
 			wantTag:  true,
 		},
 		{
@@ -1082,38 +1092,29 @@ func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
 	tests := []struct {
 		name       string
 		opts       []func(*ateapi.ActorTemplate)
+		tagDeleted bool
 		wantQueued bool
 	}{
-		{"empty status", nil, true},
-		{"golden snapshot disabled", []func(*ateapi.ActorTemplate){withoutGoldenSnapshot}, false},
-		{"mid warmup", []func(*ateapi.ActorTemplate){withSnapshotDeadline(time.Now().Add(time.Hour))}, true},
-		{"golden snapshot taken", []func(*ateapi.ActorTemplate){withGoldenTag()}, false},
-		{"failed", []func(*ateapi.ActorTemplate){withFailed(reasonGoldenActorCrashed)}, false},
+		{"empty status", nil, false, true},
+		{"golden snapshot disabled", []func(*ateapi.ActorTemplate){withoutGoldenSnapshot}, false, false},
+		{"mid warmup", []func(*ateapi.ActorTemplate){withSnapshotDeadline(time.Now().Add(time.Hour))}, false, true},
+		{"golden snapshot taken", []func(*ateapi.ActorTemplate){withGoldenTag()}, false, false},
+		{"golden tag deleted", []func(*ateapi.ActorTemplate){withGoldenTag()}, true, true},
+		{"failed", []func(*ateapi.ActorTemplate){withFailed(reasonGoldenActorCrashed)}, false, false},
 	}
 
-	// Seed one template per row, resync once, and check membership per row.
-	templateName := func(name string) string {
-		return "tmpl-" + strings.ReplaceAll(name, " ", "-")
-	}
-	templates := make([]*ateapi.ActorTemplate, 0, len(tests))
-	for _, tt := range tests {
-		tmpl := testTemplate(tt.opts...)
-		tmpl.Metadata.Name = templateName(tt.name)
-		templates = append(templates, tmpl)
-	}
-	r := newTestTemplateReconciler(newFakeTemplateStore(templates...), &fakeGoldenControl{})
-
-	r.resync(context.Background())
-
-	queued := map[resources.ActorTemplateRef]bool{}
-	for _, ref := range drainQueue(r) {
-		queued[ref] = true
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ref := resources.ActorTemplateRef{Atespace: testAtespace, Name: templateName(tt.name)}
-			if queued[ref] != tt.wantQueued {
-				t.Errorf("%s queued = %v, want %v", tt.name, queued[ref], tt.wantQueued)
+			control := &fakeGoldenControl{tag: &ateapi.Tag{}}
+			if tt.tagDeleted {
+				control.tag = nil
+			}
+			r := newTestTemplateReconciler(newFakeTemplateStore(testTemplate(tt.opts...)), control)
+
+			r.resync(t.Context())
+
+			if queued := len(drainQueue(r)) == 1; queued != tt.wantQueued {
+				t.Errorf("queued = %v, want %v", queued, tt.wantQueued)
 			}
 		})
 	}

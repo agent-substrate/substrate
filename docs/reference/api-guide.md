@@ -680,9 +680,10 @@ When an `ActorTemplate` is created with golden snapshots enabled:
 
 Golden actors follow ordinary lifecycle and ingress policies and appear in
 Actor lists. Leave these resources to the controller: modifying or deleting
-them can interrupt Golden creation, and deleting a published Golden tag
-invalidates the template's recorded reference. `DeleteActorTemplate` collects
-its Golden tag and any unfinished Golden actor.
+them can interrupt Golden creation. If the Golden tag is deleted, `CreateActor`
+without a `sourceTag` fails until the controller notices and starts a new
+Golden build. Actors created during the rebuild cold-boot. `DeleteActorTemplate`
+collects its Golden tag and any unfinished Golden actor.
 
 Golden capture follows `preferredFidelity`. MEMORY preserves processes and memory;
 VOLUMES preserves startup data in mounted volumes and starts new processes on
