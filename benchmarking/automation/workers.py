@@ -69,12 +69,14 @@ def config(test: dict[str, Any]) -> Config:
         raise ValueError(
             f"test {name!r}: sandboxClass must be one of {list(SANDBOX_CLASSES)}, got {sandbox_class!r}"
         )
-    memory = test.get("workerMemory") or ""
+    memory = test.get("workerMemory")
+    if memory is None:
+        memory = ""
     if not isinstance(memory, str):
         raise ValueError(f"test {name!r}: workerMemory must be a quantity like 8Gi, got {memory!r}")
     timeout = test.get("workerWaitTimeout", DEFAULT_WAIT_TIMEOUT_SECS)
     # A whole number of seconds; YAML may load it as an int or a string.
-    if isinstance(timeout, bool) or not str(timeout).isdigit():
+    if isinstance(timeout, bool) or not str(timeout).isdecimal():
         raise ValueError(
             f"test {name!r}: workerWaitTimeout must be a whole number of seconds, got {timeout!r}"
         )

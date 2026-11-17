@@ -63,11 +63,14 @@ class ConfigTest(unittest.TestCase):
             {"workerCount": True},
             {"sandboxClass": "kata"},
             {"workerMemory": 8},
+            {"workerMemory": 0},
+            {"workerMemory": False},
             {"workerWaitTimeout": "5m"},
+            {"workerWaitTimeout": "²"},
             {"workerWaitTimeout": True},
             {"isolate": {"bogus": "1s"}},
         ):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "test 't'"):
                 workers.config({"name": "t", **bad})
 
 
