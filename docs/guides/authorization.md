@@ -179,7 +179,7 @@ viewer, and a global role holds the same role in every atespace. So
 
 | RPC | Permission, on | Allowed for |
 |---|---|---|
-| `CreateActorTemplate` | `can_create_actor_template`, `metadata.atespace` | Atespace editor |
+| `CreateActorTemplate` | 1. `can_create_actor_template`, `metadata.atespace`<br>2. `can_reference`, each `volumes[].external.template.external_volume_class` (subject: `atespace:<metadata.atespace>`) | 1. Atespace editor<br>2. The template's atespace must be listed under `allowed_atespace` in the class's access policy. Global owners do not bypass this check. |
 | `GetActorTemplate` | `can_get`, the template | Viewer of its atespace |
 | `DeleteActorTemplate` | `can_delete`, the template | Editor of its atespace |
 | `ListActorTemplates` | `can_list_actor_templates`, the atespace, or global if none is given | Atespace viewer; global viewer for all atespaces |
@@ -350,6 +350,11 @@ For a shared cluster, beyond replacing the default bootstrap owner:
   `ListExternalVolumeClasses` requires global `viewer`; an editor of an
   atespace granted `allowed_atespace` on a class can inspect that class by
   name with `GetExternalVolumeClass`.
+- **External volume class revocation is not retroactive.** `can_reference` is
+  checked only on `CreateActorTemplate`. Revoking an `allowed_atespace` grant
+  does not stop actors created from existing templates, and cloning a tag
+  across atespaces (`CreateActor` with `sourceTag`) does not re-check the
+  original template's class grant.
 - **Tags can copy an actor's data.** A tag is a durable copy of an actor's
   memory and disk, including secrets, and outlives the actor. Any atespace
   editor can tag, publish and clone any actor in the atespace.
