@@ -58,7 +58,7 @@ Global
 | `ActorTemplate` | Atespace | 0..N | Clients |
 | `Actor` | Atespace | 0..N | Clients |
 | `Tag` | Atespace | 0..N | Clients |
-| `ExternalVolumeSnapshot` | Atespace | 0..N | Substrate (owned by the tag in `origin.tag`) |
+| `ExternalVolumeSnapshot` | Atespace | 0..N | Substrate (owned by the tag in `origin.tag_capture.tag`) |
 | `Worker` | Global | 0..N | Substrate |
 
 ## Subresources
@@ -114,7 +114,7 @@ classDiagram
     Actor "*" --> "1" ActorTemplate : actor_template
     Actor "*" --> "0..1" Tag : source_tag
     Tag "*" --> "1" Actor : source_actor
-    ExternalVolumeSnapshot "*" --> "1" Tag : origin.tag
+    ExternalVolumeSnapshot "*" --> "1" Tag : origin.tag_capture.tag
     ActorAssignment "0..1" --> "1" Actor : actor
     ActorTemplate ..> WorkerPool : worker_selector
     WorkerPool ..> SandboxConfig : sandboxClasses
