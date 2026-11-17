@@ -244,7 +244,7 @@ This applies what the steps above do not, such as the ate-system NetworkPolicies
 - **Stuck:** the command fails. [Roll back step 4](#roll-back-step-4).
 - **API clients:** if the release changes the bundled PostgreSQL, it restarts once, and API calls fail until it is back.
 
-Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release.
+Then install the new `kubectl ate` with `go install ./cmd/kubectl-ate`. Actor owners can now use API fields and commands new in this release, and you can set WorkerPool, SandboxConfig and CSIDriverConfig fields new in this release. (If you used the preview `ExternalVolumeTemplate.storage_class_name` field in 1.0, recreate those templates with `external_volume_class` pointing to an `ExternalVolumeClass`.)
 
 The upgrade is done when step 4 is done and [Where am I?](#where-am-i) shows every component and pool moved, every pool done rolling and none paused. Keep `~/ate-upgrade` while you might still roll back, then delete it.
 
