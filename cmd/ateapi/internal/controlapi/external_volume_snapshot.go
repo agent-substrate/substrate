@@ -18,30 +18,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/apivalidation"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// requireExternalVolumes refuses a request for ExternalVolumeSnapshots unless
-// the ExternalVolumes gate is enabled for it.
-func requireExternalVolumes(ctx context.Context, fldPath *field.Path) error {
-	if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
-		return nil
-	}
-	return resources.ToAPIError(field.ErrorList{field.Forbidden(fldPath,
-		"ExternalVolumeSnapshots require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)")})
-}
-
 func (s *RPCService) GetExternalVolumeSnapshot(ctx context.Context, req *ateapi.GetExternalVolumeSnapshotRequest) (*ateapi.ExternalVolumeSnapshot, error) {
-	if err := requireExternalVolumes(ctx, field.NewPath("external_volume_snapshot")); err != nil {
-		return nil, err
-	}
 	if errs := apivalidation.ValidateGetExternalVolumeSnapshotRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -57,9 +45,6 @@ func (s *RPCService) GetExternalVolumeSnapshot(ctx context.Context, req *ateapi.
 }
 
 func (s *RPCService) ListExternalVolumeSnapshots(ctx context.Context, req *ateapi.ListExternalVolumeSnapshotsRequest) (*ateapi.ListExternalVolumeSnapshotsResponse, error) {
-	if err := requireExternalVolumes(ctx, field.NewPath("atespace")); err != nil {
-		return nil, err
-	}
 	if errs := apivalidation.ValidateListExternalVolumeSnapshotsRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
@@ -70,8 +55,12 @@ func (s *RPCService) ListExternalVolumeSnapshots(ctx context.Context, req *ateap
 	return &ateapi.ListExternalVolumeSnapshotsResponse{ExternalVolumeSnapshots: page.Items, NextPageToken: page.NextPageToken}, nil
 }
 
-// Pass-through.
+// CreateExternalVolumeSnapshot validates and stores a snapshot the server
+// recorded.
 func (s *ServiceImpl) CreateExternalVolumeSnapshot(ctx context.Context, snapshot *ateapi.ExternalVolumeSnapshot) (*ateapi.ExternalVolumeSnapshot, error) {
+	if errs := apivalidation.ValidateExternalVolumeSnapshot(ctx, snapshot); len(errs) > 0 {
+		return nil, resources.ToInternalError(errs)
+	}
 	return s.store.CreateExternalVolumeSnapshot(ctx, snapshot)
 }
 
@@ -85,7 +74,23 @@ func (s *ServiceImpl) ListExternalVolumeSnapshots(ctx context.Context, atespace 
 	return s.store.ListExternalVolumeSnapshots(ctx, atespace, opts)
 }
 
-// Pass-through.
+// UpdateExternalVolumeSnapshot applies mutate and validates the result as an
+// update of the stored snapshot. Changing a field marked `+k8s:immutable`
+// returns an error matching store.ErrImmutableField, as the store does. Other
+// validation failures return an Internal error.
 func (s *ServiceImpl) UpdateExternalVolumeSnapshot(ctx context.Context, ref resources.ExternalVolumeSnapshotRef, precondition store.Precondition, mutate func(*ateapi.ExternalVolumeSnapshot) error) (*ateapi.ExternalVolumeSnapshot, error) {
-	return s.store.UpdateExternalVolumeSnapshot(ctx, ref, precondition, mutate)
+	return s.store.UpdateExternalVolumeSnapshot(ctx, ref, precondition, func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+		oldVal := proto.CloneOf(toUpdate)
+		if err := mutate(toUpdate); err != nil {
+			return err
+		}
+		errs := apivalidation.ValidateExternalVolumeSnapshotUpdate(ctx, toUpdate, oldVal)
+		if len(errs) == 0 {
+			return nil
+		}
+		if slices.ContainsFunc(errs, func(e *field.Error) bool { return e.Origin == "immutable" }) {
+			return fmt.Errorf("%w: %w", store.ErrImmutableField, resources.ToInternalError(errs))
+		}
+		return resources.ToInternalError(errs)
+	})
 }

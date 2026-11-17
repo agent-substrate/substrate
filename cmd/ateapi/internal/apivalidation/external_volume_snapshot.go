@@ -19,7 +19,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/resources"
-	"k8s.io/apimachinery/pkg/api/validate"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -34,92 +34,45 @@ func ValidateListExternalVolumeSnapshotsRequest(ctx context.Context, req *ateapi
 }
 
 // ValidateExternalVolumeSnapshot checks a snapshot the server is about to
-// store. No request carries one, so validation-gen generates no validator for
-// it, and this applies the field tags in ateapi.proto by hand. It checks one
-// object; the store checks which changes an update may make.
+// create.
 func ValidateExternalVolumeSnapshot(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) field.ErrorList {
 	op := MakeCreateOp(ctx)
-	var errs field.ErrorList
-
-	md := snap.GetMetadata()
-	mdPath := field.NewPath("metadata")
-	if md == nil {
-		return field.ErrorList{field.Required(mdPath, "")}
-	}
-	errs = append(errs, Validate_ResourceMetadata(ctx, op, mdPath, md, nil)...)
-	errs = append(errs, validate.RequiredValue(ctx, op, mdPath.Child("atespace"), &md.Atespace, nil)...)
-
-	switch vtPath, vt := field.NewPath("volume_type"), snap.GetVolumeType(); {
-	case vt == "":
-		errs = append(errs, field.Required(vtPath, ""))
-	case len(vt) > 253:
-		errs = append(errs, field.TooLong(vtPath, nil, 253))
-	default:
-		errs = append(errs, resources.ValidateVolumeType(vtPath, vt)...)
-	}
-
-	tagPath := field.NewPath("origin", "tag")
-	if tag := snap.GetOrigin().GetTag(); tag == nil {
-		errs = append(errs, field.Required(tagPath, "exactly one origin must be set"))
-	} else {
-		errs = append(errs, validateTagVolumeSnapshotOrigin(ctx, tagPath, tag, md.GetAtespace())...)
-	}
-
-	st := snap.GetStatus()
-	stPath := field.NewPath("status")
-	if len(st.GetStorageSnapshotId()) > 256 {
-		errs = append(errs, field.TooLong(stPath.Child("storage_snapshot_id"), nil, 256))
-	}
-	errs = append(errs, resources.ValidateStorageVolumeID(stPath.Child("storage_snapshot_id"), st.GetStorageSnapshotId())...)
-	if st.GetSizeBytes() < 0 {
-		errs = append(errs, field.Invalid(stPath.Child("size_bytes"), st.GetSizeBytes(), "must be greater than or equal to 0"))
-	}
-	if len(st.GetErrorMessage()) > 4096 {
-		errs = append(errs, field.TooLong(stPath.Child("error_message"), nil, 4096))
-	}
-	if st.GetErrorMessage() != "" && st.GetStorageSnapshotId() != "" {
-		errs = append(errs, field.Invalid(stPath.Child("error_message"), nil, "must not be set together with storage_snapshot_id"))
-	}
-	if st.GetStorageSnapshotId() == "" {
-		if st.GetReadyToUse() {
-			errs = append(errs, field.Invalid(stPath.Child("ready_to_use"), true, "must not be set without storage_snapshot_id"))
-		}
-		if st.GetSizeBytes() > 0 {
-			errs = append(errs, field.Invalid(stPath.Child("size_bytes"), st.GetSizeBytes(), "must not be set without storage_snapshot_id"))
-		}
-	}
-	return errs
+	return Validate_ExternalVolumeSnapshot(ctx, op, nil, snap, nil)
 }
 
-func validateTagVolumeSnapshotOrigin(ctx context.Context, fldPath *field.Path, origin *ateapi.TagVolumeSnapshotOrigin, atespace string) field.ErrorList {
-	op := MakeCreateOp(ctx)
-	var errs field.ErrorList
-	tagPath := fldPath.Child("tag")
-	if ref := origin.GetTag(); ref == nil {
-		errs = append(errs, field.Required(tagPath, ""))
-	} else {
-		errs = append(errs, Validate_ObjectRef(ctx, op, tagPath, ref, nil)...)
-		if ref.GetAtespace() != atespace {
-			errs = append(errs, field.Invalid(tagPath.Child("atespace"), ref.GetAtespace(), "must match metadata.atespace"))
-		}
+// ValidateExternalVolumeSnapshotUpdate checks newVal as an update of oldVal.
+// Values that did not change are not re-validated.
+func ValidateExternalVolumeSnapshotUpdate(ctx context.Context, newVal, oldVal *ateapi.ExternalVolumeSnapshot) field.ErrorList {
+	op := MakeUpdateOp(ctx)
+	return Validate_ExternalVolumeSnapshot(ctx, op, nil, newVal, oldVal)
+}
+
+// ValidateCustom_ExternalVolumeSnapshot requires the owning tag to be in the
+// snapshot's atespace. Nested subfield tags are not supported yet.
+func ValidateCustom_ExternalVolumeSnapshot(_ context.Context, op operation.Operation, fldPath *field.Path, snap, oldSnap *ateapi.ExternalVolumeSnapshot) field.ErrorList {
+	atespace := snap.GetMetadata().GetAtespace()
+	tagAtespace := snap.GetOrigin().GetTagCapture().GetTag().GetAtespace()
+	if atespace == "" || tagAtespace == "" {
+		return nil // handled by DV
 	}
-	if uid := origin.GetTagUid(); uid == "" {
-		errs = append(errs, field.Required(fldPath.Child("tag_uid"), ""))
-	} else {
-		errs = append(errs, validate.UUID(ctx, op, fldPath.Child("tag_uid"), &uid, nil)...)
+	if op.Type == operation.Update && atespace == oldSnap.GetMetadata().GetAtespace() &&
+		tagAtespace == oldSnap.GetOrigin().GetTagCapture().GetTag().GetAtespace() {
+		return nil
 	}
-	if name := origin.GetSourceVolumeName(); name == "" {
-		errs = append(errs, field.Required(fldPath.Child("source_volume_name"), ""))
-	} else {
-		errs = append(errs, validate.ShortName(ctx, op, fldPath.Child("source_volume_name"), &name, nil)...)
+	if tagAtespace != atespace {
+		return field.ErrorList{field.Invalid(fldPath.Child("origin", "tag_capture", "tag", "atespace"), tagAtespace, "must match metadata.atespace")}
 	}
-	switch idPath, id := fldPath.Child("source_volume_id"), origin.GetSourceVolumeId(); {
-	case id == "":
-		errs = append(errs, field.Required(idPath, ""))
-	case len(id) > 256:
-		errs = append(errs, field.TooLong(idPath, nil, 256))
-	default:
-		errs = append(errs, resources.ValidateStorageVolumeID(idPath, id)...)
-	}
-	return errs
+	return nil
+}
+
+func ValidateCustom_ExternalVolumeSnapshot_DriverName(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateVolumeType(fldPath, *value)
+}
+
+func ValidateCustom_TagVolumeSnapshotOrigin_SourceVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
+
+func ValidateCustom_ExternalVolumeSnapshotStatus_SnapshotId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
 }

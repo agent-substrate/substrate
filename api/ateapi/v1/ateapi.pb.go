@@ -2648,11 +2648,13 @@ func (x *Tag) GetSourceActor() *ObjectRef {
 // ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
 // by the storage system.
 //
-// A snapshot is owned by the tag named in origin.tag, in the same atespace.
-// The tag cannot be deleted while it has snapshots. The API only reads
-// snapshots.
+// A snapshot is owned by the tag named in `origin.tag_capture.tag`, in the
+// same atespace. DeleteTag fails with `FAILED_PRECONDITION` while the tag owns
+// snapshots. The API only reads snapshots.
 //
 // +ate:preview=ExternalVolumes
+// +k8s:validation-gen=true
+// +k8s:customValidation # `origin.tag_capture.tag.atespace` must match `metadata.atespace`
 type ExternalVolumeSnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
@@ -2660,18 +2662,17 @@ type ExternalVolumeSnapshot struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// volume_type is the plugin or CSI driver that took the snapshot. The
-	// snapshot handle means something only to that driver. Must be a DNS
-	// subdomain, optionally prefixed with "substrate.io/" (per the CSI spec's
-	// driver-name syntax). Immutable.
+	// driver_name is the CSI driver that took the snapshot. The snapshot handle
+	// means something only to that driver. Must be a DNS subdomain, optionally
+	// prefixed with `substrate.io/`, of at most 63 characters (per the CSI
+	// spec's driver-name syntax). Immutable.
 	//
 	// +k8s:required
-	// +k8s:maxLength=253
+	// +k8s:maxLength=63
 	// +k8s:immutable
 	// +k8s:customValidation # CSI driver name syntax
-	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
-	// origin records how the snapshot was created, which also decides who owns
-	// it. Set by the server. Immutable.
+	DriverName string `protobuf:"bytes,2,opt,name=driver_name,json=driverName,proto3" json:"driver_name,omitempty"`
+	// origin records how the snapshot came to exist. It is fixed at creation.
 	//
 	// +k8s:required
 	// +k8s:immutable
@@ -2721,9 +2722,9 @@ func (x *ExternalVolumeSnapshot) GetMetadata() *ResourceMetadata {
 	return nil
 }
 
-func (x *ExternalVolumeSnapshot) GetVolumeType() string {
+func (x *ExternalVolumeSnapshot) GetDriverName() string {
 	if x != nil {
-		return x.VolumeType
+		return x.DriverName
 	}
 	return ""
 }
@@ -2742,17 +2743,18 @@ func (x *ExternalVolumeSnapshot) GetStatus() *ExternalVolumeSnapshotStatus {
 	return nil
 }
 
-// ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot was
-// created. Exactly one member is set.
+// ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot came to
+// exist. Exactly one member is set.
 //
 // (-- An imported member, for snapshots a user registers, is planned. --)
 type ExternalVolumeSnapshotOrigin struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// tag is set when a tag owns the snapshot.
+	// tag_capture is set by the server when a tag captured the snapshot. The
+	// tag owns the snapshot.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	Tag           *TagVolumeSnapshotOrigin `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	TagCapture    *TagVolumeSnapshotOrigin `protobuf:"bytes,1,opt,name=tag_capture,json=tagCapture,proto3" json:"tag_capture,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2787,9 +2789,9 @@ func (*ExternalVolumeSnapshotOrigin) Descriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{25}
 }
 
-func (x *ExternalVolumeSnapshotOrigin) GetTag() *TagVolumeSnapshotOrigin {
+func (x *ExternalVolumeSnapshotOrigin) GetTagCapture() *TagVolumeSnapshotOrigin {
 	if x != nil {
-		return x.Tag
+		return x.TagCapture
 	}
 	return nil
 }
@@ -2819,7 +2821,7 @@ type TagVolumeSnapshotOrigin struct {
 	// source_volume_id is the CSI volume handle of the volume the snapshot was
 	// captured from. Its format is the storage system's own, so it is only
 	// bounded and checked for control characters, like
-	// ExternalVolumeStatus.storage_volume_id.
+	// `ExternalVolumeStatus.storage_volume_id`.
 	//
 	// +k8s:required
 	// +k8s:maxLength=256
@@ -2891,21 +2893,19 @@ func (x *TagVolumeSnapshotOrigin) GetSourceVolumeId() string {
 // ExternalVolumeSnapshot.
 type ExternalVolumeSnapshotStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// storage_snapshot_id is the snapshot handle returned by the storage
-	// system. Empty until the storage system returns it, then set once. A
-	// snapshot left without one and without error_message may have been taken
-	// with its handle never recorded. Its format is the storage system's own,
-	// so it is only bounded and checked for control characters, like
-	// ExternalVolumeStatus.storage_volume_id.
+	// snapshot_id is the snapshot handle returned by the storage system. It is
+	// empty until the storage system returns it, and does not change once set.
+	// Its format is the storage system's own, so it is only bounded and checked
+	// for control characters, like `ExternalVolumeStatus.storage_volume_id`.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=256
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset
 	// +k8s:customValidation # no control characters
-	StorageSnapshotId string `protobuf:"bytes,1,opt,name=storage_snapshot_id,json=storageSnapshotId,proto3" json:"storage_snapshot_id,omitempty"`
+	SnapshotId string `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
 	// ready_to_use is whether the storage system has finished the snapshot, so
-	// it can seed new volumes. It is set only once storage_snapshot_id is
+	// it can seed new volumes. It can be true only after `snapshot_id` is
 	// recorded. Drivers may return a handle while the copy continues in the
 	// background, so it can start false. It never moves from true back to
 	// false.
@@ -2913,20 +2913,20 @@ type ExternalVolumeSnapshotStatus struct {
 	// +k8s:optional
 	// +k8s:update=NoUnset
 	ReadyToUse bool `protobuf:"varint,2,opt,name=ready_to_use,json=readyToUse,proto3" json:"ready_to_use,omitempty"`
-	// size_bytes is the minimum size of a volume restored from the snapshot, as
-	// the driver reports it in the CSI size_bytes field, or 0 if it is unknown.
-	// It is set only once storage_snapshot_id is recorded, and never
-	// overwritten once known.
+	// restore_size_bytes is the minimum size of a volume restored from the
+	// snapshot, as the driver reports it in the CSI `size_bytes` field, or 0 if
+	// it is unknown. It is nonzero only after `snapshot_id` is recorded, and
+	// does not change once nonzero.
 	//
 	// +k8s:optional
 	// +k8s:minimum=0
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset
-	SizeBytes int64 `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	// error_message is why CreateSnapshot last failed for this volume. Tag
-	// snapshots only. It may be replaced while storage_snapshot_id is empty,
-	// and is cleared by the write that records storage_snapshot_id. It is never
-	// set together with storage_snapshot_id.
+	RestoreSizeBytes int64 `protobuf:"varint,3,opt,name=restore_size_bytes,json=restoreSizeBytes,proto3" json:"restore_size_bytes,omitempty"`
+	// error_message is why the CSI CreateSnapshot call last failed for this
+	// volume. It may be replaced while `snapshot_id` is empty, and is cleared by
+	// the write that records `snapshot_id`. It is never set together with
+	// `snapshot_id`.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=4096
@@ -2965,9 +2965,9 @@ func (*ExternalVolumeSnapshotStatus) Descriptor() ([]byte, []int) {
 	return file_api_ateapi_v1_ateapi_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *ExternalVolumeSnapshotStatus) GetStorageSnapshotId() string {
+func (x *ExternalVolumeSnapshotStatus) GetSnapshotId() string {
 	if x != nil {
-		return x.StorageSnapshotId
+		return x.SnapshotId
 	}
 	return ""
 }
@@ -2979,9 +2979,9 @@ func (x *ExternalVolumeSnapshotStatus) GetReadyToUse() bool {
 	return false
 }
 
-func (x *ExternalVolumeSnapshotStatus) GetSizeBytes() int64 {
+func (x *ExternalVolumeSnapshotStatus) GetRestoreSizeBytes() int64 {
 	if x != nil {
-		return x.SizeBytes
+		return x.RestoreSizeBytes
 	}
 	return 0
 }
@@ -10638,23 +10638,24 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\fsource_actor\x18\x04 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\vsourceActor:\f\x82\xb5\x18\b\x18\x01\"\x04Tags\"\xb3\x02\n" +
 	"\x16ExternalVolumeSnapshot\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata\x12\x1f\n" +
-	"\vvolume_type\x18\x02 \x01(\tR\n" +
-	"volumeType\x12I\n" +
+	"\vdriver_name\x18\x02 \x01(\tR\n" +
+	"driverName\x12I\n" +
 	"\x06origin\x18\x03 \x01(\v21.substrate.ateapi.v1.ExternalVolumeSnapshotOriginR\x06origin\x12I\n" +
-	"\x06status\x18\x04 \x01(\v21.substrate.ateapi.v1.ExternalVolumeSnapshotStatusR\x06status:\x1f\x82\xb5\x18\x1b\x18\x01\"\x17ExternalVolumeSnapshots\"^\n" +
-	"\x1cExternalVolumeSnapshotOrigin\x12>\n" +
-	"\x03tag\x18\x01 \x01(\v2,.substrate.ateapi.v1.TagVolumeSnapshotOriginR\x03tag\"\xbc\x01\n" +
+	"\x06status\x18\x04 \x01(\v21.substrate.ateapi.v1.ExternalVolumeSnapshotStatusR\x06status:\x1f\x82\xb5\x18\x1b\x18\x01\"\x17ExternalVolumeSnapshots\"m\n" +
+	"\x1cExternalVolumeSnapshotOrigin\x12M\n" +
+	"\vtag_capture\x18\x01 \x01(\v2,.substrate.ateapi.v1.TagVolumeSnapshotOriginR\n" +
+	"tagCapture\"\xbc\x01\n" +
 	"\x17TagVolumeSnapshotOrigin\x120\n" +
 	"\x03tag\x18\x01 \x01(\v2\x1e.substrate.ateapi.v1.ObjectRefR\x03tag\x12\x17\n" +
 	"\atag_uid\x18\x02 \x01(\tR\x06tagUid\x12,\n" +
 	"\x12source_volume_name\x18\x03 \x01(\tR\x10sourceVolumeName\x12(\n" +
 	"\x10source_volume_id\x18\x04 \x01(\tR\x0esourceVolumeId\"\xb4\x01\n" +
-	"\x1cExternalVolumeSnapshotStatus\x12.\n" +
-	"\x13storage_snapshot_id\x18\x01 \x01(\tR\x11storageSnapshotId\x12 \n" +
+	"\x1cExternalVolumeSnapshotStatus\x12\x1f\n" +
+	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
+	"snapshotId\x12 \n" +
 	"\fready_to_use\x18\x02 \x01(\bR\n" +
-	"readyToUse\x12\x1d\n" +
-	"\n" +
-	"size_bytes\x18\x03 \x01(\x03R\tsizeBytes\x12#\n" +
+	"readyToUse\x12,\n" +
+	"\x12restore_size_bytes\x18\x03 \x01(\x03R\x10restoreSizeBytes\x12#\n" +
 	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"`\n" +
 	"\bAtespace\x12A\n" +
 	"\bmetadata\x18\x01 \x01(\v2%.substrate.ateapi.v1.ResourceMetadataR\bmetadata:\x11\x82\xb5\x18\r\x18\x02\"\tAtespaces\";\n" +
@@ -11421,7 +11422,7 @@ var file_api_ateapi_v1_ateapi_proto_depIdxs = []int32{
 	14,  // 44: substrate.ateapi.v1.ExternalVolumeSnapshot.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
 	35,  // 45: substrate.ateapi.v1.ExternalVolumeSnapshot.origin:type_name -> substrate.ateapi.v1.ExternalVolumeSnapshotOrigin
 	37,  // 46: substrate.ateapi.v1.ExternalVolumeSnapshot.status:type_name -> substrate.ateapi.v1.ExternalVolumeSnapshotStatus
-	36,  // 47: substrate.ateapi.v1.ExternalVolumeSnapshotOrigin.tag:type_name -> substrate.ateapi.v1.TagVolumeSnapshotOrigin
+	36,  // 47: substrate.ateapi.v1.ExternalVolumeSnapshotOrigin.tag_capture:type_name -> substrate.ateapi.v1.TagVolumeSnapshotOrigin
 	39,  // 48: substrate.ateapi.v1.TagVolumeSnapshotOrigin.tag:type_name -> substrate.ateapi.v1.ObjectRef
 	14,  // 49: substrate.ateapi.v1.Atespace.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata
 	14,  // 50: substrate.ateapi.v1.ActorTemplate.metadata:type_name -> substrate.ateapi.v1.ResourceMetadata

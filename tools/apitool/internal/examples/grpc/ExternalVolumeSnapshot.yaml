@@ -18,9 +18,9 @@ metadata:
   version: "2"
   createTime: "2026-08-13T10:00:05Z"
   updateTime: "2026-08-13T10:00:40Z"
-volumeType: pd.csi.storage.gke.io
+driverName: pd.csi.storage.gke.io
 origin:
-  tag:
+  tagCapture:
     tag:
       atespace: prod
       name: e2f4a6b8-1c3d-4e5f-8a7b-9c0d1e2f3a4b
@@ -28,6 +28,6 @@ origin:
     sourceVolumeName: data
     sourceVolumeId: projects/my-project/zones/us-central1-a/disks/pvc-3f2a1b0c
 status:
-  storageSnapshotId: projects/my-project/global/snapshots/substrate-snap-2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e-9f86d08188
+  snapshotId: projects/my-project/global/snapshots/substrate-snap-2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e-9f86d08188
   readyToUse: true
-  sizeBytes: "10737418240"
+  restoreSizeBytes: "10737418240"

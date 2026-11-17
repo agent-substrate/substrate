@@ -116,6 +116,8 @@ service Control {
   // Delete a Tag and the external snapshot it owns. Actors created from the
   // tag that have not yet been suspended still point at that external snapshot
   // and become unrecoverable, so do not delete a tag while such Actors exist.
+  // Fails with `FAILED_PRECONDITION`, leaving the tag unchanged, while the tag
+  // owns ExternalVolumeSnapshots.
   rpc DeleteTag(DeleteTagRequest) returns (Tag) {
     option (method).resource = "Tag";
   }
@@ -1129,11 +1131,13 @@ message Tag {
 // ExternalVolumeSnapshot is a point-in-time copy of one external volume, held
 // by the storage system.
 //
-// A snapshot is owned by the tag named in origin.tag, in the same atespace.
-// The tag cannot be deleted while it has snapshots. The API only reads
-// snapshots.
+// A snapshot is owned by the tag named in `origin.tag_capture.tag`, in the
+// same atespace. DeleteTag fails with `FAILED_PRECONDITION` while the tag owns
+// snapshots. The API only reads snapshots.
 //
 // +ate:preview=ExternalVolumes
+// +k8s:validation-gen=true
+// +k8s:customValidation # `origin.tag_capture.tag.atespace` must match `metadata.atespace`
 message ExternalVolumeSnapshot {
   option (resource) = {
     scope : SCOPE_ATESPACE
@@ -1146,19 +1150,18 @@ message ExternalVolumeSnapshot {
   // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
-  // volume_type is the plugin or CSI driver that took the snapshot. The
-  // snapshot handle means something only to that driver. Must be a DNS
-  // subdomain, optionally prefixed with "substrate.io/" (per the CSI spec's
-  // driver-name syntax). Immutable.
+  // driver_name is the CSI driver that took the snapshot. The snapshot handle
+  // means something only to that driver. Must be a DNS subdomain, optionally
+  // prefixed with `substrate.io/`, of at most 63 characters (per the CSI
+  // spec's driver-name syntax). Immutable.
   //
   // +k8s:required
-  // +k8s:maxLength=253
+  // +k8s:maxLength=63
   // +k8s:immutable
   // +k8s:customValidation # CSI driver name syntax
-  string volume_type = 2;
+  string driver_name = 2;
 
-  // origin records how the snapshot was created, which also decides who owns
-  // it. Set by the server. Immutable.
+  // origin records how the snapshot came to exist. It is fixed at creation.
   //
   // +k8s:required
   // +k8s:immutable
@@ -1170,16 +1173,17 @@ message ExternalVolumeSnapshot {
   ExternalVolumeSnapshotStatus status = 4;
 }
 
-// ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot was
-// created. Exactly one member is set.
+// ExternalVolumeSnapshotOrigin records how an ExternalVolumeSnapshot came to
+// exist. Exactly one member is set.
 //
 // (-- An imported member, for snapshots a user registers, is planned. --)
 message ExternalVolumeSnapshotOrigin {
-  // tag is set when a tag owns the snapshot.
+  // tag_capture is set by the server when a tag captured the snapshot. The
+  // tag owns the snapshot.
   //
   // +k8s:optional
   // +k8s:unionMember
-  TagVolumeSnapshotOrigin tag = 1;
+  TagVolumeSnapshotOrigin tag_capture = 1;
 }
 
 // TagVolumeSnapshotOrigin identifies the tag that captured a snapshot and the
@@ -1209,7 +1213,7 @@ message TagVolumeSnapshotOrigin {
   // source_volume_id is the CSI volume handle of the volume the snapshot was
   // captured from. Its format is the storage system's own, so it is only
   // bounded and checked for control characters, like
-  // ExternalVolumeStatus.storage_volume_id.
+  // `ExternalVolumeStatus.storage_volume_id`.
   //
   // +k8s:required
   // +k8s:maxLength=256
@@ -1220,22 +1224,20 @@ message TagVolumeSnapshotOrigin {
 // ExternalVolumeSnapshotStatus is the server-owned state of an
 // ExternalVolumeSnapshot.
 message ExternalVolumeSnapshotStatus {
-  // storage_snapshot_id is the snapshot handle returned by the storage
-  // system. Empty until the storage system returns it, then set once. A
-  // snapshot left without one and without error_message may have been taken
-  // with its handle never recorded. Its format is the storage system's own,
-  // so it is only bounded and checked for control characters, like
-  // ExternalVolumeStatus.storage_volume_id.
+  // snapshot_id is the snapshot handle returned by the storage system. It is
+  // empty until the storage system returns it, and does not change once set.
+  // Its format is the storage system's own, so it is only bounded and checked
+  // for control characters, like `ExternalVolumeStatus.storage_volume_id`.
   //
   // +k8s:optional
   // +k8s:maxLength=256
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
   // +k8s:customValidation # no control characters
-  string storage_snapshot_id = 1;
+  string snapshot_id = 1;
 
   // ready_to_use is whether the storage system has finished the snapshot, so
-  // it can seed new volumes. It is set only once storage_snapshot_id is
+  // it can seed new volumes. It can be true only after `snapshot_id` is
   // recorded. Drivers may return a handle while the copy continues in the
   // background, so it can start false. It never moves from true back to
   // false.
@@ -1244,21 +1246,21 @@ message ExternalVolumeSnapshotStatus {
   // +k8s:update=NoUnset
   bool ready_to_use = 2;
 
-  // size_bytes is the minimum size of a volume restored from the snapshot, as
-  // the driver reports it in the CSI size_bytes field, or 0 if it is unknown.
-  // It is set only once storage_snapshot_id is recorded, and never
-  // overwritten once known.
+  // restore_size_bytes is the minimum size of a volume restored from the
+  // snapshot, as the driver reports it in the CSI `size_bytes` field, or 0 if
+  // it is unknown. It is nonzero only after `snapshot_id` is recorded, and
+  // does not change once nonzero.
   //
   // +k8s:optional
   // +k8s:minimum=0
   // +k8s:update=NoModify
   // +k8s:update=NoUnset
-  int64 size_bytes = 3;
+  int64 restore_size_bytes = 3;
 
-  // error_message is why CreateSnapshot last failed for this volume. Tag
-  // snapshots only. It may be replaced while storage_snapshot_id is empty,
-  // and is cleared by the write that records storage_snapshot_id. It is never
-  // set together with storage_snapshot_id.
+  // error_message is why the CSI CreateSnapshot call last failed for this
+  // volume. It may be replaced while `snapshot_id` is empty, and is cleared by
+  // the write that records `snapshot_id`. It is never set together with
+  // `snapshot_id`.
   //
   // +k8s:optional
   // +k8s:maxLength=4096
