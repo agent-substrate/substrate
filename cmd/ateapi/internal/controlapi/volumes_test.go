@@ -581,12 +581,12 @@ type mockPluginRegistry struct {
 	plugins map[string]volume.VolumePluginControlPlane
 }
 
-func (m *mockPluginRegistry) GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error) {
+func (m *mockPluginRegistry) GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, func(), error) {
 	p, ok := m.plugins[name]
 	if !ok {
-		return nil, fmt.Errorf("plugin %q not found in mock registry", name)
+		return nil, nil, fmt.Errorf("plugin %q not found in mock registry", name)
 	}
-	return p, nil
+	return p, func() {}, nil
 }
 
 type detachCall struct {

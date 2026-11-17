@@ -3805,30 +3805,20 @@ func runCsiDriverConfigContractTests(t *testing.T, setup func(t *testing.T) stor
 			t.Errorf("mutate error = %v, want %v", err, abortErr)
 		}
 
-		for _, fn := range []func(*ateapi.CsiDriverConfig){
-			func(cfg *ateapi.CsiDriverConfig) { cfg.DriverName = "other.csi.k8s.io" },
-			func(cfg *ateapi.CsiDriverConfig) { cfg.Metadata.Name = "other" },
-			func(cfg *ateapi.CsiDriverConfig) { cfg.Metadata.Atespace = "team-a" },
-		} {
-			if _, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.PreconditionFrom(created), func(cfg *ateapi.CsiDriverConfig) error {
-				fn(cfg)
-				return nil
-			}); !errors.Is(err, store.ErrImmutableField) {
-				t.Errorf("immutable field mutation = %v, want ErrImmutableField", err)
-			}
-		}
-
 		updated, err := s.UpdateCsiDriverConfig(ctx, "csi-nfs", store.PreconditionFrom(created), func(cfg *ateapi.CsiDriverConfig) error {
 			cfg.ControllerEndpoint = "tcp://10.0.0.2:9000"
 			cfg.NodeSocketOverride = "unix:///run/csi/nfs.sock"
 			cfg.Tls = &ateapi.CsiDriverTlsConfig{Enabled: false}
+			cfg.Metadata.Name = "other"
+			cfg.Metadata.Atespace = "team-a"
 			cfg.Metadata.UpdateTime = timestamppb.New(time.Unix(1, 0))
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("UpdateCsiDriverConfig failed: %v", err)
 		}
-		if updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() ||
+		if updated.GetMetadata().GetName() != "csi-nfs" || updated.GetMetadata().GetAtespace() != "" ||
+			updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() ||
 			!updated.GetMetadata().GetCreateTime().AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) ||
 			updated.GetMetadata().GetUpdateTime().AsTime().Before(created.GetMetadata().GetUpdateTime().AsTime()) {
 			t.Errorf("updated metadata = %v, created = %v", updated.GetMetadata(), created.GetMetadata())

@@ -134,7 +134,7 @@ func (s *ServiceImpl) UpdateCsiDriverConfig(ctx context.Context, name string, pr
 		return updated, nil
 	case errors.Is(err, store.ErrNotFound):
 		return nil, apierror.NotFound("CsiDriverConfig %s not found", name)
-	case errors.Is(err, store.ErrPreconditionRequired), errors.Is(err, store.ErrImmutableField):
+	case errors.Is(err, store.ErrPreconditionRequired):
 		return nil, apierror.InvalidArgument("while updating csi driver config %s: %v", name, err)
 	case errors.Is(err, store.ErrUIDConflict):
 		return nil, apierror.Aborted("CsiDriverConfig %s does not have uid %s", name, precondition.UID)

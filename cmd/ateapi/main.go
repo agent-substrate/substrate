@@ -420,6 +420,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
 	<-drainDone
+	controlSrv.Close()
 	slog.InfoContext(ctx, "Shutdown complete")
 }
 

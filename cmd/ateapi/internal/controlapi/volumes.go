@@ -163,7 +163,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, clas
 			return resultVolumes, apierror.FailedPrecondition("volume %q has mismatched type %q (expected %q from %s)", volName, vol.GetVolumeType(), class.driver, class.label)
 		}
 
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, release, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
 			return resultVolumes, apierror.FailedPrecondition("failed to get volume plugin for driver %q (%s): %v", class.driver, class.label, err)
 		}
@@ -173,6 +173,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, clas
 			CapacityBytes: specVol.GetExternal().GetTemplate().GetCapacityBytes(),
 			Parameters:    class.params,
 		})
+		release()
 		if volErr != nil {
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
 		}
@@ -208,17 +209,19 @@ func deleteActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 		}
 		// TODO: Standardize volume plugin lookup and error handling across control plane
 		// and worker plane (e.g. via a shared helper).
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, release, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
 			continue
 		}
-		if err := plugin.DeleteVolume(ctx, volID); err != nil {
-			if status.Code(err) == codes.NotFound {
+		delErr := plugin.DeleteVolume(ctx, volID)
+		release()
+		if delErr != nil {
+			if status.Code(delErr) == codes.NotFound {
 				slog.WarnContext(ctx, "Volume not found during delete, assuming already deleted", slog.String("volume_id", volID))
 				continue
 			}
-			errs = append(errs, fmt.Errorf("failed to delete volume %q: %w", volID, err))
+			errs = append(errs, fmt.Errorf("failed to delete volume %q: %w", volID, delErr))
 		}
 	}
 	return errors.Join(errs...)
@@ -282,17 +285,19 @@ func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 			continue
 		}
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
-		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
+		plugin, release, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
 			continue
 		}
-		if err := plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
-			if status.Code(err) == codes.NotFound {
+		detachErr := plugin.DetachVolume(ctx, vol.GetStorageVolumeId(), node)
+		release()
+		if detachErr != nil {
+			if status.Code(detachErr) == codes.NotFound {
 				slog.WarnContext(ctx, "Volume not found during detach, assuming already detached", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 				continue
 			}
-			errs = append(errs, fmt.Errorf("failed to detach volume %q from node %q: %w", vol.GetStorageVolumeId(), node, err))
+			errs = append(errs, fmt.Errorf("failed to detach volume %q from node %q: %w", vol.GetStorageVolumeId(), node, detachErr))
 		}
 	}
 	return errors.Join(errs...)
