@@ -653,7 +653,13 @@ tests:
         object: external_volume_class:nfs-gold
         assertions:
           allowed_atespace: true
+          can_reference: true
       - user: atespace:space-1
         object: external_volume_class:ssd-restricted
         assertions:
           allowed_atespace: false
+          can_reference: false
+      - user: user:carol # Global owner cannot satisfy can_reference directly
+        object: external_volume_class:nfs-gold
+        assertions:
+          can_reference: false

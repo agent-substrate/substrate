@@ -89,6 +89,20 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	return nil
 }
 
+// CheckSubject verifies that subject (such as "atespace:team-a") has relation
+// on object, without applying caller-derived grants or bootstrap owner
+// overrides.
+func (a *Authorizer) CheckSubject(ctx context.Context, subject, relation, object string) error {
+	allowed, err := a.checkRaw(ctx, subject, relation, object)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return apierror.PermissionDenied("permission denied: %q lacks %q on %q", subject, relation, object)
+	}
+	return nil
+}
+
 // checkRaw reports whether user has relation on object. Besides the stored
 // tuples, OpenFGA evaluates these as contextual tuples: object's structural
 // parent links, user's bootstrap owner grant if configured, and grants.
