@@ -198,6 +198,91 @@ func externalVolumeClassEqual(want, got *ateapi.ExternalVolumeClass) bool {
 		slices.Equal(want.GetMountOptions(), got.GetMountOptions())
 }
 
+const (
+	externalVolumeClassAllowedRole = "allowed_atespace"
+	maxPolicyGrantAttempts         = 5
+)
+
+type externalVolumeClassAccessPolicyClient interface {
+	GetExternalVolumeClassAccessPolicy(ctx context.Context, in *ateapi.GetExternalVolumeClassAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	CreateExternalVolumeClassAccessPolicy(ctx context.Context, in *ateapi.CreateExternalVolumeClassAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+	UpdateExternalVolumeClassAccessPolicy(ctx context.Context, in *ateapi.UpdateExternalVolumeClassAccessPolicyRequest, opts ...grpc.CallOption) (*ateapi.AccessPolicy, error)
+}
+
+// EnsureExternalVolumeClassAtespaceAccess ensures atespace is listed in the
+// allowed_atespace binding of className's AccessPolicy, creating the policy if
+// none exists and retrying optimistic-concurrency conflicts.
+func EnsureExternalVolumeClassAtespaceAccess(ctx context.Context, client externalVolumeClassAccessPolicyClient, className, atespace string) error {
+	member := "atespace:" + atespace
+	ref := &ateapi.ObjectRef{Name: className}
+
+	for attempt := range maxPolicyGrantAttempts {
+		current, err := client.GetExternalVolumeClassAccessPolicy(ctx, &ateapi.GetExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: ref,
+			Name:                resources.SingletonName,
+		})
+		if err != nil {
+			if status.Code(err) != codes.NotFound {
+				return fmt.Errorf("getting access policy for external volume class %q: %w", className, err)
+			}
+			_, err = client.CreateExternalVolumeClassAccessPolicy(ctx, &ateapi.CreateExternalVolumeClassAccessPolicyRequest{
+				ExternalVolumeClass: ref,
+				AccessPolicy: &ateapi.AccessPolicy{
+					Metadata: &ateapi.ResourceMetadata{Name: resources.SingletonName},
+					Bindings: []*ateapi.Binding{{
+						Role:    externalVolumeClassAllowedRole,
+						Members: []string{member},
+					}},
+				},
+			})
+			if err == nil {
+				log.Stepf("granted atespace %q access to external volume class %q", atespace, className)
+				return nil
+			}
+			if status.Code(err) == codes.AlreadyExists && attempt+1 < maxPolicyGrantAttempts {
+				continue
+			}
+			return fmt.Errorf("creating access policy for external volume class %q: %w", className, err)
+		}
+
+		updated := proto.CloneOf(current)
+		if !addExternalVolumeClassMember(updated, member) {
+			return nil
+		}
+		_, err = client.UpdateExternalVolumeClassAccessPolicy(ctx, &ateapi.UpdateExternalVolumeClassAccessPolicyRequest{
+			ExternalVolumeClass: ref,
+			AccessPolicy:        updated,
+		})
+		if err == nil {
+			log.Stepf("granted atespace %q access to external volume class %q", atespace, className)
+			return nil
+		}
+		if (status.Code(err) == codes.Aborted || status.Code(err) == codes.NotFound) && attempt+1 < maxPolicyGrantAttempts {
+			continue
+		}
+		return fmt.Errorf("updating access policy for external volume class %q: %w", className, err)
+	}
+	return fmt.Errorf("exceeded %d attempts updating access policy for external volume class %q", maxPolicyGrantAttempts, className)
+}
+
+func addExternalVolumeClassMember(policy *ateapi.AccessPolicy, member string) bool {
+	for _, b := range policy.GetBindings() {
+		if b.GetRole() != externalVolumeClassAllowedRole {
+			continue
+		}
+		if slices.Contains(b.GetMembers(), member) {
+			return false
+		}
+		b.Members = append(b.Members, member)
+		return true
+	}
+	policy.Bindings = append(policy.Bindings, &ateapi.Binding{
+		Role:    externalVolumeClassAllowedRole,
+		Members: []string{member},
+	})
+	return true
+}
+
 // CreateActorTemplate creates the template through the ate API. Actor
 // templates are immutable (no update RPC), so an existing template is left
 // in place: delete the demo and redeploy to change it.

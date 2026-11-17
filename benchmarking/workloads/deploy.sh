@@ -319,6 +319,11 @@ deploy() {
   run_kubectl_ate create atespace benchmark-workloads >/dev/null 2>&1 \
     || run_kubectl_ate get atespace benchmark-workloads >/dev/null
 
+  if [[ -n "${EXTERNAL_VOLUME_CLASS}" ]]; then
+    run_kubectl_ate --preview update access-policy -c "${EXTERNAL_VOLUME_CLASS}" \
+      --add-member atespace:benchmark-workloads
+  fi
+
   # Actor templates are immutable (no update RPC). A value that changes for
   # each run — the OTLP endpoint or the sandbox class — needs the removal of
   # the old template first. This removal is safe, because the benchmark

@@ -164,6 +164,13 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 		if err != nil {
 			return err
 		}
+		for _, v := range template.GetVolumes() {
+			if className := v.GetExternal().GetTemplate().GetExternalVolumeClass().GetName(); className != "" {
+				if err := steps.EnsureExternalVolumeClassAtespaceAccess(ctx, client, className, template.GetMetadata().GetAtespace()); err != nil {
+					return err
+				}
+			}
+		}
 		if err := steps.CreateActorTemplate(ctx, client, template); err != nil {
 			return err
 		}
