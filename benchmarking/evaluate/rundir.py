@@ -63,9 +63,7 @@ class GcsArtifacts:
         self._fetched: dict[str, Optional[Path]] = {}
 
     def fetch(self, name: str) -> Optional[Path]:
-        """Raises ValueError for a name outside the run, OSError on a read error."""
-        if name.startswith("/") or ".." in name.split("/"):
-            raise ValueError(f"artifact name {name!r} is outside the run")
+        """Raises OSError on a read error."""
         if name not in self._fetched:
             self._fetched[name] = _gcs_download(f"{self.uri}/{name}", self.tmp / name)
         return self._fetched[name]
@@ -83,6 +81,12 @@ def open_run(uri: str, tmp: Path) -> BenchmarkRunContext:
     tmp.mkdir(parents=True, exist_ok=True)
     local = Path(tempfile.mkdtemp(prefix="run-", dir=tmp))
     return BenchmarkRunContext(identity_from_uri(uri), GcsArtifacts(uri, local))
+
+
+def dest_of(uri: str) -> Optional[str]:
+    """The <dest> a run stored in the runner's layout lives under; None otherwise."""
+    m = RUN_PATH.match(uri.rstrip("/"))
+    return m["root"] if m else None
 
 
 def find_paired_run(dest: str, test_name: str, tag: str, before_ts: int, max_age_s: int = DEFAULT_MAX_AGE_S) -> str:
@@ -115,6 +119,17 @@ def cluster_name(artifacts: ArtifactStore) -> str:
     measurements = trial.get("measurements")
     name = measurements.get("metadata_cluster_name") if isinstance(measurements, dict) else None
     return str(name) if name else ""
+
+
+def data_timestamp(artifacts: ArtifactStore) -> str:
+    """The timestamp the run's stats.jsonl rows carry (trial_summary's); "" without one
+    or when stats.jsonl is corrupt (the evaluation then says why)."""
+    try:
+        stats = read_stats(artifacts.fetch("stats.jsonl"))
+    except ValueError:
+        return ""
+    row = stats.get("trial_summary") or next(iter(stats.values()), {})
+    return str(row.get("timestamp") or "")
 
 
 def paired_run_finder(dest: str, tag: str, run_ts: int, artifacts: ArtifactStore, tmp: Path,
