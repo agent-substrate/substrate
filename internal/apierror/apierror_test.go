@@ -40,6 +40,7 @@ func TestConstructors(t *testing.T) {
 		{name: "ResourceExhausted", err: ResourceExhausted("tier %d", 1), wantCode: codes.ResourceExhausted},
 		{name: "Unimplemented", err: Unimplemented("tier %d", 1), wantCode: codes.Unimplemented},
 		{name: "Unavailable", err: Unavailable("tier %d", 1), wantCode: codes.Unavailable},
+		{name: "DeadlineExceeded", err: DeadlineExceeded("tier %d", 1), wantCode: codes.DeadlineExceeded},
 		{name: "DataLoss", err: DataLoss("tier %d", 1), wantCode: codes.DataLoss},
 		{name: "Internal", err: Internal("tier %d", 1), wantCode: codes.Internal},
 	}

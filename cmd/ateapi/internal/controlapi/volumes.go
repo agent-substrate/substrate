@@ -20,12 +20,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
@@ -122,12 +126,13 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		}
 
 		resp, volErr := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
-			Name:          actVolID,
-			CapacityBytes: specVol.GetExternal().GetTemplate().GetCapacityBytes(),
-			Parameters:    sc.Parameters,
+			Name:             actVolID,
+			CapacityBytes:    specVol.GetExternal().GetTemplate().GetCapacityBytes(),
+			Parameters:       sc.Parameters,
+			SourceSnapshotID: vol.GetSourceSnapshotId(),
 		})
 		if volErr != nil {
-			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
+			return resultVolumes, createVolumeError(volName, vol.GetSourceSnapshotId(), volErr)
 		}
 
 		if resp.VolumeID == "" {
@@ -135,6 +140,8 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			return resultVolumes, apierror.Internal("volume plugin returned no ID for volume %q", specVol.GetName())
 		}
 
+		// source_snapshot_id is left out: a provisioned volume is never
+		// restored again.
 		resultVolumes = append(resultVolumes, &ateapi.ExternalVolumeStatus{
 			Name:            volName,
 			StorageVolumeId: resp.VolumeID,
@@ -143,6 +150,227 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		})
 	}
 	return resultVolumes, nil
+}
+
+// createVolumeError maps a failed CreateVolume to the error resume fails with,
+// keeping the driver's meaning. sourceSnapshotID is the snapshot the volume was
+// being restored from, or empty.
+func createVolumeError(volName, sourceSnapshotID string, err error) error {
+	code := status.Code(err)
+	if sourceSnapshotID != "" {
+		switch code {
+		case codes.NotFound:
+			// The snapshot is gone, as when the tag was deleted before this
+			// Actor first resumed. Retrying cannot help.
+			return apierror.FailedPrecondition("snapshot %q to restore volume %q from no longer exists in the storage system: %v", sourceSnapshotID, volName, err)
+		case codes.FailedPrecondition:
+			// For example, a snapshot that is not ready to use yet, from a
+			// driver that cannot report readiness.
+			return apierror.FailedPrecondition("cannot restore volume %q from snapshot %q: %v", volName, sourceSnapshotID, err)
+		case codes.Aborted:
+			return apierror.Aborted("failed to create volume %q: %v", volName, err)
+		}
+	}
+	switch code {
+	case codes.OutOfRange, codes.InvalidArgument:
+		// For example, a capacity smaller than the snapshot.
+		return apierror.FailedPrecondition("failed to create volume %q: %v", volName, err)
+	case codes.Unavailable:
+		return apierror.Unavailable("failed to create volume %q: %v", volName, err)
+	case codes.DeadlineExceeded:
+		return apierror.DeadlineExceeded("failed to create volume %q: %v", volName, err)
+	case codes.ResourceExhausted:
+		return apierror.ResourceExhausted("failed to create volume %q: %v", volName, err)
+	}
+	return apierror.Internal("failed to create volume %q: %v", volName, err)
+}
+
+// setTagVolumeSources sets source_snapshot_id on each of vols, the external
+// volumes of an Actor created from tag, that tag captured, so its first resume
+// restores them. A volume the tag did not capture keeps no source and is
+// provisioned empty, whether the tag left it out or captured no volumes.
+//
+// CreateTag does not wait for snapshots to become ready. A snapshot that is
+// not yet ready to use is looked up in the storage system, and the call fails
+// with FailedPrecondition until it is ready. One now ready is recorded as
+// ready to use, so later Actors skip the lookup. A driver that cannot report
+// readiness never has its snapshots marked ready, so they are used as they
+// are, and provisioning fails if the snapshot cannot be restored.
+//
+// TODO: Keep ExternalVolumeRef volumes out of this once
+// ExternalVolumeSource.ref lands. Tags never capture them.
+func (s *ServiceImpl) setTagVolumeSources(ctx context.Context, tag *ateapi.Tag, vols []*ateapi.ExternalVolumeStatus) error {
+	if len(vols) == 0 {
+		return nil
+	}
+	tagRef := resources.TagRefFromTag(tag)
+	tagUID := tag.GetMetadata().GetUid()
+	snapshots, err := s.store.ListTagExternalVolumeSnapshots(ctx, tagRef, tagUID)
+	if err != nil {
+		return fmt.Errorf("while listing the external volume snapshots of tag %s: %w", tagRef, err)
+	}
+	// DeleteTag marks the tag before it deletes any of its snapshots, so a
+	// tag that is still unmarked now had all of them when they were listed.
+	// Check even when the list is empty: DeleteTag may have deleted them all.
+	current, err := s.store.GetTag(ctx, tagRef)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("while getting tag: %w", err)
+	}
+	if err != nil || current.GetMetadata().GetUid() != tagUID || current.GetMetadata().GetDeleteTime() != nil {
+		return apierror.FailedPrecondition("source Tag %s is being deleted", tagRef)
+	}
+
+	byVolume := make(map[string]*ateapi.ExternalVolumeSnapshot, len(snapshots))
+	for _, snap := range snapshots {
+		byVolume[snap.GetOrigin().GetTagCapture().GetSourceVolumeName()] = snap
+	}
+	sources := make([]*ateapi.ExternalVolumeSnapshot, len(vols))
+	var creating []*ateapi.ExternalVolumeSnapshot
+	for i, vol := range vols {
+		volName := vol.GetName()
+		snap := byVolume[volName]
+		if snap == nil {
+			continue
+		}
+		switch st := snap.GetStatus(); {
+		case st.GetSnapshotId() == "":
+			// CreateTag completes a tag only once every snapshot has a
+			// handle. One without means the stored status is wrong, so fail
+			// instead of provisioning the volume empty.
+			return apierror.Internal("Tag %s has no snapshot handle for volume %q", tagRef, volName)
+		case !st.GetReadyToUse():
+			creating = append(creating, snap)
+		}
+		// A handle means nothing to another driver. The StorageClass may have
+		// been recreated with a different provisioner since the tag was taken.
+		if snap.GetDriverName() != vol.GetVolumeType() {
+			return apierror.FailedPrecondition("Tag %s snapshot of volume %q was taken by driver %q, but the volume is provisioned by %q", tagRef, volName, snap.GetDriverName(), vol.GetVolumeType())
+		}
+		sources[i] = snap
+	}
+
+	lookups := s.lookupVolumeSnapshots(ctx, creating)
+	var nowReady []volumeSnapshotLookup
+	var errs []error
+	for _, l := range lookups {
+		snapshotID := l.snapshot.GetStatus().GetSnapshotId()
+		volName := l.snapshot.GetOrigin().GetTagCapture().GetSourceVolumeName()
+		switch {
+		case errors.Is(l.err, errors.ErrUnsupported):
+			slog.WarnContext(ctx, "driver cannot report snapshot readiness; restoring anyway",
+				slog.String("snapshot_id", snapshotID), slog.String("volume_name", volName))
+		case l.err != nil:
+			errs = append(errs, l.err)
+		case !l.found:
+			errs = append(errs, apierror.FailedPrecondition("Tag %s snapshot %q of volume %q no longer exists in the storage system", tagRef, snapshotID, volName))
+		case !l.observed.ReadyToUse:
+			errs = append(errs, apierror.FailedPrecondition("Tag %s snapshot %q of volume %q is not ready to use yet; retry later", tagRef, snapshotID, volName))
+		default:
+			nowReady = append(nowReady, l)
+		}
+	}
+	// Recorded even when another snapshot is not ready, so a retry skips the
+	// lookups that already succeeded.
+	s.recordVolumeSnapshotsReady(ctx, nowReady)
+	if len(errs) > 0 {
+		return errs[0]
+	}
+
+	for i, vol := range vols {
+		if sources[i] != nil {
+			vol.SourceSnapshotId = sources[i].GetStatus().GetSnapshotId()
+		}
+	}
+	return nil
+}
+
+// volumeSnapshotLookup is what the storage system reported about snapshot.
+type volumeSnapshotLookup struct {
+	snapshot *ateapi.ExternalVolumeSnapshot
+	observed volume.Snapshot
+	found    bool
+	// err wraps errors.ErrUnsupported if the driver cannot look snapshots up.
+	// Otherwise it is an apierror.
+	err error
+}
+
+// lookupVolumeSnapshots asks the driver of each snapshot about it. Driver
+// calls can take seconds, so they run concurrently.
+func (s *ServiceImpl) lookupVolumeSnapshots(ctx context.Context, snapshots []*ateapi.ExternalVolumeSnapshot) []volumeSnapshotLookup {
+	lookups := make([]volumeSnapshotLookup, len(snapshots))
+	var wg sync.WaitGroup
+	for i, snap := range snapshots {
+		wg.Go(func() {
+			lookups[i] = s.lookupVolumeSnapshot(ctx, snap)
+		})
+	}
+	wg.Wait()
+	return lookups
+}
+
+// lookupVolumeSnapshot asks the driver that took snap about it.
+func (s *ServiceImpl) lookupVolumeSnapshot(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) volumeSnapshotLookup {
+	l := volumeSnapshotLookup{snapshot: snap}
+	driver := snap.GetDriverName()
+	plugin, err := s.pluginRegistry.GetPlugin(ctx, driver)
+	if err != nil {
+		l.err = apierror.FailedPrecondition("failed to get volume plugin for driver %q: %v", driver, err)
+		return l
+	}
+	snapshotID := snap.GetStatus().GetSnapshotId()
+	l.observed, l.found, err = plugin.GetSnapshot(ctx, snapshotID)
+	switch {
+	case errors.Is(err, errors.ErrUnsupported):
+		l.err = err
+	case err != nil:
+		l.err = apierror.Internal("failed to read snapshot %q of volume %q: %v", snapshotID, snap.GetOrigin().GetTagCapture().GetSourceVolumeName(), err)
+	}
+	return l
+}
+
+// recordVolumeSnapshotsReady records each looked-up snapshot as ready to use,
+// with the size the driver reported if none is recorded, and returns the
+// stored snapshots in the same order. Recording readiness only saves later
+// callers a lookup, so a failed write is logged, and the snapshot is returned
+// with ready_to_use set but not stored. A snapshot deleted meanwhile, as
+// DeleteTag does, is returned as it was looked up.
+func (s *ServiceImpl) recordVolumeSnapshotsReady(ctx context.Context, lookups []volumeSnapshotLookup) []*ateapi.ExternalVolumeSnapshot {
+	recorded := make([]*ateapi.ExternalVolumeSnapshot, len(lookups))
+	for i, l := range lookups {
+		recorded[i] = s.recordVolumeSnapshotReady(ctx, l.snapshot, l.observed)
+	}
+	return recorded
+}
+
+func (s *ServiceImpl) recordVolumeSnapshotReady(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot, observed volume.Snapshot) *ateapi.ExternalVolumeSnapshot {
+	ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(snap)
+	setReady := func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+		toUpdate.Status.ReadyToUse = true
+		if toUpdate.GetStatus().GetRestoreSizeBytes() == 0 {
+			toUpdate.Status.RestoreSizeBytes = observed.SizeBytes
+		}
+		return nil
+	}
+	updated, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(snap), setReady)
+	if errors.Is(err, store.ErrVersionConflict) {
+		// Another reader may have recorded it first. Retry once against the
+		// stored snapshot.
+		var stored *ateapi.ExternalVolumeSnapshot
+		if stored, err = s.store.GetExternalVolumeSnapshot(ctx, ref); err == nil {
+			updated, err = s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(stored), setReady)
+		}
+	}
+	switch {
+	case err == nil:
+		return updated
+	case errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict):
+		return snap
+	}
+	slog.WarnContext(ctx, "failed to record an external volume snapshot as ready",
+		slog.String("external_volume_snapshot", ref.String()), slog.Any("error", err))
+	stamped := proto.CloneOf(snap)
+	_ = setReady(stamped)
+	return stamped
 }
 
 // deleteActorVolumes deletes all external volumes in the list.

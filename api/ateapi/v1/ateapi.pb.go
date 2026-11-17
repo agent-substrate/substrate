@@ -1135,8 +1135,20 @@ type ExternalVolumeStatus struct {
 	// +k8s:optional
 	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,4,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// source_snapshot_id is the snapshot handle the volume is restored from
+	// when it is provisioned. CreateActor copies it from the
+	// ExternalVolumeSnapshot the source tag captured of this volume. Empty
+	// means the volume is provisioned empty. It is cleared once the volume is
+	// provisioned. Like `storage_volume_id`, it is only bounded and checked for
+	// control characters.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=256
+	// +k8s:update=NoModify
+	// +k8s:customValidation # no control characters
+	SourceSnapshotId string `protobuf:"bytes,5,opt,name=source_snapshot_id,json=sourceSnapshotId,proto3" json:"source_snapshot_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ExternalVolumeStatus) Reset() {
@@ -1197,6 +1209,13 @@ func (x *ExternalVolumeStatus) GetVolumeContext() map[string]string {
 	return nil
 }
 
+func (x *ExternalVolumeStatus) GetSourceSnapshotId() string {
+	if x != nil {
+		return x.SourceSnapshotId
+	}
+	return ""
+}
+
 type Actor struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
@@ -1224,6 +1243,10 @@ type Actor struct {
 	// The tag specified by the caller at CreateActor to seed this Actor from an
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
 	// once at creation and immutable afterward.
+	// If the tag captured external volumes, the first resume restores each of
+	// them from its ExternalVolumeSnapshot, and the Actor's other external
+	// volumes start empty. CreateActor fails with FAILED_PRECONDITION while one
+	// of those snapshots is not ready to use.
 	//
 	// +k8s:optional
 	// +k8s:subfield(atespace)=+k8s:required
@@ -6610,7 +6633,8 @@ type CreateTagRequest struct {
 	// Capturing requires the driver of every captured volume to support
 	// snapshots, and fails the call if any does not. It also fails if the
 	// Actor has no external volumes. Each captured volume is recorded as an
-	// ExternalVolumeSnapshot the tag owns.
+	// ExternalVolumeSnapshot the tag owns. An Actor created from the tag
+	// restores each captured volume on its first resume.
 	//
 	// +ate:preview=ExternalVolumes
 	// +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
@@ -10628,13 +10652,14 @@ const file_api_ateapi_v1_ateapi_proto_rawDesc = "" +
 	"\vdelete_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"deleteTime\"V\n" +
 	"\x0fExternalVolumes\x12C\n" +
-	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\x9e\x02\n" +
+	"\avolumes\x18\x01 \x03(\v2).substrate.ateapi.v1.ExternalVolumeStatusR\avolumes\"\xcc\x02\n" +
 	"\x14ExternalVolumeStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x12c\n" +
-	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x1a@\n" +
+	"\x0evolume_context\x18\x04 \x03(\v2<.substrate.ateapi.v1.ExternalVolumeStatus.VolumeContextEntryR\rvolumeContext\x12,\n" +
+	"\x12source_snapshot_id\x18\x05 \x01(\tR\x10sourceSnapshotId\x1a@\n" +
 	"\x12VolumeContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe2\x02\n" +

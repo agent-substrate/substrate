@@ -393,7 +393,11 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 	}
 }
 
-func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
+// TestCreateActor_TagVolumeSnapshots covers creating an Actor whose template
+// has external volumes from a tag: a tag without volume snapshots seeds an
+// Actor whose volume is provisioned empty, and a tag whose volume snapshot was
+// taken by another driver is refused.
+func TestCreateActor_TagVolumeSnapshots(t *testing.T) {
 	preview.InitForTest(t, "ExternalVolumes")
 
 	ns := namespaceForTest("ns-snapshot-external-volume")
@@ -417,20 +421,31 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create ActorTemplate: %v", err)
 	}
-	seedTag(t, tc, "external-volume-source", "external-volume-snapshot", func(tag *ateapi.Tag) {
+	createFrom := func(actorName, tagName string) (*ateapi.Actor, error) {
+		return tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{
+			Actor: &ateapi.Actor{
+				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: actorName},
+				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				SourceTag:     &ateapi.ObjectRef{Atespace: testAtespace, Name: tagName},
+			},
+		})
+	}
+
+	seedTag(t, tc, "no-volumes-source", "no-volumes", func(tag *ateapi.Tag) {
 		tag.Status.ActorTemplateUid = template.GetMetadata().GetUid()
 	})
-	tagRef := &ateapi.ObjectRef{Atespace: testAtespace, Name: "external-volume-snapshot"}
+	clone, err := createFrom("clone-empty", "no-volumes")
+	if err != nil {
+		t.Fatalf("CreateActor from a tag without volume snapshots: %v", err)
+	}
+	want := []*ateapi.ExternalVolumeStatus{{Name: "data", VolumeType: "substrate.io/mock"}}
+	if diff := cmp.Diff(want, clone.GetStatus().GetExternalVolumes().GetVolumes(), protocmp.Transform()); diff != "" {
+		t.Errorf("clone volumes mismatch (-want +got):\n%s", diff)
+	}
 
-	_, err = tc.service.CreateActor(context.Background(), &ateapi.CreateActorRequest{
-		Actor: &ateapi.Actor{
-			Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
-			ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-			SourceTag:     tagRef,
-		},
-	})
-	if apierror.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", apierror.Code(err))
+	seedTagWithVolumeSnapshot(t, tc, "other-driver-source", "other-driver", template, "data", "other.io/driver")
+	if _, err := createFrom("clone-other-driver", "other-driver"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor from a tag whose volume snapshot another driver took = %v, want FailedPrecondition", err)
 	}
 }
 

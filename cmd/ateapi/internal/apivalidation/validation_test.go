@@ -937,6 +937,17 @@ func TestValidateExternalVolume(t *testing.T) {
 		name: "storage volume id at the bound",
 		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = strings.Repeat("x", 256) }),
 	}, {
+		name: "source snapshot id at the bound",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = strings.Repeat("x", 256) }),
+	}, {
+		name: "source snapshot id too long",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = strings.Repeat("x", 257) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("source_snapshot_id"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		name: "invalid source snapshot id with null U+0000",
+		obj:  valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = "snap\x00id" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("source_snapshot_id"), nil, "")},
+	}, {
 		name: "volume_context with many entries, as a CSI driver may return",
 		obj: valid(func(v *ateapi.ExternalVolumeStatus) {
 			ctxMap := make(map[string]string, 100)
@@ -996,6 +1007,15 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "vol-id-1" }),
 		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "" }),
 		want:   field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "").WithOrigin("update")},
+	}, {
+		name:   "source_snapshot_id cleared once the volume is provisioned is valid",
+		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = ""; v.SourceSnapshotId = "snap-1" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.StorageVolumeId = "vol-id-1"; v.SourceSnapshotId = "" }),
+	}, {
+		name:   "source_snapshot_id changed is invalid",
+		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = "snap-1" }),
+		newObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.SourceSnapshotId = "snap-2" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("source_snapshot_id"), nil, "").WithOrigin("update")},
 	}, {
 		name:   "volume_type changed is invalid",
 		oldObj: valid(func(v *ateapi.ExternalVolumeStatus) { v.VolumeType = "mock" }),

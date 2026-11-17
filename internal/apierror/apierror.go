@@ -105,6 +105,12 @@ func Unavailable(format string, args ...any) error {
 	return newf(codes.Unavailable, format, args...)
 }
 
+// DeadlineExceeded reports that a call the server made ran out of time. The
+// call may still have taken effect.
+func DeadlineExceeded(format string, args ...any) error {
+	return newf(codes.DeadlineExceeded, format, args...)
+}
+
 // DataLoss reports unrecoverable loss or corruption of data.
 func DataLoss(format string, args ...any) error {
 	return newf(codes.DataLoss, format, args...)

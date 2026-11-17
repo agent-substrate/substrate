@@ -139,6 +139,10 @@ func ValidateCustom_ExternalVolumeStatus_StorageVolumeId(_ context.Context, _ op
 	return resources.ValidateStorageVolumeID(fldPath, *value)
 }
 
+func ValidateCustom_ExternalVolumeStatus_SourceSnapshotId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
+
 func ValidateCustom_ExternalVolumeStatus_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
 	return resources.ValidateCSIMap(fldPath, value)
 }

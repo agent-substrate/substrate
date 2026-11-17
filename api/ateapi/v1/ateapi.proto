@@ -545,6 +545,19 @@ message ExternalVolumeStatus {
   // +k8s:optional
   // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 4;
+
+  // source_snapshot_id is the snapshot handle the volume is restored from
+  // when it is provisioned. CreateActor copies it from the
+  // ExternalVolumeSnapshot the source tag captured of this volume. Empty
+  // means the volume is provisioned empty. It is cleared once the volume is
+  // provisioned. Like `storage_volume_id`, it is only bounded and checked for
+  // control characters.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:customValidation # no control characters
+  string source_snapshot_id = 5;
 }
 
 message Actor {
@@ -581,6 +594,10 @@ message Actor {
   // The tag specified by the caller at CreateActor to seed this Actor from an
   // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
   // once at creation and immutable afterward.
+  // If the tag captured external volumes, the first resume restores each of
+  // them from its ExternalVolumeSnapshot, and the Actor's other external
+  // volumes start empty. CreateActor fails with FAILED_PRECONDITION while one
+  // of those snapshots is not ready to use.
   //
   // +k8s:optional
   // +k8s:subfield(atespace)=+k8s:required
@@ -2248,7 +2265,8 @@ message CreateTagRequest {
   // Capturing requires the driver of every captured volume to support
   // snapshots, and fails the call if any does not. It also fails if the
   // Actor has no external volumes. Each captured volume is recorded as an
-  // ExternalVolumeSnapshot the tag owns.
+  // ExternalVolumeSnapshot the tag owns. An Actor created from the tag
+  // restores each captured volume on its first resume.
   //
   // +ate:preview=ExternalVolumes
   // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
