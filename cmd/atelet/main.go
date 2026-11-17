@@ -401,6 +401,9 @@ func main() {
 	defer ateapiConn.Close()
 	workerService := ateapi.NewWorkerServiceClient(ateapiConn)
 
+	if err := snapshottracker.MigrateSnapshotStateFiles(); err != nil {
+		serverboot.Fatal(ctx, "Failed to migrate the actors' snapshot state files", err)
+	}
 	// The snapshot tracker's workers get a context of their own, cancelled only
 	// once the gRPC server has drained, so background snapshot work keeps
 	// running while in-flight RPCs finish.

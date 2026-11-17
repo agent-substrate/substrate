@@ -663,6 +663,9 @@ func TestTrackerCommitPromotedClearsUploadDue(t *testing.T) {
 // state file, until a later save succeeds.
 func TestTrackerKeepsUnsavedStateInMemory(t *testing.T) {
 	useTempNodeDirs(t)
+	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	stateFile := ateletpath.ActorSnapshotStateFile(trackedActorUID)
 	// A directory where the state file goes makes the write's rename fail.
 	if err := os.MkdirAll(stateFile, 0o700); err != nil {
@@ -759,6 +762,9 @@ func TestTrackerLocksEachActorSeparately(t *testing.T) {
 func TestTrackerSkipsUnreadableSnapshotState(t *testing.T) {
 	useTempNodeDirs(t)
 	if err := os.MkdirAll(ateletpath.ActorPath(trackedActorUID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ateletpath.ActorSnapshotPath(trackedActorUID), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(ateletpath.ActorSnapshotStateFile(trackedActorUID), []byte("{"), 0o600); err != nil {
