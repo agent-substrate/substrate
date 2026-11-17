@@ -61,12 +61,16 @@ query($owner: String!, $name: String!, $oid: GitObjectID!, $endCursor: String) {
 GRAPHQL
 )"
 
+source "$(dirname "${BASH_SOURCE[0]}")/gh-retry.sh"
+
 output_dir="$(mktemp -d)"
 trap 'rm -rf "${output_dir}"' EXIT
 touch "${output_dir}/logins"
 while IFS= read -r commit; do
     [[ -n "${commit}" ]] || continue
-    response="$(gh api graphql --paginate \
+    # Retries HTTP 5xx. GraphQL timeouts are not retried: gh reports them
+    # without a status.
+    response="$(gh_with_retries api graphql --paginate \
         -f query="${query}" -f owner="${ORG}" -f name="${REPO}" -f oid="${commit}")"
     if ! jq -e -s 'length > 0 and all(.[];
         (.errors | length) == 0 and
