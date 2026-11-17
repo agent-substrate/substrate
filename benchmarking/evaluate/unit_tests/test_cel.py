@@ -166,6 +166,8 @@ class ConfigTest(unittest.TestCase):
                 **self.VALID, "inputs": [stats_input(select="line.a +")]},
             "inputs.0: reader_cfg: until: .*must give a bool": {
                 **self.VALID, "inputs": [stats_input(until="size(line)")]},
+            "inputs.0.from_test: String should have at least 1 character": {
+                **self.VALID, "inputs": [{**stats_input(), "from_test": ""}]},
             "locals: \\['stats'\\] are also inputs": {**self.VALID, "locals": [
                 {"name": "stats", "cel": "1.0"}, {"name": "rows", "cel": "stats"}]},
             "local 'rows': .*Syntax error": {**self.VALID, "locals": [
@@ -283,6 +285,28 @@ class QueryTest(unittest.TestCase):
             run = local_run(Path(tmp))
             cfg = {"inputs": STATS, "values": [{"name": "n", "cel": "double(size(stats.lines))"}]}
             self.assertEqual(query(run, cfg), ({}, "input 'stats': stats.jsonl absent"))
+            other = {"inputs": [{**stats_input("other"), "from_test": "t1"}],
+                     "values": [{"name": "n", "cel": "double(size(other.lines))"}]}
+            self.assertEqual(query(write_stats(Path(tmp), self.LINES), other),
+                             ({}, "input 'other': no run of t1"))
+
+    def test_an_input_with_from_test_reads_that_tests_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            this = write_stats(Path(tmp) / "this", self.LINES)
+            other = write_stats(Path(tmp) / "t1", [stats_row("trial_summary", allocatable_cores=4)])
+            asked = []
+
+            def run_of(test: str) -> BenchmarkRunContext:
+                asked.append(test)
+                return other
+
+            cfg = {"inputs": [*STATS, {**stats_input("other"), "from_test": "t1"}],
+                   "values": [{"name": "ratio", "cel": "stats.lines[0].measurements.allocatable_cores / "
+                                       "other.lines[0].measurements.allocatable_cores"},
+                              {"name": "other_uri", "cel": "other.uri"}]}
+            self.assertEqual(query(dataclasses.replace(this, run_of=run_of), cfg),
+                             ({"ratio": 48.0, "other_uri": str(Path(tmp) / "t1")}, None))
+            self.assertEqual(asked, ["t1"])
 
     def test_each_input_is_read_once_per_run(self):
         cfg = {"inputs": STATS, "values": [{"name": "n", "cel": "double(size(stats.lines))"}]}
