@@ -236,25 +236,7 @@ kubectl rollout status deployment/nfs-server -n default --timeout=120s
 kubectl rollout status deployment/csi-nfs-controller -n kube-system --timeout=120s
 kubectl rollout status daemonset/csi-nfs-node -n kube-system --timeout=120s
 
-# 8. Create the CSIDriverConfig for Substrate
-echo "Creating nfs.csi.k8s.io CSIDriverConfig..."
-cat <<EOF | kubectl apply -f -
-apiVersion: ate.dev/v1
-kind: CSIDriverConfig
-metadata:
-  name: nfs.csi.k8s.io
-spec:
-  driverName: nfs.csi.k8s.io
-  controllerEndpoint: tcp://csi-nfs-controller.kube-system.svc.cluster.local:50052
-  nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
-  tls:
-    enabled: true
-    usePodIdentity: true
-    # The one DNS name servicednssigner puts in the proxy's certificate.
-    serverName: csi-nfs-controller.kube-system.svc
-EOF
-
-# 9. Register the canonical CsiDriverConfig when ExternalVolumes preview is enabled.
+# 8. Register the canonical CsiDriverConfig when ExternalVolumes preview is enabled.
 preview_gates="${ATE_PREVIEW:-}"
 case ",${preview_gates//[[:space:]]/}," in
   *,ALL,*|*,ExternalVolumes,*)
@@ -280,7 +262,7 @@ case ",${preview_gates//[[:space:]]/}," in
     ;;
 esac
 
-# 10. Restart atelet to ensure it reconnects to the new CSI socket.
+# 9. Restart atelet to ensure it reconnects to the new CSI socket.
 echo "Restarting atelet DaemonSet (if present)..."
 kubectl rollout restart daemonset/atelet -n "${ATE_NAMESPACE}" >/dev/null 2>&1 || true
 

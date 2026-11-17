@@ -192,7 +192,7 @@ kubectl ate delete actor my-counter-1 -a ate-demo-counter-microvm
 Pass `--with-external-volume` to attach a CSI-backed external volume mounted at `/external-data`. That flag sets `--validate-existing-file-path=/external-data/test.txt` on `counter.go`, so `curl` returns `failed to read test file: open /external-data/test.txt: no such file or directory` until `/external-data/test.txt` exists on the volume.
 
 > [!IMPORTANT]
-> External volumes are a **preview** feature and require the `ExternalVolumes` preview feature gate plus an adapted CSI driver with a `CSIDriverConfig` (see [CSI Volumes](../../docs/guides/csi-volumes.md) and [Deploying CSI Drivers](../../docs/guides/csi-deployment.md)):
+> External volumes are a **preview** feature and require the `ExternalVolumes` preview feature gate plus an adapted CSI driver with a `CsiDriverConfig` (see [CSI Volumes](../../docs/guides/csi-volumes.md) and [Deploying CSI Drivers](../../docs/guides/csi-deployment.md)):
 
 ```bash
 # 1. Deploy ate-system with the ExternalVolumes preview gate enabled
@@ -201,11 +201,11 @@ go run ./cmd/ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
   --ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-system/sa/atenet-client
 
-# 2. Install a bundled CSI driver and its CSIDriverConfig:
+# 2. Install a bundled CSI driver and its CsiDriverConfig:
 #    - NFS (creates StorageClass csi-nfs-sc, requires the nfsd kernel module on nodes):
-go run ./cmd/ate-setup setup csi nfs
+go run ./cmd/ate-setup setup csi nfs --preview=ExternalVolumes
 #    - Or hostpath on kind clusters (creates StorageClass csi-hostpath-sc):
-# go run ./cmd/ate-setup setup csi hostpath
+# go run ./cmd/ate-setup setup csi hostpath --preview=ExternalVolumes
 
 # 3. Delete any existing counter demo (templates are immutable), then deploy with the external volume
 go run ./cmd/ate-setup delete demo counter
