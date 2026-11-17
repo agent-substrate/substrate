@@ -19,12 +19,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
@@ -620,6 +622,88 @@ func TestRegisterExternalVolumeClassesClient(t *testing.T) {
 		}
 		if err := registerExternalVolumeClasses(context.Background(), client, []*ateapi.ExternalVolumeClass{nfs}); err == nil {
 			t.Fatal("registerExternalVolumeClasses on get error = nil, want error")
+		}
+	})
+}
+
+type fakeExternalVolumeClassAccessPolicyClient struct {
+	policy        *ateapi.AccessPolicy
+	updateErrOnce error
+	createCalls   int
+	updateCalls   int
+}
+
+func (f *fakeExternalVolumeClassAccessPolicyClient) GetExternalVolumeClassAccessPolicy(_ context.Context, _ *ateapi.GetExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	if f.policy == nil {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+	return proto.CloneOf(f.policy), nil
+}
+
+func (f *fakeExternalVolumeClassAccessPolicyClient) CreateExternalVolumeClassAccessPolicy(_ context.Context, in *ateapi.CreateExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.createCalls++
+	f.policy = proto.CloneOf(in.GetAccessPolicy())
+	f.policy.Metadata = &ateapi.ResourceMetadata{Name: "default", Uid: "uid-1", Version: 1}
+	return proto.CloneOf(f.policy), nil
+}
+
+func (f *fakeExternalVolumeClassAccessPolicyClient) UpdateExternalVolumeClassAccessPolicy(_ context.Context, in *ateapi.UpdateExternalVolumeClassAccessPolicyRequest, _ ...grpc.CallOption) (*ateapi.AccessPolicy, error) {
+	f.updateCalls++
+	if f.updateErrOnce != nil {
+		err := f.updateErrOnce
+		f.updateErrOnce = nil
+		return nil, err
+	}
+	f.policy = proto.CloneOf(in.GetAccessPolicy())
+	f.policy.Metadata.Version++
+	return proto.CloneOf(f.policy), nil
+}
+
+func TestEnsureExternalVolumeClassAtespaceAccess(t *testing.T) {
+	t.Run("creates policy when absent", func(t *testing.T) {
+		client := &fakeExternalVolumeClassAccessPolicyClient{}
+		if err := EnsureExternalVolumeClassAtespaceAccess(context.Background(), client, "csi-nfs", "ate-demo"); err != nil {
+			t.Fatalf("EnsureExternalVolumeClassAtespaceAccess = %v, want nil", err)
+		}
+		if client.createCalls != 1 {
+			t.Fatalf("createCalls = %d, want 1", client.createCalls)
+		}
+		if got := client.policy.GetBindings()[0].GetMembers(); !slices.Equal(got, []string{"atespace:ate-demo"}) {
+			t.Fatalf("members = %v, want [atespace:ate-demo]", got)
+		}
+	})
+
+	t.Run("idempotent when already granted", func(t *testing.T) {
+		client := &fakeExternalVolumeClassAccessPolicyClient{
+			policy: &ateapi.AccessPolicy{
+				Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "uid-1", Version: 1},
+				Bindings: []*ateapi.Binding{{Role: externalVolumeClassAllowedRole, Members: []string{"atespace:ate-demo"}}},
+			},
+		}
+		if err := EnsureExternalVolumeClassAtespaceAccess(context.Background(), client, "csi-nfs", "ate-demo"); err != nil {
+			t.Fatalf("EnsureExternalVolumeClassAtespaceAccess = %v, want nil", err)
+		}
+		if client.updateCalls != 0 {
+			t.Fatalf("updateCalls = %d, want 0", client.updateCalls)
+		}
+	})
+
+	t.Run("retries on Aborted and appends member", func(t *testing.T) {
+		client := &fakeExternalVolumeClassAccessPolicyClient{
+			policy: &ateapi.AccessPolicy{
+				Metadata: &ateapi.ResourceMetadata{Name: "default", Uid: "uid-1", Version: 1},
+				Bindings: []*ateapi.Binding{{Role: externalVolumeClassAllowedRole, Members: []string{"atespace:ate-a"}}},
+			},
+			updateErrOnce: status.Error(codes.Aborted, "conflict"),
+		}
+		if err := EnsureExternalVolumeClassAtespaceAccess(context.Background(), client, "csi-nfs", "ate-demo"); err != nil {
+			t.Fatalf("EnsureExternalVolumeClassAtespaceAccess = %v, want nil", err)
+		}
+		if client.updateCalls != 2 {
+			t.Fatalf("updateCalls = %d, want 2", client.updateCalls)
+		}
+		if got := client.policy.GetBindings()[0].GetMembers(); !slices.Equal(got, []string{"atespace:ate-a", "atespace:ate-demo"}) {
+			t.Fatalf("members = %v, want [atespace:ate-a atespace:ate-demo]", got)
 		}
 	})
 }
