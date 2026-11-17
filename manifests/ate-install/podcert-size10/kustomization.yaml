@@ -13,9 +13,10 @@
 # limitations under the License.
 
 # size10 cluster overlay for podcertificate-controller: raises the client-go
-# rate limits above the built-in 5 QPS / 10 burst so signing keeps up with
-# the request volume the size10 postgres profile enables. Selected by
-# cmd/ate-setup when --cluster-size=size10.
+# rate limits above the built-in 5 QPS / 10 burst to 500 QPS / 1000 burst and
+# runs 50 workers per signer, so signing keeps up with the request volume the
+# size10 postgres profile enables. Selected by cmd/ate-setup when
+# --cluster-size=size10.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -23,8 +24,8 @@ kind: Kustomization
 resources:
   - ../pod-certificate-controller.yaml
 
-# JSON-patch style so we only append the rate-limit flags and replace
-# WORKERS_PER_SIGNER rather than restate the whole container spec.
+# The JSON patch appends the rate-limit flags without restating the args list.
+# The strategic merge patch sets WORKERS_PER_SIGNER by name.
 patches:
   - target:
       kind: Deployment
@@ -37,6 +38,17 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --kube-api-burst=1000
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "50"
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: podcertificate-controller
+        namespace: podcertificate-controller-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: controller
+              env:
+              - name: WORKERS_PER_SIGNER
+                value: "50"
