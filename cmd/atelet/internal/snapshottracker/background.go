@@ -56,8 +56,9 @@ const (
 	snapshotRetryDelay    = time.Minute
 	maxSnapshotRetryDelay = 10 * time.Minute
 	// DefaultUploadWorkers and DefaultDetachWorkers are how many background
-	// uploads and detaches run at once on a node by default. Each kind has a
-	// queue and workers of its own, so neither waits behind the other.
+	// uploads, and how many detaches, run at once on a node by default. Each
+	// kind has a queue and workers of its own, so neither waits behind the
+	// other.
 	DefaultUploadWorkers = 2
 	DefaultDetachWorkers = 2
 )
@@ -112,7 +113,8 @@ func logOp(ctx context.Context, actorUID string, kind opKind, target SnapshotRef
 // actor has at most one, of any kind.
 //
 // A worker runs it in the background once it is due. A Detach call begins one
-// directly instead, and it runs on if the caller leaves.
+// and queues it for a detach worker instead, and it runs on if the caller
+// leaves.
 //
 // The operation holds the actor's lock only while it begins and ends, not
 // while it runs:
@@ -135,6 +137,9 @@ type actorOp struct {
 	// done is closed once the operation has ended, and has finished any change
 	// it makes to the actor's local snapshots.
 	done chan struct{}
+	// queued runs a detach that a Detach call began, and is nil once a detach
+	// worker or endQueuedDetach has taken it.
+	queued func()
 	// state and err are a detach's result, set before done is closed.
 	state *ateletpb.ActorSnapshotState
 	err   error
@@ -244,13 +249,9 @@ func (t *Tracker) prunePreRebootLocalLocked(a *actorSnapshots) {
 	t.saveLocked(a)
 }
 
-// Wait blocks until the workers and any detach a Detach call started have
-// stopped, which they do once the tracker's context ends. It returns ctx's
-// error if ctx ends first. Detach starts nothing after Wait begins.
+// Wait blocks until the workers have stopped, which they do once the tracker's
+// context ends, or until ctx ends. It returns ctx's error if ctx ended first.
 func (t *Tracker) Wait(ctx context.Context) error {
-	t.foregroundMu.Lock()
-	t.waiting = true
-	t.foregroundMu.Unlock()
 	stopped := make(chan struct{})
 	go func() {
 		t.workersDone.Wait()
@@ -264,8 +265,8 @@ func (t *Tracker) Wait(ctx context.Context) error {
 	}
 }
 
-// runWorker runs the background operations of kind of the actors it takes
-// from kind's queue, until the queue shuts down.
+// runWorker runs the operations of kind of the actors it takes from kind's
+// queue, until the queue shuts down.
 func (t *Tracker) runWorker(kind opKind) {
 	q := t.queues[kind]
 	for {
@@ -278,8 +279,7 @@ func (t *Tracker) runWorker(kind opKind) {
 	}
 }
 
-// syncActor runs the actor's background operation of kind if beginDueWork
-// begins one.
+// syncActor runs the actor's operation of kind if beginDueWork returns one.
 func (t *Tracker) syncActor(actorUID string, kind opKind) {
 	if run := t.beginDueWork(actorUID, kind); run != nil {
 		run()
@@ -287,7 +287,8 @@ func (t *Tracker) syncActor(actorUID string, kind opKind) {
 }
 
 // beginDueWork begins the actor's background operation of kind if one is due,
-// and returns the func that runs it. Otherwise it returns nil, and queues the
+// and returns the func that runs it. For a detach worker, it first returns the
+// detach a Detach call queued, if any. Otherwise it returns nil, and queues the
 // actor for when its next operations are due, unless an operation, Run,
 // Restore, Checkpoint, PromoteSnapshot, or Terminate in progress on the actor
 // queues it again when it ends. An upload worker that finds no upload due
@@ -304,10 +305,16 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 		return nil
 	}
 	a := t.findLocked(actorUID)
+	if a != nil && a.op != nil && a.op.queued != nil && kind == opDetach {
+		// A Detach call queued this detach for a detach worker.
+		run := a.op.queued
+		a.op.queued = nil
+		return run
+	}
 	if a == nil || a.op != nil {
 		// Forgotten, or an operation is already in progress on the actor: one
-		// a worker of the other queue or a Detach call began. When it ends,
-		// requeueLocked queues the actor again.
+		// a worker began, or one a Detach call queued for a detach worker. When
+		// it ends, requeueLocked queues the actor again.
 		return nil
 	}
 	if a.hold == holdTerminate {
@@ -326,7 +333,7 @@ func (t *Tracker) beginDueWork(actorUID string, kind opKind) func() {
 				// (see holdLocked).
 				return nil
 			}
-			if _, run, err := t.beginDetachLocked(t.ctx, a, true); err == nil {
+			if _, _, run, err := t.beginDetachLocked(t.ctx, a, true); err == nil {
 				t.instruments.recordDetachOverdue(t.ctx, now.Sub(due))
 				return run
 			}

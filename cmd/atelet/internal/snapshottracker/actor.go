@@ -164,8 +164,8 @@ type actorSnapshotsRecord struct {
 	//   - A Run, Restore, Checkpoint, PromoteSnapshot, or Terminate of the
 	//     actor is in progress (BeginStart, BeginCheckpoint, BeginPromote, or
 	//     BeginTerminate). Its end queues the actor again.
-	//   - Another operation on the actor, such as a Detach call, is in
-	//     progress. Its end queues the actor again.
+	//   - Another operation on the actor, such as an upload, is in progress.
+	//     Its end queues the actor again.
 	//   - The detach is not due yet. The worker queues the actor again for
 	//     when it is.
 	//
@@ -215,7 +215,7 @@ type actorSnapshots struct {
 	actorSnapshotsRecord
 
 	// op is the actor's operation in progress, an upload or a detach, or nil.
-	// A background worker or an RPC call such as Detach runs it; an actor has
+	// A worker runs it, in the background or for a Detach call; an actor has
 	// at most one. The entry stays in memory while op is set.
 	op *actorOp
 	// hold records the Run, Restore, Checkpoint, PromoteSnapshot, or Terminate
@@ -430,8 +430,8 @@ func (a *actorSnapshots) localInUse() bool {
 	return a.hold == holdStart
 }
 
-// runningDetach returns the snapshot an opDetach goroutine is currently
-// detaching, or nil.
+// runningDetach returns the snapshot of the actor's detach in progress, queued
+// or running, or nil.
 func (a *actorSnapshots) runningDetach() *SnapshotRef {
 	if a.op == nil || a.op.kind != opDetach {
 		return nil

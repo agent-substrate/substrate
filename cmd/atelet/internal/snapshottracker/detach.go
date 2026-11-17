@@ -23,16 +23,17 @@ import (
 )
 
 // beginDetachLocked begins a detach of the actor's latest local snapshot,
-// under a context derived from ctx, and returns its op and the func that runs
-// it once the caller releases the actor's lock. It begins nothing, and fails,
-// when no detach can make the snapshot durable (see detachTarget).
-func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (*actorOp, func(), error) {
+// under a context derived from ctx, and returns that context, its op, and the
+// func that runs it once the caller releases the actor's lock. It begins
+// nothing, and fails, when no detach can make the snapshot durable (see
+// detachTarget).
+func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, background bool) (context.Context, *actorOp, func(), error) {
 	target, alreadyDurable, err := a.detachTarget()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	opCtx, op := t.beginOpLocked(ctx, a, opDetach, target)
-	return op, func() {
+	return opCtx, op, func() {
 		defer close(op.done)
 		op.state, op.err = t.finishDetach(opCtx, a.actorUID, op, alreadyDurable, background)
 	}, nil
@@ -43,12 +44,13 @@ func (t *Tracker) beginDetachLocked(ctx context.Context, a *actorSnapshots, back
 // snapshot-state.json until the detach is reported). It is a no-op when atelet
 // holds no local snapshot for the actor. It fails with Aborted once a Run or
 // Restore of the actor has begun since its latest local snapshot, and with
-// FailedPrecondition when no detach can make the snapshot durable. It starts
-// once the actor's operation in progress ends, and runs on the tracker's
-// context, not ctx. If ctx ends first, Detach returns ctx's error and the
-// detach runs on, recorded by its report. After Wait begins, Detach fails with
-// Unavailable. Callers serialize it with the actor's other lifecycle RPCs (see
-// Tracker).
+// FailedPrecondition when no detach can make the snapshot durable. Once the
+// actor's operation in progress ends, it queues the detach for a detach worker,
+// which runs it on the tracker's context, not ctx, so the detach waits until
+// Start has run a detach worker. If ctx ends first, Detach returns ctx's error
+// and the detach runs on, recorded by its report. Once the tracker's context
+// has ended, Detach fails with Unavailable. Callers serialize it with the
+// actor's other lifecycle RPCs (see Tracker).
 func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorSnapshotState, error) {
 	if t.store == nil {
 		return nil, apierror.Unimplemented("atelet has no snapshot store to detach actors with")
@@ -91,21 +93,21 @@ func (t *Tracker) Detach(ctx context.Context, actorUID string) (*ateletpb.ActorS
 		t.unlock(actorUID)
 		return nil, apierror.Aborted("actor %s is in use on this node", actorUID)
 	}
-	// Under foregroundMu, so no detach joins workersDone after Wait begins.
-	t.foregroundMu.Lock()
-	if t.waiting || t.ctx.Err() != nil {
-		t.foregroundMu.Unlock()
+	if t.ctx.Err() != nil {
 		t.unlock(actorUID)
 		return nil, apierror.Unavailable("atelet is shutting down")
 	}
-	op, run, err := t.beginDetachLocked(t.ctx, a, false)
+	opCtx, op, run, err := t.beginDetachLocked(t.ctx, a, false)
 	if err != nil {
-		t.foregroundMu.Unlock()
 		t.unlock(actorUID)
 		return nil, err
 	}
-	t.workersDone.Go(run)
-	t.foregroundMu.Unlock()
+	// A detach worker runs the detach (see beginDueWork), so the detaches of a
+	// burst of calls run a few at a time. It ends unrun if Forget or the
+	// tracker's shutdown ends opCtx before a worker takes it.
+	op.queued = run
+	context.AfterFunc(opCtx, func() { t.endQueuedDetach(opCtx, actorUID, op) })
+	t.queues[opDetach].Add(actorUID)
 	t.unlock(actorUID)
 
 	select {
@@ -125,27 +127,28 @@ func (t *Tracker) detachCallError(ctx context.Context, err error) error {
 	return err
 }
 
-// uploadForDetach uploads target for a detach. A Detach call's detach first
-// takes one of the detachUploads slots, so the uploads of a burst of calls run
-// a few at a time, like the background detaches; its upload timeout starts once
-// it has the slot. A background detach's upload is bounded by its worker.
-func (t *Tracker) uploadForDetach(ctx context.Context, actorUID string, target SnapshotRef, background bool) (bool, error) {
-	if !background {
-		select {
-		case t.detachUploads <- struct{}{}:
-			defer func() { <-t.detachUploads }()
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
+// endQueuedDetach ends op, a detach a Detach call queued, with ctx's error,
+// unless a detach worker has taken it.
+func (t *Tracker) endQueuedDetach(ctx context.Context, actorUID string, op *actorOp) {
+	t.lock(actorUID)
+	defer t.unlock(actorUID)
+	if op.queued == nil {
+		return
 	}
-	uploaded, _, err := t.uploadSnapshot(ctx, actorUID, target, background)
-	return uploaded, err
+	op.queued = nil
+	op.err = ctx.Err()
+	logOp(ctx, actorUID, op.kind, op.target, false, false, 0, op.err)
+	a := t.endOpLocked(actorUID, op)
+	t.requeueLocked(a)
+	t.queueReportLocked(a)
+	close(op.done)
 }
 
 // finishDetach runs op, a detach of the actor's latest local snapshot: it
 // uploads the snapshot unless already durable, then deletes the actor's local
 // snapshots and its other files on this node except snapshot-state.json.
-// background reports whether a worker runs it, rather than a Detach call.
+// background reports whether it came due on its own, rather than by a Detach
+// call.
 // Either way it makes a report of what it changed due, so snapshot-state.json
 // and the actor's directory are removed once the control plane acknowledges
 // the detach (or refuses it with NotFound).
@@ -157,7 +160,7 @@ func (t *Tracker) finishDetach(ctx context.Context, actorUID string, op *actorOp
 	if !alreadyDurable {
 		err = ctx.Err()
 		if err == nil {
-			uploaded, err = t.uploadForDetach(ctx, actorUID, target, background)
+			uploaded, _, err = t.uploadSnapshot(ctx, actorUID, target, background)
 		}
 		if err == nil {
 			t.updateOp(actorUID, func(a *actorSnapshots) {

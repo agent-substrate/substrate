@@ -438,6 +438,13 @@ func setWorkers(tr *Tracker, uploads, detaches int) {
 	WithDetachWorkers(detaches)(tr)
 }
 
+// startDetachWorkers starts tr with detach workers only, so its Detach calls
+// run and no background upload does.
+func startDetachWorkers(tr *Tracker) {
+	setWorkers(tr, 0, DefaultDetachWorkers)
+	tr.Start()
+}
+
 // State reports the latest local snapshot CommitLocal records and the latest
 // durable one CommitDurable records, as an immediate checkpoint records its
 // upload before its local copy. Each update is written to the actor's snapshot
@@ -656,6 +663,7 @@ func TestTrackerCommitPromotedClearsUploadDue(t *testing.T) {
 
 	stepTo(tr, t2.Add(testUploadDelay))
 	store.setErr(errors.New("boom"))
+	startDetachWorkers(tr)
 	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
 		t.Fatal("detach succeeded, want the store's error")
 	}
@@ -1102,6 +1110,7 @@ func TestTrackerCommitsSkipOlderGenerations(t *testing.T) {
 	tr.CommitLocal(trackedActorUID, testRef("s6", 6, t6))
 	stepTo(tr, t6.Add(testUploadDelay))
 	store.setErr(errors.New("boom"))
+	startDetachWorkers(tr)
 	if _, err := tr.Detach(t.Context(), trackedActorUID); err == nil {
 		t.Fatal("detach succeeded, want the store's error")
 	}

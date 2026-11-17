@@ -1693,6 +1693,7 @@ func TestStaleCheckpointRetryLeavesRestoredActorAlone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := runPluginActor(t)
 			a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			a.s.snapshots.Start()
 			var workerCheckpoints atomic.Int32
 			a.worker.onCheckpoint = func() { workerCheckpoints.Add(1) }
 			snap := a.snapshot("pause-snap-1", 1)
@@ -1776,6 +1777,7 @@ func TestRetriedCheckpointAnswersFromCommittedSnapshot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := runPluginActor(t)
 			a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+			a.s.snapshots.Start()
 			var workerCheckpoints atomic.Int32
 			a.worker.onCheckpoint = func() { workerCheckpoints.Add(1) }
 			snap := a.snapshot("snap-1", 1)
@@ -2393,6 +2395,7 @@ func TestResetActorDirsFailureIsCanceled(t *testing.T) {
 func TestRestoreAfterDetachReadsUpload(t *testing.T) {
 	a := runPluginActor(t)
 	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	a.s.snapshots.Start()
 	snap := a.snapshot("pause-snap-1", 1)
 	if _, err := a.checkpoint(t, snap, ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
 		t.Fatalf("Checkpoint (pause): %v", err)
@@ -2522,6 +2525,7 @@ func TestDetachActorValidatesRequest(t *testing.T) {
 func TestDetachActorWaitsForInFlightCheckpoint(t *testing.T) {
 	a := runPluginActor(t)
 	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	a.s.snapshots.Start()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -2576,6 +2580,7 @@ func TestDetachActorWaitsForInFlightCheckpoint(t *testing.T) {
 func TestInvalidRunKeepsDetachScheduled(t *testing.T) {
 	a := runPluginActor(t)
 	a.s.snapshots = snapshottracker.New(t.Context(), &trackerStore{s: a.s}, clock.RealClock{})
+	a.s.snapshots.Start()
 	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
 		t.Fatalf("Checkpoint (pause): %v", err)
 	}
@@ -2612,6 +2617,7 @@ func startBlockedDetach(t *testing.T, a *pluginActor) {
 	t.Helper()
 	store := &blockingTrackerStore{started: make(chan struct{}, 1)}
 	a.s.snapshots = snapshottracker.New(t.Context(), store, clock.RealClock{})
+	a.s.snapshots.Start()
 	if _, err := a.checkpoint(t, a.snapshot("pause-snap-1", 1), ateletpb.UploadMode_UPLOAD_MODE_DEFERRED); err != nil {
 		t.Fatalf("Checkpoint (pause): %v", err)
 	}
