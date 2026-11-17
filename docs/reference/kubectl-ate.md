@@ -197,7 +197,7 @@ kubectl ate delete external-volume-class <name> --uid <uid> --version <version>
 
 ### CSI Driver Configs
 
-A **CSI driver config** (`CsiDriverConfig`) is a global-scoped resource that records connection settings for a CSI driver (`driverName`): its controller gRPC endpoint (`controllerEndpoint`), optional node plugin socket (`nodeSocketOverride`), and mTLS settings (`tls`). `ate-api-server` reads this resource first and falls back to the `ate.dev/v1` `CSIDriverConfig` CRD, while `atelet` still reads the CRD (see [CSI Volumes](../guides/csi-volumes.md)). `driverName` is immutable after creation, while `controllerEndpoint`, `nodeSocketOverride`, and `tls` can be replaced with `update`. Creating or updating a CSI driver config requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI, and deleting fails while an external volume class references its `driverName`.
+A **CSI driver config** (`CsiDriverConfig`) is a global-scoped resource that records connection settings for a CSI driver (`driverName`): its controller gRPC endpoint (`controllerEndpoint`), optional node plugin socket (`nodeSocketOverride`), and mTLS settings (`tls`). Both `ate-api-server` and `atelet` read this resource first and fall back to the `ate.dev/v1` `CSIDriverConfig` CRD when no control-plane config matches (see [CSI Volumes](../guides/csi-volumes.md)). `driverName` is immutable after creation, while `controllerEndpoint`, `nodeSocketOverride`, and `tls` can be replaced with `update`. Creating or updating a CSI driver config requires the `ExternalVolumes` preview gate on the server and `--preview` on the CLI, and deleting fails while an external volume class references its `driverName`.
 
 Example `csi-driver-config.yaml`:
 
