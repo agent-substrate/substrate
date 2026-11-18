@@ -210,7 +210,10 @@ if [[ "${dry_run}" == true ]]; then
   echo "Dry run: no release created."
   exit 0
 fi
-if gh release view "${tag}" --repo "${REPO}" >/dev/null 2>&1; then
+# Not gh release view: it can report a failed lookup as "release not found".
+existing="$(api "checking for an existing release" "repos/${REPO}/releases" \
+  --paginate | jq -r --arg tag "${tag}" '.[] | select(.tag_name == $tag) | .id')"
+if [[ -n "${existing}" ]]; then
   echo "A release for ${tag} already exists; left unchanged."
   exit 0
 fi
