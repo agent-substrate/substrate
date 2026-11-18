@@ -383,6 +383,12 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // needs NET_ADMIN/NET_RAW, and rootfs ownership and modes need
 // DAC_OVERRIDE/FOWNER/CHOWN.
 //
+// IPC_LOCK lets runsc create each sandbox's pin ring, a *disabled* io_uring
+// used to parallelize kernel FD release operations with gVisor's own teardown
+// process, making sandbox teardown faster.
+// Without the capability the kernel charges each ring to uid 0, which fails
+// with ENOMEM when that is over RLIMIT_MEMLOCK.
+//
 // The sandbox's user namespace supplies its own SYS_CHROOT (gofer) and
 // SYS_PTRACE (systrap); the outer worker needs neither, nor SETPCAP. That user
 // namespace comes from runsc's modifySpecForDirectfs, which creates an
@@ -394,7 +400,7 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // does not require MKNOD.
 var workerGvisorCapabilities = []corev1.Capability{
 	"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE",
-	"FOWNER", "CHOWN", "NET_RAW", "SETFCAP",
+	"FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK",
 }
 
 // workerMicroVMCapabilities retains virtiofsd's eight default child

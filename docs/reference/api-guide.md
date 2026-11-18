@@ -52,9 +52,8 @@ metadata; they do not affect actor scheduling. Actor selectors match
 
 Substrate sets a fixed capability set for each sandbox runtime. Every worker
 drops `ALL` container-runtime default capabilities and adds back only the set
-below: 9 capabilities for gVisor and 11 for microVM. These permissions are not
-configurable per pool. Actor containers are configured separately through
-`ActorTemplate.containers[].securityContext`.
+below. These permissions are not configurable per pool. Actor containers are
+configured separately through `ActorTemplate.containers[].securityContext`.
 
 Workers run as UID/GID 0 with `privileged: false` and
 `allowPrivilegeEscalation: false`. They retain `SYS_ADMIN` and `NET_ADMIN` for
@@ -70,6 +69,7 @@ permissions described in [Security](../security/security.md).
 | `DAC_READ_SEARCH` | Not granted | Not granted; virtiofsd runs with file handles off (`--inode-file-handles=never`) and needs it only to open them |
 | `FSETID` | Not granted | Retained for virtiofsd's setgid-file behavior |
 | `NET_RAW` | Needed to open the sandbox's raw socket | Not granted |
+| `IPC_LOCK` | Lets runsc create each sandbox's pin ring, which holds the sandbox's resources so that they are released after the sandbox exits. Without it, the sandbox takes longer to exit | Not granted |
 | `SETFCAP`, `SETUID` | Needed to start runsc's gofer | Retained in virtiofsd's child set; `SETUID` is needed for non-root guest file creation |
 | `SETGID` | Needed to start runsc's gofer | Needed by virtiofsd to drop supplementary groups |
 | `DAC_OVERRIDE` | Needed to mount the rootfs overlay | Same |

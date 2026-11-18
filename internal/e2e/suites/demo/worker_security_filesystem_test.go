@@ -36,7 +36,7 @@ import (
 // test restates them rather than importing the controller so that a change to
 // the defaults has to be made deliberately in both places.
 var (
-	gvisorWorkerCapabilities  = []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"}
+	gvisorWorkerCapabilities  = []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP", "IPC_LOCK"}
 	microVMWorkerCapabilities = []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER", "CHOWN", "MKNOD", "SETFCAP", "FSETID", "SETPCAP"}
 	// virtiofsd's default child set: what its serving child keeps in its
 	// permitted and effective sets after it drops the rest. With file handles
@@ -49,7 +49,7 @@ var (
 // masks in /proc/<pid>/status.
 var capabilityBits = map[corev1.Capability]uint{
 	"CHOWN": 0, "DAC_OVERRIDE": 1, "DAC_READ_SEARCH": 2, "FOWNER": 3, "FSETID": 4, "KILL": 5,
-	"SETGID": 6, "SETUID": 7, "SETPCAP": 8, "NET_BIND_SERVICE": 10, "NET_ADMIN": 12, "NET_RAW": 13,
+	"SETGID": 6, "SETUID": 7, "SETPCAP": 8, "NET_BIND_SERVICE": 10, "NET_ADMIN": 12, "NET_RAW": 13, "IPC_LOCK": 14,
 	"SYS_CHROOT": 18, "SYS_PTRACE": 19, "SYS_ADMIN": 21, "MKNOD": 27, "AUDIT_WRITE": 29, "SETFCAP": 31,
 }
 
