@@ -27,7 +27,7 @@ import (
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
 )
 
-const websocketDenialBody = "WebSocket egress is not supported"
+const upgradeDenialBody = "Only WebSocket upgrades are supported"
 
 type websocketProcessStream struct {
 	extprocv3.ExternalProcessor_ProcessServer
@@ -52,7 +52,9 @@ func (s *websocketProcessStream) Send(resp *extprocv3.ProcessingResponse) error 
 	return nil
 }
 
-func TestProcessReturnsWebSocketDenialAsImmediateResponse(t *testing.T) {
+// Process runs the egress handler on each request it receives and sends back
+// the refusal of an upgrade other than WebSocket as an immediate response.
+func TestProcessReturnsUpgradeDenialAsImmediateResponse(t *testing.T) {
 	for _, leg := range []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName} {
 		t.Run(leg, func(t *testing.T) {
 			request := &extprocv3.ProcessingRequest{
@@ -62,7 +64,7 @@ func TestProcessReturnsWebSocketDenialAsImmediateResponse(t *testing.T) {
 							{Key: ":method", RawValue: []byte("GET")},
 							{Key: ":authority", RawValue: []byte("api.example.com")},
 							{Key: "connection", RawValue: []byte("keep-alive, Upgrade")},
-							{Key: "upgrade", RawValue: []byte("websocket")},
+							{Key: "upgrade", RawValue: []byte("foo")},
 						}},
 					},
 				},
@@ -90,8 +92,8 @@ func TestProcessReturnsWebSocketDenialAsImmediateResponse(t *testing.T) {
 			if got := response.GetStatus().GetCode(); got != 403 {
 				t.Errorf("status = %d, want 403", got)
 			}
-			if got := string(response.GetBody()); got != websocketDenialBody {
-				t.Errorf("body = %q, want %q", got, websocketDenialBody)
+			if got := string(response.GetBody()); got != upgradeDenialBody {
+				t.Errorf("body = %q, want %q", got, upgradeDenialBody)
 			}
 		})
 	}
