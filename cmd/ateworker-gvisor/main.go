@@ -108,6 +108,7 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	snapshotWriteSlots     = pflag.Int("snapshot-write-slots", defaultCheckpointWriteSlots, "Maximum number of concurrent checkpoint writes. Each slot keeps 16 MiB of the worker's memory from actors.")
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -160,6 +161,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateworker booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *snapshotWriteSlots < 1 {
+		return fmt.Errorf("--snapshot-write-slots must be at least 1, got %d", *snapshotWriteSlots)
 	}
 	if *usageSampleInterval < minUsageSampleInterval {
 		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
@@ -267,7 +271,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID)
+	ateworkerService := NewService(tunnel, actorLogger, *maxActors, *snapshotWriteSlots, flags, bootID)
 	ateworkerService.throttleMemory = cgroup.PSIEnabled(defaultCgroupRoot)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
@@ -323,7 +327,7 @@ func do(ctx context.Context) error {
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
 		PodIPs:               register.ParsePodIPs(*podIPs),
-		MemoryReservedBytes:  memoryReservedBytes,
+		MemoryReservedBytes:  ateworkerService.memoryReservedBytes,
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
 	}
@@ -418,8 +422,9 @@ type AteWorkerService struct {
 
 	// checkpointWrites holds a slot per checkpoint writing its page cache,
 	// which memoryReservedBytes budgets for.
-	checkpointWrites chan struct{}
-	borrow           *memborrow.Ledger
+	checkpointWrites    chan struct{}
+	memoryReservedBytes int64
+	borrow              *memborrow.Ledger
 
 	// enableCoreTags indicates whether the host kernel supports core tagging.
 	enableCoreTags bool
@@ -428,19 +433,20 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore, bootID string) *AteWorkerService {
+func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors, snapshotWriteSlots int, flags *flagStore, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
-		locks:            actorlock.New(),
-		inFlight:         actorlock.NewInFlight(),
-		actors:           map[string]*hostedActor{},
-		maxActors:        maxActors,
-		tunnel:           tunnel,
-		actorLogger:      actorLogger,
-		cgroupRoot:       defaultCgroupRoot,
-		flags:            flags,
-		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
-		bootID:           bootID,
-		enableCoreTags:   checkCoreTagsSupported(),
+		locks:               actorlock.New(),
+		inFlight:            actorlock.NewInFlight(),
+		actors:              map[string]*hostedActor{},
+		maxActors:           maxActors,
+		tunnel:              tunnel,
+		actorLogger:         actorLogger,
+		cgroupRoot:          defaultCgroupRoot,
+		flags:               flags,
+		checkpointWrites:    make(chan struct{}, snapshotWriteSlots),
+		memoryReservedBytes: reservedMemoryBytes(snapshotWriteSlots),
+		bootID:              bootID,
+		enableCoreTags:      checkCoreTagsSupported(),
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s
