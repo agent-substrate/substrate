@@ -288,7 +288,3 @@ type WorkerPoolList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WorkerPool `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&WorkerPool{}, &WorkerPoolList{})
-}

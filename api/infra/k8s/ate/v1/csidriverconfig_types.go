@@ -98,7 +98,3 @@ type CSIDriverConfigList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []CSIDriverConfig `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&CSIDriverConfig{}, &CSIDriverConfigList{})
-}
