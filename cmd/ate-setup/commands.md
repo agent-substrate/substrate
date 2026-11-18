@@ -173,6 +173,10 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 `driver` is one of `nfs`, `hostpath`, `both`, or `none`, and defaults to `nfs`. The hostpath is for KIND clusters only. NFS has no such
 restriction, but it does need the `nfsd` kernel module loaded on the nodes.
 
+When `ate-api-server` is deployed and `--preview=ExternalVolumes` (or `ATE_PREVIEW`) is set
+for this command, `setup csi` also registers the matching `ExternalVolumeClass` (`csi-nfs`,
+`csi-hostpath`). Run it after `deploy ate-system`, or pass `--setup-csi` to `deploy ate-system`.
+
 
 ## Benchmarks
 
@@ -196,7 +200,7 @@ is absent); the other two are flags of the benchmark commands. See
 | Command | Description |
 |---|---|
 | `deploy demo counter` | A counter actor exercising snapshot, resume, and atenet ingress |
-| `deploy demo counter --with-external-volume [--storage-class NAME]` | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
+| `deploy demo counter --with-external-volume [--external-volume-class NAME]` | The same, plus an external volume and a pre-seeded file to validate (requires `--preview=ExternalVolumes`). Run `setup csi --preview=ExternalVolumes` first and name the class it registered, e.g. `csi-nfs`; defaults to `csi-nfs` |
 | `deploy demo counter-microvm` | The counter demo on microVM workers |
 | `deploy demo egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
 | `deploy demo egress-microvm` | The same on microVM workers |

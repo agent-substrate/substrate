@@ -31,31 +31,31 @@ import (
 // sweep test in the demos package.
 func TestExternalVolumeRenders(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		storageClass string
-		wantSC       string
+		name                string
+		externalVolumeClass string
+		wantEVC             string
 	}{
 		{
-			name:         "unset",
-			storageClass: "",
-			wantSC:       "storageClassName: standard",
+			name:                "unset",
+			externalVolumeClass: "",
+			wantEVC:             "name: csi-nfs",
 		},
 		{
-			name:         "explicit",
-			storageClass: "csi-nfs-sc",
-			wantSC:       "storageClassName: csi-nfs-sc",
+			name:                "explicit",
+			externalVolumeClass: "csi-hostpath",
+			wantEVC:             "name: csi-hostpath",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// The storage class is a setting now, so steer it the way an
-			// operator would rather than by reaching into the demo. Unset,
-			// not blanked, for the case that wants the default: an exported
-			// empty value is a storage class the operator asked for.
-			if tc.storageClass == "" {
-				t.Setenv("STORAGE_CLASS", "x")
-				_ = os.Unsetenv("STORAGE_CLASS")
+			// The external volume class is a setting, so steer it the way an
+			// operator would rather than by reaching into the demo. Unset, not
+			// blanked, for the case that wants the default: an exported empty
+			// value is a class name the operator asked for.
+			if tc.externalVolumeClass == "" {
+				t.Setenv("EXTERNAL_VOLUME_CLASS", "x")
+				_ = os.Unsetenv("EXTERNAL_VOLUME_CLASS")
 			} else {
-				t.Setenv("STORAGE_CLASS", tc.storageClass)
+				t.Setenv("EXTERNAL_VOLUME_CLASS", tc.externalVolumeClass)
 			}
 			e := demotest.Env(t)
 			d := &demo{}
@@ -71,7 +71,8 @@ func TestExternalVolumeRenders(t *testing.T) {
 				"mountPath: /external-data",
 				"external:",
 				"template:",
-				tc.wantSC,
+				"externalVolumeClass:",
+				tc.wantEVC,
 			} {
 				if !strings.Contains(string(manifest), want) {
 					t.Errorf("rendered manifest is missing %q", want)

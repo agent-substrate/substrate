@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The NFS server backing the csi-nfs-sc StorageClass on Kind. Development only.
+# The NFS server backing the csi-nfs ExternalVolumeClass on Kind. Development only.
 ---
 kind: Service
 apiVersion: v1

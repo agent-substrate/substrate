@@ -1664,9 +1664,14 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapi.SnapshotFidelity) (*ateapi.ActorTemplate, error) {
-	scName := e2e.StorageClass
-	if !hasStorageClass(ctx, clients, scName) {
-		t.Fatalf("StorageClass %q not found in cluster; provide a valid --storage-class or install the CSI driver via --setup-csi", scName)
+	className := e2e.ExternalVolumeClass
+	if _, err := clients.SubstrateAPI.GetExternalVolumeClass(ctx, &ateapi.GetExternalVolumeClassRequest{
+		ExternalVolumeClass: &ateapi.ObjectRef{Name: className},
+	}); err != nil {
+		if status.Code(err) == codes.NotFound {
+			t.Fatalf("ExternalVolumeClass %q not found; provide a valid --external-volume-class or install the CSI driver via --setup-csi", className)
+		}
+		t.Fatalf("GetExternalVolumeClass(%q): %v", className, err)
 	}
 
 	modify := func(at *ateapi.ActorTemplate) {
@@ -1702,8 +1707,8 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 			at.Volumes = append(at.Volumes, &ateapi.Volume{
 				Name: "external-data",
 				External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
-					CapacityBytes:    1 << 30,
-					StorageClassName: scName,
+					CapacityBytes:       1 << 30,
+					ExternalVolumeClass: &ateapi.ObjectRef{Name: className},
 				}},
 			})
 		}
@@ -1740,11 +1745,6 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 		})
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", fidelity, modify)
-}
-
-func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
-	_, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
-	return err == nil
 }
 
 func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapi.ActorState) {
