@@ -200,11 +200,14 @@ Manage the execution state of your workloads.
 ```bash
 # Create a new actor from an ActorTemplate.
 kubectl ate create actor my-actor --template=<template-name> -a <atespace>
+kubectl ate create actor my-actor --template=<template-name> --annotations=owner=team-a -a <atespace>
 
-# Update an actor's template (requires the actor to be SUSPENDED) or worker selector.
+# Update an actor's template (requires the actor to be SUSPENDED), worker selector, or annotations.
 kubectl ate update actor my-actor --template=<new-template-name> -a <atespace>
 kubectl ate update actor my-actor --worker-selector=tier=paid,env=prod -a <atespace>
 kubectl ate update actor my-actor --worker-selector="" -a <atespace>
+kubectl ate update actor my-actor --annotations=owner=team-b,env=prod -a <atespace>
+kubectl ate update actor my-actor --annotations="" -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>

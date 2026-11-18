@@ -20,6 +20,7 @@ import (
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/api/objectstore/v1"
+	"go.ate.dev/substrate/cmd/ateapi/internal/lifecyclehook"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/localjwtauthority"
@@ -180,9 +181,22 @@ type ServiceImpl struct {
 	// clusterSnapshotLocation is ate-api-server's --snapshot-location; see
 	// resolveSnapshotLocation.
 	clusterSnapshotLocation string
+
+	hooks lifecyclehook.Hooks
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
+
+// SetLifecycleHooks wires the lifecycle hook dispatcher into both the create
+// middleware and the delete workflows.
+func (s *RPCService) SetLifecycleHooks(hooks lifecyclehook.Hooks) {
+	if impl, ok := s.impl.(*ServiceImpl); ok {
+		impl.hooks = hooks
+	}
+	if s.actorWorkflow != nil {
+		s.actorWorkflow.hooks = hooks
+	}
+}
 
 // newServiceImpl creates an instance of the service's middleware
 // implementation layer.

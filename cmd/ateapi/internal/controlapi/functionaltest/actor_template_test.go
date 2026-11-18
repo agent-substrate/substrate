@@ -40,9 +40,13 @@ func TestActorTemplateCRUD(t *testing.T) {
 	defer tc.cleanup()
 	ctx := context.Background()
 
+	annotations := map[string]string{
+		"example.com/owner": "team-a",
+		"example.com/uri":   "spiffe://example.com/agent",
+	}
 	created, err := tc.client.CreateActorTemplate(ctx, &ateapi.CreateActorTemplateRequest{
 		ActorTemplate: &ateapi.ActorTemplate{
-			Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
+			Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Annotations: annotations},
 			Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 			Resources:  &ateapi.ResourceRequirements{Limits: resources.CPUMemory(1000, 1<<30)},
 			// Server-owned status on the request is ignored.
@@ -57,7 +61,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 	want := &ateapi.ActorTemplate{
-		Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
+		Metadata:   &ateapi.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1, Annotations: annotations},
 		Containers: []*ateapi.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapi.SnapshotConfig{
 			PreferredFidelity:    ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
@@ -91,8 +95,8 @@ func TestActorTemplateCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListActorTemplates failed: %v", err)
 	}
-	if len(list.GetActorTemplates()) != 1 || list.GetActorTemplates()[0].GetMetadata().GetName() != "tmpl-a" {
-		t.Errorf("ListActorTemplates = %v, want [tmpl-a]", list.GetActorTemplates())
+	if diff := cmp.Diff([]*ateapi.ActorTemplate{created}, list.GetActorTemplates(), protocmp.Transform()); diff != "" {
+		t.Errorf("ListActorTemplates mismatch (-want +got):\n%s", diff)
 	}
 
 	// The atespace filter scopes the listing: a match returns the template, a

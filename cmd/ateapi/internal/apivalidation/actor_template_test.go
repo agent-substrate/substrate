@@ -106,6 +106,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "metadata", "name"), "Tmpl_A", "").WithOrigin("format=k8s-short-name")},
 	}, {
+		"valid metadata.annotations",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Annotations = map[string]string{"build.example.com/commit": "abc1234"}
+		})},
+		nil,
+	}, {
+		"invalid metadata.annotations",
+		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+			tmpl.Metadata.Annotations = map[string]string{"ate.dev/x": "v"}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "metadata", "annotations"), "ate.dev/x", "")},
+	}, {
 		"valid volumes fidelity",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
