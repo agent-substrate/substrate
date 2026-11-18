@@ -616,9 +616,12 @@ data:
                       - { address_prefix: "::ffff:0.0.0.0", prefix_len: 104 }
                       - { address_prefix: "::ffff:127.0.0.0", prefix_len: 104 }
                       - { address_prefix: "::ffff:169.254.0.0", prefix_len: 112 }
-                      # IPv6 metadata servers on GCE, AWS, and EKS Pod Identity.
+                      # IPv6 metadata servers.
+                      # GCE: https://cloud.google.com/compute/docs/metadata/querying-metadata
                       - { address_prefix: "fd20:ce::254", prefix_len: 128 }
+                      # AWS: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html
                       - { address_prefix: "fd00:ec2::254", prefix_len: 128 }
+                      # EKS Pod Identity: https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html
                       - { address_prefix: "fd00:ec2::23", prefix_len: 128 }
               - name: envoy.filters.http.router
                 typed_config:
