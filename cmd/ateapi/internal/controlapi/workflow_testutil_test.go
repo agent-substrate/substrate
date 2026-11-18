@@ -58,7 +58,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
+	return NewActorWorkflow(st, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()), testGates)
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an
@@ -66,7 +66,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}, objects
+	return &ActorWorkflow{gates: testGates, store: persistence, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}, objects
 }
 
 // newWireFinalizeWorkflow is newWireCaptureWorkflow with an in-memory object
@@ -338,7 +338,7 @@ func assignmentOf(actor *ateapi.Actor) *ateapi.ActorAssignment {
 // so a suspend stops right after its mark step and leaves the actor as that
 // step committed it.
 func newMarkOnlyWorkflow(st store.Interface) *ActorWorkflow {
-	return &ActorWorkflow{store: st, dialer: newDanglingDialer()}
+	return &ActorWorkflow{gates: testGates, store: st, dialer: newDanglingDialer()}
 }
 
 // assertStoppedAtDial verifies a workflow built by newMarkOnlyWorkflow failed
@@ -422,7 +422,7 @@ func (s workerDeletedDuringReleaseStore) UpdateActorAndRelease(ctx context.Conte
 		return nil, err
 	}
 	dialer := NewAteletDialer(cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{byNode: nil}), "", "", "")
-	if err := NewWorkerWorkflow(noLeaseStore(s), dialer).releaseBoundActor(ctx, worker, assignment); err != nil {
+	if err := NewWorkerWorkflow(noLeaseStore(s), dialer, testGates).releaseBoundActor(ctx, worker, assignment); err != nil {
 		return nil, err
 	}
 	return s.Interface.UpdateActorAndRelease(ctx, actorRef, precondition, mutate)

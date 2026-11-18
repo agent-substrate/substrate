@@ -432,7 +432,12 @@ func TestLoadDockerBuildFlags(t *testing.T) {
 // The preview gates arrive from any channel as one comma-separated value. An
 // explicitly empty one turns every gate off, even over a lower channel's.
 func TestLoadPreviewGates(t *testing.T) {
-	preview.InitForTestFake(t, []preview.Gate{"A", "B"})
+	// Real gate names, so the test survives gates graduating.
+	gates := preview.NewForTest(t, "ALL").Enabled()
+	if len(gates) == 0 {
+		t.Fatal("need a real gate to test parsing")
+	}
+	a, b := gates[0], preview.All
 
 	// nil leaves the channel out; a pointer to "" supplies it, empty.
 	val := func(s string) *string { return &s }
@@ -443,12 +448,12 @@ func TestLoadPreviewGates(t *testing.T) {
 	}{
 		{name: "default"},
 		{name: "flag all", flag: val("ALL"), want: []string{"ALL"}},
-		{name: "flag list", flag: val("A,B"), want: []string{"A", "B"}},
-		{name: "file", file: val("A, B"), want: []string{"A", "B"}},
+		{name: "flag list", flag: val(a + "," + b), want: []string{a, b}},
+		{name: "file", file: val(a + ", " + b), want: []string{a, b}},
 		{name: "environment", env: val("ALL"), want: []string{"ALL"}},
-		{name: "empty items dropped", env: val(",A,,"), want: []string{"A"}},
-		{name: "file beats environment", file: val("A"), env: val("ALL"), want: []string{"A"}},
-		{name: "flag beats file", flag: val("B"), file: val("A"), want: []string{"B"}},
+		{name: "empty items dropped", env: val("," + a + ",,"), want: []string{a}},
+		{name: "file beats environment", file: val(a), env: val("ALL"), want: []string{a}},
+		{name: "flag beats file", flag: val(b), file: val(a), want: []string{b}},
 		{name: "empty flag beats environment", flag: val(""), env: val("ALL")},
 		{name: "empty file beats environment", file: val(""), env: val("ALL")},
 	} {
@@ -489,14 +494,14 @@ func TestLoadPreviewGates(t *testing.T) {
 }
 
 func TestLoadRejectsUnknownPreviewGates(t *testing.T) {
-	preview.InitForTestFake(t, []preview.Gate{"Fake"})
+	known := preview.NewForTest(t, "ALL").Enabled()[0]
 	for _, tc := range []struct {
 		name    string
 		env     string
 		wantErr string
 	}{
 		{name: "all", env: "ALL"},
-		{name: "known gate", env: "Fake"},
+		{name: "known gate", env: known},
 		{name: "unknown gate", env: "NoSuchGate", wantErr: "ATE_PREVIEW"},
 		{name: "unknown among known", env: "ALL,NoSuchGate", wantErr: "ATE_PREVIEW"},
 	} {

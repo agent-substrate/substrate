@@ -249,7 +249,7 @@ func TestActorDeletedRecord(t *testing.T) {
 		t.Fatalf("mark actor: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 	if _, err := w.finalizeDeleted(ctx, actor); err != nil {
 		t.Fatalf("finalizeDeleted: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 		t.Fatalf("bump version: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 	if _, err := w.ensureMarkedDeleting(ctx, actorRef, store.DeletePreconditions{Version: stale.GetMetadata().GetVersion()}); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("ensureMarkedDeleting with a stale guard = %v, want ABORTED", err)
 	}

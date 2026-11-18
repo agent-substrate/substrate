@@ -44,7 +44,7 @@ func newWorkerDeleteWorkflow(t *testing.T) (*WorkerWorkflow, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{})), persistence
+	return NewWorkerWorkflow(persistence, newNodeAteletDialer(t, &capturingTerminator{}), testGates), persistence
 }
 
 // apiActorRef names the Actor seedAPIActor stores.
@@ -95,7 +95,7 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, newNodeAteletDialer(t, &capturingTerminator{}))
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, newNodeAteletDialer(t, &capturingTerminator{}), testGates)
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
 		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 	}
@@ -304,7 +304,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_RUNNING)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, newNodeAteletDialer(t, &capturingTerminator{}))
+			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, newNodeAteletDialer(t, &capturingTerminator{}), testGates)
 			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
@@ -441,7 +441,7 @@ func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			atelet := &capturingTerminator{err: tt.terminateErr}
-			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet), testGates)
 
 			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 			seeds := []func(*ateapi.Actor){}
@@ -486,7 +486,7 @@ func TestDeleteWorkerWorkflow_ReleasesUnderTheActorLease(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	atelet := &capturingTerminator{}
-	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet), testGates)
 
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	actor := seedAPIActor(t, ctx, persistence, ateapi.ActorState_ACTOR_STATE_SUSPENDING, func(a *ateapi.Actor) {
@@ -538,7 +538,7 @@ func TestDeleteWorkerWorkflow_BusyActorDoesNotHoldUpOthers(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	atelet := &capturingTerminator{}
-	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet), testGates)
 
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	var refs []resources.ActorRef
@@ -602,7 +602,7 @@ func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
 
 			now := time.Now()
 			atelet := &capturingTerminator{hang: tt.hang, err: tt.err}
-			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet), testGates)
 			wf.reclaimTimeout = 50 * time.Millisecond
 			wf.now = func() time.Time { return now }
 

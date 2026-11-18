@@ -14,8 +14,8 @@
 
 // Package preview manages preview feature gates enabled via the --preview flag.
 //
-// The gates are process-wide. A binary calls Init exactly once, before
-// anything calls IsEnabled or AsMap.
+// A binary calls New with its --preview values and passes the returned Gates
+// to the code that checks them.
 package preview
 
 import (
@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 )
 
 // Gate identifies a gate-controlled preview feature.  Preview gates are
@@ -63,76 +62,52 @@ var realKnownGates = []Gate{
 	GatePerTemplateSnapshotLocation,
 }
 
-var globalKnownGates []Gate           // all known gates
-var globalStateMap map[string]bool    // gate-name -> enabled?
-var globalDisabledMap map[string]bool // gate-name -> false (all disabled)
-var globalInitialized bool            // true if Init has been called, false otherwise
-var globalInitLock sync.Mutex
-
-// init sets the globalStateMap to the default state of all known gates disabled. It
-// is called automatically on package initialization, but can be overridden by
-// calling Init.
-func init() {
-	globalInitLock.Lock()
-	defer globalInitLock.Unlock()
-	if globalStateMap != nil {
-		return
-	}
-
-	slices.Sort(realKnownGates)
-	if m, err := newGateMap(realKnownGates); err != nil {
-		panic(fmt.Sprintf("preview.init failed: %v", err))
-	} else {
-		globalKnownGates = realKnownGates
-		globalStateMap = m
-		globalDisabledMap = newDisabledMap(realKnownGates)
-	}
+// Gates holds the state of each known preview gate. Build one with New. It is
+// immutable, so one value may be shared freely.
+type Gates struct {
+	known    []Gate
+	enabled  map[string]bool // gate-name -> enabled?
+	disabled map[string]bool // gate-name -> false (all disabled)
 }
 
-// Init sets the process-wide preview gates from the --preview flag values.
-// The special value All enables all known gates. With no values, all gates are
-// disabled. It panics if called again after the first successful call.
-func Init(values ...string) error {
-	globalInitLock.Lock()
-	defer globalInitLock.Unlock()
-	if globalInitialized {
-		panic("preview.Init called more than once")
+// New returns the preview gates set by the --preview flag values, and logs
+// their state. The special value All enables all known gates. With no values,
+// all gates are disabled.
+func New(values ...string) (*Gates, error) {
+	g, err := newGates(realKnownGates, values...)
+	if err != nil {
+		return nil, err
 	}
-	logFunc := func(state string) {
-		slog.Info("initializing preview gates", slog.String("state", state))
-	}
-	return doInit(globalKnownGates, logFunc, values...)
+	slog.Info("initializing preview gates", slog.String("state", g.String()))
+	return g, nil
 }
 
-// This allows tests to use fake gates.
-func doInit(knownGates []Gate, logFunc func(state string), values ...string) error {
-	if m, err := newGateMap(knownGates, values...); err != nil {
-		return err
-	} else {
-		globalKnownGates = knownGates
-		globalStateMap = m
-		globalDisabledMap = newDisabledMap(knownGates)
-		globalInitialized = true
+// newGates is New with the known gates as a parameter, so tests can use fake
+// gates.
+func newGates(knownGates []Gate, values ...string) (*Gates, error) {
+	knownGates = slices.Sorted(slices.Values(knownGates))
+	m, err := newGateMap(knownGates, values...)
+	if err != nil {
+		return nil, err
+	}
+	return &Gates{known: knownGates, enabled: m, disabled: newDisabledMap(knownGates)}, nil
+}
 
-		if logFunc != nil {
-			logStr := func() string {
-				en := make([]string, 0, len(knownGates))
-				for _, g := range knownGates {
-					k := string(g)
-					v := "off"
-					if m[k] {
-						v = "on"
-					}
-					en = append(en, fmt.Sprintf("%s=%s", k, v))
-				}
-				return fmt.Sprintf("[%s]", strings.Join(en, ", "))
-			}()
-			logFunc(logStr)
+// String returns the state of every known gate, like "[A=on, B=off]".
+func (g *Gates) String() string {
+	en := make([]string, 0, len(g.known))
+	for _, k := range g.known {
+		v := "off"
+		if g.enabled[string(k)] {
+			v = "on"
 		}
+		en = append(en, fmt.Sprintf("%s=%s", k, v))
 	}
-	return nil
+	return fmt.Sprintf("[%s]", strings.Join(en, ", "))
 }
 
+// newGateMap creates a map of the gate states, or returns an error if any
+// value is not a known gate.
 func newGateMap(knownGates []Gate, values ...string) (map[string]bool, error) {
 	tmpMap := make(map[string]bool, len(knownGates))
 	all := false
@@ -164,32 +139,45 @@ func newDisabledMap(knownGates []Gate) map[string]bool {
 
 // Verify checks that the given values are all valid preview gates.
 func Verify(values ...string) error {
-	return doVerify(globalKnownGates, values...)
+	return verify(realKnownGates, values...)
 }
 
-func doVerify(knownGates []Gate, values ...string) error {
+// verify is Verify with the known gates as a parameter, so tests can use fake
+// gates.
+func verify(knownGates []Gate, values ...string) error {
 	_, err := newGateMap(knownGates, values...)
 	return err
 }
 
 // IsEnabled reports whether the given preview gate is enabled. Unknown gates
 // are always treated as disabled.
-func IsEnabled(gate Gate) bool {
-	return globalStateMap[string(gate)]
+func (g *Gates) IsEnabled(gate Gate) bool {
+	return g.enabled[string(gate)]
+}
+
+// Enabled returns the names of the enabled gates, sorted.
+func (g *Gates) Enabled() []string {
+	var ret []string
+	for _, k := range g.known {
+		if g.enabled[string(k)] {
+			ret = append(ret, string(k))
+		}
+	}
+	return ret
 }
 
 // AsMap returns the map of known gate names to their enabled state.
 // The returned map MUST NOT be modified.
 //
 // TODO: Fix this to use an interface when DV supports it.
-func AsMap() map[string]bool {
-	return globalStateMap
+func (g *Gates) AsMap() map[string]bool {
+	return g.enabled
 }
 
 // DisabledMap returns the map of known gate names, all disabled.
 // The returned map MUST NOT be modified.
 //
 // TODO: Fix this to use an interface when DV supports it.
-func DisabledMap() map[string]bool {
-	return globalDisabledMap
+func (g *Gates) DisabledMap() map[string]bool {
+	return g.disabled
 }

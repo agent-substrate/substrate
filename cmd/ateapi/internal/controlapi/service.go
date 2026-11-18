@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/workercache"
 	"go.ate.dev/substrate/internal/localjwtauthority"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/internal/volume"
 	"go.ate.dev/substrate/internal/volume/csi"
@@ -48,6 +49,7 @@ type RPCService struct {
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
 	objectStorePlugin     objectstore.ControlProviderClient
+	gates                 *preview.Gates
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
@@ -73,6 +75,8 @@ type VolumePluginRegistry interface {
 //
 // snapshotLocation is ate-api-server's cluster-wide --snapshot-location; see
 // resolveSnapshotLocation.
+//
+// gates are ate-api-server's preview gates.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -86,8 +90,9 @@ func NewRPCService(
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	snapshotLocation string,
+	gates *preview.Gates,
 ) *RPCService {
-	impl := newServiceImpl(persistence, storageClassLister)
+	impl := newServiceImpl(persistence, storageClassLister, gates)
 	impl.clusterSnapshotLocation = snapshotLocation
 	s := &RPCService{
 		impl:                  impl,
@@ -100,10 +105,11 @@ func NewRPCService(
 		objectStorePlugin:     objectStorePlugin,
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
+		gates:                 gates,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin, gates)
 	s.actorWorkflow.clusterSnapshotLocation = snapshotLocation
-	s.workerWorkflow = NewWorkerWorkflow(impl, dialer)
+	s.workerWorkflow = NewWorkerWorkflow(impl, dialer, gates)
 	return s
 }
 
@@ -180,6 +186,8 @@ type ServiceImpl struct {
 	// clusterSnapshotLocation is ate-api-server's --snapshot-location; see
 	// resolveSnapshotLocation.
 	clusterSnapshotLocation string
+
+	gates *preview.Gates
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
@@ -189,10 +197,12 @@ var _ store.Interface = (*ServiceImpl)(nil)
 func newServiceImpl(
 	persistence store.Interface,
 	storageClassLister storagev1listers.StorageClassLister,
+	gates *preview.Gates,
 ) *ServiceImpl {
 	s := &ServiceImpl{
 		store:              persistence,
 		storageClassLister: storageClassLister,
+		gates:              gates,
 	}
 	return s
 }

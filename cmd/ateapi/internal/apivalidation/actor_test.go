@@ -182,11 +182,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		name   string
 		oldVal *ateapi.Actor
 		newVal *ateapi.Actor
-		// want is the result with no preview gates enabled.
-		want field.ErrorList
-		// wantWithPreview maps a --preview value to the result with those
-		// gates enabled.
-		wantWithPreview map[string]field.ErrorList
+		want   field.ErrorList
 	}{{
 		name:   "valid",
 		oldVal: validInput(),
@@ -635,13 +631,10 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		want: field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
-		// Status is written by the server, so it is not preview-gated: the
-		// volume cases below expect the same result with and without preview.
-		name:            "no volumes",
-		oldVal:          validActor(withActorStatus()),
-		newVal:          validActor(withActorStatus()),
-		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
+		name:   "no volumes",
+		oldVal: validActor(withActorStatus()),
+		newVal: validActor(withActorStatus()),
+		want:   nil,
 	}, {
 		// Set-once fields permit the nil->set transition, so a volume added
 		// in an update validates like one added at creation.
@@ -650,16 +643,14 @@ func TestValidateActorUpdate(t *testing.T) {
 		newVal: validActor(withActorStatus(func(s *ateapi.ActorStatus) {
 			s.ExternalVolumes = &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{{Name: "vol-a", VolumeType: "substrate.io/mock"}}}
 		})),
-		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
+		want: nil,
 	}, {
 		name:   "adding a volume to an actor with no status",
 		oldVal: validActor(),
 		newVal: validActor(withActorStatus(func(s *ateapi.ActorStatus) {
 			s.ExternalVolumes = &ateapi.ExternalVolumes{Volumes: []*ateapi.ExternalVolumeStatus{{Name: "vol-a", VolumeType: "substrate.io/mock"}}}
 		})),
-		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
+		want: nil,
 	}, {
 		name: "provisioning transition on an existing volume",
 		oldVal: validInput(withStatus(func(s *ateapi.ActorStatus) {
@@ -673,8 +664,7 @@ func TestValidateActorUpdate(t *testing.T) {
 				VolumeContext:   map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"},
 			}}}
 		})),
-		want:            nil,
-		wantWithPreview: map[string]field.ErrorList{"ALL": nil},
+		want: nil,
 	}, {
 		name:   "duplicate external_volumes volume_name",
 		oldVal: validActor(withActorStatus()),
@@ -685,9 +675,6 @@ func TestValidateActorUpdate(t *testing.T) {
 			}}
 		})),
 		want: field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes", "volumes").Index(1), nil)},
-		wantWithPreview: map[string]field.ErrorList{
-			"ALL": {field.Duplicate(field.NewPath("status", "external_volumes", "volumes").Index(1), nil)},
-		},
 	}, {
 		name:   "too many external_volumes",
 		oldVal: validActor(withActorStatus()),
@@ -699,15 +686,10 @@ func TestValidateActorUpdate(t *testing.T) {
 			s.ExternalVolumes = &ateapi.ExternalVolumes{Volumes: vols}
 		})),
 		want: field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes", "volumes"), 33, 32).WithOrigin("maxItems")},
-		wantWithPreview: map[string]field.ErrorList{
-			"ALL": {field.TooMany(field.NewPath("status", "external_volumes", "volumes"), 33, 32).WithOrigin("maxItems")},
-		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidate(t, func() field.ErrorList {
-				return ValidateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true)
-			}, tt.want, tt.wantWithPreview)
+			assertValidateErr(t, ValidateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)
 		})
 	}
 }

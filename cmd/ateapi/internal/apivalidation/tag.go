@@ -24,17 +24,17 @@ import (
 )
 
 func ValidateCreateTagRequest(ctx context.Context, req *ateapi.CreateTagRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_CreateTagRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetTagRequest(ctx context.Context, req *ateapi.GetTagRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_GetTagRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListTagsRequest(ctx context.Context, req *ateapi.ListTagsRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 }
 
@@ -43,17 +43,17 @@ func ValidateUpdateTagRequest(ctx context.Context, req *ateapi.UpdateTagRequest)
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_UpdateTagRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteTagRequest(ctx context.Context, req *ateapi.DeleteTagRequest) field.ErrorList {
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_DeleteTagRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.Tag) field.ErrorList {
-	op := MakeUpdateOp(ctx)
+	op := MakeUpdateOp()
 	return Validate_Tag(ctx, op, fldPath, newVal, oldVal)
 }
 

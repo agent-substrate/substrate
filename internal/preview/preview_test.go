@@ -16,35 +16,12 @@ package preview
 
 import (
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-// resetGlobalsForTest clears the global state.
-func resetGlobalsForTest() {
-	globalKnownGates = nil
-	globalStateMap = nil
-	globalInitialized = false
-}
-
-func wantPanic(t *testing.T, substr string, fn func()) {
-	t.Helper()
-	defer func() {
-		t.Helper()
-		r := recover()
-		if r == nil {
-			t.Fatalf("got no panic, want one containing %q", substr)
-		}
-		if msg, _ := r.(string); !strings.Contains(msg, substr) {
-			t.Fatalf("panic = %v, want one containing %q", r, substr)
-		}
-	}()
-	fn()
-}
-
-func TestInit(t *testing.T) {
+func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string
 		values  []string
@@ -64,18 +41,14 @@ func TestInit(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resetGlobalsForTest()
-			err := doInit([]Gate{"Fake", "Phony"}, nil, tc.values...)
+			g, err := newGates([]Gate{"Fake", "Phony"}, tc.values...)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("Init(%q) error = %v, wantErr %v", tc.values, err, tc.wantErr)
+				t.Fatalf("newGates(%q) error = %v, wantErr %v", tc.values, err, tc.wantErr)
 			}
 			if tc.wantErr {
-				if globalStateMap != nil {
-					t.Errorf("Init(%q) failed but set the gates", tc.values)
-				}
 				return
 			}
-			if diff := cmp.Diff(tc.want, AsMap()); diff != "" {
+			if diff := cmp.Diff(tc.want, g.AsMap()); diff != "" {
 				t.Errorf("AsMap() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -100,31 +73,26 @@ func TestRealGatesArePascalCase(t *testing.T) {
 	if len(realKnownGates) == 0 {
 		t.Fatal("no real gates defined")
 	}
-	for _, g := range realKnownGates {
+	for i, g := range realKnownGates {
 		if !pascalCase.MatchString(string(g)) {
 			t.Errorf("gate %q is not PascalCase", g)
+		}
+		if i > 0 && realKnownGates[i-1] >= g {
+			t.Errorf("realKnownGates not sorted: %q before %q", realKnownGates[i-1], g)
 		}
 	}
 }
 
-func TestInitTwicePanics(t *testing.T) {
-	resetGlobalsForTest()
-	if err := Init(); err != nil {
-		t.Fatalf("Init(): %v", err)
-	}
-	wantPanic(t, "more than once", func() { _ = Init("ALL") })
-}
-
 func TestIsEnabledKnownGate(t *testing.T) {
-	InitForTestFake(t, []Gate{"Fake"}, "ALL")
-	if !IsEnabled(Gate("Fake")) {
-		t.Errorf("IsEnabled(unknown) = false, want true")
+	g := NewForTestFake(t, []Gate{"Fake"}, "ALL")
+	if !g.IsEnabled(Gate("Fake")) {
+		t.Errorf("IsEnabled(Fake) = false, want true")
 	}
 }
 
 func TestIsEnabledUnknownGate(t *testing.T) {
-	InitForTestFake(t, []Gate{"Fake"}, "ALL")
-	if IsEnabled(Gate("Bogus")) {
+	g := NewForTestFake(t, []Gate{"Fake"}, "ALL")
+	if g.IsEnabled(Gate("Bogus")) {
 		t.Errorf("IsEnabled(unknown) = true, want false")
 	}
 }
@@ -143,47 +111,15 @@ func TestVerify(t *testing.T) {
 		{values: []string{"Bogus"}, wantErr: true},
 		{values: []string{"ALL", "Bogus"}, wantErr: true},
 	} {
-		if err := doVerify(fakeGates, tc.values...); (err != nil) != tc.wantErr {
+		if err := verify(fakeGates, tc.values...); (err != nil) != tc.wantErr {
 			t.Errorf("Verify(%q) = %v, want error %v", tc.values, err, tc.wantErr)
 		}
 	}
 }
 
-func TestSetForTest(t *testing.T) {
-	resetGlobalsForTest()
-	t.Run("enabled", func(t *testing.T) {
-		InitForTestFake(t, []Gate{"Fake"}, "ALL")
-		if !IsEnabled("Fake") {
-			t.Errorf("IsEnabled(%q) = false, want true", "Fake")
-		}
-		t.Run("nested disabled", func(t *testing.T) {
-			InitForTest(t)
-			if IsEnabled("Fake") {
-				t.Errorf("IsEnabled(%q) = true, want false", "Fake")
-			}
-		})
-		if !IsEnabled("Fake") {
-			t.Errorf("IsEnabled(%q) after nested test = false, want true", "Fake")
-		}
-	})
-	if globalStateMap != nil {
-		t.Errorf("InitForTest did not restore the uninitialized state")
-	}
-	// Init still works once InitForTest has been undone.
-	if err := Init(); err != nil {
-		t.Errorf("Init() after InitForTest: %v", err)
-	}
-}
-
-func TestSetForTestFakeRestoresKnownGates(t *testing.T) {
-	resetGlobalsForTest()
-	t.Run("fake", func(t *testing.T) {
-		InitForTestFake(t, []Gate{"Fake"}, "Fake")
-		if err := Verify("Fake"); err != nil {
-			t.Errorf("Verify(Fake) with the fake installed = %v", err)
-		}
-	})
-	if err := Verify("Fake"); err == nil {
-		t.Errorf("Verify(Fake) after the fake's test ended = nil, want an error: %v", globalStateMap)
+func TestEnabled(t *testing.T) {
+	g := NewForTestFake(t, []Gate{"C", "A", "B"}, "C", "A")
+	if diff := cmp.Diff([]string{"A", "C"}, g.Enabled()); diff != "" {
+		t.Errorf("Enabled() mismatch (-want +got):\n%s", diff)
 	}
 }

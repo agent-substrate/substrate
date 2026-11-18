@@ -455,7 +455,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	objects := objectstoretest.New()
-	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects), testGates)
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
@@ -610,7 +610,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			}
 			// SuspendActor failed mid-checkpoint and released the actor's lease,
 			// leaving the actor in SUSPENDING; DeleteWorker then crashes it.
-			if _, err := NewWorkerWorkflow(persistence, actorWorkflow.dialer).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+			if _, err := NewWorkerWorkflow(persistence, actorWorkflow.dialer, testGates).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
 				t.Fatalf("DeleteWorker: %v", err)
 			}
 
@@ -641,7 +641,7 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	objects := objectstoretest.New()
-	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects), testGates)
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapi.Actor{
@@ -711,7 +711,7 @@ func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
 func TestEnsureWorkerReleased_RecreatedActorKeepsAssignment(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 	bound := func(uid string) *ateapi.Actor {
 		return &ateapi.Actor{
 			Metadata:      &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor-1", Uid: uid},

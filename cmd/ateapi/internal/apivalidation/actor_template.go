@@ -18,39 +18,40 @@ import (
 	"context"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
+	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func ValidateCreateActorTemplateRequest(ctx context.Context, req *ateapi.CreateActorTemplateRequest) field.ErrorList {
+func ValidateCreateActorTemplateRequest(ctx context.Context, gates *preview.Gates, req *ateapi.CreateActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := makeGatedOp(ctx, operation.Create, gates)
 	return Validate_CreateActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetActorTemplateRequest(ctx context.Context, req *ateapi.GetActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListActorTemplatesRequest(ctx context.Context, req *ateapi.ListActorTemplatesRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapi.DeleteActorTemplateRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp(ctx)
+	op := MakeCreateOp()
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapi.ActorTemplate) field.ErrorList {
+func ValidateActorTemplateUpdate(ctx context.Context, gates *preview.Gates, fldPath *field.Path, newVal, oldVal *ateapi.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
-	op := MakeUpdateOp(ctx)
+	op := makeGatedOp(ctx, operation.Update, gates)
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 

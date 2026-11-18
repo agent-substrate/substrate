@@ -325,12 +325,12 @@ func TestResolveSnapshotLocation(t *testing.T) {
 			if tt.gateEnabled {
 				gates = []string{string(preview.GatePerTemplateSnapshotLocation)}
 			}
-			preview.InitForTest(t, gates...)
+			g := preview.NewForTest(t, gates...)
 			tmpl := &ateapi.ActorTemplate{
 				Metadata:       &ateapi.ResourceMetadata{Atespace: "team-a", Name: "tmpl"},
 				SnapshotConfig: &ateapi.SnapshotConfig{StorageLocation: tt.templateLocation},
 			}
-			got, err := resolveSnapshotLocation(tt.bucketPrefix, tmpl)
+			got, err := resolveSnapshotLocation(g, tt.bucketPrefix, tmpl)
 			if tt.wantErr {
 				if apierror.Code(err) != codes.FailedPrecondition {
 					t.Fatalf("resolveSnapshotLocation() err = %v, want FailedPrecondition", err)

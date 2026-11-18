@@ -111,7 +111,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapi.Actor) (*
 	var initVols []*ateapi.ExternalVolumeStatus
 	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
-	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
+	} else if s.gates.IsEnabledFor(ctx, preview.GateExternalVolumes) {
 		initVols = iv
 	} else if len(iv) > 0 {
 		errs := field.ErrorList{
@@ -427,7 +427,7 @@ func (s *ServiceImpl) validateSnapshotLocationUnchanged(actor *ateapi.Actor, new
 	}
 	// Compared as prefixes, so a newLocation spelled with and without a
 	// trailing slash counts as the same.
-	newLocation, err := resolveSnapshotLocation(s.clusterSnapshotLocation, newTemplate)
+	newLocation, err := resolveSnapshotLocation(s.gates, s.clusterSnapshotLocation, newTemplate)
 	if err != nil {
 		return err
 	}

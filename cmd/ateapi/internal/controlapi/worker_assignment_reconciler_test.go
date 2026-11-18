@@ -38,7 +38,7 @@ func epochWorker(name string, registered, observed int64) *ateapi.Worker {
 }
 
 func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
-	r := NewWorkerAssignmentReconciler(nil, noWorkers{})
+	r := NewWorkerAssignmentReconciler(nil, noWorkers{}, testGates)
 	defer r.queue.ShutDown()
 
 	for _, w := range []*ateapi.Worker{
@@ -77,7 +77,7 @@ func TestWorkerAssignmentReconciler_SkipsWorkerLeasedElsewhere(t *testing.T) {
 	}
 	defer lease.Close()
 
-	r := NewWorkerAssignmentReconciler(persistence, noWorkers{})
+	r := NewWorkerAssignmentReconciler(persistence, noWorkers{}, testGates)
 	defer r.queue.ShutDown()
 	if err := r.reconcileOne(ctx, apiWorkerName); !errors.Is(err, errWorkerLeased) {
 		t.Fatalf("reconcileOne() = %v, want errWorkerLeased", err)
@@ -107,7 +107,7 @@ func startAssignmentReconciler(t *testing.T, ctx context.Context, persistence st
 	if err := wc.Start(ctx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
-	NewWorkerAssignmentReconciler(persistence, wc).Start(ctx)
+	NewWorkerAssignmentReconciler(persistence, wc, testGates).Start(ctx)
 }
 
 // End to end: the syncer's raise is all it takes for the reconciler to hear of

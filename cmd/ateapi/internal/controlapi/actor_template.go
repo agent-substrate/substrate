@@ -40,7 +40,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapi.Create
 	}
 
 	// Validate the request, including the object within it.
-	if errs := apivalidation.ValidateCreateActorTemplateRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateCreateActorTemplateRequest(ctx, s.gates, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
@@ -66,13 +66,13 @@ func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateap
 	outTemplate.Status = &ateapi.ActorTemplateStatus{}
 
 	// Validate the final value before storing it.
-	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
+	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, s.gates, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
 		return nil, resources.ToInternalError(errs)
 	}
 
 	// Reject a template whose actors could never be snapshotted, rather than
 	// failing their first suspend or tag.
-	if _, err := resolveSnapshotLocation(s.clusterSnapshotLocation, outTemplate); err != nil {
+	if _, err := resolveSnapshotLocation(s.gates, s.clusterSnapshotLocation, outTemplate); err != nil {
 		return nil, err
 	}
 

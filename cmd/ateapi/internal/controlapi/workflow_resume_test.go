@@ -98,7 +98,7 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 		Status:   &ateapi.ActorStatus{State: ateapi.ActorState_ACTOR_STATE_RUNNING},
 	})
 	st := &leaseCountingStore{Interface: persistence}
-	w := &ActorWorkflow{store: st}
+	w := &ActorWorkflow{gates: testGates, store: st}
 
 	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
@@ -163,7 +163,7 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	seedFinalizeActor(t, ctx, persistence, 1, []string{"10.0.0.1"})
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 
 	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 1)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestFinalizeRunning_StampsReportedEpochAndIPs(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	seedFinalizeActor(t, ctx, persistence, 2, []string{"10.0.0.2"})
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 
 	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, 2)
 	if err != nil {
@@ -224,7 +224,7 @@ func TestFinalizeRunning_ReplacedWorkerProcess(t *testing.T) {
 					t.Fatalf("DeleteWorker: %v", err)
 				}
 			}
-			w := &ActorWorkflow{store: persistence}
+			w := &ActorWorkflow{gates: testGates, store: persistence}
 
 			_, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, tc.reported)
 			if got := apierror.Code(err); got != tc.want {
@@ -256,7 +256,7 @@ func TestFinalizeRunning_UnrecordableUploadStillRuns(t *testing.T) {
 		s.Snapshots[0].Locality = "node-3"
 		s.Snapshots[0].Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	})
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 
 	got, err := w.finalizeRunning(ctx, ref, 1)
 	if err != nil {
@@ -346,7 +346,7 @@ func TestAssignWorkerAttempt_BindNotFound(t *testing.T) {
 			persistence := newTestPersistence(t)
 			actor, wc := seedAssignFixture(t, ctx, persistence)
 			st := &bindErrorStore{Interface: persistence, err: tc.bindErr}
-			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+			w := &ActorWorkflow{gates: testGates, store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 
 			_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, &ateapi.ActorTemplate{})
 			if tc.wantErr != nil {
@@ -372,7 +372,7 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	persistence := newTestPersistence(t)
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &bindErrorStore{Interface: persistence, err: store.ErrVersionConflict}
-	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{gates: testGates, store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapi.ActorTemplate{}
 
 	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
@@ -414,7 +414,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{gates: testGates, store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	actor := &ateapi.Actor{
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "actor-uid"},
 	}
@@ -475,7 +475,7 @@ func TestEnsureWorkerAssigned_MissingUploadClaimsNoWorker(t *testing.T) {
 		t.Fatalf("GetActor: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{gates: testGates, store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	if _, _, err := w.ensureWorkerAssigned(ctx, actorRef, actor, &ateapi.ActorTemplate{}); apierror.Code(err) != codes.DataLoss {
 		t.Fatalf("ensureWorkerAssigned() error = %v, want DataLoss", err)
 	}
@@ -556,7 +556,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{gates: testGates, store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapi.ActorTemplate{}
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
@@ -704,7 +704,7 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 				}
 			}}
 
-			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+			w := &ActorWorkflow{gates: testGates, store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 			tmpl := &ateapi.ActorTemplate{}
 			refreshed, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 
@@ -828,7 +828,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 // step because the orchestrator early-returns.)
 func TestEnsureWorkerAssigned_RejectsNonResumableStates(t *testing.T) {
 	ctx := context.Background()
-	w := &ActorWorkflow{}
+	w := &ActorWorkflow{gates: testGates}
 	for _, st := range allActorStates {
 		switch st {
 		case ateapi.ActorState_ACTOR_STATE_SUSPENDED, ateapi.ActorState_ACTOR_STATE_RESUMING:
@@ -1018,7 +1018,7 @@ func TestValidateAssignedWorker(t *testing.T) {
 				}
 			}
 
-			w := &ActorWorkflow{store: persistence, scheduler: scheduling.New(nil)}
+			w := &ActorWorkflow{gates: testGates, store: persistence, scheduler: scheduling.New(nil)}
 			resumingActor := &ateapi.Actor{
 				Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: uid},
 				Status: &ateapi.ActorStatus{
@@ -1079,7 +1079,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	// to fetch either.
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "missing-tmpl", ateapi.ActorState_ACTOR_STATE_RUNNING)
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{gates: testGates, store: persistence}
 
 	actor, tmpl, err := w.loadActorForResume(ctx, actorRef)
 	if err != nil {
@@ -1272,7 +1272,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	t.Helper()
 
 	fake := &capturingAtelet{}
-	return &ActorWorkflow{store: persistence, dialer: newNodeAteletDialer(t, fake)}, fake
+	return &ActorWorkflow{gates: testGates, store: persistence, dialer: newNodeAteletDialer(t, fake)}, fake
 }
 
 // newNodeAteletDialer resolves node-1's atelet to an in-process fake. The
@@ -2002,7 +2002,6 @@ func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volum
 // The attach step hands the publish context to the Restore call in memory and
 // leaves the stored actor untouched.
 func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
-	preview.InitForTest(t, "ExternalVolumes")
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
@@ -2023,6 +2022,7 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 
 	plugin := &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}}
 	w := &ActorWorkflow{
+		gates: preview.NewForTest(t, "ExternalVolumes"),
 		store: persistence,
 		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
 			"mock": plugin,
@@ -2108,6 +2108,7 @@ func TestEnsureVolumesCreated(t *testing.T) {
 
 			plugin := &createCountingVolumePlugin{}
 			w := &ActorWorkflow{
+				gates:          testGates,
 				store:          persistence,
 				pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}},
 				storageClassLister: &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
@@ -2309,6 +2310,7 @@ func newContendedWorkflow(t *testing.T, sched *filledUpScheduler) (*ActorWorkflo
 		t.Fatalf("workercache.Start: %v", err)
 	}
 	w := &ActorWorkflow{
+		gates:       testGates,
 		store:       &contentionStore{workers: byName, actor: actor},
 		workerCache: wc,
 		scheduler:   sched,
@@ -2661,7 +2663,7 @@ func newSchedulingWorkflow(t *testing.T, ctx context.Context, st store.Interface
 	if err := wc.Start(cacheCtx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
-	return &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+	return &ActorWorkflow{gates: testGates, store: st, workerCache: wc, scheduler: scheduling.New(wc)}
 }
 
 // assertAssignedRuntime checks the runtime recorded on actor's assignment,
@@ -2812,7 +2814,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		worker := seedRuntimeWorker(t, ctx, st, "amd-pod", "node-amd", newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
-		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: worker}}
+		w := &ActorWorkflow{gates: testGates, store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: worker}}
 		stored, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
@@ -2832,7 +2834,7 @@ func TestAssignWorkerAttempt_PrefersRuntimeMatchingWorkerAndFallsBack(t *testing
 		stale.Status.SandboxClasses = workerSandboxClasses(newDefaultRT, oldRestorableRT)
 		actor := seedActorWithSnapshot(t, ctx, st, suspended, "", durableMemorySnapshot(t, oldRestorableRT))
 
-		w := &ActorWorkflow{store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: stale}}
+		w := &ActorWorkflow{gates: testGates, store: st, scheduler: &relaxingTestScheduler{Scheduler: scheduling.New(nil), relaxedWorker: stale}}
 		stored, bound, err := w.assignWorkerAttempt(ctx, actorRef, actor, &ateapi.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("assignWorkerAttempt: %v", err)
@@ -2876,7 +2878,7 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 			},
 		}
 
-		w := &ActorWorkflow{store: st, scheduler: scheduling.New(nil)}
+		w := &ActorWorkflow{gates: testGates, store: st, scheduler: scheduling.New(nil)}
 		worker, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, resumingActor, &ateapi.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("validateAssignedWorker: %v", err)
@@ -2919,7 +2921,7 @@ func TestValidateAssignedWorker_RuntimeFallback(t *testing.T) {
 			},
 		}
 
-		w := &ActorWorkflow{store: st, scheduler: scheduling.New(nil)}
+		w := &ActorWorkflow{gates: testGates, store: st, scheduler: scheduling.New(nil)}
 		worker, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, resumingActor, &ateapi.ActorTemplate{})
 		if err != nil {
 			t.Fatalf("validateAssignedWorker: %v", err)
@@ -3133,6 +3135,7 @@ func seedVolumeAssignFixture(t *testing.T, ctx context.Context, persistence stor
 // serves "mock" volumes with plugin.
 func newVolumeAssignWorkflow(st store.Interface, wc *workercache.Cache, plugin volume.VolumePluginControlPlane) *ActorWorkflow {
 	return &ActorWorkflow{
+		gates:          testGates,
 		store:          st,
 		workerCache:    wc,
 		scheduler:      scheduling.New(wc),
@@ -3147,7 +3150,7 @@ func newVolumeAssignWorkflow(st store.Interface, wc *workercache.Cache, plugin v
 // FailedPrecondition before any publish call, even when a valid volume
 // precedes it.
 func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
-	preview.InitForTest(t, "ExternalVolumes")
+	gates := preview.NewForTest(t, "ExternalVolumes")
 	tests := []struct {
 		name string
 		// last is the second mounted volume, placed after every other volume.
@@ -3176,6 +3179,7 @@ func TestResume_ChecksMountedVolumesBeforeAttach(t *testing.T) {
 			)
 			plugin := &publishContextVolumePlugin{}
 			w := newVolumeAssignWorkflow(persistence, wc, plugin)
+			w.gates = gates
 			// u is declared but not mounted; o is not declared at all.
 			tmpl := volumeTemplate([]string{"a", "u", "b"}, "a", "b")
 

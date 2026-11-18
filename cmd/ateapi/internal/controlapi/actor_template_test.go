@@ -56,9 +56,9 @@ func validActorTemplate(mutations ...func(*ateapi.ActorTemplate)) *ateapi.ActorT
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence, nil, testGates)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-	s := &RPCService{impl: impl}
+	s := &RPCService{gates: testGates, impl: impl}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapi.CreateActorTemplateRequest {
 		return &ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
@@ -123,11 +123,11 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 	}}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preview.InitForTest(t, tt.gates...)
+			gates := preview.NewForTest(t, tt.gates...)
 			persistence := newTestPersistence(t)
-			impl := newServiceImpl(persistence, nil)
+			impl := newServiceImpl(persistence, nil, gates)
 			impl.clusterSnapshotLocation = tt.clusterSnapshotLocation
-			s := &RPCService{impl: impl}
+			s := &RPCService{gates: gates, impl: impl}
 			ctx := context.Background()
 			if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 				t.Fatalf("CreateAtespace failed: %v", err)
@@ -152,9 +152,9 @@ func TestCreateActorTemplate_RequiresSnapshotLocation(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence, nil, testGates)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-	s := &RPCService{impl: impl}
+	s := &RPCService{gates: testGates, impl: impl}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -199,9 +199,9 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 // snapshot_config is optional: create fills an omitted one with every default.
 func TestCreateActorTemplateDefaultsOmittedSnapshotConfig(t *testing.T) {
 	persistence := newTestPersistence(t)
-	impl := newServiceImpl(persistence, nil)
+	impl := newServiceImpl(persistence, nil, testGates)
 	impl.clusterSnapshotLocation = "gs://cluster-bucket/"
-	s := &RPCService{impl: impl}
+	s := &RPCService{gates: testGates, impl: impl}
 	ctx := context.Background()
 	if _, err := persistence.CreateAtespace(ctx, &ateapi.Atespace{Metadata: &ateapi.ResourceMetadata{Name: "ns1"}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
@@ -276,7 +276,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagRef := resources.TagRefFromTag(tag)
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
-			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
+			svc := &RPCService{gates: testGates, impl: newServiceImpl(persistence, nil, testGates), actorWorkflow: workflow, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}
 			// The handler must clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapi.ActorStatus) {
 				s.State = ateapi.ActorState_ACTOR_STATE_RUNNING

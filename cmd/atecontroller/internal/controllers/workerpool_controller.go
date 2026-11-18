@@ -89,6 +89,9 @@ type WorkerPoolReconciler struct {
 	RouterServiceAccount string
 	// DNSEgressPolicy is the --dns-egress-policy mode propagated to worker pods.
 	DNSEgressPolicy string
+	// PreviewGates are the names of the controller's enabled preview gates,
+	// sorted, propagated to worker pods.
+	PreviewGates []string
 	// Recorder emits a Normal event each time a pool's SandboxConfig
 	// changes, and a Warning event when a class stops resolving.
 	Recorder events.EventRecorder
@@ -340,7 +343,7 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1.Wo
 		LogsExporter:         r.OTelLogsExporter,
 		TracesExporter:       r.OTelTracesExporter,
 		MetricsExporter:      r.OTelMetricsExporter,
-	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount, r.DNSEgressPolicy)
+	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount, r.DNSEgressPolicy, r.PreviewGates)
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}
