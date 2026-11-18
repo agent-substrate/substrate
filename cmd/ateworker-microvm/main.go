@@ -364,7 +364,7 @@ type AteWorkerService struct {
 
 	// Serializes lifecycle RPCs per actor.
 	locks *actorlock.Locks
-	// Tracks lifecycle RPCs for shutdown cancellation and draining.
+	// Tracks lifecycle RPCs so shutdown can wait for them.
 	inFlight *actorlock.InFlight
 	// crashReporter reports actors whose micro-VM died. Nil if it could not
 	// be set up.
@@ -440,8 +440,8 @@ func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel 
 }
 
 // beginRPC registers before checking the drain flag so shutdown cannot miss it.
-func (s *AteWorkerService) beginRPC(actorUID, name string, cancel context.CancelFunc) (func(), error) {
-	release := s.inFlight.Add(actorUID, name, cancel)
+func (s *AteWorkerService) beginRPC(actorUID, name string) (func(), error) {
+	release := s.inFlight.Add(actorUID, name)
 	if err := s.rejectIfDraining(); err != nil {
 		release()
 		return nil, err
@@ -488,12 +488,4 @@ func (s *AteWorkerService) rejectIfDraining() error {
 		return apierror.Unavailable("worker draining: not accepting new workloads")
 	}
 	return nil
-}
-
-// cancelStartups cancels all boots and restores, leaving checkpoints running.
-func (s *AteWorkerService) cancelStartups(ctx context.Context) {
-	for _, actorUID := range s.inFlight.CancelStartups() {
-		slog.InfoContext(ctx, "Cancelling in-progress workload startup RPC due to graceful shutdown",
-			slog.String("actorUID", actorUID))
-	}
 }
