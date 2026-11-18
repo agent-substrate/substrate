@@ -649,6 +649,114 @@ func TestActorResumer_Parking(t *testing.T) {
 // context.Canceled (classified as the `canceled` outcome) WITHOUT aborting the
 // shared in-flight resume, which keeps running and serves a later caller from
 // the same single RPC.
+// TestActorResumer_InProgressBudget scripts what ateapi answers over the life
+// of a flight. Each case runs in a synctest bubble with a 5s park budget and a
+// fixed 1s retry interval, so attempts land on whole seconds.
+func TestActorResumer_InProgressBudget(t *testing.T) {
+	const forever = time.Hour
+	var (
+		aborted    = status.Error(codes.Aborted, "another operation is in progress for actor")
+		suspending = status.Error(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: team-a/actor (got: ACTOR_STATE_SUSPENDING, want ACTOR_STATE_SUSPENDED)")
+		crashed    = status.Error(codes.FailedPrecondition, "actor team-a/actor is CRASHED: out of memory")
+		poolFull   = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+	)
+	// answer is what ResumeActor returns until the flight is this old.
+	type answer struct {
+		until time.Duration
+		err   error
+	}
+	tests := []struct {
+		name             string
+		inProgressBudget time.Duration
+		// answers are in order; once they run out the resume succeeds.
+		answers       []answer
+		wantCode      codes.Code
+		wantElapsed   time.Duration
+		wantExhausted bool
+	}{
+		{
+			name:             "suspend that outlasts the park budget is ridden out",
+			inProgressBudget: 30 * time.Second,
+			answers:          []answer{{6 * time.Second, aborted}, {12 * time.Second, suspending}},
+			wantCode:         codes.OK,
+			wantElapsed:      12 * time.Second,
+		},
+		{
+			name:        "SUSPENDING fails fast without the flag",
+			answers:     []answer{{forever, suspending}},
+			wantCode:    codes.FailedPrecondition,
+			wantElapsed: 0,
+		},
+		{
+			name:             "other FailedPrecondition still fails fast",
+			inProgressBudget: 30 * time.Second,
+			answers:          []answer{{forever, crashed}},
+			wantCode:         codes.FailedPrecondition,
+			wantElapsed:      0,
+		},
+		{
+			name:             "suspend that never ends stops at the in-progress budget",
+			inProgressBudget: 30 * time.Second,
+			answers:          []answer{{forever, suspending}},
+			wantCode:         codes.FailedPrecondition,
+			wantElapsed:      30 * time.Second,
+			wantExhausted:    true,
+		},
+		{
+			name:             "pool saturation keeps the park budget",
+			inProgressBudget: 30 * time.Second,
+			answers:          []answer{{forever, poolFull}},
+			wantCode:         codes.ResourceExhausted,
+			wantElapsed:      5 * time.Second,
+			wantExhausted:    true,
+		},
+		{
+			name:             "park budget counts from the first saturation",
+			inProgressBudget: 30 * time.Second,
+			answers:          []answer{{8 * time.Second, suspending}, {forever, poolFull}},
+			wantCode:         codes.ResourceExhausted,
+			wantElapsed:      13 * time.Second,
+			wantExhausted:    true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				mock := &resumerMockClient{
+					resumeFn: func(context.Context, *ateapi.ResumeActorRequest, ...grpc.CallOption) (*ateapi.ResumeActorResponse, error) {
+						for _, a := range tc.answers {
+							if time.Since(start) < a.until {
+								return nil, a.err
+							}
+						}
+						return &ateapi.ResumeActorResponse{}, nil
+					},
+				}
+				resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{
+					Max:              1,
+					Budget:           5 * time.Second,
+					InProgressBudget: tc.inProgressBudget,
+					RetryInterval:    time.Second,
+					RetryFactor:      1,
+				}))
+
+				_, _, err := resumer.ResumeActor(t.Context(), resources.ActorRef{Atespace: "team-a", Name: "actor"})
+				if got := status.Code(err); got != tc.wantCode {
+					t.Errorf("code = %v, want %v (err=%v)", got, tc.wantCode, err)
+				}
+				if got := time.Since(start); got != tc.wantElapsed {
+					t.Errorf("returned after %s, want %s", got, tc.wantElapsed)
+				}
+				var exhausted *budgetExhaustedError
+				if got := errors.As(err, &exhausted); got != tc.wantExhausted {
+					t.Errorf("budget exhaustion = %t, want %t (err=%v)", got, tc.wantExhausted, err)
+				}
+			})
+		})
+	}
+}
+
 func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	synctest.Test(t, testCallerCancelDoesNotAbortFlight)
 }

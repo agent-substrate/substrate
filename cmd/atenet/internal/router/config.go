@@ -282,7 +282,7 @@ func (c routerConfig) drainTimeout(parkCfg ingress.ParkedRequestConfig) time.Dur
 	if c.DrainTimeout > 0 {
 		return c.DrainTimeout
 	}
-	return parkCfg.Budget + drainRouteBudget + drainTimeoutMargin
+	return max(parkCfg.Budget, parkCfg.InProgressBudget) + drainRouteBudget + drainTimeoutMargin
 }
 
 // validate rejects flag combinations that would make the router misbehave
@@ -331,6 +331,10 @@ func (c routerConfig) validate() error {
 	if c.DrainTimeout > 0 && c.ParkedRequest.Enabled() && c.DrainTimeout < c.ParkedRequest.Normalized().Budget {
 		return fmt.Errorf("--drain-timeout (%s) must be >= --parked-request-budget (%s): a drain shorter than the parking budget resets parked requests on shutdown instead of letting them finish",
 			c.DrainTimeout, c.ParkedRequest.Normalized().Budget)
+	}
+	if c.DrainTimeout > 0 && c.ParkedRequest.InProgressBudget > 0 && c.DrainTimeout < c.ParkedRequest.InProgressBudget {
+		return fmt.Errorf("--drain-timeout (%s) must be >= --in-progress-resume-budget (%s): a drain shorter than the in-progress resume budget resets waiting requests on shutdown instead of letting them finish",
+			c.DrainTimeout, c.ParkedRequest.InProgressBudget)
 	}
 	return nil
 }

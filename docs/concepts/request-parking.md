@@ -122,6 +122,7 @@ waiting are returned immediately (fail fast):
 | `Aborted` (concurrent resume)          | Retry (always)                    |
 | `ResourceExhausted` (no room)          | **Park & retry** (when enabled)   |
 | `FailedPrecondition` (e.g. CRASHED)    | Fail fast → `503`                 |
+| `FailedPrecondition` (SUSPENDING)      | Fail fast → `503`, or retry with `--in-progress-resume-budget` |
 | `Unavailable` (control-plane blip)     | **Park & retry** (when enabled)   |
 | `NotFound`                             | Fail fast → `404`                 |
 | `DeadlineExceeded`                     | Fail fast → `504`                 |
@@ -131,6 +132,30 @@ When parking is **disabled** (`--parked-request-max=0`), the router fails fast:
 `ResourceExhausted` and `Unavailable` are returned immediately, there is no
 admission cap, and only `Aborted` (concurrent-resume) conflicts are retried,
 within a `15s` budget.
+
+### Waiting out a suspend that is still running
+
+A request can arrive while its actor is still being suspended, for example
+while the checkpoint uploads. Until the suspend finishes, `ResumeActor` answers
+`Aborted` (the suspend holds the actor) or `FailedPrecondition` (the actor is
+`SUSPENDING`). By default `Aborted` is retried within the park budget and
+`SUSPENDING` fails fast.
+
+Setting `--in-progress-resume-budget` above `0` changes two things:
+
+- `SUSPENDING` is retried like `Aborted`.
+- A flight keeps retrying these two answers for up to the larger of
+  `--in-progress-resume-budget` and `--parked-request-budget`.
+
+Pool saturation and control-plane unavailability still get only the park
+budget. When the in-progress budget is the larger of the two, their clock
+starts the first time the flight sees one of them, so a long suspend followed
+by a brief saturation is not failed at once.
+
+Envoy's ext_proc message timeout and the derived `--drain-timeout` grow with
+the larger budget. With an explicit `--drain-timeout`, startup fails if it is
+below `--in-progress-resume-budget`. Raise `terminationGracePeriodSeconds` to
+match.
 
 ### Parked requests survive router shutdown
 
@@ -148,6 +173,7 @@ so a parked request always gets its full budget and a normal verdict (routed
 | Flag                             | Default | Meaning                                                            |
 | -------------------------------- | ------- | ------------------------------------------------------------------ |
 | `--parked-request-budget`         | `5s`    | Park budget per resume *flight*; requests de-duplicated onto an in-flight resume share its remaining budget (see Behavior). |
+| `--in-progress-resume-budget`     | `0`     | When positive, also retry a resume refused because the actor is `SUSPENDING`, and let a flight wait on an in-progress suspend for up to the larger of this and `--parked-request-budget` (see Behavior). |
 | `--parked-request-max`            | `1024`  | Max concurrent **parked** requests (a slot is taken at the park transition, never for a first-attempt lookup); requests parking beyond it are shed (503). `0` disables parking. |
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |

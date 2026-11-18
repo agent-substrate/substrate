@@ -160,6 +160,20 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
 		},
+		{
+			name:    "negative in-progress-resume-budget rejected",
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax, InProgressBudget: -time.Second}},
+			wantErr: "in-progress resume budget must not be negative",
+		},
+		{
+			name:    "drain-timeout below in-progress-resume-budget rejected",
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, InProgressBudget: 30 * time.Second, Max: 1024}, DrainTimeout: 10 * time.Second},
+			wantErr: "must be >= --in-progress-resume-budget",
+		},
+		{
+			name: "drain-timeout equal to in-progress-resume-budget accepted",
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, InProgressBudget: 30 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -454,6 +468,12 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 			// surprise.
 			parkCfg: ingress.ParkedRequestConfig{Max: 0}.Normalized(),
 			want:    ingress.DefaultParkedRequestBudget + drainRouteBudget + drainTimeoutMargin,
+		},
+		{
+			name:    "auto follows a larger in-progress resume budget",
+			cfg:     routerConfig{DrainTimeout: 0},
+			parkCfg: ingress.ParkedRequestConfig{Budget: 5 * time.Second, InProgressBudget: 30 * time.Second, Max: 1024}.Normalized(),
+			want:    30*time.Second + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name:    "explicit value wins over derivation",
