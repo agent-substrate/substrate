@@ -415,8 +415,9 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 * `--agentsession-awake` — turnover mode when above 0 (default 0, off). Each
   session registers by creating its actor, running step 1, and parking it.
   After registration is idle for 1 minute, the worker wakes this many sessions
-  and swaps `--target-rps` idle awake sessions with parked ones each second
-  (both per worker; tracked in `agentsession_turnover_sessions`). Each woken
+  and then swaps idle awake sessions with parked ones at `--target-rps` swaps
+  per second, evenly spaced (both per worker; tracked in
+  `agentsession_turnover_sessions`). Each woken
   session runs its next step immediately (ignoring the script's think times).
   Requires a fixed user count, and a stop from the master ends turnover for
   that worker process until it restarts. See

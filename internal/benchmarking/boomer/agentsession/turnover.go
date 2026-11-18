@@ -28,13 +28,16 @@ import (
 // and swaps idle awake sessions with parked ones at target_rps/s. Each session
 // registers by creating its actor, running step 1, and parking it. After
 // registrationQuiet with no active registrations, the conductor wakes
-// agentsession_awake sessions and then swaps at target_rps/s.
+// agentsession_awake sessions and then swaps at target_rps/s, evenly spaced.
 const (
 	registrationQuiet        = time.Minute
 	turnoverStartConcurrency = 48
 	fillConcurrency          = 8
-	swapTick                 = time.Second
-	turnoverParkRetry        = 2 * time.Second
+	// fillTick is how often the conductor wakes a batch to reach or restore
+	// the awake count. swapTick is how finely it paces swaps.
+	fillTick          = time.Second
+	swapTick          = 10 * time.Millisecond
+	turnoverParkRetry = 2 * time.Second
 )
 
 var turnoverSessions = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -67,11 +70,14 @@ type conductor struct {
 	filled     bool
 	halted     bool
 	warnHalted sync.Once
-	credit     float64
+	// credit is the swaps owed, earned at the rate since lastTick.
+	credit   float64
+	lastTick time.Time
+	lastFill time.Time
 }
 
 func newConductor(now func() time.Time) *conductor {
-	return &conductor{now: now, busy: map[*sessionUser]bool{}, inFlight: map[*sessionUser]turnCmd{}}
+	return &conductor{now: now, busy: map[*sessionUser]bool{}, inFlight: map[*sessionUser]turnCmd{}, lastTick: now()}
 }
 
 func (c *conductor) join(u *sessionUser) {
@@ -125,20 +131,32 @@ func (c *conductor) tick(awake int, rate float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.export()
+	now := c.now()
+	elapsed := now.Sub(c.lastTick)
+	c.lastTick = now
 	if c.halted {
 		return
 	}
+	fillDue := now.Sub(c.lastFill) >= fillTick
+	if fillDue {
+		c.lastFill = now
+	}
 	if !c.filled {
-		c.fill(awake)
+		if fillDue {
+			c.fill(awake)
+		}
 		return
 	}
-	c.balance(awake, fillConcurrency)
+	if fillDue {
+		c.balance(awake, fillConcurrency)
+	}
 	if rate <= 0 {
 		c.credit = 0
 		return
 	}
-	perTick := rate * swapTick.Seconds()
-	c.credit = min(c.credit+perTick, perTick+1)
+	// Up to a second of credit carries over, so the swap rate catches up
+	// after a stall.
+	c.credit = min(c.credit+rate*elapsed.Seconds(), rate+1)
 	for c.credit >= 1 && len(c.idle) > 0 && len(c.parked) > 0 {
 		c.send(&c.idle, cmdPark)
 		c.send(&c.parked, cmdWake)

@@ -82,21 +82,30 @@ func TestConductorFill(t *testing.T) {
 			len(got[cmdWake]), len(got[cmdPark]))
 	}
 
-	now = now.Add(time.Second)
 	for _, want := range []int{fillConcurrency, awake - fillConcurrency} {
+		now = now.Add(fillTick)
 		c.tick(awake, 5)
 		got := commands(fleet)
 		if len(got[cmdWake]) != want || len(got[cmdPark]) != 0 {
 			t.Fatalf("fill tick sent %d wakes and %d parks, want %d wakes", len(got[cmdWake]), len(got[cmdPark]), want)
 		}
 		finish(c, got)
+
+		now = now.Add(swapTick)
+		c.tick(awake, 5)
+		if got := commands(fleet); len(got) != 0 {
+			t.Fatalf("tick %v after a fill tick sent %d wakes and %d parks, want none",
+				swapTick, len(got[cmdWake]), len(got[cmdPark]))
+		}
 	}
+	now = now.Add(fillTick)
 	c.tick(awake, 5)
 	if got := commands(fleet); len(got) != 0 || !c.filled {
 		t.Fatalf("tick after %d sessions woke: %d wakes, %d parks, filled %v; want none and true",
 			awake, len(got[cmdWake]), len(got[cmdPark]), c.filled)
 	}
 
+	now = now.Add(time.Second)
 	c.tick(awake, 5)
 	got := commands(fleet)
 	if len(got[cmdPark]) != 5 || len(got[cmdWake]) != 5 {
@@ -115,7 +124,8 @@ func TestConductorFill(t *testing.T) {
 }
 
 func TestConductorSwaps(t *testing.T) {
-	c := newConductor(time.Now)
+	now := time.Unix(1000, 0)
+	c := newConductor(func() time.Time { return now })
 	c.filled = true
 	fleet := append(turnSessions(4, true), turnSessions(4, false)...)
 	for _, u := range fleet {
@@ -126,14 +136,22 @@ func TestConductorSwaps(t *testing.T) {
 		t.Fatal("claim of an idle session failed")
 	}
 	for i, tc := range []struct {
+		after time.Duration
 		rate  float64
 		swaps int
 	}{
-		{1.5, 1},
-		{1.5, 2},
-		{0, 0},
-		{1, 1},
+		{time.Second, 1.5, 1},
+		{time.Second, 1.5, 2},
+		{time.Second, 0, 0},
+		{time.Second, 1, 1},
+		// A swap is due every 100ms, however often the conductor ticks.
+		{60 * time.Millisecond, 10, 0},
+		{60 * time.Millisecond, 10, 1},
+		{60 * time.Millisecond, 10, 0},
+		// A minute without a tick keeps a second of credit.
+		{time.Minute, 1, 2},
 	} {
+		now = now.Add(tc.after)
 		c.tick(4, tc.rate)
 		got := commands(fleet)
 		if len(got[cmdPark]) != tc.swaps || len(got[cmdWake]) != tc.swaps {
@@ -171,7 +189,9 @@ func TestConductorRestoresAwakeCount(t *testing.T) {
 			got := commands(fleet)
 			if tc.filled {
 				finish(c, got)
+				now = now.Add(fillTick)
 				c.tick(awake, 1) // ends the fill
+				now = now.Add(time.Second)
 				c.tick(awake, 1) // swaps one
 				got = commands(fleet)
 			}
@@ -183,6 +203,7 @@ func TestConductorRestoresAwakeCount(t *testing.T) {
 			got[tc.fail] = got[tc.fail][1:]
 			finish(c, got)
 
+			now = now.Add(fillTick)
 			c.tick(awake, 0)
 			got = commands(fleet)
 			if len(got) != 1 || len(got[tc.fail]) != 1 {
@@ -497,6 +518,7 @@ func TestConductorFillWaitsForInFlightStarts(t *testing.T) {
 		t.Fatalf("with starts in flight: parked %d, filled %v; want 1, false", len(c.parked), c.filled)
 	}
 	inFlight = 0
+	now = now.Add(fillTick)
 	c.tick(1, 0)
 	if len(c.inFlight) != 1 {
 		t.Errorf("after starts finished: inFlight %d, want 1", len(c.inFlight))
