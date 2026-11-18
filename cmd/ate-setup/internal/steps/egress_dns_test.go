@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -33,39 +34,40 @@ import (
 	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
 )
 
-// TestEgressDNSLookupFamily requires ALL on every dynamic forward proxy DNS
-// cache in the install tree, so a new egress manifest is checked the day it is
-// added rather than the day it is installed. atenet-egress.yaml says why ALL.
-func TestEgressDNSLookupFamily(t *testing.T) {
+// TestEgressDNSCacheSettings requires ALL and the resolved address filter on
+// every dynamic forward proxy DNS cache in the install tree, so a new egress
+// manifest is checked the day it is added rather than the day it is installed.
+// atenet-egress.yaml says why.
+func TestEgressDNSCacheSettings(t *testing.T) {
 	for _, path := range manifestPaths(t) {
 		caches := dnsCacheConfigs(t, path)
 		if len(caches) == 0 {
 			continue
 		}
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			requireLookupFamilyALL(t, caches)
+			requireDNSCacheSettings(t, caches)
 		})
 	}
 }
 
-// TestRenderedOverlaysDNSLookupFamily repeats the check against the output of
+// TestRenderedOverlaysDNSCacheSettings repeats the check against the output of
 // every overlay, because a manifest is not what gets applied: a patch or a
 // configMapGenerator can put back a pin that no file in the tree contains.
-func TestRenderedOverlaysDNSLookupFamily(t *testing.T) {
+func TestRenderedOverlaysDNSCacheSettings(t *testing.T) {
 	for _, dir := range overlayDirs(t) {
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			rendered, err := kustomize.Build(dir)
 			if err != nil {
 				t.Fatalf("rendering %s: %v", dir, err)
 			}
-			requireLookupFamilyALL(t, dnsCacheConfigsIn(t, dir, bytes.NewReader(rendered)))
+			requireDNSCacheSettings(t, dnsCacheConfigsIn(t, dir, bytes.NewReader(rendered)))
 		})
 	}
 }
 
 // TestEgressManifestsCarryDNSCaches pins the cache count of the envoy egress
 // manifest the installer selects, so a walk that quietly stopped matching
-// fails here instead of passing TestEgressDNSLookupFamily vacuously.
+// fails here instead of passing TestEgressDNSCacheSettings vacuously.
 func TestEgressManifestsCarryDNSCaches(t *testing.T) {
 	const want = 7
 	env := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
@@ -101,11 +103,28 @@ func TestOverlayDiscoveryCoversTheInstaller(t *testing.T) {
 	}
 }
 
-func requireLookupFamilyALL(t *testing.T, caches []map[string]any) {
+func requireDNSCacheSettings(t *testing.T, caches []map[string]any) {
 	t.Helper()
+	// A sample of the denied ranges: loopback and link-local in both families.
+	mustDeny := []string{"127.0.0.0/8", "169.254.0.0/16", "::1/128", "fe80::/10"}
 	for _, cache := range caches {
 		if got := cache["dns_lookup_family"]; got != "ALL" {
 			t.Errorf("dns_cache_config %v: dns_lookup_family = %v, want ALL", cache["name"], got)
+		}
+		var denied []string
+		filter, _ := cache["resolved_address_filter"].(map[string]any)
+		ranges, _ := filter["ranges"].([]any)
+		for _, r := range ranges {
+			r, _ := r.(map[string]any)
+			denied = append(denied, fmt.Sprintf("%v/%v", r["address_prefix"], r["prefix_len"]))
+		}
+		if filter["invert_match"] == true {
+			t.Errorf("dns_cache_config %v: resolved_address_filter is inverted", cache["name"])
+		}
+		for _, cidr := range mustDeny {
+			if !slices.Contains(denied, cidr) {
+				t.Errorf("dns_cache_config %v: resolved_address_filter does not deny %s", cache["name"], cidr)
+			}
 		}
 	}
 }
