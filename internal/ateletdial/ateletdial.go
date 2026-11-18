@@ -19,7 +19,6 @@ package ateletdial
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net"
 
@@ -46,32 +45,13 @@ func TLSConfig(credentialBundlePath, trustBundlePath, ateletSPIFFEID string) (*t
 	if err != nil || localIdentity == nil {
 		return nil, fmt.Errorf("worker certificate has no valid Pod identity")
 	}
-	loadRoots := credbundle.PoolLoader(trustBundlePath)
-	if _, err := loadRoots(); err != nil {
-		return nil, fmt.Errorf("load atelet trust bundle: %w", err)
-	}
-	return &tls.Config{
-		MinVersion:           tls.VersionTLS13,
-		InsecureSkipVerify:   true, // Verification below supports SPIFFE Pod certificates without a DNS name.
+	// Verification below supports SPIFFE Pod certificates without a DNS name,
+	// and checks the identities that DNS verification cannot express: atelet's
+	// SPIFFE ID and exact node incarnation.
+	return credbundle.PrepareClientTLSConfig(credbundle.ClientConfig{
 		GetClientCertificate: credbundle.ClientLoader(credentialBundlePath),
-		VerifyConnection: func(state tls.ConnectionState) error {
-			// Verify both the normal server-auth chain and the identities that DNS
-			// verification cannot express: atelet's SPIFFE ID and exact node
-			// incarnation. This is why InsecureSkipVerify is set above.
-			if len(state.PeerCertificates) == 0 {
-				return fmt.Errorf("atelet certificate is required")
-			}
-			roots, err := loadRoots()
-			if err != nil {
-				return err
-			}
-			intermediates := x509.NewCertPool()
-			for _, cert := range state.PeerCertificates[1:] {
-				intermediates.AddCert(cert)
-			}
-			if _, err := state.PeerCertificates[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
-				return fmt.Errorf("verify atelet certificate: %w", err)
-			}
+		TrustBundlePath:      trustBundlePath,
+		VerifyPeer: func(state tls.ConnectionState) error {
 			leaf := state.PeerCertificates[0]
 			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != ateletSPIFFEID {
 				return fmt.Errorf("node-local peer is not atelet")
@@ -82,7 +62,7 @@ func TLSConfig(credentialBundlePath, trustBundlePath, ateletSPIFFEID string) (*t
 			}
 			return nil
 		},
-	}, nil
+	})
 }
 
 // Dial opens a connection to the atelet socket. The caller closes it; a fresh

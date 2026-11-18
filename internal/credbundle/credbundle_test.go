@@ -33,6 +33,14 @@ import (
 	"time"
 )
 
+// TestMain disables recheckInterval for the rest of this file's tests, which
+// assert rotation pickup on the very next call. The one test of the
+// interval itself re-enables it temporarily.
+func TestMain(m *testing.M) {
+	recheckInterval = 0
+	os.Exit(m.Run())
+}
+
 func TestParsePKCS8PrivateKeyBlock(t *testing.T) {
 	key := generateRSAKey(t)
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
@@ -123,6 +131,44 @@ func TestLoaderPicksUpProjectedVolumeRotation(t *testing.T) {
 	}
 	if got := leafSerial(t, cert); got != 2 {
 		t.Fatalf("Loader() leaf serial after rotation = %d, want 2", got)
+	}
+}
+
+func TestLoaderSkipsStatWithinRecheckInterval(t *testing.T) {
+	path := writeProjectedBundle(t, makeBundle(t, 1))
+	getCert := Loader(path)
+
+	cert, err := getCert(nil)
+	if err != nil {
+		t.Fatalf("Loader() first call error = %v", err)
+	}
+	if got := leafSerial(t, cert); got != 1 {
+		t.Fatalf("Loader() leaf serial = %d, want 1", got)
+	}
+
+	recheckInterval = time.Minute
+	defer func() { recheckInterval = 0 }()
+
+	if err := rotateProjectedBundle(path, makeBundle(t, 2)); err != nil {
+		t.Fatalf("rotate bundle: %v", err)
+	}
+
+	cert, err = getCert(nil)
+	if err != nil {
+		t.Fatalf("Loader() within recheckInterval error = %v", err)
+	}
+	if got := leafSerial(t, cert); got != 1 {
+		t.Fatalf("Loader() leaf serial within recheckInterval = %d, want the cached 1 (the rotation should not have been stat'd yet)", got)
+	}
+
+	recheckInterval = 0
+
+	cert, err = getCert(nil)
+	if err != nil {
+		t.Fatalf("Loader() after recheckInterval elapses error = %v", err)
+	}
+	if got := leafSerial(t, cert); got != 2 {
+		t.Fatalf("Loader() leaf serial after recheckInterval elapses = %d, want rotated 2", got)
 	}
 }
 

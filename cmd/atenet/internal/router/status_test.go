@@ -84,6 +84,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		Auth: authConfig{
 			AteapiCAFile:         caPath,
 			AteapiClientCertPath: clientCertPath,
+			AteapiServerName:     "test-server",
 		},
 	}
 
