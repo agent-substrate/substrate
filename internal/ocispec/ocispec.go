@@ -108,13 +108,19 @@ func processUser(u *ateworkerpb.ProcessUser) specs.User {
 // systemMounts returns the system mounts of an actor container. ShapeGVisor
 // removes the parts runsc does not use. Like containerd's CRI plugin, it has no
 // /run mount, so the image's /run shows through.
-func systemMounts() []specs.Mount {
+func systemMounts(shmSizeBytes int64) []specs.Mount {
+	// Keep the original option spelling for the default: runsc requires
+	// unchanged mount options across MEMORY restores.
+	shmSize := "size=65536k"
+	if shmSizeBytes != 0 && shmSizeBytes != 64<<20 {
+		shmSize = fmt.Sprintf("size=%d", shmSizeBytes)
+	}
 	return []specs.Mount{
 		{Destination: "/proc", Type: "proc", Source: "proc", Options: []string{"nosuid", "noexec", "nodev"}},
 		{Destination: "/dev", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
 		{Destination: "/dev/pts", Type: "devpts", Source: "devpts", Options: []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"}},
 		{Destination: "/dev/mqueue", Type: "mqueue", Source: "mqueue", Options: []string{"nosuid", "noexec", "nodev"}},
-		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
+		{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", shmSize}},
 		{Destination: "/sys", Type: "sysfs", Source: "sysfs", Options: []string{"nosuid", "noexec", "nodev", "ro"}},
 		{Destination: "/tmp", Type: "tmpfs", Source: "tmpfs", Options: []string{"nosuid", "nodev", "mode=1777"}},
 	}
@@ -154,7 +160,7 @@ func Build(o Options) *specs.Spec {
 			Readonly: false,
 		},
 		Hostname: Hostname,
-		Mounts:   systemMounts(),
+		Mounts:   systemMounts(containerSpec.GetShmSizeBytes()),
 		Linux: &specs.Linux{
 			Namespaces: namespaces(o.ActorUID),
 			Resources:  ociResources(containerSpec.GetResources()),

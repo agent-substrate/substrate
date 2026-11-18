@@ -81,6 +81,34 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 	return errs
 }
 
+// ValidateCustom_ActorTemplate bounds explicit shm sizes by the memory limits.
+func ValidateCustom_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ActorTemplate) field.ErrorList {
+	var errs field.ErrorList
+	for i, ctr := range value.GetContainers() {
+		size := ctr.GetShmSizeBytes()
+		if size <= 0 {
+			continue // Zero keeps the default; negative values fail declarative validation.
+		}
+		replaced := false
+		for _, mount := range ctr.GetVolumeMounts() {
+			if mount.GetMountPath() == "/dev/shm" {
+				replaced = true
+				break
+			}
+		}
+		if replaced {
+			continue
+		}
+		p := fldPath.Child("containers").Index(i).Child("shm_size_bytes")
+		if limit := value.GetResources().GetLimits().GetMemoryBytes(); limit > 0 && size > limit {
+			errs = append(errs, field.Invalid(p, size, "must not exceed the actor's memory limit"))
+		} else if limit := ctr.GetResources().GetLimits().GetMemoryBytes(); limit > 0 && size > limit {
+			errs = append(errs, field.Invalid(p, size, "must not exceed the container's memory limit"))
+		}
+	}
+	return errs
+}
+
 // ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
 // limit, which the scheduler books against worker capacity.
 func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ResourceRequirements) field.ErrorList {

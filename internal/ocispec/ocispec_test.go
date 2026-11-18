@@ -125,7 +125,7 @@ func TestBuild_VolumeReplacesSystemMount(t *testing.T) {
 					DurableDirVolumeMounts: []*ateworkerpb.VolumeMount{{Name: "data", MountPath: dest}},
 				},
 			})
-			want := systemMounts()
+			want := systemMounts(0)
 			i := slices.IndexFunc(want, func(m specs.Mount) bool { return m.Destination == dest })
 			if i < 0 {
 				t.Fatalf("no system mount at %q", dest)

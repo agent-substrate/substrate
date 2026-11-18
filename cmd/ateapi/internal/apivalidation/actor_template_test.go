@@ -995,6 +995,77 @@ func TestValidateActorTemplate(t *testing.T) {
 	}
 }
 
+func TestValidateActorTemplateShmSize(t *testing.T) {
+	tests := []struct {
+		name            string
+		size            int64
+		actorMemory     int64
+		containerMemory int64
+		mountPath       string
+		oldSize         int64
+		oldMountPath    string
+		wantInvalid     bool
+	}{
+		{name: "unset preserves default with small memory limit", actorMemory: 32 << 20, containerMemory: 16 << 20},
+		{name: "negative size", size: -1, wantInvalid: true},
+		{name: "one byte", size: 1},
+		{name: "explicit default", size: 64 << 20},
+		{name: "one GiB", size: 1 << 30, actorMemory: 2 << 30},
+		{name: "equal to actor limit", size: 512 << 20},
+		{name: "above actor limit", size: (512 << 20) + 1, wantInvalid: true},
+		{name: "equal to container limit", size: 128 << 20, containerMemory: 128 << 20},
+		{name: "above container limit", size: (128 << 20) + 1, containerMemory: 128 << 20, wantInvalid: true},
+		{name: "larger container limit does not bypass actor limit", size: 1 << 30, containerMemory: 2 << 30, wantInvalid: true},
+		{name: "volume replaces shm", size: 1 << 30, mountPath: "/dev/shm"},
+		{name: "negative size with volume", size: -1, mountPath: "/dev/shm", wantInvalid: true},
+		{name: "other volume does not replace shm", size: 1 << 30, mountPath: "/tmp", wantInvalid: true},
+		{name: "actor limit shrinks below unchanged size", size: 128 << 20, oldSize: 128 << 20, actorMemory: 64 << 20, wantInvalid: true},
+		{name: "container limit shrinks below unchanged size", size: 128 << 20, oldSize: 128 << 20, containerMemory: 64 << 20, wantInvalid: true},
+		{name: "shm volume removed with unchanged size", size: 1 << 30, oldSize: 1 << 30, oldMountPath: "/dev/shm", wantInvalid: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := validActorTemplate()
+			ctr := tmpl.Containers[0]
+			ctr.ShmSizeBytes = tt.size
+			if tt.actorMemory != 0 {
+				tmpl.Resources.Limits.MemoryBytes = tt.actorMemory
+			}
+			if tt.containerMemory != 0 {
+				ctr.Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: tt.containerMemory}}
+			}
+			if tt.mountPath != "" {
+				tmpl.Volumes = []*ateapi.Volume{{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}}
+				ctr.VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: tt.mountPath}}
+			}
+			p := field.NewPath("actor_template")
+			var want field.ErrorList
+			if tt.wantInvalid {
+				err := field.Invalid(p.Child("containers").Index(0).Child("shm_size_bytes"), nil, "")
+				if tt.size < 0 {
+					err = err.WithOrigin("minimum")
+				}
+				want = field.ErrorList{err}
+			}
+			t.Run("create", func(t *testing.T) {
+				assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl}), want)
+			})
+			t.Run("update", func(t *testing.T) {
+				old := validActorTemplate()
+				old.Containers[0].ShmSizeBytes = tt.oldSize
+				if tt.containerMemory != 0 {
+					old.Containers[0].Resources = &ateapi.ResourceRequirements{Limits: &ateapi.Resources{MemoryBytes: 512 << 20}}
+				}
+				if tt.oldMountPath != "" {
+					old.Volumes = []*ateapi.Volume{{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}}
+					old.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: tt.oldMountPath}}
+				}
+				assertValidateErr(t, ValidateActorTemplateUpdate(context.Background(), p, tmpl, old), want)
+			})
+		})
+	}
+}
+
 // validActorTemplate returns the smallest template that passes create
 // validation; mutations tweak it per test case. The snapshot scopes and
 // resume policy are set explicitly because TestValidateActorTemplate

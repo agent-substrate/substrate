@@ -846,6 +846,13 @@ message Container {
   //
   // +k8s:optional
   ResourceRequirements resources = 9;
+
+  // shm_size_bytes is the container's `/dev/shm` tmpfs capacity in bytes.
+  // Zero leaves the runtime default of 64 MiB unchanged.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 shm_size_bytes = 10;
 }
 
 // SecurityContext holds security settings for a container's process.

@@ -670,6 +670,7 @@ func main() {
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
 	mux.HandleFunc("/filesystem", filesystem)
+	mux.Handle("/shm", &sharedMemoryProbe{dir: "/dev/shm"})
 	mux.HandleFunc("/healthz", healthz)
 
 	const addr = ":80"

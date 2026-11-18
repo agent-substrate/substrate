@@ -119,6 +119,54 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 	}
 }
 
+func TestShapers_SharedMemorySize(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		size     int64
+		volume   bool
+		wantSize string
+	}{
+		{name: "default", wantSize: "size=65536k"},
+		{name: "explicit default", size: 64 << 20, wantSize: "size=65536k"},
+		{name: "one GiB", size: 1 << 30, wantSize: "size=1073741824"},
+		{name: "one byte", size: 1, wantSize: "size=1"},
+		{name: "non-aligned size", size: 67108865, wantSize: "size=67108865"},
+		{name: "volume replaces default", volume: true},
+		{name: "volume replaces custom size", size: 1 << 30, volume: true},
+	} {
+		for _, runtime := range []string{"base", "gvisor", "microvm"} {
+			t.Run(tc.name+"/"+runtime, func(t *testing.T) {
+				opts := parityOptions
+				opts.Container = proto.Clone(parityOptions.Container).(*ateworkerpb.Container)
+				opts.Container.ContainerSpec.ShmSizeBytes = tc.size
+				if tc.volume {
+					opts.Container.DurableDirVolumeMounts = []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/dev/shm"}}
+				}
+				spec := Build(opts)
+				switch runtime {
+				case "gvisor":
+					ShapeGVisor(spec, GVisorOptions{ActorUID: testActorUID, ContainerName: "app", Size: sizing.SandboxSize{MilliCPU: 500, MemoryBytes: 2 << 30}})
+				case "microvm":
+					if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerName: "app"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				want := specs.Mount{Destination: "/dev/shm", Type: "tmpfs", Source: "shm", Options: []string{"nosuid", "noexec", "nodev", "mode=1777", tc.wantSize}}
+				if tc.volume {
+					want = specs.Mount{Destination: "/dev/shm", Type: "bind", Source: "/node/actors/a/durable-dir/data", Options: []string{"bind", "rw", "nodev"}}
+					if runtime == "microvm" {
+						want.Source = GuestSharedDir + "/" + ShareDurable + "/data"
+						want.Options = []string{"rbind", "rw", "nodev"}
+					}
+				}
+				if got := mountFor(t, spec, "/dev/shm"); !reflect.DeepEqual(got, want) {
+					t.Errorf("/dev/shm mount = %+v, want %+v", got, want)
+				}
+			})
+		}
+	}
+}
+
 // Both shapers leave the process identity and cwd as Build set them.
 func TestShapers_PreserveProcess(t *testing.T) {
 	for _, tc := range []struct {

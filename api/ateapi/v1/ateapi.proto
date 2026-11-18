@@ -1150,6 +1150,7 @@ message ObjectRef {
   string name = 2;
 }
 
+// +k8s:customValidation # explicit shm sizes must fit actor and container memory limits
 message ActorTemplate {
   option (resource) = {
     scope : SCOPE_ATESPACE
@@ -1393,6 +1394,18 @@ message Container {
   //
   // +k8s:optional
   ResourceRequirements resources = 9;
+
+  // shm_size_bytes is the capacity of the container's `/dev/shm` tmpfs in
+  // bytes. Must be nonnegative. Unset or 0 uses 64 MiB (67108864 bytes).
+  //
+  // An explicit size must not exceed the actor's memory limit or the
+  // container's memory limit, when set. Files consume the actor's memory
+  // budget. A volume mounted at `/dev/shm` replaces the tmpfs; a positive
+  // size has no effect and is not checked against memory limits in that case.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  int64 shm_size_bytes = 10;
 }
 
 // SecurityContext holds security settings for a container's process,

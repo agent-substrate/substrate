@@ -30,6 +30,23 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		want     *ateletpb.WorkloadSpec
 	}{
 		{
+			name: "preserves per-container shm sizes and unset default",
+			template: &ateapi.ActorTemplate{
+				Containers: []*ateapi.Container{
+					{Name: "main", Image: "main", ShmSizeBytes: 1 << 30},
+					{Name: "sidecar", Image: "sidecar", ShmSizeBytes: 128 << 20},
+					{Name: "default", Image: "default"},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{
+					{Name: "main", Image: "main", ShmSizeBytes: 1073741824},
+					{Name: "sidecar", Image: "sidecar", ShmSizeBytes: 134217728},
+					{Name: "default", Image: "default"},
+				},
+			},
+		},
+		{
 			name: "converts DurableDir volume and mounts",
 			template: &ateapi.ActorTemplate{
 				Metadata: &ateapi.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},

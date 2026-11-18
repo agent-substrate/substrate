@@ -1833,6 +1833,16 @@ func TestValidateContainer(t *testing.T) {
 
 		// Resources.
 		{
+			name: "shm size: unset preserves default",
+			obj:  valid(),
+		}, {
+			name: "shm size: custom capacity",
+			obj:  valid(func(c *ateletpb.Container) { c.ShmSizeBytes = 1 << 30 }),
+		}, {
+			name: "shm size: negative rejected",
+			obj:  valid(func(c *ateletpb.Container) { c.ShmSizeBytes = -1 }),
+			want: field.ErrorList{field.Invalid(field.NewPath("shm_size_bytes"), nil, "").WithOrigin("minimum")},
+		}, {
 			name: "valid limits",
 			obj:  limits(&ateletpb.ResourceRequirements{Limits: &ateletpb.Resources{MemoryBytes: 1 << 30, CpuMillicores: 500}}),
 		}, {

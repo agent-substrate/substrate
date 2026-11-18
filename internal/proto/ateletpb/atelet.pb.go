@@ -2950,7 +2950,13 @@ type Container struct {
 	// ActorTemplate. Unset means no limits.
 	//
 	// +k8s:optional
-	Resources     *ResourceRequirements `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *ResourceRequirements `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	// shm_size_bytes is the container's `/dev/shm` tmpfs capacity in bytes.
+	// Zero leaves the runtime default of 64 MiB unchanged.
+	//
+	// +k8s:optional
+	// +k8s:minimum=0
+	ShmSizeBytes  int64 `protobuf:"varint,10,opt,name=shm_size_bytes,json=shmSizeBytes,proto3" json:"shm_size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3046,6 +3052,13 @@ func (x *Container) GetResources() *ResourceRequirements {
 		return x.Resources
 	}
 	return nil
+}
+
+func (x *Container) GetShmSizeBytes() int64 {
+	if x != nil {
+		return x.ShmSizeBytes
+	}
+	return 0
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -4582,7 +4595,7 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xf7\x02\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"\x9d\x03\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
@@ -4592,7 +4605,9 @@ const file_internal_proto_ateletpb_atelet_proto_rawDesc = "" +
 	"\fwakeup_probe\x18\x05 \x01(\v2\x13.atelet.WakeupProbeR\vwakeupProbe\x128\n" +
 	"\rvolume_mounts\x18\x06 \x03(\v2\x13.atelet.VolumeMountR\fvolumeMounts\x12B\n" +
 	"\x10security_context\x18\b \x01(\v2\x17.atelet.SecurityContextR\x0fsecurityContext\x12:\n" +
-	"\tresources\x18\t \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\"K\n" +
+	"\tresources\x18\t \x01(\v2\x1c.atelet.ResourceRequirementsR\tresources\x12$\n" +
+	"\x0eshm_size_bytes\x18\n" +
+	" \x01(\x03R\fshmSizeBytes\"K\n" +
 	"\x0fSecurityContext\x128\n" +
 	"\fcapabilities\x18\x01 \x01(\v2\x14.atelet.CapabilitiesR\fcapabilities\"4\n" +
 	"\fCapabilities\x12\x10\n" +

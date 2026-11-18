@@ -356,6 +356,10 @@ message ContainerSpec {
 
   // cwd is the process working directory, the image's WORKDIR. Empty is "/".
   string cwd = 6;
+
+  // shm_size_bytes is the container's `/dev/shm` tmpfs capacity in bytes.
+  // Zero leaves the runtime default of 64 MiB unchanged.
+  int64 shm_size_bytes = 7;
 }
 // ProcessUser is a resolved process identity.
 message ProcessUser {
