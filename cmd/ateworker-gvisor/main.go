@@ -839,7 +839,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
-	// Read before the snapshot: a MEMORY checkpoint stops the sandbox, and its
+	// Read before the snapshot: a checkpoint stops the sandbox, and its
 	// cgroup with it. The final record waits for the teardown.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted != nil {
@@ -893,6 +893,20 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 	}
 
 	fsPaths := slices.Concat(rootfsFSCheckpointPaths(containers), durablePaths)
+	var sandbox *sandboxProcess
+	if hosted != nil {
+		sandbox = hosted.sandbox
+	}
+	if sandbox == nil {
+		// never pinned: fall back to the pidfile, still better than
+		// cleaning up before the sandbox is reaped
+		var err error
+		if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
+			slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
+		} else {
+			defer sandbox.Close()
+		}
+	}
 	var checkpointFn func(context.Context) error
 	switch fidelity {
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
@@ -901,19 +915,23 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		}
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, durablePaths)
-			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
+				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 			}
+			waitSandboxGone(ctx, sandbox)
+			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		checkpointFn = func(ctx context.Context) error {
 			err := rcmd.cmdFsCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
-			timing.fsCheckpoint = lap(&tLast)
 			if err != nil {
+				timing.fsCheckpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing container filesystems: %w", err)
 			}
+			waitSandboxGone(ctx, sandbox)
+			timing.fsCheckpoint = lap(&tLast)
 			return nil
 		}
 	case ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
@@ -921,20 +939,8 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		// rootfs bundle and durable-dir volumes into <checkpointPath>/fs when
 		// present.
 		checkpointFn = func(ctx context.Context) error {
-			var sandbox *sandboxProcess
 			if hosted != nil {
 				hosted.stopping.Store(true)
-				sandbox = hosted.sandbox
-			}
-			if sandbox == nil {
-				// never pinned: fall back to the pidfile, still better than
-				// cleaning up before the sandbox is reaped
-				var err error
-				if sandbox, err = openSandboxProcess(req.GetActorDirs()); err != nil {
-					slog.WarnContext(ctx, "Cannot watch the sandbox exit after checkpoint", slog.Any("err", err))
-				} else {
-					defer sandbox.Close()
-				}
 			}
 			err := rcmd.cmdCheckpoint(ctx, ocispec.SandboxID, checkpointPath, fsPaths)
 			if err != nil {
@@ -946,12 +952,7 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 				timing.checkpoint = lap(&tLast)
 				return fmt.Errorf("while checkpointing the sandbox: %w", err)
 			}
-			// the checkpoint stops the sandbox, runsc delete fails until it is reaped
-			if sandbox != nil {
-				if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
-					slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
-				}
-			}
+			waitSandboxGone(ctx, sandbox)
 			timing.checkpoint = lap(&tLast)
 			return nil
 		}
@@ -1009,6 +1010,17 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		slog.WarnContext(ctx, "Failed to record checkpoint completion marker", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
 	}
 	return resp, nil
+}
+
+// waitSandboxGone waits for the sandbox a checkpoint stopped to be reaped.
+// sandbox is nil when it could not be pinned.
+func waitSandboxGone(ctx context.Context, sandbox *sandboxProcess) {
+	if sandbox == nil {
+		return
+	}
+	if err := sandbox.waitGone(sandboxExitTimeout); err != nil {
+		slog.WarnContext(ctx, "Sandbox did not go away after checkpoint", slog.Any("err", err))
+	}
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
