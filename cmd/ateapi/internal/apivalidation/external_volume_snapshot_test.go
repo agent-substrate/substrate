@@ -321,166 +321,169 @@ func TestValidateExternalVolumeSnapshotUpdate(t *testing.T) {
 	captured := &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle"}
 	ready := &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ReadyToUse: true, RestoreSizeBytes: 10 << 30}
 	tests := []struct {
-		name      string
-		old       *ateapi.ExternalVolumeSnapshotStatus
+		name string
+		// old changes the valid snapshot the update starts from.
+		old       func(*ateapi.ExternalVolumeSnapshot)
 		mutate    func(*ateapi.ExternalVolumeSnapshot)
 		wantError field.ErrorList
 	}{
 		{
 			name:      "driver_name",
-			old:       pending,
+			old:       withStatus(pending),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.DriverName = "other.csi.example.com" },
 			wantError: field.ErrorList{field.Invalid(field.NewPath("driver_name"), nil, "").WithOrigin("immutable")},
 		},
 		{
 			name:      "origin",
-			old:       pending,
+			old:       withStatus(pending),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Origin.TagCapture.SourceVolumeName = "other" },
 			wantError: field.ErrorList{field.Invalid(field.NewPath("origin"), nil, "").WithOrigin("immutable")},
 		},
 		{
 			name:   "setting a status",
-			old:    nil,
+			old:    withStatus(nil),
 			mutate: withStatus(captured),
 		},
 		{
 			name:      "dropping the status",
-			old:       ready,
+			old:       withStatus(ready),
 			mutate:    withStatus(nil),
 			wantError: field.ErrorList{field.Invalid(status, nil, "").WithOrigin("update")},
 		},
 		{
 			name:      "readiness without a handle",
-			old:       pending,
+			old:       withStatus(pending),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ReadyToUse = true },
 			wantError: field.ErrorList{field.Forbidden(status.Child("ready_to_use"), "")},
 		},
 		{
 			name:      "size without a handle",
-			old:       pending,
+			old:       withStatus(pending),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.RestoreSizeBytes = 1 },
 			wantError: field.ErrorList{field.Forbidden(status.Child("restore_size_bytes"), "")},
 		},
 		{
 			name:   "a later error replaces the error",
-			old:    failed,
+			old:    withStatus(failed),
 			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "other" },
 		},
 		{
 			name:      "clearing the error without a handle",
-			old:       failed,
+			old:       withStatus(failed),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "" },
 			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
 		},
 		{
 			name:   "recording the handle clears the error",
-			old:    failed,
+			old:    withStatus(failed),
 			mutate: withStatus(captured),
 		},
 		{
 			name:      "a handle that keeps the error",
-			old:       failed,
+			old:       withStatus(failed),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SnapshotId = "snap-handle" },
 			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
 		},
 		{
 			name:      "an error while the handle is set",
-			old:       captured,
+			old:       withStatus(captured),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "quota exceeded" },
 			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
 		},
 		{
 			name:      "clearing the error after the handle",
-			old:       &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"},
+			old:       withStatus(&ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"}),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "" },
 			wantError: field.ErrorList{field.Forbidden(status.Child("error_message"), "")},
 		},
 		{
 			name:   "readiness and size after the handle",
-			old:    captured,
+			old:    withStatus(captured),
 			mutate: withStatus(ready),
 		},
 		{
 			name:      "changing the handle",
-			old:       captured,
+			old:       withStatus(captured),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SnapshotId = "other-handle" },
 			wantError: field.ErrorList{field.Invalid(status.Child("snapshot_id"), nil, "").WithOrigin("update")},
 		},
 		{
 			name:      "clearing the handle",
-			old:       captured,
+			old:       withStatus(captured),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.SnapshotId = "" },
 			wantError: field.ErrorList{field.Invalid(status.Child("snapshot_id"), nil, "").WithOrigin("update")},
 		},
 		{
 			name:      "ready back to false",
-			old:       ready,
+			old:       withStatus(ready),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ReadyToUse = false },
 			wantError: field.ErrorList{field.Invalid(status.Child("ready_to_use"), nil, "").WithOrigin("update")},
 		},
 		{
 			name:      "changing a known size",
-			old:       ready,
+			old:       withStatus(ready),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.RestoreSizeBytes = 1 },
 			wantError: field.ErrorList{field.Invalid(status.Child("restore_size_bytes"), nil, "").WithOrigin("update")},
 		},
 		{
 			name:      "clearing a known size",
-			old:       ready,
+			old:       withStatus(ready),
 			mutate:    func(s *ateapi.ExternalVolumeSnapshot) { s.Status.RestoreSizeBytes = 0 },
 			wantError: field.ErrorList{field.Invalid(status.Child("restore_size_bytes"), nil, "").WithOrigin("update")},
+		},
+		{
+			name:   "metadata.atespace moved away from the tag's",
+			old:    withStatus(pending),
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Metadata.Atespace = "ns2" },
+			wantError: field.ErrorList{
+				field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("immutable"),
+				field.Invalid(field.NewPath("origin", "tag_capture", "tag", "atespace"), nil, ""),
+			},
+		},
+		{
+			name:   "origin tag atespace moved away from metadata.atespace",
+			old:    withStatus(pending),
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Origin.TagCapture.Tag.Atespace = "ns2" },
+			wantError: field.ErrorList{
+				field.Invalid(field.NewPath("origin"), nil, "").WithOrigin("immutable"),
+				field.Invalid(field.NewPath("origin", "tag_capture", "tag", "atespace"), nil, ""),
+			},
+		},
+		// Unchanged values are not re-validated, so a stored snapshot that a
+		// later release considers invalid can still be updated.
+		{
+			name: "unchanged invalid values",
+			old: func(s *ateapi.ExternalVolumeSnapshot) {
+				s.DriverName = "Not A Driver"
+				s.Origin.TagCapture.SourceVolumeId = "disk\x00"
+				s.Origin.TagCapture.Tag.Atespace = "ns2"
+			},
+			mutate: withStatus(failed),
+		},
+		// An update does not re-check a status rule whose fields it left
+		// unchanged.
+		{
+			name:   "unchanged handle and error",
+			old:    withStatus(&ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"}),
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ReadyToUse = true },
+		},
+		{
+			name:   "unchanged readiness without a handle",
+			old:    withStatus(&ateapi.ExternalVolumeSnapshotStatus{ReadyToUse: true}),
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "quota exceeded" },
+		},
+		{
+			name:   "unchanged size without a handle",
+			old:    withStatus(&ateapi.ExternalVolumeSnapshotStatus{RestoreSizeBytes: 1}),
+			mutate: func(s *ateapi.ExternalVolumeSnapshot) { s.Status.ErrorMessage = "quota exceeded" },
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldVal := validExternalVolumeSnapshot(withStatus(proto.CloneOf(tt.old)))
+			oldVal := validExternalVolumeSnapshot(tt.old)
 			newVal := proto.CloneOf(oldVal)
 			tt.mutate(newVal)
 			assertValidateErr(t, ValidateExternalVolumeSnapshotUpdate(ctx, newVal, oldVal), tt.wantError)
-		})
-	}
-
-	// Unchanged values are not re-validated, so a stored snapshot that a
-	// later release considers invalid can still be updated.
-	t.Run("unchanged invalid values", func(t *testing.T) {
-		oldVal := validExternalVolumeSnapshot(func(s *ateapi.ExternalVolumeSnapshot) {
-			s.DriverName = "Not A Driver"
-			s.Origin.TagCapture.SourceVolumeId = "disk\x00"
-			s.Origin.TagCapture.Tag.Atespace = "ns2"
-		})
-		newVal := proto.CloneOf(oldVal)
-		newVal.Status = proto.CloneOf(failed)
-		assertValidateErr(t, ValidateExternalVolumeSnapshotUpdate(ctx, newVal, oldVal), nil)
-	})
-
-	// An update does not re-check a status rule whose fields it left
-	// unchanged.
-	for _, tt := range []struct {
-		name   string
-		old    *ateapi.ExternalVolumeSnapshotStatus
-		mutate func(*ateapi.ExternalVolumeSnapshotStatus)
-	}{
-		{
-			name:   "unchanged handle and error",
-			old:    &ateapi.ExternalVolumeSnapshotStatus{SnapshotId: "snap-handle", ErrorMessage: "quota exceeded"},
-			mutate: func(s *ateapi.ExternalVolumeSnapshotStatus) { s.ReadyToUse = true },
-		},
-		{
-			name:   "unchanged readiness without a handle",
-			old:    &ateapi.ExternalVolumeSnapshotStatus{ReadyToUse: true},
-			mutate: func(s *ateapi.ExternalVolumeSnapshotStatus) { s.ErrorMessage = "quota exceeded" },
-		},
-		{
-			name:   "unchanged size without a handle",
-			old:    &ateapi.ExternalVolumeSnapshotStatus{RestoreSizeBytes: 1},
-			mutate: func(s *ateapi.ExternalVolumeSnapshotStatus) { s.ErrorMessage = "quota exceeded" },
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			oldVal := validExternalVolumeSnapshot(withStatus(proto.CloneOf(tt.old)))
-			newVal := proto.CloneOf(oldVal)
-			tt.mutate(newVal.Status)
-			assertValidateErr(t, ValidateExternalVolumeSnapshotUpdate(ctx, newVal, oldVal), nil)
 		})
 	}
 }

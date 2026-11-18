@@ -56,42 +56,42 @@ func TestFilterByTag(t *testing.T) {
 }
 
 func TestGetExternalVolumeSnapshotsTagFlag(t *testing.T) {
-	previousKubeconfig := kubeconfig
-	kubeconfig = filepath.Join(t.TempDir(), "missing-kubeconfig")
-	previousContext := getExternalVolumeSnapshotsCmd.Context()
-	getExternalVolumeSnapshotsCmd.SetContext(t.Context())
-	t.Cleanup(func() {
-		kubeconfig = previousKubeconfig
-		getExternalVolumeSnapshotsCmd.SetContext(previousContext)
-		getExternalVolumeSnapshotAtespaceFlag, getExternalVolumeSnapshotAllAtespacesFlag, getExternalVolumeSnapshotTagFlag = "", false, ""
-	})
-
+	missingKubeconfig := filepath.Join(t.TempDir(), "missing-kubeconfig")
 	tests := []struct {
-		name     string
+		name string
+		// resource is the name the command is called by. Empty means
+		// external-volume-snapshot.
+		resource string
 		args     []string
-		atespace string
-		all      bool
-		tag      string
 		wantErr  string
 	}{
-		{name: "all atespaces", all: true, tag: "v1", wantErr: "--tag cannot be used with -A/--all-atespaces"},
-		{name: "by name", args: []string{"snap"}, atespace: "demo", tag: "v1", wantErr: "--tag cannot be used when getting external volume snapshots by name"},
-		{name: "bare name without an atespace", tag: "v1", wantErr: "--tag requires -a/--atespace, or <atespace>/<tag-name>"},
-		{name: "invalid name", atespace: "demo", tag: "MyTag", wantErr: "invalid --tag"},
-		{name: "too long", atespace: "demo", tag: strings.Repeat("a", 64), wantErr: "invalid --tag"},
-		{name: "invalid atespace", tag: "Demo/v1", wantErr: "invalid --tag"},
-		{name: "another atespace", atespace: "demo", tag: "other/v1", wantErr: `--tag "other/v1" is not in atespace "demo"`},
+		{name: "all atespaces", args: []string{"-A", "--tag", "v1"}, wantErr: "--tag cannot be used with -A/--all-atespaces"},
+		{name: "by name", args: []string{"snap", "-a", "demo", "--tag", "v1"}, wantErr: "--tag cannot be used when getting external volume snapshots by name"},
+		{name: "bare name without an atespace", args: []string{"--tag", "v1"}, wantErr: "--tag requires -a/--atespace, or <atespace>/<tag-name>"},
+		{name: "empty tag", args: []string{"-a", "demo", "--tag="}, wantErr: "invalid --tag"},
+		{name: "empty tag without an atespace", args: []string{"--tag="}, wantErr: "invalid --tag"},
+		{name: "unhyphenated name", resource: "externalvolumesnapshot", wantErr: `unknown subcommand "externalvolumesnapshot"`},
+		{name: "invalid name", args: []string{"-a", "demo", "--tag", "MyTag"}, wantErr: "invalid --tag"},
+		{name: "too long", args: []string{"-a", "demo", "--tag", strings.Repeat("a", 64)}, wantErr: "invalid --tag"},
+		{name: "invalid atespace in tag", args: []string{"--tag", "Demo/v1"}, wantErr: "invalid --tag"},
+		{name: "invalid atespace flag", args: []string{"-a", "MySpace", "--tag", "v1"}, wantErr: `invalid -a/--atespace "MySpace"`},
+		{name: "another atespace", args: []string{"-a", "demo", "--tag", "other/v1"}, wantErr: `--tag "other/v1" is not in atespace "demo"`},
 		// A valid scope reaches client initialization, where the missing kubeconfig fails.
-		{name: "bare name in an atespace", atespace: "demo", tag: "v1", wantErr: "failed to load kubeconfig"},
-		{name: "atespace and name", tag: "demo/v1", wantErr: "failed to load kubeconfig"},
-		{name: "atespace and name in that atespace", atespace: "demo", tag: "demo/v1", wantErr: "failed to load kubeconfig"},
+		{name: "bare name in an atespace", args: []string{"-a", "demo", "--tag", "v1"}, wantErr: "failed to load kubeconfig"},
+		{name: "atespace and name", args: []string{"--tag", "demo/v1"}, wantErr: "failed to load kubeconfig"},
+		{name: "atespace and name in that atespace", args: []string{"-a", "demo", "--tag", "demo/v1"}, wantErr: "failed to load kubeconfig"},
+		{name: "plural alias", resource: "external-volume-snapshots", args: []string{"--tag", "demo/v1"}, wantErr: "failed to load kubeconfig"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			getExternalVolumeSnapshotAtespaceFlag, getExternalVolumeSnapshotAllAtespacesFlag, getExternalVolumeSnapshotTagFlag = tt.atespace, tt.all, tt.tag
-			err := getExternalVolumeSnapshotsCmd.RunE(getExternalVolumeSnapshotsCmd, tt.args)
+			resource := tt.resource
+			if resource == "" {
+				resource = "external-volume-snapshot"
+			}
+			args := append([]string{"--kubeconfig", missingKubeconfig, "get", resource}, tt.args...)
+			_, _, err := runRootCLI(t, args...)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("RunE() error = %v, want error containing %q", err, tt.wantErr)
+				t.Fatalf("kubectl-ate %v error = %v, want error containing %q", args, err, tt.wantErr)
 			}
 		})
 	}

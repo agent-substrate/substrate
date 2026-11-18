@@ -80,6 +80,37 @@ func TestExternalVolumeSnapshot_GetAndList(t *testing.T) {
 	if err != nil || len(other.GetExternalVolumeSnapshots()) != 0 {
 		t.Errorf("ListExternalVolumeSnapshots(other-atespace) = %v, %v; want none", other.GetExternalVolumeSnapshots(), err)
 	}
+
+	// Pages of one follow next_page_token through the RPC.
+	second := seedExternalVolumeSnapshot(t, tc, seedTag(t, tc, "actor-2", "v2", pendingTag))
+	want := []*ateapi.ExternalVolumeSnapshot{created, second}
+	if second.GetMetadata().GetName() < created.GetMetadata().GetName() {
+		want = []*ateapi.ExternalVolumeSnapshot{second, created}
+	}
+	for _, atespace := range []string{testAtespace, ""} {
+		var paged []*ateapi.ExternalVolumeSnapshot
+		var pages int
+		for token := ""; ; {
+			list, err := tc.client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{
+				Atespace: atespace,
+				Options:  &ateapi.ListOptions{PageSize: 1, PageToken: token},
+			})
+			if err != nil {
+				t.Fatalf("ListExternalVolumeSnapshots(%q) page %d failed: %v", atespace, pages, err)
+			}
+			pages++
+			paged = append(paged, list.GetExternalVolumeSnapshots()...)
+			if token = list.GetNextPageToken(); token == "" {
+				break
+			}
+		}
+		if diff := cmp.Diff(want, paged, protocmp.Transform()); diff != "" {
+			t.Errorf("paged ListExternalVolumeSnapshots(%q) mismatch (-want +got):\n%s", atespace, diff)
+		}
+		if pages < 2 {
+			t.Errorf("ListExternalVolumeSnapshots(%q) returned %d pages of 1, want at least 2", atespace, pages)
+		}
+	}
 }
 
 func TestExternalVolumeSnapshot_GetAndListErrors(t *testing.T) {
@@ -100,6 +131,24 @@ func TestExternalVolumeSnapshot_GetAndListErrors(t *testing.T) {
 			},
 			wantCode: codes.NotFound,
 			wantMsg:  "ExternalVolumeSnapshot test-atespace/missing not found",
+		},
+		{
+			name: "get with an invalid name",
+			call: func() error {
+				_, err := tc.client.GetExternalVolumeSnapshot(ctx, &ateapi.GetExternalVolumeSnapshotRequest{ExternalVolumeSnapshot: &ateapi.ObjectRef{Atespace: testAtespace, Name: "SNAP1"}})
+				return err
+			},
+			wantCode: codes.InvalidArgument,
+			wantMsg:  `external_volume_snapshot.name: Invalid value: "SNAP1": a lowercase RFC 1123 label must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character (e.g. 'my-name',  or '123-abc', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?')`,
+		},
+		{
+			name: "list with an invalid atespace",
+			call: func() error {
+				_, err := tc.client.ListExternalVolumeSnapshots(ctx, &ateapi.ListExternalVolumeSnapshotsRequest{Atespace: "NS1"})
+				return err
+			},
+			wantCode: codes.InvalidArgument,
+			wantMsg:  `atespace: Invalid value: "NS1": a lowercase RFC 1123 label must consist of lower case alphanumeric characters or '-', and must start and end with an alphanumeric character (e.g. 'my-name',  or '123-abc', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?')`,
 		},
 		{
 			name: "list with an invalid page token",

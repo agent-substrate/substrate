@@ -256,6 +256,14 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
 	}
+	if markForDeletion {
+		// Checked before mutate, so a tag a previous attempt already marked
+		// is refused too. The check after the UPDATE below serializes against
+		// concurrent creates.
+		if err := p.checkTagOwnsNoSnapshots(ctx, p.pool, atespace, name); err != nil {
+			return nil, err
+		}
+	}
 	tagBeforeMutation := proto.Clone(dbTag).(*ateapi.Tag)
 	oldMeta := proto.CloneOf(dbTag.Metadata)
 	if mutate != nil {
@@ -307,20 +315,31 @@ func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, pr
 		// The UPDATE's row lock conflicts with the FOR SHARE lock that
 		// CreateExternalVolumeSnapshot takes, so this sees every snapshot
 		// created before it, and creates after it see delete_time and fail.
-		var ownsSnapshots bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (SELECT 1 FROM external_volume_snapshots
-			WHERE atespace = $1 AND tag_name = $2)`, atespace, name).Scan(&ownsSnapshots); err != nil {
-			return nil, fmt.Errorf("checking external volume snapshots of tag %s/%s: %w", atespace, name, err)
-		}
-		if ownsSnapshots {
-			return nil, fmt.Errorf("%w: tag %s/%s still owns external volume snapshots", store.ErrFailedPrecondition, atespace, name)
+		if err := p.checkTagOwnsNoSnapshots(ctx, tx, atespace, name); err != nil {
+			return nil, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing tag update %s/%s: %w", atespace, name, err)
 	}
 	return dbTag, nil
+}
+
+// checkTagOwnsNoSnapshots fails with ErrFailedPrecondition if the tag owns
+// any ExternalVolumeSnapshot.
+func (p *Persistence) checkTagOwnsNoSnapshots(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, atespace, name string) error {
+	var ownsSnapshots bool
+	if err := q.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM external_volume_snapshots
+		WHERE atespace = $1 AND tag_name = $2)`, atespace, name).Scan(&ownsSnapshots); err != nil {
+		return fmt.Errorf("checking external volume snapshots of tag %s/%s: %w", atespace, name, err)
+	}
+	if ownsSnapshots {
+		return fmt.Errorf("%w: tag %s/%s still owns external volume snapshots", store.ErrFailedPrecondition, atespace, name)
+	}
+	return nil
 }
 
 // snapshotTagFKName matches external_volume_snapshots_tag_fk. Partitioning

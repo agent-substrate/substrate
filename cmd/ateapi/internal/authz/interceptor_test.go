@@ -579,6 +579,7 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 
 		// External volume snapshots: viewers of the atespace read them.
 		{"viewer gets snapshot", "viewer", getSnapshot, codes.OK},
+		{"global viewer gets snapshot", "global-viewer", getSnapshot, codes.OK},
 		{"outsider cannot get snapshot", "outsider", getSnapshot, codes.PermissionDenied},
 		{"viewer lists snapshots", "viewer", listSnapshots, codes.OK},
 		{"outsider cannot list snapshots", "outsider", listSnapshots, codes.PermissionDenied},

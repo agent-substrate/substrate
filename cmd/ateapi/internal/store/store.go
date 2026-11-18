@@ -172,7 +172,8 @@ type Interface interface {
 	// update the tag's status. Returns ErrNotFound if missing,
 	// ErrUIDConflict/ErrVersionConflict if precondition fails or a concurrent
 	// write wins, ErrFailedPrecondition, leaving the tag unchanged, if the tag
-	// owns ExternalVolumeSnapshots, or mutate's error.
+	// owns ExternalVolumeSnapshots, even when it is already marked, or mutate's
+	// error. The snapshot check runs before mutate.
 	MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition DeletePreconditions, mutate func(toUpdate *ateapi.Tag) error) (*ateapi.Tag, error)
 
 	// Deletes and returns a tag. Returns ErrNotFound if missing,

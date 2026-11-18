@@ -1918,8 +1918,28 @@ func runExternalVolumeSnapshotContractTests(t *testing.T, setup func(t *testing.
 		if creating.GetMetadata().GetVersion() != 2 || creating.GetStatus().GetSnapshotId() != "snap-handle" {
 			t.Errorf("updated snapshot = %v, want version 2 with the handle", creating)
 		}
+		if stored, err := s.GetExternalVolumeSnapshot(ctx, ref); err != nil {
+			t.Fatalf("GetExternalVolumeSnapshot after update failed: %v", err)
+		} else if diff := cmp.Diff(creating, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("UpdateExternalVolumeSnapshot return does not match stored state (-updated +stored):\n%s", diff)
+		}
 		if _, err := s.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(got), func(*ateapi.ExternalVolumeSnapshot) error { return nil }); !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("stale UpdateExternalVolumeSnapshot = %v, want ErrVersionConflict", err)
+		}
+		for _, tc := range []struct {
+			name         string
+			precondition store.Precondition
+			want         error
+		}{
+			{name: "other uid", precondition: store.Precondition{UID: "other-uid", Version: creating.GetMetadata().GetVersion()}, want: store.ErrUIDConflict},
+			{name: "no uid", precondition: store.Precondition{Version: creating.GetMetadata().GetVersion()}, want: store.ErrPreconditionRequired},
+		} {
+			if _, err := s.UpdateExternalVolumeSnapshot(ctx, ref, tc.precondition, func(*ateapi.ExternalVolumeSnapshot) error {
+				t.Fatalf("mutate ran with precondition %s", tc.name)
+				return nil
+			}); !errors.Is(err, tc.want) {
+				t.Errorf("UpdateExternalVolumeSnapshot with precondition %s = %v, want %v", tc.name, err, tc.want)
+			}
 		}
 
 		// The tag owns the snapshot, so it cannot be deleted.
@@ -1929,6 +1949,13 @@ func runExternalVolumeSnapshotContractTests(t *testing.T, setup func(t *testing.
 		// Nor can it be marked for deletion, and the refusal leaves it as it was.
 		if _, err := s.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, nil); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("MarkTagForDeletion with a snapshot = %v, want ErrFailedPrecondition", err)
+		}
+		// The snapshot check runs before mutate, so a mutate that would skip
+		// an already marked tag does not hide the refusal.
+		if _, err := s.MarkTagForDeletion(ctx, resources.TagRefFromTag(tag), store.DeletePreconditions{}, func(*ateapi.Tag) error {
+			return errors.New("mutate ran")
+		}); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("MarkTagForDeletion with a snapshot and a failing mutate = %v, want ErrFailedPrecondition", err)
 		}
 		if stored, err := s.GetTag(ctx, resources.TagRefFromTag(tag)); err != nil || !proto.Equal(stored, tag) {
 			t.Errorf("a refused MarkTagForDeletion wrote: GetTag = %v, %v; want %v", stored, err, tag)
@@ -2110,12 +2137,15 @@ func runExternalVolumeSnapshotContractTests(t *testing.T, setup func(t *testing.
 	t.Run("ListExternalVolumeSnapshots_PaginationAndScope", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
+		created := map[string][]*ateapi.ExternalVolumeSnapshot{}
 		for _, atespace := range []string{"team-a", "team-b"} {
 			tag := seedTag(t, s, atespace)
 			for i := range 3 {
-				if _, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag, fmt.Sprintf("vol-%d", i))); err != nil {
+				snapshot, err := s.CreateExternalVolumeSnapshot(ctx, newTestExternalVolumeSnapshot(tag, fmt.Sprintf("vol-%d", i)))
+				if err != nil {
 					t.Fatalf("CreateExternalVolumeSnapshot failed: %v", err)
 				}
+				created[atespace] = append(created[atespace], snapshot)
 			}
 		}
 		listAll := func(atespace string) []*ateapi.ExternalVolumeSnapshot {
@@ -2131,11 +2161,13 @@ func runExternalVolumeSnapshotContractTests(t *testing.T, setup func(t *testing.
 				}
 			}
 		}
-		if got := listAll("team-a"); len(got) != 3 {
-			t.Errorf("scoped ListExternalVolumeSnapshots returned %d snapshots, want 3", len(got))
+		// Snapshots are listed by (atespace, name). Within a tag the names
+		// differ only by volume, so creation order matches.
+		if diff := cmp.Diff(created["team-a"], listAll("team-a"), protocmp.Transform()); diff != "" {
+			t.Errorf("scoped ListExternalVolumeSnapshots mismatch (-want +got):\n%s", diff)
 		}
-		if got := listAll(""); len(got) != 6 {
-			t.Errorf("global ListExternalVolumeSnapshots returned %d snapshots, want 6", len(got))
+		if diff := cmp.Diff(append(created["team-a"], created["team-b"]...), listAll(""), protocmp.Transform()); diff != "" {
+			t.Errorf("global ListExternalVolumeSnapshots mismatch (-want +got):\n%s", diff)
 		}
 	})
 }

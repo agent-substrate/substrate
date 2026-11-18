@@ -32,7 +32,7 @@ import (
 // update.
 func TestServiceImplExternalVolumeSnapshotValidation(t *testing.T) {
 	persistence, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 	ctx := t.Context()
 	svc := &ServiceImpl{store: persistence}
 	tag := storetest.MustCreateTag(t, ctx, persistence, &ateapi.Tag{
@@ -148,8 +148,8 @@ func TestServiceImplExternalVolumeSnapshotValidation(t *testing.T) {
 				tc.mutate(toUpdate)
 				return nil
 			})
-			if err == nil || errors.Is(err, store.ErrImmutableField) != tc.wantImmutable {
-				t.Errorf("UpdateExternalVolumeSnapshot = %v, want an error; matching ErrImmutableField = %t", err, tc.wantImmutable)
+			if apierror.Code(err) != codes.Internal || errors.Is(err, store.ErrImmutableField) != tc.wantImmutable {
+				t.Errorf("UpdateExternalVolumeSnapshot = %v (code %v), want Internal with ErrImmutableField=%t", err, apierror.Code(err), tc.wantImmutable)
 			}
 			if got, err := svc.GetExternalVolumeSnapshot(ctx, ref); err != nil || !proto.Equal(got, tc.stored) {
 				t.Errorf("a rejected update wrote: GetExternalVolumeSnapshot = %v, %v; want %v", got, err, tc.stored)

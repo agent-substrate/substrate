@@ -27,9 +27,10 @@ import (
 // is expected.
 func TestRefAliasesAreDistinctTypes(t *testing.T) {
 	types := map[string]reflect.Type{
-		"ActorRef":         reflect.TypeFor[ActorRef](),
-		"ActorTemplateRef": reflect.TypeFor[ActorTemplateRef](),
-		"TagRef":           reflect.TypeFor[TagRef](),
+		"ActorRef":                  reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef":          reflect.TypeFor[ActorTemplateRef](),
+		"TagRef":                    reflect.TypeFor[TagRef](),
+		"ExternalVolumeSnapshotRef": reflect.TypeFor[ExternalVolumeSnapshotRef](),
 	}
 	seen := make(map[reflect.Type]string)
 	for name, typ := range types {

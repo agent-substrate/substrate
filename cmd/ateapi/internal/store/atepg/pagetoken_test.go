@@ -14,11 +14,37 @@
 
 package atepg
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDecodePageTokenRejectsWrongKeyShape(t *testing.T) {
 	token := encodePageToken(kindActor, "", []string{"only-an-atespace"})
 	if _, err := decodePageToken(token, kindActor, "", 2); err == nil {
 		t.Fatal("decodePageToken() accepted a global actor token with only one key part")
+	}
+}
+
+// TestEncodePageTokenFitsListOptions checks that a page token built from the
+// longest names still fits ListOptions.page_token, whose maxLength is 256.
+func TestEncodePageTokenFitsListOptions(t *testing.T) {
+	const maxPageTokenLen = 256
+	longName := strings.Repeat("a", 63)
+	for _, kind := range []resourceKind{kindActor, kindActorTemplate, kindTag, kindExternalVolumeSnapshot} {
+		for _, tc := range []struct {
+			name  string
+			scope string
+			last  []string
+		}{
+			{name: "global", scope: "", last: []string{longName, longName}},
+			{name: "atespace", scope: longName, last: []string{longName}},
+		} {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				if got := len(encodePageToken(kind, tc.scope, tc.last)); got > maxPageTokenLen {
+					t.Errorf("page token is %d characters, want at most %d", got, maxPageTokenLen)
+				}
+			})
+		}
 	}
 }

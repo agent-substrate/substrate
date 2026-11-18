@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/kubectl-ate/internal/printer"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 var (
@@ -32,19 +33,26 @@ var (
 
 var getExternalVolumeSnapshotsCmd = &cobra.Command{
 	Use:     "external-volume-snapshot [snapshot-name ...]",
-	Aliases: []string{"external-volume-snapshots", "externalvolumesnapshot", "externalvolumesnapshots"},
+	Aliases: []string{"external-volume-snapshots"},
 	Short:   "List or get external volume snapshots",
 	Long:    "List or get the external volume snapshots that tags own.",
 	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		atespace := getExternalVolumeSnapshotAtespaceFlag
 		var tagName string
-		if tag := getExternalVolumeSnapshotTagFlag; tag != "" {
+		if cmd.Flags().Changed("tag") {
+			tag := getExternalVolumeSnapshotTagFlag
 			if len(args) > 0 {
 				return usageErrorf("--tag cannot be used when getting external volume snapshots by name")
 			}
 			if getExternalVolumeSnapshotAllAtespacesFlag {
 				return usageErrorf("--tag cannot be used with -A/--all-atespaces")
+			}
+			if tag == "" {
+				return usageErrorf("invalid --tag: empty value")
+			}
+			if atespace != "" && !resources.IsValidResourceName(atespace) {
+				return usageErrorf("invalid -a/--atespace %q", atespace)
 			}
 			// A tag name is unique only within an atespace.
 			if !strings.Contains(tag, "/") && atespace == "" {

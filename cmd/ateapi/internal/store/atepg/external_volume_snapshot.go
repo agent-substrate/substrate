@@ -30,9 +30,6 @@ func (p *Persistence) CreateExternalVolumeSnapshot(ctx context.Context, snapshot
 	atespace := snapshot.GetMetadata().GetAtespace()
 	name := snapshot.GetMetadata().GetName()
 	dbSnapshot := proto.CloneOf(snapshot)
-	if dbSnapshot.Metadata == nil {
-		dbSnapshot.Metadata = &ateapi.ResourceMetadata{}
-	}
 	setCreateMetadata(dbSnapshot.Metadata)
 	protoBytes, err := proto.Marshal(dbSnapshot)
 	if err != nil {
