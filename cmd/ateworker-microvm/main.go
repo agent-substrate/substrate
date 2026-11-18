@@ -81,6 +81,7 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for the HTTP /readyz and /healthz probes")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	snapshotWriteSlots     = pflag.Int("snapshot-write-slots", defaultSnapshotWriteSlots, "Maximum number of concurrent snapshot writes")
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateworker samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
 
@@ -121,6 +122,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateworker-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *snapshotWriteSlots < 1 {
+		return fmt.Errorf("--snapshot-write-slots must be at least 1, got %d", *snapshotWriteSlots)
 	}
 	if *usageSampleInterval < minUsageSampleInterval {
 		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
@@ -238,7 +242,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, tunnel, actorLogger, bootID)
+	ateworkerService := NewService(*podUID, *chBinary, *guestDebug, *maxActors, *snapshotWriteSlots, tunnel, actorLogger, bootID)
 	ateworkerService.throttleMemory = cgroup.PSIEnabled(cgroup.Root)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so actor cgroups get no memory limit and an actor over its booking can restart the worker")
@@ -298,7 +302,7 @@ func do(ctx context.Context) error {
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
 		PodIPs:               register.ParsePodIPs(*podIPs),
-		MemoryReservedBytes:  memoryReservedBytes,
+		MemoryReservedBytes:  ateworkerService.memoryReservedBytes,
 		ActorOverhead:        actorOverhead,
 		SandboxClass:         string(atev1.SandboxClassMicroVM),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
@@ -391,8 +395,9 @@ type AteWorkerService struct {
 
 	// snapshotWrites holds a slot per CH snapshot write in flight, whose page
 	// cache memoryReservedBytes budgets for.
-	snapshotWrites chan struct{}
-	borrow         *memborrow.Ledger
+	snapshotWrites      chan struct{}
+	memoryReservedBytes int64
+	borrow              *memborrow.Ledger
 	// throttleMemory is set when actor cgroups get memory.high at what the
 	// actor books, with watchMemory killing the ones stuck there.
 	throttleMemory bool
@@ -420,20 +425,21 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(podUID, chBinary string, guestDebug bool, maxActors int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
+func NewService(podUID, chBinary string, guestDebug bool, maxActors, snapshotWriteSlots int, tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, bootID string) *AteWorkerService {
 	s := &AteWorkerService{
-		locks:          actorlock.New(),
-		inFlight:       actorlock.NewInFlight(),
-		actors:         map[string]*hostedActor{},
-		guestSlots:     make(chan struct{}, statsFanOut),
-		maxActors:      maxActors,
-		podUID:         podUID,
-		chBinary:       chBinary,
-		guestDebug:     guestDebug,
-		snapshotWrites: make(chan struct{}, snapshotWriteSlots),
-		tunnel:         tunnel,
-		actorLogger:    actorLogger,
-		bootID:         bootID,
+		locks:               actorlock.New(),
+		inFlight:            actorlock.NewInFlight(),
+		actors:              map[string]*hostedActor{},
+		guestSlots:          make(chan struct{}, statsFanOut),
+		maxActors:           maxActors,
+		podUID:              podUID,
+		chBinary:            chBinary,
+		guestDebug:          guestDebug,
+		snapshotWrites:      make(chan struct{}, snapshotWriteSlots),
+		memoryReservedBytes: reservedMemoryBytes(snapshotWriteSlots),
+		tunnel:              tunnel,
+		actorLogger:         actorLogger,
+		bootID:              bootID,
 	}
 	s.borrow = &memborrow.Ledger{Unbooked: s.unbookedMemory}
 	return s
