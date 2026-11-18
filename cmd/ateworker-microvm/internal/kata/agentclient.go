@@ -158,6 +158,39 @@ func (a *AgentClient) ReseedRandomDev(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// SetGuestDateTime updates the guest's wall clock. Mirrors
+// grpc.AgentService/SetGuestDateTime.
+func (a *AgentClient) SetGuestDateTime(ctx context.Context, now time.Time) error {
+	req := &agentpb.SetGuestDateTimeRequest{
+		Sec:  now.Unix(),
+		Usec: int64(now.Nanosecond() / 1000),
+	}
+	if err := a.client.Call(ctx, "grpc.AgentService", "SetGuestDateTime", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent SetGuestDateTime: %w", err)
+	}
+	return nil
+}
+
+// PauseContainer freezes every process of the container through the guest
+// cgroup freezer. Mirrors grpc.AgentService/PauseContainer.
+func (a *AgentClient) PauseContainer(ctx context.Context, containerID string) error {
+	req := &agentpb.PauseContainerRequest{ContainerId: containerID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "PauseContainer", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent PauseContainer: %w", err)
+	}
+	return nil
+}
+
+// ResumeContainer thaws a container PauseContainer froze. Mirrors
+// grpc.AgentService/ResumeContainer.
+func (a *AgentClient) ResumeContainer(ctx context.Context, containerID string) error {
+	req := &agentpb.ResumeContainerRequest{ContainerId: containerID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "ResumeContainer", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent ResumeContainer: %w", err)
+	}
+	return nil
+}
+
 // StartContainer execs the container's init process (pivots into the rootfs the
 // storages assembled). Mirrors grpc.AgentService/StartContainer.
 func (a *AgentClient) StartContainer(ctx context.Context, containerID string) error {

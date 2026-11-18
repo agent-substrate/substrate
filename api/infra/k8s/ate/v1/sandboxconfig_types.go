@@ -28,7 +28,7 @@ const (
 	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
 	SandboxClassGvisor SandboxClass = sandboxclass.GVisor
 	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateworker-microvm); needs
-	// /dev/kvm and vhost devices.
+	// a supported host hypervisor device and vhost devices.
 	SandboxClassMicroVM SandboxClass = sandboxclass.MicroVM
 )
 

@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -337,20 +338,64 @@ func TestSandboxClassToleration(t *testing.T) {
 // bind-mounts the tun device; other classes get none of it. Placement comes
 // from the device request, so no nodeSelector is added.
 func TestMicroVMPodShape(t *testing.T) {
+	limits := func(name string, qty string) *atev1.WorkerPoolPodTemplate {
+		return &atev1.WorkerPoolPodTemplate{Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:        resource.MustParse("1"),
+				corev1.ResourceName(name): resource.MustParse(qty),
+			},
+		}}
+	}
+	requests := func(name string, qty string) *atev1.WorkerPoolPodTemplate {
+		return &atev1.WorkerPoolPodTemplate{Resources: &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceName(name): resource.MustParse(qty)},
+		}}
+	}
 	tests := []struct {
-		name        string
-		class       atev1.SandboxClass
-		wantMicroVM bool
+		name         string
+		class        atev1.SandboxClass
+		template     *atev1.WorkerPoolPodTemplate
+		wantResource string
 	}{
-		{"gvisor default", "", false},
-		{"gvisor explicit", atev1.SandboxClassGvisor, false},
-		{"microvm", atev1.SandboxClassMicroVM, true},
+		{"gvisor default", "", nil, ""},
+		{"gvisor explicit", atev1.SandboxClassGvisor, nil, ""},
+		{"microvm default", atev1.SandboxClassMicroVM, nil, deviceplugin.ResourceKVM},
+		{"microvm kvm limit", atev1.SandboxClassMicroVM, limits(deviceplugin.ResourceKVM, "1"), deviceplugin.ResourceKVM},
+		{"microvm mshv limit", atev1.SandboxClassMicroVM, limits(deviceplugin.ResourceMSHV, "1"), deviceplugin.ResourceMSHV},
+		// A worker drives one VMM, so any named quantity becomes one unit.
+		{"microvm mshv limit of 2", atev1.SandboxClassMicroVM, limits(deviceplugin.ResourceMSHV, "2"), deviceplugin.ResourceMSHV},
+		{"microvm mshv request", atev1.SandboxClassMicroVM, requests(deviceplugin.ResourceMSHV, "1"), deviceplugin.ResourceMSHV},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClasses = []atev1.WorkerPoolSandboxClass{{Name: tt.class}}
+			wp.Spec.Template = tt.template
+			var before *corev1.ResourceRequirements
+			if tt.template != nil {
+				before = tt.template.Resources.DeepCopy()
+			}
 			ps := buildDeploymentApplyConfig(wp, workerOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount, egresspolicy.DNSEgressPolicyEnforceInAtunnel).Spec.Template.Spec
+			if tt.template != nil && !equality.Semantic.DeepEqual(before, tt.template.Resources) {
+				t.Errorf("building the Deployment mutated the WorkerPool's resources: got %v, want %v", tt.template.Resources, before)
+			}
+			for _, arg := range ps.Containers[0].Args {
+				if strings.HasPrefix(arg, "--hypervisor") {
+					t.Errorf("unexpected hypervisor argument %q; ateworker detects the granted device", arg)
+				}
+			}
+			if res := ps.Containers[0].Resources; res != nil && res.Requests != nil {
+				for _, name := range []string{deviceplugin.ResourceKVM, deviceplugin.ResourceMSHV} {
+					if _, ok := (*res.Requests)[corev1.ResourceName(name)]; ok && tt.wantResource != "" {
+						t.Errorf("request for %s left in place; the device is requested through its limit only", name)
+					}
+				}
+			}
+			if tt.template != nil && tt.template.Resources.Limits != nil {
+				if qty, ok := deviceLimit(ps.Containers[0], string(corev1.ResourceCPU)); !ok || qty != "1" {
+					t.Errorf("cpu limit = %q (present %v), want the template's 1", qty, ok)
+				}
+			}
 
 			// /dev/kvm must come from the device plugin, never a hostPath: a
 			// hostPath mount carries no cgroup device allow rule, and the
@@ -380,15 +425,16 @@ func TestMicroVMPodShape(t *testing.T) {
 				t.Errorf("%s is a pod volume but the worker container does not mount it", tunDevicePath)
 			}
 
-			hasDeviceRequest := true
-			for _, name := range []string{deviceplugin.ResourceKVM} {
+			hasDeviceRequest := false
+			for _, name := range []string{deviceplugin.ResourceKVM, deviceplugin.ResourceMSHV} {
 				qty, ok := deviceLimit(ps.Containers[0], name)
-				if !ok {
-					hasDeviceRequest = false
-					continue
-				}
-				if qty != "1" {
-					t.Errorf("%s limit = %s, want 1", name, qty)
+				if name == tt.wantResource {
+					hasDeviceRequest = ok
+					if ok && qty != "1" {
+						t.Errorf("%s limit = %s, want 1", name, qty)
+					}
+				} else if ok {
+					t.Errorf("unexpected device request %s=%s", name, qty)
 				}
 			}
 
@@ -398,9 +444,10 @@ func TestMicroVMPodShape(t *testing.T) {
 			if _, hasSelector := ps.NodeSelector[sandboxClassTaintKey]; hasSelector {
 				t.Errorf("nodeSelector on %s should be gone; placement comes from the device request", sandboxClassTaintKey)
 			}
-			if hasDeviceRequest != tt.wantMicroVM || hasTunMount != tt.wantMicroVM {
+			wantMicroVM := tt.wantResource != ""
+			if hasDeviceRequest != wantMicroVM || hasTunMount != wantMicroVM {
 				t.Errorf("microvm shape: deviceRequest=%v tunMount=%v, want both %v",
-					hasDeviceRequest, hasTunMount, tt.wantMicroVM)
+					hasDeviceRequest, hasTunMount, wantMicroVM)
 			}
 		})
 	}

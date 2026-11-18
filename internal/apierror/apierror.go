@@ -24,20 +24,27 @@
 //
 // There is one constructor per code a server chooses. OK and Unknown have none,
 // and neither do Canceled and DeadlineExceeded: return or wrap the context's
-// error instead, and Code and FromError map it.
+// error instead, and Code and FromError map it. AbortedWithReason also names an
+// AIP-193 ErrorInfo reason, for a caller that must tell one Aborted error apart
+// from the others a server returns; Reason reads it back.
 package apierror
 
 import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// ReasonDomain is the ErrorInfo domain of the reasons an apierror carries.
+const ReasonDomain = "ate.dev"
+
 type apiError struct {
-	code codes.Code
-	err  error
+	code   codes.Code
+	reason string
+	err    error
 }
 
 func (e *apiError) Error() string { return e.err.Error() }
@@ -74,6 +81,13 @@ func FailedPrecondition(format string, args ...any) error {
 // version mismatch. Retrying from a fresh read can succeed.
 func Aborted(format string, args ...any) error {
 	return newf(codes.Aborted, format, args...)
+}
+
+// AbortedWithReason is Aborted with an ErrorInfo detail in ReasonDomain naming
+// reason, an UPPER_SNAKE_CASE identifier, so a caller can tell this conflict
+// apart from the other Aborted errors a server returns.
+func AbortedWithReason(reason, format string, args ...any) error {
+	return &apiError{code: codes.Aborted, reason: reason, err: fmt.Errorf(format, args...)}
 }
 
 // PermissionDenied reports an authenticated caller that may not perform the
@@ -135,10 +149,40 @@ func FromError(err error) (s *status.Status, ok bool) {
 	}
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
-		return status.New(apiErr.code, apiErr.Error()), true
+		s := status.New(apiErr.code, apiErr.Error())
+		if apiErr.reason != "" {
+			// WithDetails fails only if ErrorInfo cannot be marshaled.
+			if withInfo, derr := s.WithDetails(&errdetails.ErrorInfo{Domain: ReasonDomain, Reason: apiErr.reason}); derr == nil {
+				s = withInfo
+			}
+		}
+		return s, true
 	}
 	if s := status.FromContextError(err); s.Code() != codes.Unknown {
 		return s, true
 	}
 	return status.New(codes.Internal, err.Error()), false
+}
+
+// Reason returns the ErrorInfo reason in ReasonDomain that err carries, or ""
+// if it carries none. It reads the outermost apierror in err's chain, which
+// carries one only when made by AbortedWithReason; failing that, a gRPC status
+// received from another server, whose detail FromError attached. Unlike Code,
+// it reads a received status, because a reason only ever crosses a server
+// through FromError, which a server builds from its own apierror.
+func Reason(err error) string {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.reason
+	}
+	s, ok := status.FromError(err)
+	if !ok {
+		return ""
+	}
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == ReasonDomain {
+			return info.GetReason()
+		}
+	}
+	return ""
 }
