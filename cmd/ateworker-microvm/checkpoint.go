@@ -330,11 +330,11 @@ func (s *AteWorkerService) snapshotVMState(ctx context.Context, client *ch.Clien
 
 // snapshotWriteHeadroom is how far the actor's cgroup may grow past the paused
 // guest while CH writes the snapshot, when its booking leaves less than that,
-// and snapshotWriteSlots how many of those writes may run at once.
-// memoryReservedBytes covers both.
+// and defaultSnapshotWriteSlots is the default --snapshot-write-slots.
+// reservedMemoryBytes covers both.
 const (
-	snapshotWriteHeadroom = 16 << 20
-	snapshotWriteSlots    = 2
+	snapshotWriteHeadroom     = 16 << 20
+	defaultSnapshotWriteSlots = 2
 )
 
 // writeSnapshot has CH write the paused guest into checkpointDir.
