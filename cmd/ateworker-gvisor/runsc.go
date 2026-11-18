@@ -75,6 +75,16 @@ func (r *runsc) buildArgs(command, containerName string, extraArgs ...string) []
 	return args
 }
 
+// command returns a command object that executes runsc with args.
+func (r *runsc) command(ctx context.Context, args []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, r.path, args...)
+	env := slices.DeleteFunc(os.Environ(), func(e string) bool {
+		return strings.HasPrefix(e, "GOMAXPROCS=")
+	})
+	cmd.Env = append(env, "GOMAXPROCS=2")
+	return cmd
+}
+
 // durableVolumeNames returns the sorted, deduplicated durable-dir volume names
 // mounted by workload containers.
 func durableVolumeNames(spec *ateworkerpb.WorkloadSpec) []string {
@@ -143,7 +153,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
-	cmd := exec.CommandContext(ctx, r.path, r.createArgs(containerName, additionalArgs)...)
+	cmd := r.command(ctx, r.createArgs(containerName, additionalArgs))
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -158,7 +168,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc start", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("start", containerName)...)
+	cmd := r.command(ctx, r.buildArgs("start", containerName))
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -184,7 +194,7 @@ func (r *runsc) checkpointArgs(containerName, checkpointPath string, fsCheckpoin
 func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
 	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(ctx, r.path, r.checkpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
+	cmd := r.command(ctx, r.checkpointArgs(containerName, checkpointPath, fsCheckpointPaths))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -209,7 +219,7 @@ func (r *runsc) fsCheckpointArgs(containerName, checkpointPath string, fsCheckpo
 func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, fsCheckpointPaths []string) error {
 	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(ctx, r.path, r.fsCheckpointArgs(containerName, checkpointPath, fsCheckpointPaths)...)
+	cmd := r.command(ctx, r.fsCheckpointArgs(containerName, checkpointPath, fsCheckpointPaths))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -239,7 +249,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
-	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)
+	cmd := r.command(ctx, r.restoreArgs(containerName, checkpointPath))
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {
@@ -249,11 +259,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 }
 
 func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		r.buildArgs("delete", containerName)...,
-	)
+	cmd := r.command(ctx, r.buildArgs("delete", containerName))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -264,11 +270,7 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 }
 
 func (r *runsc) cmdState(ctx context.Context, containerName string) error {
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		r.buildArgs("state", containerName)...,
-	)
+	cmd := r.command(ctx, r.buildArgs("state", containerName))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -279,11 +281,7 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 
 // cmdList returns the container IDs runsc has a record of.
 func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		r.buildArgs("list", "")...,
-	)
+	cmd := r.command(ctx, r.buildArgs("list", ""))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
@@ -298,7 +296,7 @@ func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
 func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
 	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
 
-	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("kill", "", containerName, signal)...)
+	cmd := r.command(ctx, r.buildArgs("kill", "", containerName, signal))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -310,7 +308,7 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 // runWait runs `runsc wait [extraArgs...] <container>` and blocks until the
 // waited-on condition completes.
 func (r *runsc) runWait(ctx context.Context, containerName string, extraArgs ...string) error {
-	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("wait", containerName, extraArgs...)...)
+	cmd := r.command(ctx, r.buildArgs("wait", containerName, extraArgs...))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
