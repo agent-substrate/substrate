@@ -1106,7 +1106,7 @@ type UseCPURequest struct {
 	// Fraction of CPU time each goroutine should consume, in [0.0, 1.0].
 	DutyCycle float64 `protobuf:"fixed64,2,opt,name=duty_cycle,json=dutyCycle,proto3" json:"duty_cycle,omitempty"`
 	// Per-goroutine work/sleep cycle length in milliseconds. Defaults to
-	// 100 when 0 or unset. Smaller values give smoother load at the cost
+	// 200 when 0 or unset. Smaller values give smoother load at the cost
 	// of scheduler and timer-wheel overhead.
 	CycleLengthMs int32 `protobuf:"varint,3,opt,name=cycle_length_ms,json=cycleLengthMs,proto3" json:"cycle_length_ms,omitempty"`
 	// Whether num_cores should be capped at GOMAXPROCS. Defaults to true

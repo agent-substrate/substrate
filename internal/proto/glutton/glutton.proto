@@ -238,7 +238,7 @@ message UseCPURequest {
   double duty_cycle = 2;
 
   // Per-goroutine work/sleep cycle length in milliseconds. Defaults to
-  // 100 when 0 or unset. Smaller values give smoother load at the cost
+  // 200 when 0 or unset. Smaller values give smoother load at the cost
   // of scheduler and timer-wheel overhead.
   int32 cycle_length_ms = 3;
 
