@@ -53,8 +53,6 @@ import (
 var (
 	cfg       *rest.Config
 	k8sClient client.Client
-	// cachedClient reads from the manager cache, as the reconcilers do.
-	cachedClient client.Client
 )
 
 func TestMain(m *testing.M) {

@@ -19,14 +19,59 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// cachedClient reads from the manager cache, as the reconcilers do. TestMain sets it.
+var cachedClient client.Client
+
+// TestCacheOptionsScope checks the Secret and Deployment rules of CacheOptions.
+func TestCacheOptionsScope(t *testing.T) {
+	t.Parallel()
+
+	ref := types.NamespacedName{Namespace: "ate-system", Name: "pool"}
+	opts := CacheOptions(ref)
+
+	var secrets, deployments cache.ByObject
+	hasSecrets, hasDeployments := false, false
+	for obj, by := range opts.ByObject {
+		switch obj.(type) {
+		case *corev1.Secret:
+			secrets, hasSecrets = by, true
+		case *appsv1.Deployment:
+			deployments, hasDeployments = by, true
+		}
+	}
+	if !hasSecrets {
+		t.Fatal("no cache scope for Secrets")
+	}
+	scope, ok := secrets.Namespaces[ref.Namespace]
+	if !ok || len(secrets.Namespaces) != 1 {
+		t.Fatalf("Secret cache namespaces = %v, want only %q", secrets.Namespaces, ref.Namespace)
+	}
+	if got := scope.FieldSelector.String(); got != "metadata.name="+ref.Name {
+		t.Errorf("Secret field selector = %q, want %q", got, "metadata.name="+ref.Name)
+	}
+
+	if !hasDeployments || deployments.Label == nil {
+		t.Fatal("no label-selected cache scope for Deployments")
+	}
+	if !deployments.Label.Matches(labels.Set{"ate.dev/worker-pool": "pool"}) {
+		t.Errorf("Deployment label selector %q does not match the label ate.dev/worker-pool", deployments.Label)
+	}
+	if deployments.Label.Matches(labels.Set{}) {
+		t.Errorf("Deployment label selector %q matches a Deployment with no labels", deployments.Label)
+	}
+}
 
 // TestDeploymentCacheScope checks that the manager cache holds a pool's
 // Deployment and no Deployment without the ate.dev/worker-pool label.

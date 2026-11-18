@@ -24,9 +24,7 @@ import (
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -130,40 +128,26 @@ func TestManagerOptionsMetricsListener(t *testing.T) {
 	}
 }
 
+// TestManagerOptionsScopeCache checks that the manager uses
+// controllers.CacheOptions. The rules are tested next to CacheOptions.
 func TestManagerOptionsScopeCache(t *testing.T) {
 	t.Parallel()
 
-	ref := types.NamespacedName{Namespace: "ate-system", Name: "pool"}
-	opts := managerOptions(ref, true)
+	opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, true)
 
-	var secrets, deployments cache.ByObject
 	hasSecrets, hasDeployments := false, false
-	for obj, by := range opts.Cache.ByObject {
+	for obj := range opts.Cache.ByObject {
 		switch obj.(type) {
 		case *corev1.Secret:
-			secrets, hasSecrets = by, true
+			hasSecrets = true
 		case *appsv1.Deployment:
-			deployments, hasDeployments = by, true
+			hasDeployments = true
 		}
 	}
 	if !hasSecrets {
-		t.Fatal("no cache scope for Secrets")
+		t.Error("no cache scope for Secrets")
 	}
-	cfg, ok := secrets.Namespaces[ref.Namespace]
-	if !ok || len(secrets.Namespaces) != 1 {
-		t.Fatalf("Secret cache namespaces = %v, want only %q", secrets.Namespaces, ref.Namespace)
-	}
-	if got := cfg.FieldSelector.String(); got != "metadata.name="+ref.Name {
-		t.Errorf("Secret field selector = %q, want %q", got, "metadata.name="+ref.Name)
-	}
-
-	if !hasDeployments || deployments.Label == nil {
-		t.Fatal("no label-selected cache scope for Deployments")
-	}
-	if !deployments.Label.Matches(labels.Set{"ate.dev/worker-pool": "pool"}) {
-		t.Errorf("Deployment label selector %q does not match the label ate.dev/worker-pool", deployments.Label)
-	}
-	if deployments.Label.Matches(labels.Set{}) {
-		t.Errorf("Deployment label selector %q matches a Deployment with no labels", deployments.Label)
+	if !hasDeployments {
+		t.Error("no cache scope for Deployments")
 	}
 }
