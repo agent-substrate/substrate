@@ -47,6 +47,12 @@ const workerPodLabel = "ate.dev/worker-pool"
 // as members of that pool.
 const workerPoolIndex = "worker-pool"
 
+// reconcileTimeout bounds one reconcile, and one attempt of the startup
+// ListWorkers scan, so a call to ate-api-server that hangs fails instead of
+// holding one of the syncer's goroutines. It leaves room for DeleteWorker,
+// which can wait 30s on atelet.
+const reconcileTimeout = time.Minute
+
 // workerKey identifies the pod incarnation a queued event concerns. namespace
 // and name locate the pod in the informer, which is indexed by namespace/name
 // rather than by UID.
@@ -234,7 +240,9 @@ func (s *WorkerPoolSyncer) processNextWorkItem(ctx context.Context) bool {
 	}
 	defer s.queue.Done(key)
 
-	if err := s.reconcile(ctx, key); err != nil {
+	reconcileCtx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+	if err := s.reconcile(reconcileCtx, key); err != nil {
 		// The syncer builds its requests from pod and pool state, so a request
 		// the API rejects as invalid would be resent verbatim on every retry.
 		// INVALID_ARGUMENT is therefore terminal: the key is dropped and a
@@ -586,6 +594,13 @@ func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
 	}
 }
 
+// listWorkersPage reads one page of workers, bounded by reconcileTimeout.
+func (s *WorkerPoolSyncer) listWorkersPage(ctx context.Context, pageToken string) (*ateapi.ListWorkersResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+	defer cancel()
+	return s.client.ListWorkers(ctx, &ateapi.ListWorkersRequest{Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken}})
+}
+
 // listWorkersPageWithRetry reads one page of workers, retrying the call with
 // capped exponential backoff until it succeeds or ctx is cancelled. The page
 // token is a stateless cursor, so retrying the failed call with the same token
@@ -605,7 +620,7 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 		Cap:   s.listCap,
 	}
 	for {
-		page, err := s.client.ListWorkers(ctx, &ateapi.ListWorkersRequest{Options: &ateapi.ListOptions{PageSize: 1000, PageToken: pageToken}})
+		page, err := s.listWorkersPage(ctx, pageToken)
 		if err == nil {
 			return page, nil
 		}
