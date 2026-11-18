@@ -49,14 +49,15 @@ RUN bash /gen.sh /out/nighthawk.desc
 # --- Stage 2: runtime -------------------------------------------------------
 FROM envoyproxy/nighthawk-dev@${NIGHTHAWK_IMAGE_DIGEST}
 
-COPY benchmarking/nighthawk-egress/requirements.txt /tmp/requirements.txt
+COPY benchmarking/requirements.txt /requirements/requirements.txt
+COPY benchmarking/nighthawk-egress/requirements.txt /requirements/nighthawk-egress/requirements.txt
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
     && python3 -m pip install --no-cache-dir --break-system-packages \
-        --target=/app/deps -r /tmp/requirements.txt \
+        --target=/app/deps -r /requirements/nighthawk-egress/requirements.txt \
     && apt-get purge -y python3-pip \
     && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /tmp/requirements.txt
+    && rm -rf /var/lib/apt/lists/* /requirements
 
 WORKDIR /app
 COPY --from=protogen /out/nighthawk.desc /app/nighthawk.desc
@@ -65,6 +66,7 @@ COPY benchmarking/nighthawk-egress/runner.py \
      benchmarking/nighthawk-egress/spec.py \
      /app/
 COPY benchmarking/nighthawk-egress/tests/check_descriptor.py /app/tests/check_descriptor.py
+COPY benchmarking/result_store.py /app/result_store.py
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

@@ -39,9 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, TextIO
 
-# Also find the shared module when running directly from the source tree.
+# Also find the shared modules when running directly from the source tree.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from result_store import upload
 
 import actors
 from nighthawk_common import output as output_mod

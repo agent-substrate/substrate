@@ -49,7 +49,7 @@ def test_converged_run_requires_successful_uploads(tmp_path, monkeypatch, upload
     monkeypatch.setattr(runner.output_mod, "stats_records", lambda *_: [])
     monkeypatch.setattr(runner.output_mod, "capacity_summary", lambda *_, **__: {})
     if upload_fails:
-        monkeypatch.setattr(runner, "upload", mock.Mock(side_effect=OSError("storage unavailable")))
+        monkeypatch.setattr(runner.output_mod, "upload", mock.Mock(side_effect=OSError("storage unavailable")))
     with pytest.raises(SystemExit) as exc:
         runner.main()
     assert exc.value.code == (1 if upload_fails else 0)

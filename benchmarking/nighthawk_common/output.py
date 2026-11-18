@@ -29,10 +29,10 @@ short native metric names, identifying thresholds).
 
 import json
 import re
-import shutil
 from pathlib import Path
 
 from nighthawk_common import spec as spec_mod
+from result_store import upload
 
 # Statistic carrying client-measured end-to-end request latency.
 LATENCY_STAT_ID = "benchmark_http_client.request_to_response"
@@ -294,25 +294,6 @@ def write_artifacts(
     summary.update(extra or {})
     (work_dir / "capacity.json").write_text(json.dumps(summary, indent=2) + "\n")
     return summary, any(row["stage"] == "testing" for row in rows)
-
-
-def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
-    # Imported here so non-GCS use doesn't require google-cloud-storage.
-    from google.cloud import storage
-
-    bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
-    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
-        str(local_path)
-    )
-
-
-def upload(src: Path, dest: str) -> None:
-    if dest.startswith("gs://"):
-        upload_to_gcs(src, dest)
-    else:
-        dest_path = Path(dest)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(src, dest_path)
 
 
 def upload_files(paths: list[Path], prefix: str) -> list[str]:
