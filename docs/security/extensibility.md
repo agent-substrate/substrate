@@ -24,7 +24,7 @@ You can add your own [`ext_proc`](https://www.envoyproxy.io/docs/envoy/latest/co
 
 ## Replace: bring your own gateway
 
-- **Egress:** you can point actors at your own policy enforcement point (PEP) instead of `atenet-egress`. Your PEP must meet the [Network Egress Contract](../guides/network-egress.md): it must verify the actor's certificate and reject any traffic it can't attribute to a running actor. Honoring Substrate's `EgressPolicy` is encouraged but not required. The installer doesn't have a bring-your-own mode yet.
+- **Egress:** you can point actors at your own policy enforcement point (PEP) instead of `atenet-egress`. Your PEP must meet the [egress PEP contract](../guides/egress-traffic.md#egress-pep-contract): it must verify the actor's certificate and reject any traffic it can't attribute to a running actor. Honoring Substrate's `EgressPolicy` is encouraged but not required. The installer doesn't have a bring-your-own mode yet.
 - **Ingress:** planned. `atenet-router` does more than filter traffic: it wakes suspended actors and routes requests to their workers. A replacement router will need to call Substrate, either through the Substrate ext_proc or via the Substrate API, for those steps.
 
 If you replace a gateway, the authentication and authorization it enforced become your responsibility.

@@ -788,7 +788,7 @@ data:
         # The gateway resolves the SNI itself and relays the bytes to it unread,
         # on the port the actor dialed. The address the actor dialed plays no
         # part: an SNI only authorizes a dial to the name it claims
-        # (docs/network-egress.md).
+        # (docs/guides/egress-traffic.md).
         - name: egress_passthrough
           filters:
           - name: envoy.filters.network.sni_dynamic_forward_proxy

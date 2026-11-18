@@ -262,12 +262,17 @@ func do(ctx context.Context) error {
 		return err
 	}
 
-	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	tunnel, err := atunnel.Start(ctx, *tunnelConfig, actornet.ActorHTTPUpstream)
+	workerPodIPs := register.ParsePodIPs(*podIPs)
+	families, err := actornet.IPFamiliesForPodIPs(workerPodIPs)
 	if err != nil {
 		return err
 	}
-	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID)
+	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
+	tunnel, err := atunnel.Start(ctx, *tunnelConfig, families.ActorHTTPUpstream())
+	if err != nil {
+		return err
+	}
+	ateworkerService := NewService(tunnel, actorLogger, *maxActors, flags, bootID, families)
 	ateworkerService.throttleMemory = cgroup.PSIEnabled(defaultCgroupRoot)
 	if !ateworkerService.throttleMemory {
 		slog.WarnContext(ctx, "Kernel has no cgroup memory pressure (PSI), so sandboxes keep memory.max and an OOM kill in one can restart the worker")
@@ -322,7 +327,7 @@ func do(ctx context.Context) error {
 		TrustBundlePath:      tunnelConfig.TrustBundle,
 		AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 		Actors:               *maxActors,
-		PodIPs:               register.ParsePodIPs(*podIPs),
+		PodIPs:               workerPodIPs,
 		MemoryReservedBytes:  memoryReservedBytes,
 		SandboxClass:         string(atev1.SandboxClassGvisor),
 		RuntimesFile:         nodepath.WorkerSandboxRuntimesPath(*podUID),
@@ -414,7 +419,8 @@ type AteWorkerService struct {
 	readSandboxCgroup func(dir string) (cgroupstats.Sample, error)
 
 	// flags holds the watched JSON flag configuration.
-	flags *flagStore
+	flags    *flagStore
+	families actornet.IPFamilies
 
 	// checkpointWrites holds a slot per checkpoint writing its page cache,
 	// which memoryReservedBytes budgets for.
@@ -428,7 +434,7 @@ type AteWorkerService struct {
 var _ ateworkerpb.WorkerServer = (*AteWorkerService)(nil)
 
 // NewService creates a new AteWorkerService.
-func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore, bootID string) *AteWorkerService {
+func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxActors int, flags *flagStore, bootID string, families actornet.IPFamilies) *AteWorkerService {
 	s := &AteWorkerService{
 		locks:            actorlock.New(),
 		inFlight:         actorlock.NewInFlight(),
@@ -438,6 +444,7 @@ func NewService(tunnel *atunnel.Tunnel, actorLogger *actorlog.ActorLogger, maxAc
 		actorLogger:      actorLogger,
 		cgroupRoot:       defaultCgroupRoot,
 		flags:            flags,
+		families:         families,
 		checkpointWrites: make(chan struct{}, checkpointWriteSlots),
 		bootID:           bootID,
 		enableCoreTags:   checkCoreTagsSupported(),
@@ -776,7 +783,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName()); err != nil {
+		if err := setupAppRootfs(req.GetActorDirs(), ac.GetName(), s.families); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		containersToDelete = append(containersToDelete, ac.GetName())
@@ -789,7 +796,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), s.families.ActorVethIP(), wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
@@ -1279,7 +1286,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		err = setupAppRootfs(req.GetActorDirs(), ac.GetName())
+		err = setupAppRootfs(req.GetActorDirs(), ac.GetName(), s.families)
 		timing.appRootfs += lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
@@ -1307,7 +1314,7 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	err = wakeupprobe.WaitAll(ctx, containers, actornet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
+	err = wakeupprobe.WaitAll(ctx, containers, s.families.ActorVethIP(), wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid())))
 	timing.wakeupProbe = lap(&tLast)
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)

@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,5 +186,5 @@ func URL(probe *ateworkerpb.WakeupProbe, actorIP string) (string, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return fmt.Sprintf("http://%s:%d%s", actorIP, port, path), nil
+	return "http://" + net.JoinHostPort(actorIP, strconv.Itoa(int(port))) + path, nil
 }

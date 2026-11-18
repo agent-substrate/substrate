@@ -27,10 +27,10 @@ import (
 
 // setupAppRootfs composes an application container's bundle rootfs, the base
 // layer under the sandbox's restored rootfs writes, and writes its /etc files.
-func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string) error {
+func setupAppRootfs(actorDirs *ateworkerpb.ActorDirs, containerName string, families actornet.IPFamilies) error {
 	bundle := ociBundlePath(actorDirs, containerName)
 	if err := imagecache.SetupBundleRootfs(bundle); err != nil {
 		return err
 	}
-	return actornet.WriteRootfsEtcFiles(filepath.Join(bundle, "rootfs"), ocispec.Hostname)
+	return actornet.WriteRootfsEtcFiles(filepath.Join(bundle, "rootfs"), ocispec.Hostname, families)
 }

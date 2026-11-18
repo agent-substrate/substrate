@@ -103,6 +103,8 @@ jobs:
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
+    - name: Verify goldens
+      run: hack/verify-goldens.sh
     - name: root-gated tests
       env:
         ROOT_JUNIT_FILE: ${{ github.workspace }}/_artifacts/root.xml
@@ -148,8 +150,9 @@ jobs:
   # envoy entry with preview features off reports the required e2e-test check.
   e2e-test:
     name: >-
-      ${{ (matrix.dataplane == 'envoy' && matrix.preview == 'off') && 'e2e-test'
-        || format('e2e-test ({0}{1})', matrix.dataplane, matrix.preview == 'on' && ', preview' || '') }}
+      ${{ (matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.ip_family == 'ipv4') && 'e2e-test'
+        || matrix.ip_family == 'ipv4' && format('e2e-test ({0}{1})', matrix.dataplane, matrix.preview == 'on' && ', preview' || '')
+        || format('e2e-test ({0}, {1})', matrix.dataplane, matrix.ip_family) }}
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and two sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
@@ -173,7 +176,25 @@ jobs:
         # "off" is the default install, and proves the suites pass without
         # preview features; "on" enables every one of them.
         preview: ['off', 'on']
+        # IPv4 remains the presubmit gate. IPv6-only and dual-stack run with
+        # Envoy and default features after merge and on the weekly schedule.
+        ip_family: >-
+          ${{ fromJSON(
+            (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+            && '["ipv4", "ipv6", "dual"]'
+            || '["ipv4"]'
+          ) }}
+        exclude:
+        - dataplane: agentgateway
+          ip_family: ipv6
+        - dataplane: agentgateway
+          ip_family: dual
+        - preview: 'on'
+          ip_family: ipv6
+        - preview: 'on'
+          ip_family: dual
     env:
+      IP_FAMILY: ${{ matrix.ip_family }}
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # Apply the e2e test component (short atelet snapshot delays) during the
       # control-plane install.
@@ -193,7 +214,9 @@ jobs:
       ATE_INGRESS_ALLOWED_SPIFFE_IDS: spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
       # Appended to the lane and artifact names: e2e-gvisor runs without
       # preview features, e2e-gvisor-preview with them.
-      LANE_SUFFIX: ${{ matrix.preview == 'on' && '-preview' || '' }}
+      LANE_SUFFIX: >-
+        ${{ format('{0}{1}', matrix.ip_family != 'ipv4' && format('-{0}', matrix.ip_family) || '',
+          matrix.preview == 'on' && '-preview' || '') }}
       # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
@@ -201,7 +224,7 @@ jobs:
       # share one copy instead of each storing their own.
       DOCKER_BUILD_FLAGS: >-
         --cache-from type=gha,scope=envoy-dataplane
-        ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off'
+        ${{ github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.ip_family == 'ipv4'
           && '--cache-to type=gha,mode=max,scope=envoy-dataplane,ignore-error=true' || '' }}
     steps:
     - name: Checkout
@@ -320,7 +343,7 @@ jobs:
     - name: Save Go build cache
       # Main only, so PRs restore the latest main build rather than each
       # storing its own copy.
-      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' }}
+      if: ${{ !cancelled() && github.ref == 'refs/heads/main' && matrix.dataplane == 'envoy' && matrix.preview == 'off' && matrix.ip_family == 'ipv4' }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |

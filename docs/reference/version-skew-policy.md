@@ -102,7 +102,7 @@ The schema is updated with `ate-api-server`, and migrations follow [postgresql-s
 
 ### Data on nodes and in snapshots
 
-This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the file systems. On gVisor, `runsc` writes those file systems as `fscheckpoint` bundles (see [SandboxConfig](#sandboxconfig)). On microVM, `ateworker-microvm` writes them as tar files, which are Substrate's own data and follow the snapshot rules below.
+This covers Substrate's own data only. The sandbox runtime's checkpoint files follow the runtime's own rules: a restore across runtime versions keeps only the file systems. On gVisor, `runsc` writes those file systems as `fscheckpoint` bundles (see [SandboxConfig](#sandboxconfig)). On microVM, `ateworker-microvm` writes them as tar files, which are Substrate's own data and follow the snapshot rules below. Restoring a pre-v1.1 microVM memory snapshot onto an IPv6-only worker is unsupported because the snapshot contains the guest network configuration.
 
 This section is about data one release writes and another release reads, whether that is a different component or the same component after an upgrade or a rollback. Substrate's data comes in two kinds, by how long it lives.
 

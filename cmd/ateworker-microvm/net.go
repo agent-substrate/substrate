@@ -51,7 +51,7 @@ var gatewayHWAddr = actornet.MustParseMAC(gatewayMAC)
 
 // setupActorTap creates the guest's tap with a fixed gateway address and MAC.
 // Returns the FDs cloud-hypervisor adopts on boot or restore.
-func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, queuePairs int) ([]*os.File, error) {
+func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, queuePairs int, families actornet.IPFamilies) ([]*os.File, error) {
 	var fds []*os.File
 	err := netns.Do(ctx, actorNetNS, func(ctx context.Context) error {
 		if old, lerr := netlink.LinkByName(name); lerr == nil {
@@ -80,8 +80,15 @@ func setupActorTap(ctx context.Context, actorNetNS netns.Handle, name string, qu
 		if err := netlink.LinkSetHardwareAddr(link, gatewayHWAddr); err != nil {
 			return fmt.Errorf("setting the gateway MAC on tap %q: %w", name, err)
 		}
-		if err := netlink.AddrReplace(link, actornet.HostVethAddr); err != nil {
-			return fmt.Errorf("assigning the gateway address to tap %q: %w", name, err)
+		if families.Has(actornet.IPv4) {
+			if err := netlink.AddrReplace(link, actornet.HostVethAddr); err != nil {
+				return fmt.Errorf("assigning the IPv4 gateway address to tap %q: %w", name, err)
+			}
+		}
+		if families.Has(actornet.IPv6) {
+			if err := netlink.AddrReplace(link, actornet.HostVethIPv6Addr); err != nil {
+				return fmt.Errorf("assigning the IPv6 gateway address to tap %q: %w", name, err)
+			}
 		}
 		if err := netlink.LinkSetUp(link); err != nil {
 			return fmt.Errorf("bringing up tap %q: %w", name, err)
