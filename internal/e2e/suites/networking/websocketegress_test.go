@@ -15,11 +15,14 @@
 package networking
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // egressWebSocketResponse mirrors observations returned by the actor. The
@@ -38,6 +41,9 @@ type egressWebSocketMessage struct {
 	Message string `json:"message"`
 }
 
+// websocketTextMessage is the RFC 6455 text frame opcode the actor reports.
+const websocketTextMessage = 1
+
 func TestActorEgressWebSocket(t *testing.T) {
 	ctx := t.Context()
 	_, address, _ := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
@@ -45,25 +51,7 @@ func TestActorEgressWebSocket(t *testing.T) {
 		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, HealthPath: "/readyz",
 	}, false)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "ws")
-	raw := postEgressWithStatus(t, ctx, router, actorRef, "/websocket", map[string]any{
-		"url": "ws://" + address + "/ws", "messages": []string{"ws-message"},
-	}, http.StatusBadGateway)
-	var got egressWebSocketResponse
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("decoding WebSocket observation: %v", err)
-	}
-	if got.StatusCode != http.StatusForbidden {
-		t.Errorf("WebSocket handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
-	}
-	if got.HandshakeBody != "WebSocket egress is not supported" {
-		t.Errorf("WebSocket handshake body = %q, want %q", got.HandshakeBody, "WebSocket egress is not supported")
-	}
-	if got.Error == "" {
-		t.Error("WebSocket handshake error is empty")
-	}
-	if len(got.Messages) != 0 {
-		t.Errorf("WebSocket messages = %+v, want no echoes", got.Messages)
-	}
+	assertEgressWebSocket(t, ctx, router, actorRef, "ws://"+address+"/ws", "ws-message", false)
 }
 
 func TestActorEgressSecureWebSocket(t *testing.T) {
@@ -73,23 +61,33 @@ func TestActorEgressSecureWebSocket(t *testing.T) {
 		Args: []string{"websocket", "--echo"}, Port: 80, TargetPort: 8080, TLSPort: 443, HealthPath: "/readyz",
 	}, true)
 	_, router, actorRef := prepareProtocolActor(t, ctx, "wss")
-	raw := postEgressWithStatus(t, ctx, router, actorRef, "/websocket", map[string]any{
-		"url": "wss://" + address + "/ws", "messages": []string{"wss-message"},
-	}, http.StatusBadGateway)
+	assertEgressWebSocket(t, ctx, router, actorRef, "wss://"+address+"/ws", "wss-message", true)
+}
+
+// assertEgressWebSocket opens a WebSocket from the actor to url and checks
+// that the origin echoes message. The agentgateway dataplane does not carry
+// WebSocket: there the handshake must get 403 before the origin sees a message.
+func assertEgressWebSocket(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url, message string, wantTLS bool) {
+	t.Helper()
+	input := map[string]any{"url": url, "messages": []string{message}}
+	wantStatus := http.StatusOK
+	if e2e.IsAgentGateway() {
+		wantStatus = http.StatusBadGateway
+	}
 	var got egressWebSocketResponse
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("decoding secure WebSocket observation: %v", err)
+	if err := json.Unmarshal(postEgressWithStatus(t, ctx, router, actorRef, "/websocket", input, wantStatus), &got); err != nil {
+		t.Fatalf("decoding WebSocket observation: %v", err)
 	}
-	if got.StatusCode != http.StatusForbidden {
-		t.Errorf("secure WebSocket handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
+	if e2e.IsAgentGateway() {
+		if got.StatusCode != http.StatusForbidden || got.HandshakeBody != "WebSocket egress is not supported" || got.Error == "" || len(got.Messages) != 0 {
+			t.Errorf("WebSocket to %s = %+v; want a handshake refused with 403 and no echoes", url, got)
+		}
+		return
 	}
-	if got.HandshakeBody != "WebSocket egress is not supported" {
-		t.Errorf("secure WebSocket handshake body = %q, want %q", got.HandshakeBody, "WebSocket egress is not supported")
+	if got.Error != "" || got.StatusCode != http.StatusSwitchingProtocols || got.TLS != wantTLS {
+		t.Errorf("WebSocket to %s = %+v; want a 101 handshake with verified TLS = %v", url, got, wantTLS)
 	}
-	if got.Error == "" {
-		t.Error("secure WebSocket handshake error is empty")
-	}
-	if len(got.Messages) != 0 {
-		t.Errorf("secure WebSocket messages = %+v, want no echoes", got.Messages)
+	if want := []egressWebSocketMessage{{Type: websocketTextMessage, Message: message}}; !slices.Equal(got.Messages, want) {
+		t.Errorf("WebSocket echoes from %s = %+v, want %+v", url, got.Messages, want)
 	}
 }
