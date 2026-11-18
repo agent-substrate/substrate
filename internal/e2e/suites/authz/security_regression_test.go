@@ -16,15 +16,21 @@ package authz
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/ateclient"
 	"go.ate.dev/substrate/internal/e2e"
 	"go.ate.dev/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/podidentity"
 	"go.ate.dev/substrate/internal/resources"
 )
 
@@ -41,6 +47,7 @@ func testSecurityRegression(t *testing.T, ctx context.Context, f *fixture) {
 	t.Run("recreated atespace drops old grants", func(t *testing.T) { testAtespaceRecreated(t, ctx, f) })
 	t.Run("recreated AccessPolicy rejects stale updates", func(t *testing.T) { testAccessPolicyRecreated(t, ctx, f) })
 	t.Run("WorkerService accepts only atelet", func(t *testing.T) { testWorkerServiceRequiresAtelet(t, ctx, f) })
+	t.Run("atelet reads egress policies only for actors on its node", func(t *testing.T) { testAteletEgressPolicyOnItsNode(t, ctx, f) })
 }
 
 // testEnforcedByDefault checks that a default install enforces
@@ -335,4 +342,55 @@ func testWorkerServiceRequiresAtelet(t *testing.T, ctx context.Context, f *fixtu
 		{"ReportActorSnapshotState", f.bootstrap, reportSnapshotState, rejected},
 		{"ReportActorSnapshotState", ateletToken, reportSnapshotState, rejected},
 	})
+}
+
+// testAteletEgressPolicyOnItsNode checks that atelet, authenticated over mTLS
+// with its pod certificate, cannot read the egress policy of an Actor its node
+// does not host.
+func testAteletEgressPolicyOnItsNode(t *testing.T, ctx context.Context, f *fixture) {
+	e2e.EnsureEgressPolicy(t, ctx, f.clients, f.actor)
+	// No node has this name, so it hosts no Actor.
+	elsewhere := ateletOnNode(t, ctx, f, "authz-no-such-node")
+	getEgressPolicy := func(ctx context.Context, api *ateclient.Client) error {
+		_, err := api.GetActorEgressPolicy(ctx, &ateapi.GetActorEgressPolicyRequest{Actor: f.actor, Name: resources.SingletonName})
+		return err
+	}
+	expectAll(t, ctx, []call{
+		{"GetActorEgressPolicy", f.bootstrap, getEgressPolicy, allowed},
+		{"GetActorEgressPolicy", elsewhere, getEgressPolicy, exactly(codes.NotFound)},
+	})
+}
+
+// ateletOnNode returns a principal that calls ateapi over mTLS as atelet on
+// node. The podidentity signer takes the identity, node included, from the
+// PodCertificateRequest, so the certificate is the one atelet on node would
+// hold.
+func ateletOnNode(t *testing.T, ctx context.Context, f *fixture, node string) *principal {
+	t.Helper()
+	cert, err := podidentity.RequestCertificate(ctx, f.clients.K8s, node, e2e.SystemNamespace(), installdefaults.AteletServiceAccount, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("requesting atelet's podidentity certificate for node %s: %v", node, err)
+	}
+	// RouterTLSConfig trusts the servicedns signer, which also issues
+	// ateapi's serving certificate.
+	tlsCfg, err := e2e.RouterTLSConfig(ctx, &cert)
+	if err != nil {
+		t.Fatalf("building TLS config: %v", err)
+	}
+	apiService := installdefaults.APIServiceName
+	if n := os.Getenv(ateclient.APIServiceEnv); n != "" {
+		apiService = n
+	}
+	tlsCfg.ServerName = fmt.Sprintf("%s.%s.svc", apiService, e2e.SystemNamespace())
+	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	// The client still sends a bearer token, but ateapi takes the identity
+	// from the client certificate first.
+	api, err := ateclient.NewClient(connectCtx, e2e.KubeConfig, e2e.KubeContext, "", "", false,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	if err != nil {
+		t.Fatalf("ateclient.NewClient: %v", err)
+	}
+	t.Cleanup(api.Close)
+	return &principal{name: "atelet on " + node, api: api}
 }
