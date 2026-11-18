@@ -17,6 +17,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -79,6 +81,15 @@ func handleFlagError(cmd *cobra.Command, err error) error {
 		return usageErrorf("unknown flag %q", specifiedNotExistFlag(notExist))
 	}
 
+	// A map flag such as --volume-context parses its value eagerly, so a
+	// swallowed flag token fails here rather than in checkSwallowedFlags.
+	var invalid *pflag.InvalidValueError
+	if errors.As(err, &invalid) {
+		if f, val := invalid.GetFlag(), invalid.GetValue(); f != nil && strings.HasPrefix(val, "-") {
+			return usageErrorf("flag %q requires a value, got flag %q", formatFlagName(f), val)
+		}
+	}
+
 	return wrapUsageError(err)
 }
 
@@ -94,15 +105,28 @@ func specifiedNotExistFlag(e *pflag.NotExistError) string {
 func checkSwallowedFlags(cmd *cobra.Command) error {
 	var swallowedErr error
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		if swallowedErr != nil || f.Value.Type() != "string" {
+		if swallowedErr != nil {
 			return
 		}
-		val := f.Value.String()
-		if val == "-" && (f.Name == "filename" || f.Name == "token-file") {
-			return
-		}
-		if strings.HasPrefix(val, "-") {
-			swallowedErr = usageErrorf("flag %q requires a value, got flag %q", formatFlagName(f), val)
+		switch f.Value.Type() {
+		case "string":
+			val := f.Value.String()
+			if val == "-" && (f.Name == "filename" || f.Name == "token-file") {
+				return
+			}
+			if strings.HasPrefix(val, "-") {
+				swallowedErr = usageErrorf("flag %q requires a value, got flag %q", formatFlagName(f), val)
+			}
+		case "stringToString":
+			// pflag reads "--volume-context --volume-id=vol-1" as the pair
+			// "--volume-id"="vol-1".
+			m, _ := cmd.Flags().GetStringToString(f.Name)
+			for _, key := range slices.Sorted(maps.Keys(m)) {
+				if strings.HasPrefix(key, "-") {
+					swallowedErr = usageErrorf("flag %q requires a value, got flag %q", formatFlagName(f), key)
+					return
+				}
+			}
 		}
 	})
 	return swallowedErr

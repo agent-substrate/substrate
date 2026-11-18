@@ -36,6 +36,7 @@ func TestGetScopeBeforeConnecting(t *testing.T) {
 		{"actors", getActorsCmd, &getActorAtespaceFlag, &getActorAllAtespacesFlag},
 		{"actor templates", getActorTemplatesCmd, &getActorTemplateAtespaceFlag, &getActorTemplateAllAtespacesFlag},
 		{"tags", getTagsCmd, &getTagAtespaceFlag, &getTagAllAtespacesFlag},
+		{"external volumes", getExternalVolumesCmd, &getExternalVolumeAtespaceFlag, &getExternalVolumeAllAtespacesFlag},
 	} {
 		t.Run(resource.name, func(t *testing.T) {
 			previousAtespace, previousAll := *resource.atespace, *resource.all

@@ -483,6 +483,14 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "v1"},
 	}}}
 	deleteTag := rpcCall{ateapi.Control_DeleteTag_FullMethodName, &ateapi.DeleteTagRequest{Tag: tag}}
+	externalVolume := &ateapi.ObjectRef{Atespace: "team-a", Name: "ctx"}
+	createExternalVolume := rpcCall{ateapi.Control_CreateExternalVolume_FullMethodName, &ateapi.CreateExternalVolumeRequest{ExternalVolume: &ateapi.ExternalVolume{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "ctx"},
+	}}}
+	getExternalVolume := rpcCall{ateapi.Control_GetExternalVolume_FullMethodName, &ateapi.GetExternalVolumeRequest{ExternalVolume: externalVolume}}
+	listExternalVolumes := rpcCall{ateapi.Control_ListExternalVolumes_FullMethodName, &ateapi.ListExternalVolumesRequest{Atespace: "team-a"}}
+	listAllExternalVolumes := rpcCall{ateapi.Control_ListExternalVolumes_FullMethodName, &ateapi.ListExternalVolumesRequest{}}
+	deleteExternalVolume := rpcCall{ateapi.Control_DeleteExternalVolume_FullMethodName, &ateapi.DeleteExternalVolumeRequest{ExternalVolume: externalVolume}}
 	mintJWT := rpcCall{ateapi.Control_MintActorJwt_FullMethodName, &ateapi.MintActorJwtRequest{Actor: actor}}
 	// cloneTag creates an actor in atespace from team-a's tag v1, with a
 	// template in that same atespace so only the tag check can differ.
@@ -586,6 +594,24 @@ func TestUnaryServerInterceptor_LifecycleEgressWorkerAndTagChecks(t *testing.T) 
 		{"editor cannot mint actor JWT", "editor", mintJWT, codes.PermissionDenied},
 		{"global owner cannot mint actor JWT", "global-owner", mintJWT, codes.PermissionDenied},
 		{"bootstrap owner cannot mint actor JWT", "bootstrap-owner", mintJWT, codes.PermissionDenied},
+
+		// External volumes: only a global owner registers one; viewers read
+		// and editors delete within the owning atespace.
+		{"global owner creates external volume", "global-owner", createExternalVolume, codes.OK},
+		{"bootstrap owner creates external volume", "bootstrap-owner", createExternalVolume, codes.OK},
+		{"editor cannot create external volume", "editor", createExternalVolume, codes.PermissionDenied},
+		{"viewer cannot create external volume", "viewer", createExternalVolume, codes.PermissionDenied},
+		{"outsider cannot create external volume", "outsider", createExternalVolume, codes.PermissionDenied},
+		{"viewer gets external volume", "viewer", getExternalVolume, codes.OK},
+		{"global viewer gets external volume", "global-viewer", getExternalVolume, codes.OK},
+		{"outsider cannot get external volume", "outsider", getExternalVolume, codes.PermissionDenied},
+		{"viewer lists external volumes", "viewer", listExternalVolumes, codes.OK},
+		{"outsider cannot list external volumes", "outsider", listExternalVolumes, codes.PermissionDenied},
+		{"global viewer lists all external volumes", "global-viewer", listAllExternalVolumes, codes.OK},
+		{"atespace editor cannot list all external volumes", "editor", listAllExternalVolumes, codes.PermissionDenied},
+		{"editor deletes external volume", "editor", deleteExternalVolume, codes.OK},
+		{"viewer cannot delete external volume", "viewer", deleteExternalVolume, codes.PermissionDenied},
+		{"outsider cannot delete external volume", "outsider", deleteExternalVolume, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer)
