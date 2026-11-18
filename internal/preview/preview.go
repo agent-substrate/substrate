@@ -50,6 +50,10 @@ const (
 	// field and snapshots are stored under ate-api-server's
 	// --snapshot-location.
 	GatePerTemplateSnapshotLocation Gate = "PerTemplateSnapshotLocation"
+
+	// GateIngressCache controls whether the ingress router caches actor to
+	// worker bindings and routes cache hits around ext_proc.
+	GateIngressCache Gate = "IngressCache"
 )
 
 // All is the pseudo-gate name that enables every known gate.
@@ -61,6 +65,7 @@ var realKnownGates = []Gate{
 	GateExternalVolumes,
 	GateGoldenEgressPolicy,
 	GatePerTemplateSnapshotLocation,
+	GateIngressCache,
 }
 
 var globalKnownGates []Gate           // all known gates
