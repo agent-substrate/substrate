@@ -126,12 +126,16 @@ func metricsBindAddr(servePull bool) string {
 }
 
 // managerOptions configures the controller-runtime manager.
-func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
+func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) (ctrl.Options, error) {
+	cacheOptions, err := controllers.CacheOptions(egressMITMCAPool)
+	if err != nil {
+		return ctrl.Options{}, err
+	}
 	return ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: metricsBindAddr(servePull)},
-		Cache:   controllers.CacheOptions(egressMITMCAPool),
-	}
+		Cache:   cacheOptions,
+	}, nil
 }
 
 func main() {
@@ -231,7 +235,12 @@ func main() {
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
-	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool, servePull))
+	mgrOptions, err := managerOptions(egressMITMCAPool, servePull)
+	if err != nil {
+		setupLog.Error(err, "unable to configure manager")
+		os.Exit(1)
+	}
+	mgr, err := ctrl.NewManager(k8sConfig, mgrOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
